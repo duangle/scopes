@@ -1,0 +1,8 @@
+syntax: glob
+
+*.so
+bang0
+
+syntax: regexp
+
+^clang
