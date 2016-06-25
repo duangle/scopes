@@ -6,6 +6,12 @@ while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symli
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
 done
 DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
-$DIR/clang/bin/clang++ -pedantic -g -o bang0 $DIR/bang0.cpp \
-    && gdb --ex r --silent --args ./bang0 bang1.b
+$DIR/clang/bin/clang++ \
+    -o bang0 $DIR/bang0.cpp \
+    -pedantic -g -DDEBUG \
+    -lpthread -lm -ldl -ltinfo \
+    `$DIR/clang/bin/llvm-config --cxxflags --ldflags --libs` \
+    -DDEBUG \
+    && $DIR/bang0 $DIR/bang1.b
+    # && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
 

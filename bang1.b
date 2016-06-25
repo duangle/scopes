@@ -1,18 +1,8 @@
 bang
 
-print "hi"
-    \ "hel\"lo" "goodbye"
+__function printf
+    __functype int rawstring ...
 
-a b c
-    \ d e f
-
-function expr (a b c)
-    if (a == b)
-        c d
-        e ;
-
-.= ($)
-    a b
-    qua
-    quo
-    d
+__function main
+    __functype void
+    __call printf "Hello World!\n"
