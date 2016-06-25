@@ -1030,6 +1030,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                         bang_expr *expr_type = bang_nth(expr, 2);
 
                         bang_expr *expr_name = bang_verify_type(bang_nth(expr, 1), bang_expr_type_symbol);
+
                         LLVMTypeRef functype = bang_translate_type(env, expr_type);
 
                         if (expr_name && functype) {
@@ -1146,6 +1147,13 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
     return result;
 }
 
+static void export_external (const char *name, void *addr) {
+    LLVMValueRef func = LLVMGetNamedFunction(bang_module, name);
+    if (func) {
+        LLVMAddGlobalMapping(bang_engine, func, addr);
+    }
+}
+
 static void bang_compile (bang_expr *expr) {
     bang_module = LLVMModuleCreateWithName("bang");
     bang_builder = LLVMCreateBuilder();
@@ -1233,6 +1241,8 @@ static void bang_compile (bang_expr *expr) {
             fprintf(stderr, "failed to create execution engine\n");
             abort();
         }
+
+        export_external("bang_parse_file", (void *)bang_parse_file);
 
         LLVMRunFunction(bang_engine, entryfunc, 0, NULL);
 
