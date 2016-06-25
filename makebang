@@ -9,9 +9,9 @@ DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 $DIR/clang/bin/clang++ \
     -o bang0 $DIR/bang0.cpp \
     -pedantic -g -DDEBUG \
-    -lpthread -lm -ldl -ltinfo \
+    -lpthread -lm -ldl -ltinfo -lz \
     `$DIR/clang/bin/llvm-config --cxxflags --ldflags --libs` \
     -DDEBUG \
-    && $DIR/bang0 $DIR/bang1.b
-    # && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
+    && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
+    # && $DIR/bang0 $DIR/bang1.b
 
