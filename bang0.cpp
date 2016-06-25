@@ -598,10 +598,14 @@ void print_expr(bang_expr *e, size_t depth)
 static LLVMModuleRef bang_module;
 static LLVMBuilderRef bang_builder;
 static LLVMExecutionEngineRef bang_engine;
+static LLVMValueRef bang_nopfunc;
 
-static std::map<std::string, LLVMValueRef> NamedValues;
+typedef std::map<std::string, LLVMValueRef> NameValueMap;
+
+static NameValueMap NamedValues;
 static std::map<std::string, LLVMTypeRef> NamedTypes;
 static int compile_errors = 0;
+static bool bang_dump_module = false;
 
 static const char *bang_expr_type_name(int type) {
     switch(type) {
@@ -621,25 +625,31 @@ static void bang_error (bang_anchor *anchor, const char *format, ...) {
     va_start (args, format);
     vprintf (format, args);
     va_end (args);
+    assert(false);
 }
 
 static bool bang_eq_symbol (bang_expr *expr, const char *sym) {
     return expr && (expr->type == bang_expr_type_symbol) &&
-        !strncmp((const char *)expr->buf, sym, expr->len);
+        !strcmp((const char *)expr->buf, sym);
 }
 
 /*
-(__functype returntype [argtype [...]] [\...])
-(__function name type [value])
-(__call name value ...)
-(__bitcast type value)
-(__extract value indexvalue)
-(__const-int <value> [<type>])
-(__const-real <value> [<type>])
-(__gep value index [index [...]])
-(__pointer-type type)
-(__typeof value)
-(__dump value)
+() = nop
+(function-type returntype ([argtype [...]] [\...]))
+(function name type [value])
+(extern name type)
+(call name value ...)
+(bitcast type value)
+(extract value indexvalue)
+(const-int <value> [<type>])
+(const-real <value> [<type>])
+(getelementptr value index [index [...]])
+(pointer-type type)
+(typeof value)
+(dump value)
+(? if-expr then-block else-block)
+(do expr ...)
+(dump-module)
 */
 
 typedef struct {
@@ -647,11 +657,13 @@ typedef struct {
     LLVMValueRef value;
 } bang_type_or_value;
 
-typedef struct {
+typedef struct _bang_env {
     // currently active function
     LLVMValueRef function;
-    // dest
-    LLVMValueRef dest;
+    // local names
+    NameValueMap *names;
+    // parent env
+    struct _bang_env *parent;
 } bang_env;
 
 static bang_type_or_value bang_translate (bang_env env, bang_expr *expr);
@@ -715,6 +727,26 @@ static bool bang_match_expr (bang_expr *expr, const char *name, int mincount, in
     return bang_eq_symbol(bang_nth(expr, 0), name) && bang_verify_arg_range(expr, mincount, maxcount);
 }
 
+static LLVMValueRef bang_nopcall () {
+    return LLVMBuildCall(bang_builder, bang_nopfunc, NULL, 0, "");
+}
+
+static LLVMValueRef bang_translate_exprlist (bang_env env, bang_expr *expr, int offset) {
+    int argcount = (int)expr->len - offset;
+    bool success = true;
+    LLVMValueRef stmt = NULL;
+    for (int i = 0; i < argcount; ++i) {
+        stmt = bang_translate_value(env, bang_nth(expr, i + offset));
+        if (!stmt || compile_errors) {
+            success = false;
+            stmt = NULL;
+            break;
+        }
+    }
+
+    return stmt;
+}
+
 static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
     bang_type_or_value result;
     result.type = NULL;
@@ -725,38 +757,42 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
             if (expr->len >= 1) {
                 bang_expr *head = bang_nth(expr, 0);
                 if (head->type == bang_expr_type_symbol) {
-                    if (bang_match_expr(expr, "__functype", 1, -1)) {
-                        bang_expr *tail = bang_nth(expr, -1);
-                        bool vararg = false;
-                        int argcount = (int)expr->len - 2;
-                        if (bang_eq_symbol(tail, "...")) {
-                            vararg = true;
-                            --argcount;
-                        }
+                    if (bang_match_expr(expr, "function-type", 2, 2)) {
+                        bang_expr *args_expr = bang_verify_type(bang_nth(expr, 2), bang_expr_type_list);
 
-                        if (argcount >= 0) {
-                            LLVMTypeRef rettype = bang_translate_type(env, bang_nth(expr, 1));
-                            if (rettype) {
-                                LLVMTypeRef *argtypes = (LLVMTypeRef *)alloca(sizeof(LLVMTypeRef) * argcount);
-
-                                bool success = true;
-                                for (int i = 0; i < argcount; ++i) {
-                                    LLVMTypeRef argtype = bang_translate_type(env, bang_nth(expr, i + 2));
-                                    if (!argtype) {
-                                        success = false;
-                                        break;
-                                    }
-                                    argtypes[i] = argtype;
-                                }
-
-                                if (success) {
-                                    result.type = LLVMFunctionType(rettype, argtypes, argcount, vararg);
-                                }
+                        if (args_expr) {
+                            bang_expr *tail = bang_nth(args_expr, -1);
+                            bool vararg = false;
+                            int argcount = (int)args_expr->len;
+                            if (bang_eq_symbol(tail, "...")) {
+                                vararg = true;
+                                --argcount;
                             }
-                        } else {
-                            bang_error(&expr->anchor, "vararg function is missing return type\n");
+
+                            if (argcount >= 0) {
+                                LLVMTypeRef rettype = bang_translate_type(env, bang_nth(expr, 1));
+                                if (rettype) {
+                                    LLVMTypeRef *argtypes = (LLVMTypeRef *)alloca(sizeof(LLVMTypeRef) * argcount);
+
+                                    bool success = true;
+                                    for (int i = 0; i < argcount; ++i) {
+                                        LLVMTypeRef argtype = bang_translate_type(env, bang_nth(args_expr, i));
+                                        if (!argtype) {
+                                            success = false;
+                                            break;
+                                        }
+                                        argtypes[i] = argtype;
+                                    }
+
+                                    if (success) {
+                                        result.type = LLVMFunctionType(rettype, argtypes, argcount, vararg);
+                                    }
+                                }
+                            } else {
+                                bang_error(&expr->anchor, "vararg function is missing return type\n");
+                            }
                         }
-                    } else if (bang_match_expr(expr, "__bitcast", 2, 2)) {
+                    } else if (bang_match_expr(expr, "bitcast", 2, 2)) {
 
                         LLVMTypeRef casttype = bang_translate_type(env, bang_nth(expr, 1));
                         LLVMValueRef castvalue = bang_translate_value(env, bang_nth(expr, 2));
@@ -765,7 +801,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             result.value = LLVMBuildBitCast(bang_builder, castvalue, casttype, "ptrcast");
                         }
 
-                    } else if (bang_match_expr(expr, "__extract", 2, 2)) {
+                    } else if (bang_match_expr(expr, "extract", 2, 2)) {
 
                         LLVMValueRef value = bang_translate_value(env, bang_nth(expr, 1));
                         LLVMValueRef index = bang_translate_value(env, bang_nth(expr, 2));
@@ -774,7 +810,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             result.value = LLVMBuildExtractElement(bang_builder, value, index, "extractelem");
                         }
 
-                    } else if (bang_match_expr(expr, "__const-int", 2, 2)) {
+                    } else if (bang_match_expr(expr, "const-int", 2, 2)) {
                         bang_expr *expr_type = bang_nth(expr, 1);
                         bang_expr *expr_value = bang_verify_type(bang_nth(expr, 2), bang_expr_type_symbol);
 
@@ -795,7 +831,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             }
                         }
 
-                    } else if (bang_match_expr(expr, "__const-real", 2, 2)) {
+                    } else if (bang_match_expr(expr, "const-real", 2, 2)) {
                         bang_expr *expr_type = bang_nth(expr, 1);
                         bang_expr *expr_value = bang_verify_type(bang_nth(expr, 2), bang_expr_type_symbol);
 
@@ -816,14 +852,18 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             }
                         }
 
-                    } else if (bang_match_expr(expr, "__typeof", 1, 1)) {
+                    } else if (bang_match_expr(expr, "typeof", 1, 1)) {
 
                         LLVMValueRef value = bang_translate_value(env, bang_nth(expr, 1));
                         if (value) {
                             result.type = LLVMTypeOf(value);
                         }
 
-                    } else if (bang_match_expr(expr, "__dump", 1, 1)) {
+                    } else if (bang_match_expr(expr, "dump-module", 0, 0)) {
+
+                        bang_dump_module = true;
+
+                    } else if (bang_match_expr(expr, "dump", 1, 1)) {
 
                         bang_expr *expr_arg = bang_nth(expr, 1);
 
@@ -838,7 +878,9 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             printf("no expression\n");
                         }
 
-                    } else if (bang_match_expr(expr, "__gep", 2, -1)) {
+                        result = tov;
+
+                    } else if (bang_match_expr(expr, "getelementptr", 2, -1)) {
 
                         LLVMValueRef ptr = bang_translate_value(env, bang_nth(expr, 1));
                         if (ptr) {
@@ -860,48 +902,131 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             }
                         }
 
-                    } else if (bang_match_expr(expr, "__block", 1, -1)) {
+                    } else if (bang_match_expr(expr, "?", 3, 3)) {
 
-                        if (env.function) {
+                        LLVMValueRef cond_value = bang_translate_value(env, bang_nth(expr, 1));
+                        if (cond_value) {
                             LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(bang_builder);
 
-                            LLVMBasicBlockRef entry = LLVMAppendBasicBlock(env.function, "block");
-                            LLVMPositionBuilderAtEnd(bang_builder, entry);
-                            int argcount = (int)expr->len - 1;
-                            bool success = true;
-                            LLVMValueRef stmt = NULL;
-                            LLVMValueRef dest = env.dest;
-                            env.dest = NULL;
-                            for (int i = 0; i < argcount; ++i) {
-                                stmt = bang_translate_value(env, bang_nth(expr, i + 1));
-                                if (!stmt) {
-                                    success = false;
-                                    break;
-                                }
-                                if (compile_errors)
-                                    break;
+                            LLVMBasicBlockRef then_block = LLVMAppendBasicBlock(env.function, "then");
+                            LLVMBasicBlockRef else_block = LLVMAppendBasicBlock(env.function, "else");
+                            LLVMBasicBlockRef br_block = LLVMAppendBasicBlock(env.function, "br");
+
+                            bang_expr *then_expr = bang_nth(expr, 2);
+                            bang_expr *else_expr = bang_nth(expr, 3);
+
+                            LLVMPositionBuilderAtEnd(bang_builder, then_block);
+                            LLVMValueRef then_result = bang_translate_value(env, then_expr);
+                            LLVMBuildBr(bang_builder, br_block);
+
+                            LLVMPositionBuilderAtEnd(bang_builder, else_block);
+                            LLVMValueRef else_result = bang_translate_value(env, else_expr);
+                            LLVMBuildBr(bang_builder, br_block);
+
+                            LLVMTypeRef then_type = then_result?LLVMTypeOf(then_result):NULL;
+                            LLVMTypeRef else_type = else_result?LLVMTypeOf(else_result):NULL;
+
+                            if ((then_type == LLVMVoidType()) || (else_type == LLVMVoidType())) {
+                                LLVMPositionBuilderAtEnd(bang_builder, br_block);
+                                result.value = bang_nopcall();
+                            } else if (then_type == else_type) {
+                                LLVMPositionBuilderAtEnd(bang_builder, br_block);
+                                result.value = LLVMBuildPhi(bang_builder, then_type, "select");
+                                LLVMValueRef values[] = { then_result, else_result };
+                                LLVMBasicBlockRef blocks[] = { then_block, else_block };
+                                LLVMAddIncoming(result.value, values, blocks, 2);
+                            } else {
+                                LLVMDumpType(then_type);
+                                LLVMDumpType(else_type);
+                                bang_error(&then_expr->anchor, "then/else type evaluation mismatch\n");
+                                bang_error(&else_expr->anchor, "then-expression must evaluate to same type as else-expression\n");
                             }
 
-                            if (success) {
-                                if (dest == env.function) {
-                                    LLVMTypeRef functype = LLVMGetElementType(LLVMTypeOf(env.function));
-                                    if (LLVMGetReturnType(functype) == LLVMVoidType()) {
-                                        LLVMBuildRetVoid(bang_builder);
-                                    } else if (stmt) {
-                                        LLVMBuildRet(bang_builder, stmt);
-                                    } else {
-                                        bang_error(&expr->anchor, "function returns no value\n");
-                                    }
-                                }
+                            LLVMPositionBuilderAtEnd(bang_builder, oldblock);
+                            LLVMBuildCondBr(bang_builder, cond_value, then_block, else_block);
 
-                                LLVMPositionBuilderAtEnd(bang_builder, oldblock);
-                            }
-
-                        } else {
-                            bang_error(&expr->anchor, "block outside function\n");
+                            LLVMPositionBuilderAtEnd(bang_builder, br_block);
                         }
 
-                    } else if (bang_match_expr(expr, "__function", 2, 3)) {
+                    } else if (bang_match_expr(expr, "do", 1, -1)) {
+
+                        result.value = bang_translate_exprlist(env, expr, 1);
+
+                    } else if (bang_match_expr(expr, "function", 3, -1)) {
+
+                        bang_expr *expr_type = bang_nth(expr, 3);
+
+                        bang_expr *expr_name = bang_verify_type(bang_nth(expr, 1), bang_expr_type_symbol);
+                        LLVMTypeRef functype = bang_translate_type(env, expr_type);
+
+                        if (expr_name && functype) {
+                            if (LLVMGetTypeKind(functype) == LLVMFunctionTypeKind) {
+                                // todo: external linkage?
+                                LLVMValueRef func = LLVMAddFunction(bang_module, (const char *)expr_name->buf, functype);
+
+                                bang_expr *expr_params = bang_nth(expr, 2);
+                                bang_expr *body_expr = bang_nth(expr, 4);
+
+                                NameValueMap names;
+
+                                if (bang_eq_symbol(expr_params, "...")) {
+                                    if (body_expr) {
+                                        bang_error(&expr_params->anchor, "cannot declare function body without parameter list\n");
+                                    }
+                                } else if (expr_params->type == bang_expr_type_list) {
+                                    int argcount = (int)expr_params->len;
+                                    int paramcount = LLVMCountParams(func);
+                                    if (argcount == paramcount) {
+                                        LLVMValueRef *params = (LLVMValueRef *)alloca(sizeof(LLVMValueRef) * paramcount);
+                                        LLVMGetParams(func, params);
+                                        for (int i = 0; i < argcount; ++i) {
+                                            bang_expr *expr_param = bang_verify_type(bang_nth(expr_params, i), bang_expr_type_symbol);
+                                            if (expr_param) {
+                                                const char *name = (const char *)expr_param->buf;
+                                                LLVMSetValueName(params[i], name);
+                                                names[name] = params[i];
+                                            }
+                                        }
+                                    } else {
+                                        bang_error(&expr_params->anchor, "parameter name count mismatch (%i != %i); must name all parameter types\n",
+                                            argcount, paramcount);
+                                    }
+                                } else {
+                                    bang_error(&expr_params->anchor, "parameter list or ... expected\n");
+                                }
+
+                                if (!compile_errors) {
+                                    result.value = func;
+
+                                    if (body_expr) {
+                                        env.function = func;
+                                        env.names = &names;
+
+                                        LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(bang_builder);
+
+                                        LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
+                                        LLVMPositionBuilderAtEnd(bang_builder, entry);
+
+                                        LLVMValueRef result = bang_translate_exprlist(env, expr, 4);
+
+                                        if (LLVMGetReturnType(functype) == LLVMVoidType()) {
+                                            LLVMBuildRetVoid(bang_builder);
+                                        } else if (result) {
+                                            LLVMBuildRet(bang_builder, result);
+                                        } else {
+                                            bang_error(&expr->anchor, "function returns no value\n");
+                                        }
+
+                                        LLVMPositionBuilderAtEnd(bang_builder, oldblock);
+
+                                    }
+                                }
+                            } else {
+                                bang_error(&expr_type->anchor, "not a function type\n");
+                            }
+                        }
+
+                    } else if (bang_match_expr(expr, "extern", 2, 2)) {
 
                         bang_expr *expr_type = bang_nth(expr, 2);
 
@@ -914,26 +1039,12 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                                 LLVMValueRef func = LLVMAddFunction(bang_module, (const char *)expr_name->buf, functype);
 
                                 result.value = func;
-
-                                bang_expr *body_expr = bang_nth(expr, 3);
-
-                                if (body_expr) {
-                                    env.function = func;
-                                    env.dest = func;
-
-                                    LLVMValueRef block = bang_translate_value(env, body_expr);
-                                    if (block) {
-                                        if (!LLVMValueIsBasicBlock(block)) {
-                                            bang_error(&body_expr->anchor, "block expected\n");
-                                        }
-                                    }
-
-                                }
                             } else {
                                 bang_error(&expr_type->anchor, "not a function type\n");
                             }
                         }
-                    } else if (bang_match_expr(expr, "__call", 1, -1)) {
+
+                    } else if (bang_match_expr(expr, "call", 1, -1)) {
 
                         int argcount = (int)expr->len - 2;
 
@@ -980,7 +1091,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             }
                         }
 
-                    } else if (bang_match_expr(expr, "__pointer-type", 1, 1)) {
+                    } else if (bang_match_expr(expr, "pointer-type", 1, 1)) {
 
                         LLVMTypeRef type = bang_translate_type(env, bang_nth(expr, 1));
 
@@ -995,13 +1106,21 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                     bang_error(&head->anchor, "symbol expected\n");
                 }
             } else {
-                bang_error(&expr->anchor, "expression is empty\n");
+                result.value = bang_nopcall();
             }
         } else if (expr->type == bang_expr_type_symbol) {
             const char *name = (const char *)expr->buf;
 
             result.type = NamedTypes[name];
-            result.value = NamedValues[name];
+            result.value = NULL;
+
+            if (env.names) {
+                result.value = (*env.names)[name];
+            }
+
+            if (!result.value) {
+                result.value = NamedValues[name];
+            }
 
             if (!result.value) {
                 result.value = LLVMGetNamedFunction(bang_module, name);
@@ -1043,12 +1162,18 @@ static void bang_compile (bang_expr *expr) {
     NamedTypes["i64"] = LLVMInt64Type();
 
     LLVMTypeRef entryfunctype = LLVMFunctionType(LLVMVoidType(), NULL, 0, 0);
+    bang_nopfunc = LLVMAddFunction(bang_module, "__nop", entryfunctype);
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(bang_nopfunc, "entry");
+    LLVMPositionBuilderAtEnd(bang_builder, entry);
+    LLVMBuildRetVoid(bang_builder);
+
     LLVMValueRef entryfunc = LLVMAddFunction(bang_module, "__anon_expr", entryfunctype);
     LLVMValueRef lastvalue = NULL;
 
     bang_env env;
     env.function = entryfunc;
-    env.dest = NULL;
+    env.names = NULL;
+    env.parent = NULL;
 
     if (expr->type == bang_expr_type_list) {
         if (expr->len >= 1) {
@@ -1081,7 +1206,10 @@ static void bang_compile (bang_expr *expr) {
     LLVMBuildRetVoid(bang_builder);
 
     if (!compile_errors) {
-        LLVMDumpModule(bang_module);
+        if (bang_dump_module) {
+            LLVMDumpModule(bang_module);
+            printf("\n\noutput:\n");
+        }
 
         char *error = NULL;
         LLVMVerifyModule(bang_module, LLVMAbortProcessAction, &error);
@@ -1106,8 +1234,6 @@ static void bang_compile (bang_expr *expr) {
             fprintf(stderr, "failed to create execution engine\n");
             abort();
         }
-
-        printf("running:\n");
 
         LLVMRunFunction(bang_engine, entryfunc, 0, NULL);
 

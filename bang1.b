@@ -1,30 +1,34 @@
 bang
 
-__function printf
-    __functype i32 (__pointer-type i8) ...
-__function sin
-    __functype double double
+extern printf
+    function-type i32 ((pointer-type i8) ...)
+extern sin
+    function-type double (double)
 
-__function computesin
-    __functype double
-    __block
-        __call sin
-            __const-real double 0.5
+function computesin ()
+    function-type double ()
+    call sin
+        const-real double 0.5
 
-__function dostuff
-    __functype i32
-    __block
-        __call printf
-            __gep "value = %f!\n"
-                __const-int i32 0
-                __const-int i32 0
-            __call computesin
-        __const-int i32 0
+function dostuff (a b)
+    function-type i32 (i32 i32)
+    ?
+        const-int i1 0
+        ()
+        call printf
+            getelementptr "value = %f! (false) %i %i\n"
+                const-int i32 0
+                const-int i32 0
+            call computesin
+            \ a b
+    const-int i32 0
 
-__call dostuff
+call dostuff
+    const-int i32 1
+    const-int i32 2
 
-__call printf
-    __gep "Hello World!\n"
-        __const-int i32 0
-        __const-int i32 0
+call printf
+    getelementptr "Hello World!\n"
+        const-int i32 0
+        const-int i32 0
 

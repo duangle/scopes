@@ -12,6 +12,6 @@ $DIR/clang/bin/clang++ \
     -lpthread -lm -ldl -ltinfo -lz \
     `$DIR/clang/bin/llvm-config --cxxflags --ldflags --libs` \
     -DDEBUG \
-    && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
-    # && $DIR/bang0 $DIR/bang1.b
+    && $DIR/bang0 $DIR/bang1.b
+    # && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
 
