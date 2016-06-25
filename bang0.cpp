@@ -625,7 +625,6 @@ static void bang_error (bang_anchor *anchor, const char *format, ...) {
     va_start (args, format);
     vprintf (format, args);
     va_end (args);
-    assert(false);
 }
 
 static bool bang_eq_symbol (bang_expr *expr, const char *sym) {
