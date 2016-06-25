@@ -650,6 +650,8 @@ typedef struct {
 typedef struct {
     // currently active function
     LLVMValueRef function;
+    // dest
+    LLVMValueRef dest;
 } bang_env;
 
 static bang_type_or_value bang_translate (bang_env env, bang_expr *expr);
@@ -858,7 +860,46 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             }
                         }
 
-                    } else if (bang_match_expr(expr, "__block", 0, -1)) {
+                    } else if (bang_match_expr(expr, "__block", 1, -1)) {
+
+                        if (env.function) {
+                            LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(bang_builder);
+
+                            LLVMBasicBlockRef entry = LLVMAppendBasicBlock(env.function, "block");
+                            LLVMPositionBuilderAtEnd(bang_builder, entry);
+                            int argcount = (int)expr->len - 1;
+                            bool success = true;
+                            LLVMValueRef stmt = NULL;
+                            LLVMValueRef dest = env.dest;
+                            env.dest = NULL;
+                            for (int i = 0; i < argcount; ++i) {
+                                stmt = bang_translate_value(env, bang_nth(expr, i + 1));
+                                if (!stmt) {
+                                    success = false;
+                                    break;
+                                }
+                                if (compile_errors)
+                                    break;
+                            }
+
+                            if (success) {
+                                if (dest == env.function) {
+                                    LLVMTypeRef functype = LLVMGetElementType(LLVMTypeOf(env.function));
+                                    if (LLVMGetReturnType(functype) == LLVMVoidType()) {
+                                        LLVMBuildRetVoid(bang_builder);
+                                    } else if (stmt) {
+                                        LLVMBuildRet(bang_builder, stmt);
+                                    } else {
+                                        bang_error(&expr->anchor, "function returns no value\n");
+                                    }
+                                }
+
+                                LLVMPositionBuilderAtEnd(bang_builder, oldblock);
+                            }
+
+                        } else {
+                            bang_error(&expr->anchor, "block outside function\n");
+                        }
 
                     } else if (bang_match_expr(expr, "__function", 2, 3)) {
 
@@ -878,17 +919,15 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
 
                                 if (body_expr) {
                                     env.function = func;
+                                    env.dest = func;
 
-                                    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
-                                    LLVMPositionBuilderAtEnd(bang_builder, entry);
-
-                                    LLVMValueRef body = bang_translate_value(env, body_expr);
-                                    if (body) {
-                                        LLVMBuildRet(bang_builder, body);
-
-                                        // Error reading body, remove function.
-                                        // func->eraseFromParent();
+                                    LLVMValueRef block = bang_translate_value(env, body_expr);
+                                    if (block) {
+                                        if (!LLVMValueIsBasicBlock(block)) {
+                                            bang_error(&body_expr->anchor, "block expected\n");
+                                        }
                                     }
+
                                 }
                             } else {
                                 bang_error(&expr_type->anchor, "not a function type\n");
@@ -926,7 +965,11 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                                     }
 
                                     if (success) {
-                                        result.value = LLVMBuildCall(bang_builder, callee, args, argcount, "calltmp");
+                                        if (LLVMGetReturnType(functype) == LLVMVoidType()) {
+                                            result.value = LLVMBuildCall(bang_builder, callee, args, argcount, "");
+                                        } else {
+                                            result.value = LLVMBuildCall(bang_builder, callee, args, argcount, "calltmp");
+                                        }
                                     }
                                 } else {
                                     bang_error(&expr->anchor, "incorrect number of call arguments (got %i, need %s%i)\n",
@@ -1005,6 +1048,7 @@ static void bang_compile (bang_expr *expr) {
 
     bang_env env;
     env.function = entryfunc;
+    env.dest = NULL;
 
     if (expr->type == bang_expr_type_list) {
         if (expr->len >= 1) {

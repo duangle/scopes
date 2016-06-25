@@ -5,14 +5,26 @@ __function printf
 __function sin
     __functype double double
 
-__call printf
-    __gep "value = %f!\n"
+__function computesin
+    __functype double
+    __block
+        __call sin
+            __const-real double 0.5
+
+__function dostuff
+    __functype i32
+    __block
+        __call printf
+            __gep "value = %f!\n"
+                __const-int i32 0
+                __const-int i32 0
+            __call computesin
         __const-int i32 0
-        __const-int i32 0
-    __call sin
-        __const-real double 0.5
+
+__call dostuff
 
 __call printf
     __gep "Hello World!\n"
         __const-int i32 0
         __const-int i32 0
+
