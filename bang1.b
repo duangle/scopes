@@ -1,13 +1,16 @@
 bang
 
+import-c /home/lritter/devel/duangle/bang/bang0.h (
+    )
+
 extern bang_parse_file
-    function-type (pointer-type void) ((pointer-type i8))
+    function-type (pointer-type i8) ((pointer-type i8))
 
 extern LLVMVoidType
-    function-type (pointer-type void) ()
+    function-type (pointer-type i8) ()
 
 extern dlopen
-    function-type (pointer-type void) ((pointer-type i8) i32)
+    function-type (pointer-type i8) ((pointer-type i8) i32)
 
 extern printf
     function-type i32 ((pointer-type i8) ...)
@@ -19,7 +22,7 @@ function computesin ()
     call sin
         const-real double 0.5
 
-function dostuff (a b)
+function dostuff-hyphenated (a b)
     function-type i32 (i32 i32)
     do
         ?
@@ -33,7 +36,7 @@ function dostuff (a b)
                 \ a b
     const-int i32 0
 
-call dostuff
+call dostuff-hyphenated
     const-int i32 1
     const-int i32 2
 

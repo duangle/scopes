@@ -584,6 +584,7 @@ void print_expr(bang_expr *e, size_t depth)
 #undef sep
 }
 
+
 //------------------------------------------------------------------------------
 
 #include <llvm-c/Core.h>
@@ -594,6 +595,213 @@ void print_expr(bang_expr *e, size_t depth)
 
 #include <map>
 #include <string>
+
+//------------------------------------------------------------------------------
+
+#include "clang/Frontend/CompilerInstance.h"
+#include "clang/Basic/TargetInfo.h"
+#include "clang/CodeGen/ModuleBuilder.h"
+//#include "clang/CodeGen/CodeGenAction.h"
+//#include "clang/AST/ASTConsumer.h"
+//#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/Parse/ParseAST.h"
+#include "clang/Lex/Preprocessor.h"
+//#include "clang/Basic/SourceManager.h"
+#include "llvm/IR/LLVMContext.h"
+#include "llvm/IR/Module.h"
+
+#include <sstream>
+
+using namespace clang;
+using namespace llvm;
+
+// createInvocationFromCommandLine()
+// attach custom observers
+// - diagnostic consumer
+// pp callbacks (for module import)
+// manually run most of ExecuteAction (?)
+// - set up several compiler components
+// - parse a single decl from a dummy file
+// - finalize the AST
+
+// CompilerInstance::loadModuleFile
+// look up decls we want (not possible?)
+// use TU-wide lookup and filter
+
+// ASTContext::getASTRecordLayout(const RecordDecl *D)
+
+/*
+class CodeGenProxy : public ASTConsumer {
+public:
+  CodeGenerator * CG;
+  IncludeCVisitor Visitor;
+
+  CodeGenProxy(CodeGenerator * CG_, Obj * result, const std::string & livenessfunction) :
+    CG(CG_),
+    Visitor(result,livenessfunction) {}
+  virtual ~CodeGenProxy() {}
+  virtual void Initialize(ASTContext &Context) {
+    Visitor.SetContext(&Context);
+    CG->Initialize(Context);
+  }
+  virtual bool HandleTopLevelDecl(DeclGroupRef D) {
+    for (DeclGroupRef::iterator b = D.begin(), e = D.end();
+         b != e; ++b)
+            Visitor.TraverseDecl(*b);
+    return CG->HandleTopLevelDecl(D);
+  }
+  virtual void HandleInterestingDecl(DeclGroupRef D) { CG->HandleInterestingDecl(D); }
+  virtual void HandleTranslationUnit(ASTContext &Ctx) {
+    Decl * Decl = Visitor.GetLivenessFunction();
+    DeclGroupRef R = DeclGroupRef::Create(Ctx, &Decl, 1);
+    CG->HandleTopLevelDecl(R);
+    CG->HandleTranslationUnit(Ctx);
+  }
+  virtual void HandleTagDeclDefinition(TagDecl *D) { CG->HandleTagDeclDefinition(D); }
+  virtual void HandleCXXImplicitFunctionInstantiation(FunctionDecl *D) { CG->HandleCXXImplicitFunctionInstantiation(D); }
+  virtual void HandleTopLevelDeclInObjCContainer(DeclGroupRef D) { CG->HandleTopLevelDeclInObjCContainer(D); }
+  virtual void CompleteTentativeDefinition(VarDecl *D) { CG->CompleteTentativeDefinition(D); }
+  virtual void HandleCXXStaticMemberVarInstantiation(VarDecl *D) { CG->HandleCXXStaticMemberVarInstantiation(D); }
+  virtual void HandleVTable(CXXRecordDecl *RD, bool DefinitionRequired) { CG->HandleVTable(RD, DefinitionRequired); }
+  virtual ASTMutationListener *GetASTMutationListener() { return CG->GetASTMutationListener(); }
+  virtual ASTDeserializationListener *GetASTDeserializationListener() { return CG->GetASTDeserializationListener(); }
+  virtual void PrintStats() { CG->PrintStats(); }
+
+};
+*/
+
+static int bang_next_unused_id = 0;
+
+// TODO: in LLVM 3.9, use SourceManager::getOrCreateFileID
+static FileID getOrCreateFileID(SourceManager &self, const FileEntry *SourceFile, SrcMgr::CharacteristicKind FileCharacter) {
+    FileID ID = self.translateFile(SourceFile);
+    return ID.isValid() ? ID : self.createFileID(SourceFile, SourceLocation(), FileCharacter);
+}
+
+static void bang_import_c_module (const char *path, const char **args, int argcount) {
+    CompilerInstance compiler;
+
+    // llvm::MemoryBuffer * membuffer = llvm::MemoryBuffer::getMemBuffer(code, "<buffer>");
+
+    compiler.createDiagnostics();
+    CompilerInvocation::CreateFromArgs(
+        compiler.getInvocation(),
+        args, args + argcount,
+        compiler.getDiagnostics());
+    //need to recreate the diagnostics engine so that it actually listens to warning flags like -Wno-deprecated
+    //this cannot go before CreateFromArgs
+    //compiler.createDiagnostics();
+
+#if 1
+    std::shared_ptr<clang::TargetOptions> to(new clang::TargetOptions(compiler.getTargetOpts()));
+
+    TargetInfo *TI = TargetInfo::CreateTargetInfo(compiler.getDiagnostics(), to);
+    compiler.setTarget(TI);
+#endif
+
+#if 0
+    llvm::IntrusiveRefCntPtr<clang::vfs::FileSystem> FS = new LuaOverlayFileSystem(T->L);
+    TheCompInst->setVirtualFileSystem(FS);
+    TheCompInst->createFileManager();
+    FileManager &FileMgr = TheCompInst->getFileManager();
+    TheCompInst->createSourceManager(FileMgr);
+    SourceManager &SourceMgr = TheCompInst->getSourceManager();
+    TheCompInst->createPreprocessor(TU_Complete);
+    TheCompInst->createASTContext();
+#else
+    compiler.createFileManager();
+    compiler.createSourceManager(compiler.getFileManager());
+    compiler.createPreprocessor(TU_Complete);
+    compiler.createASTContext();
+    compiler.createModuleManager();
+#endif
+
+    FileManager &filemgr = compiler.getFileManager();
+    SourceManager &sourcemgr = compiler.getSourceManager();
+
+    const FileEntry *fileentry = filemgr.getFile(path, true);
+    assert(fileentry && "cannot find file");
+    FileID fileid = getOrCreateFileID(sourcemgr, fileentry, SrcMgr::C_User);
+    assert(fileid.isValid());
+    sourcemgr.setMainFileID(fileid);
+
+    // Set the main file handled by the source manager to the input file.
+    //sourcemgr.setMainFileID(sourcemgr.createFileID(UNIQUEIFY(llvm::MemoryBuffer,membuffer)));
+
+    compiler.getDiagnosticClient().BeginSourceFile(compiler.getLangOpts(),&compiler.getPreprocessor());
+    Preprocessor &PP = compiler.getPreprocessor();
+    PP.getBuiltinInfo().initializeBuiltins(PP.getIdentifierTable(),
+                                           PP.getLangOpts());
+
+    //llvm::LLVMContext *ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
+    //assert(ctx);
+    llvm::LLVMContext ctx;
+
+    CodeGenerator * codegen = CreateLLVMCodeGen(
+        compiler.getDiagnostics(),
+        "mymodule",
+        compiler.getHeaderSearchOpts(),
+        compiler.getPreprocessorOpts(),
+        compiler.getCodeGenOpts(),
+        ctx );
+
+    codegen->Initialize(compiler.getASTContext());
+
+    /*
+    std::stringstream ss;
+    ss << "__makeeverythinginclanglive_";
+    ss << bang_next_unused_id++;
+    std::string livenessfunction = ss.str();
+    */
+
+    //CodeGenProxy proxy(codegen,result,livenessfunction);
+    ParseAST(compiler.getPreprocessor(),
+            codegen,
+            compiler.getASTContext());
+
+
+
+    /*
+    Obj macros;
+    CreateTableWithName(result, "macros", &macros);
+    #if LLVM_VERSION >= 33
+    Preprocessor & PP = TheCompInst.getPreprocessor();
+    for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false); it != end; ++it) {
+        const IdentifierInfo * II = it->first;
+        MacroDirective * MD = it->second;
+        AddMacro(T,PP,II,MD,&macros);
+    }
+    #endif
+    */
+
+    llvm::Module * M = codegen->ReleaseModule();
+    M->dump();
+
+    /*
+    llvm::Module * M = codegen->ReleaseModule();
+    delete codegen;
+    if(!M) {
+        terra_reporterror(T,"compilation of included c code failed\n");
+    }
+    optimizemodule(TT,M);
+
+    char * err;
+    if(LLVMLinkModules(llvm::wrap(TT->external), llvm::wrap(M), LLVMLinkerDestroySource, &err)) {
+        terra_pusherror(T, "linker reported error: %s",err);
+        LLVMDisposeMessage(err);
+        lua_error(T->L);
+    }
+    return 0;
+
+    */
+
+}
+
+//------------------------------------------------------------------------------
+
+#ifndef alloca
+#define alloca(x)  __builtin_alloca(x)
+#endif
 
 static LLVMModuleRef bang_module;
 static LLVMBuilderRef bang_builder;
@@ -649,6 +857,7 @@ static bool bang_eq_symbol (bang_expr *expr, const char *sym) {
 (? if-expr then-block else-block)
 (do expr ...)
 (dump-module)
+(import-c <filename> (<compiler-arg> ...))
 */
 
 typedef struct {
@@ -674,6 +883,17 @@ static bang_expr *bang_verify_type(bang_expr *expr, int type) {
         } else {
             bang_error(&expr->anchor, "%s expected\n",
                 bang_expr_type_name(type));
+        }
+    }
+    return NULL;
+}
+
+static const char *bang_get_string(bang_expr *expr) {
+    if (expr) {
+        if ((expr->type == bang_expr_type_symbol) || (expr->type == bang_expr_type_string)) {
+            return (const char *)expr->buf;
+        } else {
+            bang_error(&expr->anchor, "string or symbol expected\n");
         }
     }
     return NULL;
@@ -1094,6 +1314,26 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             } else {
                                 bang_error(&expr_func->anchor, "cannot call object\n");
                             }
+                        }
+
+                    } else if (bang_match_expr(expr, "import-c", 2, 2)) {
+                        const char *name = bang_get_string(bang_nth(expr, 1));
+                        bang_expr *args_expr = bang_verify_type(bang_nth(expr, 2), bang_expr_type_list);
+
+                        if (name && args_expr) {
+                            int argcount = (int)args_expr->len;
+                            const char **args = (const char **)alloca(sizeof(const char *) * argcount);
+                            bool success = true;
+                            for (int i = 0; i < argcount; ++i) {
+                                const char *arg = bang_get_string(bang_nth(args_expr, i));
+                                if (arg) {
+                                    args[i] = arg;
+                                } else {
+                                    success = false;
+                                    break;
+                                }
+                            }
+                            bang_import_c_module(name, args, argcount);
                         }
 
                     } else if (bang_match_expr(expr, "pointer-type", 1, 1)) {
