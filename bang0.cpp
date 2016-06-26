@@ -949,7 +949,12 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
 
                     } else if (bang_match_expr(expr, "do", 1, -1)) {
 
-                        result.value = bang_translate_exprlist(env, expr, 1);
+                        bang_env subenv = env;
+                        subenv.parent = &env;
+                        NameValueMap names;
+                        subenv.names = NULL;
+
+                        result.value = bang_translate_exprlist(subenv, expr, 1);
 
                     } else if (bang_match_expr(expr, "function", 3, -1)) {
 
@@ -1114,8 +1119,14 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
             result.type = NamedTypes[name];
             result.value = NULL;
 
-            if (env.names) {
-                result.value = (*env.names)[name];
+            bang_env *penv = &env;
+            while (penv) {
+                if (penv->names) {
+                    result.value = (*penv->names)[name];
+                    if (result.value)
+                        break;
+                }
+                penv = penv->parent;
             }
 
             if (!result.value) {
@@ -1243,6 +1254,8 @@ static void bang_compile (bang_expr *expr) {
         }
 
         export_external("bang_parse_file", (void *)bang_parse_file);
+        export_external("LLVMVoidType", (void *)LLVMVoidType);
+
 
         LLVMRunFunction(bang_engine, entryfunc, 0, NULL);
 

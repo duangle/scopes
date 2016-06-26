@@ -3,6 +3,12 @@ bang
 extern bang_parse_file
     function-type (pointer-type void) ((pointer-type i8))
 
+extern LLVMVoidType
+    function-type (pointer-type void) ()
+
+extern dlopen
+    function-type (pointer-type void) ((pointer-type i8) i32)
+
 extern printf
     function-type i32 ((pointer-type i8) ...)
 extern sin
@@ -15,15 +21,16 @@ function computesin ()
 
 function dostuff (a b)
     function-type i32 (i32 i32)
-    ?
-        const-int i1 0
-        ()
-        call printf
-            getelementptr "value = %f! (false) %i %i\n"
-                const-int i32 0
-                const-int i32 0
-            call computesin
-            \ a b
+    do
+        ?
+            const-int i1 0
+            ()
+            call printf
+                getelementptr "value = %f! (false) %i %i\n"
+                    const-int i32 0
+                    const-int i32 0
+                call computesin
+                \ a b
     const-int i32 0
 
 call dostuff
@@ -38,5 +45,3 @@ call printf
         getelementptr "bang1.b"
             const-int i32 0
             const-int i32 0
-
-
