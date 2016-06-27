@@ -1,9 +1,13 @@
+#ifndef BANG0_CPP
+#define BANG0_CPP
 
 #include <sys/types.h>
 
 //------------------------------------------------------------------------------
 
+#if defined __cplusplus
 extern "C" {
+#endif
 
 typedef enum {
     bang_expr_type_none,
@@ -29,7 +33,18 @@ typedef struct {
 
 bang_expr *bang_parse_file (const char *path);
 
+#ifdef BANG_HEADER_ONLY
+long imul(long a, long b) {
+    return a * b;
 }
+#endif
+
+#if defined __cplusplus
+}
+#endif
+
+#endif // BANG0_CPP
+#ifndef BANG_HEADER_ONLY
 
 //------------------------------------------------------------------------------
 
@@ -607,6 +622,7 @@ void print_expr(bang_expr *e, size_t depth)
 #include "clang/Parse/ParseAST.h"
 #include "clang/Lex/Preprocessor.h"
 //#include "clang/Basic/SourceManager.h"
+#include "clang/CodeGen/CodeGenAction.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 
@@ -670,7 +686,7 @@ public:
 };
 */
 
-static int bang_next_unused_id = 0;
+//static int bang_next_unused_id = 0;
 
 // TODO: in LLVM 3.9, use SourceManager::getOrCreateFileID
 static FileID getOrCreateFileID(SourceManager &self, const FileEntry *SourceFile, SrcMgr::CharacteristicKind FileCharacter) {
@@ -678,10 +694,85 @@ static FileID getOrCreateFileID(SourceManager &self, const FileEntry *SourceFile
     return ID.isValid() ? ID : self.createFileID(SourceFile, SourceLocation(), FileCharacter);
 }
 
-static void bang_import_c_module (const char *path, const char **args, int argcount) {
+static void bang_error (bang_anchor *anchor, const char *format, ...);
+
+// This function isn't referenced outside its translation unit, but it
+// can't use the "static" keyword because its address is used for
+// GetMainExecutable (since some platforms don't support taking the
+// address of main, and some platforms can't implement GetMainExecutable
+// without being given the address of a function in the main executable).
+std::string GetExecutablePath(const char *Argv0) {
+  // This just needs to be some symbol in the binary; C++ doesn't
+  // allow taking the address of ::main however.
+  void *MainAddr = (void*) (intptr_t) GetExecutablePath;
+  return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
+}
+
+/*
+    -I/usr/local/include
+    -I./clang/lib/clang/3.8.0/include
+    -I/usr/include/x86_64-linux-gnu
+    -I/usr/include
+
+*/
+static int bang_argc;
+static char **bang_argv;
+
+static LLVMModuleRef bang_import_c_module (bang_anchor *anchor,
+    const char *modulename, const char *path, const char **args, int argcount) {
+
+    void *MainAddr = (void*) (intptr_t) GetExecutablePath;
+
+    std::vector<const char *> aargs;
+    aargs.push_back("clang");
+    aargs.push_back(path);
+    for (int i = 0; i < argcount; ++i) {
+        aargs.push_back(args[i]);
+    }
+
+    std::unique_ptr<CompilerInvocation> CI(createInvocationFromCommandLine(aargs));
+
+    assert(CI);
+
+    // TODO: create the CompilerInvocation and remap with addRemappedFile(llvm::StringRef From, const llvm::MemoryBuffer * To)
+
+    CompilerInstance compiler;
+    compiler.setInvocation(CI.release());
+
+    // Create the compilers actual diagnostics engine.
+    compiler.createDiagnostics();
+
+    // Infer the builtin include path if unspecified.
+    if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
+        compiler.getHeaderSearchOpts().ResourceDir.empty())
+        compiler.getHeaderSearchOpts().ResourceDir =
+            CompilerInvocation::GetResourcesPath(bang_argv[0], MainAddr);
+
+    LLVMModuleRef M = NULL;
+
+    llvm::LLVMContext *ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
+    assert(ctx);
+
+    // Create and execute the frontend to generate an LLVM bitcode module.
+    std::unique_ptr<CodeGenAction> Act(new EmitLLVMOnlyAction(ctx));
+    if (compiler.ExecuteAction(*Act)) {
+        M = (LLVMModuleRef)Act->takeModule().release();
+        assert(M);
+        LLVMDumpModule(M);
+    } else {
+        bang_error(anchor, "compiler failed\n");
+    }
+
+    return M;
+}
+
+static LLVMModuleRef bang_import_c_module0 (bang_anchor *anchor,
+    const char *modulename, const char *path, const char **args, int argcount) {
     CompilerInstance compiler;
 
     // llvm::MemoryBuffer * membuffer = llvm::MemoryBuffer::getMemBuffer(code, "<buffer>");
+
+
 
     compiler.createDiagnostics();
     CompilerInvocation::CreateFromArgs(
@@ -690,7 +781,7 @@ static void bang_import_c_module (const char *path, const char **args, int argco
         compiler.getDiagnostics());
     //need to recreate the diagnostics engine so that it actually listens to warning flags like -Wno-deprecated
     //this cannot go before CreateFromArgs
-    //compiler.createDiagnostics();
+    compiler.createDiagnostics();
 
 #if 1
     std::shared_ptr<clang::TargetOptions> to(new clang::TargetOptions(compiler.getTargetOpts()));
@@ -733,19 +824,19 @@ static void bang_import_c_module (const char *path, const char **args, int argco
     PP.getBuiltinInfo().initializeBuiltins(PP.getIdentifierTable(),
                                            PP.getLangOpts());
 
-    //llvm::LLVMContext *ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
-    //assert(ctx);
-    llvm::LLVMContext ctx;
+    llvm::LLVMContext *ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
+    assert(ctx);
 
-    CodeGenerator * codegen = CreateLLVMCodeGen(
+    CodeGenerator* codegen = CreateLLVMCodeGen(
         compiler.getDiagnostics(),
-        "mymodule",
+        modulename,
         compiler.getHeaderSearchOpts(),
         compiler.getPreprocessorOpts(),
         compiler.getCodeGenOpts(),
-        ctx );
+        *ctx );
 
     codegen->Initialize(compiler.getASTContext());
+    //compiler.setASTConsumer(*codegen);
 
     /*
     std::stringstream ss;
@@ -759,30 +850,25 @@ static void bang_import_c_module (const char *path, const char **args, int argco
             codegen,
             compiler.getASTContext());
 
-
-
     /*
     Obj macros;
     CreateTableWithName(result, "macros", &macros);
-    #if LLVM_VERSION >= 33
-    Preprocessor & PP = TheCompInst.getPreprocessor();
+    Preprocessor & PP = compiler.getPreprocessor();
     for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false); it != end; ++it) {
         const IdentifierInfo * II = it->first;
         MacroDirective * MD = it->second;
         AddMacro(T,PP,II,MD,&macros);
     }
-    #endif
     */
 
     llvm::Module * M = codegen->ReleaseModule();
-    M->dump();
+    if(M) {
+        M->dump();
+    } else {
+        bang_error(anchor, "compilation of included c code failed\n");
+    }
 
     /*
-    llvm::Module * M = codegen->ReleaseModule();
-    delete codegen;
-    if(!M) {
-        terra_reporterror(T,"compilation of included c code failed\n");
-    }
     optimizemodule(TT,M);
 
     char * err;
@@ -795,6 +881,7 @@ static void bang_import_c_module (const char *path, const char **args, int argco
 
     */
 
+    return (LLVMModuleRef)M;
 }
 
 //------------------------------------------------------------------------------
@@ -809,9 +896,11 @@ static LLVMExecutionEngineRef bang_engine;
 static LLVMValueRef bang_nopfunc;
 
 typedef std::map<std::string, LLVMValueRef> NameValueMap;
+typedef std::map<std::string, LLVMModuleRef> NameModuleMap;
 
 static NameValueMap NamedValues;
 static std::map<std::string, LLVMTypeRef> NamedTypes;
+static NameModuleMap NamedModules;
 static int compile_errors = 0;
 static bool bang_dump_module = false;
 
@@ -1316,11 +1405,12 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             }
                         }
 
-                    } else if (bang_match_expr(expr, "import-c", 2, 2)) {
-                        const char *name = bang_get_string(bang_nth(expr, 1));
-                        bang_expr *args_expr = bang_verify_type(bang_nth(expr, 2), bang_expr_type_list);
+                    } else if (bang_match_expr(expr, "import-c", 3, 3)) {
+                        const char *modulename = bang_get_string(bang_nth(expr, 1));
+                        const char *name = bang_get_string(bang_nth(expr, 2));
+                        bang_expr *args_expr = bang_verify_type(bang_nth(expr, 3), bang_expr_type_list);
 
-                        if (name && args_expr) {
+                        if (modulename && name && args_expr) {
                             int argcount = (int)args_expr->len;
                             const char **args = (const char **)alloca(sizeof(const char *) * argcount);
                             bool success = true;
@@ -1333,7 +1423,10 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                                     break;
                                 }
                             }
-                            bang_import_c_module(name, args, argcount);
+                            LLVMModuleRef module = bang_import_c_module(&expr->anchor, modulename, name, args, argcount);
+                            if (module) {
+                                NamedModules[modulename] = module;
+                            }
                         }
 
                     } else if (bang_match_expr(expr, "pointer-type", 1, 1)) {
@@ -1374,6 +1467,13 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
             }
 
             if (!result.value) {
+                /*
+                for (auto it: NamedModules) {
+                    result.value = LLVMGetNamedFunction(it.second, name);
+                    if (result.value)
+                        break;
+                }
+                */
                 result.value = LLVMGetNamedFunction(bang_module, name);
             }
 
@@ -1407,6 +1507,7 @@ static void export_external (const char *name, void *addr) {
 
 static void bang_compile (bang_expr *expr) {
     bang_module = LLVMModuleCreateWithName("bang");
+    NamedModules["bang"] = bang_module;
     bang_builder = LLVMCreateBuilder();
 
     NamedTypes["void"] = LLVMVoidType();
@@ -1493,6 +1594,9 @@ static void bang_compile (bang_expr *expr) {
             abort();
         }
 
+        for (auto it: NamedModules)
+            LLVMAddModule(bang_engine, it.second);
+
         export_external("bang_parse_file", (void *)bang_parse_file);
         export_external("LLVMVoidType", (void *)LLVMVoidType);
 
@@ -1508,6 +1612,9 @@ static void bang_compile (bang_expr *expr) {
 //------------------------------------------------------------------------------
 
 int main(int argc, char ** argv) {
+    bang_argc = argc;
+    bang_argv = argv;
+
     int result = 0;
 
     ++argv;
@@ -1527,3 +1634,5 @@ int main(int argc, char ** argv) {
 
     return result;
 }
+
+#endif // BANG_HEADER_ONLY

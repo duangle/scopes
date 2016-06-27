@@ -6,21 +6,38 @@ while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symli
   [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE" # if $SOURCE was a relative symlink, we need to resolve it relative to the path where the symlink file was located
 done
 DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
-PATH=$DIR/clang/bin:/usr/lib/llvm-3.8/bin:$PATH
-# PATH=$DIR/../../llvm/build/bin:$PATH
-clang++ \
-    -o bang0 $DIR/bang0.cpp \
-    -pedantic -g \
-    -lpthread -lm -ldl -ltinfo -lz -lstdc++ \
-    -lclangFrontend -lclangDriver \
-    -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
-    -lclangAnalysis \
-    -lclangEdit -lclangAST -lclangLex -lclangBasic \
-    `llvm-config --cxxflags` \
-    `llvm-config --ldflags --libs` \
-    && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
-    # && $DIR/bang0 $DIR/bang1.b
-
-
-#    -I$DIR/../../llvm/llvm/tools/clang/include
-#    -I$DIR/../../llvm/build/tools/clang/include
+cd $DIR
+MODE=release
+if [ $MODE = "release" ]; then
+    echo Building with clang release version...
+    PATH=$DIR/clang/bin:/usr/lib/llvm-3.8/bin:$PATH
+    clang++ \
+        -o bang0 $DIR/bang0.cpp \
+        -pedantic -g \
+        -lpthread -lm -ldl -ltinfo -lz -lstdc++ \
+        -lclangFrontend -lclangDriver \
+        -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
+        -lclangAnalysis \
+        -lclangEdit -lclangAST -lclangLex -lclangBasic \
+        `llvm-config --cxxflags` \
+        `llvm-config --ldflags --libs` \
+        && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
+        # && $DIR/bang0 $DIR/bang1.b
+else
+    echo Building with clang debug version...
+    PATH=$DIR/../../llvm/build/bin:$PATH
+    clang++ \
+        -o bang0 $DIR/bang0.cpp \
+        -pedantic -g \
+        -lpthread -lm -ldl -ltinfo -lz -lstdc++ \
+        -lclangFrontend -lclangDriver \
+        -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
+        -lclangAnalysis \
+        -lclangEdit -lclangAST -lclangLex -lclangBasic \
+        `llvm-config --cxxflags` \
+        `llvm-config --ldflags --libs` \
+        -I$DIR/../../llvm/llvm/tools/clang/include \
+        -I$DIR/../../llvm/build/tools/clang/include \
+        && gdb --ex r --silent --args $DIR/bang0 $DIR/bang1.b
+        # && $DIR/bang0 $DIR/bang1.b
+fi

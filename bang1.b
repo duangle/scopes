@@ -1,6 +1,8 @@
 bang
 
-import-c /home/lritter/devel/duangle/bang/bang0.h (
+import-c bang0 ./bang0.cpp (
+    -DBANG_HEADER_ONLY
+    -I./clang/lib/clang/3.8.0/include
     )
 
 extern bang_parse_file
@@ -39,6 +41,10 @@ function dostuff-hyphenated (a b)
 call dostuff-hyphenated
     const-int i32 1
     const-int i32 2
+
+call imul
+    const-int i64 1
+    const-int i64 2
 
 call printf
     getelementptr "Hello World! %p\n"
