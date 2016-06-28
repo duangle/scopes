@@ -645,12 +645,17 @@ static std::map<TypeId, std::vector<TypeId> > _element_type_map;
 static std::map<TypeId, std::vector<std::string> > _element_name_map;
 // if a type is a pointer, its pointee type is here
 static std::map<TypeId, TypeId> _pointee_map;
-// if a type is an array, the array size is here
-static std::map<TypeId, size_t> _array_size_map;
-// if a type is a vector, the vector size is here
-static std::map<TypeId, size_t> _vector_size_map;
 // cached pointer types go here
 static std::map<TypeId, TypeId> _pointer_map;
+
+// if a type is an array, the array size is here
+static std::map<TypeId, size_t> _array_size_map;
+// cached array types go here
+static std::map< std::pair<TypeId, size_t>, TypeId> _array_map;
+// if a type is a vector, the vector size is here
+static std::map<TypeId, size_t> _vector_size_map;
+// cached vector types go here
+static std::map< std::pair<TypeId, size_t>, TypeId> _vector_map;
 
 // handle around TypeIds
 class Type {
@@ -662,14 +667,25 @@ public:
     Type(const Type &type) : id(type.id) {}
     Type(uint64_t id_) : id(id_) {}
 
+    static Type none() {
+        return Type(0);
+    }
+        
     static Type create(std::string name, LLVMTypeRef llvmtype) {
         Type type(++next_type_ref);
         _pretty_name_map[type.id] = name;
         _llvm_type_map[type.id] = llvmtype;
         return type;
     }
+    
+    static Type createStruct(std::string name) {
+        return Type::create(name, 
+            LLVMStructCreateNamed(LLVMGetGlobalContext(), name.c_str()));
+    }
 
     static Type pointer(Type type);
+    static Type array(Type type, size_t size);
+    static Type vector(Type type, size_t size);
 
     bool operator == (const Type &other) const {
         return id == other.id;
@@ -744,11 +760,31 @@ Type Type::pointer(Type type) {
     assert(type != T_void);
     Type ptr = Type(_pointer_map[type.id]);
     if (!ptr) {
-        ptr = Type::create(string_format("&%s", getPrettyName().c_str()));
+        ptr = Type::create(string_format("&%s", 
+            type.getPrettyName().c_str()), 
+            LLVMPointerType(type.getLLVMType(), 0) );
         _pointer_map[type.id] = ptr.id;
         _pointee_map[ptr.id] = type.id;
     }
     return ptr;
+}
+
+Type Type::array(Type type, size_t size) {
+    // cannot reference void
+    assert(type != T_void);
+    Type ptr = Type(_pointer_map[type.id]);
+    if (_array_size_map
+    if (!ptr) {
+        ptr = Type::create(string_format("&%s", 
+            type.getPrettyName().c_str()), 
+            LLVMPointerType(type.getLLVMType(), 0) );
+        _pointer_map[type.id] = ptr.id;
+        _pointee_map[ptr.id] = type.id;
+    }
+    return ptr;
+}
+
+Type Type::vector(Type type, size_t size) {
 }
 
 //------------------------------------------------------------------------------
@@ -760,6 +796,7 @@ static LLVMValueRef bang_nopfunc;
 
 typedef std::map<std::string, LLVMValueRef> NameValueMap;
 typedef std::map<std::string, LLVMModuleRef> NameModuleMap;
+typedef std::map<std::string, Type> NameTypeMap;
 
 static NameValueMap NamedValues;
 static NameModuleMap NamedModules;
@@ -794,20 +831,21 @@ struct Environment {
 
 static void translateError (Anchor *anchor, const char *format, ...);
 
-class BangCVisitor : public clang::RecursiveASTVisitor<clang::BangCVisitor> {
+class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
 public:
-    using namespace clang;
+    clang::ASTContext *Context;
 
-    ASTContext *Context;
+    NameTypeMap taggedStructs;
+    NameTypeMap namedStructs;
 
-    BangCVisitor() : Context(NULL) {
+    CVisitor() : Context(NULL) {
     }
 
-    void SetContext(ASTContext * ctx) {
+    void SetContext(clang::ASTContext * ctx) {
         Context = ctx;
     }
 
-    bool GetFields(RecordDecl * rd) {
+    bool GetFields(clang::RecordDecl * rd) {
         // ASTContext::getASTRecordLayout(const RecordDecl *D)
 
         //check the fields of this struct, if any one of them is not understandable, then this struct becomes 'opaque'
@@ -815,8 +853,8 @@ public:
         //but none of its fields are exposed (since we don't understand the layout)
         bool opaque = false;
         int anonname = 0;
-        for(RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
-            DeclarationName declname = it->getDeclName();
+        for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
+            clang::DeclarationName declname = it->getDeclName();
 
             if(it->isBitField() || (!it->isAnonymousStructOrUnion() && !declname)) {
                 opaque = true;
@@ -830,7 +868,7 @@ public:
             } else {
                 declstr = declname.getAsString();
             }
-            QualType FT = it->getType();
+            clang::QualType FT = it->getType();
             LLVMTypeRef fieldtype = TranslateType(FT);
             if(!fieldtype) {
                 opaque = true;
@@ -843,41 +881,35 @@ public:
 
     }
 
-    LLVMTypeRef TranslateRecord(RecordDecl * rd) {
+    Type TranslateRecord(clang::RecordDecl * rd) {
         if(rd->isStruct() || rd->isUnion()) {
             std::string name = rd->getName();
 
             bool tagged = true;
 
             if(name == "") {
-                TypedefNameDecl * decl = rd->getTypedefNameForAnonDecl();
+                clang::TypedefNameDecl * decl = rd->getTypedefNameForAnonDecl();
                 if(decl) {
                     tagged = false;
                     name = decl->getName();
                 }
             }
-            bang_struct_def *structdef =
-                ((tagged)?TaggedNamedStructs[name]:NamedStructs[name]).get();
+            
+            Type structtype = (tagged)?taggedStructs[name]:namedStructs[name];
 
-            if (!structdef) {
-                structdef = new bang_struct_def();
-
-                structdef->type = LLVMStructCreateNamed(
-                    LLVMGetGlobalContext(), name.c_str());
-
-                printf("record: %s tagged=%s\n",
-                    name.c_str(), tagged?"true":"false");
+            if (!structtype) {
+                structtype = Type::createStruct(name);
 
                 if (tagged)
-                    TaggedNamedStructs[name].reset(structdef);
+                    taggedStructs[name] = structtype;
                 else
-                    NamedStructs[name].reset(structdef);
+                    namedStructs[name] = structtype;
             }
 
             // size_t argpos = RegisterRecordType(Context->getRecordType(rd));
             // thenamespace->setfield(name.c_str()); //register the type
 
-            RecordDecl * defn = rd->getDefinition();
+            clang::RecordDecl * defn = rd->getDefinition();
             if (defn != NULL) {
                 if (GetFields(defn)) {
                     if(!defn->isUnion()) {
@@ -889,111 +921,113 @@ public:
                 }
             }
 
-            return structdef->type;
+            return structtype;
         } else {
             //return ImportError("non-struct record types are not supported");
-            return NULL;
+            return Type::none();
         }
     }
 
-    LLVMTypeRef TranslateType(QualType T) {
+    Type TranslateType(clang::QualType T) {
+        using namespace clang;
+        
         T = Context->getCanonicalType(T);
-        const Type *Ty = T.getTypePtr();
+        const clang::Type *Ty = T.getTypePtr();
 
         switch (Ty->getTypeClass()) {
-        case Type::Record: {
+        case clang::Type::Record: {
             const RecordType *RT = dyn_cast<RecordType>(Ty);
             RecordDecl * rd = RT->getDecl();
             //return GetRecordTypeFromDecl(rd, tt);
             return TranslateRecord(rd);
         }  break; //TODO
-        case Type::Builtin:
+        case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
-            case BuiltinType::Void: {
-                //InitType("opaque",tt);
-                return LLVMVoidType();
+            case clang::BuiltinType::Void: {
+                return T_void;
             } break;
-            case BuiltinType::Bool: {
-                //InitType("bool",tt);
-                return LLVMInt1Type();
+            case clang::BuiltinType::Bool: {
+                return T_bool;
             } break;
-            case BuiltinType::Char_S:
-            case BuiltinType::Char_U:
-            case BuiltinType::SChar:
-            case BuiltinType::UChar:
-            case BuiltinType::Short:
-            case BuiltinType::UShort:
-            case BuiltinType::Int:
-            case BuiltinType::UInt:
-            case BuiltinType::Long:
-            case BuiltinType::ULong:
-            case BuiltinType::LongLong:
-            case BuiltinType::ULongLong:
-            case BuiltinType::WChar_S:
-            case BuiltinType::WChar_U:
-            case BuiltinType::Char16:
-            case BuiltinType::Char32: {
-                /*
-                std::stringstream ss;
-                if (Ty->isUnsignedIntegerType())
-                    ss << "u";
-                ss << "int";
+            case clang::BuiltinType::Char_S:
+            case clang::BuiltinType::Char_U:
+            case clang::BuiltinType::SChar:
+            case clang::BuiltinType::UChar:
+            case clang::BuiltinType::Short:
+            case clang::BuiltinType::UShort:
+            case clang::BuiltinType::Int:
+            case clang::BuiltinType::UInt:
+            case clang::BuiltinType::Long:
+            case clang::BuiltinType::ULong:
+            case clang::BuiltinType::LongLong:
+            case clang::BuiltinType::ULongLong:
+            case clang::BuiltinType::WChar_S:
+            case clang::BuiltinType::WChar_U:
+            case clang::BuiltinType::Char16:
+            case clang::BuiltinType::Char32: {
                 int sz = Context->getTypeSize(T);
-                ss << sz;
-                InitType(ss.str().c_str(),tt);
-                */
-                int sz = Context->getTypeSize(T);
-                if (sz == 8)
-                    return LLVMInt8Type();
-                else if (sz == 16)
-                    return LLVMInt16Type();
-                else if (sz == 32)
-                    return LLVMInt32Type();
-                else if (sz == 64)
-                    return LLVMInt64Type();
+                if (Ty->isUnsignedIntegerType()) {                
+                    if (sz == 8)
+                        return T_uint8;
+                    else if (sz == 16)
+                        return T_uint16;
+                    else if (sz == 32)
+                        return T_uint32;
+                    else if (sz == 64)
+                        return T_uint64;
+                } else {
+                    if (sz == 8)
+                        return T_int8;
+                    else if (sz == 16)
+                        return T_int16;
+                    else if (sz == 32)
+                        return T_int32;
+                    else if (sz == 64)
+                        return T_int64;
+                }
             } break;
-            case BuiltinType::Half: {
-                return LLVMHalfType();
+            case clang::BuiltinType::Half: {
+                return T_half;
             } break;
-            case BuiltinType::Float: {
-                return LLVMFloatType();
+            case clang::BuiltinType::Float: {
+                return T_float;
             } break;
-            case BuiltinType::Double: {
-                return LLVMDoubleType();
+            case clang::BuiltinType::Double: {
+                return T_double;
             } break;
-            case BuiltinType::LongDouble:
-            case BuiltinType::NullPtr:
-            case BuiltinType::UInt128:
+            case clang::BuiltinType::LongDouble:
+            case clang::BuiltinType::NullPtr:
+            case clang::BuiltinType::UInt128:
             default:
                 break;
             }
-        case Type::Complex:
-        case Type::LValueReference:
-        case Type::RValueReference:
+        case clang::Type::Complex:
+        case clang::Type::LValueReference:
+        case clang::Type::RValueReference:
             break;
-        case Type::Pointer: {
+        case clang::Type::Pointer: {
             const PointerType *PTy = cast<PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            LLVMTypeRef pointee = TranslateType(ETy);
+            Type pointee = TranslateType(ETy);
             if (pointee) {
-                if (pointee == LLVMVoidType())
-                    pointee = LLVMInt8Type();
-                return LLVMPointerType(pointee, 0);
+                if (pointee == T_void)
+                    pointee = T_opaque;
+                return pointee::pointer();
             }
         } break;
-        case Type::VariableArray:
-        case Type::IncompleteArray:
+        case clang::Type::VariableArray:
+        case clang::Type::IncompleteArray:
             break;
-        case Type::ConstantArray: {
+        case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
-            LLVMTypeRef at = TranslateType(ATy->getElementType());
+            Type at = TranslateType(ATy->getElementType());
             if(at) {
                 int sz = ATy->getSize().getZExtValue();
                 return LLVMArrayType(at, sz);
             }
         } break;
-        case Type::ExtVector:
-        case Type::Vector: {
+        case clang::Type::ExtVector:
+        case clang::Type::Vector: {
                 const VectorType *VT = cast<VectorType>(T);
                 LLVMTypeRef at = TranslateType(VT->getElementType());
                 if(at) {
@@ -1001,22 +1035,22 @@ public:
                     return LLVMVectorType(at, n);
                 }
         } break;
-        case Type::FunctionNoProto: /* fallthrough */
-        case Type::FunctionProto: {
+        case clang::Type::FunctionNoProto: /* fallthrough */
+        case clang::Type::FunctionProto: {
             const FunctionType *FT = cast<FunctionType>(Ty);
             if (FT) {
                 return TranslateFuncType(FT);
             }
         } break;
-        case Type::ObjCObject: break;
-        case Type::ObjCInterface: break;
-        case Type::ObjCObjectPointer: break;
+        case clang::Type::ObjCObject: break;
+        case clang::Type::ObjCInterface: break;
+        case clang::Type::ObjCObjectPointer: break;
         case Type::Enum: {
             return LLVMInt32Type();
         } break;
-        case Type::BlockPointer:
-        case Type::MemberPointer:
-        case Type::Atomic:
+        case clang::Type::BlockPointer:
+        case clang::Type::MemberPointer:
+        case clang::Type::Atomic:
         default:
             break;
         }
@@ -1027,10 +1061,10 @@ public:
         return ImportError(ss.str().c_str());
         */
         // TODO: print error
-        return NULL;
+        return Type::none();
     }
 
-    LLVMTypeRef TranslateFuncType(const FunctionType * f) {
+    LLVMTypeRef TranslateFuncType(const clang::FunctionType * f) {
 
         bool valid = true; // decisions about whether this function can be exported or not are delayed until we have seen all the potential problems
         QualType RT = f->getReturnType();
@@ -1063,9 +1097,9 @@ public:
         return NULL;
     }
 
-    bool TraverseFunctionDecl(FunctionDecl *f) {
+    bool TraverseFunctionDecl(clang::FunctionDecl *f) {
          // Function name
-        DeclarationName DeclName = f->getNameInfo().getName();
+        clang::DeclarationName DeclName = f->getNameInfo().getName();
         std::string FuncName = DeclName.getAsString();
         const FunctionType * fntyp = f->getType()->getAs<FunctionType>();
 
@@ -1090,7 +1124,7 @@ public:
             return true;
 
         std::string InternalName = FuncName;
-        AsmLabelAttr * asmlabel = f->getAttr<AsmLabelAttr>();
+        clang::AsmLabelAttr * asmlabel = f->getAttr<clang::AsmLabelAttr>();
         if(asmlabel) {
             InternalName = asmlabel->getLabel();
             #ifndef __linux__
@@ -1117,7 +1151,7 @@ class CodeGenProxy : public clang::ASTConsumer {
 public:
     using namespace clang;
 
-    BangCVisitor visitor;
+    CVisitor visitor;
 
     CodeGenProxy() {}
     virtual ~CodeGenProxy() {}
