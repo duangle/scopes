@@ -1,12 +1,11 @@
 bang
 
+(dump-module)
+
 import-c bang0 ./bang0.cpp (
     -DBANG_HEADER_ONLY
     -I./clang/lib/clang/3.8.0/include
     )
-
-extern bang_parse_file
-    function-type (pointer-type i8) ((pointer-type i8))
 
 extern LLVMVoidType
     function-type (pointer-type i8) ()
@@ -18,6 +17,7 @@ extern printf
     function-type i32 ((pointer-type i8) ...)
 extern sin
     function-type double (double)
+
 
 function computesin ()
     function-type double ()

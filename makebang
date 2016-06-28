@@ -14,6 +14,7 @@ if [ $MODE = "release" ]; then
     clang++ \
         -o bang0 $DIR/bang0.cpp \
         -pedantic -g \
+        -Wno-vla-extension\
         -lpthread -lm -ldl -ltinfo -lz -lstdc++ \
         -lclangFrontend -lclangDriver \
         -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
@@ -29,6 +30,7 @@ else
     clang++ \
         -o bang0 $DIR/bang0.cpp \
         -pedantic -g \
+        -Wno-vla-extension\
         -lpthread -lm -ldl -ltinfo -lz -lstdc++ \
         -lclangFrontend -lclangDriver \
         -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \

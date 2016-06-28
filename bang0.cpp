@@ -610,26 +610,56 @@ void print_expr(bang_expr *e, size_t depth)
 
 #include <map>
 #include <string>
+#include <vector>
+#include <memory>
 
 //------------------------------------------------------------------------------
 
-#include "clang/Frontend/CompilerInstance.h"
-#include "clang/Basic/TargetInfo.h"
-#include "clang/CodeGen/ModuleBuilder.h"
-//#include "clang/CodeGen/CodeGenAction.h"
-//#include "clang/AST/ASTConsumer.h"
-//#include "clang/AST/RecursiveASTVisitor.h"
-#include "clang/Parse/ParseAST.h"
-#include "clang/Lex/Preprocessor.h"
-//#include "clang/Basic/SourceManager.h"
-#include "clang/CodeGen/CodeGenAction.h"
+static LLVMModuleRef bang_module;
+static LLVMBuilderRef bang_builder;
+static LLVMExecutionEngineRef bang_engine;
+static LLVMValueRef bang_nopfunc;
+
+typedef std::map<std::string, LLVMValueRef> NameValueMap;
+typedef std::map<std::string, LLVMTypeRef> NameTypeMap;
+typedef std::map<std::string, LLVMModuleRef> NameModuleMap;
+
+static NameValueMap NamedValues;
+static NameTypeMap NamedTypes;
+static NameModuleMap NamedModules;
+static int compile_errors = 0;
+static bool bang_dump_module = false;
+
+//------------------------------------------------------------------------------
+
+struct bang_field_def {
+    std::string name;
+    LLVMTypeRef type;
+};
+
+struct bang_struct_def {
+    std::vector<bang_field_def> fields;
+    LLVMTypeRef type;
+};
+
+typedef std::map<std::string, std::unique_ptr<bang_struct_def> > NameStructMap;
+static NameStructMap NamedStructs;
+static NameStructMap TaggedNamedStructs;
+
+//------------------------------------------------------------------------------
+
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+
+#include "clang/Frontend/CompilerInstance.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/CodeGen/CodeGenAction.h"
+#include "clang/Frontend/MultiplexConsumer.h"
 
 #include <sstream>
 
 using namespace clang;
-using namespace llvm;
+//using namespace llvm;
 
 // createInvocationFromCommandLine()
 // attach custom observers
@@ -643,56 +673,6 @@ using namespace llvm;
 // CompilerInstance::loadModuleFile
 // look up decls we want (not possible?)
 // use TU-wide lookup and filter
-
-// ASTContext::getASTRecordLayout(const RecordDecl *D)
-
-/*
-class CodeGenProxy : public ASTConsumer {
-public:
-  CodeGenerator * CG;
-  IncludeCVisitor Visitor;
-
-  CodeGenProxy(CodeGenerator * CG_, Obj * result, const std::string & livenessfunction) :
-    CG(CG_),
-    Visitor(result,livenessfunction) {}
-  virtual ~CodeGenProxy() {}
-  virtual void Initialize(ASTContext &Context) {
-    Visitor.SetContext(&Context);
-    CG->Initialize(Context);
-  }
-  virtual bool HandleTopLevelDecl(DeclGroupRef D) {
-    for (DeclGroupRef::iterator b = D.begin(), e = D.end();
-         b != e; ++b)
-            Visitor.TraverseDecl(*b);
-    return CG->HandleTopLevelDecl(D);
-  }
-  virtual void HandleInterestingDecl(DeclGroupRef D) { CG->HandleInterestingDecl(D); }
-  virtual void HandleTranslationUnit(ASTContext &Ctx) {
-    Decl * Decl = Visitor.GetLivenessFunction();
-    DeclGroupRef R = DeclGroupRef::Create(Ctx, &Decl, 1);
-    CG->HandleTopLevelDecl(R);
-    CG->HandleTranslationUnit(Ctx);
-  }
-  virtual void HandleTagDeclDefinition(TagDecl *D) { CG->HandleTagDeclDefinition(D); }
-  virtual void HandleCXXImplicitFunctionInstantiation(FunctionDecl *D) { CG->HandleCXXImplicitFunctionInstantiation(D); }
-  virtual void HandleTopLevelDeclInObjCContainer(DeclGroupRef D) { CG->HandleTopLevelDeclInObjCContainer(D); }
-  virtual void CompleteTentativeDefinition(VarDecl *D) { CG->CompleteTentativeDefinition(D); }
-  virtual void HandleCXXStaticMemberVarInstantiation(VarDecl *D) { CG->HandleCXXStaticMemberVarInstantiation(D); }
-  virtual void HandleVTable(CXXRecordDecl *RD, bool DefinitionRequired) { CG->HandleVTable(RD, DefinitionRequired); }
-  virtual ASTMutationListener *GetASTMutationListener() { return CG->GetASTMutationListener(); }
-  virtual ASTDeserializationListener *GetASTDeserializationListener() { return CG->GetASTDeserializationListener(); }
-  virtual void PrintStats() { CG->PrintStats(); }
-
-};
-*/
-
-//static int bang_next_unused_id = 0;
-
-// TODO: in LLVM 3.9, use SourceManager::getOrCreateFileID
-static FileID getOrCreateFileID(SourceManager &self, const FileEntry *SourceFile, SrcMgr::CharacteristicKind FileCharacter) {
-    FileID ID = self.translateFile(SourceFile);
-    return ID.isValid() ? ID : self.createFileID(SourceFile, SourceLocation(), FileCharacter);
-}
 
 static void bang_error (bang_anchor *anchor, const char *format, ...);
 
@@ -715,13 +695,367 @@ std::string GetExecutablePath(const char *Argv0) {
     -I/usr/include
 
 */
+
 static int bang_argc;
 static char **bang_argv;
+
+class BangCVisitor : public RecursiveASTVisitor<BangCVisitor> {
+public:
+    ASTContext *Context;
+
+    BangCVisitor() : Context(NULL) {
+    }
+
+    void SetContext(ASTContext * ctx) {
+        Context = ctx;
+    }
+
+    bool GetFields(RecordDecl * rd) {
+        // ASTContext::getASTRecordLayout(const RecordDecl *D)
+
+        //check the fields of this struct, if any one of them is not understandable, then this struct becomes 'opaque'
+        //that is, we insert the type, and link it to its llvm type, so it can be used in terra code
+        //but none of its fields are exposed (since we don't understand the layout)
+        bool opaque = false;
+        int anonname = 0;
+        for(RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
+            DeclarationName declname = it->getDeclName();
+
+            if(it->isBitField() || (!it->isAnonymousStructOrUnion() && !declname)) {
+                opaque = true;
+                continue;
+            }
+            std::string declstr;
+            if(it->isAnonymousStructOrUnion()) {
+                char buf[32];
+                sprintf(buf,"_%d",anonname++);
+                declstr = buf;
+            } else {
+                declstr = declname.getAsString();
+            }
+            QualType FT = it->getType();
+            LLVMTypeRef fieldtype = TranslateType(FT);
+            if(!fieldtype) {
+                opaque = true;
+                continue;
+            }
+            LLVMDumpType(fieldtype);
+            printf("%s\n", declstr.c_str());
+        }
+        return !opaque;
+
+    }
+
+    LLVMTypeRef TranslateRecord(RecordDecl * rd) {
+        if(rd->isStruct() || rd->isUnion()) {
+            std::string name = rd->getName();
+
+            bool tagged = true;
+
+            if(name == "") {
+                TypedefNameDecl * decl = rd->getTypedefNameForAnonDecl();
+                if(decl) {
+                    tagged = false;
+                    name = decl->getName();
+                }
+            }
+            bang_struct_def *structdef =
+                ((tagged)?TaggedNamedStructs[name]:NamedStructs[name]).get();
+
+            if (!structdef) {
+                structdef = new bang_struct_def();
+
+                structdef->type = LLVMStructCreateNamed(
+                    LLVMGetGlobalContext(), name.c_str());
+
+                printf("record: %s tagged=%s\n",
+                    name.c_str(), tagged?"true":"false");
+
+                if (tagged)
+                    TaggedNamedStructs[name].reset(structdef);
+                else
+                    NamedStructs[name].reset(structdef);
+            }
+
+            // size_t argpos = RegisterRecordType(Context->getRecordType(rd));
+            // thenamespace->setfield(name.c_str()); //register the type
+
+            RecordDecl * defn = rd->getDefinition();
+            if (defn != NULL) {
+                if (GetFields(defn)) {
+                    if(!defn->isUnion()) {
+                        //structtype.entries = {entry1, entry2, ... }
+                    } else {
+                        //add as a union:
+                        //structtype.entries = { {entry1,entry2,...} }
+                    }
+                }
+            }
+
+            return structdef->type;
+        } else {
+            //return ImportError("non-struct record types are not supported");
+            return NULL;
+        }
+    }
+
+    LLVMTypeRef TranslateType(QualType T) {
+        T = Context->getCanonicalType(T);
+        const Type *Ty = T.getTypePtr();
+
+        switch (Ty->getTypeClass()) {
+        case Type::Record: {
+            const RecordType *RT = dyn_cast<RecordType>(Ty);
+            RecordDecl * rd = RT->getDecl();
+            //return GetRecordTypeFromDecl(rd, tt);
+            return TranslateRecord(rd);
+        }  break; //TODO
+        case Type::Builtin:
+            switch (cast<BuiltinType>(Ty)->getKind()) {
+            case BuiltinType::Void: {
+                //InitType("opaque",tt);
+                return LLVMVoidType();
+            } break;
+            case BuiltinType::Bool: {
+                //InitType("bool",tt);
+                return LLVMInt1Type();
+            } break;
+            case BuiltinType::Char_S:
+            case BuiltinType::Char_U:
+            case BuiltinType::SChar:
+            case BuiltinType::UChar:
+            case BuiltinType::Short:
+            case BuiltinType::UShort:
+            case BuiltinType::Int:
+            case BuiltinType::UInt:
+            case BuiltinType::Long:
+            case BuiltinType::ULong:
+            case BuiltinType::LongLong:
+            case BuiltinType::ULongLong:
+            case BuiltinType::WChar_S:
+            case BuiltinType::WChar_U:
+            case BuiltinType::Char16:
+            case BuiltinType::Char32: {
+                /*
+                std::stringstream ss;
+                if (Ty->isUnsignedIntegerType())
+                    ss << "u";
+                ss << "int";
+                int sz = Context->getTypeSize(T);
+                ss << sz;
+                InitType(ss.str().c_str(),tt);
+                */
+                int sz = Context->getTypeSize(T);
+                if (sz == 8)
+                    return LLVMInt8Type();
+                else if (sz == 16)
+                    return LLVMInt16Type();
+                else if (sz == 32)
+                    return LLVMInt32Type();
+                else if (sz == 64)
+                    return LLVMInt64Type();
+            } break;
+            case BuiltinType::Half: {
+                return LLVMHalfType();
+            } break;
+            case BuiltinType::Float: {
+                return LLVMFloatType();
+            } break;
+            case BuiltinType::Double: {
+                return LLVMDoubleType();
+            } break;
+            case BuiltinType::LongDouble:
+            case BuiltinType::NullPtr:
+            case BuiltinType::UInt128:
+            default:
+                break;
+            }
+        case Type::Complex:
+        case Type::LValueReference:
+        case Type::RValueReference:
+            break;
+        case Type::Pointer: {
+            const PointerType *PTy = cast<PointerType>(Ty);
+            QualType ETy = PTy->getPointeeType();
+            LLVMTypeRef pointee = TranslateType(ETy);
+            if (pointee) {
+                if (pointee == LLVMVoidType())
+                    pointee = LLVMInt8Type();
+                return LLVMPointerType(pointee, 0);
+            }
+        } break;
+        case Type::VariableArray:
+        case Type::IncompleteArray:
+            break;
+        case Type::ConstantArray: {
+            const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
+            LLVMTypeRef at = TranslateType(ATy->getElementType());
+            if(at) {
+                int sz = ATy->getSize().getZExtValue();
+                return LLVMArrayType(at, sz);
+            }
+        } break;
+        case Type::ExtVector:
+        case Type::Vector: {
+                const VectorType *VT = cast<VectorType>(T);
+                LLVMTypeRef at = TranslateType(VT->getElementType());
+                if(at) {
+                    int n = VT->getNumElements();
+                    return LLVMVectorType(at, n);
+                }
+        } break;
+        case Type::FunctionNoProto: /* fallthrough */
+        case Type::FunctionProto: {
+            const FunctionType *FT = cast<FunctionType>(Ty);
+            if (FT) {
+                return TranslateFuncType(FT);
+            }
+        } break;
+        case Type::ObjCObject: break;
+        case Type::ObjCInterface: break;
+        case Type::ObjCObjectPointer: break;
+        case Type::Enum: {
+            return LLVMInt32Type();
+        } break;
+        case Type::BlockPointer:
+        case Type::MemberPointer:
+        case Type::Atomic:
+        default:
+            break;
+        }
+        fprintf(stderr, "type not understood: %s (%i)\n", T.getAsString().c_str(), Ty->getTypeClass());
+        /*
+        std::stringstream ss;
+        ss << "type not understood: " << T.getAsString().c_str() << " " << Ty->getTypeClass();
+        return ImportError(ss.str().c_str());
+        */
+        // TODO: print error
+        return NULL;
+    }
+
+    LLVMTypeRef TranslateFuncType(const FunctionType * f) {
+
+        bool valid = true; // decisions about whether this function can be exported or not are delayed until we have seen all the potential problems
+        QualType RT = f->getReturnType();
+
+        LLVMTypeRef returntype = TranslateType(RT);
+
+        if (!returntype)
+            valid = false;
+
+        const FunctionProtoType * proto = f->getAs<FunctionProtoType>();
+        std::vector<LLVMTypeRef> argtypes;
+        //proto is null if the function was declared without an argument list (e.g. void foo() and not void foo(void))
+        //we don't support old-style C parameter lists, we just treat them as empty
+        if(proto) {
+            for(size_t i = 0; i < proto->getNumParams(); i++) {
+                QualType PT = proto->getParamType(i);
+                LLVMTypeRef paramtype = TranslateType(PT);
+                if(!paramtype) {
+                    valid = false; //keep going with attempting to parse type to make sure we see all the reasons why we cannot support this function
+                } else if(valid) {
+                    argtypes.push_back(paramtype);
+                }
+            }
+        }
+
+        if(valid) {
+            return LLVMFunctionType(returntype, &argtypes[0], argtypes.size(), proto ? proto->isVariadic() : false);
+        }
+
+        return NULL;
+    }
+
+    bool TraverseFunctionDecl(FunctionDecl *f) {
+         // Function name
+        DeclarationName DeclName = f->getNameInfo().getName();
+        std::string FuncName = DeclName.getAsString();
+        const FunctionType * fntyp = f->getType()->getAs<FunctionType>();
+
+        if(!fntyp)
+            return true;
+
+        if(f->getStorageClass() == clang::SC_Static) {
+            //ImportError("cannot import static functions.");
+            //SetErrorReport(FuncName.c_str());
+            return true;
+        }
+
+        /*
+        //Obj typ;
+        if(!GetFuncType(fntyp,&typ)) {
+            SetErrorReport(FuncName.c_str());
+            return true;
+        }
+        */
+        LLVMTypeRef functype = TranslateFuncType(fntyp);
+        if (!functype)
+            return true;
+
+        std::string InternalName = FuncName;
+        AsmLabelAttr * asmlabel = f->getAttr<AsmLabelAttr>();
+        if(asmlabel) {
+            InternalName = asmlabel->getLabel();
+            #ifndef __linux__
+                //In OSX and Windows LLVM mangles assembler labels by adding a '\01' prefix
+                InternalName.insert(InternalName.begin(), '\01');
+            #endif
+        }
+
+        printf("%s -> %s\n", FuncName.c_str(), InternalName.c_str());
+        //CreateFunction(FuncName,InternalName,&typ);
+
+        //LLVMDumpType(functype);
+
+        LLVMAddFunction(bang_module, InternalName.c_str(), functype);
+
+
+        //KeepLive(f);//make sure this function is live in codegen by creating a dummy reference to it (void) is to suppress unused warnings
+
+        return true;
+    }
+};
+
+class CodeGenProxy : public ASTConsumer {
+public:
+    BangCVisitor visitor;
+
+    CodeGenProxy() {}
+    virtual ~CodeGenProxy() {}
+
+    virtual void Initialize(ASTContext &Context) {
+        visitor.SetContext(&Context);
+    }
+
+    virtual bool HandleTopLevelDecl(DeclGroupRef D) {
+        for (DeclGroupRef::iterator b = D.begin(), e = D.end(); b != e; ++b)
+            visitor.TraverseDecl(*b);
+        return true;
+    }
+};
+
+// see ASTConsumers.h for more utilities
+class BangEmitLLVMOnlyAction : public EmitLLVMOnlyAction {
+public:
+    BangEmitLLVMOnlyAction() :
+        EmitLLVMOnlyAction((llvm::LLVMContext *)LLVMGetGlobalContext())
+    {
+    }
+
+    std::unique_ptr<ASTConsumer> CreateASTConsumer(CompilerInstance &CI,
+                                                 StringRef InFile) override {
+
+        std::vector< std::unique_ptr<ASTConsumer> > consumers;
+        consumers.push_back(EmitLLVMOnlyAction::CreateASTConsumer(CI, InFile));
+        consumers.push_back(llvm::make_unique<CodeGenProxy>());
+        return llvm::make_unique<MultiplexConsumer>(std::move(consumers));
+    }
+};
 
 static LLVMModuleRef bang_import_c_module (bang_anchor *anchor,
     const char *modulename, const char *path, const char **args, int argcount) {
 
-    void *MainAddr = (void*) (intptr_t) GetExecutablePath;
+    //void *MainAddr = (void*) (intptr_t) GetExecutablePath;
 
     std::vector<const char *> aargs;
     aargs.push_back("clang");
@@ -730,31 +1064,27 @@ static LLVMModuleRef bang_import_c_module (bang_anchor *anchor,
         aargs.push_back(args[i]);
     }
 
-    std::unique_ptr<CompilerInvocation> CI(createInvocationFromCommandLine(aargs));
-
-    assert(CI);
-
-    // TODO: create the CompilerInvocation and remap with addRemappedFile(llvm::StringRef From, const llvm::MemoryBuffer * To)
+    // TODO: to input string instead of file remap filename using
+    // addRemappedFile(llvm::StringRef From, const llvm::MemoryBuffer * To)
 
     CompilerInstance compiler;
-    compiler.setInvocation(CI.release());
+    compiler.setInvocation(createInvocationFromCommandLine(aargs));
 
     // Create the compilers actual diagnostics engine.
     compiler.createDiagnostics();
 
+    /*
     // Infer the builtin include path if unspecified.
     if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
         compiler.getHeaderSearchOpts().ResourceDir.empty())
         compiler.getHeaderSearchOpts().ResourceDir =
             CompilerInvocation::GetResourcesPath(bang_argv[0], MainAddr);
+    */
 
     LLVMModuleRef M = NULL;
 
-    llvm::LLVMContext *ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
-    assert(ctx);
-
     // Create and execute the frontend to generate an LLVM bitcode module.
-    std::unique_ptr<CodeGenAction> Act(new EmitLLVMOnlyAction(ctx));
+    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction());
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
@@ -766,143 +1096,7 @@ static LLVMModuleRef bang_import_c_module (bang_anchor *anchor,
     return M;
 }
 
-static LLVMModuleRef bang_import_c_module0 (bang_anchor *anchor,
-    const char *modulename, const char *path, const char **args, int argcount) {
-    CompilerInstance compiler;
-
-    // llvm::MemoryBuffer * membuffer = llvm::MemoryBuffer::getMemBuffer(code, "<buffer>");
-
-
-
-    compiler.createDiagnostics();
-    CompilerInvocation::CreateFromArgs(
-        compiler.getInvocation(),
-        args, args + argcount,
-        compiler.getDiagnostics());
-    //need to recreate the diagnostics engine so that it actually listens to warning flags like -Wno-deprecated
-    //this cannot go before CreateFromArgs
-    compiler.createDiagnostics();
-
-#if 1
-    std::shared_ptr<clang::TargetOptions> to(new clang::TargetOptions(compiler.getTargetOpts()));
-
-    TargetInfo *TI = TargetInfo::CreateTargetInfo(compiler.getDiagnostics(), to);
-    compiler.setTarget(TI);
-#endif
-
-#if 0
-    llvm::IntrusiveRefCntPtr<clang::vfs::FileSystem> FS = new LuaOverlayFileSystem(T->L);
-    TheCompInst->setVirtualFileSystem(FS);
-    TheCompInst->createFileManager();
-    FileManager &FileMgr = TheCompInst->getFileManager();
-    TheCompInst->createSourceManager(FileMgr);
-    SourceManager &SourceMgr = TheCompInst->getSourceManager();
-    TheCompInst->createPreprocessor(TU_Complete);
-    TheCompInst->createASTContext();
-#else
-    compiler.createFileManager();
-    compiler.createSourceManager(compiler.getFileManager());
-    compiler.createPreprocessor(TU_Complete);
-    compiler.createASTContext();
-    compiler.createModuleManager();
-#endif
-
-    FileManager &filemgr = compiler.getFileManager();
-    SourceManager &sourcemgr = compiler.getSourceManager();
-
-    const FileEntry *fileentry = filemgr.getFile(path, true);
-    assert(fileentry && "cannot find file");
-    FileID fileid = getOrCreateFileID(sourcemgr, fileentry, SrcMgr::C_User);
-    assert(fileid.isValid());
-    sourcemgr.setMainFileID(fileid);
-
-    // Set the main file handled by the source manager to the input file.
-    //sourcemgr.setMainFileID(sourcemgr.createFileID(UNIQUEIFY(llvm::MemoryBuffer,membuffer)));
-
-    compiler.getDiagnosticClient().BeginSourceFile(compiler.getLangOpts(),&compiler.getPreprocessor());
-    Preprocessor &PP = compiler.getPreprocessor();
-    PP.getBuiltinInfo().initializeBuiltins(PP.getIdentifierTable(),
-                                           PP.getLangOpts());
-
-    llvm::LLVMContext *ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
-    assert(ctx);
-
-    CodeGenerator* codegen = CreateLLVMCodeGen(
-        compiler.getDiagnostics(),
-        modulename,
-        compiler.getHeaderSearchOpts(),
-        compiler.getPreprocessorOpts(),
-        compiler.getCodeGenOpts(),
-        *ctx );
-
-    codegen->Initialize(compiler.getASTContext());
-    //compiler.setASTConsumer(*codegen);
-
-    /*
-    std::stringstream ss;
-    ss << "__makeeverythinginclanglive_";
-    ss << bang_next_unused_id++;
-    std::string livenessfunction = ss.str();
-    */
-
-    //CodeGenProxy proxy(codegen,result,livenessfunction);
-    ParseAST(compiler.getPreprocessor(),
-            codegen,
-            compiler.getASTContext());
-
-    /*
-    Obj macros;
-    CreateTableWithName(result, "macros", &macros);
-    Preprocessor & PP = compiler.getPreprocessor();
-    for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false); it != end; ++it) {
-        const IdentifierInfo * II = it->first;
-        MacroDirective * MD = it->second;
-        AddMacro(T,PP,II,MD,&macros);
-    }
-    */
-
-    llvm::Module * M = codegen->ReleaseModule();
-    if(M) {
-        M->dump();
-    } else {
-        bang_error(anchor, "compilation of included c code failed\n");
-    }
-
-    /*
-    optimizemodule(TT,M);
-
-    char * err;
-    if(LLVMLinkModules(llvm::wrap(TT->external), llvm::wrap(M), LLVMLinkerDestroySource, &err)) {
-        terra_pusherror(T, "linker reported error: %s",err);
-        LLVMDisposeMessage(err);
-        lua_error(T->L);
-    }
-    return 0;
-
-    */
-
-    return (LLVMModuleRef)M;
-}
-
 //------------------------------------------------------------------------------
-
-#ifndef alloca
-#define alloca(x)  __builtin_alloca(x)
-#endif
-
-static LLVMModuleRef bang_module;
-static LLVMBuilderRef bang_builder;
-static LLVMExecutionEngineRef bang_engine;
-static LLVMValueRef bang_nopfunc;
-
-typedef std::map<std::string, LLVMValueRef> NameValueMap;
-typedef std::map<std::string, LLVMModuleRef> NameModuleMap;
-
-static NameValueMap NamedValues;
-static std::map<std::string, LLVMTypeRef> NamedTypes;
-static NameModuleMap NamedModules;
-static int compile_errors = 0;
-static bool bang_dump_module = false;
 
 static const char *bang_expr_type_name(int type) {
     switch(type) {
@@ -1080,7 +1274,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                             if (argcount >= 0) {
                                 LLVMTypeRef rettype = bang_translate_type(env, bang_nth(expr, 1));
                                 if (rettype) {
-                                    LLVMTypeRef *argtypes = (LLVMTypeRef *)alloca(sizeof(LLVMTypeRef) * argcount);
+                                    LLVMTypeRef argtypes[argcount];
 
                                     bool success = true;
                                     for (int i = 0; i < argcount; ++i) {
@@ -1194,7 +1388,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                         if (ptr) {
                             int argcount = (int)expr->len - 2;
 
-                            LLVMValueRef *indices = (LLVMValueRef *)alloca(sizeof(LLVMValueRef) * argcount);
+                            LLVMValueRef indices[argcount];
                             bool success = true;
                             for (int i = 0; i < argcount; ++i) {
                                 LLVMValueRef index = bang_translate_value(env, bang_nth(expr, i + 2));
@@ -1290,7 +1484,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                                     int argcount = (int)expr_params->len;
                                     int paramcount = LLVMCountParams(func);
                                     if (argcount == paramcount) {
-                                        LLVMValueRef *params = (LLVMValueRef *)alloca(sizeof(LLVMValueRef) * paramcount);
+                                        LLVMValueRef params[paramcount];
                                         LLVMGetParams(func, params);
                                         for (int i = 0; i < argcount; ++i) {
                                             bang_expr *expr_param = bang_verify_type(bang_nth(expr_params, i), bang_expr_type_symbol);
@@ -1377,7 +1571,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
                                 if ((isvararg && (arg_size <= (unsigned)argcount))
                                     || (arg_size == (unsigned)argcount)) {
 
-                                    LLVMValueRef *args = (LLVMValueRef *)alloca(sizeof(LLVMValueRef) * argcount);
+                                    LLVMValueRef args[argcount];
 
                                     bool success = true;
                                     for (int i = 0; i < argcount; ++i) {
@@ -1412,7 +1606,7 @@ static bang_type_or_value bang_translate (bang_env env, bang_expr *expr) {
 
                         if (modulename && name && args_expr) {
                             int argcount = (int)args_expr->len;
-                            const char **args = (const char **)alloca(sizeof(const char *) * argcount);
+                            const char *args[argcount];
                             bool success = true;
                             for (int i = 0; i < argcount; ++i) {
                                 const char *arg = bang_get_string(bang_nth(args_expr, i));
