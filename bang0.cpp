@@ -56,6 +56,17 @@ namespace bang {
 
 //------------------------------------------------------------------------------
 
+template<typename ... Args>
+std::string string_format( const std::string& format, Args ... args ) {
+    size_t size = snprintf( nullptr, 0, format.c_str(), args ... );
+    std::string str;
+    str.resize(size);
+    snprintf( &str[0], size, format.c_str(), args ... );
+    return str;
+}
+
+//------------------------------------------------------------------------------
+
 typedef enum {
     E_None,
     E_List,
@@ -624,44 +635,120 @@ typedef uint64_t TypeId;
 
 static TypeId next_type_ref = 0;
 
-static TypeId newTypeId() {
-    return ++TypeId;
-}
-
 // pretty names for types are here
-static std::map<TypeId, std::string> bang_pretty_name_map;
+static std::map<TypeId, std::string> _pretty_name_map;
 // opaque types don't have an LLVM type
-static std::map<TypeId, LLVMTypeRef> bang_llvm_type_map;
+static std::map<TypeId, LLVMTypeRef> _llvm_type_map;
 // if a type has elements, their types are here
-static std::map<TypeId, std::vector<TypeId> > bang_element_type_map;
+static std::map<TypeId, std::vector<TypeId> > _element_type_map;
 // if a type's elements are named, their names are here
-static std::map<TypeId, std::vector<std::string> > bang_element_name_map;
+static std::map<TypeId, std::vector<std::string> > _element_name_map;
 // if a type is a pointer, its pointee type is here
-static std::map<TypeId, TypeId> bang_pointee_map;
+static std::map<TypeId, TypeId> _pointee_map;
 // if a type is an array, the array size is here
-static std::map<TypeId, size_t> bang_array_size_map;
+static std::map<TypeId, size_t> _array_size_map;
 // if a type is a vector, the vector size is here
-static std::map<TypeId, size_t> bang_vector_size_map;
+static std::map<TypeId, size_t> _vector_size_map;
+// cached pointer types go here
+static std::map<TypeId, TypeId> _pointer_map;
+
+// handle around TypeIds
+class Type {
+protected:
+    TypeId id;
+public:
+
+    Type() : id(0) {}
+    Type(const Type &type) : id(type.id) {}
+    Type(uint64_t id_) : id(id_) {}
+
+    static Type create(std::string name, LLVMTypeRef llvmtype) {
+        Type type(++next_type_ref);
+        _pretty_name_map[type.id] = name;
+        _llvm_type_map[type.id] = llvmtype;
+        return type;
+    }
+
+    static Type pointer(Type type);
+
+    bool operator == (const Type &other) const {
+        return id == other.id;
+    }
+
+    operator bool () const {
+        return id != 0;
+    }
+
+    TypeId getId() const {
+        return id;
+    }
+
+    LLVMTypeRef getLLVMType() const {
+        return _llvm_type_map[id];
+    }
+
+    std::string getPrettyName() const {
+        if (!id) {
+            return "<none>";
+        } else {
+            std::string result = _pretty_name_map[id];
+            if (!result.size())
+                return string_format("<unnamed:" PRIu64 ">", id);
+            return result;
+        }
+    }
+};
+
 // etc.
 
-template<typename ... Args>
-std::string string_format( const std::string& format, Args ... args ) {
-    size_t size = snprintf( nullptr, 0, format.c_str(), args ... );
-    std::string str;
-    str.resize(size);
-    snprintf( &str[0], size, format.c_str(), args ... );
-    return str;
+static Type T_void;
+static Type T_opaque;
+static Type T_bool;
+
+static Type T_int8;
+static Type T_int16;
+static Type T_int32;
+static Type T_int64;
+
+static Type T_uint8;
+static Type T_uint16;
+static Type T_uint32;
+static Type T_uint64;
+
+static Type T_half;
+static Type T_float;
+static Type T_double;
+
+static void setupTypes () {
+    T_void = Type::create("void", LLVMVoidType());
+    T_opaque = Type::create("opaque", NULL);
+    T_bool = Type::create("bool", LLVMInt1Type());
+
+    T_int8 = Type::create("int8", LLVMInt8Type());
+    T_int16 = Type::create("int16", LLVMInt16Type());
+    T_int32 = Type::create("int32", LLVMInt32Type());
+    T_int64 = Type::create("int64", LLVMInt64Type());
+
+    T_uint8 = Type::create("uint8", LLVMInt8Type());
+    T_uint16 = Type::create("uint16", LLVMInt16Type());
+    T_uint32 = Type::create("uint32", LLVMInt32Type());
+    T_uint64 = Type::create("uint64", LLVMInt64Type());
+
+    T_half = Type::create("half", LLVMHalfType());
+    T_float = Type::create("float", LLVMFloatType());
+    T_double = Type::create("double", LLVMDoubleType());
 }
 
-static std::string getPrettyName(TypeId) {
-    if (!TypeId) {
-        return "<none>";
-    } else {
-        std::string result = bang_pretty_name_map[TypeId];
-        if (!result.size())
-            return string_format("<unnamed:" PRIu64 ">", TypeId);
-        return result;
+Type Type::pointer(Type type) {
+    // cannot reference void
+    assert(type != T_void);
+    Type ptr = Type(_pointer_map[type.id]);
+    if (!ptr) {
+        ptr = Type::create(string_format("&%s", getPrettyName().c_str()));
+        _pointer_map[type.id] = ptr.id;
+        _pointee_map[ptr.id] = type.id;
     }
+    return ptr;
 }
 
 //------------------------------------------------------------------------------
@@ -1702,6 +1789,8 @@ static void compile (Expression *expr) {
     bang_module = LLVMModuleCreateWithName("bang");
     NamedModules["bang"] = bang_module;
     bang_builder = LLVMCreateBuilder();
+
+    setupTypes();
 
     NamedTypes["void"] = LLVMVoidType();
     NamedTypes["half"] = LLVMHalfType();
