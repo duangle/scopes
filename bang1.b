@@ -42,10 +42,6 @@ call dostuff-hyphenated
     const-int i32 1
     const-int i32 2
 
-call imul
-    const-int i64 1
-    const-int i64 2
-
 call printf
     getelementptr "Hello World! %p\n"
         const-int i32 0
