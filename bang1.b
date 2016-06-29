@@ -30,10 +30,11 @@ function dostuff-hyphenated (a b)
         ?
             const-int bool 0
             ()
-            call printf
-                array-ref "value = %f! (false) %i %i\n"
-                call computesin
-                \ a b
+            dump
+                call printf
+                    array-ref "value = %f! (false) %i %i\n"
+                    call computesin
+                    \ a b
     const-int int32 0
 
 call dostuff-hyphenated

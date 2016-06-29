@@ -867,7 +867,7 @@ Type Type::_pointer(Type type) {
     assert(type.getLLVMType());
     // cannot reference void
     assert(type != T_void);
-    Type ptr = Type::create(string_format("(& %s)",
+    Type ptr = Type::create(string_format("(pointer-type %s)",
         type.getString().c_str()),
         LLVMPointerType(type.getLLVMType(), 0) );
     std::vector<Type> etypes;
@@ -880,7 +880,7 @@ Type Type::_array(Type type, size_t size) {
     assert(type.getLLVMType());
     assert(type != T_void);
     assert(size >= 1);
-    Type arraytype = Type::create(string_format("(%s # %zu)",
+    Type arraytype = Type::create(string_format("(array-type %s %zu)",
         type.getString().c_str(), size),
         LLVMArrayType(type.getLLVMType(), size) );
     std::vector<Type> etypes;
@@ -894,7 +894,7 @@ Type Type::_vector(Type type, size_t size) {
     assert(type.getLLVMType());
     assert(type != T_void);
     assert(size >= 1);
-    Type vectortype = Type::create(string_format("<%s x %zu>",
+    Type vectortype = Type::create(string_format("(vector-type %s %zu)",
         type.getString().c_str(), size),
         LLVMVectorType(type.getLLVMType(), size) );
     std::vector<Type> etypes;
@@ -908,7 +908,7 @@ Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
     assert(returntype.getLLVMType());
     std::stringstream ss;
     std::vector<LLVMTypeRef> llvmparamtypes;
-    ss << "(" << returntype.getString() << " <- (";
+    ss << "(function-type " << returntype.getString() << " (";
     for (size_t i = 0; i < params.size(); ++i) {
         if (i != 0)
             ss << " ";
@@ -965,24 +965,36 @@ public:
 
 //------------------------------------------------------------------------------
 
-static LLVMModuleRef bang_module;
-static LLVMBuilderRef bang_builder;
-static LLVMExecutionEngineRef bang_engine;
-static LLVMValueRef bang_nopfunc;
-
 typedef std::map<std::string, TypedValue> NameValueMap;
 typedef std::map<std::string, LLVMModuleRef> NameModuleMap;
 typedef std::map<std::string, Type> NameTypeMap;
 
-static NameModuleMap NamedModules;
-static int compile_errors = 0;
-static bool bang_dump_module = false;
-
 //------------------------------------------------------------------------------
 
+struct TranslationGlobals {
+    int compile_errors;
+    bool dump_module;
+    LLVMValueRef nopfunc;
+
+    TranslationGlobals() :
+        compile_errors(0),
+        dump_module(false),
+        nopfunc(NULL)
+        {}
+};
+
 struct Environment {
+    TranslationGlobals *globals;
+    // currently active execution engine
+    LLVMExecutionEngineRef engine;
+    // currently active module
+    LLVMModuleRef module;
+    // currently active builder
+    LLVMBuilderRef builder;
     // currently active function
     LLVMValueRef function;
+    // currently evaluated expression
+    Expression *expr;
     // type of active function
     Type function_type;
     // local names
@@ -990,21 +1002,54 @@ struct Environment {
     // parent env
     const Environment *parent;
 
+    struct WithExpression {
+        Expression *prevexpr;
+        Environment *env;
+
+        WithExpression(Environment *env_, Expression *expr_) :
+            prevexpr(env_->expr),
+            env(env_) {
+            if (expr_)
+                env_->expr = expr_;
+        }
+        ~WithExpression() {
+            env->expr = prevexpr;
+        }
+    };
+
     Environment() :
+        globals(NULL),
+        engine(NULL),
+        module(NULL),
+        builder(NULL),
         function(NULL),
+        expr(NULL),
         parent(NULL)
     {}
 
-    Environment(const Environment *parent) :
-        function(parent->function),
-        parent(parent) {
+    Environment(const Environment *parent_) :
+        globals(parent_->globals),
+        engine(parent_->engine),
+        module(parent_->module),
+        builder(parent_->builder),
+        function(parent_->function),
+        expr(parent_->expr),
+        parent(parent_) {
     }
+
+    WithExpression with_expr(Expression *expr) {
+        return WithExpression(this, expr);
+    }
+
+    bool hasErrors() const {
+        return globals->compile_errors != 0;
+    };
 
 };
 
 //------------------------------------------------------------------------------
 
-static void translateError (Anchor *anchor, const char *format, ...);
+static void translateError (Environment *env, const char *format, ...);
 
 class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
 public:
@@ -1317,7 +1362,7 @@ public:
         ;
 
         env->names[FuncName] = TypedValue(Type::pointer(functype),
-            LLVMAddFunction(bang_module, InternalName.c_str(), functype.getLLVMType()));
+            LLVMAddFunction(env->module, InternalName.c_str(), functype.getLLVMType()));
 
         //KeepLive(f);//make sure this function is live in codegen by creating a dummy reference to it (void) is to suppress unused warnings
 
@@ -1365,7 +1410,7 @@ public:
     }
 };
 
-static LLVMModuleRef importCModule (Environment *env, Anchor *anchor,
+static LLVMModuleRef importCModule (Environment *env,
     const char *modulename, const char *path, const char **args, int argcount) {
     using namespace clang;
 
@@ -1402,9 +1447,10 @@ static LLVMModuleRef importCModule (Environment *env, Anchor *anchor,
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
-        LLVMDumpModule(M);
+        //LLVMDumpModule(M);
+        LLVMAddModule(env->engine, M);
     } else {
-        translateError(anchor, "compiler failed\n");
+        translateError(env, "compiler failed\n");
     }
 
     return M;
@@ -1423,9 +1469,14 @@ static const char *expressionKindName(int type) {
     }
 }
 
-static void translateError (Anchor *anchor, const char *format, ...) {
-    ++compile_errors;
-    printf("%s:%i:%i: error: ", anchor->path, anchor->lineno, anchor->column);
+static void translateError (Environment *env, const char *format, ...) {
+    ++env->globals->compile_errors;
+    if (env->expr) {
+        Anchor anchor = env->expr->anchor;
+        printf("%s:%i:%i: error: ", anchor.path, anchor.lineno, anchor.column);
+    } else {
+        printf("error: ");
+    }
     va_list args;
     va_start (args, format);
     vprintf (format, args);
@@ -1459,24 +1510,26 @@ static bool isSymbol (Expression *expr, const char *sym) {
 
 static TypedValue translate (Environment *env, Expression *expr);
 
-static Expression *translateKind(Expression *expr, int type) {
+static Expression *translateKind(Environment *env, Expression *expr, int type) {
     if (expr) {
+        auto _ = env->with_expr(expr);
         if (expr->type == type) {
             return expr;
         } else {
-            translateError(&expr->anchor, "%s expected\n",
+            translateError(env, "%s expected\n",
                 expressionKindName(type));
         }
     }
     return NULL;
 }
 
-static const char *translateString(Expression *expr) {
+static const char *translateString(Environment *env, Expression *expr) {
     if (expr) {
+        auto _ = env->with_expr(expr);
         if ((expr->type == E_Symbol) || (expr->type == E_String)) {
             return (const char *)expr->buf;
         } else {
-            translateError(&expr->anchor, "string or symbol expected\n");
+            translateError(env, "string or symbol expected\n");
         }
     }
     return NULL;
@@ -1484,9 +1537,10 @@ static const char *translateString(Expression *expr) {
 
 static Type translateType (Environment *env, Expression *expr) {
     if (expr) {
+        auto _ = env->with_expr(expr);
         TypedValue result = translate(env, expr);
         if (!result.getType().isValid() && result.getValue()) {
-            translateError(&expr->anchor, "type expected, not value\n");
+            translateError(env, "type expected, not value\n");
         }
         return result.getType();
     }
@@ -1495,42 +1549,44 @@ static Type translateType (Environment *env, Expression *expr) {
 
 static TypedValue translateValue (Environment *env, Expression *expr) {
     if (expr) {
+        auto _ = env->with_expr(expr);
         TypedValue result = translate(env, expr);
         if (!result.getValue() && result.getType().isValid()) {
-            translateError(&expr->anchor, "value expected, not type\n");
+            translateError(env, "value expected, not type\n");
         }
         return result;
     }
     return TypedValue();
 }
 
-static bool verifyParameterCount (Expression *expr, int mincount, int maxcount) {
+static bool verifyParameterCount (Environment *env, Expression *expr, int mincount, int maxcount) {
     if (expr) {
+        auto _ = env->with_expr(expr);
         if (expr->type == E_List) {
             int argcount = (int)expr->len - 1;
             if ((mincount >= 0) && (argcount < mincount)) {
-                translateError(&expr->anchor, "at least %i arguments expected\n", mincount);
+                translateError(env, "at least %i arguments expected\n", mincount);
                 return false;
             }
             if ((maxcount >= 0) && (argcount > maxcount)) {
-                translateError(&expr->anchor, "at most %i arguments expected\n", maxcount);
+                translateError(env, "at most %i arguments expected\n", maxcount);
                 return false;
             }
             return true;
         } else {
-            translateError(&expr->anchor, "list expected\n");
+            translateError(env, "list expected\n");
             return false;
         }
     }
     return false;
 }
 
-static bool matchSpecialForm (Expression *expr, const char *name, int mincount, int maxcount) {
-    return isSymbol(nth(expr, 0), name) && verifyParameterCount(expr, mincount, maxcount);
+static bool matchSpecialForm (Environment *env, Expression *expr, const char *name, int mincount, int maxcount) {
+    return isSymbol(nth(expr, 0), name) && verifyParameterCount(env, expr, mincount, maxcount);
 }
 
-static TypedValue nopcall () {
-    return TypedValue(T_void, LLVMBuildCall(bang_builder, bang_nopfunc, NULL, 0, ""));
+static TypedValue nopcall (Environment *env) {
+    return TypedValue(T_void, LLVMBuildCall(env->builder, env->globals->nopfunc, NULL, 0, ""));
 }
 
 static TypedValue translateExpressionList (Environment *env, Expression *expr, int offset) {
@@ -1539,7 +1595,7 @@ static TypedValue translateExpressionList (Environment *env, Expression *expr, i
     TypedValue stmt;
     for (int i = 0; i < argcount; ++i) {
         stmt = translateValue(env, nth(expr, i + offset));
-        if (!stmt.getValue() || compile_errors) {
+        if (!stmt.getValue() || env->hasErrors()) {
             success = false;
             stmt = TypedValue();
             break;
@@ -1553,12 +1609,14 @@ static TypedValue translate (Environment *env, Expression *expr) {
     TypedValue result;
 
     if (expr) {
+        auto _ = env->with_expr(expr);
+
         if (expr->type == E_List) {
             if (expr->len >= 1) {
                 Expression *head = nth(expr, 0);
                 if (head->type == E_Symbol) {
-                    if (matchSpecialForm(expr, "function-type", 2, 2)) {
-                        Expression *args_expr = translateKind(nth(expr, 2), E_List);
+                    if (matchSpecialForm(env, expr, "function-type", 2, 2)) {
+                        Expression *args_expr = translateKind(env, nth(expr, 2), E_List);
 
                         if (args_expr) {
                             Expression *tail = nth(args_expr, -1);
@@ -1589,21 +1647,21 @@ static TypedValue translate (Environment *env, Expression *expr) {
                                     }
                                 }
                             } else {
-                                translateError(&expr->anchor, "vararg function is missing return type\n");
+                                translateError(env, "vararg function is missing return type\n");
                             }
                         }
                     /*
-                    } else if (matchSpecialForm(expr, "bitcast", 2, 2)) {
+                    } else if (matchSpecialForm(env, expr, "bitcast", 2, 2)) {
 
                         Type casttype = translateType(env, nth(expr, 1));
                         LLVMValueRef castvalue = translateValue(env, nth(expr, 2));
 
                         if (casttype && castvalue) {
                             result = TypedValue(casttype,
-                                LLVMBuildBitCast(bang_builder, castvalue, casttype.getLLVMType(), "ptrcast"));
+                                LLVMBuildBitCast(env->builder, castvalue, casttype.getLLVMType(), "ptrcast"));
                         }
 
-                    } else if (matchSpecialForm(expr, "extract", 2, 2)) {
+                    } else if (matchSpecialForm(env, expr, "extract", 2, 2)) {
 
                         LLVMValueRef value = translateValue(env, nth(expr, 1));
                         LLVMValueRef index = translateValue(env, nth(expr, 2));
@@ -1611,12 +1669,12 @@ static TypedValue translate (Environment *env, Expression *expr) {
                         if (value && index) {
                             result = TypedValue(
 
-                                LLVMBuildExtractElement(bang_builder, value, index, "extractelem"));
+                                LLVMBuildExtractElement(env->builder, value, index, "extractelem"));
                         }
                     */
-                    } else if (matchSpecialForm(expr, "const-int", 2, 2)) {
+                    } else if (matchSpecialForm(env, expr, "const-int", 2, 2)) {
                         Expression *expr_type = nth(expr, 1);
-                        Expression *expr_value = translateKind(nth(expr, 2), E_Symbol);
+                        Expression *expr_value = translateKind(env, nth(expr, 2), E_Symbol);
 
                         Type type;
                         if (expr_type) {
@@ -1626,19 +1684,20 @@ static TypedValue translate (Environment *env, Expression *expr) {
                         }
 
                         if (type.isValid() && expr_value) {
+                            auto _ = env->with_expr(expr_value);
                             char *end;
                             long long value = strtoll((const char *)expr_value->buf, &end, 10);
                             if (end != ((char *)expr_value->buf + expr_value->len)) {
-                                translateError(&expr_value->anchor, "not a valid integer constant\n");
+                                translateError(env, "not a valid integer constant\n");
                             } else {
                                 result = TypedValue(type,
                                     LLVMConstInt(type.getLLVMType(), value, 1));
                             }
                         }
 
-                    } else if (matchSpecialForm(expr, "const-real", 2, 2)) {
+                    } else if (matchSpecialForm(env, expr, "const-real", 2, 2)) {
                         Expression *expr_type = nth(expr, 1);
-                        Expression *expr_value = translateKind(nth(expr, 2), E_Symbol);
+                        Expression *expr_value = translateKind(env, nth(expr, 2), E_Symbol);
 
                         Type type;
                         if (expr_type) {
@@ -1648,27 +1707,28 @@ static TypedValue translate (Environment *env, Expression *expr) {
                         }
 
                         if (type.isValid() && expr_value) {
+                            auto _ = env->with_expr(expr_value);
                             char *end;
                             double value = strtod((const char *)expr_value->buf, &end);
                             if (end != ((char *)expr_value->buf + expr_value->len)) {
-                                translateError(&expr_value->anchor, "not a valid real constant\n");
+                                translateError(env, "not a valid real constant\n");
                             } else {
                                 result = TypedValue(type,
                                     LLVMConstReal(type.getLLVMType(), value));
                             }
                         }
 
-                    } else if (matchSpecialForm(expr, "typeof", 1, 1)) {
+                    } else if (matchSpecialForm(env, expr, "typeof", 1, 1)) {
 
                         TypedValue tmpresult = translate(env, nth(expr, 1));
 
                         result = TypedValue(tmpresult.getType());
 
-                    } else if (matchSpecialForm(expr, "dump-module", 0, 0)) {
+                    } else if (matchSpecialForm(env, expr, "dump-module", 0, 0)) {
 
-                        bang_dump_module = true;
+                        env->globals->dump_module = true;
 
-                    } else if (matchSpecialForm(expr, "dump", 1, 1)) {
+                    } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
                         Expression *expr_arg = nth(expr, 1);
 
@@ -1687,10 +1747,12 @@ static TypedValue translate (Environment *env, Expression *expr) {
 
                         result = tov;
 
-                    } else if (matchSpecialForm(expr, "array-ref", 1, 1)) {
+                    } else if (matchSpecialForm(env, expr, "array-ref", 1, 1)) {
                         Expression *expr_array = nth(expr, 1);
                         TypedValue ptr = translateValue(env, expr_array);
                         if (ptr) {
+                            auto _ = env->with_expr(expr_array);
+
                             Type etype = ptr.getType();
                             if (etype.isArray()) {
                                 etype = Type::pointer(etype.getElementType());
@@ -1701,17 +1763,17 @@ static TypedValue translate (Environment *env, Expression *expr) {
                                 };
 
                                 result = TypedValue(etype,
-                                    LLVMBuildGEP(bang_builder, ptr.getValue(), indices, 2, "gep"));
+                                    LLVMBuildGEP(env->builder, ptr.getValue(), indices, 2, "gep"));
                             } else {
-                                translateError(&expr_array->anchor, "array value expected");
+                                translateError(env, "array value expected");
                             }
                         }
 
-                    } else if (matchSpecialForm(expr, "?", 3, 3)) {
+                    } else if (matchSpecialForm(env, expr, "?", 3, 3)) {
 
                         TypedValue cond_value = translateValue(env, nth(expr, 1));
                         if (cond_value) {
-                            LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(bang_builder);
+                            LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->builder);
 
                             LLVMBasicBlockRef then_block = LLVMAppendBasicBlock(env->function, "then");
                             LLVMBasicBlockRef else_block = LLVMAppendBasicBlock(env->function, "else");
@@ -1720,56 +1782,60 @@ static TypedValue translate (Environment *env, Expression *expr) {
                             Expression *then_expr = nth(expr, 2);
                             Expression *else_expr = nth(expr, 3);
 
-                            LLVMPositionBuilderAtEnd(bang_builder, then_block);
+                            LLVMPositionBuilderAtEnd(env->builder, then_block);
                             TypedValue then_result = translateValue(env, then_expr);
-                            LLVMBuildBr(bang_builder, br_block);
+                            LLVMBuildBr(env->builder, br_block);
 
-                            LLVMPositionBuilderAtEnd(bang_builder, else_block);
+                            LLVMPositionBuilderAtEnd(env->builder, else_block);
                             TypedValue else_result = translateValue(env, else_expr);
-                            LLVMBuildBr(bang_builder, br_block);
+                            LLVMBuildBr(env->builder, br_block);
 
                             Type then_type = then_result.getType();
                             Type else_type = else_result.getType();
 
+                            auto _ = env->with_expr(then_expr);
+
                             if ((then_type == T_void) || (else_type == T_void)) {
-                                LLVMPositionBuilderAtEnd(bang_builder, br_block);
-                                result = nopcall();
+                                LLVMPositionBuilderAtEnd(env->builder, br_block);
+                                result = nopcall(env);
                             } else if (then_type == else_type) {
-                                LLVMPositionBuilderAtEnd(bang_builder, br_block);
-                                result = TypedValue(then_type, LLVMBuildPhi(bang_builder, then_type.getLLVMType(), "select"));
+                                LLVMPositionBuilderAtEnd(env->builder, br_block);
+                                result = TypedValue(then_type, LLVMBuildPhi(env->builder, then_type.getLLVMType(), "select"));
                                 LLVMValueRef values[] = { then_result.getValue(), else_result.getValue() };
                                 LLVMBasicBlockRef blocks[] = { then_block, else_block };
                                 LLVMAddIncoming(result.getValue(), values, blocks, 2);
                             } else {
-                                translateError(&then_expr->anchor, "then/else type evaluation mismatch\n");
-                                translateError(&else_expr->anchor, "then-expression must evaluate to same type as else-expression\n");
+                                translateError(env, "then/else type evaluation mismatch\n");
+                                translateError(env, "then-expression must evaluate to same type as else-expression\n");
                             }
 
-                            LLVMPositionBuilderAtEnd(bang_builder, oldblock);
-                            LLVMBuildCondBr(bang_builder, cond_value.getValue(), then_block, else_block);
+                            LLVMPositionBuilderAtEnd(env->builder, oldblock);
+                            LLVMBuildCondBr(env->builder, cond_value.getValue(), then_block, else_block);
 
-                            LLVMPositionBuilderAtEnd(bang_builder, br_block);
+                            LLVMPositionBuilderAtEnd(env->builder, br_block);
                         }
 
-                    } else if (matchSpecialForm(expr, "do", 1, -1)) {
+                    } else if (matchSpecialForm(env, expr, "do", 1, -1)) {
 
                         Environment subenv(env);
 
                         result = translateExpressionList(&subenv, expr, 1);
 
-                    } else if (matchSpecialForm(expr, "function", 3, -1)) {
+                    } else if (matchSpecialForm(env, expr, "function", 3, -1)) {
 
                         Expression *expr_type = nth(expr, 3);
 
-                        Expression *expr_name = translateKind(nth(expr, 1), E_Symbol);
+                        Expression *expr_name = translateKind(env, nth(expr, 1), E_Symbol);
                         Type functype = translateType(env, expr_type);
 
                         if (expr_name && functype.isValid()) {
+                            auto _ = env->with_expr(expr_type);
+
                             if (functype.isFunction()) {
                                 const char *name = (const char *)expr_name->buf;
 
                                 // todo: external linkage?
-                                LLVMValueRef func = LLVMAddFunction(bang_module, name, functype.getLLVMType());
+                                LLVMValueRef func = LLVMAddFunction(env->module, name, functype.getLLVMType());
 
                                 Expression *expr_params = nth(expr, 2);
                                 Expression *body_expr = nth(expr, 4);
@@ -1778,88 +1844,96 @@ static TypedValue translate (Environment *env, Expression *expr) {
                                 subenv.function = func;
                                 subenv.function_type = functype;
 
-                                if (isSymbol(expr_params, "...")) {
-                                    if (body_expr) {
-                                        translateError(&expr_params->anchor, "cannot declare function body without parameter list\n");
-                                    }
-                                } else if (expr_params->type == E_List) {
-                                    std::vector<Type> etypes = functype.getElementTypes();
+                                {
+                                    auto _ = env->with_expr(expr_params);
 
-                                    int argcount = (int)expr_params->len;
-                                    int paramcount = LLVMCountParams(func);
-                                    if (argcount == paramcount) {
-                                        LLVMValueRef params[paramcount];
-                                        LLVMGetParams(func, params);
-                                        for (int i = 0; i < argcount; ++i) {
-                                            Expression *expr_param = translateKind(nth(expr_params, i), E_Symbol);
-                                            if (expr_param) {
-                                                const char *name = (const char *)expr_param->buf;
-                                                LLVMSetValueName(params[i], name);
-                                                subenv.names[name] = TypedValue(etypes[i], params[i]);
+                                    if (isSymbol(expr_params, "...")) {
+                                        if (body_expr) {
+                                            translateError(env, "cannot declare function body without parameter list\n");
+                                        }
+                                    } else if (expr_params->type == E_List) {
+                                        std::vector<Type> etypes = functype.getElementTypes();
+
+                                        int argcount = (int)expr_params->len;
+                                        int paramcount = LLVMCountParams(func);
+                                        if (argcount == paramcount) {
+                                            LLVMValueRef params[paramcount];
+                                            LLVMGetParams(func, params);
+                                            for (int i = 0; i < argcount; ++i) {
+                                                Expression *expr_param = translateKind(env, nth(expr_params, i), E_Symbol);
+                                                if (expr_param) {
+                                                    const char *name = (const char *)expr_param->buf;
+                                                    LLVMSetValueName(params[i], name);
+                                                    subenv.names[name] = TypedValue(etypes[i], params[i]);
+                                                }
                                             }
+                                        } else {
+                                            translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types\n",
+                                                argcount, paramcount);
                                         }
                                     } else {
-                                        translateError(&expr_params->anchor, "parameter name count mismatch (%i != %i); must name all parameter types\n",
-                                            argcount, paramcount);
+                                        translateError(env, "parameter list or ... expected\n");
                                     }
-                                } else {
-                                    translateError(&expr_params->anchor, "parameter list or ... expected\n");
                                 }
 
-                                if (!compile_errors) {
+                                if (!env->hasErrors()) {
                                     result = TypedValue(Type::pointer(functype), func);
                                     env->names[name] = result;
 
                                     if (body_expr) {
-                                        LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(bang_builder);
+                                        auto _ = env->with_expr(body_expr);
+
+                                        LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->builder);
 
                                         LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
-                                        LLVMPositionBuilderAtEnd(bang_builder, entry);
+                                        LLVMPositionBuilderAtEnd(env->builder, entry);
 
                                         TypedValue bodyvalue = translateExpressionList(&subenv, expr, 4);
 
                                         if (functype.getReturnType() == T_void) {
-                                            LLVMBuildRetVoid(bang_builder);
+                                            LLVMBuildRetVoid(env->builder);
                                         } else if (bodyvalue.getValue()) {
-                                            LLVMBuildRet(bang_builder, bodyvalue.getValue());
+                                            LLVMBuildRet(env->builder, bodyvalue.getValue());
                                         } else {
-                                            translateError(&expr->anchor, "function returns no value\n");
+                                            translateError(env, "function returns no value\n");
                                         }
 
-                                        LLVMPositionBuilderAtEnd(bang_builder, oldblock);
+                                        LLVMPositionBuilderAtEnd(env->builder, oldblock);
 
                                     }
                                 }
                             } else {
-                                translateError(&expr_type->anchor, "not a function type: %s\n",
+                                translateError(env, "not a function type: %s\n",
                                     functype.getString().c_str());
                             }
                         }
 
-                    } else if (matchSpecialForm(expr, "extern", 2, 2)) {
+                    } else if (matchSpecialForm(env, expr, "extern", 2, 2)) {
 
                         Expression *expr_type = nth(expr, 2);
 
-                        Expression *expr_name = translateKind(nth(expr, 1), E_Symbol);
+                        Expression *expr_name = translateKind(env, nth(expr, 1), E_Symbol);
 
                         Type functype = translateType(env, expr_type);
+
+                        auto _ = env->with_expr(expr_type);
 
                         if (expr_name && functype.isValid()) {
                             if (functype.isFunction()) {
                                 const char *name = (const char *)expr_name->buf;
                                 // todo: external linkage?
-                                LLVMValueRef func = LLVMAddFunction(bang_module,
+                                LLVMValueRef func = LLVMAddFunction(env->module,
                                     name, functype.getLLVMType());
 
                                 result = TypedValue(Type::pointer(functype), func);
                                 env->names[name] = result;
                             } else {
-                                translateError(&expr_type->anchor, "not a function type: %s\n",
+                                translateError(env, "not a function type: %s\n",
                                     functype.getString().c_str());
                             }
                         }
 
-                    } else if (matchSpecialForm(expr, "call", 1, -1)) {
+                    } else if (matchSpecialForm(env, expr, "call", 1, -1)) {
 
                         int argcount = (int)expr->len - 2;
 
@@ -1892,28 +1966,29 @@ static TypedValue translate (Environment *env, Expression *expr) {
                                     if (success) {
                                         Type returntype = functype.getReturnType();
                                         result = TypedValue(returntype,
-                                            LLVMBuildCall(bang_builder, callee.getValue(), args, argcount, (returntype == T_void)?"":"calltmp"));
+                                            LLVMBuildCall(env->builder, callee.getValue(), args, argcount, (returntype == T_void)?"":"calltmp"));
                                     }
                                 } else {
-                                    translateError(&expr->anchor, "incorrect number of call arguments (got %i, need %s%i)\n",
+                                    translateError(env, "incorrect number of call arguments (got %i, need %s%i)\n",
                                         argcount, isvararg?"at least ":"", arg_size);
                                 }
                             } else {
-                                translateError(&expr_func->anchor, "cannot call object\n");
+                                auto _ = env->with_expr(expr_func);
+                                translateError(env, "cannot call object\n");
                             }
                         }
 
-                    } else if (matchSpecialForm(expr, "import-c", 3, 3)) {
-                        const char *modulename = translateString(nth(expr, 1));
-                        const char *name = translateString(nth(expr, 2));
-                        Expression *args_expr = translateKind(nth(expr, 3), E_List);
+                    } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
+                        const char *modulename = translateString(env, nth(expr, 1));
+                        const char *name = translateString(env, nth(expr, 2));
+                        Expression *args_expr = translateKind(env, nth(expr, 3), E_List);
 
                         if (modulename && name && args_expr) {
                             int argcount = (int)args_expr->len;
                             const char *args[argcount];
                             bool success = true;
                             for (int i = 0; i < argcount; ++i) {
-                                const char *arg = translateString(nth(args_expr, i));
+                                const char *arg = translateString(env, nth(args_expr, i));
                                 if (arg) {
                                     args[i] = arg;
                                 } else {
@@ -1921,13 +1996,10 @@ static TypedValue translate (Environment *env, Expression *expr) {
                                     break;
                                 }
                             }
-                            LLVMModuleRef module = importCModule(env, &expr->anchor, modulename, name, args, argcount);
-                            if (module) {
-                                NamedModules[modulename] = module;
-                            }
+                            importCModule(env, modulename, name, args, argcount);
                         }
 
-                    } else if (matchSpecialForm(expr, "pointer-type", 1, 1)) {
+                    } else if (matchSpecialForm(env, expr, "pointer-type", 1, 1)) {
 
                         Type type = translateType(env, nth(expr, 1));
 
@@ -1935,14 +2007,16 @@ static TypedValue translate (Environment *env, Expression *expr) {
                             result = TypedValue(Type::pointer(type));
                         }
                     } else {
-                        translateError(&head->anchor, "unhandled special form: %s\n",
+                        auto _ = env->with_expr(head);
+                        translateError(env, "unhandled special form: %s\n",
                             (const char *)head->buf);
                     }
                 } else {
-                    translateError(&head->anchor, "symbol expected\n");
+                    auto _ = env->with_expr(head);
+                    translateError(env, "symbol expected\n");
                 }
             } else {
-                result = nopcall();
+                result = nopcall(env);
             }
         } else if (expr->type == E_Symbol) {
             const char *name = (const char *)expr->buf;
@@ -1957,7 +2031,7 @@ static TypedValue translate (Environment *env, Expression *expr) {
             }
 
             if (!result) {
-                translateError(&expr->anchor, "no such name: %s\n", name);
+                translateError(env, "no such name: %s\n", name);
             }
 
         } else if (expr->type == E_String) {
@@ -1965,11 +2039,11 @@ static TypedValue translate (Environment *env, Expression *expr) {
             const char *name = (const char *)expr->buf;
             result = TypedValue(
                 Type::array(T_int8, expr->len + 1),
-                LLVMBuildGlobalString(bang_builder, name, "str"));
+                LLVMBuildGlobalString(env->builder, name, "str"));
 
         } else {
 
-            translateError(&expr->anchor, "unexpected %s\n",
+            translateError(env, "unexpected %s\n",
                 expressionKindName(expr->type));
         }
     }
@@ -1977,21 +2051,42 @@ static TypedValue translate (Environment *env, Expression *expr) {
     return result;
 }
 
-static void exportExternal (const char *name, void *addr) {
-    LLVMValueRef func = LLVMGetNamedFunction(bang_module, name);
-    if (func) {
-        LLVMAddGlobalMapping(bang_engine, func, addr);
-    }
-}
-
 static void compile (Expression *expr) {
     setupTypes();
 
-    bang_module = LLVMModuleCreateWithName("bang");
-    NamedModules["bang"] = bang_module;
-    bang_builder = LLVMCreateBuilder();
+    LLVMLinkInMCJIT();
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    LLVMInitializeNativeDisassembler();
+
+    LLVMModuleRef module = LLVMModuleCreateWithName("bang");
+
+    char *error = NULL;
+    LLVMExecutionEngineRef engine;
+    int result = LLVMCreateExecutionEngineForModule(
+        &engine, module, &error);
+
+    if (error) {
+        fprintf(stderr, "error: %s\n", error);
+        LLVMDisposeMessage(error);
+        exit(EXIT_FAILURE);
+    }
+
+    if (result != 0) {
+        fprintf(stderr, "failed to create execution engine\n");
+        abort();
+    }
+
+    LLVMBuilderRef builder = LLVMCreateBuilder();
+
+    TranslationGlobals globals;
 
     Environment env;
+    env.globals = &globals;
+    env.engine = engine;
+    env.module = module;
+    env.builder = builder;
 
     env.names["void"] = T_void;
     env.names["half"] = T_half;
@@ -2010,87 +2105,63 @@ static void compile (Expression *expr) {
 
     Type entryfunctype = Type::function(T_void, std::vector<Type>(), false);
 
-    bang_nopfunc = LLVMAddFunction(bang_module, "__nop", entryfunctype.getLLVMType());
-    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(bang_nopfunc, "entry");
-    LLVMPositionBuilderAtEnd(bang_builder, entry);
-    LLVMBuildRetVoid(bang_builder);
+    globals.nopfunc = LLVMAddFunction(module, "__nop", entryfunctype.getLLVMType());
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(globals.nopfunc, "entry");
+    LLVMPositionBuilderAtEnd(builder, entry);
+    LLVMBuildRetVoid(builder);
 
-    LLVMValueRef entryfunc = LLVMAddFunction(bang_module, "__anon_expr", entryfunctype.getLLVMType());
+    LLVMValueRef entryfunc = LLVMAddFunction(module, "__anon_expr", entryfunctype.getLLVMType());
 
     env.function = entryfunc;
     env.function_type = entryfunctype;
 
-    if (expr->type == E_List) {
-        if (expr->len >= 1) {
-            Expression *head = nth(expr, 0);
-            if (isSymbol(head, "bang")) {
+    {
+        auto _ = env.with_expr(expr);
+        if (expr->type == E_List) {
+            if (expr->len >= 1) {
+                Expression *head = nth(expr, 0);
+                if (isSymbol(head, "bang")) {
 
-                LLVMBasicBlockRef entry = LLVMAppendBasicBlock(entryfunc, "entry");
-                LLVMPositionBuilderAtEnd(bang_builder, entry);
+                    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(entryfunc, "entry");
+                    LLVMPositionBuilderAtEnd(builder, entry);
 
-                for (size_t i = 1; i != expr->len; ++i) {
-                    Expression *stmt = nth(expr, (int)i);
-                    translate(&env, stmt);
-                    if (compile_errors)
-                        break;
+                    for (size_t i = 1; i != expr->len; ++i) {
+                        Expression *stmt = nth(expr, (int)i);
+                        translate(&env, stmt);
+                        if (env.hasErrors())
+                            break;
+                    }
+                } else {
+                    auto _ = env.with_expr(head);
+                    translateError(&env, "'bang' expected\n");
                 }
             } else {
-                translateError(&head->anchor, "'bang' expected\n");
+                translateError(&env, "expression is empty\n");
             }
         } else {
-            translateError(&expr->anchor, "expression is empty\n");
+            translateError(&env, "unexpected %s\n",
+                expressionKindName(expr->type));
         }
-    } else {
-        translateError(&expr->anchor, "unexpected %s\n",
-            expressionKindName(expr->type));
     }
 
-    if (!compile_errors) {
-        LLVMBuildRetVoid(bang_builder);
+    if (!env.hasErrors()) {
+        LLVMBuildRetVoid(builder);
 
-        if (bang_dump_module) {
-            LLVMDumpModule(bang_module);
+        if (globals.dump_module) {
+            LLVMDumpModule(module);
             printf("\n\noutput:\n");
         }
 
-        char *error = NULL;
-        LLVMVerifyModule(bang_module, LLVMAbortProcessAction, &error);
+        error = NULL;
+        LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
         LLVMDisposeMessage(error);
 
-        error = NULL;
-        LLVMLinkInMCJIT();
-        LLVMInitializeNativeTarget();
-        LLVMInitializeNativeAsmParser();
-        LLVMInitializeNativeAsmPrinter();
-        LLVMInitializeNativeDisassembler();
-        int result = LLVMCreateExecutionEngineForModule(
-            &bang_engine, bang_module, &error);
-
-        if (error) {
-            fprintf(stderr, "error: %s\n", error);
-            LLVMDisposeMessage(error);
-            exit(EXIT_FAILURE);
-        }
-
-        if (result != 0) {
-            fprintf(stderr, "failed to create execution engine\n");
-            abort();
-        }
-
-        for (auto it: NamedModules)
-            LLVMAddModule(bang_engine, it.second);
-
-        exportExternal("parseFile", (void *)parseFile);
-        exportExternal("LLVMVoidType", (void *)LLVMVoidType);
-
-
-        LLVMRunFunction(bang_engine, entryfunc, 0, NULL);
+        LLVMRunFunction(engine, entryfunc, 0, NULL);
 
     }
 
-    LLVMDisposeBuilder(bang_builder);
+    LLVMDisposeBuilder(builder);
 }
-
 
 //------------------------------------------------------------------------------
 
