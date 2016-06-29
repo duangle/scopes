@@ -31,9 +31,7 @@ function dostuff-hyphenated (a b)
             const-int i1 0
             ()
             call printf
-                getelementptr "value = %f! (false) %i %i\n"
-                    const-int i32 0
-                    const-int i32 0
+                array-ref "value = %f! (false) %i %i\n"
                 call computesin
                 \ a b
     const-int i32 0
@@ -43,10 +41,6 @@ call dostuff-hyphenated
     const-int i32 2
 
 call printf
-    getelementptr "Hello World! %p\n"
-        const-int i32 0
-        const-int i32 0
+    array-ref "Hello World! %p\n"
     call bang_parse_file
-        getelementptr "bang1.b"
-            const-int i32 0
-            const-int i32 0
+        array-ref "bang1.b"
