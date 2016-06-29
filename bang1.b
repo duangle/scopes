@@ -8,13 +8,13 @@ import-c bang0 ./bang0.cpp (
     )
 
 extern LLVMVoidType
-    function-type (pointer-type i8) ()
+    function-type (pointer-type int8) ()
 
 extern dlopen
-    function-type (pointer-type i8) ((pointer-type i8) i32)
+    function-type (pointer-type int8) ((pointer-type int8) int32)
 
 extern printf
-    function-type i32 ((pointer-type i8) ...)
+    function-type int32 ((pointer-type int8) ...)
 extern sin
     function-type double (double)
 
@@ -25,22 +25,21 @@ function computesin ()
         const-real double 0.5
 
 function dostuff-hyphenated (a b)
-    function-type i32 (i32 i32)
+    function-type int32 (int32 int32)
     do
         ?
-            const-int i1 0
+            const-int bool 0
             ()
             call printf
                 array-ref "value = %f! (false) %i %i\n"
                 call computesin
                 \ a b
-    const-int i32 0
+    const-int int32 0
 
 call dostuff-hyphenated
-    const-int i32 1
-    const-int i32 2
+    const-int int32 1
+    const-int int32 2
 
 call printf
-    array-ref "Hello World! %p\n"
-    call bang_parse_file
-        array-ref "bang1.b"
+    array-ref "Hello World! %s\n"
+    call return_test_string

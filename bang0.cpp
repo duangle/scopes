@@ -9,6 +9,9 @@
 extern "C" {
 #endif
 
+const char *return_test_string () {
+    return "hi!";
+}
 
 #if defined __cplusplus
 }
@@ -33,6 +36,7 @@ extern "C" {
 #include <stdint.h>
 
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 #include <memory>
@@ -651,28 +655,34 @@ typedef uint64_t TypeId;
 
 static TypeId next_type_ref = 0;
 
-// pretty names for types are here
-static std::map<TypeId, std::string> _pretty_name_map;
-// opaque types don't have an LLVM type
-static std::map<TypeId, LLVMTypeRef> _llvm_type_map;
-// return type for function types
-static std::map<TypeId, TypeId > _return_type_map;
-// varargs trait for function types
-static std::map<TypeId, bool> _varargs_map;
-// if a type has elements or parameters, their types are here
-static std::map<TypeId, std::vector<TypeId> > _element_type_map;
-// if a type's elements are named, their names are here
-static std::map<TypeId, std::vector<std::string> > _element_name_map;
-// if a type is an array, the array size is here
-static std::map<TypeId, size_t> _array_size_map;
-// if a type is a vector, the vector size is here
-static std::map<TypeId, size_t> _vector_size_map;
-
 // handle around TypeIds
 class Type {
 protected:
     TypeId id;
 public:
+
+    struct TypeHash {
+      size_t operator() (const Type &x) const {
+        return std::hash<int>()(x.getId());
+      }
+    };
+
+    // pretty names for types are here
+    static std::unordered_map<Type, std::string, TypeHash> _pretty_name_map;
+    // opaque types don't have an LLVM type
+    static std::unordered_map<Type, LLVMTypeRef, TypeHash> _llvm_type_map;
+    // return type for function types
+    static std::unordered_map<Type, Type, TypeHash > _return_type_map;
+    // varargs trait for function types
+    static std::unordered_map<Type, bool, TypeHash> _varargs_map;
+    // if a type has elements or parameters, their types are here
+    static std::unordered_map<Type, std::vector<Type>, TypeHash > _element_type_map;
+    // if a type's elements are named, their names are here
+    static std::unordered_map<Type, std::vector<std::string>, TypeHash > _element_name_map;
+    // if a type is an array, the array size is here
+    static std::unordered_map<Type, size_t, TypeHash> _array_size_map;
+    // if a type is a vector, the vector size is here
+    static std::unordered_map<Type, size_t, TypeHash> _vector_size_map;
 
     Type() : id(0) {}
     Type(const Type &type) : id(type.id) {}
@@ -712,16 +722,20 @@ public:
         return id != other.id;
     }
 
-    operator bool () const {
+    bool operator < (const Type &other) const {
+        return id < other.id;
+    }
+
+    bool isValid () const {
         return id != 0;
     }
 
     size_t getArraySize() const {
-        return _array_size_map[id];
+        return _array_size_map[*this];
     }
 
     size_t getVectorSize() const {
-        return _vector_size_map[id];
+        return _vector_size_map[*this];
     }
 
     bool isArray() const {
@@ -733,36 +747,31 @@ public:
     }
 
     bool isPointer() const {
-        return (!isArray() && !isVector() && (_element_type_map[id].size() == 1));
+        return (!isArray() && !isVector() && (_element_type_map[*this].size() == 1));
     }
 
     bool isFunction() const {
-        return (_return_type_map[id] != Type::none());
+        return (_return_type_map[*this] != 0);
     }
 
     bool hasVarArgs() const {
         assert(isFunction());
-        return _varargs_map[id];
+        return _varargs_map[*this];
     }
 
     Type getReturnType() const {
         assert(isFunction());
-        return _return_type_map[id];
+        return _return_type_map[*this];
     }
 
     std::vector<Type> getElementTypes() const {
         assert(isFunction() || isArray() || isVector());
-        const std::vector<TypeId> &params = _element_type_map[id];
-        std::vector<Type> result;
-        for (size_t i = 0; i < params.size(); ++i) {
-            result.push_back(Type(params[i]));
-        }
-        return result;
+        return _element_type_map[*this];
     }
 
     Type getElementType() const {
         assert(isArray() || isVector() || isPointer());
-        return _element_type_map[id][0];
+        return _element_type_map[*this][0];
     }
 
     TypeId getId() const {
@@ -770,14 +779,14 @@ public:
     }
 
     LLVMTypeRef getLLVMType() const {
-        return _llvm_type_map[id];
+        return _llvm_type_map[*this];
     }
 
     std::string getString() const {
         if (!id) {
             return "<none>";
         } else {
-            std::string result = _pretty_name_map[id];
+            std::string result = _pretty_name_map[*this];
             if (!result.size())
                 return string_format("<unnamed:" PRIu64 ">", id);
             return result;
@@ -785,11 +794,33 @@ public:
     }
 };
 
+std::unordered_map<Type, std::string, Type::TypeHash> Type::_pretty_name_map;
+std::unordered_map<Type, LLVMTypeRef, Type::TypeHash> Type::_llvm_type_map;
+std::unordered_map<Type, Type, Type::TypeHash > Type::_return_type_map;
+std::unordered_map<Type, bool, Type::TypeHash> Type::_varargs_map;
+std::unordered_map<Type, std::vector<Type>, Type::TypeHash > Type::_element_type_map;
+std::unordered_map<Type, std::vector<std::string>, Type::TypeHash > Type::_element_name_map;
+std::unordered_map<Type, size_t, Type::TypeHash> Type::_array_size_map;
+std::unordered_map<Type, size_t, Type::TypeHash> Type::_vector_size_map;
+
 std::function<Type (Type)> Type::pointer = memo(Type::_pointer);
 std::function<Type (Type, size_t)> Type::array = memo(Type::_array);
 std::function<Type (Type, size_t)> Type::vector = memo(Type::_vector);
 std::function<Type (Type, std::vector<Type>, bool)> Type::function = memo(Type::_function);
 
+} // namespace bang
+
+namespace std {
+    template <>
+    struct hash<bang::Type> {
+        public :
+        size_t operator()(const bang::Type &x ) const{
+            return hash<int>()(x.getId());
+        }
+    };
+}
+
+namespace bang {
 
 // etc.
 
@@ -834,13 +865,12 @@ static void setupTypes () {
 
 Type Type::_pointer(Type type) {
     assert(type.getLLVMType());
-    printf("%i %i\n",type.getId(), T_void.getId());
     // cannot reference void
     assert(type != T_void);
-    Type ptr = Type::create(string_format("&%s",
+    Type ptr = Type::create(string_format("(& %s)",
         type.getString().c_str()),
         LLVMPointerType(type.getLLVMType(), 0) );
-    std::vector<TypeId> etypes;
+    std::vector<Type> etypes;
     etypes.push_back(type.id);
     _element_type_map[ptr] = etypes;
     return ptr;
@@ -850,10 +880,10 @@ Type Type::_array(Type type, size_t size) {
     assert(type.getLLVMType());
     assert(type != T_void);
     assert(size >= 1);
-    Type arraytype = Type::create(string_format("%s # %zu",
+    Type arraytype = Type::create(string_format("(%s # %zu)",
         type.getString().c_str(), size),
         LLVMArrayType(type.getLLVMType(), size) );
-    std::vector<TypeId> etypes;
+    std::vector<Type> etypes;
     etypes.push_back(type.id);
     _element_type_map[arraytype] = etypes;
     _array_size_map[arraytype] = size;
@@ -864,10 +894,10 @@ Type Type::_vector(Type type, size_t size) {
     assert(type.getLLVMType());
     assert(type != T_void);
     assert(size >= 1);
-    Type vectortype = Type::create(string_format("%s x %zu",
+    Type vectortype = Type::create(string_format("<%s x %zu>",
         type.getString().c_str(), size),
         LLVMVectorType(type.getLLVMType(), size) );
-    std::vector<TypeId> etypes;
+    std::vector<Type> etypes;
     etypes.push_back(type.id);
     _element_type_map[vectortype] = etypes;
     _vector_size_map[vectortype] = size;
@@ -877,25 +907,28 @@ Type Type::_vector(Type type, size_t size) {
 Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
     assert(returntype.getLLVMType());
     std::stringstream ss;
-    std::vector<TypeId> paramtypes;
     std::vector<LLVMTypeRef> llvmparamtypes;
-    ss << returntype.getString() << " <- (";
+    ss << "(" << returntype.getString() << " <- (";
     for (size_t i = 0; i < params.size(); ++i) {
+        if (i != 0)
+            ss << " ";
         ss << params[i].getString();
         assert(params[i] != T_void);
-        paramtypes.push_back(params[i].id);
         LLVMTypeRef llvmtype = params[i].getLLVMType();
         assert(llvmtype);
         llvmparamtypes.push_back(llvmtype);
     }
-    ss << ")";
+    if (varargs)
+        ss << " ...";
+    ss << "))";
 
     Type functype = Type::create(ss.str(),
         LLVMFunctionType(returntype.getLLVMType(),
             &llvmparamtypes[0], llvmparamtypes.size(), varargs));
-    _element_type_map[functype] = paramtypes;
-    _return_type_map[functype] = returntype.id;
+    _element_type_map[functype] = params;
+    _return_type_map[functype] = returntype;
     _varargs_map[functype] = varargs;
+    assert (functype.isFunction());
     return functype;
 }
 
@@ -920,14 +953,14 @@ public:
     TypedValue(Type type_, LLVMValueRef value_) :
         type(type_),
         value(value_) {
-        assert(!value_ || type);
+        assert(!value_ || type.isValid());
         }
 
     Type getType() const { return type; }
     LLVMValueRef getValue() const { return value; }
     LLVMTypeRef getLLVMType() const { return type.getLLVMType(); }
 
-    operator bool () const { return type || (value != NULL); }
+    operator bool () const { return (value != NULL) || (type != Type::none()); }
 };
 
 //------------------------------------------------------------------------------
@@ -941,8 +974,6 @@ typedef std::map<std::string, TypedValue> NameValueMap;
 typedef std::map<std::string, LLVMModuleRef> NameModuleMap;
 typedef std::map<std::string, Type> NameTypeMap;
 
-static NameValueMap NamedValues;
-static NameTypeMap NamedTypes;
 static NameModuleMap NamedModules;
 static int compile_errors = 0;
 static bool bang_dump_module = false;
@@ -954,8 +985,6 @@ struct Environment {
     LLVMValueRef function;
     // type of active function
     Type function_type;
-    // types in scope
-    NameTypeMap types;
     // local names
     NameValueMap names;
     // parent env
@@ -979,6 +1008,7 @@ static void translateError (Anchor *anchor, const char *format, ...);
 
 class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
 public:
+    Environment *env;
     clang::ASTContext *Context;
 
     NameTypeMap taggedStructs;
@@ -987,8 +1017,9 @@ public:
     CVisitor() : Context(NULL) {
     }
 
-    void SetContext(clang::ASTContext * ctx) {
+    void SetContext(clang::ASTContext * ctx, Environment *env_) {
         Context = ctx;
+        env = env_;
     }
 
     bool GetFields(clang::RecordDecl * rd) {
@@ -1016,7 +1047,7 @@ public:
             }
             clang::QualType FT = it->getType();
             Type fieldtype = TranslateType(FT);
-            if(!fieldtype) {
+            if(!fieldtype.isValid()) {
                 opaque = true;
                 continue;
             }
@@ -1042,7 +1073,7 @@ public:
 
             Type structtype = (tagged)?taggedStructs[name]:namedStructs[name];
 
-            if (!structtype) {
+            if (!structtype.isValid()) {
                 structtype = Type::createStruct(name);
 
                 if (tagged)
@@ -1154,7 +1185,7 @@ public:
             const PointerType *PTy = cast<PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
             Type pointee = TranslateType(ETy);
-            if (pointee) {
+            if (pointee.isValid()) {
                 if (pointee == T_void)
                     pointee = T_opaque;
                 return Type::pointer(pointee);
@@ -1166,7 +1197,7 @@ public:
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
             Type at = TranslateType(ATy->getElementType());
-            if(at) {
+            if(at.isValid()) {
                 int sz = ATy->getSize().getZExtValue();
                 return Type::array(at, sz);
             }
@@ -1175,7 +1206,7 @@ public:
         case clang::Type::Vector: {
                 const VectorType *VT = cast<VectorType>(T);
                 Type at = TranslateType(VT->getElementType());
-                if(at) {
+                if(at.isValid()) {
                     int n = VT->getNumElements();
                     return Type::vector(at, n);
                 }
@@ -1216,7 +1247,7 @@ public:
 
         Type returntype = TranslateType(RT);
 
-        if (!returntype)
+        if (!returntype.isValid())
             valid = false;
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
@@ -1227,7 +1258,7 @@ public:
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
                 Type paramtype = TranslateType(PT);
-                if(!paramtype) {
+                if(!paramtype.isValid()) {
                     valid = false; //keep going with attempting to parse type to make sure we see all the reasons why we cannot support this function
                 } else if(valid) {
                     argtypes.push_back(paramtype);
@@ -1265,7 +1296,7 @@ public:
         }
         */
         Type functype = TranslateFuncType(fntyp);
-        if (!functype)
+        if (!functype.isValid())
             return true;
 
         std::string InternalName = FuncName;
@@ -1283,8 +1314,10 @@ public:
 
         //LLVMDumpType(functype);
 
-        LLVMAddFunction(bang_module, InternalName.c_str(), functype.getLLVMType());
+        ;
 
+        env->names[FuncName] = TypedValue(Type::pointer(functype),
+            LLVMAddFunction(bang_module, InternalName.c_str(), functype.getLLVMType()));
 
         //KeepLive(f);//make sure this function is live in codegen by creating a dummy reference to it (void) is to suppress unused warnings
 
@@ -1294,13 +1327,14 @@ public:
 
 class CodeGenProxy : public clang::ASTConsumer {
 public:
+    Environment *env;
     CVisitor visitor;
 
-    CodeGenProxy() {}
+    CodeGenProxy(Environment *env_) : env(env_) {}
     virtual ~CodeGenProxy() {}
 
     virtual void Initialize(clang::ASTContext &Context) {
-        visitor.SetContext(&Context);
+        visitor.SetContext(&Context, env);
     }
 
     virtual bool HandleTopLevelDecl(clang::DeclGroupRef D) {
@@ -1313,8 +1347,11 @@ public:
 // see ASTConsumers.h for more utilities
 class BangEmitLLVMOnlyAction : public clang::EmitLLVMOnlyAction {
 public:
-    BangEmitLLVMOnlyAction() :
-        EmitLLVMOnlyAction((llvm::LLVMContext *)LLVMGetGlobalContext())
+    Environment *env;
+
+    BangEmitLLVMOnlyAction(Environment *env_) :
+        EmitLLVMOnlyAction((llvm::LLVMContext *)LLVMGetGlobalContext()),
+        env(env_)
     {
     }
 
@@ -1323,12 +1360,12 @@ public:
 
         std::vector< std::unique_ptr<clang::ASTConsumer> > consumers;
         consumers.push_back(clang::EmitLLVMOnlyAction::CreateASTConsumer(CI, InFile));
-        consumers.push_back(llvm::make_unique<CodeGenProxy>());
+        consumers.push_back(llvm::make_unique<CodeGenProxy>(env));
         return llvm::make_unique<clang::MultiplexConsumer>(std::move(consumers));
     }
 };
 
-static LLVMModuleRef importCModule (Anchor *anchor,
+static LLVMModuleRef importCModule (Environment *env, Anchor *anchor,
     const char *modulename, const char *path, const char **args, int argcount) {
     using namespace clang;
 
@@ -1361,7 +1398,7 @@ static LLVMModuleRef importCModule (Anchor *anchor,
     LLVMModuleRef M = NULL;
 
     // Create and execute the frontend to generate an LLVM bitcode module.
-    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction());
+    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(env));
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
@@ -1420,7 +1457,7 @@ static bool isSymbol (Expression *expr, const char *sym) {
 (import-c <filename> (<compiler-arg> ...))
 */
 
-static TypedValue translate (const Environment *env, Expression *expr);
+static TypedValue translate (Environment *env, Expression *expr);
 
 static Expression *translateKind(Expression *expr, int type) {
     if (expr) {
@@ -1445,10 +1482,10 @@ static const char *translateString(Expression *expr) {
     return NULL;
 }
 
-static Type translateType (const Environment *env, Expression *expr) {
+static Type translateType (Environment *env, Expression *expr) {
     if (expr) {
         TypedValue result = translate(env, expr);
-        if (!result.getType() && result.getValue()) {
+        if (!result.getType().isValid() && result.getValue()) {
             translateError(&expr->anchor, "type expected, not value\n");
         }
         return result.getType();
@@ -1456,10 +1493,10 @@ static Type translateType (const Environment *env, Expression *expr) {
     return Type::none();
 }
 
-static TypedValue translateValue (const Environment *env, Expression *expr) {
+static TypedValue translateValue (Environment *env, Expression *expr) {
     if (expr) {
         TypedValue result = translate(env, expr);
-        if (!result.getValue() && result.getType()) {
+        if (!result.getValue() && result.getType().isValid()) {
             translateError(&expr->anchor, "value expected, not type\n");
         }
         return result;
@@ -1496,7 +1533,7 @@ static TypedValue nopcall () {
     return TypedValue(T_void, LLVMBuildCall(bang_builder, bang_nopfunc, NULL, 0, ""));
 }
 
-static TypedValue translateExpressionList (const Environment *env, Expression *expr, int offset) {
+static TypedValue translateExpressionList (Environment *env, Expression *expr, int offset) {
     int argcount = (int)expr->len - offset;
     bool success = true;
     TypedValue stmt;
@@ -1512,7 +1549,7 @@ static TypedValue translateExpressionList (const Environment *env, Expression *e
     return stmt;
 }
 
-static TypedValue translate (const Environment *env, Expression *expr) {
+static TypedValue translate (Environment *env, Expression *expr) {
     TypedValue result;
 
     if (expr) {
@@ -1534,13 +1571,13 @@ static TypedValue translate (const Environment *env, Expression *expr) {
 
                             if (argcount >= 0) {
                                 Type rettype = translateType(env, nth(expr, 1));
-                                if (rettype) {
+                                if (rettype.isValid()) {
                                     std::vector<Type> argtypes;
 
                                     bool success = true;
                                     for (int i = 0; i < argcount; ++i) {
                                         Type argtype = translateType(env, nth(args_expr, i));
-                                        if (!argtype) {
+                                        if (!argtype.isValid()) {
                                             success = false;
                                             break;
                                         }
@@ -1588,7 +1625,7 @@ static TypedValue translate (const Environment *env, Expression *expr) {
                             type = T_int32;
                         }
 
-                        if (type && expr_value) {
+                        if (type.isValid() && expr_value) {
                             char *end;
                             long long value = strtoll((const char *)expr_value->buf, &end, 10);
                             if (end != ((char *)expr_value->buf + expr_value->len)) {
@@ -1610,7 +1647,7 @@ static TypedValue translate (const Environment *env, Expression *expr) {
                             type = T_double;
                         }
 
-                        if (type && expr_value) {
+                        if (type.isValid() && expr_value) {
                             char *end;
                             double value = strtod((const char *)expr_value->buf, &end);
                             if (end != ((char *)expr_value->buf + expr_value->len)) {
@@ -1636,7 +1673,7 @@ static TypedValue translate (const Environment *env, Expression *expr) {
                         Expression *expr_arg = nth(expr, 1);
 
                         TypedValue tov = translate(env, expr_arg);
-                        if (tov.getType()) {
+                        if (tov.getType().isValid()) {
                             printf("type: %s\n", tov.getType().getString().c_str());
                             LLVMDumpType(tov.getLLVMType());
                         }
@@ -1727,10 +1764,12 @@ static TypedValue translate (const Environment *env, Expression *expr) {
                         Expression *expr_name = translateKind(nth(expr, 1), E_Symbol);
                         Type functype = translateType(env, expr_type);
 
-                        if (expr_name && functype) {
+                        if (expr_name && functype.isValid()) {
                             if (functype.isFunction()) {
+                                const char *name = (const char *)expr_name->buf;
+
                                 // todo: external linkage?
-                                LLVMValueRef func = LLVMAddFunction(bang_module, (const char *)expr_name->buf, functype.getLLVMType());
+                                LLVMValueRef func = LLVMAddFunction(bang_module, name, functype.getLLVMType());
 
                                 Expression *expr_params = nth(expr, 2);
                                 Expression *body_expr = nth(expr, 4);
@@ -1769,6 +1808,7 @@ static TypedValue translate (const Environment *env, Expression *expr) {
 
                                 if (!compile_errors) {
                                     result = TypedValue(Type::pointer(functype), func);
+                                    env->names[name] = result;
 
                                     if (body_expr) {
                                         LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(bang_builder);
@@ -1791,7 +1831,8 @@ static TypedValue translate (const Environment *env, Expression *expr) {
                                     }
                                 }
                             } else {
-                                translateError(&expr_type->anchor, "not a function type\n");
+                                translateError(&expr_type->anchor, "not a function type: %s\n",
+                                    functype.getString().c_str());
                             }
                         }
 
@@ -1803,15 +1844,18 @@ static TypedValue translate (const Environment *env, Expression *expr) {
 
                         Type functype = translateType(env, expr_type);
 
-                        if (expr_name && functype) {
+                        if (expr_name && functype.isValid()) {
                             if (functype.isFunction()) {
+                                const char *name = (const char *)expr_name->buf;
                                 // todo: external linkage?
                                 LLVMValueRef func = LLVMAddFunction(bang_module,
-                                    (const char *)expr_name->buf, functype.getLLVMType());
+                                    name, functype.getLLVMType());
 
                                 result = TypedValue(Type::pointer(functype), func);
+                                env->names[name] = result;
                             } else {
-                                translateError(&expr_type->anchor, "not a function type\n");
+                                translateError(&expr_type->anchor, "not a function type: %s\n",
+                                    functype.getString().c_str());
                             }
                         }
 
@@ -1877,7 +1921,7 @@ static TypedValue translate (const Environment *env, Expression *expr) {
                                     break;
                                 }
                             }
-                            LLVMModuleRef module = importCModule(&expr->anchor, modulename, name, args, argcount);
+                            LLVMModuleRef module = importCModule(env, &expr->anchor, modulename, name, args, argcount);
                             if (module) {
                                 NamedModules[modulename] = module;
                             }
@@ -1887,7 +1931,7 @@ static TypedValue translate (const Environment *env, Expression *expr) {
 
                         Type type = translateType(env, nth(expr, 1));
 
-                        if (type) {
+                        if (type.isValid()) {
                             result = TypedValue(Type::pointer(type));
                         }
                     } else {
@@ -1903,19 +1947,13 @@ static TypedValue translate (const Environment *env, Expression *expr) {
         } else if (expr->type == E_Symbol) {
             const char *name = (const char *)expr->buf;
 
-            result = TypedValue(NamedTypes[name]);
-
             Environment *penv = (Environment *)env;
             while (penv) {
                 result = (*penv).names[name];
-                if (result.getValue()) {
+                if (result) {
                     break;
                 }
                 penv = (Environment *)penv->parent;
-            }
-
-            if (!result.getValue()) {
-                result = NamedValues[name];
             }
 
             if (!result) {
@@ -1949,26 +1987,26 @@ static void exportExternal (const char *name, void *addr) {
 static void compile (Expression *expr) {
     setupTypes();
 
-    printf("%i %i %i\n", T_void.getId(), T_int32.getId(), Type::pointer(T_int32).getId() );
-
     bang_module = LLVMModuleCreateWithName("bang");
     NamedModules["bang"] = bang_module;
     bang_builder = LLVMCreateBuilder();
 
-    NamedTypes["void"] = T_void;
-    NamedTypes["half"] = T_half;
-    NamedTypes["float"] = T_float;
-    NamedTypes["double"] = T_double;
-    NamedTypes["bool"] = T_bool;
-    NamedTypes["int8"] = T_int8;
-    NamedTypes["int16"] = T_int16;
-    NamedTypes["int32"] = T_int32;
-    NamedTypes["int64"] = T_int64;
-    NamedTypes["uint8"] = T_uint8;
-    NamedTypes["uint16"] = T_uint16;
-    NamedTypes["uint32"] = T_uint32;
-    NamedTypes["uint64"] = T_uint64;
-    NamedTypes["opaque"] = T_opaque;
+    Environment env;
+
+    env.names["void"] = T_void;
+    env.names["half"] = T_half;
+    env.names["float"] = T_float;
+    env.names["double"] = T_double;
+    env.names["bool"] = T_bool;
+    env.names["int8"] = T_int8;
+    env.names["int16"] = T_int16;
+    env.names["int32"] = T_int32;
+    env.names["int64"] = T_int64;
+    env.names["uint8"] = T_uint8;
+    env.names["uint16"] = T_uint16;
+    env.names["uint32"] = T_uint32;
+    env.names["uint64"] = T_uint64;
+    env.names["opaque"] = T_opaque;
 
     Type entryfunctype = Type::function(T_void, std::vector<Type>(), false);
 
@@ -1979,7 +2017,6 @@ static void compile (Expression *expr) {
 
     LLVMValueRef entryfunc = LLVMAddFunction(bang_module, "__anon_expr", entryfunctype.getLLVMType());
 
-    Environment env;
     env.function = entryfunc;
     env.function_type = entryfunctype;
 
