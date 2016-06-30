@@ -149,6 +149,8 @@ public:
     bool isListComment() const;
     bool isLineComment() const;
     bool isComment() const;
+
+    std::string getHeader() const;
 };
 
 typedef std::shared_ptr<Expression> ExpressionRef;
@@ -322,6 +324,17 @@ bool Expression::isLineComment() const {
 
 bool Expression::isComment() const {
     return isLineComment() || isListComment();
+}
+
+std::string Expression::getHeader() const {
+    if (auto list = llvm::dyn_cast<List>(this)) {
+        if (list->size() >= 1) {
+            if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
+                return head->getValue();
+            }
+        }
+    }
+    return "";
 }
 
 //------------------------------------------------------------------------------
@@ -544,6 +557,7 @@ struct Parser {
         va_start (args, format);
         vsnprintf( &error_string[0], size, format, args );
         va_end (args);
+        assert(false);
     }
 
     ExpressionRef parseAny () {
@@ -718,6 +732,8 @@ struct Parser {
             munmap(ptr, length);
             close(fd);
 
+            if (expr)
+                expr = strip(expr);
             return expr;
         } else {
             fprintf(stderr, "unable to open file: %s\n", path);
@@ -1737,6 +1753,8 @@ static TypedValue translateExpressionList (Environment *env, const List *expr, i
     return stmt;
 }
 
+static void compileAndRun (Environment *env, const char *modulename, const Expression *expr);
+
 static TypedValue translateList (Environment *env, const List *expr) {
     TypedValue result;
 
@@ -1948,37 +1966,18 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
             } else if (matchSpecialForm(env, expr, "meta-eval", 1, -1)) {
 
-                Type evalfunctype = Type::function(T_void, std::vector<Type>(), false);
+                Environment meta_env;
+                TranslationGlobals globals;
 
-                LLVMValueRef evalfunc = LLVMAddFunction(env->module, "", evalfunctype.getLLVMType());
+                meta_env.globals = &globals;
 
-                LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->builder);
+                compileAndRun(&meta_env, "meta", expr);
 
-                LLVMBasicBlockRef entry = LLVMAppendBasicBlock(evalfunc, "entry");
-                LLVMPositionBuilderAtEnd(env->builder, entry);
+                env->globals->compile_errors += globals.compile_errors;
 
-                Environment subenv(env);
-                subenv.function = evalfunc;
-                subenv.function_type = evalfunctype;
-
-                translateExpressionList(&subenv, expr, 1);
-
-                if (!subenv.hasErrors()) {
-                    LLVMBuildRetVoid(env->builder);
-
-                    LLVMPositionBuilderAtEnd(env->builder, oldblock);
-
-                    typedef void (*EvalFunctionType)();
-
-                    EvalFunctionType fn = (EvalFunctionType)
-                        LLVMGetPointerToGlobal(env->engine, evalfunc);
-                    assert(fn);
-
-                    printf("calling...\n");
-                    fn();
+                if (!env->hasErrors()) {
+                    result = TypedValue(T_void);
                 }
-
-                result = TypedValue(T_void);
 
             } else if (matchSpecialForm(env, expr, "function", 3, -1)) {
 
@@ -2217,7 +2216,7 @@ static TypedValue translate (Environment *env, const Expression *expr) {
     return result;
 }
 
-static void compile (Expression *expr) {
+static void init() {
     setupTypes();
 
     LLVMEnablePrettyStackTrace();
@@ -2226,8 +2225,10 @@ static void compile (Expression *expr) {
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
     LLVMInitializeNativeDisassembler();
+}
 
-    LLVMModuleRef module = LLVMModuleCreateWithName("bang");
+static void compileAndRun (Environment *env, const char *modulename, const Expression *expr) {
+    LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
 
     char *error = NULL;
     LLVMExecutionEngineRef engine;
@@ -2247,74 +2248,63 @@ static void compile (Expression *expr) {
 
     LLVMBuilderRef builder = LLVMCreateBuilder();
 
-    TranslationGlobals globals;
+    env->engine = engine;
+    env->module = module;
+    env->builder = builder;
 
-    Environment env;
-    env.globals = &globals;
-    env.engine = engine;
-    env.module = module;
-    env.builder = builder;
-
-    env.names["void"] = T_void;
-    env.names["half"] = T_half;
-    env.names["float"] = T_float;
-    env.names["double"] = T_double;
-    env.names["bool"] = T_bool;
-    env.names["int8"] = T_int8;
-    env.names["int16"] = T_int16;
-    env.names["int32"] = T_int32;
-    env.names["int64"] = T_int64;
-    env.names["uint8"] = T_uint8;
-    env.names["uint16"] = T_uint16;
-    env.names["uint32"] = T_uint32;
-    env.names["uint64"] = T_uint64;
-    env.names["opaque"] = T_opaque;
+    env->names["void"] = T_void;
+    env->names["half"] = T_half;
+    env->names["float"] = T_float;
+    env->names["double"] = T_double;
+    env->names["bool"] = T_bool;
+    env->names["int8"] = T_int8;
+    env->names["int16"] = T_int16;
+    env->names["int32"] = T_int32;
+    env->names["int64"] = T_int64;
+    env->names["uint8"] = T_uint8;
+    env->names["uint16"] = T_uint16;
+    env->names["uint32"] = T_uint32;
+    env->names["uint64"] = T_uint64;
+    env->names["opaque"] = T_opaque;
 
     Type entryfunctype = Type::function(T_void, std::vector<Type>(), false);
 
-    globals.nopfunc = LLVMAddFunction(module, "__nop", entryfunctype.getLLVMType());
-    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(globals.nopfunc, "entry");
+    env->globals->nopfunc = LLVMAddFunction(module, "__nop", entryfunctype.getLLVMType());
+    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(env->globals->nopfunc, "entry");
     LLVMPositionBuilderAtEnd(builder, entry);
     LLVMBuildRetVoid(builder);
 
     LLVMValueRef entryfunc = LLVMAddFunction(module, "", entryfunctype.getLLVMType());
 
-    env.function = entryfunc;
-    env.function_type = entryfunctype;
+    env->function = entryfunc;
+    env->function_type = entryfunctype;
 
     {
-        auto _ = env.with_expr(expr);
+        auto _ = env->with_expr(expr);
         if (auto list = llvm::dyn_cast<List>(expr)) {
             if (list->size() >= 1) {
-                const Expression *head = list->nth(0);
-                if (isSymbol(head, "bang")) {
+                LLVMBasicBlockRef entry = LLVMAppendBasicBlock(entryfunc, "entry");
+                LLVMPositionBuilderAtEnd(builder, entry);
 
-                    LLVMBasicBlockRef entry = LLVMAppendBasicBlock(entryfunc, "entry");
-                    LLVMPositionBuilderAtEnd(builder, entry);
-
-                    for (size_t i = 1; i != list->size(); ++i) {
-                        Expression *stmt = list->nth((int)i);
-                        translate(&env, stmt);
-                        if (env.hasErrors())
-                            break;
-                    }
-                } else {
-                    auto _ = env.with_expr(head);
-                    translateError(&env, "'bang' expected\n");
+                for (size_t i = 1; i != list->size(); ++i) {
+                    const Expression *stmt = list->nth((int)i);
+                    translate(env, stmt);
+                    if (env->hasErrors())
+                        break;
                 }
             } else {
-                translateError(&env, "expression is empty\n");
+                translateError(env, "expression is empty\n");
             }
         } else {
-            translateError(&env, "unexpected %s\n",
+            translateError(env, "unexpected %s\n",
                 expressionKindName(expr->getKind()));
         }
     }
 
-    if (!env.hasErrors()) {
+    if (!env->hasErrors()) {
         LLVMBuildRetVoid(builder);
 
-        if (globals.dump_module) {
+        if (env->globals->dump_module) {
             LLVMDumpModule(module);
             printf("\n\noutput:\n");
         }
@@ -2339,27 +2329,43 @@ static void compile (Expression *expr) {
     LLVMDisposeBuilder(builder);
 }
 
+static void compileMain (const Expression *expr) {
+    Environment env;
+    TranslationGlobals globals;
+
+    env.globals = &globals;
+
+    {
+        auto _ = env.with_expr(expr);
+
+        std::string header = expr->getHeader();
+        if (header != "bang") {
+            translateError(&env, "unrecognized header: '%s'; try 'bang' instead.\n", header.c_str());
+            return;
+        }
+    }
+
+    compileAndRun(&env, "main", expr);
+
+}
+
 //------------------------------------------------------------------------------
 
 } // namespace bang
 
 int main(int argc, char ** argv) {
+    bang::init();
 
     int result = 0;
 
-    ++argv;
-    while (argv && *argv) {
+    if (argv && argv[1]) {
         bang::Parser parser;
-        auto expr = parser.parseFile(*argv);
+        auto expr = parser.parseFile(argv[1]);
         if (expr) {
-            expr = strip(expr);
-            //printExpression(expr.get());
-            bang::compile(expr.get());
+            bang::compileMain(expr.get());
         } else {
-            result = 255;
+            result = 1;
         }
-
-        ++argv;
     }
 
     return result;

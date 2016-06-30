@@ -1,17 +1,24 @@
 bang
 
+; dump LLVM IR for this module after compilation
 (dump-module)
 
+; import-c: parse and compile C++ source code / headers using clang
 import-c bang0 ./bang0.cpp (
     -DBANG_HEADER_ONLY
     -I./clang/lib/clang/3.8.0/include
     )
 
-extern LLVMVoidType
-    function-type (pointer-type int8) ()
+; meta-eval: runs code in the compiler context, allowing to compile & register
+; new expression handlers before the rest of the module is translated.
+meta-eval
+    dump-module ;
 
-extern dlopen
-    function-type (pointer-type int8) ((pointer-type int8) int32)
+    extern printf
+        function-type int32 ((pointer-type int8) ...)
+
+    call printf
+        array-ref "running in the compiler!\n"
 
 extern printf
     function-type int32 ((pointer-type int8) ...)
@@ -49,7 +56,4 @@ call printf
         function-type int32 ()
         const-int int32 0
 
-meta-eval
-    call printf
-        array-ref "running in the compiler!\n"
 
