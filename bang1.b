@@ -49,7 +49,7 @@ call printf
         function-type int32 ()
         const-int int32 0
 
-compiler-eval
+meta-eval
     call printf
         array-ref "running in the compiler!\n"
 

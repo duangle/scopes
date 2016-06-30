@@ -47,6 +47,7 @@ const char *return_test_string () {
 #include <llvm-c/Target.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
+#include <llvm-c/ErrorHandling.h>
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
@@ -2219,6 +2220,7 @@ static TypedValue translate (Environment *env, const Expression *expr) {
 static void compile (Expression *expr) {
     setupTypes();
 
+    LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmParser();
