@@ -1642,6 +1642,7 @@ static bool isSymbol (const Expression *expr, const char *sym) {
 (do expr ...)
 (dump-module)
 (import-c <filename> (<compiler-arg> ...))
+(meta-eval expr ...)
 */
 
 static TypedValue translate (Environment *env, const Expression *expr);
@@ -1944,7 +1945,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 result = translateExpressionList(&subenv, expr, 1);
 
-            } else if (matchSpecialForm(env, expr, "compiler-eval", 1, -1)) {
+            } else if (matchSpecialForm(env, expr, "meta-eval", 1, -1)) {
 
                 Type evalfunctype = Type::function(T_void, std::vector<Type>(), false);
 
