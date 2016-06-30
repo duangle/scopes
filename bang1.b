@@ -18,7 +18,6 @@ extern printf
 extern sin
     function-type double (double)
 
-
 function computesin ()
     function-type double ()
     call sin
@@ -30,11 +29,10 @@ function dostuff-hyphenated (a b)
         ?
             const-int bool 0
             ()
-            dump
-                call printf
-                    array-ref "value = %f! (false) %i %i\n"
-                    call computesin
-                    \ a b
+            call printf
+                array-ref "value = %f! (false) %i %i\n"
+                call computesin
+                \ a b
     const-int int32 0
 
 call dostuff-hyphenated
@@ -44,3 +42,14 @@ call dostuff-hyphenated
 call printf
     array-ref "Hello World! %s\n"
     call return_test_string
+
+call printf
+    array-ref "%p\n"
+    function stuffz ()
+        function-type int32 ()
+        const-int int32 0
+
+compiler-eval
+    call printf
+        array-ref "running in the compiler!\n"
+

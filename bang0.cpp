@@ -144,18 +144,24 @@ public:
     ExpressionKind getKind() const {
         return kind;
     }
+
+    bool isListComment() const;
+    bool isLineComment() const;
+    bool isComment() const;
 };
+
+typedef std::shared_ptr<Expression> ExpressionRef;
 
 //------------------------------------------------------------------------------
 
 struct List : Expression {
-    std::vector< std::unique_ptr<Expression> > values;
+    std::vector< ExpressionRef > values;
 
     List() :
         Expression(E_List)
         {}
 
-    Expression *append(std::unique_ptr<Expression> expr) {
+    Expression *append(ExpressionRef expr) {
         assert(expr);
         Expression *ptr = expr.get();
         values.push_back(std::move(expr));
@@ -166,11 +172,11 @@ struct List : Expression {
         return values.size();
     };
 
-    std::unique_ptr<Expression> &getElement(size_t i) {
+    ExpressionRef &getElement(size_t i) {
         return values[i];
     }
 
-    const std::unique_ptr<Expression> &getElement(size_t i) const {
+    const ExpressionRef &getElement(size_t i) const {
         return values[i];
     }
 
@@ -294,6 +300,54 @@ struct Comment : Atom {
     }
 
 };
+
+//------------------------------------------------------------------------------
+
+bool Expression::isListComment() const {
+    if (auto list = llvm::dyn_cast<List>(this)) {
+        if (list->size() > 0) {
+            if (auto head = llvm::dyn_cast<Comment>(list->nth(0))) {
+                if (head->getValue().substr(0, 2) == ";;")
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool Expression::isLineComment() const {
+    return llvm::isa<Comment>(this);
+}
+
+bool Expression::isComment() const {
+    return isLineComment() || isListComment();
+}
+
+//------------------------------------------------------------------------------
+
+std::shared_ptr<Expression> strip(std::shared_ptr<Expression> expr) {
+    assert(expr);
+    if (expr->isComment()) {
+        return nullptr;
+    } else if (expr->getKind() == E_List) {
+        auto list = std::static_pointer_cast<List>(expr);
+        auto result = std::make_shared<List>();
+        bool changed = false;
+        for (size_t i = 0; i < list->size(); ++i) {
+            auto oldelem = list->getElement(i);
+            auto newelem = strip(oldelem);
+            if (oldelem.get() != newelem.get())
+                changed = true;
+            if (newelem)
+                result->append(newelem);
+        }
+        if (changed) {
+            result->anchor = expr->anchor;
+            return result;
+        }
+    }
+    return expr;
+}
 
 //------------------------------------------------------------------------------
 
@@ -491,7 +545,7 @@ struct Parser {
         va_end (args);
     }
 
-    std::unique_ptr<Expression> parseAny () {
+    ExpressionRef parseAny () {
         assert(lexer.token != token_eof);
         if (lexer.token == token_open) {
             auto result = llvm::make_unique<List>();
@@ -535,7 +589,7 @@ struct Parser {
         return nullptr;
     }
 
-    std::unique_ptr<Expression> parseNaked () {
+    ExpressionRef parseNaked () {
         int lineno = lexer.lineno;
         int column = lexer.column();
 
@@ -589,7 +643,7 @@ struct Parser {
         }
     }
 
-    std::unique_ptr<Expression> parseRoot (
+    ExpressionRef parseRoot (
         const char *input_stream, const char *eof, const char *path) {
         lexer.init(input_stream, eof, path);
 
@@ -644,7 +698,7 @@ struct Parser {
         }
     }
 
-    std::unique_ptr<Expression> parseFile (const char *path) {
+    ExpressionRef parseFile (const char *path) {
         int fd = open(path, O_RDONLY);
         off_t length = lseek(fd, 0, SEEK_END);
         void *ptr = mmap(NULL, length, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -675,7 +729,7 @@ struct Parser {
 
 //------------------------------------------------------------------------------
 
-void printExpression(const Expression *e, size_t depth)
+void printExpression(const Expression *e, size_t depth=0)
 {
 #define sep() for(i = 0; i < depth; i++) printf("    ")
 	size_t i;
@@ -1174,7 +1228,7 @@ public:
                 opaque = true;
                 continue;
             }
-            printf("%s\n", declstr.c_str());
+            //printf("%s\n", declstr.c_str());
         }
         return !opaque;
 
@@ -1432,7 +1486,7 @@ public:
             #endif
         }
 
-        printf("%s -> %s\n", FuncName.c_str(), InternalName.c_str());
+        //printf("%s -> %s\n", FuncName.c_str(), InternalName.c_str());
         //CreateFunction(FuncName,InternalName,&typ);
 
         //LLVMDumpType(functype);
@@ -1600,8 +1654,9 @@ static const T *translateKind(Environment *env, const Expression *expr) {
         if (co) {
             return co;
         } else {
-            translateError(env, "%s expected\n",
-                expressionKindName(T::kind()));
+            translateError(env, "%s expected, not %s\n",
+                expressionKindName(T::kind()),
+                expressionKindName(expr->getKind()));
         }
     }
     return nullptr;
@@ -1889,6 +1944,40 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 result = translateExpressionList(&subenv, expr, 1);
 
+            } else if (matchSpecialForm(env, expr, "compiler-eval", 1, -1)) {
+
+                Type evalfunctype = Type::function(T_void, std::vector<Type>(), false);
+
+                LLVMValueRef evalfunc = LLVMAddFunction(env->module, "", evalfunctype.getLLVMType());
+
+                LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->builder);
+
+                LLVMBasicBlockRef entry = LLVMAppendBasicBlock(evalfunc, "entry");
+                LLVMPositionBuilderAtEnd(env->builder, entry);
+
+                Environment subenv(env);
+                subenv.function = evalfunc;
+                subenv.function_type = evalfunctype;
+
+                translateExpressionList(&subenv, expr, 1);
+
+                if (!subenv.hasErrors()) {
+                    LLVMBuildRetVoid(env->builder);
+
+                    LLVMPositionBuilderAtEnd(env->builder, oldblock);
+
+                    typedef void (*EvalFunctionType)();
+
+                    EvalFunctionType fn = (EvalFunctionType)
+                        LLVMGetPointerToGlobal(env->engine, evalfunc);
+                    assert(fn);
+
+                    printf("calling...\n");
+                    fn();
+                }
+
+                result = TypedValue(T_void);
+
             } else if (matchSpecialForm(env, expr, "function", 3, -1)) {
 
                 const Expression *expr_type = expr->nth(3);
@@ -2080,7 +2169,8 @@ static TypedValue translateList (Environment *env, const List *expr) {
             }
         } else {
             auto _ = env->with_expr(expr->nth(0));
-            translateError(env, "symbol expected\n");
+            translateError(env, "first element of expression must be symbol, not %s\n",
+                expressionKindName(expr->nth(0)->getKind()));
         }
     } else {
         result = nopcall(env);
@@ -2184,7 +2274,7 @@ static void compile (Expression *expr) {
     LLVMPositionBuilderAtEnd(builder, entry);
     LLVMBuildRetVoid(builder);
 
-    LLVMValueRef entryfunc = LLVMAddFunction(module, "__anon_expr", entryfunctype.getLLVMType());
+    LLVMValueRef entryfunc = LLVMAddFunction(module, "", entryfunctype.getLLVMType());
 
     env.function = entryfunc;
     env.function_type = entryfunctype;
@@ -2230,7 +2320,16 @@ static void compile (Expression *expr) {
         LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
         LLVMDisposeMessage(error);
 
-        LLVMRunFunction(engine, entryfunc, 0, NULL);
+        typedef void (*MainFunctionType)();
+
+        MainFunctionType fn = (MainFunctionType)
+            LLVMGetPointerToGlobal(engine, entryfunc);
+            //LLVMRecompileAndRelinkFunction(engine, entryfunc);
+        assert(fn);
+
+        fn();
+
+        //LLVMRunFunction(engine, entryfunc, 0, NULL);
 
     }
 
@@ -2250,7 +2349,8 @@ int main(int argc, char ** argv) {
         bang::Parser parser;
         auto expr = parser.parseFile(*argv);
         if (expr) {
-            //printExpression(expr, 0);
+            expr = strip(expr);
+            //printExpression(expr.get());
             bang::compile(expr.get());
         } else {
             result = 255;
