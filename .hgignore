@@ -1,6 +1,7 @@
 syntax: glob
 
 *.so
+*.o
 bang0
 
 syntax: regexp

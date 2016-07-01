@@ -23,17 +23,21 @@ const char *return_test_string () {
 //------------------------------------------------------------------------------
 
 #undef NDEBUG
+#ifdef _WIN32
+#include "mman.h"
+#else
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+#include <stdint.h>
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdlib.h>
-#include <stdint.h>
 
 #include <map>
 #include <unordered_map>
