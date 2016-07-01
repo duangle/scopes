@@ -667,7 +667,6 @@ struct Parser {
         lexer.init(input_stream, eof, path);
 
         lexer.readToken();
-        bool escape = false;
 
         auto result = llvm::make_unique<List>();
         lexer.initAnchor(result->anchor);
@@ -676,7 +675,6 @@ struct Parser {
         while (lexer.token != token_eof) {
 
             if (lexer.token == token_escape) {
-                escape = true;
                 lexer.readToken();
                 if (lexer.lineno <= lineno) {
                     error("escape character is not at end of line\n");
@@ -684,7 +682,6 @@ struct Parser {
                 }
                 lineno = lexer.lineno;
             } else if (lexer.lineno > lineno) {
-                escape = false;
                 lineno = lexer.lineno;
                 if (auto elem = parseNaked())
                     result->append(std::move(elem));
@@ -1153,7 +1150,7 @@ struct Environment {
     // local names
     NameValueMap names;
     // parent env
-    const Environment *parent;
+    Environment *parent;
 
     struct WithExpression {
         const Expression *prevexpr;
@@ -1180,7 +1177,7 @@ struct Environment {
         parent(NULL)
     {}
 
-    Environment(const Environment *parent_) :
+    Environment(Environment *parent_) :
         globals(parent_->globals),
         engine(parent_->engine),
         module(parent_->module),
@@ -1468,7 +1465,7 @@ public:
             return Type::function(returntype, argtypes, proto ? proto->isVariadic() : false);
         }
 
-        return NULL;
+        return Type::none();
     }
 
     bool TraverseFunctionDecl(clang::FunctionDecl *f) {
@@ -1743,12 +1740,10 @@ static TypedValue nopcall (Environment *env) {
 
 static TypedValue translateExpressionList (Environment *env, const List *expr, int offset) {
     int argcount = (int)expr->size() - offset;
-    bool success = true;
     TypedValue stmt;
     for (int i = 0; i < argcount; ++i) {
         stmt = translateValue(env, expr->nth(i + offset));
         if (!stmt.getValue() || env->hasErrors()) {
-            success = false;
             stmt = TypedValue();
             break;
         }
@@ -2158,7 +2153,9 @@ static TypedValue translateList (Environment *env, const List *expr) {
                             break;
                         }
                     }
-                    importCModule(env, modulename, name, args, argcount);
+                    if (success) {
+                        importCModule(env, modulename, name, args, argcount);
+                    }
                 }
 
             } else if (matchSpecialForm(env, expr, "pointer-type", 1, 1)) {
@@ -2199,7 +2196,7 @@ static TypedValue translate (Environment *env, const Expression *expr) {
                 if (result) {
                     break;
                 }
-                penv = (Environment *)penv->parent;
+                penv = penv->parent;
             }
 
             if (!result) {

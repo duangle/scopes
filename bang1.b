@@ -1,7 +1,7 @@
 bang
 
 ; dump LLVM IR for this module after compilation
-(dump-module)
+; (dump-module)
 
 ; import-c: parse and compile C++ source code / headers using clang
 import-c bang0 ./bang0.cpp (
@@ -12,7 +12,7 @@ import-c bang0 ./bang0.cpp (
 ; meta-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.
 meta-eval
-    dump-module ;
+    ; dump-module ;
 
     extern printf
         function-type int32 ((pointer-type int8) ...)

@@ -2,6 +2,7 @@ syntax: glob
 
 *.so
 *.o
+*.exe
 bang0
 
 syntax: regexp
