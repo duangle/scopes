@@ -5,15 +5,15 @@ bang
 
 ; import-c: parse and compile C++ source code / headers using clang
 import-c bang ./bang.h ()
-;;;import-c bang2 ./clang/include/llvm-c/Core.h (
+###import-c bang2 ./clang/include/llvm-c/Core.h (
     -x c
     -I./clang/include
     -I./clang/lib/clang/3.8.0/include
     -D__STDC_LIMIT_MACROS
     -D__STDC_CONSTANT_MACROS
-)
+    )
 
-; meta-eval: runs code in the compiler context, allowing to compile & register
+; proto-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.
 proto-eval
     ; dump-module ;
@@ -54,8 +54,6 @@ call printf
 
 call printf
     array-ref "%p\n"
-    function stuffz ()
-        function-type int32 ()
-        const-int int32 0
+    call LLVMVoidType
 
 

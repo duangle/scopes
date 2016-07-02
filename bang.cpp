@@ -313,8 +313,8 @@ struct Comment : Atom {
 bool Expression::isListComment() const {
     if (auto list = llvm::dyn_cast<List>(this)) {
         if (list->size() > 0) {
-            if (auto head = llvm::dyn_cast<Comment>(list->nth(0))) {
-                if (head->getValue().substr(0, 2) == ";;")
+            if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
+                if (head->getValue().substr(0, 3) == "###")
                     return true;
             }
         }
@@ -561,7 +561,6 @@ struct Parser {
         va_start (args, format);
         vsnprintf( &error_string[0], size, format, args );
         va_end (args);
-        assert(false);
     }
 
     ExpressionRef parseAny () {
@@ -2056,15 +2055,19 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                                 TypedValue bodyvalue = translateExpressionList(&subenv, expr, 4);
 
-                                if (functype.getReturnType() == T_void) {
-                                    LLVMBuildRetVoid(env->getBuilder());
-                                } else if (bodyvalue.getValue()) {
-                                    LLVMBuildRet(env->getBuilder(), bodyvalue.getValue());
-                                } else {
-                                    translateError(env, "function returns no value\n");
-                                }
+                                if (!env->hasErrors()) {
 
-                                LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
+                                    if (functype.getReturnType() == T_void) {
+                                        LLVMBuildRetVoid(env->getBuilder());
+                                    } else if (bodyvalue.getValue()) {
+                                        LLVMBuildRet(env->getBuilder(), bodyvalue.getValue());
+                                    } else {
+                                        translateError(env, "function returns no value\n");
+                                    }
+
+                                    LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
+
+                                }
 
                             }
                         }
