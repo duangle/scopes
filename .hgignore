@@ -6,8 +6,8 @@ syntax: glob
 *.dll
 *.a
 *.def
-bang0
 
 syntax: regexp
 
 ^clang
+^bang$

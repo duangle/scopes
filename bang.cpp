@@ -1,8 +1,6 @@
 #ifndef BANG0_CPP
 #define BANG0_CPP
 
-#include <sys/types.h>
-
 //------------------------------------------------------------------------------
 
 #if defined __cplusplus
@@ -24,6 +22,7 @@ int bang_main(int argc, char ** argv);
 //------------------------------------------------------------------------------
 
 #undef NDEBUG
+#include <sys/types.h>
 #ifdef _WIN32
 #include "mman.h"
 #else
@@ -1122,26 +1121,36 @@ typedef std::map<std::string, Type> NameTypeMap;
 
 //------------------------------------------------------------------------------
 
+struct Environment;
+
 struct TranslationGlobals {
     int compile_errors;
     bool dump_module;
     LLVMValueRef nopfunc;
+    // execution engine for this translation
+    LLVMExecutionEngineRef engine;
+    // module for this translation
+    LLVMModuleRef module;
+    // builder for this translation
+    LLVMBuilderRef builder;
+    // meta env; only valid for proto environments
+    const Environment *meta;
 
     TranslationGlobals() :
         compile_errors(0),
         dump_module(false),
-        nopfunc(NULL)
+        nopfunc(NULL),
+        engine(NULL),
+        module(NULL),
+        builder(NULL),
+        meta(NULL)
         {}
 };
 
+//------------------------------------------------------------------------------
+
 struct Environment {
     TranslationGlobals *globals;
-    // currently active execution engine
-    LLVMExecutionEngineRef engine;
-    // currently active module
-    LLVMModuleRef module;
-    // currently active builder
-    LLVMBuilderRef builder;
     // currently active function
     LLVMValueRef function;
     // currently evaluated expression
@@ -1170,23 +1179,17 @@ struct Environment {
 
     Environment() :
         globals(NULL),
-        engine(NULL),
-        module(NULL),
-        builder(NULL),
         function(NULL),
         expr(NULL),
         parent(NULL)
-    {}
+        {}
 
     Environment(Environment *parent_) :
         globals(parent_->globals),
-        engine(parent_->engine),
-        module(parent_->module),
-        builder(parent_->builder),
         function(parent_->function),
         expr(parent_->expr),
-        parent(parent_) {
-    }
+        parent(parent_)
+        {}
 
     WithExpression with_expr(const Expression *expr) {
         return WithExpression(this, expr);
@@ -1195,6 +1198,10 @@ struct Environment {
     bool hasErrors() const {
         return globals->compile_errors != 0;
     };
+
+    LLVMBuilderRef getBuilder() const {
+        return globals->builder;
+    }
 
 };
 
@@ -1513,7 +1520,7 @@ public:
         ;
 
         env->names[FuncName] = TypedValue(Type::pointer(functype),
-            LLVMAddFunction(env->module, InternalName.c_str(), functype.getLLVMType()));
+            LLVMAddFunction(env->globals->module, InternalName.c_str(), functype.getLLVMType()));
 
         //KeepLive(f);//make sure this function is live in codegen by creating a dummy reference to it (void) is to suppress unused warnings
 
@@ -1599,7 +1606,7 @@ static LLVMModuleRef importCModule (Environment *env,
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
         //LLVMDumpModule(M);
-        LLVMAddModule(env->engine, M);
+        LLVMAddModule(env->globals->engine, M);
     } else {
         translateError(env, "compiler failed\n");
     }
@@ -1661,7 +1668,7 @@ static bool isSymbol (const Expression *expr, const char *sym) {
 (do expr ...)
 (dump-module)
 (import-c <filename> (<compiler-arg> ...))
-(meta-eval expr ...)
+(proto-eval expr ...)
 */
 
 static TypedValue translate (Environment *env, const Expression *expr);
@@ -1736,7 +1743,7 @@ static bool matchSpecialForm (Environment *env, const List *expr, const char *na
 }
 
 static TypedValue nopcall (Environment *env) {
-    return TypedValue(T_void, LLVMBuildCall(env->builder, env->globals->nopfunc, NULL, 0, ""));
+    return TypedValue(T_void, LLVMBuildCall(env->getBuilder(), env->globals->nopfunc, NULL, 0, ""));
 }
 
 static TypedValue translateExpressionList (Environment *env, const List *expr, int offset) {
@@ -1801,7 +1808,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 if (casttype && castvalue) {
                     result = TypedValue(casttype,
-                        LLVMBuildBitCast(env->builder, castvalue, casttype.getLLVMType(), "ptrcast"));
+                        LLVMBuildBitCast(env->getBuilder(), castvalue, casttype.getLLVMType(), "ptrcast"));
                 }
 
             } else if (matchSpecialForm(env, expr, "extract", 2, 2)) {
@@ -1812,7 +1819,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 if (value && index) {
                     result = TypedValue(
 
-                        LLVMBuildExtractElement(env->builder, value, index, "extractelem"));
+                        LLVMBuildExtractElement(env->getBuilder(), value, index, "extractelem"));
                 }
             */
             } else if (matchSpecialForm(env, expr, "const-int", 2, 2)) {
@@ -1906,7 +1913,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                         };
 
                         result = TypedValue(etype,
-                            LLVMBuildGEP(env->builder, ptr.getValue(), indices, 2, "gep"));
+                            LLVMBuildGEP(env->getBuilder(), ptr.getValue(), indices, 2, "gep"));
                     } else {
                         translateError(env, "array value expected");
                     }
@@ -1916,7 +1923,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 TypedValue cond_value = translateValue(env, expr->nth(1));
                 if (cond_value) {
-                    LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->builder);
+                    LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->getBuilder());
 
                     LLVMBasicBlockRef then_block = LLVMAppendBasicBlock(env->function, "then");
                     LLVMBasicBlockRef else_block = LLVMAppendBasicBlock(env->function, "else");
@@ -1925,13 +1932,13 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     const Expression *then_expr = expr->nth(2);
                     const Expression *else_expr = expr->nth(3);
 
-                    LLVMPositionBuilderAtEnd(env->builder, then_block);
+                    LLVMPositionBuilderAtEnd(env->getBuilder(), then_block);
                     TypedValue then_result = translateValue(env, then_expr);
-                    LLVMBuildBr(env->builder, br_block);
+                    LLVMBuildBr(env->getBuilder(), br_block);
 
-                    LLVMPositionBuilderAtEnd(env->builder, else_block);
+                    LLVMPositionBuilderAtEnd(env->getBuilder(), else_block);
                     TypedValue else_result = translateValue(env, else_expr);
-                    LLVMBuildBr(env->builder, br_block);
+                    LLVMBuildBr(env->getBuilder(), br_block);
 
                     Type then_type = then_result.getType();
                     Type else_type = else_result.getType();
@@ -1939,11 +1946,11 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     auto _ = env->with_expr(then_expr);
 
                     if ((then_type == T_void) || (else_type == T_void)) {
-                        LLVMPositionBuilderAtEnd(env->builder, br_block);
+                        LLVMPositionBuilderAtEnd(env->getBuilder(), br_block);
                         result = nopcall(env);
                     } else if (then_type == else_type) {
-                        LLVMPositionBuilderAtEnd(env->builder, br_block);
-                        result = TypedValue(then_type, LLVMBuildPhi(env->builder, then_type.getLLVMType(), "select"));
+                        LLVMPositionBuilderAtEnd(env->getBuilder(), br_block);
+                        result = TypedValue(then_type, LLVMBuildPhi(env->getBuilder(), then_type.getLLVMType(), "select"));
                         LLVMValueRef values[] = { then_result.getValue(), else_result.getValue() };
                         LLVMBasicBlockRef blocks[] = { then_block, else_block };
                         LLVMAddIncoming(result.getValue(), values, blocks, 2);
@@ -1952,10 +1959,10 @@ static TypedValue translateList (Environment *env, const List *expr) {
                         translateError(env, "then-expression must evaluate to same type as else-expression\n");
                     }
 
-                    LLVMPositionBuilderAtEnd(env->builder, oldblock);
-                    LLVMBuildCondBr(env->builder, cond_value.getValue(), then_block, else_block);
+                    LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
+                    LLVMBuildCondBr(env->getBuilder(), cond_value.getValue(), then_block, else_block);
 
-                    LLVMPositionBuilderAtEnd(env->builder, br_block);
+                    LLVMPositionBuilderAtEnd(env->getBuilder(), br_block);
                 }
 
             } else if (matchSpecialForm(env, expr, "do", 1, -1)) {
@@ -1964,14 +1971,15 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 result = translateExpressionList(&subenv, expr, 1);
 
-            } else if (matchSpecialForm(env, expr, "meta-eval", 1, -1)) {
+            } else if (matchSpecialForm(env, expr, "proto-eval", 1, -1)) {
 
-                Environment meta_env;
+                Environment proto_env;
                 TranslationGlobals globals;
+                globals.meta = env;
 
-                meta_env.globals = &globals;
+                proto_env.globals = &globals;
 
-                compileAndRun(&meta_env, "meta", expr);
+                compileAndRun(&proto_env, "proto", expr);
 
                 env->globals->compile_errors += globals.compile_errors;
 
@@ -1993,7 +2001,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                         const char *name = expr_name->c_str();
 
                         // todo: external linkage?
-                        LLVMValueRef func = LLVMAddFunction(env->module, name, functype.getLLVMType());
+                        LLVMValueRef func = LLVMAddFunction(env->globals->module, name, functype.getLLVMType());
 
                         const Expression *expr_params = expr->nth(2);
                         const Expression *body_expr = expr->nth(4);
@@ -2041,22 +2049,22 @@ static TypedValue translateList (Environment *env, const List *expr) {
                             if (body_expr) {
                                 auto _ = env->with_expr(body_expr);
 
-                                LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->builder);
+                                LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->getBuilder());
 
                                 LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
-                                LLVMPositionBuilderAtEnd(env->builder, entry);
+                                LLVMPositionBuilderAtEnd(env->getBuilder(), entry);
 
                                 TypedValue bodyvalue = translateExpressionList(&subenv, expr, 4);
 
                                 if (functype.getReturnType() == T_void) {
-                                    LLVMBuildRetVoid(env->builder);
+                                    LLVMBuildRetVoid(env->getBuilder());
                                 } else if (bodyvalue.getValue()) {
-                                    LLVMBuildRet(env->builder, bodyvalue.getValue());
+                                    LLVMBuildRet(env->getBuilder(), bodyvalue.getValue());
                                 } else {
                                     translateError(env, "function returns no value\n");
                                 }
 
-                                LLVMPositionBuilderAtEnd(env->builder, oldblock);
+                                LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
 
                             }
                         }
@@ -2080,7 +2088,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     if (functype.isFunction()) {
                         const char *name = (const char *)expr_name->c_str();
                         // todo: external linkage?
-                        LLVMValueRef func = LLVMAddFunction(env->module,
+                        LLVMValueRef func = LLVMAddFunction(env->globals->module,
                             name, functype.getLLVMType());
 
                         result = TypedValue(Type::pointer(functype), func);
@@ -2124,7 +2132,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                             if (success) {
                                 Type returntype = functype.getReturnType();
                                 result = TypedValue(returntype,
-                                    LLVMBuildCall(env->builder, callee.getValue(), args, argcount, (returntype == T_void)?"":"calltmp"));
+                                    LLVMBuildCall(env->getBuilder(), callee.getValue(), args, argcount, (returntype == T_void)?"":"calltmp"));
                             }
                         } else {
                             translateError(env, "incorrect number of call arguments (got %i, need %s%i)\n",
@@ -2207,7 +2215,7 @@ static TypedValue translate (Environment *env, const Expression *expr) {
         } else if (auto str = llvm::dyn_cast<String>(expr)) {
             result = TypedValue(
                 Type::array(T_int8, str->size() + 1),
-                LLVMBuildGlobalString(env->builder, str->c_str(), "str"));
+                LLVMBuildGlobalString(env->getBuilder(), str->c_str(), "str"));
 
         } else {
             translateError(env, "unexpected %s\n",
@@ -2250,9 +2258,9 @@ static void compileAndRun (Environment *env, const char *modulename, const Expre
 
     LLVMBuilderRef builder = LLVMCreateBuilder();
 
-    env->engine = engine;
-    env->module = module;
-    env->builder = builder;
+    env->globals->engine = engine;
+    env->globals->module = module;
+    env->globals->builder = builder;
 
     env->names["void"] = T_void;
     env->names["half"] = T_half;

@@ -12,7 +12,8 @@ if [ $MODE = "release" ]; then
     echo Building with clang release version...
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.8/bin:$PATH
     clang++ \
-        -o bang $DIR/bang.cpp \
+        -shared \
+        -o $DIR/libbang.so $DIR/bang.cpp \
         -pedantic -g \
         -ferror-limit=1 \
         -Wno-vla-extension \
@@ -24,13 +25,16 @@ if [ $MODE = "release" ]; then
         -lclangEdit -lclangAST -lclangLex -lclangBasic \
         `llvm-config --cxxflags` \
         `llvm-config --ldflags --libs` \
-        && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
+    && clang++ \
+        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -L$DIR -lbang -O2 \
+    && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
         # && $DIR/bang $DIR/bang.b
 else
     echo Building with clang debug version...
     PATH=$DIR/../../llvm/build/bin:$PATH
     clang++ \
-        -o bang $DIR/bang.cpp \
+        -shared \
+        -o $DIR/libbang.so $DIR/bang.cpp \
         -pedantic -g \
         -ferror-limit=1 \
         -Wno-vla-extension \
@@ -44,6 +48,8 @@ else
         `llvm-config --ldflags --libs` \
         -I$DIR/../../llvm/llvm/tools/clang/include \
         -I$DIR/../../llvm/build/tools/clang/include \
-        && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
+    && clang++ \
+        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -L$DIR -lbang -g \
+    && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
         # && $DIR/bang $DIR/bang.b
 fi

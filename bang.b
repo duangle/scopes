@@ -8,7 +8,7 @@ import-c bang ./bang.cpp ()
 
 ; meta-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.
-meta-eval
+proto-eval
     ; dump-module ;
 
     extern printf
