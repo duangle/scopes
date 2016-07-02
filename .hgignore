@@ -11,3 +11,4 @@ syntax: regexp
 
 ^clang
 ^bang$
+^bang[.]h$

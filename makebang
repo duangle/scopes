@@ -11,7 +11,8 @@ MODE=release
 if [ $MODE = "release" ]; then
     echo Building with clang release version...
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.8/bin:$PATH
-    clang++ \
+    clang -x c -o $DIR/bang.h -C -E $DIR/bang.cpp \
+    && clang++ \
         -shared \
         -o $DIR/libbang.so $DIR/bang.cpp \
         -pedantic -g \
@@ -28,11 +29,12 @@ if [ $MODE = "release" ]; then
     && clang++ \
         -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -L$DIR -lbang -O2 \
     && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
-        # && $DIR/bang $DIR/bang.b
+    # && $DIR/bang $DIR/bang.b
 else
     echo Building with clang debug version...
     PATH=$DIR/../../llvm/build/bin:$PATH
-    clang++ \
+    clang -x c -o $DIR/bang.h -C -E $DIR/bang.cpp \
+    && clang++ \
         -shared \
         -o $DIR/libbang.so $DIR/bang.cpp \
         -pedantic -g \
@@ -51,5 +53,5 @@ else
     && clang++ \
         -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -L$DIR -lbang -g \
     && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
-        # && $DIR/bang $DIR/bang.b
+    # && $DIR/bang $DIR/bang.b
 fi
