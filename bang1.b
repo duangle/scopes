@@ -4,10 +4,7 @@ bang
 ; (dump-module)
 
 ; import-c: parse and compile C++ source code / headers using clang
-import-c bang0 ./bang0.cpp (
-    -DBANG_HEADER_ONLY
-    -I./clang/lib/clang/3.8.0/include
-    )
+import-c bang0 ./bang0.cpp ()
 
 ; meta-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.

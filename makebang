@@ -16,6 +16,7 @@ if [ $MODE = "release" ]; then
         -pedantic -g \
         -ferror-limit=1 \
         -Wno-vla-extension \
+        -DBANG_CPP_IMPL \
         -lpthread -lm -ldl -ltinfo -lz \
         -lclangFrontend -lclangDriver \
         -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
@@ -33,6 +34,7 @@ else
         -pedantic -g \
         -ferror-limit=1 \
         -Wno-vla-extension \
+        -DBANG_CPP_IMPL \
         -lpthread -lm -ldl -ltinfo -lz \
         -lclangFrontend -lclangDriver \
         -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \

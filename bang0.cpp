@@ -9,16 +9,17 @@
 extern "C" {
 #endif
 
-const char *return_test_string () {
-    return "hi!";
-}
+
+const char *return_test_string ();
+
+int bang_main(int argc, char ** argv);
 
 #if defined __cplusplus
 }
 #endif
 
 #endif // BANG0_CPP
-#ifndef BANG_HEADER_ONLY
+#ifdef BANG_CPP_IMPL
 
 //------------------------------------------------------------------------------
 
@@ -2350,11 +2351,16 @@ static void compileMain (const Expression *expr) {
 
 }
 
-//------------------------------------------------------------------------------
-
 } // namespace bang
 
-int main(int argc, char ** argv) {
+// C API
+//------------------------------------------------------------------------------
+
+const char *return_test_string () {
+    return "hi!";
+}
+
+int bang_main(int argc, char ** argv) {
     bang::init();
 
     int result = 0;
@@ -2372,4 +2378,11 @@ int main(int argc, char ** argv) {
     return result;
 }
 
-#endif // BANG_HEADER_ONLY
+//------------------------------------------------------------------------------
+
+#endif // BANG_CPP_IMPL
+#ifdef BANG_MAIN_CPP_IMPL
+int main(int argc, char ** argv) {
+    return bang_main(argc, argv);
+}
+#endif

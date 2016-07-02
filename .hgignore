@@ -3,6 +3,9 @@ syntax: glob
 *.so
 *.o
 *.exe
+*.dll
+*.a
+*.def
 bang0
 
 syntax: regexp
