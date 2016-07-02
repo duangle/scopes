@@ -5,6 +5,13 @@ bang
 
 ; import-c: parse and compile C++ source code / headers using clang
 import-c bang ./bang.h ()
+;;;import-c bang2 ./clang/include/llvm-c/Core.h (
+    -x c
+    -I./clang/include
+    -I./clang/lib/clang/3.8.0/include
+    -D__STDC_LIMIT_MACROS
+    -D__STDC_CONSTANT_MACROS
+)
 
 ; meta-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.
@@ -19,8 +26,6 @@ proto-eval
 
 extern printf
     function-type int32 ((pointer-type int8) ...)
-extern sin
-    function-type double (double)
 
 function computesin ()
     function-type double ()
