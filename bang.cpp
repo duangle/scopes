@@ -197,18 +197,18 @@ public:
     Type(const Type &type) : id(type.id) {}
     Type(TypeId id_) : id(id_) {}
 
-    static Type none() {
-        return Type(0);
+    static Type create() {
+        return Type(++next_type_ref);
     }
 
     static Type createTrait(const std::string &name) {
-        Type type(++next_type_ref);
+        Type type = create();
         _pretty_name_map[type.id] = name;
         return type;
     }
 
     static Type create(const std::string &name, LLVMTypeRef llvmtype) {
-        Type type(++next_type_ref);
+        Type type = create();
         _pretty_name_map[type.id] = name;
         _llvm_type_map[type.id] = llvmtype;
         return type;
@@ -258,51 +258,54 @@ public:
     static std::function<Type (Type, size_t)> vector;
     static std::function<Type (Type, std::vector<Type>, bool)> function;
 
-    bool operator == (const Type &other) const {
+    bool operator == (Type other) const {
         return id == other.id;
     }
 
-    bool operator != (const Type &other) const {
+    bool operator != (Type other) const {
         return id != other.id;
     }
 
-    bool operator < (const Type &other) const {
+    bool operator < (Type other) const {
         return id < other.id;
     }
 
-    bool isValid () const {
-        return id != 0;
-    }
-
     size_t getArraySize() const {
+        assert(id != 0);
         return _array_size_map[*this];
     }
 
     size_t getVectorSize() const {
+        assert(id != 0);
         return _vector_size_map[*this];
     }
 
     bool hasVarArgs() const {
+        assert(id != 0);
         assert(inherits(Type::Function));
         return _varargs_map[*this];
     }
 
     Type getReturnType() const {
+        assert(id != 0);
         assert(inherits(Type::Function));
         return _return_type_map[*this];
     }
 
     const std::vector<Type> &getElementTypes() const {
+        assert(id != 0);
         assert(inherits(Type::Function) || inherits(Type::Sized) || inherits(Type::Struct));
         return _element_type_map[*this];
     }
 
     Type getElementType() const {
+        assert(id != 0);
         assert(inherits(Type::Sized) || inherits(Type::Pointer));
         return _element_type_map[*this][0];
     }
 
     const std::vector<std::string> &getElementNames() const {
+        assert(id != 0);
         assert(inherits(Type::Struct));
         return _element_name_map[*this];
     }
@@ -312,15 +315,18 @@ public:
     }
 
     LLVMTypeRef getLLVMType() const {
+        assert(id != 0);
         return _llvm_type_map[*this];
     }
 
     bool hasBody() const {
+        assert(id != 0);
         assert(inherits(Struct));
         return _element_name_map[*this].size() > 0;
     }
 
     void setBody(const std::vector<std::string> &names, const std::vector<Type> &types, bool packed = false) {
+        assert(id != 0);
         assert(!hasBody());
         assert(types.size() == names.size());
 
@@ -336,6 +342,7 @@ public:
     }
 
     bool inherits(Type type) const {
+        assert(id != 0);
         auto &s = _basetype_map[*this];
         if (s.count(type) == 1)
             return true;
@@ -346,13 +353,14 @@ public:
     }
 
     Type inherit(Type type) {
+        assert(id != 0);
         _basetype_map[*this].insert(type);
         return *this;
     }
 
     std::string getString() const {
         if (!id) {
-            return "<none>";
+            return "<undefined>";
         } else {
             std::string result = _pretty_name_map[*this];
             if (!result.size())
@@ -361,6 +369,8 @@ public:
         }
     }
 };
+
+#define Undefined (Type(0))
 
 Type Type::Immutable;
 Type Type::Arithmetic;
@@ -475,6 +485,7 @@ static void setupTypes () {
 }
 
 Type Type::_pointer(Type type) {
+    assert(type != Undefined);
     assert(type.getLLVMType());
     // cannot reference void
     assert(type != Type::Void);
@@ -489,6 +500,7 @@ Type Type::_pointer(Type type) {
 }
 
 Type Type::_array(Type type, size_t size) {
+    assert(type != Undefined);
     assert(type.getLLVMType());
     assert(type != Type::Void);
     assert(size >= 1);
@@ -504,6 +516,7 @@ Type Type::_array(Type type, size_t size) {
 }
 
 Type Type::_vector(Type type, size_t size) {
+    assert(type != Undefined);
     assert(type.getLLVMType());
     assert(type != Type::Void);
     assert(size >= 1);
@@ -519,11 +532,13 @@ Type Type::_vector(Type type, size_t size) {
 }
 
 Type Type::_function(Type returntype, const std::vector<Type> &params, bool varargs) {
+    assert(returntype != Undefined);
     assert(returntype.getLLVMType());
     std::stringstream ss;
     std::vector<LLVMTypeRef> llvmparamtypes;
     ss << "(function-type " << returntype.getString() << " (";
     for (size_t i = 0; i < params.size(); ++i) {
+        assert(params[i] != Undefined);
         if (i != 0)
             ss << " ";
         ss << params[i].getString();
@@ -1241,7 +1256,7 @@ protected:
 public:
 
     TypedValue() :
-        type(Type::none()),
+        type(Undefined),
         value(NULL)
         {}
 
@@ -1253,14 +1268,14 @@ public:
     TypedValue(Type type_, LLVMValueRef value_) :
         type(type_),
         value(value_) {
-        assert(!value_ || type.isValid());
+        assert(!value_ || (type != Undefined));
         }
 
     Type getType() const { return type; }
     LLVMValueRef getValue() const { return value; }
     LLVMTypeRef getLLVMType() const { return type.getLLVMType(); }
 
-    operator bool () const { return (value != NULL) || (type != Type::none()); }
+    operator bool () const { return (value != NULL) || (type != Undefined); }
 };
 
 //------------------------------------------------------------------------------
@@ -1441,7 +1456,7 @@ public:
             }
             clang::QualType FT = it->getType();
             Type fieldtype = TranslateType(FT);
-            if(!fieldtype.isValid()) {
+            if(fieldtype == Undefined) {
                 opaque = true;
                 continue;
             }
@@ -1467,7 +1482,7 @@ public:
 
             Type structtype = (tagged)?taggedStructs[name]:namedStructs[name];
 
-            if (!structtype.isValid()) {
+            if (structtype == Undefined) {
                 structtype = Type::createStruct(name);
 
                 if (tagged)
@@ -1494,7 +1509,7 @@ public:
             return structtype;
         } else {
             //return ImportError("non-struct record types are not supported");
-            return Type::none();
+            return Undefined;
         }
     }
 
@@ -1579,7 +1594,7 @@ public:
             const PointerType *PTy = cast<PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
             Type pointee = TranslateType(ETy);
-            if (pointee.isValid()) {
+            if (pointee != Undefined) {
                 if (pointee == Type::Void)
                     pointee = Type::Opaque;
                 return Type::pointer(pointee);
@@ -1591,7 +1606,7 @@ public:
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
             Type at = TranslateType(ATy->getElementType());
-            if(at.isValid()) {
+            if(at != Undefined) {
                 int sz = ATy->getSize().getZExtValue();
                 return Type::array(at, sz);
             }
@@ -1600,7 +1615,7 @@ public:
         case clang::Type::Vector: {
                 const VectorType *VT = cast<VectorType>(T);
                 Type at = TranslateType(VT->getElementType());
-                if(at.isValid()) {
+                if(at != Undefined) {
                     int n = VT->getNumElements();
                     return Type::vector(at, n);
                 }
@@ -1631,7 +1646,7 @@ public:
         return ImportError(ss.str().c_str());
         */
         // TODO: print error
-        return Type::none();
+        return Undefined;
     }
 
     Type TranslateFuncType(const clang::FunctionType * f) {
@@ -1641,7 +1656,7 @@ public:
 
         Type returntype = TranslateType(RT);
 
-        if (!returntype.isValid())
+        if (returntype == Undefined)
             valid = false;
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
@@ -1652,7 +1667,7 @@ public:
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
                 Type paramtype = TranslateType(PT);
-                if(!paramtype.isValid()) {
+                if(paramtype == Undefined) {
                     valid = false; //keep going with attempting to parse type to make sure we see all the reasons why we cannot support this function
                 } else if(valid) {
                     argtypes.push_back(paramtype);
@@ -1664,7 +1679,7 @@ public:
             return Type::function(returntype, argtypes, proto ? proto->isVariadic() : false);
         }
 
-        return Type::none();
+        return Undefined;
     }
 
     bool TraverseFunctionDecl(clang::FunctionDecl *f) {
@@ -1690,7 +1705,7 @@ public:
         }
         */
         Type functype = TranslateFuncType(fntyp);
-        if (!functype.isValid())
+        if (functype == Undefined)
             return true;
 
         std::string InternalName = FuncName;
@@ -1893,19 +1908,19 @@ static Type translateType (Environment *env, const Expression *expr) {
     if (expr) {
         auto _ = env->with_expr(expr);
         TypedValue result = translate(env, expr);
-        if (!result.getType().isValid() && result.getValue()) {
+        if ((result.getType() == Undefined) && result.getValue()) {
             translateError(env, "type expected, not value\n");
         }
         return result.getType();
     }
-    return Type::none();
+    return Undefined;
 }
 
 static TypedValue translateValue (Environment *env, const Expression *expr) {
     if (expr) {
         auto _ = env->with_expr(expr);
         TypedValue result = translate(env, expr);
-        if (!result.getValue() && result.getType().isValid()) {
+        if (!result.getValue() && (result.getType() != Undefined)) {
             translateError(env, "value expected, not type\n");
         }
         return result;
@@ -1971,13 +1986,13 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                     if (argcount >= 0) {
                         Type rettype = translateType(env, expr->nth(1));
-                        if (rettype.isValid()) {
+                        if (rettype != Undefined) {
                             std::vector<Type> argtypes;
 
                             bool success = true;
                             for (int i = 0; i < argcount; ++i) {
                                 Type argtype = translateType(env, args_expr->nth(i));
-                                if (!argtype.isValid()) {
+                                if (argtype == Undefined) {
                                     success = false;
                                     break;
                                 }
@@ -2025,7 +2040,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     type = Type::Int32;
                 }
 
-                if (type.isValid() && expr_value) {
+                if ((type != Undefined) && expr_value) {
                     auto _ = env->with_expr(expr_value);
                     char *end;
                     long long value = strtoll(expr_value->c_str(), &end, 10);
@@ -2048,7 +2063,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     type = Type::Double;
                 }
 
-                if (type.isValid() && expr_value) {
+                if ((type != Undefined) && expr_value) {
                     auto _ = env->with_expr(expr_value);
                     char *end;
                     double value = strtod(expr_value->c_str(), &end);
@@ -2075,7 +2090,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 const Expression *expr_arg = expr->nth(1);
 
                 TypedValue tov = translate(env, expr_arg);
-                if (tov.getType().isValid()) {
+                if (tov.getType() != Undefined) {
                     printf("type: %s\n", tov.getType().getString().c_str());
                     LLVMDumpType(tov.getLLVMType());
                 }
@@ -2202,7 +2217,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 if (functype.inherits(Type::Pointer))
                     functype = functype.getElementType();
 
-                if (expr_params && functype.isValid()) {
+                if (expr_params && (functype != Undefined)) {
                     auto _ = env->with_expr(expr_type);
 
                     if (functype.inherits(Type::Function)) {
@@ -2282,7 +2297,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 auto _ = env->with_expr(expr_type);
 
-                if (expr_name && functype.isValid()) {
+                if (expr_name && (functype != Undefined)) {
                     if (functype.inherits(Type::Function)) {
                         const char *name = (const char *)expr_name->c_str();
                         // todo: external linkage?
@@ -2304,7 +2319,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 const Expression *expr_func = expr->nth(1);
                 TypedValue callee = translateValue(env, expr_func);
 
-                if (callee && callee.getType().isValid()) {
+                if (callee && (callee.getType() != Undefined)) {
                     Type functype = callee.getType();
 
                     if (functype.inherits(Type::Pointer))
@@ -2373,7 +2388,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 Type type = translateType(env, expr->nth(1));
 
-                if (type.isValid()) {
+                if (type != Undefined) {
                     result = TypedValue(Type::pointer(type));
                 }
             } else {
@@ -2542,6 +2557,8 @@ bool isString(Environment *env, Expression *expr) {
 //------------------------------------------------------------------------------
 
 static void compileAndRun (Environment *env, const char *modulename, const Expression *expr) {
+    assert(expr);
+
     LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
 
     char *error = NULL;
@@ -2566,6 +2583,7 @@ static void compileAndRun (Environment *env, const char *modulename, const Expre
     env->globals->module = module;
     env->globals->builder = builder;
 
+    env->names["undefined"] = Undefined;
     env->names["void"] = Type::Void;
     env->names["half"] = Type::Half;
     env->names["float"] = Type::Float;
