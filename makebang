@@ -27,7 +27,8 @@ if [ $MODE = "release" ]; then
         `llvm-config --cxxflags` \
         `llvm-config --ldflags --libs` \
     && clang++ \
-        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -L$DIR -lbang -O2 \
+        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -O2 -L$DIR \
+        -Wl,-rpath '-Wl,$ORIGIN' -lbang \
     && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
     # && $DIR/bang $DIR/bang.b
 else
@@ -51,7 +52,8 @@ else
         -I$DIR/../../llvm/llvm/tools/clang/include \
         -I$DIR/../../llvm/build/tools/clang/include \
     && clang++ \
-        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -L$DIR -lbang -g \
+        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -O2 -L$DIR \
+        -Wl,-rpath '-Wl,$ORIGIN' -lbang \
     && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
     # && $DIR/bang $DIR/bang.b
 fi
