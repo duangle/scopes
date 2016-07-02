@@ -7,9 +7,6 @@
 extern "C" {
 #endif
 
-
-const char *return_test_string ();
-
 int bang_main(int argc, char ** argv);
 
 #if defined __cplusplus
@@ -40,11 +37,12 @@ int bang_main(int argc, char ** argv);
 #include <stdlib.h>
 
 #include <map>
-#include <unordered_map>
 #include <string>
 #include <vector>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
+#include <unordered_set>
 
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
@@ -71,7 +69,7 @@ std::string string_format( const std::string& format, Args ... args ) {
     size_t size = snprintf( nullptr, 0, format.c_str(), args ... );
     std::string str;
     str.resize(size);
-    snprintf( &str[0], size, format.c_str(), args ... );
+    snprintf( &str[0], size + 1, format.c_str(), args ... );
     return str;
 }
 
@@ -121,6 +119,435 @@ static size_t inplace_unescape(char *buf) {
 
 //------------------------------------------------------------------------------
 
+typedef uint64_t TypeId;
+
+static TypeId next_type_ref = 0;
+
+// handle around TypeIds
+class Type {
+protected:
+    TypeId id;
+public:
+
+    struct TypeHash {
+      size_t operator() (const Type &x) const {
+        return std::hash<int>()(x.getId());
+      }
+    };
+
+    // built-in base classes
+    static Type Immutable;
+    static Type Arithmetic;
+    static Type Integer;
+    static Type Unsigned;
+    static Type Real;
+    static Type Pointer;
+    static Type Sized;
+    static Type Array;
+    static Type Vector;
+    static Type Struct;
+    static Type Function;
+
+    // built-in types
+    static Type Void;
+    static Type Opaque;
+    static Type Bool;
+
+    static Type Int8;
+    static Type Int16;
+    static Type Int32;
+    static Type Int64;
+
+    static Type UInt8;
+    static Type UInt16;
+    static Type UInt32;
+    static Type UInt64;
+
+    static Type Half;
+    static Type Float;
+    static Type Double;
+
+    static Type Rawstring;
+
+    static Type Environment;
+    static Type SExpression;
+
+    // base types are here
+    static std::unordered_map<Type, std::unordered_set<Type, TypeHash>, TypeHash> _basetype_map;
+    // pretty names for types are here
+    static std::unordered_map<Type, std::string, TypeHash> _pretty_name_map;
+    // opaque types don't have an LLVM type
+    static std::unordered_map<Type, LLVMTypeRef, TypeHash> _llvm_type_map;
+    // return type for function types
+    static std::unordered_map<Type, Type, TypeHash > _return_type_map;
+    // varargs trait for function types
+    static std::unordered_map<Type, bool, TypeHash> _varargs_map;
+    // if a type has elements or parameters, their types are here
+    static std::unordered_map<Type, std::vector<Type>, TypeHash > _element_type_map;
+    // if a type's elements are named, their names are here
+    static std::unordered_map<Type, std::vector<std::string>, TypeHash > _element_name_map;
+    // if a type is an array, the array size is here
+    static std::unordered_map<Type, size_t, TypeHash> _array_size_map;
+    // if a type is a vector, the vector size is here
+    static std::unordered_map<Type, size_t, TypeHash> _vector_size_map;
+    // integer and real types carry their bitwidth here
+    static std::unordered_map<Type, unsigned, Type::TypeHash> _bitwidth_map;
+
+    Type() : id(0) {}
+    Type(const Type &type) : id(type.id) {}
+    Type(TypeId id_) : id(id_) {}
+
+    static Type none() {
+        return Type(0);
+    }
+
+    static Type createTrait(const std::string &name) {
+        Type type(++next_type_ref);
+        _pretty_name_map[type.id] = name;
+        return type;
+    }
+
+    static Type create(const std::string &name, LLVMTypeRef llvmtype) {
+        Type type(++next_type_ref);
+        _pretty_name_map[type.id] = name;
+        _llvm_type_map[type.id] = llvmtype;
+        return type;
+    }
+
+    static Type createInt(unsigned bits) {
+        Type type = create(string_format("int%i", bits),
+            LLVMIntTypeInContext(LLVMGetGlobalContext(), bits))
+            .inherit(Integer);
+        _bitwidth_map[type] = bits;
+        return type;
+    }
+
+    static Type createUInt(unsigned bits) {
+        Type type = create(string_format("uint%i", bits),
+            LLVMIntTypeInContext(LLVMGetGlobalContext(), bits))
+            .inherit(Integer)
+            .inherit(Unsigned);
+        _bitwidth_map[type] = bits;
+        return type;
+    }
+
+    static Type createReal(const std::string &name, LLVMTypeRef llvmtype, unsigned bits) {
+        Type type = create(name, llvmtype)
+            .inherit(Real);
+        _bitwidth_map[type] = bits;
+        return type;
+    }
+
+    static Type createStruct(const std::string &name) {
+        return create(name,
+            LLVMStructCreateNamed(LLVMGetGlobalContext(), name.c_str()))
+            .inherit(Struct);
+    }
+
+    static Type createOpaque(const std::string &name) {
+        return create(name, LLVMStructType(NULL, 0, false));
+    }
+
+    static Type _pointer(Type type);
+    static Type _array(Type type, size_t size);
+    static Type _vector(Type type, size_t size);
+    static Type _function(Type returntype, const std::vector<Type> &params, bool varargs);
+
+    static std::function<Type (Type)> pointer;
+    static std::function<Type (Type, size_t)> array;
+    static std::function<Type (Type, size_t)> vector;
+    static std::function<Type (Type, std::vector<Type>, bool)> function;
+
+    bool operator == (const Type &other) const {
+        return id == other.id;
+    }
+
+    bool operator != (const Type &other) const {
+        return id != other.id;
+    }
+
+    bool operator < (const Type &other) const {
+        return id < other.id;
+    }
+
+    bool isValid () const {
+        return id != 0;
+    }
+
+    size_t getArraySize() const {
+        return _array_size_map[*this];
+    }
+
+    size_t getVectorSize() const {
+        return _vector_size_map[*this];
+    }
+
+    bool hasVarArgs() const {
+        assert(inherits(Type::Function));
+        return _varargs_map[*this];
+    }
+
+    Type getReturnType() const {
+        assert(inherits(Type::Function));
+        return _return_type_map[*this];
+    }
+
+    const std::vector<Type> &getElementTypes() const {
+        assert(inherits(Type::Function) || inherits(Type::Sized) || inherits(Type::Struct));
+        return _element_type_map[*this];
+    }
+
+    Type getElementType() const {
+        assert(inherits(Type::Sized) || inherits(Type::Pointer));
+        return _element_type_map[*this][0];
+    }
+
+    const std::vector<std::string> &getElementNames() const {
+        assert(inherits(Type::Struct));
+        return _element_name_map[*this];
+    }
+
+    TypeId getId() const {
+        return id;
+    }
+
+    LLVMTypeRef getLLVMType() const {
+        return _llvm_type_map[*this];
+    }
+
+    bool hasBody() const {
+        assert(inherits(Struct));
+        return _element_name_map[*this].size() > 0;
+    }
+
+    void setBody(const std::vector<std::string> &names, const std::vector<Type> &types, bool packed = false) {
+        assert(!hasBody());
+        assert(types.size() == names.size());
+
+        int fieldcount = (int)types.size();
+        LLVMTypeRef fields[fieldcount];
+        for (int i = 0; i < fieldcount; ++i) {
+            fields[i] = types[i].getLLVMType();
+        }
+
+        _element_type_map[*this] = types;
+        _element_name_map[*this] = names;
+        LLVMStructSetBody(getLLVMType(), fields, fieldcount, packed);
+    }
+
+    bool inherits(Type type) const {
+        auto &s = _basetype_map[*this];
+        if (s.count(type) == 1)
+            return true;
+        for (auto subtype : s)
+            if (subtype.inherits(type))
+                return true;
+        return false;
+    }
+
+    Type inherit(Type type) {
+        _basetype_map[*this].insert(type);
+        return *this;
+    }
+
+    std::string getString() const {
+        if (!id) {
+            return "<none>";
+        } else {
+            std::string result = _pretty_name_map[*this];
+            if (!result.size())
+                return string_format("<unnamed:" PRIu64 ">", id);
+            return result;
+        }
+    }
+};
+
+Type Type::Immutable;
+Type Type::Arithmetic;
+Type Type::Integer;
+Type Type::Unsigned;
+Type Type::Real;
+Type Type::Pointer;
+Type Type::Sized;
+Type Type::Array;
+Type Type::Vector;
+Type Type::Struct;
+Type Type::Function;
+
+Type Type::Void;
+Type Type::Opaque;
+Type Type::Bool;
+
+Type Type::Int8;
+Type Type::Int16;
+Type Type::Int32;
+Type Type::Int64;
+
+Type Type::UInt8;
+Type Type::UInt16;
+Type Type::UInt32;
+Type Type::UInt64;
+
+Type Type::Half;
+Type Type::Float;
+Type Type::Double;
+
+Type Type::Rawstring;
+
+Type Type::Environment;
+Type Type::SExpression;
+
+std::unordered_map<Type, std::unordered_set<Type, Type::TypeHash>, Type::TypeHash> Type::_basetype_map;
+std::unordered_map<Type, std::string, Type::TypeHash> Type::_pretty_name_map;
+std::unordered_map<Type, LLVMTypeRef, Type::TypeHash> Type::_llvm_type_map;
+std::unordered_map<Type, Type, Type::TypeHash > Type::_return_type_map;
+std::unordered_map<Type, bool, Type::TypeHash> Type::_varargs_map;
+std::unordered_map<Type, std::vector<Type>, Type::TypeHash > Type::_element_type_map;
+std::unordered_map<Type, std::vector<std::string>, Type::TypeHash > Type::_element_name_map;
+std::unordered_map<Type, size_t, Type::TypeHash> Type::_array_size_map;
+std::unordered_map<Type, size_t, Type::TypeHash> Type::_vector_size_map;
+std::unordered_map<Type, unsigned, Type::TypeHash> Type::_bitwidth_map;
+
+std::function<Type (Type)> Type::pointer = memo(Type::_pointer);
+std::function<Type (Type, size_t)> Type::array = memo(Type::_array);
+std::function<Type (Type, size_t)> Type::vector = memo(Type::_vector);
+std::function<Type (Type, std::vector<Type>, bool)> Type::function = memo(Type::_function);
+
+} // namespace bang
+
+namespace std {
+    template <>
+    struct hash<bang::Type> {
+        public :
+        size_t operator()(const bang::Type &x ) const{
+            return hash<int>()(x.getId());
+        }
+    };
+}
+
+namespace bang {
+
+static void setupTypes () {
+
+    Type::Immutable = Type::createTrait("Immutable");
+    Type::Pointer = Type::createTrait("Pointer")
+        .inherit(Type::Immutable);
+    Type::Arithmetic = Type::createTrait("Arithmetic")
+        .inherit(Type::Immutable);
+    Type::Unsigned = Type::createTrait("Unsigned");
+    Type::Sized = Type::createTrait("Sized");
+    Type::Struct = Type::createTrait("Struct");
+    Type::Integer = Type::createTrait("Integer")
+        .inherit(Type::Arithmetic);
+    Type::Real = Type::createTrait("Real")
+        .inherit(Type::Arithmetic);
+    Type::Array = Type::createTrait("Array")
+        .inherit(Type::Sized);
+    Type::Vector = Type::createTrait("Vector")
+        .inherit(Type::Sized)
+        .inherit(Type::Immutable);
+    Type::Function = Type::createTrait("Function")
+        .inherit(Type::Function);
+
+    Type::Void = Type::create("void", LLVMVoidType());
+    Type::Opaque = Type::createOpaque("opaque");
+    Type::Bool = Type::create("bool", LLVMInt1Type())
+        .inherit(Type::Immutable);
+
+    Type::Int8 = Type::createInt(8);
+    Type::Int16 = Type::createInt(16);
+    Type::Int32 = Type::createInt(32);
+    Type::Int64 = Type::createInt(64);
+
+    Type::UInt8 = Type::createUInt(8);
+    Type::UInt16 = Type::createUInt(16);
+    Type::UInt32 = Type::createUInt(32);
+    Type::UInt64 = Type::createUInt(64);
+
+    Type::Half = Type::createReal("half", LLVMHalfType(), 16);
+    Type::Float = Type::createReal("float", LLVMFloatType(), 32);
+    Type::Double = Type::createReal("double", LLVMDoubleType(), 64);
+
+    Type::Rawstring = Type::pointer(Type::Int8);
+
+    Type::Environment = Type::createOpaque("Environment");
+    Type::SExpression = Type::createOpaque("SExpression");
+}
+
+Type Type::_pointer(Type type) {
+    assert(type.getLLVMType());
+    // cannot reference void
+    assert(type != Type::Void);
+    Type ptr = Type::create(string_format("(pointer-type %s)",
+        type.getString().c_str()),
+        LLVMPointerType(type.getLLVMType(), 0) );
+    ptr.inherit(Type::Pointer);
+    std::vector<Type> etypes;
+    etypes.push_back(type.id);
+    _element_type_map[ptr] = etypes;
+    return ptr;
+}
+
+Type Type::_array(Type type, size_t size) {
+    assert(type.getLLVMType());
+    assert(type != Type::Void);
+    assert(size >= 1);
+    Type arraytype = Type::create(string_format("(array-type %s %zu)",
+        type.getString().c_str(), size),
+        LLVMArrayType(type.getLLVMType(), size) );
+    arraytype.inherit(Type::Array);
+    std::vector<Type> etypes;
+    etypes.push_back(type.id);
+    _element_type_map[arraytype] = etypes;
+    _array_size_map[arraytype] = size;
+    return arraytype;
+}
+
+Type Type::_vector(Type type, size_t size) {
+    assert(type.getLLVMType());
+    assert(type != Type::Void);
+    assert(size >= 1);
+    Type vectortype = Type::create(string_format("(vector-type %s %zu)",
+        type.getString().c_str(), size),
+        LLVMVectorType(type.getLLVMType(), size) );
+    vectortype.inherit(Type::Vector);
+    std::vector<Type> etypes;
+    etypes.push_back(type.id);
+    _element_type_map[vectortype] = etypes;
+    _vector_size_map[vectortype] = size;
+    return vectortype;
+}
+
+Type Type::_function(Type returntype, const std::vector<Type> &params, bool varargs) {
+    assert(returntype.getLLVMType());
+    std::stringstream ss;
+    std::vector<LLVMTypeRef> llvmparamtypes;
+    ss << "(function-type " << returntype.getString() << " (";
+    for (size_t i = 0; i < params.size(); ++i) {
+        if (i != 0)
+            ss << " ";
+        ss << params[i].getString();
+        assert(params[i] != Type::Void);
+        LLVMTypeRef llvmtype = params[i].getLLVMType();
+        assert(llvmtype);
+        llvmparamtypes.push_back(llvmtype);
+    }
+    if (varargs)
+        ss << " ...";
+    ss << "))";
+
+    Type functype = Type::create(ss.str(),
+        LLVMFunctionType(returntype.getLLVMType(),
+            &llvmparamtypes[0], llvmparamtypes.size(), varargs));
+    functype.inherit(Type::Function);
+    _element_type_map[functype] = params;
+    _return_type_map[functype] = returntype;
+    _varargs_map[functype] = varargs;
+    return functype;
+}
+
+//------------------------------------------------------------------------------
+
 enum ExpressionKind {
     E_None,
     E_List,
@@ -137,12 +564,15 @@ struct Anchor {
     int offset;
 };
 
-struct Expression {
+struct Expression :
+    std::enable_shared_from_this<Expression>
+{
 private:
     const ExpressionKind kind;
 protected:
     Expression(ExpressionKind kind_) :
         kind(kind_) {}
+
 public:
     Anchor anchor;
 
@@ -155,6 +585,10 @@ public:
     bool isComment() const;
 
     std::string getHeader() const;
+
+    std::shared_ptr<Expression> managed() {
+        return shared_from_this();
+    }
 };
 
 typedef std::shared_ptr<Expression> ExpressionRef;
@@ -433,7 +867,7 @@ struct Lexer {
         va_end (args);
         error_string.resize(size);
         va_start (args, format);
-        vsnprintf( &error_string[0], size, format, args );
+        vsnprintf( &error_string[0], size + 1, format, args );
         va_end (args);
         token = token_eof;
     }
@@ -559,7 +993,7 @@ struct Parser {
         va_end (args);
         error_string.resize(size);
         va_start (args, format);
-        vsnprintf( &error_string[0], size, format, args );
+        vsnprintf( &error_string[0], size + 1, format, args );
         va_end (args);
     }
 
@@ -800,289 +1234,6 @@ void printExpression(const Expression *e, size_t depth=0)
 
 //------------------------------------------------------------------------------
 
-typedef uint64_t TypeId;
-
-static TypeId next_type_ref = 0;
-
-// handle around TypeIds
-class Type {
-protected:
-    TypeId id;
-public:
-
-    struct TypeHash {
-      size_t operator() (const Type &x) const {
-        return std::hash<int>()(x.getId());
-      }
-    };
-
-    // pretty names for types are here
-    static std::unordered_map<Type, std::string, TypeHash> _pretty_name_map;
-    // opaque types don't have an LLVM type
-    static std::unordered_map<Type, LLVMTypeRef, TypeHash> _llvm_type_map;
-    // return type for function types
-    static std::unordered_map<Type, Type, TypeHash > _return_type_map;
-    // varargs trait for function types
-    static std::unordered_map<Type, bool, TypeHash> _varargs_map;
-    // if a type has elements or parameters, their types are here
-    static std::unordered_map<Type, std::vector<Type>, TypeHash > _element_type_map;
-    // if a type's elements are named, their names are here
-    static std::unordered_map<Type, std::vector<std::string>, TypeHash > _element_name_map;
-    // if a type is an array, the array size is here
-    static std::unordered_map<Type, size_t, TypeHash> _array_size_map;
-    // if a type is a vector, the vector size is here
-    static std::unordered_map<Type, size_t, TypeHash> _vector_size_map;
-
-    Type() : id(0) {}
-    Type(const Type &type) : id(type.id) {}
-    Type(TypeId id_) : id(id_) {}
-
-    static Type none() {
-        return Type(0);
-    }
-
-    static Type create(std::string name, LLVMTypeRef llvmtype) {
-        Type type(++next_type_ref);
-        _pretty_name_map[type.id] = name;
-        _llvm_type_map[type.id] = llvmtype;
-        return type;
-    }
-
-    static Type createStruct(std::string name) {
-        return Type::create(name,
-            LLVMStructCreateNamed(LLVMGetGlobalContext(), name.c_str()));
-    }
-
-    static Type _pointer(Type type);
-    static Type _array(Type type, size_t size);
-    static Type _vector(Type type, size_t size);
-    static Type _function(Type returntype, std::vector<Type> params, bool varargs);
-
-    static std::function<Type (Type)> pointer;
-    static std::function<Type (Type, size_t)> array;
-    static std::function<Type (Type, size_t)> vector;
-    static std::function<Type (Type, std::vector<Type>, bool)> function;
-
-    bool operator == (const Type &other) const {
-        return id == other.id;
-    }
-
-    bool operator != (const Type &other) const {
-        return id != other.id;
-    }
-
-    bool operator < (const Type &other) const {
-        return id < other.id;
-    }
-
-    bool isValid () const {
-        return id != 0;
-    }
-
-    size_t getArraySize() const {
-        return _array_size_map[*this];
-    }
-
-    size_t getVectorSize() const {
-        return _vector_size_map[*this];
-    }
-
-    bool isArray() const {
-        return (getArraySize() != 0);
-    }
-
-    bool isVector() const {
-        return (getVectorSize() != 0);
-    }
-
-    bool isPointer() const {
-        return (!isArray() && !isVector() && (_element_type_map[*this].size() == 1));
-    }
-
-    bool isFunction() const {
-        return (_return_type_map[*this] != 0);
-    }
-
-    bool hasVarArgs() const {
-        assert(isFunction());
-        return _varargs_map[*this];
-    }
-
-    Type getReturnType() const {
-        assert(isFunction());
-        return _return_type_map[*this];
-    }
-
-    std::vector<Type> getElementTypes() const {
-        assert(isFunction() || isArray() || isVector());
-        return _element_type_map[*this];
-    }
-
-    Type getElementType() const {
-        assert(isArray() || isVector() || isPointer());
-        return _element_type_map[*this][0];
-    }
-
-    TypeId getId() const {
-        return id;
-    }
-
-    LLVMTypeRef getLLVMType() const {
-        return _llvm_type_map[*this];
-    }
-
-    std::string getString() const {
-        if (!id) {
-            return "<none>";
-        } else {
-            std::string result = _pretty_name_map[*this];
-            if (!result.size())
-                return string_format("<unnamed:" PRIu64 ">", id);
-            return result;
-        }
-    }
-};
-
-std::unordered_map<Type, std::string, Type::TypeHash> Type::_pretty_name_map;
-std::unordered_map<Type, LLVMTypeRef, Type::TypeHash> Type::_llvm_type_map;
-std::unordered_map<Type, Type, Type::TypeHash > Type::_return_type_map;
-std::unordered_map<Type, bool, Type::TypeHash> Type::_varargs_map;
-std::unordered_map<Type, std::vector<Type>, Type::TypeHash > Type::_element_type_map;
-std::unordered_map<Type, std::vector<std::string>, Type::TypeHash > Type::_element_name_map;
-std::unordered_map<Type, size_t, Type::TypeHash> Type::_array_size_map;
-std::unordered_map<Type, size_t, Type::TypeHash> Type::_vector_size_map;
-
-std::function<Type (Type)> Type::pointer = memo(Type::_pointer);
-std::function<Type (Type, size_t)> Type::array = memo(Type::_array);
-std::function<Type (Type, size_t)> Type::vector = memo(Type::_vector);
-std::function<Type (Type, std::vector<Type>, bool)> Type::function = memo(Type::_function);
-
-} // namespace bang
-
-namespace std {
-    template <>
-    struct hash<bang::Type> {
-        public :
-        size_t operator()(const bang::Type &x ) const{
-            return hash<int>()(x.getId());
-        }
-    };
-}
-
-namespace bang {
-
-// etc.
-
-static Type T_void;
-static Type T_opaque;
-static Type T_bool;
-
-static Type T_int8;
-static Type T_int16;
-static Type T_int32;
-static Type T_int64;
-
-static Type T_uint8;
-static Type T_uint16;
-static Type T_uint32;
-static Type T_uint64;
-
-static Type T_half;
-static Type T_float;
-static Type T_double;
-
-static void setupTypes () {
-    T_void = Type::create("void", LLVMVoidType());
-    T_opaque = Type::create("opaque",
-        LLVMStructType(NULL, 0, false));
-    T_bool = Type::create("bool", LLVMInt1Type());
-
-    T_int8 = Type::create("int8", LLVMInt8Type());
-    T_int16 = Type::create("int16", LLVMInt16Type());
-    T_int32 = Type::create("int32", LLVMInt32Type());
-    T_int64 = Type::create("int64", LLVMInt64Type());
-
-    T_uint8 = Type::create("uint8", LLVMInt8Type());
-    T_uint16 = Type::create("uint16", LLVMInt16Type());
-    T_uint32 = Type::create("uint32", LLVMInt32Type());
-    T_uint64 = Type::create("uint64", LLVMInt64Type());
-
-    T_half = Type::create("half", LLVMHalfType());
-    T_float = Type::create("float", LLVMFloatType());
-    T_double = Type::create("double", LLVMDoubleType());
-}
-
-Type Type::_pointer(Type type) {
-    assert(type.getLLVMType());
-    // cannot reference void
-    assert(type != T_void);
-    Type ptr = Type::create(string_format("(pointer-type %s)",
-        type.getString().c_str()),
-        LLVMPointerType(type.getLLVMType(), 0) );
-    std::vector<Type> etypes;
-    etypes.push_back(type.id);
-    _element_type_map[ptr] = etypes;
-    return ptr;
-}
-
-Type Type::_array(Type type, size_t size) {
-    assert(type.getLLVMType());
-    assert(type != T_void);
-    assert(size >= 1);
-    Type arraytype = Type::create(string_format("(array-type %s %zu)",
-        type.getString().c_str(), size),
-        LLVMArrayType(type.getLLVMType(), size) );
-    std::vector<Type> etypes;
-    etypes.push_back(type.id);
-    _element_type_map[arraytype] = etypes;
-    _array_size_map[arraytype] = size;
-    return arraytype;
-}
-
-Type Type::_vector(Type type, size_t size) {
-    assert(type.getLLVMType());
-    assert(type != T_void);
-    assert(size >= 1);
-    Type vectortype = Type::create(string_format("(vector-type %s %zu)",
-        type.getString().c_str(), size),
-        LLVMVectorType(type.getLLVMType(), size) );
-    std::vector<Type> etypes;
-    etypes.push_back(type.id);
-    _element_type_map[vectortype] = etypes;
-    _vector_size_map[vectortype] = size;
-    return vectortype;
-}
-
-Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
-    assert(returntype.getLLVMType());
-    std::stringstream ss;
-    std::vector<LLVMTypeRef> llvmparamtypes;
-    ss << "(function-type " << returntype.getString() << " (";
-    for (size_t i = 0; i < params.size(); ++i) {
-        if (i != 0)
-            ss << " ";
-        ss << params[i].getString();
-        assert(params[i] != T_void);
-        LLVMTypeRef llvmtype = params[i].getLLVMType();
-        assert(llvmtype);
-        llvmparamtypes.push_back(llvmtype);
-    }
-    if (varargs)
-        ss << " ...";
-    ss << "))";
-
-    Type functype = Type::create(ss.str(),
-        LLVMFunctionType(returntype.getLLVMType(),
-            &llvmparamtypes[0], llvmparamtypes.size(), varargs));
-    _element_type_map[functype] = params;
-    _return_type_map[functype] = returntype;
-    _varargs_map[functype] = varargs;
-    assert (functype.isFunction());
-    return functype;
-}
-
-//------------------------------------------------------------------------------
-
 class TypedValue {
 protected:
     Type type;
@@ -1134,6 +1285,9 @@ struct TranslationGlobals {
     LLVMBuilderRef builder;
     // meta env; only valid for proto environments
     const Environment *meta;
+    // temporary references to expressions in the lang
+    // to keep objects from being deleted
+    std::vector< ExpressionRef > refs;
 
     TranslationGlobals() :
         compile_errors(0),
@@ -1144,9 +1298,27 @@ struct TranslationGlobals {
         builder(NULL),
         meta(NULL)
         {}
+
+    TranslationGlobals(Environment *env) :
+        compile_errors(0),
+        dump_module(false),
+        nopfunc(NULL),
+        engine(NULL),
+        module(NULL),
+        builder(NULL),
+        meta(env)
+        {}
+
+    ExpressionRef manage(ExpressionRef expr) {
+        refs.push_back(expr);
+        return expr;
+    }
+
 };
 
 //------------------------------------------------------------------------------
+
+typedef Expression *(*Preprocessor)(Environment *, const Expression *);
 
 struct Environment {
     TranslationGlobals *globals;
@@ -1160,6 +1332,8 @@ struct Environment {
     NameValueMap names;
     // parent env
     Environment *parent;
+    // expression handling hook
+    Preprocessor preproc;
 
     struct WithExpression {
         const Expression *prevexpr;
@@ -1180,18 +1354,28 @@ struct Environment {
         globals(NULL),
         function(NULL),
         expr(NULL),
-        parent(NULL)
+        parent(NULL),
+        preproc(NULL)
         {}
 
     Environment(Environment *parent_) :
         globals(parent_->globals),
         function(parent_->function),
         expr(parent_->expr),
-        parent(parent_)
+        parent(parent_),
+        preproc(parent_->preproc)
         {}
+
+    ExpressionRef manage(ExpressionRef expr) {
+        return globals->manage(expr);
+    }
 
     WithExpression with_expr(const Expression *expr) {
         return WithExpression(this, expr);
+    }
+
+    const Environment *getMeta() const {
+        return globals->meta;
     }
 
     bool hasErrors() const {
@@ -1200,6 +1384,14 @@ struct Environment {
 
     LLVMBuilderRef getBuilder() const {
         return globals->builder;
+    }
+
+    LLVMModuleRef getModule() const {
+        return globals->module;
+    }
+
+    LLVMExecutionEngineRef getEngine() const {
+        return globals->engine;
     }
 
 };
@@ -1322,10 +1514,10 @@ public:
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
             case clang::BuiltinType::Void: {
-                return T_void;
+                return Type::Void;
             } break;
             case clang::BuiltinType::Bool: {
-                return T_bool;
+                return Type::Bool;
             } break;
             case clang::BuiltinType::Char_S:
             case clang::BuiltinType::Char_U:
@@ -1346,32 +1538,32 @@ public:
                 int sz = Context->getTypeSize(T);
                 if (Ty->isUnsignedIntegerType()) {
                     if (sz == 8)
-                        return T_uint8;
+                        return Type::UInt8;
                     else if (sz == 16)
-                        return T_uint16;
+                        return Type::UInt16;
                     else if (sz == 32)
-                        return T_uint32;
+                        return Type::UInt32;
                     else if (sz == 64)
-                        return T_uint64;
+                        return Type::UInt64;
                 } else {
                     if (sz == 8)
-                        return T_int8;
+                        return Type::Int8;
                     else if (sz == 16)
-                        return T_int16;
+                        return Type::Int16;
                     else if (sz == 32)
-                        return T_int32;
+                        return Type::Int32;
                     else if (sz == 64)
-                        return T_int64;
+                        return Type::Int64;
                 }
             } break;
             case clang::BuiltinType::Half: {
-                return T_half;
+                return Type::Half;
             } break;
             case clang::BuiltinType::Float: {
-                return T_float;
+                return Type::Float;
             } break;
             case clang::BuiltinType::Double: {
-                return T_double;
+                return Type::Double;
             } break;
             case clang::BuiltinType::LongDouble:
             case clang::BuiltinType::NullPtr:
@@ -1388,8 +1580,8 @@ public:
             QualType ETy = PTy->getPointeeType();
             Type pointee = TranslateType(ETy);
             if (pointee.isValid()) {
-                if (pointee == T_void)
-                    pointee = T_opaque;
+                if (pointee == Type::Void)
+                    pointee = Type::Opaque;
                 return Type::pointer(pointee);
             }
         } break;
@@ -1424,7 +1616,7 @@ public:
         case clang::Type::ObjCInterface: break;
         case clang::Type::ObjCObjectPointer: break;
         case clang::Type::Enum: {
-            return T_int32;
+            return Type::Int32;
         } break;
         case clang::Type::BlockPointer:
         case clang::Type::MemberPointer:
@@ -1652,13 +1844,13 @@ static bool isSymbol (const Expression *expr, const char *sym) {
 /*
 () = nop
 (function-type returntype ([argtype [...]] [\...]))
-(function name type [value])
+(function ([argname ...]) type [value])
 (extern name type)
 (call name value ...)
 (bitcast type value)
 (extract value indexvalue)
-(const-int <value> [<type>])
-(const-real <value> [<type>])
+(const-int type value)
+(const-real type value)
 (array-ref <value>)
 (pointer-type type)
 (typeof value)
@@ -1668,6 +1860,7 @@ static bool isSymbol (const Expression *expr, const char *sym) {
 (dump-module)
 (import-c <filename> (<compiler-arg> ...))
 (proto-eval expr ...)
+(var name value)
 */
 
 static TypedValue translate (Environment *env, const Expression *expr);
@@ -1742,7 +1935,7 @@ static bool matchSpecialForm (Environment *env, const List *expr, const char *na
 }
 
 static TypedValue nopcall (Environment *env) {
-    return TypedValue(T_void, LLVMBuildCall(env->getBuilder(), env->globals->nopfunc, NULL, 0, ""));
+    return TypedValue(Type::Void, LLVMBuildCall(env->getBuilder(), env->globals->nopfunc, NULL, 0, ""));
 }
 
 static TypedValue translateExpressionList (Environment *env, const List *expr, int offset) {
@@ -1829,7 +2022,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 if (expr_type) {
                     type = translateType(env, expr_type);
                 } else {
-                    type = T_int32;
+                    type = Type::Int32;
                 }
 
                 if (type.isValid() && expr_value) {
@@ -1852,7 +2045,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 if (expr_type) {
                     type = translateType(env, expr_type);
                 } else {
-                    type = T_double;
+                    type = Type::Double;
                 }
 
                 if (type.isValid() && expr_value) {
@@ -1903,7 +2096,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     auto _ = env->with_expr(expr_array);
 
                     Type etype = ptr.getType();
-                    if (etype.isArray()) {
+                    if (etype.inherits(Type::Array)) {
                         etype = Type::pointer(etype.getElementType());
 
                         LLVMValueRef indices[] = {
@@ -1933,10 +2126,12 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                     LLVMPositionBuilderAtEnd(env->getBuilder(), then_block);
                     TypedValue then_result = translateValue(env, then_expr);
+                    LLVMBasicBlockRef final_then_block = LLVMGetInsertBlock(env->getBuilder());
                     LLVMBuildBr(env->getBuilder(), br_block);
 
                     LLVMPositionBuilderAtEnd(env->getBuilder(), else_block);
                     TypedValue else_result = translateValue(env, else_expr);
+                    LLVMBasicBlockRef final_else_block = LLVMGetInsertBlock(env->getBuilder());
                     LLVMBuildBr(env->getBuilder(), br_block);
 
                     Type then_type = then_result.getType();
@@ -1944,14 +2139,14 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                     auto _ = env->with_expr(then_expr);
 
-                    if ((then_type == T_void) || (else_type == T_void)) {
+                    if ((then_type == Type::Void) || (else_type == Type::Void)) {
                         LLVMPositionBuilderAtEnd(env->getBuilder(), br_block);
                         result = nopcall(env);
                     } else if (then_type == else_type) {
                         LLVMPositionBuilderAtEnd(env->getBuilder(), br_block);
                         result = TypedValue(then_type, LLVMBuildPhi(env->getBuilder(), then_type.getLLVMType(), "select"));
                         LLVMValueRef values[] = { then_result.getValue(), else_result.getValue() };
-                        LLVMBasicBlockRef blocks[] = { then_block, else_block };
+                        LLVMBasicBlockRef blocks[] = { final_then_block, final_else_block };
                         LLVMAddIncoming(result.getValue(), values, blocks, 2);
                     } else {
                         translateError(env, "then/else type evaluation mismatch\n");
@@ -1973,8 +2168,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
             } else if (matchSpecialForm(env, expr, "proto-eval", 1, -1)) {
 
                 Environment proto_env;
-                TranslationGlobals globals;
-                globals.meta = env;
+                TranslationGlobals globals(env);
 
                 proto_env.globals = &globals;
 
@@ -1983,27 +2177,37 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 env->globals->compile_errors += globals.compile_errors;
 
                 if (!env->hasErrors()) {
-                    result = TypedValue(T_void);
+                    result = TypedValue(Type::Void);
+                }
+
+            } else if (matchSpecialForm(env, expr, "var", 2, 2)) {
+
+                const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
+                const Expression *expr_value = expr->nth(2);
+                result = translate(env, expr_value);
+                if (result) {
+                    const char *name = expr_name->c_str();
+                    env->names[name] = result;
                 }
 
             } else if (matchSpecialForm(env, expr, "function", 3, -1)) {
 
-                const Expression *expr_type = expr->nth(3);
+                const List *expr_params = translateKind<List>(env, expr->nth(1));
+                const Expression *expr_type = expr->nth(2);
+                const Expression *body_expr = expr->nth(3);
 
-                const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
+
                 Type functype = translateType(env, expr_type);
 
-                if (expr_name && functype.isValid()) {
+                if (functype.inherits(Type::Pointer))
+                    functype = functype.getElementType();
+
+                if (expr_params && functype.isValid()) {
                     auto _ = env->with_expr(expr_type);
 
-                    if (functype.isFunction()) {
-                        const char *name = expr_name->c_str();
-
+                    if (functype.inherits(Type::Function)) {
                         // todo: external linkage?
-                        LLVMValueRef func = LLVMAddFunction(env->globals->module, name, functype.getLLVMType());
-
-                        const Expression *expr_params = expr->nth(2);
-                        const Expression *body_expr = expr->nth(4);
+                        LLVMValueRef func = LLVMAddFunction(env->globals->module, "", functype.getLLVMType());
 
                         Environment subenv(env);
                         subenv.function = func;
@@ -2012,38 +2216,29 @@ static TypedValue translateList (Environment *env, const List *expr) {
                         {
                             auto _ = env->with_expr(expr_params);
 
-                            if (isSymbol(expr_params, "...")) {
-                                if (body_expr) {
-                                    translateError(env, "cannot declare function body without parameter list\n");
-                                }
-                            } else if (auto list = llvm::dyn_cast<List>(expr_params)) {
-                                std::vector<Type> etypes = functype.getElementTypes();
+                            std::vector<Type> etypes = functype.getElementTypes();
 
-                                int argcount = (int)list->size();
-                                int paramcount = LLVMCountParams(func);
-                                if (argcount == paramcount) {
-                                    LLVMValueRef params[paramcount];
-                                    LLVMGetParams(func, params);
-                                    for (int i = 0; i < argcount; ++i) {
-                                        const Symbol *expr_param = translateKind<Symbol>(env, list->nth(i));
-                                        if (expr_param) {
-                                            const char *name = expr_param->c_str();
-                                            LLVMSetValueName(params[i], name);
-                                            subenv.names[name] = TypedValue(etypes[i], params[i]);
-                                        }
+                            int argcount = (int)expr_params->size();
+                            int paramcount = LLVMCountParams(func);
+                            if (argcount == paramcount) {
+                                LLVMValueRef params[paramcount];
+                                LLVMGetParams(func, params);
+                                for (int i = 0; i < argcount; ++i) {
+                                    const Symbol *expr_param = translateKind<Symbol>(env, expr_params->nth(i));
+                                    if (expr_param) {
+                                        const char *name = expr_param->c_str();
+                                        LLVMSetValueName(params[i], name);
+                                        subenv.names[name] = TypedValue(etypes[i], params[i]);
                                     }
-                                } else {
-                                    translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types\n",
-                                        argcount, paramcount);
                                 }
                             } else {
-                                translateError(env, "parameter list or ... expected\n");
+                                translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types\n",
+                                    argcount, paramcount);
                             }
                         }
 
                         if (!env->hasErrors()) {
                             result = TypedValue(Type::pointer(functype), func);
-                            env->names[name] = result;
 
                             if (body_expr) {
                                 auto _ = env->with_expr(body_expr);
@@ -2053,11 +2248,11 @@ static TypedValue translateList (Environment *env, const List *expr) {
                                 LLVMBasicBlockRef entry = LLVMAppendBasicBlock(func, "entry");
                                 LLVMPositionBuilderAtEnd(env->getBuilder(), entry);
 
-                                TypedValue bodyvalue = translateExpressionList(&subenv, expr, 4);
+                                TypedValue bodyvalue = translateExpressionList(&subenv, expr, 3);
 
                                 if (!env->hasErrors()) {
 
-                                    if (functype.getReturnType() == T_void) {
+                                    if (functype.getReturnType() == Type::Void) {
                                         LLVMBuildRetVoid(env->getBuilder());
                                     } else if (bodyvalue.getValue()) {
                                         LLVMBuildRet(env->getBuilder(), bodyvalue.getValue());
@@ -2088,7 +2283,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 auto _ = env->with_expr(expr_type);
 
                 if (expr_name && functype.isValid()) {
-                    if (functype.isFunction()) {
+                    if (functype.inherits(Type::Function)) {
                         const char *name = (const char *)expr_name->c_str();
                         // todo: external linkage?
                         LLVMValueRef func = LLVMAddFunction(env->globals->module,
@@ -2109,10 +2304,13 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 const Expression *expr_func = expr->nth(1);
                 TypedValue callee = translateValue(env, expr_func);
 
-                if (callee && callee.getType().isPointer()) {
-                    Type functype = callee.getType().getElementType();
+                if (callee && callee.getType().isValid()) {
+                    Type functype = callee.getType();
 
-                    if (functype.isFunction()) {
+                    if (functype.inherits(Type::Pointer))
+                        functype = functype.getElementType();
+
+                    if (functype.inherits(Type::Function)) {
                         std::vector<Type> params = functype.getElementTypes();
                         unsigned arg_size = params.size();
 
@@ -2135,7 +2333,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                             if (success) {
                                 Type returntype = functype.getReturnType();
                                 result = TypedValue(returntype,
-                                    LLVMBuildCall(env->getBuilder(), callee.getValue(), args, argcount, (returntype == T_void)?"":"calltmp"));
+                                    LLVMBuildCall(env->getBuilder(), callee.getValue(), args, argcount, (returntype == Type::Void)?"":"calltmp"));
                             }
                         } else {
                             translateError(env, "incorrect number of call arguments (got %i, need %s%i)\n",
@@ -2143,7 +2341,8 @@ static TypedValue translateList (Environment *env, const List *expr) {
                         }
                     } else {
                         auto _ = env->with_expr(expr_func);
-                        translateError(env, "cannot call object\n");
+                        translateError(env, "%s is not a function type\n",
+                            functype.getString().c_str());
                     }
                 }
 
@@ -2193,7 +2392,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
     return result;
 }
 
-static TypedValue translate (Environment *env, const Expression *expr) {
+static TypedValue translateRoot (Environment *env, const Expression *expr) {
     TypedValue result;
 
     if (expr) {
@@ -2217,7 +2416,7 @@ static TypedValue translate (Environment *env, const Expression *expr) {
 
         } else if (auto str = llvm::dyn_cast<String>(expr)) {
             result = TypedValue(
-                Type::array(T_int8, str->size() + 1),
+                Type::array(Type::Int8, str->size() + 1),
                 LLVMBuildGlobalString(env->getBuilder(), str->c_str(), "str"));
 
         } else {
@@ -2227,6 +2426,21 @@ static TypedValue translate (Environment *env, const Expression *expr) {
     }
 
     return result;
+}
+
+static TypedValue translate (Environment *env, const Expression *expr) {
+    TypedValue result;
+
+    if (expr && !env->hasErrors() && env->preproc) {
+        auto _ = env->with_expr(expr);
+
+        Expression *newexpr = env->preproc(env, expr);
+        if (newexpr != expr) {
+            expr = newexpr;
+        }
+    }
+
+    return translateRoot(env, expr);
 }
 
 static void init() {
@@ -2239,6 +2453,93 @@ static void init() {
     LLVMInitializeNativeAsmPrinter();
     LLVMInitializeNativeDisassembler();
 }
+
+static void exportGlobal (Environment *env, const char *name, Type type, void *value) {
+    LLVMValueRef gvalue =
+        LLVMAddGlobal(env->getModule(),
+            type.getLLVMType(),
+            name);
+
+    LLVMAddGlobalMapping(env->getEngine(), gvalue, value);
+
+    env->names[name] = TypedValue(Type::pointer(type), gvalue);
+}
+
+//------------------------------------------------------------------------------
+
+namespace api {
+
+void setPreprocessor(Environment *env, Preprocessor preproc) {
+    assert(env);
+    env->preproc = preproc;
+}
+
+Preprocessor getPreprocessor(Environment *env) {
+    assert(env);
+    return env->preproc;
+}
+
+Expression *newList(Environment *env) {
+    assert(env);
+    return env->manage(std::make_shared<List>()).get();
+}
+
+Expression *append(Environment *env, Expression *expr, Expression *element) {
+    assert(env);
+    assert(expr);
+    assert(expr->getKind() == E_List);
+    assert(element);
+    auto list = std::static_pointer_cast<List>(expr->managed());
+    list->append(element->managed());
+    return expr;
+}
+
+Expression *newSymbol(Environment *env, const char *value) {
+    assert(env);
+    assert(value);
+    return env->manage(std::make_shared<Symbol>(value, strlen(value))).get();
+}
+
+Expression *newZString(Environment *env, const char *value) {
+    assert(env);
+    assert(value);
+    return env->manage(std::make_shared<Symbol>(value, strlen(value))).get();
+}
+
+Expression *newString(Environment *env, const char *value, uint64_t len) {
+    assert(env);
+    assert(value);
+    return env->manage(std::make_shared<String>(value, (size_t)len)).get();
+}
+
+void copyAnchor(Environment *env, Expression *from_expr, Expression *to_expr) {
+    assert(env);
+    assert(from_expr);
+    assert(to_expr);
+    to_expr->anchor = from_expr->anchor;
+}
+
+bool isList(Environment *env, Expression *expr) {
+    assert(env);
+    assert(expr);
+    return expr->getKind() == E_List;
+}
+
+bool isSymbol(Environment *env, Expression *expr) {
+    assert(env);
+    assert(expr);
+    return expr->getKind() == E_Symbol;
+}
+
+bool isString(Environment *env, Expression *expr) {
+    assert(env);
+    assert(expr);
+    return expr->getKind() == E_String;
+}
+
+} // namespace api
+
+//------------------------------------------------------------------------------
 
 static void compileAndRun (Environment *env, const char *modulename, const Expression *expr) {
     LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
@@ -2265,22 +2566,74 @@ static void compileAndRun (Environment *env, const char *modulename, const Expre
     env->globals->module = module;
     env->globals->builder = builder;
 
-    env->names["void"] = T_void;
-    env->names["half"] = T_half;
-    env->names["float"] = T_float;
-    env->names["double"] = T_double;
-    env->names["bool"] = T_bool;
-    env->names["int8"] = T_int8;
-    env->names["int16"] = T_int16;
-    env->names["int32"] = T_int32;
-    env->names["int64"] = T_int64;
-    env->names["uint8"] = T_uint8;
-    env->names["uint16"] = T_uint16;
-    env->names["uint32"] = T_uint32;
-    env->names["uint64"] = T_uint64;
-    env->names["opaque"] = T_opaque;
+    env->names["void"] = Type::Void;
+    env->names["half"] = Type::Half;
+    env->names["float"] = Type::Float;
+    env->names["double"] = Type::Double;
+    env->names["bool"] = Type::Bool;
+    env->names["int8"] = Type::Int8;
+    env->names["int16"] = Type::Int16;
+    env->names["int32"] = Type::Int32;
+    env->names["int64"] = Type::Int64;
+    env->names["uint8"] = Type::UInt8;
+    env->names["uint16"] = Type::UInt16;
+    env->names["uint32"] = Type::UInt32;
+    env->names["uint64"] = Type::UInt64;
+    env->names["opaque"] = Type::Opaque;
 
-    Type entryfunctype = Type::function(T_void, std::vector<Type>(), false);
+    if (env->getMeta()) {
+        auto T_EnvironmentRef = Type::pointer(Type::Environment);
+        auto T_SExpressionRef = Type::pointer(Type::SExpression);
+        auto T_Preprocessor = Type::pointer(Type::function(T_SExpressionRef,
+            std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false));
+
+        env->names["Environment"] = Type::Environment;
+        env->names["SExpression"] = Type::SExpression;
+        env->names["Preprocessor"] = T_Preprocessor;
+
+        // export meta
+        exportGlobal(env, "meta-environment", Type::Environment, (void *)env->getMeta());
+
+        // export API
+        exportGlobal(env, "set-preprocessor",
+            Type::function(Type::Void, std::vector<Type> { T_EnvironmentRef, T_Preprocessor }, false),
+            (void*)api::setPreprocessor);
+        exportGlobal(env, "get-preprocessor",
+            Type::function(T_Preprocessor, std::vector<Type> { T_EnvironmentRef }, false),
+            (void*)api::getPreprocessor);
+        exportGlobal(env, "new-list",
+            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef }, false),
+            (void*)api::newList);
+        exportGlobal(env, "append",
+            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef, T_SExpressionRef }, false),
+            (void*)api::append);
+        exportGlobal(env, "new-symbol",
+            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
+            (void*)api::newSymbol);
+        exportGlobal(env, "new-zstring",
+            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
+            (void*)api::newZString);
+        exportGlobal(env, "new-string",
+            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring, Type::UInt64 }, false),
+            (void*)api::newString);
+        exportGlobal(env, "copy-anchor",
+            Type::function(Type::Void, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef, T_SExpressionRef }, false),
+            (void*)api::copyAnchor);
+        exportGlobal(env, "list?",
+            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false),
+            (void*)api::isList);
+        exportGlobal(env, "string?",
+            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false),
+            (void*)api::isString);
+        exportGlobal(env, "symbol?",
+            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false),
+            (void*)api::isSymbol);
+
+
+
+    }
+
+    Type entryfunctype = Type::function(Type::Void, std::vector<Type>(), false);
 
     env->globals->nopfunc = LLVMAddFunction(module, "__nop", entryfunctype.getLLVMType());
     LLVMBasicBlockRef entry = LLVMAppendBasicBlock(env->globals->nopfunc, "entry");
@@ -2342,14 +2695,14 @@ static void compileAndRun (Environment *env, const char *modulename, const Expre
     LLVMDisposeBuilder(builder);
 }
 
-static void compileMain (const Expression *expr) {
+static void compileMain (ExpressionRef expr) {
     Environment env;
     TranslationGlobals globals;
 
     env.globals = &globals;
 
     {
-        auto _ = env.with_expr(expr);
+        auto _ = env.with_expr(expr.get());
 
         std::string header = expr->getHeader();
         if (header != "bang") {
@@ -2358,18 +2711,13 @@ static void compileMain (const Expression *expr) {
         }
     }
 
-    compileAndRun(&env, "main", expr);
-
+    compileAndRun(&env, "main", expr.get());
 }
 
 } // namespace bang
 
 // C API
 //------------------------------------------------------------------------------
-
-const char *return_test_string () {
-    return "hi!";
-}
 
 int bang_main(int argc, char ** argv) {
     bang::init();
@@ -2380,7 +2728,7 @@ int bang_main(int argc, char ** argv) {
         bang::Parser parser;
         auto expr = parser.parseFile(argv[1]);
         if (expr) {
-            bang::compileMain(expr.get());
+            bang::compileMain(expr);
         } else {
             result = 1;
         }

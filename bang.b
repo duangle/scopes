@@ -1,7 +1,7 @@
 bang
 
 ; dump LLVM IR for this module after compilation
-; (dump-module)
+;(dump-module)
 
 ; import-c: parse and compile C++ source code / headers using clang
 import-c bang ./bang.h ()
@@ -16,44 +16,40 @@ import-c bang ./bang.h ()
 ; proto-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.
 proto-eval
-    ; dump-module ;
+    dump-module ;
 
     extern printf
         function-type int32 ((pointer-type int8) ...)
 
     call printf
-        array-ref "running in the compiler!\n"
+        array-ref "running in the compiler! (meta=%p, preproc=%p)\n"
+        meta-environment
+        call get-preprocessor meta-environment
+
+    var preprocessor
+        function (env expr)
+            Preprocessor
+            call printf
+                array-ref "s-expr received!\n"
+            ? (call list? env expr)
+                call printf (array-ref "is a list!\n")
+                ? (call symbol? env expr)
+                    call printf (array-ref "is a symbol!\n")
+                    ? (call string? env expr)
+                        call printf (array-ref "is a string\n")
+                        call printf (array-ref "is god knows what!\n")
+            expr
+
+    call set-preprocessor meta-environment preprocessor
+
+var int int32
 
 extern printf
-    function-type int32 ((pointer-type int8) ...)
+    function-type int ((pointer-type int8) ...)
 
-function computesin ()
-    function-type double ()
-    call sin
-        const-real double 0.5
+var hello-world
+    array-ref "Hello World!\n"
 
-function dostuff-hyphenated (a b)
-    function-type int32 (int32 int32)
-    do
-        ?
-            const-int bool 0
-            ()
-            call printf
-                array-ref "value = %f! (false) %i %i\n"
-                call computesin
-                \ a b
-    const-int int32 0
-
-call dostuff-hyphenated
-    const-int int32 1
-    const-int int32 2
-
-call printf
-    array-ref "Hello World! %s\n"
-    call return_test_string
-
-call printf
-    array-ref "%p\n"
-    call LLVMVoidType
+call printf hello-world
 
 
