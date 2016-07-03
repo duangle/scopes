@@ -16,7 +16,31 @@ import-c bang ./bang.h ()
 ; proto-eval: runs code in the compiler context, allowing to compile & register
 ; new expression handlers before the rest of the module is translated.
 proto-eval
-    dump-module ;
+
+    proto-eval
+        extern printf
+            function-type int32 ((pointer-type int8) ...)
+
+        call printf
+            array-ref "running in the compiler-compiler! (meta=%p, preproc=%p)\n"
+            meta-environment
+            call get-preprocessor meta-environment
+
+        var preprocessor
+            function (env expr)
+                Preprocessor
+                call printf
+                    array-ref "s-expr received!\n"
+                ? (call list? env expr)
+                    call printf (array-ref "is a list!\n")
+                    ? (call symbol? env expr)
+                        call printf (array-ref "is a symbol!\n")
+                        ? (call string? env expr)
+                            call printf (array-ref "is a string\n")
+                            call printf (array-ref "is god knows what!\n")
+                expr
+
+        call set-preprocessor meta-environment preprocessor
 
     extern printf
         function-type int32 ((pointer-type int8) ...)

@@ -135,6 +135,8 @@ public:
       }
     };
 
+    static Type Undefined;
+
     // built-in base classes
     static Type Immutable;
     static Type Arithmetic;
@@ -251,7 +253,8 @@ public:
     static Type _pointer(Type type);
     static Type _array(Type type, size_t size);
     static Type _vector(Type type, size_t size);
-    static Type _function(Type returntype, const std::vector<Type> &params, bool varargs);
+    // memoized functions must always copy arguments
+    static Type _function(Type returntype, std::vector<Type> params, bool varargs);
 
     static std::function<Type (Type)> pointer;
     static std::function<Type (Type, size_t)> array;
@@ -370,7 +373,7 @@ public:
     }
 };
 
-#define Undefined (Type(0))
+Type Type::Undefined = Type(0);
 
 Type Type::Immutable;
 Type Type::Arithmetic;
@@ -485,7 +488,7 @@ static void setupTypes () {
 }
 
 Type Type::_pointer(Type type) {
-    assert(type != Undefined);
+    assert(type != Type::Undefined);
     assert(type.getLLVMType());
     // cannot reference void
     assert(type != Type::Void);
@@ -500,7 +503,7 @@ Type Type::_pointer(Type type) {
 }
 
 Type Type::_array(Type type, size_t size) {
-    assert(type != Undefined);
+    assert(type != Type::Undefined);
     assert(type.getLLVMType());
     assert(type != Type::Void);
     assert(size >= 1);
@@ -516,7 +519,7 @@ Type Type::_array(Type type, size_t size) {
 }
 
 Type Type::_vector(Type type, size_t size) {
-    assert(type != Undefined);
+    assert(type != Type::Undefined);
     assert(type.getLLVMType());
     assert(type != Type::Void);
     assert(size >= 1);
@@ -531,14 +534,14 @@ Type Type::_vector(Type type, size_t size) {
     return vectortype;
 }
 
-Type Type::_function(Type returntype, const std::vector<Type> &params, bool varargs) {
-    assert(returntype != Undefined);
+Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
+    assert(returntype != Type::Undefined);
     assert(returntype.getLLVMType());
     std::stringstream ss;
     std::vector<LLVMTypeRef> llvmparamtypes;
     ss << "(function-type " << returntype.getString() << " (";
     for (size_t i = 0; i < params.size(); ++i) {
-        assert(params[i] != Undefined);
+        assert(params[i] != Type::Undefined);
         if (i != 0)
             ss << " ";
         ss << params[i].getString();
@@ -1256,7 +1259,7 @@ protected:
 public:
 
     TypedValue() :
-        type(Undefined),
+        type(Type::Undefined),
         value(NULL)
         {}
 
@@ -1268,14 +1271,14 @@ public:
     TypedValue(Type type_, LLVMValueRef value_) :
         type(type_),
         value(value_) {
-        assert(!value_ || (type != Undefined));
+        assert(!value_ || (type != Type::Undefined));
         }
 
     Type getType() const { return type; }
     LLVMValueRef getValue() const { return value; }
     LLVMTypeRef getLLVMType() const { return type.getLLVMType(); }
 
-    operator bool () const { return (value != NULL) || (type != Undefined); }
+    operator bool () const { return (value != NULL) || (type != Type::Undefined); }
 };
 
 //------------------------------------------------------------------------------
@@ -1456,7 +1459,7 @@ public:
             }
             clang::QualType FT = it->getType();
             Type fieldtype = TranslateType(FT);
-            if(fieldtype == Undefined) {
+            if(fieldtype == Type::Undefined) {
                 opaque = true;
                 continue;
             }
@@ -1482,7 +1485,7 @@ public:
 
             Type structtype = (tagged)?taggedStructs[name]:namedStructs[name];
 
-            if (structtype == Undefined) {
+            if (structtype == Type::Undefined) {
                 structtype = Type::createStruct(name);
 
                 if (tagged)
@@ -1509,7 +1512,7 @@ public:
             return structtype;
         } else {
             //return ImportError("non-struct record types are not supported");
-            return Undefined;
+            return Type::Undefined;
         }
     }
 
@@ -1594,7 +1597,7 @@ public:
             const PointerType *PTy = cast<PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
             Type pointee = TranslateType(ETy);
-            if (pointee != Undefined) {
+            if (pointee != Type::Undefined) {
                 if (pointee == Type::Void)
                     pointee = Type::Opaque;
                 return Type::pointer(pointee);
@@ -1606,7 +1609,7 @@ public:
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
             Type at = TranslateType(ATy->getElementType());
-            if(at != Undefined) {
+            if(at != Type::Undefined) {
                 int sz = ATy->getSize().getZExtValue();
                 return Type::array(at, sz);
             }
@@ -1615,7 +1618,7 @@ public:
         case clang::Type::Vector: {
                 const VectorType *VT = cast<VectorType>(T);
                 Type at = TranslateType(VT->getElementType());
-                if(at != Undefined) {
+                if(at != Type::Undefined) {
                     int n = VT->getNumElements();
                     return Type::vector(at, n);
                 }
@@ -1646,7 +1649,7 @@ public:
         return ImportError(ss.str().c_str());
         */
         // TODO: print error
-        return Undefined;
+        return Type::Undefined;
     }
 
     Type TranslateFuncType(const clang::FunctionType * f) {
@@ -1656,7 +1659,7 @@ public:
 
         Type returntype = TranslateType(RT);
 
-        if (returntype == Undefined)
+        if (returntype == Type::Undefined)
             valid = false;
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
@@ -1667,7 +1670,7 @@ public:
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
                 Type paramtype = TranslateType(PT);
-                if(paramtype == Undefined) {
+                if(paramtype == Type::Undefined) {
                     valid = false; //keep going with attempting to parse type to make sure we see all the reasons why we cannot support this function
                 } else if(valid) {
                     argtypes.push_back(paramtype);
@@ -1679,7 +1682,7 @@ public:
             return Type::function(returntype, argtypes, proto ? proto->isVariadic() : false);
         }
 
-        return Undefined;
+        return Type::Undefined;
     }
 
     bool TraverseFunctionDecl(clang::FunctionDecl *f) {
@@ -1705,7 +1708,7 @@ public:
         }
         */
         Type functype = TranslateFuncType(fntyp);
-        if (functype == Undefined)
+        if (functype == Type::Undefined)
             return true;
 
         std::string InternalName = FuncName;
@@ -1908,19 +1911,19 @@ static Type translateType (Environment *env, const Expression *expr) {
     if (expr) {
         auto _ = env->with_expr(expr);
         TypedValue result = translate(env, expr);
-        if ((result.getType() == Undefined) && result.getValue()) {
+        if ((result.getType() == Type::Undefined) && result.getValue()) {
             translateError(env, "type expected, not value\n");
         }
         return result.getType();
     }
-    return Undefined;
+    return Type::Undefined;
 }
 
 static TypedValue translateValue (Environment *env, const Expression *expr) {
     if (expr) {
         auto _ = env->with_expr(expr);
         TypedValue result = translate(env, expr);
-        if (!result.getValue() && (result.getType() != Undefined)) {
+        if (!result.getValue() && (result.getType() != Type::Undefined)) {
             translateError(env, "value expected, not type\n");
         }
         return result;
@@ -1986,13 +1989,13 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                     if (argcount >= 0) {
                         Type rettype = translateType(env, expr->nth(1));
-                        if (rettype != Undefined) {
+                        if (rettype != Type::Undefined) {
                             std::vector<Type> argtypes;
 
                             bool success = true;
                             for (int i = 0; i < argcount; ++i) {
                                 Type argtype = translateType(env, args_expr->nth(i));
-                                if (argtype == Undefined) {
+                                if (argtype == Type::Undefined) {
                                     success = false;
                                     break;
                                 }
@@ -2040,7 +2043,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     type = Type::Int32;
                 }
 
-                if ((type != Undefined) && expr_value) {
+                if ((type != Type::Undefined) && expr_value) {
                     auto _ = env->with_expr(expr_value);
                     char *end;
                     long long value = strtoll(expr_value->c_str(), &end, 10);
@@ -2063,7 +2066,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                     type = Type::Double;
                 }
 
-                if ((type != Undefined) && expr_value) {
+                if ((type != Type::Undefined) && expr_value) {
                     auto _ = env->with_expr(expr_value);
                     char *end;
                     double value = strtod(expr_value->c_str(), &end);
@@ -2090,7 +2093,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 const Expression *expr_arg = expr->nth(1);
 
                 TypedValue tov = translate(env, expr_arg);
-                if (tov.getType() != Undefined) {
+                if (tov.getType() != Type::Undefined) {
                     printf("type: %s\n", tov.getType().getString().c_str());
                     LLVMDumpType(tov.getLLVMType());
                 }
@@ -2217,7 +2220,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 if (functype.inherits(Type::Pointer))
                     functype = functype.getElementType();
 
-                if (expr_params && (functype != Undefined)) {
+                if (expr_params && (functype != Type::Undefined)) {
                     auto _ = env->with_expr(expr_type);
 
                     if (functype.inherits(Type::Function)) {
@@ -2297,7 +2300,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 auto _ = env->with_expr(expr_type);
 
-                if (expr_name && (functype != Undefined)) {
+                if (expr_name && (functype != Type::Undefined)) {
                     if (functype.inherits(Type::Function)) {
                         const char *name = (const char *)expr_name->c_str();
                         // todo: external linkage?
@@ -2319,7 +2322,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
                 const Expression *expr_func = expr->nth(1);
                 TypedValue callee = translateValue(env, expr_func);
 
-                if (callee && (callee.getType() != Undefined)) {
+                if (callee && (callee.getType() != Type::Undefined)) {
                     Type functype = callee.getType();
 
                     if (functype.inherits(Type::Pointer))
@@ -2388,7 +2391,7 @@ static TypedValue translateList (Environment *env, const List *expr) {
 
                 Type type = translateType(env, expr->nth(1));
 
-                if (type != Undefined) {
+                if (type != Type::Undefined) {
                     result = TypedValue(Type::pointer(type));
                 }
             } else {
@@ -2583,7 +2586,7 @@ static void compileAndRun (Environment *env, const char *modulename, const Expre
     env->globals->module = module;
     env->globals->builder = builder;
 
-    env->names["undefined"] = Undefined;
+    env->names["undefined"] = Type::Undefined;
     env->names["void"] = Type::Void;
     env->names["half"] = Type::Half;
     env->names["float"] = Type::Float;
