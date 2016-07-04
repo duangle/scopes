@@ -1,6 +1,6 @@
 bang ;
 
-struct TestStruct packed i8 i32
+struct TestStruct packed i32 i8
 
 declare somef
     function TestStruct
@@ -30,9 +30,26 @@ run
 define main ()
     function void
     label ""
+        defvalue Q
+            quote word
+        call printf
+            bitcast
+                global ""
+                    "quote = %x %p %p\n"
+                * i8
+            dump
+                load
+                    getelementptr
+                        bitcast
+                            Q
+                            * i32
+                        int i32 0
+            Q
+            Q
+
         call printf hello-world
         cond-br
-            const-int i1 1
+            int i1 1
             label then
             label else
     label then
@@ -57,4 +74,5 @@ define main ()
                 c1 else
         ret ;
 
+;dump-module ;
 run main

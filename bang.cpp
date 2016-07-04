@@ -20,8 +20,8 @@ type expressions:
 (struct name-expr [`packed`] [type-expr [...]])
 
 value expressions:
-(const-int type-expr number)
-(const-real type-expr number)
+(int type-expr number)
+(real type-expr number)
 (dump-module)
 (dump value-expr)
 (gep value-expr index-expr [index-expr [...]])
@@ -1324,6 +1324,7 @@ void printExpression(const Expression *e, size_t depth=0)
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
 typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
 typedef std::map<std::string, Type> NameTypeMap;
+typedef std::map<LLVMValueRef, void *> GlobalPtrMap;
 
 //------------------------------------------------------------------------------
 
@@ -1340,6 +1341,8 @@ struct TranslationGlobals {
     // temporary references to expressions in the lang
     // to keep objects from being deleted
     std::vector< ExpressionRef > refs;
+    // global pointers
+    GlobalPtrMap globalptrs;
 
     TranslationGlobals() :
         compile_errors(0),
@@ -1438,6 +1441,10 @@ struct Environment {
 
     LLVMModuleRef getModule() const {
         return globals->module;
+    }
+
+    void addQuote(LLVMValueRef value, const Expression *expr) {
+        globals->globalptrs[value] = (void *)expr;
     }
 
 };
@@ -1996,6 +2003,7 @@ static bool verifyInBlock(Environment *env) {
     return true;
 }
 
+/*
 static LLVMValueRef verifyConstant(Environment *env, LLVMValueRef value) {
     if (value && !LLVMIsConstant(value)) {
         translateError(env, "constant value expected\n");
@@ -2003,6 +2011,7 @@ static LLVMValueRef verifyConstant(Environment *env, LLVMValueRef value) {
     }
     return value;
 }
+*/
 
 static LLVMBasicBlockRef verifyBasicBlock(Environment *env, LLVMValueRef value) {
     if (value && !LLVMValueIsBasicBlock(value)) {
@@ -2024,7 +2033,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
             expressionKindName(expr->nth(0)->getKind()));
         return NULL;
     }
-    if (matchSpecialForm(env, expr, "const-int", 2, 2)) {
+    if (matchSpecialForm(env, expr, "int", 2, 2)) {
         const Expression *expr_type = expr->nth(1);
         const Symbol *expr_value = translateKind<Symbol>(env, expr->nth(2));
 
@@ -2042,7 +2051,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         }
 
         return NULL;
-    } else if (matchSpecialForm(env, expr, "const-real", 2, 2)) {
+    } else if (matchSpecialForm(env, expr, "real", 2, 2)) {
         const Expression *expr_type = expr->nth(1);
         const Symbol *expr_value = translateKind<Symbol>(env, expr->nth(2));
 
@@ -2100,6 +2109,15 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         return result;
 
+    } else if (matchSpecialForm(env, expr, "quote", 1, 1)) {
+
+        LLVMValueRef result = LLVMAddGlobal(env->getModule(),
+            Type::SExpression.getLLVMType(),
+            "quote");
+        env->addQuote(result, expr);
+
+        return result;
+
     } else if (matchSpecialForm(env, expr, "bitcast", 2, 2)) {
 
         LLVMValueRef value = translateValue(env, expr->nth(1));
@@ -2135,7 +2153,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         if (!type) return NULL;
 
         return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
-    } else if (matchSpecialForm(env, expr, "gep", 1, -1)) {
+    } else if (matchSpecialForm(env, expr, "getelementptr", 1, -1)) {
 
         const Expression *expr_array = expr->nth(1);
         LLVMValueRef ptr = translateValue(env, expr_array);
@@ -2161,6 +2179,51 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
             if (!verifyInBlock(env)) return NULL;
             return LLVMBuildGEP(env->getBuilder(), ptr, indices, valuecount, "");
         }
+
+    } else if (matchSpecialForm(env, expr, "extractelement", 2, 2)) {
+        LLVMValueRef value = translateValue(env, expr->nth(1));
+        if (!value) return NULL;
+
+
+        LLVMValueRef index = translateValue(env, expr->nth(2));
+        if (!index) return NULL;
+
+        LLVMValueRef result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
+        if (!result) {
+            translateError(env, "can not use extract on this value\n");
+        }
+        return result;
+
+    } else if (matchSpecialForm(env, expr, "extractvalue", 2, 2)) {
+        LLVMValueRef value = translateValue(env, expr->nth(1));
+        if (!value) return NULL;
+
+
+        int64_t index;
+        if (!translateInt64(env, expr->nth(2), index)) return NULL;
+
+        LLVMValueRef result = LLVMBuildExtractValue(env->getBuilder(), value, index, "");
+        if (!result) {
+            translateError(env, "can not use extract on this value\n");
+        }
+        return result;
+
+    } else if (matchSpecialForm(env, expr, "align", 2, 2)) {
+        LLVMValueRef value = translateValue(env, expr->nth(1));
+        if (!value) return NULL;
+
+
+        int64_t bytes;
+        if (!translateInt64(env, expr->nth(2), bytes)) return NULL;
+
+        LLVMSetAlignment(value, bytes);
+        return value;
+
+    } else if (matchSpecialForm(env, expr, "load", 1, 1)) {
+        LLVMValueRef value = translateValue(env, expr->nth(1));
+        if (!value) return NULL;
+
+        return LLVMBuildLoad(env->getBuilder(), value, "");
 
     } else if (matchSpecialForm(env, expr, "defvalue", 2, 2)) {
 
@@ -2232,6 +2295,14 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
             LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
 
         return blockvalue;
+
+    } else if (matchSpecialForm(env, expr, "null", 1, 1)) {
+
+        LLVMTypeRef type = translateType(env, expr->nth(1));
+        if (!type) return NULL;
+
+        return LLVMConstNull(type);
+
     } else if (matchSpecialForm(env, expr, "do", 0, -1)) {
 
         Environment subenv(env);
@@ -2438,6 +2509,10 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
             abort();
         }
 
+        for (auto it : env->globals->globalptrs) {
+            LLVMAddGlobalMapping(engine, it.first, it.second);
+        }
+
         LLVMRunFunction(engine, callee, 0, NULL);
 
         return NULL;
@@ -2573,6 +2648,13 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
         if (!type) return NULL;
 
         return LLVMPointerType(type, 0);
+
+    } else if (matchSpecialForm(env, expr, "typeof", 1, 1)) {
+
+        LLVMValueRef value = translateValue(env, expr->nth(1));
+        if (!value) return NULL;
+
+        return LLVMTypeOf(value);
 
     } else if (matchSpecialForm(env, expr, "array", 2, 2)) {
 
