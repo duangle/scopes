@@ -7,36 +7,25 @@ declare somef
         array i64 5
         vector i32 4
 
-dump-module ;
-
 declare printf
     function i32 (* i8) ...
 
-
 defvalue hello-world
     bitcast
-        const-global ""
+        global ""
             "Hello World!\n"
         * i8
 
-module proto
-    declare somef
-        function TestStruct
-
-    declare printf
-        function i32 (* i8) ...
-
-    define in-compiler ()
+run
+    define "" ()
         function void
         label ""
             call printf
                 bitcast
-                    const-global ""
+                    global ""
                         "running in compiler!\n"
                     * i8
             ret ;
-
-    run in-compiler
 
 define main ()
     function void
@@ -49,14 +38,14 @@ define main ()
     label then
         defvalue c0
             bitcast
-                const-global "" "Choice 1\n"
+                global "" "Choice 1\n"
                 * i8
         br
             label done
     label else
         defvalue c1
             bitcast
-                const-global "" "Choice 2\n"
+                global "" "Choice 2\n"
                 * i8
         br
             label done

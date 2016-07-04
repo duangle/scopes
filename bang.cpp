@@ -25,7 +25,7 @@ value expressions:
 (dump-module)
 (dump value-expr)
 (gep value-expr index-expr [index-expr [...]])
-(const-global const-expr)
+(global value-expr)
 (bitcast value-expr type-expr)
 (inttoptr value-expr type-expr)
 (ptrtoint value-expr type-expr)
@@ -43,6 +43,8 @@ value expressions:
 */
 
 //------------------------------------------------------------------------------
+// C HEADER
+//------------------------------------------------------------------------------
 
 #if defined __cplusplus
 extern "C" {
@@ -57,6 +59,8 @@ int bang_main(int argc, char ** argv);
 #endif // BANG0_CPP
 #ifdef BANG_CPP_IMPL
 
+//------------------------------------------------------------------------------
+// SHARED LIBRARY IMPLEMENTATION
 //------------------------------------------------------------------------------
 
 #undef NDEBUG
@@ -103,6 +107,8 @@ int bang_main(int argc, char ** argv);
 
 namespace bang {
 
+//------------------------------------------------------------------------------
+// UTILITIES
 //------------------------------------------------------------------------------
 
 template<typename ... Args>
@@ -158,6 +164,8 @@ static size_t inplace_unescape(char *buf) {
     return dst - buf;
 }
 
+//------------------------------------------------------------------------------
+// TYPE SYSTEM
 //------------------------------------------------------------------------------
 
 typedef uint64_t TypeId;
@@ -608,6 +616,8 @@ Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
 }
 
 //------------------------------------------------------------------------------
+// S-EXPRESSION DATA MODEL
+//------------------------------------------------------------------------------
 
 enum ExpressionKind {
     E_None,
@@ -875,6 +885,8 @@ std::shared_ptr<Expression> strip(std::shared_ptr<Expression> expr) {
 }
 
 //------------------------------------------------------------------------------
+// S-EXPR LEXER / TOKENIZER
+//------------------------------------------------------------------------------
 
 typedef enum {
     token_eof,
@@ -1044,8 +1056,8 @@ struct Lexer {
 
 };
 
-
-
+//------------------------------------------------------------------------------
+// S-EXPR PARSER
 //------------------------------------------------------------------------------
 
 struct Parser {
@@ -1306,36 +1318,7 @@ void printExpression(const Expression *e, size_t depth=0)
 }
 
 //------------------------------------------------------------------------------
-
-class TypedValue {
-protected:
-    Type type;
-    LLVMValueRef value;
-public:
-
-    TypedValue() :
-        type(Type::Undefined),
-        value(NULL)
-        {}
-
-    TypedValue(Type type_) :
-        type(type_),
-        value(NULL)
-        {}
-
-    TypedValue(Type type_, LLVMValueRef value_) :
-        type(type_),
-        value(value_) {
-        assert(!value_ || (type != Type::Undefined));
-        }
-
-    Type getType() const { return type; }
-    LLVMValueRef getValue() const { return value; }
-    LLVMTypeRef getLLVMType() const { return type.getLLVMType(); }
-
-    operator bool () const { return (value != NULL) || (type != Type::Undefined); }
-};
-
+// TRANSLATION ENVIRONMENT
 //------------------------------------------------------------------------------
 
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
@@ -1348,8 +1331,6 @@ struct Environment;
 
 struct TranslationGlobals {
     int compile_errors;
-    // execution engine for this translation
-    LLVMExecutionEngineRef engine;
     // module for this translation
     LLVMModuleRef module;
     // builder for this translation
@@ -1362,7 +1343,6 @@ struct TranslationGlobals {
 
     TranslationGlobals() :
         compile_errors(0),
-        engine(NULL),
         module(NULL),
         builder(NULL),
         meta(NULL)
@@ -1370,7 +1350,6 @@ struct TranslationGlobals {
 
     TranslationGlobals(Environment *env) :
         compile_errors(0),
-        engine(NULL),
         module(NULL),
         builder(NULL),
         meta(env)
@@ -1461,12 +1440,10 @@ struct Environment {
         return globals->module;
     }
 
-    LLVMExecutionEngineRef getEngine() const {
-        return globals->engine;
-    }
-
 };
 
+//------------------------------------------------------------------------------
+// CLANG SERVICES
 //------------------------------------------------------------------------------
 
 static void translateError (Environment *env, const char *format, ...);
@@ -1871,7 +1848,7 @@ static LLVMModuleRef importCModule (Environment *env,
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
         //LLVMDumpModule(M);
-        LLVMAddModule(env->globals->engine, M);
+        //LLVMAddModule(env->globals->engine, M);
     } else {
         translateError(env, "compiler failed\n");
     }
@@ -1879,6 +1856,15 @@ static LLVMModuleRef importCModule (Environment *env,
     return M;
 }
 
+//------------------------------------------------------------------------------
+// MACRO EXPANSION
+//------------------------------------------------------------------------------
+
+static ExpressionRef expand(ExpressionRef expr);
+
+
+//------------------------------------------------------------------------------
+// TRANSLATION
 //------------------------------------------------------------------------------
 
 static void setupRootEnvironment (Environment *env, const char *modulename);
@@ -2091,7 +2077,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         return value;
 
-    } else if (matchSpecialForm(env, expr, "const-global", 2, 2)) {
+    } else if (matchSpecialForm(env, expr, "global", 2, 2)) {
 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
@@ -2100,12 +2086,14 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         auto _ = env->with_expr(expr_value);
 
-        LLVMValueRef value = verifyConstant(env, translateValue(env, expr_value));
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
         LLVMValueRef result = LLVMAddGlobal(env->getModule(), LLVMTypeOf(value), name);
         LLVMSetInitializer(result, value);
-        LLVMSetGlobalConstant(result, true);
+        if (LLVMIsConstant(value)) {
+            LLVMSetGlobalConstant(result, true);
+        }
 
         if (llvm::isa<Symbol>(expr->nth(1)))
             env->values[name] = result;
@@ -2244,6 +2232,17 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
             LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
 
         return blockvalue;
+    } else if (matchSpecialForm(env, expr, "do", 0, -1)) {
+
+        Environment subenv(env);
+        translateExpressionList(&subenv, expr, 1);
+
+        return NULL;
+    } else if (matchSpecialForm(env, expr, "do-splice", 0, -1)) {
+
+        translateExpressionList(env, expr, 1);
+
+        return NULL;
     } else if (matchSpecialForm(env, expr, "define", 4, -1)) {
 
         const char *name = translateString(env, expr->nth(1));
@@ -2421,7 +2420,25 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         LLVMVerifyModule(env->getModule(), LLVMAbortProcessAction, &error);
         LLVMDisposeMessage(error);
 
-        LLVMRunFunction(env->getEngine(), callee, 0, NULL);
+        int opt_level = 0;
+
+        error = NULL;
+        LLVMExecutionEngineRef engine;
+        int result = LLVMCreateJITCompilerForModule(
+            &engine, env->getModule(), opt_level, &error);
+
+        if (error) {
+            fprintf(stderr, "error: %s\n", error);
+            LLVMDisposeMessage(error);
+            exit(EXIT_FAILURE);
+        }
+
+        if (result != 0) {
+            fprintf(stderr, "failed to create execution engine\n");
+            abort();
+        }
+
+        LLVMRunFunction(engine, callee, 0, NULL);
 
         return NULL;
 
@@ -2640,6 +2657,7 @@ static void init() {
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
+    //LLVMLinkInInterpreter();
     LLVMInitializeNativeTarget();
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
@@ -2653,7 +2671,7 @@ static void exportGlobal (Environment *env, const char *name, Type type, void *v
             type.getLLVMType(),
             name);
 
-    LLVMAddGlobalMapping(env->getEngine(), gvalue, value);
+    LLVMAddGlobalMapping(engine, gvalue, value);
 
     env->names[name] = TypedValue(Type::pointer(type), gvalue);
 }
@@ -2738,25 +2756,8 @@ bool isString(Environment *env, Expression *expr) {
 static void setupRootEnvironment (Environment *env, const char *modulename) {
     LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
 
-    char *error = NULL;
-    LLVMExecutionEngineRef engine;
-    int result = LLVMCreateExecutionEngineForModule(
-        &engine, module, &error);
-
-    if (error) {
-        fprintf(stderr, "error: %s\n", error);
-        LLVMDisposeMessage(error);
-        exit(EXIT_FAILURE);
-    }
-
-    if (result != 0) {
-        fprintf(stderr, "failed to create execution engine\n");
-        abort();
-    }
-
     LLVMBuilderRef builder = LLVMCreateBuilder();
 
-    env->globals->engine = engine;
     env->globals->module = module;
     env->globals->builder = builder;
 
@@ -2830,7 +2831,6 @@ static void compileModule (Environment *env, const Expression *expr, int offset)
     assert(expr);
     assert(env->getBuilder());
     assert(env->getModule());
-    assert(env->getEngine());
 
     auto _ = env->with_expr(expr);
     if (auto list = llvm::dyn_cast<List>(expr)) {
@@ -2891,6 +2891,11 @@ int bang_main(int argc, char ** argv) {
 
 #endif // BANG_CPP_IMPL
 #ifdef BANG_MAIN_CPP_IMPL
+
+//------------------------------------------------------------------------------
+// MAIN EXECUTABLE IMPLEMENTATION
+//------------------------------------------------------------------------------
+
 int main(int argc, char ** argv) {
     return bang_main(argc, argv);
 }
