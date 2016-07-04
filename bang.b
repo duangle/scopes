@@ -27,11 +27,23 @@ run
                     * i8
             ret ;
 
+struct Value
+defvalue dump-value
+    declare "bang_dump_value"
+        function void (* Value)
+
 define main ()
     function void
     label ""
+        call dump-value
+            quote Value
+                ;
+                    struct Expression
+                    defvalue dump-expression
+                        declare "bang_dump_expression"
+                            function void (* Expression)
         defvalue Q
-            quote word
+            quote Value word
         call printf
             bitcast
                 global ""

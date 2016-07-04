@@ -50,6 +50,16 @@ value expressions:
 extern "C" {
 #endif
 
+#ifdef BANG_CPP_IMPL
+namespace bang {
+struct Value;
+} // namespace bang
+typedef bang::Value Value;
+#else
+typedef struct _Value Value;
+#endif
+
+void bang_dump_value(Value *expr);
 int bang_main(int argc, char ** argv);
 
 #if defined __cplusplus
@@ -219,9 +229,6 @@ public:
     static Type Double;
 
     static Type Rawstring;
-
-    static Type Environment;
-    static Type SExpression;
 
     // base types are here
     static std::unordered_map<Type, std::unordered_set<Type, TypeHash>, TypeHash> _basetype_map;
@@ -459,9 +466,6 @@ Type Type::Double;
 
 Type Type::Rawstring;
 
-Type Type::Environment;
-Type Type::SExpression;
-
 std::unordered_map<Type, std::unordered_set<Type, Type::TypeHash>, Type::TypeHash> Type::_basetype_map;
 std::unordered_map<Type, std::string, Type::TypeHash> Type::_pretty_name_map;
 std::unordered_map<Type, LLVMTypeRef, Type::TypeHash> Type::_llvm_type_map;
@@ -533,9 +537,6 @@ static void setupTypes () {
     Type::Double = Type::createReal("double", LLVMDoubleType(), 64);
 
     Type::Rawstring = Type::pointer(Type::Int8);
-
-    Type::Environment = Type::createOpaque("Environment");
-    Type::SExpression = Type::createOpaque("SExpression");
 }
 
 Type Type::_pointer(Type type) {
@@ -616,10 +617,10 @@ Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
 }
 
 //------------------------------------------------------------------------------
-// S-EXPRESSION DATA MODEL
+// DATA MODEL
 //------------------------------------------------------------------------------
 
-enum ExpressionKind {
+enum ValueKind {
     E_None,
     E_List,
     E_String,
@@ -635,19 +636,19 @@ struct Anchor {
     int offset;
 };
 
-struct Expression :
-    std::enable_shared_from_this<Expression>
+struct Value :
+    std::enable_shared_from_this<Value>
 {
 private:
-    const ExpressionKind kind;
+    const ValueKind kind;
 protected:
-    Expression(ExpressionKind kind_) :
+    Value(ValueKind kind_) :
         kind(kind_) {}
 
 public:
     Anchor anchor;
 
-    ExpressionKind getKind() const {
+    ValueKind getKind() const {
         return kind;
     }
 
@@ -657,25 +658,25 @@ public:
 
     std::string getHeader() const;
 
-    std::shared_ptr<Expression> managed() {
+    std::shared_ptr<Value> managed() {
         return shared_from_this();
     }
 };
 
-typedef std::shared_ptr<Expression> ExpressionRef;
+typedef std::shared_ptr<Value> ValueRef;
 
 //------------------------------------------------------------------------------
 
-struct List : Expression {
-    std::vector< ExpressionRef > values;
+struct List : Value {
+    std::vector< ValueRef > values;
 
     List() :
-        Expression(E_List)
+        Value(E_List)
         {}
 
-    Expression *append(ExpressionRef expr) {
+    Value *append(ValueRef expr) {
         assert(expr);
-        Expression *ptr = expr.get();
+        Value *ptr = expr.get();
         values.push_back(std::move(expr));
         return ptr;
     }
@@ -684,15 +685,15 @@ struct List : Expression {
         return values.size();
     };
 
-    ExpressionRef &getElement(size_t i) {
+    ValueRef &getElement(size_t i) {
         return values[i];
     }
 
-    const ExpressionRef &getElement(size_t i) const {
+    const ValueRef &getElement(size_t i) const {
         return values[i];
     }
 
-    const Expression *nth(int i) const {
+    const Value *nth(int i) const {
         if (i < 0)
             i = (int)values.size() + i;
         if ((i < 0) || ((size_t)i >= values.size()))
@@ -701,7 +702,7 @@ struct List : Expression {
             return values[i].get();
     }
 
-    Expression *nth(int i) {
+    Value *nth(int i) {
         if (i < 0)
             i = (int)values.size() + i;
         if ((i < 0) || ((size_t)i >= values.size()))
@@ -710,21 +711,21 @@ struct List : Expression {
             return values[i].get();
     }
 
-    static bool classof(const Expression *expr) {
+    static bool classof(const Value *expr) {
         return expr->getKind() == E_List;
     }
 
-    static ExpressionKind kind() {
+    static ValueKind kind() {
         return E_List;
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct Atom : Expression {
+struct Atom : Value {
 protected:
-    Atom(ExpressionKind kind, const char *s, size_t len) :
-        Expression(kind),
+    Atom(ValueKind kind, const char *s, size_t len) :
+        Value(kind),
         value(s, len)
         {}
 
@@ -751,7 +752,7 @@ public:
         return value[i];
     }
 
-    static bool classof(const Expression *expr) {
+    static bool classof(const Value *expr) {
         auto kind = expr->getKind();
         return (kind != E_List) && (kind != E_None);
     }
@@ -760,7 +761,7 @@ public:
         value.resize(inplace_unescape(&value[0]));
     }
 
-    static ExpressionKind kind() {
+    static ValueKind kind() {
         return E_Atom;
     }
 
@@ -783,11 +784,11 @@ struct String : Atom {
     String(const char *s, size_t len) :
         Atom(E_String, s, len) {}
 
-    static bool classof(const Expression *expr) {
+    static bool classof(const Value *expr) {
         return expr->getKind() == E_String;
     }
 
-    static ExpressionKind kind() {
+    static ValueKind kind() {
         return E_String;
     }
 
@@ -799,11 +800,11 @@ struct Symbol : Atom {
     Symbol(const char *s, size_t len) :
         Atom(E_Symbol, s, len) {}
 
-    static bool classof(const Expression *expr) {
+    static bool classof(const Value *expr) {
         return expr->getKind() == E_Symbol;
     }
 
-    static ExpressionKind kind() {
+    static ValueKind kind() {
         return E_Symbol;
     }
 
@@ -815,11 +816,11 @@ struct Comment : Atom {
     Comment(const char *s, size_t len) :
         Atom(E_Comment, s, len) {}
 
-    static bool classof(const Expression *expr) {
+    static bool classof(const Value *expr) {
         return expr->getKind() == E_Comment;
     }
 
-    static ExpressionKind kind() {
+    static ValueKind kind() {
         return E_Comment;
     }
 
@@ -827,7 +828,7 @@ struct Comment : Atom {
 
 //------------------------------------------------------------------------------
 
-bool Expression::isListComment() const {
+bool Value::isListComment() const {
     if (auto list = llvm::dyn_cast<List>(this)) {
         if (list->size() > 0) {
             if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
@@ -839,15 +840,15 @@ bool Expression::isListComment() const {
     return false;
 }
 
-bool Expression::isLineComment() const {
+bool Value::isLineComment() const {
     return llvm::isa<Comment>(this);
 }
 
-bool Expression::isComment() const {
+bool Value::isComment() const {
     return isLineComment() || isListComment();
 }
 
-std::string Expression::getHeader() const {
+std::string Value::getHeader() const {
     if (auto list = llvm::dyn_cast<List>(this)) {
         if (list->size() >= 1) {
             if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
@@ -860,7 +861,7 @@ std::string Expression::getHeader() const {
 
 //------------------------------------------------------------------------------
 
-std::shared_ptr<Expression> strip(std::shared_ptr<Expression> expr) {
+std::shared_ptr<Value> strip(std::shared_ptr<Value> expr) {
     assert(expr);
     if (expr->isComment()) {
         return nullptr;
@@ -1082,7 +1083,7 @@ struct Parser {
         va_end (args);
     }
 
-    ExpressionRef parseAny () {
+    ValueRef parseAny () {
         assert(lexer.token != token_eof);
         if (lexer.token == token_open) {
             auto result = llvm::make_unique<List>();
@@ -1126,7 +1127,7 @@ struct Parser {
         return nullptr;
     }
 
-    ExpressionRef parseNaked () {
+    ValueRef parseNaked () {
         int lineno = lexer.lineno;
         int column = lexer.column();
 
@@ -1180,7 +1181,7 @@ struct Parser {
         }
     }
 
-    ExpressionRef parseRoot (
+    ValueRef parseRoot (
         const char *input_stream, const char *eof, const char *path) {
         lexer.init(input_stream, eof, path);
 
@@ -1232,7 +1233,7 @@ struct Parser {
         }
     }
 
-    ExpressionRef parseFile (const char *path) {
+    ValueRef parseFile (const char *path) {
         int fd = open(path, O_RDONLY);
         off_t length = lseek(fd, 0, SEEK_END);
         void *ptr = mmap(NULL, length, PROT_READ, MAP_PRIVATE, fd, 0);
@@ -1265,7 +1266,7 @@ struct Parser {
 
 //------------------------------------------------------------------------------
 
-void printExpression(const Expression *e, size_t depth=0)
+void printValue(const Value *e, size_t depth=0)
 {
 #define sep() for(i = 0; i < depth; i++) printf("    ")
 	size_t i;
@@ -1284,7 +1285,7 @@ void printExpression(const Expression *e, size_t depth=0)
 		sep();
 		puts("(");
 		for (i = 0; i < l->size(); i++)
-			printExpression(l->nth(i), depth + 1);
+			printValue(l->nth(i), depth + 1);
 		sep();
 		puts(")");
     } return;
@@ -1318,6 +1319,44 @@ void printExpression(const Expression *e, size_t depth=0)
 }
 
 //------------------------------------------------------------------------------
+// MACRO EXPANSION
+//------------------------------------------------------------------------------
+
+typedef Value *(*Expander)(const Value *);
+
+struct Scope {
+    // temporary references to values in the lang
+    // to keep objects from being deleted
+    std::vector< ValueRef > refs;
+    Expander expander;
+
+    ValueRef manage(ValueRef expr) {
+        refs.push_back(expr);
+        return expr;
+    }
+
+    ValueRef expand(ValueRef expr) {
+        if (expander) {
+        }
+        return expr;
+    }
+
+    Scope() :
+        expander(NULL)
+        {}
+
+    static thread_local Scope *scope;
+};
+
+thread_local Scope *Scope::scope;
+
+ValueRef expand(ValueRef expr) {
+    Scope scope;
+    Scope::scope = &scope;
+    return scope.expand(expr);
+}
+
+//------------------------------------------------------------------------------
 // TRANSLATION ENVIRONMENT
 //------------------------------------------------------------------------------
 
@@ -1338,9 +1377,6 @@ struct TranslationGlobals {
     LLVMBuilderRef builder;
     // meta env; only valid for proto environments
     Environment *meta;
-    // temporary references to expressions in the lang
-    // to keep objects from being deleted
-    std::vector< ExpressionRef > refs;
     // global pointers
     GlobalPtrMap globalptrs;
 
@@ -1358,16 +1394,11 @@ struct TranslationGlobals {
         meta(env)
         {}
 
-    ExpressionRef manage(ExpressionRef expr) {
-        refs.push_back(expr);
-        return expr;
-    }
-
 };
 
 //------------------------------------------------------------------------------
 
-typedef Expression *(*Preprocessor)(Environment *, const Expression *);
+typedef Value *(*Preprocessor)(Environment *, const Value *);
 
 struct Environment {
     TranslationGlobals *globals;
@@ -1375,28 +1406,28 @@ struct Environment {
     LLVMValueRef function;
     // currently active block
     LLVMValueRef block;
-    // currently evaluated expression
-    const Expression *expr;
+    // currently evaluated value
+    const Value *expr;
 
     NameLLVMValueMap values;
     NameLLVMTypeMap types;
 
     // parent env
     Environment *parent;
-    // expression handling hook
+    // value handling hook
     Preprocessor preproc;
 
-    struct WithExpression {
-        const Expression *prevexpr;
+    struct WithValue {
+        const Value *prevexpr;
         Environment *env;
 
-        WithExpression(Environment *env_, const Expression *expr_) :
+        WithValue(Environment *env_, const Value *expr_) :
             prevexpr(env_->expr),
             env(env_) {
             if (expr_)
                 env_->expr = expr_;
         }
-        ~WithExpression() {
+        ~WithValue() {
             env->expr = prevexpr;
         }
     };
@@ -1419,12 +1450,8 @@ struct Environment {
         preproc(parent_->preproc)
         {}
 
-    ExpressionRef manage(ExpressionRef expr) {
-        return globals->manage(expr);
-    }
-
-    WithExpression with_expr(const Expression *expr) {
-        return WithExpression(this, expr);
+    WithValue with_expr(const Value *expr) {
+        return WithValue(this, expr);
     }
 
     Environment *getMeta() const {
@@ -1443,7 +1470,7 @@ struct Environment {
         return globals->module;
     }
 
-    void addQuote(LLVMValueRef value, const Expression *expr) {
+    void addQuote(LLVMValueRef value, const Value *expr) {
         globals->globalptrs[value] = (void *)expr;
     }
 
@@ -1864,23 +1891,16 @@ static LLVMModuleRef importCModule (Environment *env,
 }
 
 //------------------------------------------------------------------------------
-// MACRO EXPANSION
-//------------------------------------------------------------------------------
-
-static ExpressionRef expand(ExpressionRef expr);
-
-
-//------------------------------------------------------------------------------
 // TRANSLATION
 //------------------------------------------------------------------------------
 
-static void setupRootEnvironment (Environment *env, const char *modulename);
-static void teardownRootEnvironment (Environment *env);
-static void compileModule (Environment *env, const Expression *expr, int offset);
+//static void setupRootEnvironment (Environment *env, const char *modulename);
+//static void teardownRootEnvironment (Environment *env);
+//static void compileModule (Environment *env, const Value *expr, int offset);
 
 //------------------------------------------------------------------------------
 
-static const char *expressionKindName(int kind) {
+static const char *valueKindName(int kind) {
     switch(kind) {
     case E_None: return "?";
     case E_List: return "list";
@@ -1906,7 +1926,7 @@ static void translateError (Environment *env, const char *format, ...) {
     va_end (args);
 }
 
-static bool isSymbol (const Expression *expr, const char *sym) {
+static bool isSymbol (const Value *expr, const char *sym) {
     if (expr) {
         if (auto symexpr = llvm::dyn_cast<Symbol>(expr))
             return (symexpr->getValue() == sym);
@@ -1938,7 +1958,7 @@ static bool matchSpecialForm (Environment *env, const List *expr, const char *na
 //------------------------------------------------------------------------------
 
 template<typename T>
-static const T *translateKind(Environment *env, const Expression *expr) {
+static const T *translateKind(Environment *env, const Value *expr) {
     if (expr) {
         auto _ = env->with_expr(expr);
         const T *co = llvm::dyn_cast<T>(expr);
@@ -1946,14 +1966,14 @@ static const T *translateKind(Environment *env, const Expression *expr) {
             return co;
         } else {
             translateError(env, "%s expected, not %s\n",
-                expressionKindName(T::kind()),
-                expressionKindName(expr->getKind()));
+                valueKindName(T::kind()),
+                valueKindName(expr->getKind()));
         }
     }
     return nullptr;
 }
 
-static bool translateInt64 (Environment *env, const Expression *expr, int64_t &value) {
+static bool translateInt64 (Environment *env, const Value *expr, int64_t &value) {
     if (expr) {
         if (auto str = translateKind<Atom>(env, expr)) {
             auto _ = env->with_expr(expr);
@@ -1965,7 +1985,7 @@ static bool translateInt64 (Environment *env, const Expression *expr, int64_t &v
     return false;
 }
 
-static const char *translateString (Environment *env, const Expression *expr) {
+static const char *translateString (Environment *env, const Value *expr) {
     if (expr) {
         if (auto str = translateKind<Atom>(env, expr))
             return str->c_str();
@@ -1973,10 +1993,10 @@ static const char *translateString (Environment *env, const Expression *expr) {
     return nullptr;
 }
 
-static LLVMTypeRef translateType (Environment *env, const Expression *expr);
-static LLVMValueRef translateValue (Environment *env, const Expression *expr);
+static LLVMTypeRef translateType (Environment *env, const Value *expr);
+static LLVMValueRef translateValue (Environment *env, const Value *expr);
 
-static bool translateExpressionList (Environment *env, const List *expr, int offset) {
+static bool translateValueList (Environment *env, const List *expr, int offset) {
     int argcount = (int)expr->size() - offset;
     for (int i = 0; i < argcount; ++i) {
         translateValue(env, expr->nth(i + offset));
@@ -2021,6 +2041,18 @@ static LLVMBasicBlockRef verifyBasicBlock(Environment *env, LLVMValueRef value) 
     return LLVMValueAsBasicBlock(value);
 }
 
+static LLVMTypeRef resolveType(Environment *env, const std::string &name) {
+    Environment *penv = (Environment *)env;
+    while (penv) {
+        LLVMTypeRef result = (*penv).types[name];
+        if (result) {
+            return result;
+        }
+        penv = (penv->parent)?penv->parent:penv->getMeta();
+    }
+    return NULL;
+}
+
 static LLVMValueRef translateValueFromList (Environment *env, const List *expr) {
     if (expr->size() == 0) {
         translateError(env, "value expected\n");
@@ -2029,12 +2061,12 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
     if (!head) {
         auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of expression must be symbol, not %s\n",
-            expressionKindName(expr->nth(0)->getKind()));
+        translateError(env, "first element of list must be symbol, not %s\n",
+            valueKindName(expr->nth(0)->getKind()));
         return NULL;
     }
     if (matchSpecialForm(env, expr, "int", 2, 2)) {
-        const Expression *expr_type = expr->nth(1);
+        const Value *expr_type = expr->nth(1);
         const Symbol *expr_value = translateKind<Symbol>(env, expr->nth(2));
 
         LLVMTypeRef type = translateType(env, expr_type);
@@ -2052,7 +2084,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         return NULL;
     } else if (matchSpecialForm(env, expr, "real", 2, 2)) {
-        const Expression *expr_type = expr->nth(1);
+        const Value *expr_type = expr->nth(1);
         const Symbol *expr_value = translateKind<Symbol>(env, expr->nth(2));
 
         LLVMTypeRef type = translateType(env, expr_type);
@@ -2077,7 +2109,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
     } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
-        const Expression *expr_arg = expr->nth(1);
+        const Value *expr_arg = expr->nth(1);
 
         LLVMValueRef value = translateValue(env, expr_arg);
         if (value) {
@@ -2091,7 +2123,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
 
-        const Expression *expr_value = expr->nth(2);
+        const Value *expr_value = expr->nth(2);
 
         auto _ = env->with_expr(expr_value);
 
@@ -2109,12 +2141,13 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         return result;
 
-    } else if (matchSpecialForm(env, expr, "quote", 1, 1)) {
+    } else if (matchSpecialForm(env, expr, "quote", 2, 2)) {
 
-        LLVMValueRef result = LLVMAddGlobal(env->getModule(),
-            Type::SExpression.getLLVMType(),
-            "quote");
-        env->addQuote(result, expr);
+        LLVMTypeRef type = translateType(env, expr->nth(1));
+        if (!type) return NULL;
+
+        LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, "quote");
+        env->addQuote(result, expr->nth(2));
 
         return result;
 
@@ -2155,7 +2188,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
     } else if (matchSpecialForm(env, expr, "getelementptr", 1, -1)) {
 
-        const Expression *expr_array = expr->nth(1);
+        const Value *expr_array = expr->nth(1);
         LLVMValueRef ptr = translateValue(env, expr_array);
         if (!ptr) return NULL;
 
@@ -2228,7 +2261,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     } else if (matchSpecialForm(env, expr, "defvalue", 2, 2)) {
 
         const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
-        const Expression *expr_value = expr->nth(2);
+        const Value *expr_value = expr->nth(2);
         LLVMValueRef result = translateValue(env, expr_value);
         if (!result) return NULL;
 
@@ -2239,7 +2272,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     } else if (matchSpecialForm(env, expr, "deftype", 2, 2)) {
 
         const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
-        const Expression *expr_value = expr->nth(2);
+        const Value *expr_value = expr->nth(2);
         LLVMTypeRef result = translateType(env, expr_value);
         if (!result) return NULL;
 
@@ -2256,7 +2289,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         if (!verifyInFunction(env)) return NULL;
 
-        const Expression *expr_name = expr->nth(1);
+        const Value *expr_name = expr->nth(1);
 
         const char *name = translateString(env, expr_name);
         if (!name) return NULL;
@@ -2286,7 +2319,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         LLVMValueRef oldblockvalue = env->block;
         env->block = blockvalue;
-        translateExpressionList(env, expr, 2);
+        translateValueList(env, expr, 2);
         env->block = oldblockvalue;
 
         if (env->hasErrors()) return NULL;
@@ -2306,12 +2339,12 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     } else if (matchSpecialForm(env, expr, "do", 0, -1)) {
 
         Environment subenv(env);
-        translateExpressionList(&subenv, expr, 1);
+        translateValueList(&subenv, expr, 1);
 
         return NULL;
     } else if (matchSpecialForm(env, expr, "do-splice", 0, -1)) {
 
-        translateExpressionList(env, expr, 1);
+        translateValueList(env, expr, 1);
 
         return NULL;
     } else if (matchSpecialForm(env, expr, "define", 4, -1)) {
@@ -2321,8 +2354,8 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         const List *expr_params = translateKind<List>(env, expr->nth(2));
         if (!expr_params)
             return NULL;
-        const Expression *expr_type = expr->nth(3);
-        const Expression *body_expr = expr->nth(4);
+        const Value *expr_type = expr->nth(3);
+        const Value *body_expr = expr->nth(4);
 
         LLVMTypeRef functype = translateType(env, expr_type);
 
@@ -2369,7 +2402,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         {
             auto _ = env->with_expr(body_expr);
 
-            translateExpressionList(&subenv, expr, 4);
+            translateValueList(&subenv, expr, 4);
             if (env->hasErrors()) return NULL;
         }
 
@@ -2433,7 +2466,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         if (!verifyInBlock(env)) return NULL;
 
-        const Expression *expr_value = expr->nth(1);
+        const Value *expr_value = expr->nth(1);
         if (!expr_value) {
             LLVMBuildRetVoid(env->getBuilder());
         } else {
@@ -2447,7 +2480,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
-        const Expression *expr_type = expr->nth(2);
+        const Value *expr_type = expr->nth(2);
 
         LLVMTypeRef functype = translateType(env, expr_type);
 
@@ -2470,7 +2503,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         int argcount = (int)expr->size() - 2;
 
-        const Expression *expr_func = expr->nth(1);
+        const Value *expr_func = expr->nth(1);
         LLVMValueRef callee = translateValue(env, expr_func);
         if (!callee) return NULL;
 
@@ -2517,6 +2550,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         return NULL;
 
+    /*
     } else if (matchSpecialForm(env, expr, "module", 1, -1)) {
 
         const char *name = translateString(env, expr->nth(1));
@@ -2533,6 +2567,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         teardownRootEnvironment(&module_env);
         return NULL;
+    */
 
     /*
     } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
@@ -2565,7 +2600,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     }
 }
 
-static LLVMValueRef translateValue (Environment *env, const Expression *expr) {
+static LLVMValueRef translateValue (Environment *env, const Value *expr) {
     if (env->hasErrors()) return NULL;
     assert(expr);
     auto _ = env->with_expr(expr);
@@ -2587,8 +2622,8 @@ static LLVMValueRef translateValue (Environment *env, const Expression *expr) {
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
         return LLVMConstString(str->c_str(), str->size(), false);
     } else {
-        translateError(env, "expected value expression, not %s\n",
-            expressionKindName(expr->getKind()));
+        translateError(env, "expected value, not %s\n",
+            valueKindName(expr->getKind()));
         return NULL;
     }
 }
@@ -2601,13 +2636,13 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
     auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
     if (!head) {
         auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of expression must be symbol, not %s\n",
-            expressionKindName(expr->nth(0)->getKind()));
+        translateError(env, "first element of list must be symbol, not %s\n",
+            valueKindName(expr->nth(0)->getKind()));
         return NULL;
     }
     if (matchSpecialForm(env, expr, "function", 1, -1)) {
 
-        const Expression *tail = expr->nth(-1);
+        const Value *tail = expr->nth(-1);
         bool vararg = false;
         int argcount = (int)expr->size() - 2;
         if (isSymbol(tail, "...")) {
@@ -2634,7 +2669,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
         return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
     } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
-        const Expression *expr_arg = expr->nth(1);
+        const Value *expr_arg = expr->nth(1);
 
         LLVMTypeRef type = translateType(env, expr_arg);
         if (type) {
@@ -2708,7 +2743,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
     }
 }
 
-static LLVMTypeRef translateType (Environment *env, const Expression *expr) {
+static LLVMTypeRef translateType (Environment *env, const Value *expr) {
     if (env->hasErrors()) return NULL;
     assert(expr);
     auto _ = env->with_expr(expr);
@@ -2716,20 +2751,16 @@ static LLVMTypeRef translateType (Environment *env, const Expression *expr) {
     if (auto list = llvm::dyn_cast<List>(expr)) {
         return translateTypeFromList(env, list);
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
-        Environment *penv = (Environment *)env;
-        while (penv) {
-            LLVMTypeRef result = (*penv).types[sym->getValue()];
-            if (result) {
-                return result;
-            }
-            penv = (penv->parent)?penv->parent:penv->getMeta();
+        LLVMTypeRef result = resolveType(env, sym->getValue());
+        if (!result) {
+            translateError(env, "no such type: %s\n", sym->c_str());
+            return NULL;
         }
 
-        translateError(env, "no such type: %s\n", sym->c_str());
-        return NULL;
+        return result;
     } else {
-        translateError(env, "expected type expression, not %s\n",
-            expressionKindName(expr->getKind()));
+        translateError(env, "expected type, not %s\n",
+            valueKindName(expr->getKind()));
         return NULL;
     }
 }
@@ -2763,6 +2794,7 @@ static void exportGlobal (Environment *env, const char *name, Type type, void *v
 
 namespace api {
 
+/*
 void setPreprocessor(Environment *env, Preprocessor preproc) {
     assert(env);
     env->preproc = preproc;
@@ -2773,12 +2805,12 @@ Preprocessor getPreprocessor(Environment *env) {
     return env->preproc;
 }
 
-Expression *newList(Environment *env) {
+Value *newList(Environment *env) {
     assert(env);
     return env->manage(std::make_shared<List>()).get();
 }
 
-Expression *append(Environment *env, Expression *expr, Expression *element) {
+Value *append(Environment *env, Value *expr, Value *element) {
     assert(env);
     assert(expr);
     assert(expr->getKind() == E_List);
@@ -2788,49 +2820,50 @@ Expression *append(Environment *env, Expression *expr, Expression *element) {
     return expr;
 }
 
-Expression *newSymbol(Environment *env, const char *value) {
+Value *newSymbol(Environment *env, const char *value) {
     assert(env);
     assert(value);
     return env->manage(std::make_shared<Symbol>(value, strlen(value))).get();
 }
 
-Expression *newZString(Environment *env, const char *value) {
+Value *newZString(Environment *env, const char *value) {
     assert(env);
     assert(value);
     return env->manage(std::make_shared<Symbol>(value, strlen(value))).get();
 }
 
-Expression *newString(Environment *env, const char *value, uint64_t len) {
+Value *newString(Environment *env, const char *value, uint64_t len) {
     assert(env);
     assert(value);
     return env->manage(std::make_shared<String>(value, (size_t)len)).get();
 }
 
-void copyAnchor(Environment *env, Expression *from_expr, Expression *to_expr) {
+void copyAnchor(Environment *env, Value *from_expr, Value *to_expr) {
     assert(env);
     assert(from_expr);
     assert(to_expr);
     to_expr->anchor = from_expr->anchor;
 }
 
-bool isList(Environment *env, Expression *expr) {
+bool isList(Environment *env, Value *expr) {
     assert(env);
     assert(expr);
     return expr->getKind() == E_List;
 }
 
-bool isSymbol(Environment *env, Expression *expr) {
+bool isSymbol(Environment *env, Value *expr) {
     assert(env);
     assert(expr);
     return expr->getKind() == E_Symbol;
 }
 
-bool isString(Environment *env, Expression *expr) {
+bool isString(Environment *env, Value *expr) {
     assert(env);
     assert(expr);
     return expr->getKind() == E_String;
 }
 
+*/
 } // namespace api
 
 //------------------------------------------------------------------------------
@@ -2856,12 +2889,12 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
     /*
     if (env->getMeta()) {
         auto T_EnvironmentRef = Type::pointer(Type::Environment);
-        auto T_SExpressionRef = Type::pointer(Type::SExpression);
-        auto T_Preprocessor = Type::pointer(Type::function(T_SExpressionRef,
-            std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false));
+        auto T_SValueRef = Type::pointer(Type::SValue);
+        auto T_Preprocessor = Type::pointer(Type::function(T_SValueRef,
+            std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false));
 
         env->names["Environment"] = Type::Environment;
-        env->names["SExpression"] = Type::SExpression;
+        env->names["SValue"] = Type::SValue;
         env->names["Preprocessor"] = T_Preprocessor;
 
         // export meta
@@ -2875,31 +2908,31 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
             Type::function(T_Preprocessor, std::vector<Type> { T_EnvironmentRef }, false),
             (void*)api::getPreprocessor);
         exportGlobal(env, "new-list",
-            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef }, false),
+            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef }, false),
             (void*)api::newList);
         exportGlobal(env, "append",
-            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef, T_SExpressionRef }, false),
+            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, T_SValueRef, T_SValueRef }, false),
             (void*)api::append);
         exportGlobal(env, "new-symbol",
-            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
+            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
             (void*)api::newSymbol);
         exportGlobal(env, "new-zstring",
-            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
+            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
             (void*)api::newZString);
         exportGlobal(env, "new-string",
-            Type::function(T_SExpressionRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring, Type::UInt64 }, false),
+            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring, Type::UInt64 }, false),
             (void*)api::newString);
         exportGlobal(env, "copy-anchor",
-            Type::function(Type::Void, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef, T_SExpressionRef }, false),
+            Type::function(Type::Void, std::vector<Type> { T_EnvironmentRef, T_SValueRef, T_SValueRef }, false),
             (void*)api::copyAnchor);
         exportGlobal(env, "list?",
-            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false),
+            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false),
             (void*)api::isList);
         exportGlobal(env, "string?",
-            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false),
+            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false),
             (void*)api::isString);
         exportGlobal(env, "symbol?",
-            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SExpressionRef }, false),
+            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false),
             (void*)api::isSymbol);
     }
     */
@@ -2909,21 +2942,21 @@ static void teardownRootEnvironment (Environment *env) {
     LLVMDisposeBuilder(env->getBuilder());
 }
 
-static void compileModule (Environment *env, const Expression *expr, int offset) {
+static void compileModule (Environment *env, const Value *expr, int offset) {
     assert(expr);
     assert(env->getBuilder());
     assert(env->getModule());
 
     auto _ = env->with_expr(expr);
     if (auto list = llvm::dyn_cast<List>(expr)) {
-        translateExpressionList (env, list, offset);
+        translateValueList (env, list, offset);
     } else {
         translateError(env, "unexpected %s\n",
-            expressionKindName(expr->getKind()));
+            valueKindName(expr->getKind()));
     }
 }
 
-static void compileMain (ExpressionRef expr) {
+static void compileMain (ValueRef expr) {
     Environment env;
     TranslationGlobals globals;
 
@@ -2951,6 +2984,10 @@ static void compileMain (ExpressionRef expr) {
 // C API
 //------------------------------------------------------------------------------
 
+void bang_dump_value(Value *expr) {
+    return bang::printValue(expr);
+}
+
 int bang_main(int argc, char ** argv) {
     bang::init();
 
@@ -2960,6 +2997,7 @@ int bang_main(int argc, char ** argv) {
         bang::Parser parser;
         auto expr = parser.parseFile(argv[1]);
         if (expr) {
+            expr = bang::expand(expr);
             bang::compileMain(expr);
         } else {
             result = 1;
