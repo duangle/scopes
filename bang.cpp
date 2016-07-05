@@ -625,7 +625,6 @@ enum ValueKind {
     V_List,
     V_String,
     V_Symbol,
-    V_Comment,
     V_Atom
 };
 
@@ -634,6 +633,14 @@ struct Anchor {
     int lineno;
     int column;
     int offset;
+
+    bool operator ==(const Anchor &other) const {
+        return
+            path == other.path
+                && lineno == other.lineno
+                && column == other.column
+                && offset == other.offset;
+    }
 };
 
 struct Value :
@@ -653,7 +660,6 @@ public:
     }
 
     bool isListComment() const;
-    bool isLineComment() const;
     bool isComment() const;
 
     std::string getHeader() const;
@@ -669,7 +675,10 @@ typedef std::shared_ptr<Value> ValueRef;
 
 struct List : Value {
     std::vector< ValueRef > values;
-    // 0 = naked, '(' = parens, '[' = square, '{' = curly
+    // 0 = naked, any
+    // '(' = parens
+    // '[' = square
+    // '{' = curly
     char style;
 
     List() :
@@ -682,6 +691,12 @@ struct List : Value {
         Value *ptr = expr.get();
         values.push_back(std::move(expr));
         return ptr;
+    }
+
+    ValueRef remove(size_t i) {
+        ValueRef tmp = values[i];
+        values.erase(values.begin() + i);
+        return tmp;
     }
 
     size_t size() const {
@@ -762,7 +777,7 @@ public:
 
     static bool classof(const Value *expr) {
         auto kind = expr->getKind();
-        return (kind == V_String) || (kind == V_Symbol) || (kind == V_Comment);
+        return (kind == V_String) || (kind == V_Symbol);
     }
 
     void unescape() {
@@ -804,22 +819,6 @@ struct Symbol : String {
 
 //------------------------------------------------------------------------------
 
-struct Comment : String {
-    Comment(const char *s, size_t len) :
-        String(V_Comment, s, len) {}
-
-    static bool classof(const Value *expr) {
-        return expr->getKind() == V_Comment;
-    }
-
-    static ValueKind kind() {
-        return V_Comment;
-    }
-
-};
-
-//------------------------------------------------------------------------------
-
 bool Value::isListComment() const {
     if (auto list = llvm::dyn_cast<List>(this)) {
         if (list->size() > 0) {
@@ -832,12 +831,8 @@ bool Value::isListComment() const {
     return false;
 }
 
-bool Value::isLineComment() const {
-    return llvm::isa<Comment>(this);
-}
-
 bool Value::isComment() const {
-    return isLineComment() || isListComment();
+    return isListComment();
 }
 
 std::string Value::getHeader() const {
@@ -969,8 +964,10 @@ typedef enum {
     token_curly_close = '}',
     token_string = '"',
     token_symbol = 'S',
-    token_comment = '#',
-    token_escape = '\\'
+    token_escape = '\\',
+    token_statement = ';',
+    token_separator_block = ':',
+    token_separator = ',',
 } Token;
 
 struct Lexer {
@@ -1009,6 +1006,10 @@ struct Lexer {
         this->error_string.clear();
     }
 
+    void dumpLine() {
+        dumpFileLine(path, offset());
+    }
+
     int offset () {
         return cursor - input_stream;
     }
@@ -1038,6 +1039,7 @@ struct Lexer {
 
     void readSymbol () {
         bool escape = false;
+        char startc = *cursor;
         while (true) {
             if (next_cursor == eof) {
                 break;
@@ -1053,18 +1055,20 @@ struct Lexer {
             } else if (c == '\\') {
                 // escape
                 escape = true;
+            } else if ((c == '.') && (startc == '.')) {
+                // consume
             } else if (isspace(c)
-                || (c == '(')
-                || (c == ')')
-                || (c == '[')
-                || (c == ']')
-                || (c == '{')
-                || (c == '}')
-                || (c == '"')) {
+                || (startc == '.')
+                || strchr("()[]{}\";#:,.", c)) {
                 -- next_cursor;
                 break;
             }
         }
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void readSingleSymbol () {
         string = cursor;
         string_len = next_cursor - cursor;
     }
@@ -1113,6 +1117,12 @@ struct Lexer {
                 lineno = next_lineno;
                 line = next_line;
                 cursor = next_cursor;
+            } else if (c == '#') {
+                readString('\n');
+                // and continue
+                lineno = next_lineno;
+                line = next_line;
+                cursor = next_cursor;
             } else if (c == '(') {
                 token = token_open;
                 break;
@@ -1138,9 +1148,15 @@ struct Lexer {
                 token = token_string;
                 readString(c);
                 break;
-            } else if (c == '#') {
-                token = token_comment;
-                readString('\n');
+            } else if (c == ';') {
+                token = token_statement;
+                break;
+            } else if (c == ',') {
+                token = token_separator;
+                break;
+            } else if (c == ':') {
+                token = token_separator_block;
+                readSingleSymbol();
                 break;
             } else {
                 token = token_symbol;
@@ -1151,6 +1167,19 @@ struct Lexer {
         return token;
     }
 
+    ValueRef getAsString() {
+        auto result = std::make_shared<String>(string + 1, string_len - 2);
+        initAnchor(result->anchor);
+        result->unescape();
+        return result;
+    }
+
+    ValueRef getAsSymbol() {
+        auto result = std::make_shared<Symbol>(string, string_len);
+        initAnchor(result->anchor);
+        result->unescape();
+        return result;
+    }
 
 };
 
@@ -1161,7 +1190,8 @@ struct Lexer {
 struct Parser {
     Lexer lexer;
 
-    Anchor error_location;
+    Anchor error_origin;
+    Anchor parse_origin;
     std::string error_string;
 
     Parser() {}
@@ -1171,7 +1201,8 @@ struct Parser {
     }
 
     void error( const char *format, ... ) {
-        lexer.initAnchor(error_location);
+        lexer.initAnchor(error_origin);
+        parse_origin = error_origin;
         va_list args;
         va_start (args, format);
         size_t size = vsnprintf(nullptr, 0, format, args);
@@ -1182,27 +1213,87 @@ struct Parser {
         va_end (args);
     }
 
+    bool splitList(
+        std::shared_ptr<List> &result, int list_split_start, char style = 0) {
+        int count = (int)result->size();
+        if (list_split_start == count) {
+            error("empty expression\n");
+            return false;
+        } else {
+            auto wrapped_result = std::make_shared<List>();
+            wrapped_result->style = style;
+            wrapped_result->anchor =
+                result->getElement(list_split_start)->anchor;
+            for (int i = list_split_start; i < count; ++i) {
+                wrapped_result->append(result->getElement(i));
+            }
+            for (int i = count - 1; i >= list_split_start; --i) {
+                result->remove(i);
+            }
+            result->append(wrapped_result);
+            return true;
+        }
+    }
+
+    bool capList(
+        std::shared_ptr<List> &result, int statement_start, int separator_start, char style = 0) {
+        int count = (int)result->size();
+        // wrap the remainder if more than one element,
+        // and there has been a previous separator in this statement
+        if ((separator_start > statement_start)
+                && (separator_start < (count - 1))) {
+            if (!splitList(result, separator_start))
+                return false;
+        }
+        return true;
+    }
+
     ValueRef parseList(int end_token) {
-        auto result = llvm::make_unique<List>();
+        auto result = std::make_shared<List>();
         result->style = lexer.token;
         lexer.initAnchor(result->anchor);
+        int statement_start = 0;
+        int separator_start = 0;
         while (true) {
             lexer.readToken();
             if (lexer.token == end_token) {
+                if (!capList(result, statement_start, separator_start))
+                    return nullptr;
                 break;
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket\n");
                 // point to beginning of list
-                error_location = result->anchor;
+                error_origin = result->anchor;
                 return nullptr;
+            } else if (lexer.token == token_separator_block) {
+                separator_start = (int)result->size() + 1;
+                result->append(lexer.getAsSymbol());
+            } else if (lexer.token == token_statement) {
+                if (!capList(result, statement_start, separator_start))
+                    return nullptr;
+                if (!splitList(result, statement_start))
+                    return nullptr;
+                statement_start++;
+                separator_start = statement_start;
+            } else if (lexer.token == token_separator) {
+                int count = (int)result->size();
+                if (separator_start == count) {
+                    error("empty expression\n");
+                    return nullptr;
+                } else if (separator_start < (count - 1)) {
+                    // more than one element available
+                    if (!splitList(result, separator_start))
+                        return nullptr;
+                }
+                separator_start++;
             } else {
                 if (auto elem = parseAny())
-                    result->append(std::move(elem));
+                    result->append(elem);
                 else
                     return nullptr;
             }
         }
-        return std::move(result);
+        return result;
     }
 
     ValueRef parseAny () {
@@ -1218,20 +1309,9 @@ struct Parser {
             || (lexer.token == token_curly_close)) {
             error("stray closing bracket\n");
         } else if (lexer.token == token_string) {
-            auto result = llvm::make_unique<String>(lexer.string + 1, lexer.string_len - 2);
-            lexer.initAnchor(result->anchor);
-            result->unescape();
-            return std::move(result);
+            return lexer.getAsString();
         } else if (lexer.token == token_symbol) {
-            auto result = llvm::make_unique<Symbol>(lexer.string, lexer.string_len);
-            lexer.initAnchor(result->anchor);
-            result->unescape();
-            return std::move(result);
-        } else if (lexer.token == token_comment) {
-            auto result = llvm::make_unique<Comment>(lexer.string + 1, lexer.string_len - 2);
-            lexer.initAnchor(result->anchor);
-            result->unescape();
-            return std::move(result);
+            return lexer.getAsSymbol();
         } else {
             error("unexpected token: %c (%i)\n", *lexer.cursor, (int)*lexer.cursor);
         }
@@ -1239,57 +1319,107 @@ struct Parser {
         return nullptr;
     }
 
-    ValueRef parseNaked () {
+    ValueRef parseNaked (int column = 0, int depth = 0) {
         int lineno = lexer.lineno;
-        int column = lexer.column();
 
         bool escape = false;
         int subcolumn = 0;
 
-        auto result = llvm::make_unique<List>();
+        auto result = std::make_shared<List>();
         lexer.initAnchor(result->anchor);
 
+        int statement_start = 0;
+        int separator_start = 0;
         while (lexer.token != token_eof) {
             if (lexer.token == token_escape) {
                 escape = true;
                 lexer.readToken();
                 if (lexer.lineno <= lineno) {
                     error("escape character is not at end of line\n");
+                    parse_origin = result->anchor;
                     return nullptr;
                 }
                 lineno = lexer.lineno;
             } else if (lexer.lineno > lineno) {
-                escape = false;
-                if (subcolumn != 0) {
-                    if (lexer.column() != subcolumn) {
+                if (depth > 0) {
+                    if (subcolumn == 0) {
+                        subcolumn = lexer.column();
+                    } else if (lexer.column() != subcolumn) {
                         error("indentation mismatch\n");
+                        parse_origin = result->anchor;
                         return nullptr;
                     }
                 } else {
                     subcolumn = lexer.column();
                 }
+                escape = false;
+                statement_start = (int)result->size();
+                separator_start = statement_start;
                 lineno = lexer.lineno;
-                if (auto elem = parseNaked())
-                    result->append(std::move(elem));
-                else
+                // keep adding elements while we're in the same line
+                while ((lexer.token != token_eof)
+                        && (lexer.lineno == lineno)) {
+                    if (auto elem = parseNaked(subcolumn, depth + 1)) {
+                        result->append(elem);
+                    } else {
+                        return nullptr;
+                    }
+                }
+            } else if (lexer.token == token_separator_block) {
+                separator_start = (int)result->size() + 1;
+                result->append(lexer.getAsSymbol());
+                lexer.readToken();
+            } else if (lexer.token == token_statement) {
+                if (!capList(result, statement_start, separator_start))
                     return nullptr;
+                if (!splitList(result, statement_start))
+                    return nullptr;
+                statement_start++;
+                separator_start = statement_start;
+                lexer.readToken();
+                if (depth > 0) {
+                    // if we are in the same line and there was no preceding ":",
+                    // continue in parent
+                    if (lexer.lineno == lineno)
+                        break;
+                }
+            } else if (lexer.token == token_separator) {
+                int count = (int)result->size();
+                if (separator_start == count) {
+                    error("empty expression\n");
+                    return nullptr;
+                } else if (separator_start < (count - 1)) {
+                    // more than one element available
+                    if (!splitList(result, separator_start))
+                        return nullptr;
+                }
+                separator_start++;
+                lexer.readToken();
             } else {
                 if (auto elem = parseAny())
-                    result->append(std::move(elem));
+                    result->append(elem);
                 else
                     return nullptr;
                 lexer.readToken();
             }
 
-            if ((!escape || (lexer.lineno > lineno)) && (lexer.column() <= column))
-                break;
+            if (depth > 0) {
+                if ((!escape || (lexer.lineno > lineno))
+                    && (lexer.column() <= column)) {
+                    if (!capList(result, statement_start, separator_start))
+                        return nullptr;
+                    break;
+                }
+            }
         }
 
-        assert(result->size() > 0);
-        if (result->size() == 1) {
-            return std::move(result->getElement(0));
+        if (result->size() == 0) {
+            assert(depth == 0);
+            return nullptr;
+        } else if (result->size() == 1) {
+            return result->getElement(0);
         } else {
-            return std::move(result);
+            return result;
         }
     }
 
@@ -1299,50 +1429,14 @@ struct Parser {
 
         lexer.readToken();
 
-        auto result = llvm::make_unique<List>();
-        lexer.initAnchor(result->anchor);
-
-        int lineno = lexer.lineno;
-        while (lexer.token != token_eof) {
-
-            if (lexer.token == token_escape) {
-                lexer.readToken();
-                if (lexer.lineno <= lineno) {
-                    error("escape character is not at end of line\n");
-                    return nullptr;
-                }
-                lineno = lexer.lineno;
-            } else if (lexer.lineno > lineno) {
-                lineno = lexer.lineno;
-                if (auto elem = parseNaked())
-                    result->append(std::move(elem));
-                else
-                    return nullptr;
-            } else {
-                if (auto elem = parseAny())
-                    result->append(std::move(elem));
-                else
-                    return nullptr;
-                lexer.readToken();
-            }
-
-        }
+        auto result = parseNaked(lexer.column());
 
         if (error_string.empty() && !lexer.error_string.empty()) {
             error_string = lexer.error_string;
             return nullptr;
         }
 
-        assert(result->size() > 0);
-        assert(error_string.empty());
-
-        if (result->size() == 0) {
-            return nullptr;
-        } else if (result->size() == 1) {
-            return std::move(result->getElement(0));
-        } else {
-            return std::move(result);
-        }
+        return result;
     }
 
     ValueRef parseFile (const char *path) {
@@ -1354,12 +1448,19 @@ struct Parser {
                 path);
             if (!error_string.empty()) {
                 printf("%s:%i:%i: error: %s",
-                    error_location.path,
-                    error_location.lineno,
-                    error_location.column,
+                    error_origin.path,
+                    error_origin.lineno,
+                    error_origin.column,
                     error_string.c_str());
-                dumpFileLine(path, error_location.offset);
+                dumpFileLine(path, error_origin.offset);
                 assert(expr == NULL);
+                if (!(parse_origin == error_origin)) {
+                    printf("%s:%i:%i: while parsing expression\n",
+                        parse_origin.path,
+                        parse_origin.lineno,
+                        parse_origin.column);
+                    dumpFileLine(path, parse_origin.offset);
+                }
             }
             if (expr)
                 expr = strip(expr);
@@ -1443,7 +1544,7 @@ static void printValue(const Value *e, size_t depth=0, bool naked=true)
                 }
             }
         } else {
-            putchar(l->style?l->style:'(');
+            putchar((l->style == 0)?'(':l->style);
             for (size_t i = 0; i < l->size(); i++) {
                 if (i > 0)
                     putchar(' ');
@@ -1461,11 +1562,9 @@ static void printValue(const Value *e, size_t depth=0, bool naked=true)
         }
     } return;
 	case V_Symbol:
-	case V_String:
-    case V_Comment: {
+	case V_String: {
         const String *a = llvm::cast<String>(e);
-        if (a->getKind() == V_Comment) putchar(';');
-		else if (a->getKind() == V_String) putchar('"');
+		if (a->getKind() == V_String) putchar('"');
 		for (size_t i = 0; i < a->size(); i++) {
 			switch((*a)[i]) {
 			case '"':
@@ -1497,7 +1596,7 @@ static void printValue(const Value *e, size_t depth=0, bool naked=true)
 			}
 		}
 		if (a->getKind() == V_String) putchar('"');
-        if (naked || (a->getKind() == V_Comment))
+        if (naked)
             putchar('\n');
     } return;
     default:
@@ -2093,7 +2192,6 @@ static const char *valueKindName(int kind) {
     case V_List: return "list";
     case V_String: return "string";
     case V_Symbol: return "symbol";
-    case V_Comment: return "comment";
     case V_Atom: return "string or symbol";
     default: return "<corrupted>";
     }

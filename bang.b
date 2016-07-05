@@ -25,7 +25,7 @@ run
                     global ""
                         "running in compiler!\n"
                     * i8
-            ret #
+            ret;
 
 struct Value
 defvalue dump-value
@@ -39,11 +39,61 @@ define main ()
             quote Value
                 run
                     {a b c} [(d)f g]
-                    if a
-                        b c d
+                    {a,(),;b, c;d e;}
+                    [abc:a,b,c d,d;a,b,c,d;]
+                    [a,b,d,e f;]
+                    [a = b,c = d,e = f]
+                    [a b: c d,q,d e,e,]
+                    [a b: c d;q;d e;e;]
+                    ab.bc..cd
+                    .\.\.
+                    . .. ...
+                    {
+                        if a: b q, c d, d e;
+                        if b: c;
+                        if c {
+                            b q;
+                            c d;
+                            d e;
+                            };
+                        }
+
+                    if q: a b, c d;
+                    a b c,
+                        d e f
+                    e f, g h, i j k,m;
+                    g h, i j k;
+                    n o;
+                    f g,q,w,q e
+                    (if a == b && c == d: print a; print b;)
+                    if a == b && c == d:
+                        print "yes"; print "no"
+                        print c
+                    {
+                        if (true)
+                        {
+                        }
+                        else if (false)
+                        {
+                        }
+                        else
+                        {
+                        };
+                        print("hi",1,2,3,auto(),5,2 + 1);
+                    }
+
+                    if a == b && c == d: print a; print b;
+                    if a; q e
+                        a b c d;
+                        e f;
+                        g h; [i];
+                        g h; j; k; l; m
+                        j k; l m
+                        teamo beamo
                     else
                         e f g
                     define "" ()
+                        # comment
                         function void
                         label ""
                             call printf
@@ -51,7 +101,7 @@ define main ()
                                     global ""
                                         "running in compiler!\n"
                                     * i8
-                            ret #
+                            ret;
 
         defvalue Q
             quote Value word
@@ -95,7 +145,7 @@ define main ()
                 * i8
                 c0 then
                 c1 else
-        ret #
+        ret;
 
 # dump-module
 run main
