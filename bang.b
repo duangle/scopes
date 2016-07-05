@@ -1,4 +1,4 @@
-bang ;
+bang
 
 struct TestStruct packed i32 i8
 
@@ -25,7 +25,7 @@ run
                     global ""
                         "running in compiler!\n"
                     * i8
-            ret ;
+            ret #
 
 struct Value
 defvalue dump-value
@@ -37,11 +37,22 @@ define main ()
     label ""
         call dump-value
             quote Value
-                ;
-                    struct Expression
-                    defvalue dump-expression
-                        declare "bang_dump_expression"
-                            function void (* Expression)
+                run
+                    {a b c} [(d)f g]
+                    if a
+                        b c d
+                    else
+                        e f g
+                    define "" ()
+                        function void
+                        label ""
+                            call printf
+                                bitcast
+                                    global ""
+                                        "running in compiler!\n"
+                                    * i8
+                            ret #
+
         defvalue Q
             quote Value word
         call printf
@@ -84,7 +95,7 @@ define main ()
                 * i8
                 c0 then
                 c1 else
-        ret ;
+        ret #
 
-;dump-module ;
+# dump-module
 run main

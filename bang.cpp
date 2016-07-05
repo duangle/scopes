@@ -621,12 +621,12 @@ Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
 //------------------------------------------------------------------------------
 
 enum ValueKind {
-    E_None,
-    E_List,
-    E_String,
-    E_Symbol,
-    E_Comment,
-    E_Atom
+    V_None,
+    V_List,
+    V_String,
+    V_Symbol,
+    V_Comment,
+    V_Atom
 };
 
 struct Anchor {
@@ -669,9 +669,12 @@ typedef std::shared_ptr<Value> ValueRef;
 
 struct List : Value {
     std::vector< ValueRef > values;
+    // 0 = naked, '(' = parens, '[' = square, '{' = curly
+    char style;
 
     List() :
-        Value(E_List)
+        Value(V_List),
+        style(0)
         {}
 
     Value *append(ValueRef expr) {
@@ -712,25 +715,30 @@ struct List : Value {
     }
 
     static bool classof(const Value *expr) {
-        return expr->getKind() == E_List;
+        return expr->getKind() == V_List;
     }
 
     static ValueKind kind() {
-        return E_List;
+        return V_List;
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct Atom : Value {
+struct String : Value {
 protected:
-    Atom(ValueKind kind, const char *s, size_t len) :
+    std::string value;
+
+    String(ValueKind kind, const char *s, size_t len) :
         Value(kind),
         value(s, len)
         {}
 
-    std::string value;
 public:
+    String(const char *s, size_t len) :
+        Value(V_String),
+        value(s, len)
+        {}
 
     const std::string &getValue() const {
         return value;
@@ -754,7 +762,7 @@ public:
 
     static bool classof(const Value *expr) {
         auto kind = expr->getKind();
-        return (kind != E_List) && (kind != E_None);
+        return (kind == V_String) || (kind == V_Symbol) || (kind == V_Comment);
     }
 
     void unescape() {
@@ -762,7 +770,7 @@ public:
     }
 
     static ValueKind kind() {
-        return E_Atom;
+        return V_String;
     }
 
     bool toInt64(int64_t &value, int radix = 10) const {
@@ -780,48 +788,32 @@ public:
 
 //------------------------------------------------------------------------------
 
-struct String : Atom {
-    String(const char *s, size_t len) :
-        Atom(E_String, s, len) {}
-
-    static bool classof(const Value *expr) {
-        return expr->getKind() == E_String;
-    }
-
-    static ValueKind kind() {
-        return E_String;
-    }
-
-};
-
-//------------------------------------------------------------------------------
-
-struct Symbol : Atom {
+struct Symbol : String {
     Symbol(const char *s, size_t len) :
-        Atom(E_Symbol, s, len) {}
+        String(V_Symbol, s, len) {}
 
     static bool classof(const Value *expr) {
-        return expr->getKind() == E_Symbol;
+        return expr->getKind() == V_Symbol;
     }
 
     static ValueKind kind() {
-        return E_Symbol;
+        return V_Symbol;
     }
 
 };
 
 //------------------------------------------------------------------------------
 
-struct Comment : Atom {
+struct Comment : String {
     Comment(const char *s, size_t len) :
-        Atom(E_Comment, s, len) {}
+        String(V_Comment, s, len) {}
 
     static bool classof(const Value *expr) {
-        return expr->getKind() == E_Comment;
+        return expr->getKind() == V_Comment;
     }
 
     static ValueKind kind() {
-        return E_Comment;
+        return V_Comment;
     }
 
 };
@@ -865,7 +857,7 @@ std::shared_ptr<Value> strip(std::shared_ptr<Value> expr) {
     assert(expr);
     if (expr->isComment()) {
         return nullptr;
-    } else if (expr->getKind() == E_List) {
+    } else if (expr->getKind() == V_List) {
         auto list = std::static_pointer_cast<List>(expr);
         auto result = std::make_shared<List>();
         bool changed = false;
@@ -886,17 +878,99 @@ std::shared_ptr<Value> strip(std::shared_ptr<Value> expr) {
 }
 
 //------------------------------------------------------------------------------
+// FILE I/O
+//------------------------------------------------------------------------------
+
+struct MappedFile {
+protected:
+    int fd;
+    off_t length;
+    void *ptr;
+
+    MappedFile() :
+        fd(-1),
+        length(0),
+        ptr(NULL)
+        {}
+
+public:
+    ~MappedFile() {
+        if (ptr)
+            munmap(ptr, length);
+        if (fd >= 0)
+            close(fd);
+    }
+
+    const char *strptr() const {
+        return (const char *)ptr;
+    }
+
+    size_t size() const {
+        return length;
+    }
+
+    static std::unique_ptr<MappedFile> open(const char *path) {
+        std::unique_ptr<MappedFile> file(new MappedFile());
+        file->fd = ::open(path, O_RDONLY);
+        if (file->fd < 0)
+            return nullptr;
+        file->length = lseek(file->fd, 0, SEEK_END);
+        file->ptr = mmap(NULL, file->length, PROT_READ, MAP_PRIVATE, file->fd, 0);
+        if (file->ptr == MAP_FAILED) {
+            return nullptr;
+        }
+        return file;
+    }
+
+    void dumpLine(size_t offset) {
+        if (offset >= (size_t)length) {
+            return;
+        }
+        const char *str = strptr();
+        size_t start = offset;
+        size_t end = offset;
+        while (start > 0) {
+            if (str[start-1] == '\n')
+                break;
+            start--;
+        }
+        while (end < (size_t)length) {
+            if (str[end] == '\n')
+                break;
+            end++;
+        }
+        printf("%.*s\n", (int)(end - start), str + start);
+        size_t column = offset - start;
+        for (size_t i = 0; i < column; ++i) {
+            putchar(' ');
+        }
+        printf("^\n");
+    }
+};
+
+static void dumpFileLine(const char *path, int offset) {
+    auto file = MappedFile::open(path);
+    if (file) {
+        file->dumpLine((size_t)offset);
+    }
+}
+
+//------------------------------------------------------------------------------
 // S-EXPR LEXER / TOKENIZER
 //------------------------------------------------------------------------------
 
 typedef enum {
-    token_eof,
-    token_open,
-    token_close,
-    token_string,
-    token_symbol,
-    token_comment,
-    token_escape
+    token_eof = 0,
+    token_open = '(',
+    token_close = ')',
+    token_square_open = '[',
+    token_square_close = ']',
+    token_curly_open = '{',
+    token_curly_close = '}',
+    token_string = '"',
+    token_symbol = 'S',
+    token_comment = '#',
+    token_escape = '\\'
 } Token;
 
 struct Lexer {
@@ -933,6 +1007,10 @@ struct Lexer {
         this->next_lineno = 1;
         this->next_line = input_stream;
         this->error_string.clear();
+    }
+
+    int offset () {
+        return cursor - input_stream;
     }
 
     int column () {
@@ -975,7 +1053,14 @@ struct Lexer {
             } else if (c == '\\') {
                 // escape
                 escape = true;
-            } else if (isspace(c) || (c == '(') || (c == ')') || (c == '"')) {
+            } else if (isspace(c)
+                || (c == '(')
+                || (c == ')')
+                || (c == '[')
+                || (c == ']')
+                || (c == '{')
+                || (c == '}')
+                || (c == '"')) {
                 -- next_cursor;
                 break;
             }
@@ -1034,6 +1119,18 @@ struct Lexer {
             } else if (c == ')') {
                 token = token_close;
                 break;
+            } else if (c == '[') {
+                token = token_square_open;
+                break;
+            } else if (c == ']') {
+                token = token_square_close;
+                break;
+            } else if (c == '{') {
+                token = token_curly_open;
+                break;
+            } else if (c == '}') {
+                token = token_curly_close;
+                break;
             } else if (c == '\\') {
                 token = token_escape;
                 break;
@@ -1041,7 +1138,7 @@ struct Lexer {
                 token = token_string;
                 readString(c);
                 break;
-            } else if (c == ';') {
+            } else if (c == '#') {
                 token = token_comment;
                 readString('\n');
                 break;
@@ -1064,6 +1161,7 @@ struct Lexer {
 struct Parser {
     Lexer lexer;
 
+    Anchor error_location;
     std::string error_string;
 
     Parser() {}
@@ -1073,6 +1171,7 @@ struct Parser {
     }
 
     void error( const char *format, ... ) {
+        lexer.initAnchor(error_location);
         va_list args;
         va_start (args, format);
         size_t size = vsnprintf(nullptr, 0, format, args);
@@ -1083,28 +1182,41 @@ struct Parser {
         va_end (args);
     }
 
+    ValueRef parseList(int end_token) {
+        auto result = llvm::make_unique<List>();
+        result->style = lexer.token;
+        lexer.initAnchor(result->anchor);
+        while (true) {
+            lexer.readToken();
+            if (lexer.token == end_token) {
+                break;
+            } else if (lexer.token == token_eof) {
+                error("missing closing bracket\n");
+                // point to beginning of list
+                error_location = result->anchor;
+                return nullptr;
+            } else {
+                if (auto elem = parseAny())
+                    result->append(std::move(elem));
+                else
+                    return nullptr;
+            }
+        }
+        return std::move(result);
+    }
+
     ValueRef parseAny () {
         assert(lexer.token != token_eof);
         if (lexer.token == token_open) {
-            auto result = llvm::make_unique<List>();
-            lexer.initAnchor(result->anchor);
-            while (true) {
-                lexer.readToken();
-                if (lexer.token == token_close) {
-                    break;
-                } else if (lexer.token == token_eof) {
-                    error("missing closing parens\n");
-                    return nullptr;
-                } else {
-                    if (auto elem = parseAny())
-                        result->append(std::move(elem));
-                    else
-                        return nullptr;
-                }
-            }
-            return std::move(result);
-        } else if (lexer.token == token_close) {
-            error("stray closing parens\n");
+            return parseList(token_close);
+        } else if (lexer.token == token_square_open) {
+            return parseList(token_square_close);
+        } else if (lexer.token == token_curly_open) {
+            return parseList(token_curly_close);
+        } else if ((lexer.token == token_close)
+            || (lexer.token == token_square_close)
+            || (lexer.token == token_curly_close)) {
+            error("stray closing bracket\n");
         } else if (lexer.token == token_string) {
             auto result = llvm::make_unique<String>(lexer.string + 1, lexer.string_len - 2);
             lexer.initAnchor(result->anchor);
@@ -1216,8 +1328,8 @@ struct Parser {
 
         }
 
-        if (!error_string.empty() && !lexer.error_string.empty()) {
-            error("%s", lexer.error_string.c_str());
+        if (error_string.empty() && !lexer.error_string.empty()) {
+            error_string = lexer.error_string;
             return nullptr;
         }
 
@@ -1234,24 +1346,21 @@ struct Parser {
     }
 
     ValueRef parseFile (const char *path) {
-        int fd = open(path, O_RDONLY);
-        off_t length = lseek(fd, 0, SEEK_END);
-        void *ptr = mmap(NULL, length, PROT_READ, MAP_PRIVATE, fd, 0);
-        if (ptr != MAP_FAILED) {
+        auto file = MappedFile::open(path);
+        if (file) {
             init();
             auto expr = parseRoot(
-                (const char *)ptr, (const char *)ptr + length,
+                file->strptr(), file->strptr() + file->size(),
                 path);
             if (!error_string.empty()) {
-                int lineno = lexer.lineno;
-                int column = lexer.column();
-                printf("%i:%i:%s\n", lineno, column, error_string.c_str());
+                printf("%s:%i:%i: error: %s",
+                    error_location.path,
+                    error_location.lineno,
+                    error_location.column,
+                    error_string.c_str());
+                dumpFileLine(path, error_location.offset);
                 assert(expr == NULL);
             }
-
-            munmap(ptr, length);
-            close(fd);
-
             if (expr)
                 expr = strip(expr);
             return expr;
@@ -1266,56 +1375,134 @@ struct Parser {
 
 //------------------------------------------------------------------------------
 
-void printValue(const Value *e, size_t depth=0)
-{
-#define sep() for(i = 0; i < depth; i++) printf("    ")
-	size_t i;
-	if (!e) return;
+static bool isNested(const Value *e) {
+    if (e->getKind() == V_List) {
+        const List *l = llvm::cast<List>(e);
+        for (size_t i = 0; i < l->size(); ++i) {
+            if (l->nth(i)->getKind() == V_List)
+                return true;
+        }
+    }
+    return false;
+}
 
-    sep();
-    printf("%s:%i:%i [%i]\n",
+static void printAnchor(const Value *e, size_t depth=0) {
+    printf("%s:%i:%i: ",
         e->anchor.path,
         e->anchor.lineno,
-        e->anchor.column,
-        e->anchor.offset);
+        e->anchor.column);
+    for(size_t i = 0; i < depth; i++) printf("    ");
+}
+
+static void printValue(const Value *e, size_t depth=0, bool naked=true)
+{
+	if (!e) return;
+
+    if (naked) {
+        printAnchor(e, depth);
+    }
 
 	switch(e->getKind()) {
-	case E_List: {
+	case V_List: {
         const List *l = llvm::cast<List>(e);
-		sep();
-		puts("(");
-		for (i = 0; i < l->size(); i++)
-			printValue(l->nth(i), depth + 1);
-		sep();
-		puts(")");
+        if (naked && !l->style) {
+            if (l->size() == 0) {
+                printf("()\n");
+            } else {
+                size_t offset = 0;
+                const Value *e0 = l->nth(0);
+                if (e0->getKind() == V_List) {
+                    printf(";\n");
+                    goto print_sparse;
+                }
+            print_terse:
+                printValue(e0, depth, false);
+                offset++;
+                while (offset < l->size()) {
+                    e0 = l->nth(offset);
+                    if (isNested(e0))
+                        break;
+                    putchar(' ');
+                    printValue(e0, depth, false);
+                    offset++;
+                }
+                printf((l->size() == 1)?" ;\n":"\n");
+            print_sparse:
+                while (offset < l->size()) {
+                    e0 = l->nth(offset);
+                    if ((e0->getKind() != V_List) // not a list
+                        && (offset >= 1) // not first element in list
+                        && (offset < (l->size() - 1)) // not last element in list
+                        && !isNested(l->nth(offset+1))) { // next element can be terse packed too
+                        printAnchor(e0, depth + 1);
+                        printf("\\ ");
+                        goto print_terse;
+                    }
+                    printValue(e0, depth + 1);
+                    offset++;
+                }
+            }
+        } else {
+            putchar(l->style?l->style:'(');
+            for (size_t i = 0; i < l->size(); i++) {
+                if (i > 0)
+                    putchar(' ');
+                printValue(l->nth(i), depth + 1, false);
+            }
+            switch(l->style) {
+                case '[': putchar(']'); break;
+                case '{': putchar('}'); break;
+                case 0:
+                default:
+                    putchar(')'); break;
+            }
+            if (naked)
+                putchar('\n');
+        }
     } return;
-	case E_Symbol:
-	case E_String:
-    case E_Comment: {
-		sep();
-        const Atom *a = llvm::cast<Atom>(e);
-        if (a->getKind() == E_Comment) putchar(';');
-		else if (a->getKind() == E_String) putchar('"');
-		for (i = 0; i < a->size(); i++) {
+	case V_Symbol:
+	case V_String:
+    case V_Comment: {
+        const String *a = llvm::cast<String>(e);
+        if (a->getKind() == V_Comment) putchar(';');
+		else if (a->getKind() == V_String) putchar('"');
+		for (size_t i = 0; i < a->size(); i++) {
 			switch((*a)[i]) {
 			case '"':
 			case '\\':
 				putchar('\\');
+                putchar((*a)[i]);
 				break;
-			case ')': case '(':
-				if (a->getKind() == E_Symbol)
+            case '\n':
+                printf("\\n");
+                break;
+            case '\r':
+                printf("\\r");
+                break;
+            case '\t':
+                printf("\\t");
+                break;
+            case 0:
+                printf("\\0");
+                break;
+            case '(':
+			case ')':
+				if (a->getKind() == V_Symbol)
 					putchar('\\');
+                putchar((*a)[i]);
+				break;
+            default:
+                putchar((*a)[i]);
+                break;
 			}
-
-			putchar((*a)[i]);
 		}
-		if (a->getKind() == E_String) putchar('"');
-		putchar('\n');
+		if (a->getKind() == V_String) putchar('"');
+        if (naked || (a->getKind() == V_Comment))
+            putchar('\n');
     } return;
     default:
         assert (false); break;
 	}
-#undef sep
 }
 
 //------------------------------------------------------------------------------
@@ -1902,12 +2089,12 @@ static LLVMModuleRef importCModule (Environment *env,
 
 static const char *valueKindName(int kind) {
     switch(kind) {
-    case E_None: return "?";
-    case E_List: return "list";
-    case E_String: return "string";
-    case E_Symbol: return "symbol";
-    case E_Comment: return "comment";
-    case E_Atom: return "string or symbol";
+    case V_None: return "?";
+    case V_List: return "list";
+    case V_String: return "string";
+    case V_Symbol: return "symbol";
+    case V_Comment: return "comment";
+    case V_Atom: return "string or symbol";
     default: return "<corrupted>";
     }
 }
@@ -1924,6 +2111,10 @@ static void translateError (Environment *env, const char *format, ...) {
     va_start (args, format);
     vprintf (format, args);
     va_end (args);
+    if (env->expr) {
+        Anchor anchor = env->expr->anchor;
+        dumpFileLine(anchor.path, anchor.offset);
+    }
 }
 
 static bool isSymbol (const Value *expr, const char *sym) {
@@ -1975,7 +2166,7 @@ static const T *translateKind(Environment *env, const Value *expr) {
 
 static bool translateInt64 (Environment *env, const Value *expr, int64_t &value) {
     if (expr) {
-        if (auto str = translateKind<Atom>(env, expr)) {
+        if (auto str = translateKind<String>(env, expr)) {
             auto _ = env->with_expr(expr);
             if (str->toInt64(value))
                 return true;
@@ -1987,7 +2178,7 @@ static bool translateInt64 (Environment *env, const Value *expr, int64_t &value)
 
 static const char *translateString (Environment *env, const Value *expr) {
     if (expr) {
-        if (auto str = translateKind<Atom>(env, expr))
+        if (auto str = translateKind<String>(env, expr))
             return str->c_str();
     }
     return nullptr;
@@ -2813,7 +3004,7 @@ Value *newList(Environment *env) {
 Value *append(Environment *env, Value *expr, Value *element) {
     assert(env);
     assert(expr);
-    assert(expr->getKind() == E_List);
+    assert(expr->getKind() == V_List);
     assert(element);
     auto list = std::static_pointer_cast<List>(expr->managed());
     list->append(element->managed());
@@ -2848,19 +3039,19 @@ void copyAnchor(Environment *env, Value *from_expr, Value *to_expr) {
 bool isList(Environment *env, Value *expr) {
     assert(env);
     assert(expr);
-    return expr->getKind() == E_List;
+    return expr->getKind() == V_List;
 }
 
 bool isSymbol(Environment *env, Value *expr) {
     assert(env);
     assert(expr);
-    return expr->getKind() == E_Symbol;
+    return expr->getKind() == V_Symbol;
 }
 
 bool isString(Environment *env, Value *expr) {
     assert(env);
     assert(expr);
-    return expr->getKind() == E_String;
+    return expr->getKind() == V_String;
 }
 
 */
