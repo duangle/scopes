@@ -38,6 +38,24 @@ define main ()
         call dump-value
             quote Value
                 run
+                    # compare
+                    do
+                        if cond1:
+                            do-this;
+                        else if cond2:
+                            do-that;
+                        else:
+                            do-something;
+
+                    # to
+                    do
+                        if (cond1) {
+                            do-this;
+                        } else if (cond2) {
+                            do-that;
+                        } else {
+                            do-that;
+                        }
                     {a b c} [(d)f g]
                     {a,(),;b, c;d e;}
                     [abc:a,b,c d,d;a,b,c,d;]
@@ -47,6 +65,10 @@ define main ()
                     [a b: c d;q;d e;e;]
                     ab.bc..cd
                     .\.\.
+                    [ptr, * ptr, const * ptr]
+                    int x, int y; x = 5, y = z
+                    do                                # (do
+                        a; b; c d
                     . .. ...
                     {
                         if a: b q, c d, d e;
@@ -57,7 +79,11 @@ define main ()
                             d e;
                             };
                         }
-
+                    a b;c d;
+                        f g
+                    do
+                        print x; print
+                            a + b
                     if q: a b, c d;
                     a b c,
                         d e f
