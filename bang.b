@@ -2,6 +2,14 @@ bang
 
 struct TestStruct packed i32 i8
 
+# some comment
+"string format 1 '\"
+over two lines"
+'string format 2 "\'
+over two lines'
+123 -123 0123 a0 0a -5. -0123.5 dot1.dot2.dot3
+++ a + b * 3 <= 5 (() [[{(a b) c d} e f] g h])
+
 declare somef
     function TestStruct
         array i64 5
@@ -38,6 +46,7 @@ define main ()
         call dump-value
             quote Value
                 run
+                    print "'\"" '"\''
                     # compare
                     do
                         if cond1:
@@ -57,9 +66,9 @@ define main ()
                             do-that;
                         }
                     {a b c} [(d)f g]
-                    {a,(),;b, c;d e;}
+                    {a,(),;b, c;d e;}[]
                     [abc:a,b,c d,d;a,b,c,d;]
-                    [a,b,d,e f;]
+                    [][a,b,d,e f;]
                     [a = b,c = d,e = f]
                     [a b: c d,q,d e,e,]
                     [a b: c d;q;d e;e;]
@@ -97,6 +106,7 @@ define main ()
                         print c
                     {
                         if (true)
+
                         {
                         }
                         else if (false)

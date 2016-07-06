@@ -1059,7 +1059,7 @@ struct Lexer {
                 // consume
             } else if (isspace(c)
                 || (startc == '.')
-                || strchr("()[]{}\";#:,.", c)) {
+                || strchr("()[]{}\"';#:,.", c)) {
                 -- next_cursor;
                 break;
             }
@@ -1145,6 +1145,10 @@ struct Lexer {
                 token = token_escape;
                 break;
             } else if (c == '"') {
+                token = token_string;
+                readString(c);
+                break;
+            } else if (c == '\'') {
                 token = token_string;
                 readString(c);
                 break;
