@@ -98,6 +98,7 @@ int bang_main(int argc, char ** argv);
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+#include <cstdlib>
 
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
@@ -625,7 +626,8 @@ enum ValueKind {
     V_List,
     V_String,
     V_Symbol,
-    V_Atom
+    V_Integer,
+    V_Real
 };
 
 struct Anchor {
@@ -740,6 +742,64 @@ struct List : Value {
 
 //------------------------------------------------------------------------------
 
+struct Integer : Value {
+protected:
+    int64_t value;
+    bool is_unsigned;
+
+public:
+    Integer(int64_t number, bool is_unsigned_ = false) :
+        Value(V_Integer),
+        value(number),
+        is_unsigned(is_unsigned_)
+        {}
+
+    bool isUnsigned() const {
+        return is_unsigned;
+    }
+
+    int64_t getValue() const {
+        return value;
+    }
+
+    static bool classof(const Value *expr) {
+        auto kind = expr->getKind();
+        return (kind == V_Integer);
+    }
+
+    static ValueKind kind() {
+        return V_Integer;
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct Real : Value {
+protected:
+    double value;
+
+public:
+    Real(double number) :
+        Value(V_Real),
+        value(number)
+        {}
+
+    double getValue() const {
+        return value;
+    }
+
+    static bool classof(const Value *expr) {
+        auto kind = expr->getKind();
+        return (kind == V_Real);
+    }
+
+    static ValueKind kind() {
+        return V_Real;
+    }
+};
+
+//------------------------------------------------------------------------------
+
 struct String : Value {
 protected:
     std::string value;
@@ -786,18 +846,6 @@ public:
 
     static ValueKind kind() {
         return V_String;
-    }
-
-    bool toInt64(int64_t &value, int radix = 10) const {
-        char *end;
-        value = strtoll(c_str(), &end, radix);
-        return (end == (c_str() + size()));
-    }
-
-    bool toDouble(double &value) const {
-        char *end;
-        value = strtod(c_str(), &end);
-        return (end == (c_str() + size()));
     }
 };
 
@@ -966,9 +1014,13 @@ typedef enum {
     token_symbol = 'S',
     token_escape = '\\',
     token_statement = ';',
-    token_separator_block = ':',
-    token_separator = ',',
+    token_integer = 'I',
+    token_real = 'R',
 } Token;
+
+const char symbol_terminators[]  = "()[]{}\"';#:,.";
+const char integer_terminators[] = "()[]{}\"';#:,";
+const char real_terminators[]    = "()[]{}\"';#:,.";
 
 struct Lexer {
     const char *path;
@@ -987,6 +1039,9 @@ struct Lexer {
     int token;
     const char *string;
     int string_len;
+    int64_t integer;
+    bool is_unsigned;
+    double real;
 
     std::string error_string;
 
@@ -1039,7 +1094,6 @@ struct Lexer {
 
     void readSymbol () {
         bool escape = false;
-        char startc = *cursor;
         while (true) {
             if (next_cursor == eof) {
                 break;
@@ -1055,11 +1109,25 @@ struct Lexer {
             } else if (c == '\\') {
                 // escape
                 escape = true;
-            } else if ((c == '.') && (startc == '.')) {
-                // consume
             } else if (isspace(c)
-                || (startc == '.')
-                || strchr("()[]{}\"';#:,.", c)) {
+                || strchr(symbol_terminators, c)) {
+                -- next_cursor;
+                break;
+            }
+        }
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void readDotSequence () {
+        while (true) {
+            if (next_cursor == eof) {
+                break;
+            }
+            char c = *next_cursor++;
+            if (strchr(".:", c)) {
+                // consume
+            } else {
                 -- next_cursor;
                 break;
             }
@@ -1097,6 +1165,47 @@ struct Lexer {
         }
         string = cursor;
         string_len = next_cursor - cursor;
+    }
+
+    bool readInteger() {
+        char *end;
+        errno = 0;
+        integer = std::strtoll(cursor, &end, 0);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            return false;
+        is_unsigned = false;
+        next_cursor = end;
+        return true;
+    }
+
+    bool readUInteger() {
+        char *end;
+        errno = 0;
+        integer = std::strtoull(cursor, &end, 0);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            return false;
+        is_unsigned = true;
+        next_cursor = end;
+        return true;
+    }
+
+    bool readReal() {
+        char *end;
+        errno = 0;
+        real = std::strtod(cursor, &end);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(real_terminators, *end)))
+            return false;
+        next_cursor = end;
+        return true;
     }
 
     int readToken () {
@@ -1156,11 +1265,22 @@ struct Lexer {
                 token = token_statement;
                 break;
             } else if (c == ',') {
-                token = token_separator;
+                token = token_symbol;
+                readSingleSymbol();
                 break;
             } else if (c == ':') {
-                token = token_separator_block;
-                readSingleSymbol();
+                token = token_symbol;
+                readDotSequence();
+                break;
+            } else if (readInteger() || readUInteger()) {
+                token = token_integer;
+                break;
+            } else if (readReal()) {
+                token = token_real;
+                break;
+            } else if (c == '.') {
+                token = token_symbol;
+                readDotSequence();
                 break;
             } else {
                 token = token_symbol;
@@ -1182,6 +1302,18 @@ struct Lexer {
         auto result = std::make_shared<Symbol>(string, string_len);
         initAnchor(result->anchor);
         result->unescape();
+        return result;
+    }
+
+    ValueRef getAsInteger() {
+        auto result = std::make_shared<Integer>(integer, is_unsigned);
+        initAnchor(result->anchor);
+        return result;
+    }
+
+    ValueRef getAsReal() {
+        auto result = std::make_shared<Real>(real);
+        initAnchor(result->anchor);
         return result;
     }
 
@@ -1239,57 +1371,24 @@ struct Parser {
         }
     }
 
-    bool capList(
-        std::shared_ptr<List> &result, int statement_start, int separator_start, char style = 0) {
-        int count = (int)result->size();
-        // wrap the remainder if more than one element,
-        // and there has been a previous separator in this statement
-        if ((separator_start > statement_start)
-                && (separator_start < (count - 1))) {
-            if (!splitList(result, separator_start))
-                return false;
-        }
-        return true;
-    }
-
     ValueRef parseList(int end_token) {
         auto result = std::make_shared<List>();
         result->style = lexer.token;
         lexer.initAnchor(result->anchor);
         int statement_start = 0;
-        int separator_start = 0;
         while (true) {
             lexer.readToken();
             if (lexer.token == end_token) {
-                if (!capList(result, statement_start, separator_start))
-                    return nullptr;
                 break;
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket\n");
                 // point to beginning of list
                 error_origin = result->anchor;
                 return nullptr;
-            } else if (lexer.token == token_separator_block) {
-                separator_start = (int)result->size() + 1;
-                result->append(lexer.getAsSymbol());
             } else if (lexer.token == token_statement) {
-                if (!capList(result, statement_start, separator_start))
-                    return nullptr;
                 if (!splitList(result, statement_start))
                     return nullptr;
                 statement_start++;
-                separator_start = statement_start;
-            } else if (lexer.token == token_separator) {
-                int count = (int)result->size();
-                if (separator_start == count) {
-                    error("empty expression\n");
-                    return nullptr;
-                } else if (separator_start < (count - 1)) {
-                    // more than one element available
-                    if (!splitList(result, separator_start))
-                        return nullptr;
-                }
-                separator_start++;
             } else {
                 if (auto elem = parseAny())
                     result->append(elem);
@@ -1316,6 +1415,10 @@ struct Parser {
             return lexer.getAsString();
         } else if (lexer.token == token_symbol) {
             return lexer.getAsSymbol();
+        } else if (lexer.token == token_integer) {
+            return lexer.getAsInteger();
+        } else if (lexer.token == token_real) {
+            return lexer.getAsReal();
         } else {
             error("unexpected token: %c (%i)\n", *lexer.cursor, (int)*lexer.cursor);
         }
@@ -1333,7 +1436,6 @@ struct Parser {
         lexer.initAnchor(result->anchor);
 
         int statement_start = 0;
-        int separator_start = 0;
         while (lexer.token != token_eof) {
             if (lexer.token == token_escape) {
                 escape = true;
@@ -1358,7 +1460,6 @@ struct Parser {
                 }
                 escape = false;
                 statement_start = (int)result->size();
-                separator_start = statement_start;
                 lineno = lexer.lineno;
                 // keep adding elements while we're in the same line
                 while ((lexer.token != token_eof)
@@ -1369,17 +1470,10 @@ struct Parser {
                         return nullptr;
                     }
                 }
-            } else if (lexer.token == token_separator_block) {
-                separator_start = (int)result->size() + 1;
-                result->append(lexer.getAsSymbol());
-                lexer.readToken();
             } else if (lexer.token == token_statement) {
-                if (!capList(result, statement_start, separator_start))
-                    return nullptr;
                 if (!splitList(result, statement_start))
                     return nullptr;
                 statement_start++;
-                separator_start = statement_start;
                 lexer.readToken();
                 if (depth > 0) {
                     // if we are in the same line and there was no preceding ":",
@@ -1387,18 +1481,6 @@ struct Parser {
                     if (lexer.lineno == lineno)
                         break;
                 }
-            } else if (lexer.token == token_separator) {
-                int count = (int)result->size();
-                if (separator_start == count) {
-                    error("empty expression\n");
-                    return nullptr;
-                } else if (separator_start < (count - 1)) {
-                    // more than one element available
-                    if (!splitList(result, separator_start))
-                        return nullptr;
-                }
-                separator_start++;
-                lexer.readToken();
             } else {
                 if (auto elem = parseAny())
                     result->append(elem);
@@ -1410,8 +1492,6 @@ struct Parser {
             if (depth > 0) {
                 if ((!escape || (lexer.lineno > lineno))
                     && (lexer.column() <= column)) {
-                    if (!capList(result, statement_start, separator_start))
-                        return nullptr;
                     break;
                 }
             }
@@ -1564,6 +1644,22 @@ static void printValue(const Value *e, size_t depth=0, bool naked=true)
             if (naked)
                 putchar('\n');
         }
+    } return;
+    case V_Integer: {
+        const Integer *a = llvm::cast<Integer>(e);
+
+        if (a->isUnsigned())
+            printf("%" PRIu64, a->getValue());
+        else
+            printf("%" PRIi64, a->getValue());
+        if (naked)
+            putchar('\n');
+    } return;
+    case V_Real: {
+        const Real *a = llvm::cast<Real>(e);
+        printf("%g", a->getValue());
+        if (naked)
+            putchar('\n');
     } return;
 	case V_Symbol:
 	case V_String: {
@@ -2196,7 +2292,8 @@ static const char *valueKindName(int kind) {
     case V_List: return "list";
     case V_String: return "string";
     case V_Symbol: return "symbol";
-    case V_Atom: return "string or symbol";
+    case V_Integer: return "integer";
+    case V_Real: return "real";
     default: return "<corrupted>";
     }
 }
@@ -2268,11 +2365,19 @@ static const T *translateKind(Environment *env, const Value *expr) {
 
 static bool translateInt64 (Environment *env, const Value *expr, int64_t &value) {
     if (expr) {
-        if (auto str = translateKind<String>(env, expr)) {
-            auto _ = env->with_expr(expr);
-            if (str->toInt64(value))
-                return true;
-            translateError(env, "not a valid integer");
+        if (auto i = translateKind<Integer>(env, expr)) {
+            value = i->getValue();
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool translateDouble (Environment *env, const Value *expr, double &value) {
+    if (expr) {
+        if (auto i = translateKind<Real>(env, expr)) {
+            value = i->getValue();
+            return true;
         }
     }
     return false;
@@ -2359,41 +2464,29 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         return NULL;
     }
     if (matchSpecialForm(env, expr, "int", 2, 2)) {
+
         const Value *expr_type = expr->nth(1);
-        const Symbol *expr_value = translateKind<Symbol>(env, expr->nth(2));
 
         LLVMTypeRef type = translateType(env, expr_type);
+        if (!type) return NULL;
 
-        if (type && expr_value) {
-            auto _ = env->with_expr(expr_value);
-            int64_t value;
-            if (!expr_value->toInt64(value)) {
-                translateError(env, "not a valid integer constant\n");
-                return NULL;
-            } else {
-                return LLVMConstInt(type, value, 1);
-            }
-        }
+        int64_t value;
+        if (!translateInt64(env, expr->nth(2), value)) return NULL;
 
-        return NULL;
+        return LLVMConstInt(type, value, 1);
+
     } else if (matchSpecialForm(env, expr, "real", 2, 2)) {
+
         const Value *expr_type = expr->nth(1);
-        const Symbol *expr_value = translateKind<Symbol>(env, expr->nth(2));
 
         LLVMTypeRef type = translateType(env, expr_type);
+        if (!type) return NULL;
 
-        if (type && expr_value) {
-            auto _ = env->with_expr(expr_value);
-            double value;
-            if (!expr_value->toDouble(value)) {
-                translateError(env, "not a valid real constant\n");
-                return NULL;
-            } else {
-                return LLVMConstReal(type, value);
-            }
-        }
+        double value;
+        if (!translateDouble(env, expr->nth(2), value)) return NULL;
 
-        return NULL;
+        return LLVMConstReal(type, value);
+
     } else if (matchSpecialForm(env, expr, "dump-module", 0, 0)) {
 
         LLVMDumpModule(env->getModule());

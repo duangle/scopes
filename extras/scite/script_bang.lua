@@ -4,6 +4,276 @@ print("Bang Lexer 0.1")
 -- lua scripting intro is here http://www.scintilla.org/SciTELua.html
 -- API is here http://www.scintilla.org/PaneAPI.html
 
+local symbol_terminators = "()[]{}\"';#:,."
+local integer_terminators = "()[]{}\"';#:,"
+local real_terminators = "()[]{}\"';#:,."
+
+local token_eof = 0
+local token_open = '('
+local token_close = ')'
+local token_square_open = '['
+local token_square_close = ']'
+local token_curly_open = '{'
+local token_curly_close = '}'
+local token_string = '"'
+local token_sqstring = "'"
+local token_symbol = 'S'
+local token_escape = '\\'
+local token_statement = ';'
+local token_number = 'N'
+local token_comment = '#'
+
+function strchr(str, c)
+    return str:find(c, 1, true)
+end
+
+function isspace(c)
+    return strchr(" \t\n", c)
+end
+
+local chr = string.char
+function deref(ptr)
+    return chr(editor.CharAt[ptr])
+end
+
+function Lexer()
+    local start = 0
+    local eof = 0
+    local cursor = 0
+    local next_cursor = 0
+    local line = 0
+    local next_line = 0
+
+    local lineno = 0
+    local next_lineno = 0
+
+    local token = 0
+
+    local lexer = {}
+    function lexer.init (start_, eof_)
+        start = start_
+        eof = eof_
+
+        next_cursor = start
+        next_lineno = 1
+        next_line = start
+    end
+
+    function lexer.range()
+        return cursor, next_cursor - cursor
+    end
+
+    function lexer.string()
+        local s = editor:GetText()
+        return s:sub(cursor + 1,next_cursor)
+    end
+
+    local function readChar ()
+        local c = deref(next_cursor)
+        next_cursor = next_cursor + 1
+        return c
+    end
+
+    local function readSymbol ()
+        local escape = false
+        while (next_cursor ~= eof) do
+            local c = readChar()
+            if (escape) then
+                if (c == '\n') then
+                    next_lineno = next_lineno + 1
+                    next_line = next_cursor
+                end
+                -- ignore character
+                escape = false
+            elseif (c == '\\') then
+                -- escape
+                escape = true
+            elseif isspace(c) or strchr(symbol_terminators, c) then
+                next_cursor = next_cursor - 1
+                break
+            end
+        end
+    end
+
+    local function readDotSequence ()
+        while (next_cursor ~= eof) do
+            local c = readChar()
+            if (strchr(".:", c)) then
+                -- consume
+            else
+                next_cursor = next_cursor - 1
+                break
+            end
+        end
+    end
+
+    local function readSingleSymbol ()
+    end
+
+    local function readString (terminator)
+        local escape = false
+        while (next_cursor ~= eof) do
+            local c = readChar()
+            if (c == '\n') then
+                next_lineno = next_lineno + 1
+                next_line = next_cursor
+            end
+            if (escape) then
+                -- ignore character
+                escape = false
+            elseif (c == '\\') then
+                -- escape
+                escape = true
+            elseif (c == terminator) then
+                break
+            end
+        end
+    end
+
+    function skipCharSet(p, chars)
+        while (p < eof) do
+            local c = deref(p)
+            if not strchr(chars, c) then
+                return p
+            end
+            p = p + 1
+        end
+        return p
+    end
+
+    function skipNumber(p)
+        local np
+        if strchr("+-", deref(p)) then
+            p = p + 1
+        end
+        local numset = "0123456789"
+        if deref(p) == "0" and deref(p + 1) == "x" then
+            -- 0x hexadecimal
+            p = p + 2
+            numset = "0123456789abcdefABCDEF"
+        end
+        local digits = 0
+        np = skipCharSet(p, numset)
+        digits = digits + (np - p)
+        p = np
+        if deref(p) == "." then
+            p = p + 1
+            np = skipCharSet(p, numset)
+            digits = digits + (np - p)
+            p = np
+        end
+        if (digits == 0) then return end
+        if deref(p) == "e" then
+            p = p + 1
+            if strchr("+-", deref(p)) then
+                p = p + 1
+                np = skipCharSet(p, "0123456789")
+                if (p == np) then return end
+                digits = digits + (np - p)
+                return np
+            else
+                return
+            end
+        end
+        return p
+    end
+
+    function readNumber()
+        local p = skipNumber(cursor)
+        if (not p) then return end
+        local c = deref(p)
+        if ((p == cursor)
+            or (p >= eof)
+            or ((not isspace(c)) and (not strchr(real_terminators, c)))) then
+            return false
+        end
+        next_cursor = p
+        return true
+    end
+
+    function lexer.readToken ()
+        lineno = next_lineno
+        line = next_line
+        cursor = next_cursor
+        while (true) do
+            if (next_cursor == eof) then
+                token = token_eof
+                break
+            end
+            local c = readChar()
+            if (c == '\n') then
+                next_lineno = next_lineno + 1
+                next_line = next_cursor
+            end
+            if (isspace(c)) then
+                lineno = next_lineno
+                line = next_line
+                cursor = next_cursor
+            elseif (c == '#') then
+                token = token_comment
+                readString('\n')
+                break
+            elseif (c == '(') then
+                token = token_open
+                break
+            elseif (c == ')') then
+                token = token_close
+                break
+            elseif (c == '[') then
+                token = token_square_open
+                break
+            elseif (c == ']') then
+                token = token_square_close
+                break
+            elseif (c == '{') then
+                token = token_curly_open
+                break
+            elseif (c == '}') then
+                token = token_curly_close
+                break
+            elseif (c == '\\') then
+                token = token_escape
+                break
+            elseif (c == '"') then
+                token = token_string
+                readString(c)
+                break
+            elseif (c == '\'') then
+                token = token_sqstring
+                readString(c)
+                break
+            elseif (c == ';') then
+                token = token_statement
+                break
+            elseif (c == ',') then
+                token = token_symbol
+                readSingleSymbol()
+                break
+            elseif (c == ':') then
+                token = token_symbol
+                readDotSequence()
+                break
+            elseif readNumber() then
+                token = token_number
+                --print("<" .. lexer.string() .. ">")
+                break
+            elseif (c == '.') then
+                token = token_symbol
+                readDotSequence()
+                break
+            else
+                token = token_symbol
+                readSymbol()
+                break
+            end
+        end
+        return token
+    end
+
+    return lexer
+end
+
+
 function getprop(name)
     local prop = props[name]
     if (#prop == 0) then
@@ -27,14 +297,30 @@ keyword_str = getprop("keywords.bang") or
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
 
 operator_str = getprop("operators.bang") or
-    "+ - ++ -- * / % == != > >= < <= not and or = := @ ** ^ & | ~ ."
+    "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
+        .. "*= /= %= ^= &= |= ~="
 
 type_str = getprop("types.bang") or
     "i1 i8 i16 i32 i64 half float double"
 
+real_str = "inf +inf -inf nan +nan -nan"
+
 KEYWORDS = splitstr(keyword_str)
 OPERATORS = splitstr(operator_str)
 TYPES = splitstr(type_str)
+REALCONST = splitstr(real_str)
+
+function makeset(...)
+    local set = {}
+    for i=1,select("#",...) do
+        set[select(i,...)] = true
+    end
+    return set
+end
+
+local brace_tokens = makeset(token_open, token_close, token_square_open,
+    token_square_close, token_curly_open, token_curly_close, token_escape,
+    token_statement)
 
 function OnStyle(styler)
     S_DEFAULT = 32
@@ -50,87 +336,57 @@ function OnStyle(styler)
     S_SQ_STRING = 11
     S_BRACE = 12
     S_TYPE = 13
+    S_DOTSEQ = 14
     S_MATCH_OP_NO = 34
     S_MATCH_OP_YES = 35
-    WHITESPACE = " \t\n"
-    CONTROLCHARS = ".,:;"
-    END_IDENTIFIER = "()[]{}\"';#:,.\t\n "
-    BRACES = "([{}])"
-    INT_MATCH = "^-?%d+$"
-    FLOAT_MATCH1 = "^-?%d*[.]%d+$"
-    FLOAT_MATCH2 = "^-?%d+[.]%d*$"
 
-    styler:StartStyling(styler.startPos, styler.lengthDoc, styler.initStyle)
+    local incomplete_styles = makeset(S_STRING, S_SQ_STRING, S_LINECOMMENT)
 
-    while styler:More() do
-        if styler:State() == S_IDENTIFIER then
-            if styler:Match("\\") then
-                styler:Forward()
-            else
-                if END_IDENTIFIER:find(styler:Current(), 1, true) then
-                    identifier = styler:Token()
-                    if identifier:match(INT_MATCH) then
-                        if styler:Current() ~= "." then
-                            styler:ChangeState(S_NUMBER)
-                            styler:SetState(S_WHITESPACE)
-                        else
-                            -- keep going
-                        end
-                    else
-                        if KEYWORDS[identifier] then
-                            styler:ChangeState(S_KEYWORD)
-                        elseif OPERATORS[identifier] then
-                            styler:ChangeState(S_OPERATOR)
-                        elseif TYPES[identifier] then
-                            styler:ChangeState(S_TYPE)
-                        elseif identifier:match(FLOAT_MATCH1)
-                            or identifier:match(FLOAT_MATCH2) then
-                            styler:ChangeState(S_NUMBER)
-                        end
-                        styler:SetState(S_WHITESPACE)
-                    end
-                end
-            end
-        elseif styler:State() == S_OPERATOR then
-            styler:SetState(S_WHITESPACE)
-        elseif styler:State() == S_BRACE then
-            styler:SetState(S_WHITESPACE)
-        elseif styler:State() == S_LINECOMMENT then
-            if styler:Match("\n") then
-                styler:SetState(S_WHITESPACE)
-            end
-        elseif styler:State() == S_STRING then
-            if styler:Match("\\") then
-                styler:Forward()
-            elseif styler:Match("\"") then
-                styler:ForwardSetState(S_WHITESPACE)
-            end
-        elseif styler:State() == S_SQ_STRING then
-            if styler:Match("\\") then
-                styler:Forward()
-            elseif styler:Match("'") then
-                styler:ForwardSetState(S_WHITESPACE)
-            end
-        end
-        if styler:State() == S_WHITESPACE then
-            if WHITESPACE:find(styler:Current(), 1, true) then
-            elseif styler:Match("#") then
-                styler:SetState(S_LINECOMMENT)
-            elseif styler:Match("\"") then
-                styler:SetState(S_STRING)
-            elseif styler:Match("'") then
-                styler:SetState(S_SQ_STRING)
-            elseif BRACES:find(styler:Current(), 1, true) then
-                styler:SetState(S_BRACE)
-            elseif CONTROLCHARS:find(styler:Current(), 1, true) then
-                styler:SetState(S_WHITESPACE)
-            else
-                styler:SetState(S_IDENTIFIER)
-            end
-        end
-        styler:Forward()
+    local lexer = Lexer()
+    local lineno = editor:LineFromPosition(styler.startPos);
+    local lineStart = editor:PositionFromLine(lineno)
+    -- if string, backtrack to first line with different style
+    while (incomplete_styles[editor.StyleAt[lineStart]]
+            or incomplete_styles[editor.StyleAt[lineStart+1]]) and lineno >= 0 do
+        lineno = lineno - 1
+        lineStart = editor:PositionFromLine(lineno)
     end
-    styler:EndStyling()
+    local lineEnd = editor:PositionFromLine(
+        editor:LineFromPosition(styler.startPos + styler.lengthDoc) + 1)
+
+    lexer.init(lineStart, lineEnd, styler.initStyle)
+
+    while true do
+        local token = lexer.readToken()
+        if (token == token_eof) then break end
+        local offset,length = lexer.range()
+        editor:StartStyling(offset, 0)
+        if token == token_symbol then
+            local sym = lexer.string()
+            if (KEYWORDS[sym]) then
+                editor:SetStyling(length, S_KEYWORD)
+            elseif (OPERATORS[sym]) then
+                editor:SetStyling(length, S_OPERATOR)
+            elseif (TYPES[sym]) then
+                editor:SetStyling(length, S_TYPE)
+            elseif (REALCONST[sym]) then
+                editor:SetStyling(length, S_NUMBER)
+            else
+                editor:SetStyling(length, S_IDENTIFIER)
+            end
+        elseif token == token_comment then
+            editor:SetStyling(length, S_LINECOMMENT)
+        elseif token == token_number then
+            editor:SetStyling(length, S_NUMBER)
+        elseif token == token_string then
+            editor:SetStyling(length, S_STRING)
+        elseif token == token_sqstring then
+            editor:SetStyling(length, S_SQ_STRING)
+        elseif brace_tokens[token] then
+            editor:SetStyling(length, S_BRACE)
+        end
+        -- editor:SetStyling(lengthLine, style)
+    end
 end
 
 
