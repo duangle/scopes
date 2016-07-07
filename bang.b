@@ -39,6 +39,12 @@ define main ()
             quote Value
                 run
                     print "'\"" '"\''
+                    print "yo
+                    yo" "hey hey" "ho"
+                    print (
+                    ) a b c (
+                     ) d e f
+                        g h i
                     # compare
                     do
                         if cond1:

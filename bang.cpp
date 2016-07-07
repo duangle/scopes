@@ -1486,6 +1486,7 @@ struct Parser {
                     result->append(elem);
                 else
                     return nullptr;
+                lineno = lexer.next_lineno;
                 lexer.readToken();
             }
 
