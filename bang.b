@@ -1,11 +1,31 @@
 bang
 
-struct TestStruct packed i32 i8
+struct Environment
+struct Value
+defvalue dump-value
+    declare "bang_dump_value"
+        function void (* Value)
 
-declare somef
-    function TestStruct
-        array i64 5
-        vector i32 4
+deftype preprocessor-func
+    function (* Value) (* Environment) (* Value)
+
+defvalue set-preprocessor
+    declare "bang_set_preprocessor"
+        function void (* preprocessor-func)
+
+# all top level expressions go through this function
+define global-preprocessor (env value)
+    preprocessor-func
+    label ""
+        call dump-value value
+        ret value
+
+run
+    define "" ()
+        function void
+        label ""
+            call set-preprocessor global-preprocessor
+            ret;
 
 declare printf
     function i32 (* i8) ...
@@ -16,26 +36,10 @@ defvalue hello-world
             "Hello World!\n"
         * i8
 
-run
-    define "" ()
-        function void
-        label ""
-            call printf
-                bitcast
-                    global ""
-                        "running in compiler!\n"
-                    * i8
-            ret;
-
-struct Value
-defvalue dump-value
-    declare "bang_dump_value"
-        function void (* Value)
-
 define main ()
     function void
     label ""
-        call dump-value
+        /// call dump-value
             quote Value
                 run
                     print "'\"" '"\''
@@ -181,3 +185,4 @@ define main ()
 
 # dump-module
 run main
+

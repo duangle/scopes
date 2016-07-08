@@ -40,6 +40,7 @@ value expressions:
 (call value-expr [param-expr [...]])
 (phi type-expr [(value-expr block-expr) [...]])
 (run function-expr)
+(nop)
 */
 
 //------------------------------------------------------------------------------
@@ -53,14 +54,23 @@ extern "C" {
 #ifdef BANG_CPP_IMPL
 namespace bang {
 struct Value;
+struct Environment;
 } // namespace bang
 typedef bang::Value Value;
+typedef bang::Environment Environment;
 #else
+typedef struct _Environment Environment;
 typedef struct _Value Value;
 #endif
 
-void bang_dump_value(Value *expr);
+typedef Value *ValueRef;
+
+void bang_dump_value(ValueRef expr);
 int bang_main(int argc, char ** argv);
+
+typedef ValueRef (*bang_preprocessor)(Environment *, ValueRef );
+void bang_set_preprocessor(bang_preprocessor f);
+bang_preprocessor bang_get_preprocessor();
 
 #if defined __cplusplus
 }
@@ -123,7 +133,7 @@ namespace bang {
 //------------------------------------------------------------------------------
 
 template<typename ... Args>
-std::string string_format( const std::string& format, Args ... args ) {
+std::string format( const std::string& format, Args ... args ) {
     size_t size = snprintf( nullptr, 0, format.c_str(), args ... );
     std::string str;
     str.resize(size);
@@ -173,6 +183,84 @@ static size_t inplace_unescape(char *buf) {
     // terminate
     *dst = 0;
     return dst - buf;
+}
+
+//------------------------------------------------------------------------------
+// FILE I/O
+//------------------------------------------------------------------------------
+
+struct MappedFile {
+protected:
+    int fd;
+    off_t length;
+    void *ptr;
+
+    MappedFile() :
+        fd(-1),
+        length(0),
+        ptr(NULL)
+        {}
+
+public:
+    ~MappedFile() {
+        if (ptr)
+            munmap(ptr, length);
+        if (fd >= 0)
+            close(fd);
+    }
+
+    const char *strptr() const {
+        return (const char *)ptr;
+    }
+
+    size_t size() const {
+        return length;
+    }
+
+    static std::unique_ptr<MappedFile> open(const char *path) {
+        std::unique_ptr<MappedFile> file(new MappedFile());
+        file->fd = ::open(path, O_RDONLY);
+        if (file->fd < 0)
+            return nullptr;
+        file->length = lseek(file->fd, 0, SEEK_END);
+        file->ptr = mmap(NULL, file->length, PROT_READ, MAP_PRIVATE, file->fd, 0);
+        if (file->ptr == MAP_FAILED) {
+            return nullptr;
+        }
+        return file;
+    }
+
+    void dumpLine(size_t offset) {
+        if (offset >= (size_t)length) {
+            return;
+        }
+        const char *str = strptr();
+        size_t start = offset;
+        size_t end = offset;
+        while (start > 0) {
+            if (str[start-1] == '\n')
+                break;
+            start--;
+        }
+        while (end < (size_t)length) {
+            if (str[end] == '\n')
+                break;
+            end++;
+        }
+        printf("%.*s\n", (int)(end - start), str + start);
+        size_t column = offset - start;
+        for (size_t i = 0; i < column; ++i) {
+            putchar(' ');
+        }
+        printf("^\n");
+    }
+};
+
+static void dumpFileLine(const char *path, int offset) {
+    auto file = MappedFile::open(path);
+    if (file) {
+        file->dumpLine((size_t)offset);
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -276,7 +364,7 @@ public:
     }
 
     static Type createInt(unsigned bits) {
-        Type type = create(string_format("int%i", bits),
+        Type type = create(format("int%i", bits),
             LLVMIntTypeInContext(LLVMGetGlobalContext(), bits))
             .inherit(Integer);
         _bitwidth_map[type] = bits;
@@ -284,7 +372,7 @@ public:
     }
 
     static Type createUInt(unsigned bits) {
-        Type type = create(string_format("uint%i", bits),
+        Type type = create(format("uint%i", bits),
             LLVMIntTypeInContext(LLVMGetGlobalContext(), bits))
             .inherit(Integer)
             .inherit(Unsigned);
@@ -427,7 +515,7 @@ public:
         } else {
             std::string result = _pretty_name_map[*this];
             if (!result.size())
-                return string_format("<unnamed:" PRIu64 ">", id);
+                return format("<unnamed:" PRIu64 ">", id);
             return result;
         }
     }
@@ -545,7 +633,7 @@ Type Type::_pointer(Type type) {
     assert(type.getLLVMType());
     // cannot reference void
     assert(type != Type::Void);
-    Type ptr = Type::create(string_format("(pointer %s)",
+    Type ptr = Type::create(format("(pointer %s)",
         type.getString().c_str()),
         LLVMPointerType(type.getLLVMType(), 0) );
     ptr.inherit(Type::Pointer);
@@ -560,7 +648,7 @@ Type Type::_array(Type type, size_t size) {
     assert(type.getLLVMType());
     assert(type != Type::Void);
     assert(size >= 1);
-    Type arraytype = Type::create(string_format("(array-type %s %zu)",
+    Type arraytype = Type::create(format("(array-type %s %zu)",
         type.getString().c_str(), size),
         LLVMArrayType(type.getLLVMType(), size) );
     arraytype.inherit(Type::Array);
@@ -576,7 +664,7 @@ Type Type::_vector(Type type, size_t size) {
     assert(type.getLLVMType());
     assert(type != Type::Void);
     assert(size >= 1);
-    Type vectortype = Type::create(string_format("(vector-type %s %zu)",
+    Type vectortype = Type::create(format("(vector-type %s %zu)",
         type.getString().c_str(), size),
         LLVMVectorType(type.getLLVMType(), size) );
     vectortype.inherit(Type::Vector);
@@ -630,11 +718,34 @@ enum ValueKind {
     V_Real
 };
 
+static const char *valueKindName(int kind) {
+    switch(kind) {
+    case V_None: return "?";
+    case V_List: return "list";
+    case V_String: return "string";
+    case V_Symbol: return "symbol";
+    case V_Integer: return "integer";
+    case V_Real: return "real";
+    default: return "<corrupted>";
+    }
+}
+
 struct Anchor {
     const char *path;
     int lineno;
     int column;
     int offset;
+
+    Anchor() {
+        path = NULL;
+        lineno = 0;
+        column = 0;
+        offset = 0;
+    }
+
+    bool isValid() const {
+        return (path != NULL) && (lineno != 0) && (column != 0);
+    }
 
     bool operator ==(const Anchor &other) const {
         return
@@ -643,19 +754,36 @@ struct Anchor {
                 && column == other.column
                 && offset == other.offset;
     }
+
+    void printMessage (const std::string &msg) const {
+        printf("%s:%i:%i: %s\n", path, lineno, column, msg.c_str());
+        dumpFileLine(path, offset);
+    }
+
 };
 
-struct Value :
-    std::enable_shared_from_this<Value>
-{
+struct Value;
+static void printValue(ValueRef e, size_t depth=0, bool naked=true);
+
+struct Value {
 private:
     const ValueKind kind;
 protected:
     Value(ValueKind kind_) :
-        kind(kind_) {}
+        kind(kind_),
+        delete_guard(false) {}
 
 public:
     Anchor anchor;
+    bool delete_guard;
+
+    virtual ~Value() {
+        if (delete_guard) {
+            printf("delete_guard triggered:\n");
+            printValue(this, 0, false);
+        }
+        assert(!delete_guard);
+    }
 
     ValueKind getKind() const {
         return kind;
@@ -666,12 +794,7 @@ public:
 
     std::string getHeader() const;
 
-    std::shared_ptr<Value> managed() {
-        return shared_from_this();
-    }
 };
-
-typedef std::shared_ptr<Value> ValueRef;
 
 //------------------------------------------------------------------------------
 
@@ -688,11 +811,10 @@ struct List : Value {
         style(0)
         {}
 
-    Value *append(ValueRef expr) {
+    ValueRef append(ValueRef expr) {
         assert(expr);
-        Value *ptr = expr.get();
-        values.push_back(std::move(expr));
-        return ptr;
+        values.push_back(expr);
+        return expr;
     }
 
     ValueRef remove(size_t i) {
@@ -713,22 +835,22 @@ struct List : Value {
         return values[i];
     }
 
-    const Value *nth(int i) const {
+    ValueRef nth(int i) const {
         if (i < 0)
             i = (int)values.size() + i;
         if ((i < 0) || ((size_t)i >= values.size()))
             return NULL;
         else
-            return values[i].get();
+            return values[i];
     }
 
-    Value *nth(int i) {
+    ValueRef nth(int i) {
         if (i < 0)
             i = (int)values.size() + i;
         if ((i < 0) || ((size_t)i >= values.size()))
             return NULL;
         else
-            return values[i].get();
+            return values[i];
     }
 
     static bool classof(const Value *expr) {
@@ -871,7 +993,7 @@ bool Value::isListComment() const {
     if (auto list = llvm::dyn_cast<List>(this)) {
         if (list->size() > 0) {
             if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
-                if (head->getValue().substr(0, 3) == "###")
+                if (head->getValue().substr(0, 3) == "///")
                     return true;
             }
         }
@@ -896,18 +1018,18 @@ std::string Value::getHeader() const {
 
 //------------------------------------------------------------------------------
 
-std::shared_ptr<Value> strip(std::shared_ptr<Value> expr) {
+ValueRef strip(ValueRef expr) {
     assert(expr);
     if (expr->isComment()) {
         return nullptr;
     } else if (expr->getKind() == V_List) {
-        auto list = std::static_pointer_cast<List>(expr);
-        auto result = std::make_shared<List>();
+        auto list = llvm::cast<List>(expr);
+        auto result = new List();
         bool changed = false;
         for (size_t i = 0; i < list->size(); ++i) {
             auto oldelem = list->getElement(i);
             auto newelem = strip(oldelem);
-            if (oldelem.get() != newelem.get())
+            if (oldelem != newelem)
                 changed = true;
             if (newelem)
                 result->append(newelem);
@@ -918,84 +1040,6 @@ std::shared_ptr<Value> strip(std::shared_ptr<Value> expr) {
         }
     }
     return expr;
-}
-
-//------------------------------------------------------------------------------
-// FILE I/O
-//------------------------------------------------------------------------------
-
-struct MappedFile {
-protected:
-    int fd;
-    off_t length;
-    void *ptr;
-
-    MappedFile() :
-        fd(-1),
-        length(0),
-        ptr(NULL)
-        {}
-
-public:
-    ~MappedFile() {
-        if (ptr)
-            munmap(ptr, length);
-        if (fd >= 0)
-            close(fd);
-    }
-
-    const char *strptr() const {
-        return (const char *)ptr;
-    }
-
-    size_t size() const {
-        return length;
-    }
-
-    static std::unique_ptr<MappedFile> open(const char *path) {
-        std::unique_ptr<MappedFile> file(new MappedFile());
-        file->fd = ::open(path, O_RDONLY);
-        if (file->fd < 0)
-            return nullptr;
-        file->length = lseek(file->fd, 0, SEEK_END);
-        file->ptr = mmap(NULL, file->length, PROT_READ, MAP_PRIVATE, file->fd, 0);
-        if (file->ptr == MAP_FAILED) {
-            return nullptr;
-        }
-        return file;
-    }
-
-    void dumpLine(size_t offset) {
-        if (offset >= (size_t)length) {
-            return;
-        }
-        const char *str = strptr();
-        size_t start = offset;
-        size_t end = offset;
-        while (start > 0) {
-            if (str[start-1] == '\n')
-                break;
-            start--;
-        }
-        while (end < (size_t)length) {
-            if (str[end] == '\n')
-                break;
-            end++;
-        }
-        printf("%.*s\n", (int)(end - start), str + start);
-        size_t column = offset - start;
-        for (size_t i = 0; i < column; ++i) {
-            putchar(' ');
-        }
-        printf("^\n");
-    }
-};
-
-static void dumpFileLine(const char *path, int offset) {
-    auto file = MappedFile::open(path);
-    if (file) {
-        file->dumpLine((size_t)offset);
-    }
 }
 
 //------------------------------------------------------------------------------
@@ -1292,27 +1336,27 @@ struct Lexer {
     }
 
     ValueRef getAsString() {
-        auto result = std::make_shared<String>(string + 1, string_len - 2);
+        auto result = new String(string + 1, string_len - 2);
         initAnchor(result->anchor);
         result->unescape();
         return result;
     }
 
     ValueRef getAsSymbol() {
-        auto result = std::make_shared<Symbol>(string, string_len);
+        auto result = new Symbol(string, string_len);
         initAnchor(result->anchor);
         result->unescape();
         return result;
     }
 
     ValueRef getAsInteger() {
-        auto result = std::make_shared<Integer>(integer, is_unsigned);
+        auto result = new Integer(integer, is_unsigned);
         initAnchor(result->anchor);
         return result;
     }
 
     ValueRef getAsReal() {
-        auto result = std::make_shared<Real>(real);
+        auto result = new Real(real);
         initAnchor(result->anchor);
         return result;
     }
@@ -1350,13 +1394,13 @@ struct Parser {
     }
 
     bool splitList(
-        std::shared_ptr<List> &result, int list_split_start, char style = 0) {
+        List *result, int list_split_start, char style = 0) {
         int count = (int)result->size();
         if (list_split_start == count) {
             error("empty expression\n");
             return false;
         } else {
-            auto wrapped_result = std::make_shared<List>();
+            auto wrapped_result = new List();
             wrapped_result->style = style;
             wrapped_result->anchor =
                 result->getElement(list_split_start)->anchor;
@@ -1372,7 +1416,7 @@ struct Parser {
     }
 
     ValueRef parseList(int end_token) {
-        auto result = std::make_shared<List>();
+        auto result = new List();
         result->style = lexer.token;
         lexer.initAnchor(result->anchor);
         int statement_start = 0;
@@ -1432,7 +1476,7 @@ struct Parser {
         bool escape = false;
         int subcolumn = 0;
 
-        auto result = std::make_shared<List>();
+        auto result = new List();
         lexer.initAnchor(result->anchor);
 
         int statement_start = 0;
@@ -1560,9 +1604,9 @@ struct Parser {
 
 //------------------------------------------------------------------------------
 
-static bool isNested(const Value *e) {
+static bool isNested(ValueRef e) {
     if (e->getKind() == V_List) {
-        const List *l = llvm::cast<List>(e);
+        List *l = llvm::cast<List>(e);
         for (size_t i = 0; i < l->size(); ++i) {
             if (l->nth(i)->getKind() == V_List)
                 return true;
@@ -1571,7 +1615,7 @@ static bool isNested(const Value *e) {
     return false;
 }
 
-static void printAnchor(const Value *e, size_t depth=0) {
+static void printAnchor(ValueRef e, size_t depth=0) {
     printf("%s:%i:%i: ",
         e->anchor.path,
         e->anchor.lineno,
@@ -1579,9 +1623,13 @@ static void printAnchor(const Value *e, size_t depth=0) {
     for(size_t i = 0; i < depth; i++) printf("    ");
 }
 
-static void printValue(const Value *e, size_t depth=0, bool naked=true)
+static void printValue(ValueRef e, size_t depth, bool naked)
 {
-	if (!e) return;
+	if (!e) {
+        printf("#null#");
+        if (naked) putchar('\n');
+        return;
+    }
 
     if (naked) {
         printAnchor(e, depth);
@@ -1589,13 +1637,13 @@ static void printValue(const Value *e, size_t depth=0, bool naked=true)
 
 	switch(e->getKind()) {
 	case V_List: {
-        const List *l = llvm::cast<List>(e);
+        List *l = llvm::cast<List>(e);
         if (naked && !l->style) {
             if (l->size() == 0) {
                 printf("()\n");
             } else {
                 size_t offset = 0;
-                const Value *e0 = l->nth(0);
+                ValueRef e0 = l->nth(0);
                 if (e0->getKind() == V_List) {
                     printf(";\n");
                     goto print_sparse;
@@ -1700,46 +1748,9 @@ static void printValue(const Value *e, size_t depth=0, bool naked=true)
             putchar('\n');
     } return;
     default:
+        printf("invalid kind: %i\n", e->getKind());
         assert (false); break;
 	}
-}
-
-//------------------------------------------------------------------------------
-// MACRO EXPANSION
-//------------------------------------------------------------------------------
-
-typedef Value *(*Expander)(const Value *);
-
-struct Scope {
-    // temporary references to values in the lang
-    // to keep objects from being deleted
-    std::vector< ValueRef > refs;
-    Expander expander;
-
-    ValueRef manage(ValueRef expr) {
-        refs.push_back(expr);
-        return expr;
-    }
-
-    ValueRef expand(ValueRef expr) {
-        if (expander) {
-        }
-        return expr;
-    }
-
-    Scope() :
-        expander(NULL)
-        {}
-
-    static thread_local Scope *scope;
-};
-
-thread_local Scope *Scope::scope;
-
-ValueRef expand(ValueRef expr) {
-    Scope scope;
-    Scope::scope = &scope;
-    return scope.expand(expr);
 }
 
 //------------------------------------------------------------------------------
@@ -1784,8 +1795,6 @@ struct TranslationGlobals {
 
 //------------------------------------------------------------------------------
 
-typedef Value *(*Preprocessor)(Environment *, const Value *);
-
 struct Environment {
     TranslationGlobals *globals;
     // currently active function
@@ -1793,21 +1802,21 @@ struct Environment {
     // currently active block
     LLVMValueRef block;
     // currently evaluated value
-    const Value *expr;
+    ValueRef expr;
 
     NameLLVMValueMap values;
     NameLLVMTypeMap types;
 
     // parent env
     Environment *parent;
-    // value handling hook
-    Preprocessor preproc;
+
+    static bang_preprocessor preprocessor;
 
     struct WithValue {
-        const Value *prevexpr;
+        ValueRef prevexpr;
         Environment *env;
 
-        WithValue(Environment *env_, const Value *expr_) :
+        WithValue(Environment *env_, ValueRef expr_) :
             prevexpr(env_->expr),
             env(env_) {
             if (expr_)
@@ -1823,8 +1832,7 @@ struct Environment {
         function(NULL),
         block(NULL),
         expr(NULL),
-        parent(NULL),
-        preproc(NULL)
+        parent(NULL)
         {}
 
     Environment(Environment *parent_) :
@@ -1832,11 +1840,10 @@ struct Environment {
         function(parent_->function),
         block(parent_->block),
         expr(parent_->expr),
-        parent(parent_),
-        preproc(parent_->preproc)
+        parent(parent_)
         {}
 
-    WithValue with_expr(const Value *expr) {
+    WithValue with_expr(ValueRef expr) {
         return WithValue(this, expr);
     }
 
@@ -1856,11 +1863,13 @@ struct Environment {
         return globals->module;
     }
 
-    void addQuote(LLVMValueRef value, const Value *expr) {
+    void addQuote(LLVMValueRef value, ValueRef expr) {
         globals->globalptrs[value] = (void *)expr;
     }
 
 };
+
+bang_preprocessor Environment::preprocessor = NULL;
 
 //------------------------------------------------------------------------------
 // CLANG SERVICES
@@ -2282,21 +2291,9 @@ static LLVMModuleRef importCModule (Environment *env,
 
 //static void setupRootEnvironment (Environment *env, const char *modulename);
 //static void teardownRootEnvironment (Environment *env);
-//static void compileModule (Environment *env, const Value *expr, int offset);
+//static void compileModule (Environment *env, ValueRef expr, int offset);
 
 //------------------------------------------------------------------------------
-
-static const char *valueKindName(int kind) {
-    switch(kind) {
-    case V_None: return "?";
-    case V_List: return "list";
-    case V_String: return "string";
-    case V_Symbol: return "symbol";
-    case V_Integer: return "integer";
-    case V_Real: return "real";
-    default: return "<corrupted>";
-    }
-}
 
 static void translateError (Environment *env, const char *format, ...) {
     ++env->globals->compile_errors;
@@ -2316,15 +2313,7 @@ static void translateError (Environment *env, const char *format, ...) {
     }
 }
 
-static bool isSymbol (const Value *expr, const char *sym) {
-    if (expr) {
-        if (auto symexpr = llvm::dyn_cast<Symbol>(expr))
-            return (symexpr->getValue() == sym);
-    }
-    return false;
-}
-
-static bool verifyParameterCount (Environment *env, const List *expr, int mincount, int maxcount) {
+static bool verifyParameterCount (Environment *env, List *expr, int mincount, int maxcount) {
     if (expr) {
         auto _ = env->with_expr(expr);
         int argcount = (int)expr->size() - 1;
@@ -2341,17 +2330,25 @@ static bool verifyParameterCount (Environment *env, const List *expr, int mincou
     return false;
 }
 
-static bool matchSpecialForm (Environment *env, const List *expr, const char *name, int mincount, int maxcount) {
+static bool isSymbol (const Value *expr, const char *sym) {
+    if (expr) {
+        if (auto symexpr = llvm::dyn_cast<Symbol>(expr))
+            return (symexpr->getValue() == sym);
+    }
+    return false;
+}
+
+static bool matchSpecialForm (Environment *env, List *expr, const char *name, int mincount, int maxcount) {
     return isSymbol(expr->nth(0), name) && verifyParameterCount(env, expr, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
 
 template<typename T>
-static const T *translateKind(Environment *env, const Value *expr) {
+static T *translateKind(Environment *env, ValueRef expr) {
     if (expr) {
         auto _ = env->with_expr(expr);
-        const T *co = llvm::dyn_cast<T>(expr);
+        T *co = llvm::dyn_cast<T>(expr);
         if (co) {
             return co;
         } else {
@@ -2363,7 +2360,7 @@ static const T *translateKind(Environment *env, const Value *expr) {
     return nullptr;
 }
 
-static bool translateInt64 (Environment *env, const Value *expr, int64_t &value) {
+static bool translateInt64 (Environment *env, ValueRef expr, int64_t &value) {
     if (expr) {
         if (auto i = translateKind<Integer>(env, expr)) {
             value = i->getValue();
@@ -2373,7 +2370,7 @@ static bool translateInt64 (Environment *env, const Value *expr, int64_t &value)
     return false;
 }
 
-static bool translateDouble (Environment *env, const Value *expr, double &value) {
+static bool translateDouble (Environment *env, ValueRef expr, double &value) {
     if (expr) {
         if (auto i = translateKind<Real>(env, expr)) {
             value = i->getValue();
@@ -2383,7 +2380,7 @@ static bool translateDouble (Environment *env, const Value *expr, double &value)
     return false;
 }
 
-static const char *translateString (Environment *env, const Value *expr) {
+static const char *translateString (Environment *env, ValueRef expr) {
     if (expr) {
         if (auto str = translateKind<String>(env, expr))
             return str->c_str();
@@ -2391,10 +2388,10 @@ static const char *translateString (Environment *env, const Value *expr) {
     return nullptr;
 }
 
-static LLVMTypeRef translateType (Environment *env, const Value *expr);
-static LLVMValueRef translateValue (Environment *env, const Value *expr);
+static LLVMTypeRef translateType (Environment *env, ValueRef expr);
+static LLVMValueRef translateValue (Environment *env, ValueRef expr);
 
-static bool translateValueList (Environment *env, const List *expr, int offset) {
+static bool translateValueList (Environment *env, List *expr, int offset) {
     int argcount = (int)expr->size() - offset;
     for (int i = 0; i < argcount; ++i) {
         translateValue(env, expr->nth(i + offset));
@@ -2451,7 +2448,7 @@ static LLVMTypeRef resolveType(Environment *env, const std::string &name) {
     return NULL;
 }
 
-static LLVMValueRef translateValueFromList (Environment *env, const List *expr) {
+static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
     if (expr->size() == 0) {
         translateError(env, "value expected\n");
         return NULL;
@@ -2465,7 +2462,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     }
     if (matchSpecialForm(env, expr, "int", 2, 2)) {
 
-        const Value *expr_type = expr->nth(1);
+        ValueRef expr_type = expr->nth(1);
 
         LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
@@ -2477,7 +2474,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
     } else if (matchSpecialForm(env, expr, "real", 2, 2)) {
 
-        const Value *expr_type = expr->nth(1);
+        ValueRef expr_type = expr->nth(1);
 
         LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
@@ -2495,7 +2492,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
     } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
-        const Value *expr_arg = expr->nth(1);
+        ValueRef expr_arg = expr->nth(1);
 
         LLVMValueRef value = translateValue(env, expr_arg);
         if (value) {
@@ -2509,7 +2506,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
 
-        const Value *expr_value = expr->nth(2);
+        ValueRef expr_value = expr->nth(2);
 
         auto _ = env->with_expr(expr_value);
 
@@ -2574,7 +2571,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
     } else if (matchSpecialForm(env, expr, "getelementptr", 1, -1)) {
 
-        const Value *expr_array = expr->nth(1);
+        ValueRef expr_array = expr->nth(1);
         LLVMValueRef ptr = translateValue(env, expr_array);
         if (!ptr) return NULL;
 
@@ -2647,7 +2644,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     } else if (matchSpecialForm(env, expr, "defvalue", 2, 2)) {
 
         const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
-        const Value *expr_value = expr->nth(2);
+        ValueRef expr_value = expr->nth(2);
         LLVMValueRef result = translateValue(env, expr_value);
         if (!result) return NULL;
 
@@ -2658,7 +2655,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     } else if (matchSpecialForm(env, expr, "deftype", 2, 2)) {
 
         const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
-        const Value *expr_value = expr->nth(2);
+        ValueRef expr_value = expr->nth(2);
         LLVMTypeRef result = translateType(env, expr_value);
         if (!result) return NULL;
 
@@ -2675,7 +2672,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         if (!verifyInFunction(env)) return NULL;
 
-        const Value *expr_name = expr->nth(1);
+        ValueRef expr_name = expr->nth(1);
 
         const char *name = translateString(env, expr_name);
         if (!name) return NULL;
@@ -2737,11 +2734,11 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
-        const List *expr_params = translateKind<List>(env, expr->nth(2));
+        List *expr_params = translateKind<List>(env, expr->nth(2));
         if (!expr_params)
             return NULL;
-        const Value *expr_type = expr->nth(3);
-        const Value *body_expr = expr->nth(4);
+        ValueRef expr_type = expr->nth(3);
+        ValueRef body_expr = expr->nth(4);
 
         LLVMTypeRef functype = translateType(env, expr_type);
 
@@ -2805,7 +2802,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         LLVMValueRef values[branchcount];
         LLVMBasicBlockRef blocks[branchcount];
         for (int i = 0; i < branchcount; ++i) {
-            const List *expr_pair = translateKind<List>(env, expr->nth(2 + i));
+            List *expr_pair = translateKind<List>(env, expr->nth(2 + i));
             auto _ = env->with_expr(expr_pair);
             if (!expr_pair)
                 return NULL;
@@ -2852,7 +2849,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         if (!verifyInBlock(env)) return NULL;
 
-        const Value *expr_value = expr->nth(1);
+        ValueRef expr_value = expr->nth(1);
         if (!expr_value) {
             LLVMBuildRetVoid(env->getBuilder());
         } else {
@@ -2866,7 +2863,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
-        const Value *expr_type = expr->nth(2);
+        ValueRef expr_type = expr->nth(2);
 
         LLVMTypeRef functype = translateType(env, expr_type);
 
@@ -2889,7 +2886,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
 
         int argcount = (int)expr->size() - 2;
 
-        const Value *expr_func = expr->nth(1);
+        ValueRef expr_func = expr->nth(1);
         LLVMValueRef callee = translateValue(env, expr_func);
         if (!callee) return NULL;
 
@@ -2900,6 +2897,11 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
         }
 
         return LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
+
+    } else if (matchSpecialForm(env, expr, "nop", 0, 0)) {
+
+        // do nothing
+        return NULL;
 
     } else if (matchSpecialForm(env, expr, "run", 1, 1)) {
 
@@ -2959,7 +2961,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
         const char *modulename = translateString(env, expr->nth(1));
         const char *name = translateString(env, expr->nth(2));
-        const List *args_expr = translateKind<List>(env, expr->nth(3));
+        List *args_expr = translateKind<List>(env, expr->nth(3));
 
         if (modulename && name && args_expr) {
             int argcount = (int)args_expr->size();
@@ -2986,7 +2988,7 @@ static LLVMValueRef translateValueFromList (Environment *env, const List *expr) 
     }
 }
 
-static LLVMValueRef translateValue (Environment *env, const Value *expr) {
+static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     if (env->hasErrors()) return NULL;
     assert(expr);
     auto _ = env->with_expr(expr);
@@ -3014,7 +3016,7 @@ static LLVMValueRef translateValue (Environment *env, const Value *expr) {
     }
 }
 
-static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
+static LLVMTypeRef translateTypeFromList (Environment *env, List *expr) {
     if (expr->size() == 0) {
         translateError(env, "type expected\n");
         return NULL;
@@ -3028,7 +3030,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
     }
     if (matchSpecialForm(env, expr, "function", 1, -1)) {
 
-        const Value *tail = expr->nth(-1);
+        ValueRef tail = expr->nth(-1);
         bool vararg = false;
         int argcount = (int)expr->size() - 2;
         if (isSymbol(tail, "...")) {
@@ -3055,7 +3057,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
         return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
     } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
-        const Value *expr_arg = expr->nth(1);
+        ValueRef expr_arg = expr->nth(1);
 
         LLVMTypeRef type = translateType(env, expr_arg);
         if (type) {
@@ -3129,7 +3131,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, const List *expr) {
     }
 }
 
-static LLVMTypeRef translateType (Environment *env, const Value *expr) {
+static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     if (env->hasErrors()) return NULL;
     assert(expr);
     auto _ = env->with_expr(expr);
@@ -3175,82 +3177,6 @@ static void exportGlobal (Environment *env, const char *name, Type type, void *v
     env->names[name] = TypedValue(Type::pointer(type), gvalue);
 }
 */
-
-//------------------------------------------------------------------------------
-
-namespace api {
-
-/*
-void setPreprocessor(Environment *env, Preprocessor preproc) {
-    assert(env);
-    env->preproc = preproc;
-}
-
-Preprocessor getPreprocessor(Environment *env) {
-    assert(env);
-    return env->preproc;
-}
-
-Value *newList(Environment *env) {
-    assert(env);
-    return env->manage(std::make_shared<List>()).get();
-}
-
-Value *append(Environment *env, Value *expr, Value *element) {
-    assert(env);
-    assert(expr);
-    assert(expr->getKind() == V_List);
-    assert(element);
-    auto list = std::static_pointer_cast<List>(expr->managed());
-    list->append(element->managed());
-    return expr;
-}
-
-Value *newSymbol(Environment *env, const char *value) {
-    assert(env);
-    assert(value);
-    return env->manage(std::make_shared<Symbol>(value, strlen(value))).get();
-}
-
-Value *newZString(Environment *env, const char *value) {
-    assert(env);
-    assert(value);
-    return env->manage(std::make_shared<Symbol>(value, strlen(value))).get();
-}
-
-Value *newString(Environment *env, const char *value, uint64_t len) {
-    assert(env);
-    assert(value);
-    return env->manage(std::make_shared<String>(value, (size_t)len)).get();
-}
-
-void copyAnchor(Environment *env, Value *from_expr, Value *to_expr) {
-    assert(env);
-    assert(from_expr);
-    assert(to_expr);
-    to_expr->anchor = from_expr->anchor;
-}
-
-bool isList(Environment *env, Value *expr) {
-    assert(env);
-    assert(expr);
-    return expr->getKind() == V_List;
-}
-
-bool isSymbol(Environment *env, Value *expr) {
-    assert(env);
-    assert(expr);
-    return expr->getKind() == V_Symbol;
-}
-
-bool isString(Environment *env, Value *expr) {
-    assert(env);
-    assert(expr);
-    return expr->getKind() == V_String;
-}
-
-*/
-} // namespace api
 
 //------------------------------------------------------------------------------
 
@@ -3328,14 +3254,28 @@ static void teardownRootEnvironment (Environment *env) {
     LLVMDisposeBuilder(env->getBuilder());
 }
 
-static void compileModule (Environment *env, const Value *expr, int offset) {
+static bool translateRootValueList (Environment *env, List *expr, int offset) {
+    int argcount = (int)expr->size() - offset;
+    for (int i = 0; i < argcount; ++i) {
+        Value *stmt = expr->nth(i + offset);
+        if (Environment::preprocessor) {
+            stmt = Environment::preprocessor(env, stmt);
+        }
+        translateValue(env, stmt);
+        if (env->hasErrors())
+            return false;
+    }
+    return true;
+}
+
+static void compileModule (Environment *env, ValueRef expr, int offset) {
     assert(expr);
     assert(env->getBuilder());
     assert(env->getModule());
 
     auto _ = env->with_expr(expr);
     if (auto list = llvm::dyn_cast<List>(expr)) {
-        translateValueList (env, list, offset);
+        translateRootValueList (env, list, offset);
     } else {
         translateError(env, "unexpected %s\n",
             valueKindName(expr->getKind()));
@@ -3349,8 +3289,7 @@ static void compileMain (ValueRef expr) {
     env.globals = &globals;
 
     {
-        auto _ = env.with_expr(expr.get());
-
+        auto _ = env.with_expr(expr);
         std::string header = expr->getHeader();
         if (header != "bang") {
             translateError(&env, "unrecognized header: '%s'; try 'bang' instead.\n", header.c_str());
@@ -3360,7 +3299,7 @@ static void compileMain (ValueRef expr) {
 
     setupRootEnvironment(&env, "main");
 
-    compileModule(&env, expr.get(), 1);
+    compileModule(&env, expr, 1);
 
     teardownRootEnvironment(&env);
 }
@@ -3370,7 +3309,7 @@ static void compileMain (ValueRef expr) {
 // C API
 //------------------------------------------------------------------------------
 
-void bang_dump_value(Value *expr) {
+void bang_dump_value(ValueRef expr) {
     return bang::printValue(expr);
 }
 
@@ -3383,7 +3322,6 @@ int bang_main(int argc, char ** argv) {
         bang::Parser parser;
         auto expr = parser.parseFile(argv[1]);
         if (expr) {
-            expr = bang::expand(expr);
             bang::compileMain(expr);
         } else {
             result = 1;
@@ -3391,6 +3329,14 @@ int bang_main(int argc, char ** argv) {
     }
 
     return result;
+}
+
+void bang_set_preprocessor(bang_preprocessor f) {
+    Environment::preprocessor = f;
+}
+
+bang_preprocessor bang_get_preprocessor() {
+    return Environment::preprocessor;
 }
 
 //------------------------------------------------------------------------------

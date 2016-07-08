@@ -4,6 +4,43 @@ print("Bang Lexer 0.1")
 -- lua scripting intro is here http://www.scintilla.org/SciTELua.html
 -- API is here http://www.scintilla.org/PaneAPI.html
 
+function getprop(name)
+    local prop = props[name]
+    if (#prop == 0) then
+        return
+    end
+    return prop
+end
+
+function splitstr(str)
+    local result = {}
+    for s in string.gmatch(str, "%S+") do
+      result[s] = true
+    end
+    return result
+end
+
+keyword_str = getprop("keywords.bang") or
+    "bang import-c dump-module function"
+        .. " call int real defvalue deftype label phi br ret cond-br bitcast"
+        .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
+        .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
+        .. " compiler-do"
+
+operator_str = getprop("operators.bang") or
+    "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
+        .. "*= /= %= ^= &= |= ~="
+
+type_str = getprop("types.bang") or
+    "i1 i8 i16 i32 i64 half float double"
+
+real_str = "inf +inf -inf nan +nan -nan"
+
+KEYWORDS = splitstr(keyword_str)
+OPERATORS = splitstr(operator_str)
+TYPES = splitstr(type_str)
+REALCONST = splitstr(real_str)
+
 local symbol_terminators = "()[]{}\"';#:,."
 local integer_terminators = "()[]{}\"';#:,"
 local real_terminators = "()[]{}\"';#:,."
@@ -273,42 +310,6 @@ function Lexer()
     return lexer
 end
 
-
-function getprop(name)
-    local prop = props[name]
-    if (#prop == 0) then
-        return
-    end
-    return prop
-end
-
-function splitstr(str)
-    local result = {}
-    for s in string.gmatch(str, "%S+") do
-      result[s] = true
-    end
-    return result
-end
-
-keyword_str = getprop("keywords.bang") or
-    "bang import-c dump-module function"
-        .. " call int real defvalue deftype label phi br ret cond-br bitcast"
-        .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
-        .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
-
-operator_str = getprop("operators.bang") or
-    "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-        .. "*= /= %= ^= &= |= ~="
-
-type_str = getprop("types.bang") or
-    "i1 i8 i16 i32 i64 half float double"
-
-real_str = "inf +inf -inf nan +nan -nan"
-
-KEYWORDS = splitstr(keyword_str)
-OPERATORS = splitstr(operator_str)
-TYPES = splitstr(type_str)
-REALCONST = splitstr(real_str)
 
 function makeset(...)
     local set = {}
