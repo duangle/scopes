@@ -72,6 +72,10 @@ typedef ValueRef (*bang_preprocessor)(Environment *, ValueRef );
 void bang_set_preprocessor(bang_preprocessor f);
 bang_preprocessor bang_get_preprocessor();
 
+int bang_get_kind(ValueRef expr);
+int bang_size(ValueRef expr);
+ValueRef bang_nth(ValueRef expr, int index);
+
 #if defined __cplusplus
 }
 #endif
@@ -710,12 +714,12 @@ Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
 //------------------------------------------------------------------------------
 
 enum ValueKind {
-    V_None,
-    V_List,
-    V_String,
-    V_Symbol,
-    V_Integer,
-    V_Real
+    V_None = 0,
+    V_List = 1,
+    V_String = 2,
+    V_Symbol = 3,
+    V_Integer = 4,
+    V_Real = 5
 };
 
 static const char *valueKindName(int kind) {
@@ -2323,7 +2327,8 @@ static bool verifyParameterCount (Environment *env, List *expr, int mincount, in
             return false;
         }
         if ((maxcount >= 0) && (argcount > maxcount)) {
-            translateError(env, "at most %i arguments expected\n", maxcount);
+            auto _ = env->with_expr(expr->nth(maxcount + 1));
+            translateError(env, "excess argument. At most %i arguments expected.\n", maxcount);
             return false;
         }
         return true;
@@ -2514,11 +2519,20 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
+        bool inlined = false;
+        if (!strcmp(name, "")) {
+            inlined = true;
+            name = "global";
+        }
+
         LLVMValueRef result = LLVMAddGlobal(env->getModule(), LLVMTypeOf(value), name);
         LLVMSetInitializer(result, value);
         if (LLVMIsConstant(value)) {
             LLVMSetGlobalConstant(result, true);
         }
+
+        if (inlined)
+            LLVMSetLinkage(result, LLVMLinkOnceAnyLinkage);
 
         if (llvm::isa<Symbol>(expr->nth(1)))
             env->values[name] = result;
@@ -2570,6 +2584,71 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         if (!type) return NULL;
 
         return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
+
+    } else if (matchSpecialForm(env, expr, "icmp", 3, 3)) {
+
+        const char *opname = translateString(env, expr->nth(1));
+        if (!opname) return NULL;
+        LLVMValueRef lhs = translateValue(env, expr->nth(2));
+        if (!lhs) return NULL;
+        LLVMValueRef rhs = translateValue(env, expr->nth(3));
+        if (!rhs) return NULL;
+
+        LLVMIntPredicate op;
+        if (!strcmp(opname, "==")) {         op = LLVMIntEQ;
+        } else if (!strcmp(opname, "!=")) {  op = LLVMIntNE;
+        } else if (!strcmp(opname, "u>")) {  op = LLVMIntUGT;
+        } else if (!strcmp(opname, "u>=")) { op = LLVMIntUGE;
+        } else if (!strcmp(opname, "u<")) {  op = LLVMIntULT;
+        } else if (!strcmp(opname, "u<=")) { op = LLVMIntULE;
+        } else if (!strcmp(opname, "i>")) {  op = LLVMIntSGT;
+        } else if (!strcmp(opname, "i>=")) { op = LLVMIntSGE;
+        } else if (!strcmp(opname, "i<")) {  op = LLVMIntSLT;
+        } else if (!strcmp(opname, "i<=")) { op = LLVMIntSLE;
+        } else {
+            auto _ = env->with_expr(expr->nth(1));
+            translateError(env,
+                "illegal operand. Try one of == != u> u>= u< u<= i> i>= i< i<=.");
+            return NULL;
+        }
+
+        return LLVMBuildICmp(env->getBuilder(), op, lhs, rhs, "");
+
+    } else if (matchSpecialForm(env, expr, "fcmp", 3, 3)) {
+
+        const char *opname = translateString(env, expr->nth(1));
+        if (!opname) return NULL;
+        LLVMValueRef lhs = translateValue(env, expr->nth(2));
+        if (!lhs) return NULL;
+        LLVMValueRef rhs = translateValue(env, expr->nth(3));
+        if (!rhs) return NULL;
+
+        LLVMRealPredicate op;
+        if (!strcmp(opname, "false")) {       op = LLVMRealPredicateFalse;
+        } else if (!strcmp(opname, "o==")) {  op = LLVMRealOEQ;
+        } else if (!strcmp(opname, "o>")) {   op = LLVMRealOGT;
+        } else if (!strcmp(opname, "o>=")) {  op = LLVMRealOGE;
+        } else if (!strcmp(opname, "o<")) {   op = LLVMRealOLT;
+        } else if (!strcmp(opname, "o<=")) {  op = LLVMRealOLE;
+        } else if (!strcmp(opname, "o!=")) {  op = LLVMRealONE;
+        } else if (!strcmp(opname, "ord")) {  op = LLVMRealORD;
+        } else if (!strcmp(opname, "uno")) {  op = LLVMRealUNO;
+        } else if (!strcmp(opname, "u==")) {  op = LLVMRealUEQ;
+        } else if (!strcmp(opname, "u>")) {   op = LLVMRealUGT;
+        } else if (!strcmp(opname, "u>=")) {  op = LLVMRealUGE;
+        } else if (!strcmp(opname, "u<")) {   op = LLVMRealULT;
+        } else if (!strcmp(opname, "u<=")) {  op = LLVMRealULE;
+        } else if (!strcmp(opname, "u!=")) {  op = LLVMRealUNE;
+        } else if (!strcmp(opname, "true")) { op = LLVMRealPredicateTrue;
+        } else {
+            auto _ = env->with_expr(expr->nth(1));
+            translateError(env,
+                "illegal operand. Try one of false true ord uno o== o!= o> o>= o< o<= u== u!= u> u>= u< u<=.");
+            return NULL;
+        }
+
+        return LLVMBuildFCmp(env->getBuilder(), op, lhs, rhs, "");
+
     } else if (matchSpecialForm(env, expr, "getelementptr", 1, -1)) {
 
         ValueRef expr_array = expr->nth(1);
@@ -2748,12 +2827,20 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
 
         auto _ = env->with_expr(expr_type);
 
+        bool inlined = false;
+        if (!strcmp(name, "")) {
+            inlined = true;
+            name = "inlined";
+        }
+
         // todo: external linkage?
         LLVMValueRef func = LLVMAddFunction(
             env->getModule(), name, functype);
 
         if (llvm::isa<Symbol>(expr->nth(1)))
             env->values[name] = func;
+        if (inlined)
+            LLVMSetLinkage(func, LLVMLinkOnceAnyLinkage);
 
         Environment subenv(env);
         subenv.function = func;
@@ -2935,7 +3022,12 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
             LLVMAddGlobalMapping(engine, it.first, it.second);
         }
 
+        printf("running...\n");
+        LLVMRunStaticConstructors(engine);
         LLVMRunFunction(engine, callee, 0, NULL);
+        //LLVMRunStaticDestructors(engine);
+
+        printf("done.\n");
 
         return NULL;
 
@@ -3338,6 +3430,31 @@ void bang_set_preprocessor(bang_preprocessor f) {
 
 bang_preprocessor bang_get_preprocessor() {
     return Environment::preprocessor;
+}
+
+int bang_get_kind(ValueRef expr) {
+    if (expr) {
+        return expr->getKind();
+    }
+    return bang::V_None;
+}
+
+int bang_size(ValueRef expr) {
+    if (expr) {
+        if (auto list = llvm::cast<bang::List>(expr)) {
+            return list->size();
+        }
+    }
+    return 0;
+}
+
+ValueRef bang_nth(ValueRef expr, int index) {
+    if (expr) {
+        if (auto list = llvm::cast<bang::List>(expr)) {
+            return list->nth(index);
+        }
+    }
+    return NULL;
 }
 
 //------------------------------------------------------------------------------

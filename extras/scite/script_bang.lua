@@ -25,11 +25,12 @@ keyword_str = getprop("keywords.bang") or
         .. " call int real defvalue deftype label phi br ret cond-br bitcast"
         .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
-        .. " compiler-do"
+        .. " compiler-do icmp fcmp"
 
 operator_str = getprop("operators.bang") or
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-        .. "*= /= %= ^= &= |= ~="
+        .. " *= /= %= ^= &= |= ~= i> i>= i< i<= u> u>= u< u<= o> o>= o< o<="
+        .. " o== o!= u== u!="
 
 type_str = getprop("types.bang") or
     "i1 i8 i16 i32 i64 half float double"

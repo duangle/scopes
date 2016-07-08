@@ -1,37 +1,107 @@
 bang
 
+# the bootstrap language is feature equivalent to LLVM IR, and translates
+# directly to LLVM API commands. It sounds like a Turing tarpit, but the fact
+# that it gives us simple means to get out of it and extend those means
+# turns it more into Turing lube.
+
+# from here, outside the confines of the horribly slow and tedious C++ compiler
+# context, we're going to implement our own language.
+
+################################################################################
+# declare the bang API as we don't have the means to comfortably import clang
+# declarations yet.
+
+# opaque declarations for the bang compiler Environment and the Values of
+# its S-Expression tree, which can be List, String, Symbol, Integer, Real.
 struct Environment
 struct Value
+
+declare printf
+    function i32 (* i8) ...
+
+declare bang_print (function void (* i8))
+
+deftype EnvironmentRef (* Environment)
+deftype ValueRef (* Value)
+
 defvalue dump-value
-    declare "bang_dump_value"
-        function void (* Value)
+    declare "bang_dump_value" (function void ValueRef)
 
 deftype preprocessor-func
-    function (* Value) (* Environment) (* Value)
+    function ValueRef EnvironmentRef ValueRef
 
 defvalue set-preprocessor
-    declare "bang_set_preprocessor"
-        function void (* preprocessor-func)
+    declare "bang_set_preprocessor" (function void (* preprocessor-func))
 
-# all top level expressions go through this function
+defvalue kind?
+    declare "bang_get_kind" (function i32 ValueRef)
+
+defvalue list-size
+    declare "bang_size" (function i32 ValueRef)
+
+defvalue list-at
+    declare "bang_nth" (function ValueRef ValueRef i32)
+
+defvalue value-type-none (int i32 0)
+defvalue value-type-list (int i32 1)
+defvalue value-type-string (int i32 2)
+defvalue value-type-symbol (int i32 3)
+defvalue value-type-integer (int i32 4)
+defvalue value-type-real (int i32 5)
+
+################################################################################
+# fundamental helper functions
+
+defvalue list?
+    define "" (value)
+        function i1 ValueRef
+        label ""
+            ret
+                icmp ==
+                    call kind? value
+                    value-type-list
+
+defvalue symbol?
+    define "" (value)
+        function i1 ValueRef
+        label ""
+            ret
+                icmp ==
+                    call kind? value
+                    value-type-symbol
+
+################################################################################
+# build and install the preprocessor hook function.
+
+# all top level expressions go through the preprocessor, which then descends
+# the expression tree and translates it to bang IR.
 define global-preprocessor (env value)
     preprocessor-func
     label ""
+        # here we can implement our own language
         call dump-value value
+        call printf
+            bitcast
+                global "" "kind=%i\n"
+                * i8
+            call kind? value
         ret value
 
-# install preprocessor
+# install preprocessor and continue evaluating the module
 run
     define "" ()
         function void
         label ""
+            call printf
+                bitcast
+                    global "" "lol\n"
+                    * i8
             call set-preprocessor global-preprocessor
             ret;
 
-# all declarations from here go through the preprocessor
-
-declare printf
-    function i32 (* i8) ...
+# all top level expressions from here go through the preprocessor
+################################################################################
 
 defvalue hello-world
     bitcast
