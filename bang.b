@@ -20,12 +20,15 @@ define global-preprocessor (env value)
         call dump-value value
         ret value
 
+# install preprocessor
 run
     define "" ()
         function void
         label ""
             call set-preprocessor global-preprocessor
             ret;
+
+# all declarations from here go through the preprocessor
 
 declare printf
     function i32 (* i8) ...
