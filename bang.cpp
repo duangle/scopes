@@ -74,7 +74,13 @@ bang_preprocessor bang_get_preprocessor();
 
 int bang_get_kind(ValueRef expr);
 int bang_size(ValueRef expr);
-ValueRef bang_nth(ValueRef expr, int index);
+ValueRef bang_at(ValueRef expr, int index);
+const char *bang_string_value(ValueRef expr);
+ValueRef bang_set_at(ValueRef expr, int index, ValueRef value);
+
+void bang_error_message(ValueRef context, const char *format, ...);
+
+int bang_eq(Value *a, Value *b);
 
 #if defined __cplusplus
 }
@@ -2300,7 +2306,7 @@ static LLVMModuleRef importCModule (Environment *env,
 
 //------------------------------------------------------------------------------
 
-static void translateError (Environment *env, const char *format, ...) {
+static void translateErrorV (Environment *env, const char *format, va_list args) {
     ++env->globals->compile_errors;
     if (env->expr) {
         Anchor anchor = env->expr->anchor;
@@ -2308,14 +2314,18 @@ static void translateError (Environment *env, const char *format, ...) {
     } else {
         printf("error: ");
     }
-    va_list args;
-    va_start (args, format);
     vprintf (format, args);
-    va_end (args);
     if (env->expr) {
         Anchor anchor = env->expr->anchor;
         dumpFileLine(anchor.path, anchor.offset);
     }
+}
+
+static void translateError (Environment *env, const char *format, ...) {
+    va_list args;
+    va_start (args, format);
+    translateErrorV(env, format, args);
+    va_end (args);
 }
 
 static bool verifyParameterCount (Environment *env, List *expr, int mincount, int maxcount) {
@@ -2585,7 +2595,48 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
 
         return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
 
+    } else if (matchSpecialForm(env, expr, "and", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
+        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        if (!lhs) return NULL;
+        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        if (!rhs) return NULL;
+
+        return LLVMBuildAnd(env->getBuilder(), lhs, rhs, "");
+
+    } else if (matchSpecialForm(env, expr, "or", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
+        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        if (!lhs) return NULL;
+        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        if (!rhs) return NULL;
+
+        return LLVMBuildOr(env->getBuilder(), lhs, rhs, "");
+
+    } else if (matchSpecialForm(env, expr, "add", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
+        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        if (!lhs) return NULL;
+        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        if (!rhs) return NULL;
+
+        return LLVMBuildAdd(env->getBuilder(), lhs, rhs, "");
+
+    } else if (matchSpecialForm(env, expr, "sub", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
+        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        if (!lhs) return NULL;
+        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        if (!rhs) return NULL;
+
+        return LLVMBuildSub(env->getBuilder(), lhs, rhs, "");
+
     } else if (matchSpecialForm(env, expr, "icmp", 3, 3)) {
+        if (!verifyInBlock(env)) return NULL;
 
         const char *opname = translateString(env, expr->nth(1));
         if (!opname) return NULL;
@@ -2615,6 +2666,7 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         return LLVMBuildICmp(env->getBuilder(), op, lhs, rhs, "");
 
     } else if (matchSpecialForm(env, expr, "fcmp", 3, 3)) {
+        if (!verifyInBlock(env)) return NULL;
 
         const char *opname = translateString(env, expr->nth(1));
         if (!opname) return NULL;
@@ -3347,14 +3399,21 @@ static void teardownRootEnvironment (Environment *env) {
     LLVMDisposeBuilder(env->getBuilder());
 }
 
+static Environment *theEnv = NULL;
+
 static bool translateRootValueList (Environment *env, List *expr, int offset) {
     int argcount = (int)expr->size() - offset;
     for (int i = 0; i < argcount; ++i) {
         Value *stmt = expr->nth(i + offset);
         if (Environment::preprocessor) {
+            theEnv = env;
             stmt = Environment::preprocessor(env, stmt);
+            theEnv = NULL;
+            if (env->hasErrors())
+                return false;
         }
-        translateValue(env, stmt);
+        if (stmt)
+            translateValue(env, stmt);
         if (env->hasErrors())
             return false;
     }
@@ -3448,13 +3507,67 @@ int bang_size(ValueRef expr) {
     return 0;
 }
 
-ValueRef bang_nth(ValueRef expr, int index) {
+ValueRef bang_at(ValueRef expr, int index) {
     if (expr) {
         if (auto list = llvm::cast<bang::List>(expr)) {
             return list->nth(index);
         }
     }
     return NULL;
+}
+
+ValueRef bang_set_at(ValueRef expr, int index, ValueRef value) {
+    if (expr && value) {
+        if (auto list = llvm::cast<bang::List>(expr)) {
+            bang::List *newlist = new bang::List();
+            newlist->anchor = list->anchor;
+            for (int i = 0; i < index; ++i) {
+                ValueRef elem = list->nth(i);
+                if (!elem) break;
+                newlist->append(elem);
+            }
+            newlist->append(value);
+            for (size_t i = index + 1; i < list->size(); ++i) {
+                newlist->append(list->nth(i));
+            }
+            return newlist;
+        }
+    }
+    return NULL;
+}
+
+const char *bang_string_value(ValueRef expr) {
+    if (expr) {
+        if (auto str = llvm::cast<bang::String>(expr)) {
+            return str->getValue().c_str();
+        }
+    }
+    return NULL;
+}
+
+void bang_error_message(ValueRef context, const char *format, ...) {
+    assert(bang::theEnv);
+    auto _ = bang::theEnv->with_expr(context);
+    va_list args;
+    va_start (args, format);
+    bang::translateErrorV(bang::theEnv, format, args);
+    va_end (args);
+}
+
+int bang_eq(Value *a, Value *b) {
+    if (a == b) return true;
+    if (a && b) {
+        auto kind = a->getKind();
+        if (kind != b->getKind())
+            return false;
+        if (kind == bang::V_Symbol) {
+            bang::Symbol *sa = llvm::cast<bang::Symbol>(a);
+            bang::Symbol *sb = llvm::cast<bang::Symbol>(b);
+            if (sa->size() != sb->size()) return false;
+            if (!memcmp(sa->c_str(), sb->c_str(), sa->size())) return true;
+        }
+    }
+    return false;
 }
 
 //------------------------------------------------------------------------------
