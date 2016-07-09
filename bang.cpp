@@ -77,6 +77,10 @@ int bang_size(ValueRef expr);
 ValueRef bang_at(ValueRef expr, int index);
 const char *bang_string_value(ValueRef expr);
 ValueRef bang_set_at(ValueRef expr, int index, ValueRef value);
+void bang_set_key(ValueRef expr, const char *key, ValueRef value);
+ValueRef bang_get_key(ValueRef expr, const char *key);
+ValueRef bang_slice(ValueRef expr, int start, int end);
+ValueRef bang_merge(ValueRef left, ValueRef right);
 
 void bang_error_message(ValueRef context, const char *format, ...);
 
@@ -721,7 +725,7 @@ Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
 
 enum ValueKind {
     V_None = 0,
-    V_List = 1,
+    V_Table = 1,
     V_String = 2,
     V_Symbol = 3,
     V_Integer = 4,
@@ -731,7 +735,7 @@ enum ValueKind {
 static const char *valueKindName(int kind) {
     switch(kind) {
     case V_None: return "?";
-    case V_List: return "list";
+    case V_Table: return "table";
     case V_String: return "string";
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
@@ -778,22 +782,22 @@ static void printValue(ValueRef e, size_t depth=0, bool naked=true);
 struct Value {
 private:
     const ValueKind kind;
+    int age;
 protected:
     Value(ValueKind kind_) :
         kind(kind_),
-        delete_guard(false) {}
+        age(0) {
+        collection.push_back(this);
+    }
 
 public:
-    Anchor anchor;
-    bool delete_guard;
+    typedef std::list<ValueRef> CollectionType;
 
-    virtual ~Value() {
-        if (delete_guard) {
-            printf("delete_guard triggered:\n");
-            printValue(this, 0, false);
-        }
-        assert(!delete_guard);
-    }
+    static CollectionType collection;
+
+    Anchor anchor;
+
+    virtual ~Value() {}
 
     ValueKind getKind() const {
         return kind;
@@ -804,25 +808,36 @@ public:
 
     std::string getHeader() const;
 
+    virtual void tag();
+    static int collect(ValueRef gcroot);
+
+    bool tagged() { return age == 0; }
 };
+
+Value::CollectionType Value::collection;
 
 //------------------------------------------------------------------------------
 
-struct List : Value {
+struct Table : Value {
+protected:
     std::vector< ValueRef > values;
+    std::map< std::string, ValueRef > string_map;
+public:
+
     // 0 = naked, any
     // '(' = parens
     // '[' = square
     // '{' = curly
     char style;
 
-    List() :
-        Value(V_List),
+    Table() :
+        Value(V_Table),
         style(0)
         {}
 
     ValueRef append(ValueRef expr) {
         assert(expr);
+        expr->tag();
         values.push_back(expr);
         return expr;
     }
@@ -863,14 +878,29 @@ struct List : Value {
             return values[i];
     }
 
+    void setKey(const std::string &key, ValueRef value) {
+        if (value) {
+            value->tag();
+        }
+        string_map[key] = value;
+    }
+
+    ValueRef getKey(const std::string &key) {
+        return string_map[key];
+    }
+
     static bool classof(const Value *expr) {
-        return expr->getKind() == V_List;
+        return expr->getKind() == V_Table;
     }
 
     static ValueKind kind() {
-        return V_List;
+        return V_Table;
     }
+
+    virtual void tag();
 };
+
+static Table *gc_root = NULL;
 
 //------------------------------------------------------------------------------
 
@@ -1000,9 +1030,9 @@ struct Symbol : String {
 //------------------------------------------------------------------------------
 
 bool Value::isListComment() const {
-    if (auto list = llvm::dyn_cast<List>(this)) {
-        if (list->size() > 0) {
-            if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
+    if (auto table = llvm::dyn_cast<Table>(this)) {
+        if (table->size() > 0) {
+            if (auto head = llvm::dyn_cast<Symbol>(table->nth(0))) {
                 if (head->getValue().substr(0, 3) == "///")
                     return true;
             }
@@ -1016,14 +1046,60 @@ bool Value::isComment() const {
 }
 
 std::string Value::getHeader() const {
-    if (auto list = llvm::dyn_cast<List>(this)) {
-        if (list->size() >= 1) {
-            if (auto head = llvm::dyn_cast<Symbol>(list->nth(0))) {
+    if (auto table = llvm::dyn_cast<Table>(this)) {
+        if (table->size() >= 1) {
+            if (auto head = llvm::dyn_cast<Symbol>(table->nth(0))) {
                 return head->getValue();
             }
         }
     }
     return "";
+}
+
+void Value::tag() {
+    // reset age
+    age = 0;
+}
+
+void Table::tag() {
+    if (tagged()) return;
+    Value::tag();
+
+    for (size_t i = 0; i < values.size(); ++i) {
+        values[i]->tag();
+    }
+
+    for (auto k : string_map) {
+        k.second->tag();
+    }
+}
+
+int Value::collect(ValueRef gcroot) {
+    assert(gcroot);
+
+    CollectionType::iterator iter = collection.begin();
+    while (iter != collection.end()) {
+        ValueRef value = *iter++;
+        value->age++;
+    }
+
+    // walk gcroot, reset age of values we find
+    gcroot->tag();
+    assert(gcroot->age == 0);
+
+    int collected = 0;
+    iter = collection.begin();
+    while (iter != collection.end()) {
+        ValueRef value = *iter;
+        auto this_iter = iter++;
+        if (value->age) {
+            // wasn't reached in this cycle; can be deleted
+            collection.erase(this_iter);
+            delete value;
+            collected++;
+        }
+    }
+    return collected;
 }
 
 //------------------------------------------------------------------------------
@@ -1032,12 +1108,12 @@ ValueRef strip(ValueRef expr) {
     assert(expr);
     if (expr->isComment()) {
         return nullptr;
-    } else if (expr->getKind() == V_List) {
-        auto list = llvm::cast<List>(expr);
-        auto result = new List();
+    } else if (expr->getKind() == V_Table) {
+        auto table = llvm::cast<Table>(expr);
+        auto result = new Table();
         bool changed = false;
-        for (size_t i = 0; i < list->size(); ++i) {
-            auto oldelem = list->getElement(i);
+        for (size_t i = 0; i < table->size(); ++i) {
+            auto oldelem = table->getElement(i);
             auto newelem = strip(oldelem);
             if (oldelem != newelem)
                 changed = true;
@@ -1404,13 +1480,13 @@ struct Parser {
     }
 
     bool splitList(
-        List *result, int list_split_start, char style = 0) {
+        Table *result, int list_split_start, char style = 0) {
         int count = (int)result->size();
         if (list_split_start == count) {
             error("empty expression\n");
             return false;
         } else {
-            auto wrapped_result = new List();
+            auto wrapped_result = new Table();
             wrapped_result->style = style;
             wrapped_result->anchor =
                 result->getElement(list_split_start)->anchor;
@@ -1426,7 +1502,7 @@ struct Parser {
     }
 
     ValueRef parseList(int end_token) {
-        auto result = new List();
+        auto result = new Table();
         result->style = lexer.token;
         lexer.initAnchor(result->anchor);
         int statement_start = 0;
@@ -1436,7 +1512,7 @@ struct Parser {
                 break;
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket\n");
-                // point to beginning of list
+                // point to beginning of table
                 error_origin = result->anchor;
                 return nullptr;
             } else if (lexer.token == token_statement) {
@@ -1486,7 +1562,7 @@ struct Parser {
         bool escape = false;
         int subcolumn = 0;
 
-        auto result = new List();
+        auto result = new Table();
         lexer.initAnchor(result->anchor);
 
         int statement_start = 0;
@@ -1616,10 +1692,10 @@ struct Parser {
 //------------------------------------------------------------------------------
 
 static bool isNested(ValueRef e) {
-    if (e->getKind() == V_List) {
-        List *l = llvm::cast<List>(e);
+    if (e->getKind() == V_Table) {
+        Table *l = llvm::cast<Table>(e);
         for (size_t i = 0; i < l->size(); ++i) {
-            if (l->nth(i)->getKind() == V_List)
+            if (l->nth(i)->getKind() == V_Table)
                 return true;
         }
     }
@@ -1647,15 +1723,15 @@ static void printValue(ValueRef e, size_t depth, bool naked)
     }
 
 	switch(e->getKind()) {
-	case V_List: {
-        List *l = llvm::cast<List>(e);
+	case V_Table: {
+        Table *l = llvm::cast<Table>(e);
         if (naked && !l->style) {
             if (l->size() == 0) {
                 printf("()\n");
             } else {
                 size_t offset = 0;
                 ValueRef e0 = l->nth(0);
-                if (e0->getKind() == V_List) {
+                if (e0->getKind() == V_Table) {
                     printf(";\n");
                     goto print_sparse;
                 }
@@ -1674,9 +1750,9 @@ static void printValue(ValueRef e, size_t depth, bool naked)
             print_sparse:
                 while (offset < l->size()) {
                     e0 = l->nth(offset);
-                    if ((e0->getKind() != V_List) // not a list
-                        && (offset >= 1) // not first element in list
-                        && (offset < (l->size() - 1)) // not last element in list
+                    if ((e0->getKind() != V_Table) // not a table
+                        && (offset >= 1) // not first element in table
+                        && (offset < (l->size() - 1)) // not last element in table
                         && !isNested(l->nth(offset+1))) { // next element can be terse packed too
                         printAnchor(e0, depth + 1);
                         printf("\\ ");
@@ -1876,6 +1952,7 @@ struct Environment {
 
     void addQuote(LLVMValueRef value, ValueRef expr) {
         globals->globalptrs[value] = (void *)expr;
+        gc_root->append(expr);
     }
 
 };
@@ -2134,7 +2211,7 @@ public:
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
         std::vector<Type> argtypes;
-        //proto is null if the function was declared without an argument list (e.g. void foo() and not void foo(void))
+        //proto is null if the function was declared without an argument table (e.g. void foo() and not void foo(void))
         //we don't support old-style C parameter lists, we just treat them as empty
         if(proto) {
             for(size_t i = 0; i < proto->getNumParams(); i++) {
@@ -2328,7 +2405,7 @@ static void translateError (Environment *env, const char *format, ...) {
     va_end (args);
 }
 
-static bool verifyParameterCount (Environment *env, List *expr, int mincount, int maxcount) {
+static bool verifyParameterCount (Environment *env, Table *expr, int mincount, int maxcount) {
     if (expr) {
         auto _ = env->with_expr(expr);
         int argcount = (int)expr->size() - 1;
@@ -2354,7 +2431,7 @@ static bool isSymbol (const Value *expr, const char *sym) {
     return false;
 }
 
-static bool matchSpecialForm (Environment *env, List *expr, const char *name, int mincount, int maxcount) {
+static bool matchSpecialForm (Environment *env, Table *expr, const char *name, int mincount, int maxcount) {
     return isSymbol(expr->nth(0), name) && verifyParameterCount(env, expr, mincount, maxcount);
 }
 
@@ -2407,7 +2484,7 @@ static const char *translateString (Environment *env, ValueRef expr) {
 static LLVMTypeRef translateType (Environment *env, ValueRef expr);
 static LLVMValueRef translateValue (Environment *env, ValueRef expr);
 
-static bool translateValueList (Environment *env, List *expr, int offset) {
+static bool translateValueList (Environment *env, Table *expr, int offset) {
     int argcount = (int)expr->size() - offset;
     for (int i = 0; i < argcount; ++i) {
         translateValue(env, expr->nth(i + offset));
@@ -2464,7 +2541,7 @@ static LLVMTypeRef resolveType(Environment *env, const std::string &name) {
     return NULL;
 }
 
-static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
+static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     if (expr->size() == 0) {
         translateError(env, "value expected\n");
         return NULL;
@@ -2472,7 +2549,7 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
     auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
     if (!head) {
         auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of list must be symbol, not %s\n",
+        translateError(env, "first element of table must be symbol, not %s\n",
             valueKindName(expr->nth(0)->getKind()));
         return NULL;
     }
@@ -2729,6 +2806,8 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         }
 
     } else if (matchSpecialForm(env, expr, "extractelement", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
         LLVMValueRef value = translateValue(env, expr->nth(1));
         if (!value) return NULL;
 
@@ -2743,9 +2822,10 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         return result;
 
     } else if (matchSpecialForm(env, expr, "extractvalue", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
         LLVMValueRef value = translateValue(env, expr->nth(1));
         if (!value) return NULL;
-
 
         int64_t index;
         if (!translateInt64(env, expr->nth(2), index)) return NULL;
@@ -2760,7 +2840,6 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         LLVMValueRef value = translateValue(env, expr->nth(1));
         if (!value) return NULL;
 
-
         int64_t bytes;
         if (!translateInt64(env, expr->nth(2), bytes)) return NULL;
 
@@ -2768,10 +2847,34 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         return value;
 
     } else if (matchSpecialForm(env, expr, "load", 1, 1)) {
+        if (!verifyInBlock(env)) return NULL;
+
         LLVMValueRef value = translateValue(env, expr->nth(1));
         if (!value) return NULL;
 
         return LLVMBuildLoad(env->getBuilder(), value, "");
+
+    } else if (matchSpecialForm(env, expr, "store", 2, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
+        LLVMValueRef value = translateValue(env, expr->nth(1));
+        if (!value) return NULL;
+        LLVMValueRef ptr = translateValue(env, expr->nth(2));
+        if (!ptr) return NULL;
+
+        return LLVMBuildStore(env->getBuilder(), value, ptr);
+
+    } else if (matchSpecialForm(env, expr, "alloca", 1, 2)) {
+        if (!verifyInBlock(env)) return NULL;
+
+        LLVMTypeRef type = translateType(env, expr->nth(1));
+        if (!type) return NULL;
+        LLVMValueRef value = translateValue(env, expr->nth(2));
+        if (value) {
+            return LLVMBuildArrayAlloca(env->getBuilder(), type, value, "");
+        } else {
+            return LLVMBuildAlloca(env->getBuilder(), type, "");
+        }
 
     } else if (matchSpecialForm(env, expr, "defvalue", 2, 2)) {
 
@@ -2866,7 +2969,7 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
 
         const char *name = translateString(env, expr->nth(1));
         if (!name) return NULL;
-        List *expr_params = translateKind<List>(env, expr->nth(2));
+        Table *expr_params = translateKind<Table>(env, expr->nth(2));
         if (!expr_params)
             return NULL;
         ValueRef expr_type = expr->nth(3);
@@ -2942,7 +3045,7 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
         LLVMValueRef values[branchcount];
         LLVMBasicBlockRef blocks[branchcount];
         for (int i = 0; i < branchcount; ++i) {
-            List *expr_pair = translateKind<List>(env, expr->nth(2 + i));
+            Table *expr_pair = translateKind<Table>(env, expr->nth(2 + i));
             auto _ = env->with_expr(expr_pair);
             if (!expr_pair)
                 return NULL;
@@ -3106,7 +3209,7 @@ static LLVMValueRef translateValueFromList (Environment *env, List *expr) {
     } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
         const char *modulename = translateString(env, expr->nth(1));
         const char *name = translateString(env, expr->nth(2));
-        List *args_expr = translateKind<List>(env, expr->nth(3));
+        Table *args_expr = translateKind<Table>(env, expr->nth(3));
 
         if (modulename && name && args_expr) {
             int argcount = (int)args_expr->size();
@@ -3138,8 +3241,8 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     assert(expr);
     auto _ = env->with_expr(expr);
 
-    if (auto list = llvm::dyn_cast<List>(expr)) {
-        return translateValueFromList(env, list);
+    if (auto table = llvm::dyn_cast<Table>(expr)) {
+        return translateValueFromList(env, table);
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         Environment *penv = (Environment *)env;
         while (penv) {
@@ -3161,7 +3264,7 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     }
 }
 
-static LLVMTypeRef translateTypeFromList (Environment *env, List *expr) {
+static LLVMTypeRef translateTypeFromList (Environment *env, Table *expr) {
     if (expr->size() == 0) {
         translateError(env, "type expected\n");
         return NULL;
@@ -3169,7 +3272,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, List *expr) {
     auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
     if (!head) {
         auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of list must be symbol, not %s\n",
+        translateError(env, "first element of table must be symbol, not %s\n",
             valueKindName(expr->nth(0)->getKind()));
         return NULL;
     }
@@ -3281,8 +3384,8 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     assert(expr);
     auto _ = env->with_expr(expr);
 
-    if (auto list = llvm::dyn_cast<List>(expr)) {
-        return translateTypeFromList(env, list);
+    if (auto table = llvm::dyn_cast<Table>(expr)) {
+        return translateTypeFromList(env, table);
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         LLVMTypeRef result = resolveType(env, sym->getValue());
         if (!result) {
@@ -3299,6 +3402,9 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 }
 
 static void init() {
+    if (!gc_root)
+        gc_root = new Table();
+
     setupTypes();
 
     LLVMEnablePrettyStackTrace();
@@ -3309,19 +3415,6 @@ static void init() {
     LLVMInitializeNativeAsmPrinter();
     LLVMInitializeNativeDisassembler();
 }
-
-/*
-static void exportGlobal (Environment *env, const char *name, Type type, void *value) {
-    LLVMValueRef gvalue =
-        LLVMAddGlobal(env->getModule(),
-            type.getLLVMType(),
-            name);
-
-    LLVMAddGlobalMapping(engine, gvalue, value);
-
-    env->names[name] = TypedValue(Type::pointer(type), gvalue);
-}
-*/
 
 //------------------------------------------------------------------------------
 
@@ -3342,57 +3435,6 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
     env->types["i16"] = LLVMInt16Type();
     env->types["i32"] = LLVMInt32Type();
     env->types["i64"] = LLVMInt64Type();
-
-    /*
-    if (env->getMeta()) {
-        auto T_EnvironmentRef = Type::pointer(Type::Environment);
-        auto T_SValueRef = Type::pointer(Type::SValue);
-        auto T_Preprocessor = Type::pointer(Type::function(T_SValueRef,
-            std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false));
-
-        env->names["Environment"] = Type::Environment;
-        env->names["SValue"] = Type::SValue;
-        env->names["Preprocessor"] = T_Preprocessor;
-
-        // export meta
-        exportGlobal(env, "meta-environment", Type::Environment, (void *)env->getMeta());
-
-        // export API
-        exportGlobal(env, "set-preprocessor",
-            Type::function(Type::Void, std::vector<Type> { T_EnvironmentRef, T_Preprocessor }, false),
-            (void*)api::setPreprocessor);
-        exportGlobal(env, "get-preprocessor",
-            Type::function(T_Preprocessor, std::vector<Type> { T_EnvironmentRef }, false),
-            (void*)api::getPreprocessor);
-        exportGlobal(env, "new-list",
-            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef }, false),
-            (void*)api::newList);
-        exportGlobal(env, "append",
-            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, T_SValueRef, T_SValueRef }, false),
-            (void*)api::append);
-        exportGlobal(env, "new-symbol",
-            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
-            (void*)api::newSymbol);
-        exportGlobal(env, "new-zstring",
-            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring }, false),
-            (void*)api::newZString);
-        exportGlobal(env, "new-string",
-            Type::function(T_SValueRef, std::vector<Type> { T_EnvironmentRef, Type::Rawstring, Type::UInt64 }, false),
-            (void*)api::newString);
-        exportGlobal(env, "copy-anchor",
-            Type::function(Type::Void, std::vector<Type> { T_EnvironmentRef, T_SValueRef, T_SValueRef }, false),
-            (void*)api::copyAnchor);
-        exportGlobal(env, "list?",
-            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false),
-            (void*)api::isList);
-        exportGlobal(env, "string?",
-            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false),
-            (void*)api::isString);
-        exportGlobal(env, "symbol?",
-            Type::function(Type::Bool, std::vector<Type> { T_EnvironmentRef, T_SValueRef }, false),
-            (void*)api::isSymbol);
-    }
-    */
 }
 
 static void teardownRootEnvironment (Environment *env) {
@@ -3401,7 +3443,7 @@ static void teardownRootEnvironment (Environment *env) {
 
 static Environment *theEnv = NULL;
 
-static bool translateRootValueList (Environment *env, List *expr, int offset) {
+static bool translateRootValueList (Environment *env, Table *expr, int offset) {
     int argcount = (int)expr->size() - offset;
     for (int i = 0; i < argcount; ++i) {
         Value *stmt = expr->nth(i + offset);
@@ -3426,8 +3468,8 @@ static void compileModule (Environment *env, ValueRef expr, int offset) {
     assert(env->getModule());
 
     auto _ = env->with_expr(expr);
-    if (auto list = llvm::dyn_cast<List>(expr)) {
-        translateRootValueList (env, list, offset);
+    if (auto table = llvm::dyn_cast<Table>(expr)) {
+        translateRootValueList (env, table, offset);
     } else {
         translateError(env, "unexpected %s\n",
             valueKindName(expr->getKind()));
@@ -3443,8 +3485,8 @@ static void compileMain (ValueRef expr) {
     {
         auto _ = env.with_expr(expr);
         std::string header = expr->getHeader();
-        if (header != "bang") {
-            translateError(&env, "unrecognized header: '%s'; try 'bang' instead.\n", header.c_str());
+        if (header != "IR") {
+            translateError(&env, "unrecognized header: '%s'; try 'IR' instead.\n", header.c_str());
             return;
         }
     }
@@ -3473,6 +3515,7 @@ int bang_main(int argc, char ** argv) {
     if (argv && argv[1]) {
         bang::Parser parser;
         auto expr = parser.parseFile(argv[1]);
+        bang::gc_root->append(expr);
         if (expr) {
             bang::compileMain(expr);
         } else {
@@ -3500,8 +3543,8 @@ int bang_get_kind(ValueRef expr) {
 
 int bang_size(ValueRef expr) {
     if (expr) {
-        if (auto list = llvm::cast<bang::List>(expr)) {
-            return list->size();
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            return table->size();
         }
     }
     return 0;
@@ -3509,8 +3552,8 @@ int bang_size(ValueRef expr) {
 
 ValueRef bang_at(ValueRef expr, int index) {
     if (expr) {
-        if (auto list = llvm::cast<bang::List>(expr)) {
-            return list->nth(index);
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            return table->nth(index);
         }
     }
     return NULL;
@@ -3518,17 +3561,56 @@ ValueRef bang_at(ValueRef expr, int index) {
 
 ValueRef bang_set_at(ValueRef expr, int index, ValueRef value) {
     if (expr && value) {
-        if (auto list = llvm::cast<bang::List>(expr)) {
-            bang::List *newlist = new bang::List();
-            newlist->anchor = list->anchor;
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            bang::Table *newlist = new bang::Table();
+            newlist->anchor = table->anchor;
             for (int i = 0; i < index; ++i) {
-                ValueRef elem = list->nth(i);
+                ValueRef elem = table->nth(i);
                 if (!elem) break;
                 newlist->append(elem);
             }
             newlist->append(value);
-            for (size_t i = index + 1; i < list->size(); ++i) {
-                newlist->append(list->nth(i));
+            for (size_t i = index + 1; i < table->size(); ++i) {
+                newlist->append(table->nth(i));
+            }
+            return newlist;
+        }
+    }
+    return NULL;
+}
+
+ValueRef bang_slice(ValueRef expr, int start, int end) {
+    if (expr) {
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            bang::Table *newlist = new bang::Table();
+            newlist->anchor = table->anchor;
+            if (end == -1)
+                end = (int)table->size();
+            for (int i = start; i <= end; ++i) {
+                ValueRef elem = table->nth(i);
+                if (!elem) break;
+                newlist->append(elem);
+            }
+            return newlist;
+        }
+    }
+    return NULL;
+}
+
+ValueRef bang_merge(ValueRef left, ValueRef right) {
+    if (left && right) {
+        auto ltable = llvm::cast<bang::Table>(left);
+        auto rtable = llvm::cast<bang::Table>(right);
+        if (ltable && rtable) {
+            bang::Table *newlist = new bang::Table();
+            newlist->anchor = ltable->anchor;
+            int size1 = (int)ltable->size();
+            for (int i = 0; i < size1; ++i) {
+                newlist->append(ltable->nth(i));
+            }
+            int size2 = (int)rtable->size();
+            for (int i = 0; i < size2; ++i) {
+                newlist->append(rtable->nth(i));
             }
             return newlist;
         }
@@ -3568,6 +3650,23 @@ int bang_eq(Value *a, Value *b) {
         }
     }
     return false;
+}
+
+void bang_set_key(ValueRef expr, const char *key, ValueRef value) {
+    if (expr && key && value) {
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            table->setKey(key, value);
+        }
+    }
+}
+
+ValueRef bang_get_key(ValueRef expr, const char *key) {
+    if (expr && key) {
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            return table->getKey(key);
+        }
+    }
+    return NULL;
 }
 
 //------------------------------------------------------------------------------

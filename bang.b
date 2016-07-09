@@ -1,4 +1,4 @@
-bang
+IR
 
 # the bootstrap language is feature equivalent to LLVM IR, and translates
 # directly to LLVM API commands. It sounds like a Turing tarpit, but the fact
@@ -13,9 +13,11 @@ bang
 # declarations yet.
 
 # opaque declarations for the bang compiler Environment and the Values of
-# its S-Expression tree, which can be List, String, Symbol, Integer, Real.
+# its S-Expression tree, which can be Table, String, Symbol, Integer, Real.
 struct Environment
 struct Value
+
+struct PValue
 
 deftype rawstring (* i8)
 
@@ -39,14 +41,26 @@ defvalue set-preprocessor
 defvalue kind?
     declare "bang_get_kind" (function i32 ValueRef)
 
-defvalue list-size
+defvalue table-size
     declare "bang_size" (function i32 ValueRef)
 
-defvalue list-at
+defvalue table-at
     declare "bang_at" (function ValueRef ValueRef i32)
 
 defvalue set-at
     declare "bang_set_at" (function ValueRef ValueRef i32 ValueRef)
+
+defvalue set-key
+    declare "bang_set_key" (function void ValueRef rawstring ValueRef)
+
+defvalue get-key
+    declare "bang_get_key" (function ValueRef ValueRef rawstring)
+
+defvalue slice
+    declare "bang_slice" (function ValueRef ValueRef i32 i32)
+
+defvalue merge
+    declare "bang_merge" (function ValueRef ValueRef ValueRef)
 
 defvalue value==
     declare "bang_eq" (function i1 ValueRef ValueRef)
@@ -58,7 +72,7 @@ defvalue error-message
     declare "bang_error_message" (function void ValueRef rawstring ...)
 
 defvalue value-type-none (int i32 0)
-defvalue value-type-list (int i32 1)
+defvalue value-type-table (int i32 1)
 defvalue value-type-string (int i32 2)
 defvalue value-type-symbol (int i32 3)
 defvalue value-type-integer (int i32 4)
@@ -67,14 +81,14 @@ defvalue value-type-real (int i32 5)
 ################################################################################
 # fundamental helper functions
 
-defvalue list?
+defvalue table?
     define "" (value)
         function i1 ValueRef
         label ""
             ret
                 icmp ==
                     call kind? value
-                    value-type-list
+                    value-type-table
 
 defvalue symbol?
     define "" (value)
@@ -91,7 +105,7 @@ defvalue empty?
         label ""
             ret
                 icmp ==
-                    call list-size value
+                    call table-size value
                     int i32 0
 
 ################################################################################
@@ -104,21 +118,21 @@ define global-preprocessor (env value)
     label ""
         # here we can implement our own language
         cond-br
-            call list? value
-            label if-list
+            call table? value
+            label if-table
                 cond-br
                     call empty? value
                     label fail
                     label if-not-empty
                         defvalue head
-                            call list-at value (int i32 0)
+                            call table-at value (int i32 0)
                         cond-br
                             call value== head
                                 quote Value IR
                             label if-IR
                                 call printf
                                     bitcast
-                                        global "" "is list!\n"
+                                        global "" "is table!\n"
                                         rawstring
                                     call kind? value
                                 defvalue ir-value
@@ -154,6 +168,7 @@ run
             ret;
 
 # all top level expressions from here go through the preprocessor
+# which means from here, we're in a new context
 ################################################################################
 
 IR
@@ -166,7 +181,7 @@ IR
     define main ()
         function void
         label ""
-            /// call dump-value
+            call dump-value
                 quote Value
                     run
                         print "'\"" '"\''
