@@ -33,7 +33,7 @@ operator_str = getprop("operators.bang") or
         .. " o== o!= u== u!="
 
 type_str = getprop("types.bang") or
-    "i1 i8 i16 i32 i64 half float double"
+    "i1 i8 i16 i32 i64 half float double void"
 
 real_str = "inf +inf -inf nan +nan -nan"
 

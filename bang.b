@@ -76,6 +76,15 @@ defvalue string-value
 defvalue error-message
     declare "bang_error_message" (function void Value rawstring ...)
 
+defvalue set-anchor
+    declare "bang_set_anchor" (function Value Value Value)
+
+# redeclare pointer types to specialize our mapping handler
+deftype bang-mapper-func
+    function Value Value i32 Value
+defvalue bang-map
+    declare "bang_map" (function Value Value (* bang-mapper-func) Value)
+
 defvalue value-type-none 0
 defvalue value-type-table 1
 defvalue value-type-string 2
@@ -121,14 +130,35 @@ defvalue expression?
                     call table-at value 0
                     expected-head
 
+defvalue type-key
+    getelementptr
+        global "" "#bang-type"
+        \ 0 0
+
+defvalue set-type
+    define "" (value value-type)
+        function void Value Value
+        label ""
+            call set-key
+                value
+                type-key
+                value-type
+            ret;
+
+defvalue get-type
+    define "" (value)
+        function Value Value
+        label ""
+            ret
+                call get-key
+                    value
+                    type-key
+
 ################################################################################
 # build and install the preprocessor hook function.
 
-# 0: typename, 1: value
-struct TypedValue rawstring Value
-
 deftype MacroFunction
-    function TypedValue Value Value
+    function Value Value Value
 
 define expand-macro (value env)
     MacroFunction
@@ -147,12 +177,12 @@ define expand-macro (value env)
 
     label $is-atom
         call error-message value
-            bitcast (global "" "unknown atom\n") rawstring
+            bitcast (global "" "unknown atom") rawstring
         br
             label $error
     label $is-empty-table
         call error-message value
-            bitcast (global "" "expression is empty\n") rawstring
+            bitcast (global "" "expression is empty") rawstring
         br
             label $error
 
@@ -182,28 +212,28 @@ define expand-macro (value env)
 
     label $has-no-handler
         call error-message value
-            bitcast (global "" "unknown special form, macro or function\n") rawstring
+            bitcast (global "" "unknown special form, macro or function") rawstring
         br
             label $error
 
     label $error
         ret
-            null TypedValue
-
-    ///
-        defvalue result
-            alloca TypedValue
-        store
-            null rawstring
-            getelementptr result 0 0
-        store
             null Value
-            getelementptr result 0 1
-        ret
-            load result
 
 defvalue global-env
     quote _Value ()
+
+define bang-mapper (value index env)
+    bang-mapper-func
+    label ""
+        cond-br
+            icmp == index 0
+            label $is-head
+                ret
+                    quote _Value do
+            label $is-body
+                ret
+                    call expand-macro value global-env
 
 # all top level expressions go through the preprocessor, which then descends
 # the expression tree and translates it to bang IR.
@@ -214,9 +244,7 @@ define global-preprocessor (ir-env value)
             call expression? value (quote _Value bang)
             label $is-bang
                 ret
-                    extractvalue
-                        call expand-macro value global-env
-                        1
+                    call bang-map value bang-mapper global-env
             label $else
                 ret value
 
@@ -229,10 +257,10 @@ run
             ret;
 
 # all top level expressions from here go through the preprocessor
-# which means from here, we're in a new context
-################################################################################
+# we only recognize and expand expressions that start with (bang ...)
 
-bang sshhhhiiiiit
+bang
+    printf "hello world"
 
 defvalue hello-world
     bitcast

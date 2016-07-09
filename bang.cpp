@@ -9,6 +9,8 @@ TODO:
     - validate: PHI node operands are not the same type as the result!
     - validate: Called function must be a pointer!
     - validate: Function return type does not match operand type of return inst!
+    - validate: Function arguments must have first-class types!
+        (passing function without pointer to constructor)
 
 type expressions:
 (function return-type-expr ([param-type-expr [...]] [`...`])
@@ -80,6 +82,9 @@ void bang_set_key(ValueRef expr, const char *key, ValueRef value);
 ValueRef bang_get_key(ValueRef expr, const char *key);
 ValueRef bang_slice(ValueRef expr, int start, int end);
 ValueRef bang_merge(ValueRef left, ValueRef right);
+typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
+ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx);
+ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr);
 
 void bang_error_message(ValueRef context, const char *format, ...);
 
@@ -277,448 +282,6 @@ static void dumpFileLine(const char *path, int offset) {
 }
 
 //------------------------------------------------------------------------------
-// TYPE SYSTEM
-//------------------------------------------------------------------------------
-
-typedef uint64_t TypeId;
-
-static TypeId next_type_ref = 0;
-
-// handle around TypeIds
-class Type {
-protected:
-    TypeId id;
-public:
-
-    struct TypeHash {
-      size_t operator() (const Type &x) const {
-        return std::hash<int>()(x.getId());
-      }
-    };
-
-    static Type Undefined;
-
-    // built-in base classes
-    static Type Immutable;
-    static Type Arithmetic;
-    static Type Integer;
-    static Type Unsigned;
-    static Type Real;
-    static Type Pointer;
-    static Type Sized;
-    static Type Array;
-    static Type Vector;
-    static Type Struct;
-    static Type Function;
-
-    // built-in types
-    static Type Void;
-    static Type Opaque;
-    static Type Bool;
-
-    static Type Int8;
-    static Type Int16;
-    static Type Int32;
-    static Type Int64;
-
-    static Type UInt8;
-    static Type UInt16;
-    static Type UInt32;
-    static Type UInt64;
-
-    static Type Half;
-    static Type Float;
-    static Type Double;
-
-    static Type Rawstring;
-
-    // base types are here
-    static std::unordered_map<Type, std::unordered_set<Type, TypeHash>, TypeHash> _basetype_map;
-    // pretty names for types are here
-    static std::unordered_map<Type, std::string, TypeHash> _pretty_name_map;
-    // opaque types don't have an LLVM type
-    static std::unordered_map<Type, LLVMTypeRef, TypeHash> _llvm_type_map;
-    // return type for function types
-    static std::unordered_map<Type, Type, TypeHash > _return_type_map;
-    // varargs trait for function types
-    static std::unordered_map<Type, bool, TypeHash> _varargs_map;
-    // if a type has elements or parameters, their types are here
-    static std::unordered_map<Type, std::vector<Type>, TypeHash > _element_type_map;
-    // if a type's elements are named, their names are here
-    static std::unordered_map<Type, std::vector<std::string>, TypeHash > _element_name_map;
-    // if a type is an array, the array size is here
-    static std::unordered_map<Type, size_t, TypeHash> _array_size_map;
-    // if a type is a vector, the vector size is here
-    static std::unordered_map<Type, size_t, TypeHash> _vector_size_map;
-    // integer and real types carry their bitwidth here
-    static std::unordered_map<Type, unsigned, Type::TypeHash> _bitwidth_map;
-
-    Type() : id(0) {}
-    Type(const Type &type) : id(type.id) {}
-    Type(TypeId id_) : id(id_) {}
-
-    static Type create() {
-        return Type(++next_type_ref);
-    }
-
-    static Type createTrait(const std::string &name) {
-        Type type = create();
-        assert(type.id != 0);
-        _pretty_name_map[type.id] = name;
-        return type;
-    }
-
-    static Type create(const std::string &name, LLVMTypeRef llvmtype) {
-        Type type = create();
-        assert(type.id != 0);
-        _pretty_name_map[type.id] = name;
-        _llvm_type_map[type.id] = llvmtype;
-        return type;
-    }
-
-    static Type createInt(unsigned bits) {
-        Type type = create(format("int%i", bits),
-            LLVMIntTypeInContext(LLVMGetGlobalContext(), bits))
-            .inherit(Integer);
-        _bitwidth_map[type] = bits;
-        return type;
-    }
-
-    static Type createUInt(unsigned bits) {
-        Type type = create(format("uint%i", bits),
-            LLVMIntTypeInContext(LLVMGetGlobalContext(), bits))
-            .inherit(Integer)
-            .inherit(Unsigned);
-        _bitwidth_map[type] = bits;
-        return type;
-    }
-
-    static Type createReal(const std::string &name, LLVMTypeRef llvmtype, unsigned bits) {
-        Type type = create(name, llvmtype)
-            .inherit(Real);
-        _bitwidth_map[type] = bits;
-        return type;
-    }
-
-    static Type createStruct(const std::string &name) {
-        return create(name,
-            LLVMStructCreateNamed(LLVMGetGlobalContext(), name.c_str()))
-            .inherit(Struct);
-    }
-
-    static Type createOpaque(const std::string &name) {
-        return create(name, LLVMStructType(NULL, 0, false));
-    }
-
-    static Type _pointer(Type type);
-    static Type _array(Type type, size_t size);
-    static Type _vector(Type type, size_t size);
-    // memoized functions must always copy arguments
-    static Type _function(Type returntype, std::vector<Type> params, bool varargs);
-
-    static std::function<Type (Type)> pointer;
-    static std::function<Type (Type, size_t)> array;
-    static std::function<Type (Type, size_t)> vector;
-    static std::function<Type (Type, std::vector<Type>, bool)> function;
-
-    bool operator == (Type other) const {
-        return id == other.id;
-    }
-
-    bool operator != (Type other) const {
-        return id != other.id;
-    }
-
-    bool operator < (Type other) const {
-        return id < other.id;
-    }
-
-    size_t getArraySize() const {
-        assert(id != 0);
-        return _array_size_map[*this];
-    }
-
-    size_t getVectorSize() const {
-        assert(id != 0);
-        return _vector_size_map[*this];
-    }
-
-    bool hasVarArgs() const {
-        assert(id != 0);
-        assert(inherits(Type::Function));
-        return _varargs_map[*this];
-    }
-
-    Type getReturnType() const {
-        assert(id != 0);
-        assert(inherits(Type::Function));
-        return _return_type_map[*this];
-    }
-
-    const std::vector<Type> &getElementTypes() const {
-        assert(id != 0);
-        assert(inherits(Type::Function) || inherits(Type::Sized) || inherits(Type::Struct));
-        return _element_type_map[*this];
-    }
-
-    Type getElementType() const {
-        assert(id != 0);
-        assert(inherits(Type::Sized) || inherits(Type::Pointer));
-        return _element_type_map[*this][0];
-    }
-
-    const std::vector<std::string> &getElementNames() const {
-        assert(id != 0);
-        assert(inherits(Type::Struct));
-        return _element_name_map[*this];
-    }
-
-    TypeId getId() const {
-        return id;
-    }
-
-    LLVMTypeRef getLLVMType() const {
-        assert(id != 0);
-        return _llvm_type_map[*this];
-    }
-
-    bool hasBody() const {
-        assert(id != 0);
-        assert(inherits(Struct));
-        return _element_name_map[*this].size() > 0;
-    }
-
-    void setBody(const std::vector<std::string> &names, const std::vector<Type> &types, bool packed = false) {
-        assert(id != 0);
-        assert(!hasBody());
-        assert(types.size() == names.size());
-
-        int fieldcount = (int)types.size();
-        LLVMTypeRef fields[fieldcount];
-        for (int i = 0; i < fieldcount; ++i) {
-            fields[i] = types[i].getLLVMType();
-        }
-
-        _element_type_map[*this] = types;
-        _element_name_map[*this] = names;
-        LLVMStructSetBody(getLLVMType(), fields, fieldcount, packed);
-    }
-
-    bool inherits(Type type) const {
-        assert(id != 0);
-        auto &s = _basetype_map[*this];
-        if (s.count(type) == 1)
-            return true;
-        for (auto subtype : s)
-            if (subtype.inherits(type))
-                return true;
-        return false;
-    }
-
-    Type inherit(Type type) {
-        assert(id != 0);
-        assert(type.id != 0);
-        _basetype_map[*this].insert(type);
-        return *this;
-    }
-
-    std::string getString() const {
-        if (!id) {
-            return "<undefined>";
-        } else {
-            std::string result = _pretty_name_map[*this];
-            if (!result.size())
-                return format("<unnamed:" PRIu64 ">", id);
-            return result;
-        }
-    }
-};
-
-Type Type::Undefined = Type(0);
-
-Type Type::Immutable;
-Type Type::Arithmetic;
-Type Type::Integer;
-Type Type::Unsigned;
-Type Type::Real;
-Type Type::Pointer;
-Type Type::Sized;
-Type Type::Array;
-Type Type::Vector;
-Type Type::Struct;
-Type Type::Function;
-
-Type Type::Void;
-Type Type::Opaque;
-Type Type::Bool;
-
-Type Type::Int8;
-Type Type::Int16;
-Type Type::Int32;
-Type Type::Int64;
-
-Type Type::UInt8;
-Type Type::UInt16;
-Type Type::UInt32;
-Type Type::UInt64;
-
-Type Type::Half;
-Type Type::Float;
-Type Type::Double;
-
-Type Type::Rawstring;
-
-std::unordered_map<Type, std::unordered_set<Type, Type::TypeHash>, Type::TypeHash> Type::_basetype_map;
-std::unordered_map<Type, std::string, Type::TypeHash> Type::_pretty_name_map;
-std::unordered_map<Type, LLVMTypeRef, Type::TypeHash> Type::_llvm_type_map;
-std::unordered_map<Type, Type, Type::TypeHash > Type::_return_type_map;
-std::unordered_map<Type, bool, Type::TypeHash> Type::_varargs_map;
-std::unordered_map<Type, std::vector<Type>, Type::TypeHash > Type::_element_type_map;
-std::unordered_map<Type, std::vector<std::string>, Type::TypeHash > Type::_element_name_map;
-std::unordered_map<Type, size_t, Type::TypeHash> Type::_array_size_map;
-std::unordered_map<Type, size_t, Type::TypeHash> Type::_vector_size_map;
-std::unordered_map<Type, unsigned, Type::TypeHash> Type::_bitwidth_map;
-
-std::function<Type (Type)> Type::pointer = memo(Type::_pointer);
-std::function<Type (Type, size_t)> Type::array = memo(Type::_array);
-std::function<Type (Type, size_t)> Type::vector = memo(Type::_vector);
-std::function<Type (Type, std::vector<Type>, bool)> Type::function = memo(Type::_function);
-
-} // namespace bang
-
-namespace std {
-    template <>
-    struct hash<bang::Type> {
-        public :
-        size_t operator()(const bang::Type &x ) const{
-            return hash<int>()(x.getId());
-        }
-    };
-}
-
-namespace bang {
-
-static void setupTypes () {
-
-    Type::Immutable = Type::createTrait("Immutable");
-    Type::Pointer = Type::createTrait("Pointer")
-        .inherit(Type::Immutable);
-    Type::Arithmetic = Type::createTrait("Arithmetic")
-        .inherit(Type::Immutable);
-    Type::Unsigned = Type::createTrait("Unsigned");
-    Type::Sized = Type::createTrait("Sized");
-    Type::Struct = Type::createTrait("Struct");
-    Type::Integer = Type::createTrait("Integer")
-        .inherit(Type::Arithmetic);
-    Type::Real = Type::createTrait("Real")
-        .inherit(Type::Arithmetic);
-    Type::Array = Type::createTrait("Array")
-        .inherit(Type::Sized);
-    Type::Vector = Type::createTrait("Vector")
-        .inherit(Type::Sized)
-        .inherit(Type::Immutable);
-    Type::Function = Type::createTrait("Function");
-
-    Type::Void = Type::create("void", LLVMVoidType());
-    Type::Opaque = Type::createOpaque("opaque");
-    Type::Bool = Type::create("bool", LLVMInt1Type())
-        .inherit(Type::Immutable);
-
-    Type::Int8 = Type::createInt(8);
-    Type::Int16 = Type::createInt(16);
-    Type::Int32 = Type::createInt(32);
-    Type::Int64 = Type::createInt(64);
-
-    Type::UInt8 = Type::createUInt(8);
-    Type::UInt16 = Type::createUInt(16);
-    Type::UInt32 = Type::createUInt(32);
-    Type::UInt64 = Type::createUInt(64);
-
-    Type::Half = Type::createReal("half", LLVMHalfType(), 16);
-    Type::Float = Type::createReal("float", LLVMFloatType(), 32);
-    Type::Double = Type::createReal("double", LLVMDoubleType(), 64);
-
-    Type::Rawstring = Type::pointer(Type::Int8);
-}
-
-Type Type::_pointer(Type type) {
-    assert(type != Type::Undefined);
-    assert(type.getLLVMType());
-    // cannot reference void
-    assert(type != Type::Void);
-    Type ptr = Type::create(format("(pointer %s)",
-        type.getString().c_str()),
-        LLVMPointerType(type.getLLVMType(), 0) );
-    ptr.inherit(Type::Pointer);
-    std::vector<Type> etypes;
-    etypes.push_back(type.id);
-    _element_type_map[ptr] = etypes;
-    return ptr;
-}
-
-Type Type::_array(Type type, size_t size) {
-    assert(type != Type::Undefined);
-    assert(type.getLLVMType());
-    assert(type != Type::Void);
-    assert(size >= 1);
-    Type arraytype = Type::create(format("(array-type %s %zu)",
-        type.getString().c_str(), size),
-        LLVMArrayType(type.getLLVMType(), size) );
-    arraytype.inherit(Type::Array);
-    std::vector<Type> etypes;
-    etypes.push_back(type.id);
-    _element_type_map[arraytype] = etypes;
-    _array_size_map[arraytype] = size;
-    return arraytype;
-}
-
-Type Type::_vector(Type type, size_t size) {
-    assert(type != Type::Undefined);
-    assert(type.getLLVMType());
-    assert(type != Type::Void);
-    assert(size >= 1);
-    Type vectortype = Type::create(format("(vector-type %s %zu)",
-        type.getString().c_str(), size),
-        LLVMVectorType(type.getLLVMType(), size) );
-    vectortype.inherit(Type::Vector);
-    std::vector<Type> etypes;
-    etypes.push_back(type.id);
-    _element_type_map[vectortype] = etypes;
-    _vector_size_map[vectortype] = size;
-    return vectortype;
-}
-
-Type Type::_function(Type returntype, std::vector<Type> params, bool varargs) {
-    assert(returntype != Type::Undefined);
-    assert(returntype.getLLVMType());
-    std::stringstream ss;
-    std::vector<LLVMTypeRef> llvmparamtypes;
-    ss << "(function-type " << returntype.getString() << " (";
-    for (size_t i = 0; i < params.size(); ++i) {
-        assert(params[i] != Type::Undefined);
-        if (i != 0)
-            ss << " ";
-        ss << params[i].getString();
-        assert(params[i] != Type::Void);
-        LLVMTypeRef llvmtype = params[i].getLLVMType();
-        assert(llvmtype);
-        llvmparamtypes.push_back(llvmtype);
-    }
-    if (varargs)
-        ss << " ...";
-    ss << "))";
-
-    Type functype = Type::create(ss.str(),
-        LLVMFunctionType(returntype.getLLVMType(),
-            &llvmparamtypes[0], llvmparamtypes.size(), varargs));
-    functype.inherit(Type::Function);
-    _element_type_map[functype] = params;
-    _return_type_map[functype] = returntype;
-    _varargs_map[functype] = varargs;
-    return functype;
-}
-
-//------------------------------------------------------------------------------
 // DATA MODEL
 //------------------------------------------------------------------------------
 
@@ -810,6 +373,7 @@ public:
 
     virtual void tag();
     static int collect(ValueRef gcroot);
+    virtual ValueRef clone() const = 0;
 
     bool tagged() { return age == 0; }
 };
@@ -898,6 +462,10 @@ public:
     }
 
     virtual void tag();
+
+    virtual ValueRef clone() const {
+        return new Table(*this);
+    }
 };
 
 static Table *gc_root = NULL;
@@ -932,6 +500,10 @@ public:
     static ValueKind kind() {
         return V_Integer;
     }
+
+    virtual ValueRef clone() const {
+        return new Integer(*this);
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -957,6 +529,10 @@ public:
 
     static ValueKind kind() {
         return V_Real;
+    }
+
+    virtual ValueRef clone() const {
+        return new Real(*this);
     }
 };
 
@@ -1009,6 +585,10 @@ public:
     static ValueKind kind() {
         return V_String;
     }
+
+    virtual ValueRef clone() const {
+        return new String(*this);
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -1025,6 +605,9 @@ struct Symbol : String {
         return V_Symbol;
     }
 
+    virtual ValueRef clone() const {
+        return new Symbol(*this);
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -1050,6 +633,10 @@ public:
 
     static ValueKind kind() {
         return V_Handle;
+    }
+
+    virtual ValueRef clone() const {
+        return new Handle(*this);
     }
 };
 
@@ -1301,7 +888,7 @@ struct Lexer {
         bool escape = false;
         while (true) {
             if (next_cursor == eof) {
-                error("unterminated sequence\n");
+                error("unterminated sequence");
                 break;
             }
             char c = *next_cursor++;
@@ -1509,7 +1096,7 @@ struct Parser {
         Table *result, int list_split_start, char style = 0) {
         int count = (int)result->size();
         if (list_split_start == count) {
-            error("empty expression\n");
+            error("empty expression");
             return false;
         } else {
             auto wrapped_result = new Table();
@@ -1537,7 +1124,7 @@ struct Parser {
             if (lexer.token == end_token) {
                 break;
             } else if (lexer.token == token_eof) {
-                error("missing closing bracket\n");
+                error("missing closing bracket");
                 // point to beginning of table
                 error_origin = result->anchor;
                 return nullptr;
@@ -1566,7 +1153,7 @@ struct Parser {
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
-            error("stray closing bracket\n");
+            error("stray closing bracket");
         } else if (lexer.token == token_string) {
             return lexer.getAsString();
         } else if (lexer.token == token_symbol) {
@@ -1576,7 +1163,7 @@ struct Parser {
         } else if (lexer.token == token_real) {
             return lexer.getAsReal();
         } else {
-            error("unexpected token: %c (%i)\n", *lexer.cursor, (int)*lexer.cursor);
+            error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
         }
 
         return nullptr;
@@ -1597,7 +1184,7 @@ struct Parser {
                 escape = true;
                 lexer.readToken();
                 if (lexer.lineno <= lineno) {
-                    error("escape character is not at end of line\n");
+                    error("escape character is not at end of line");
                     parse_origin = result->anchor;
                     return nullptr;
                 }
@@ -1607,7 +1194,7 @@ struct Parser {
                     if (subcolumn == 0) {
                         subcolumn = lexer.column();
                     } else if (lexer.column() != subcolumn) {
-                        error("indentation mismatch\n");
+                        error("indentation mismatch");
                         parse_origin = result->anchor;
                         return nullptr;
                     }
@@ -1696,7 +1283,7 @@ struct Parser {
                 dumpFileLine(path, error_origin.offset);
                 assert(expr == NULL);
                 if (!(parse_origin == error_origin)) {
-                    printf("%s:%i:%i: while parsing expression\n",
+                    printf("%s:%i:%i: while parsing expression",
                         parse_origin.path,
                         parse_origin.lineno,
                         parse_origin.column);
@@ -1707,7 +1294,7 @@ struct Parser {
                 expr = strip(expr);
             return expr;
         } else {
-            fprintf(stderr, "unable to open file: %s\n", path);
+            fprintf(stderr, "unable to open file: %s", path);
             return NULL;
         }
     }
@@ -1878,7 +1465,6 @@ static void printValue(ValueRef e, size_t depth, bool naked)
 
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
 typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
-typedef std::map<std::string, Type> NameTypeMap;
 typedef std::map<LLVMValueRef, void *> GlobalPtrMap;
 
 //------------------------------------------------------------------------------
@@ -1995,6 +1581,7 @@ bang_preprocessor Environment::preprocessor = NULL;
 // CLANG SERVICES
 //------------------------------------------------------------------------------
 
+/*
 static void translateError (Environment *env, const char *format, ...);
 
 class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
@@ -2202,7 +1789,7 @@ public:
                     return Type::vector(at, n);
                 }
         } break;
-        case clang::Type::FunctionNoProto: /* fallthrough */
+        case clang::Type::FunctionNoProto:
         case clang::Type::FunctionProto: {
             const FunctionType *FT = cast<FunctionType>(Ty);
             if (FT) {
@@ -2222,11 +1809,10 @@ public:
             break;
         }
         fprintf(stderr, "type not understood: %s (%i)\n", T.getAsString().c_str(), Ty->getTypeClass());
-        /*
-        std::stringstream ss;
-        ss << "type not understood: " << T.getAsString().c_str() << " " << Ty->getTypeClass();
-        return ImportError(ss.str().c_str());
-        */
+
+        //~ std::stringstream ss;
+        //~ ss << "type not understood: " << T.getAsString().c_str() << " " << Ty->getTypeClass();
+        //~ return ImportError(ss.str().c_str());
         // TODO: print error
         return Type::Undefined;
     }
@@ -2279,13 +1865,11 @@ public:
             return true;
         }
 
-        /*
-        //Obj typ;
-        if(!GetFuncType(fntyp,&typ)) {
-            SetErrorReport(FuncName.c_str());
-            return true;
-        }
-        */
+        //~ //Obj typ;
+        //~ if(!GetFuncType(fntyp,&typ)) {
+            //~ SetErrorReport(FuncName.c_str());
+            //~ return true;
+        //~ }
         Type functype = TranslateFuncType(fntyp);
         if (functype == Type::Undefined)
             return true;
@@ -2308,10 +1892,8 @@ public:
         ;
 
         // TODO
-        /*
-        env->names[FuncName] = TypedValue(Type::pointer(functype),
-            LLVMAddFunction(env->globals->module, InternalName.c_str(), functype.getLLVMType()));
-        */
+        //~ env->names[FuncName] = TypedValue(Type::pointer(functype),
+            //~ LLVMAddFunction(env->globals->module, InternalName.c_str(), functype.getLLVMType()));
 
         //KeepLive(f);//make sure this function is live in codegen by creating a dummy reference to it (void) is to suppress unused warnings
 
@@ -2381,13 +1963,11 @@ static LLVMModuleRef importCModule (Environment *env,
     // Create the compilers actual diagnostics engine.
     compiler.createDiagnostics();
 
-    /*
     // Infer the builtin include path if unspecified.
-    if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
-        compiler.getHeaderSearchOpts().ResourceDir.empty())
-        compiler.getHeaderSearchOpts().ResourceDir =
-            CompilerInvocation::GetResourcesPath(bang_argv[0], MainAddr);
-    */
+    //~ if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
+        //~ compiler.getHeaderSearchOpts().ResourceDir.empty())
+        //~ compiler.getHeaderSearchOpts().ResourceDir =
+            //~ CompilerInvocation::GetResourcesPath(bang_argv[0], MainAddr);
 
     LLVMModuleRef M = NULL;
 
@@ -2399,11 +1979,12 @@ static LLVMModuleRef importCModule (Environment *env,
         //LLVMDumpModule(M);
         //LLVMAddModule(env->globals->engine, M);
     } else {
-        translateError(env, "compiler failed\n");
+        translateError(env, "compiler failed");
     }
 
     return M;
 }
+*/
 
 //------------------------------------------------------------------------------
 // TRANSLATION
@@ -2424,6 +2005,7 @@ static void translateErrorV (Environment *env, const char *format, va_list args)
         printf("error: ");
     }
     vprintf (format, args);
+    putchar('\n');
     if (env->expr) {
         Anchor anchor = env->expr->anchor;
         dumpFileLine(anchor.path, anchor.offset);
@@ -2442,12 +2024,12 @@ static bool verifyParameterCount (Environment *env, Table *expr, int mincount, i
         auto _ = env->with_expr(expr);
         int argcount = (int)expr->size() - 1;
         if ((mincount >= 0) && (argcount < mincount)) {
-            translateError(env, "at least %i arguments expected\n", mincount);
+            translateError(env, "at least %i arguments expected", mincount);
             return false;
         }
         if ((maxcount >= 0) && (argcount > maxcount)) {
             auto _ = env->with_expr(expr->nth(maxcount + 1));
-            translateError(env, "excess argument. At most %i arguments expected.\n", maxcount);
+            translateError(env, "excess argument. At most %i arguments expected.", maxcount);
             return false;
         }
         return true;
@@ -2477,7 +2059,7 @@ static T *translateKind(Environment *env, ValueRef expr) {
         if (co) {
             return co;
         } else {
-            translateError(env, "%s expected, not %s\n",
+            translateError(env, "%s expected, not %s",
                 valueKindName(T::kind()),
                 valueKindName(expr->getKind()));
         }
@@ -2528,7 +2110,7 @@ static bool translateValueList (Environment *env, Table *expr, int offset) {
 
 static bool verifyInFunction(Environment *env) {
     if (!env->function) {
-        translateError(env, "illegal use outside of function\n");
+        translateError(env, "illegal use outside of function");
         return false;
     }
     return true;
@@ -2537,7 +2119,7 @@ static bool verifyInFunction(Environment *env) {
 static bool verifyInBlock(Environment *env) {
     if (!verifyInFunction(env)) return false;
     if (!env->block) {
-        translateError(env, "illegal use outside of labeled block\n");
+        translateError(env, "illegal use outside of labeled block");
         return false;
     }
     return true;
@@ -2546,7 +2128,7 @@ static bool verifyInBlock(Environment *env) {
 /*
 static LLVMValueRef verifyConstant(Environment *env, LLVMValueRef value) {
     if (value && !LLVMIsConstant(value)) {
-        translateError(env, "constant value expected\n");
+        translateError(env, "constant value expected");
         return NULL;
     }
     return value;
@@ -2555,7 +2137,7 @@ static LLVMValueRef verifyConstant(Environment *env, LLVMValueRef value) {
 
 static LLVMBasicBlockRef verifyBasicBlock(Environment *env, LLVMValueRef value) {
     if (value && !LLVMValueIsBasicBlock(value)) {
-        translateError(env, "block label expected\n");
+        translateError(env, "block label expected");
         return NULL;
     }
     return LLVMValueAsBasicBlock(value);
@@ -2575,13 +2157,13 @@ static LLVMTypeRef resolveType(Environment *env, const std::string &name) {
 
 static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     if (expr->size() == 0) {
-        translateError(env, "value expected\n");
+        translateError(env, "value expected");
         return NULL;
     }
     auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
     if (!head) {
         auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of table must be symbol, not %s\n",
+        translateError(env, "first element of table must be symbol, not %s",
             valueKindName(expr->nth(0)->getKind()));
         return NULL;
     }
@@ -2859,7 +2441,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         LLVMValueRef result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
         if (!result) {
-            translateError(env, "can not use extract on this value\n");
+            translateError(env, "can not use extract on this value");
         }
         return result;
 
@@ -2872,9 +2454,36 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         int64_t index;
         if (!translateInt64(env, expr->nth(2), index)) return NULL;
 
+        LLVMTypeRef valuetype = LLVMTypeOf(value);
+        LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(value));
+        switch(kind) {
+            case LLVMStructTypeKind: {
+                auto _ = env->with_expr(expr->nth(2));
+                unsigned count = LLVMCountStructElementTypes(valuetype);
+                if ((unsigned)index >= count) {
+                    translateError(env,
+                        "struct field index is out of bounds.");
+                }
+            } break;
+            case LLVMArrayTypeKind: {
+                auto _ = env->with_expr(expr->nth(2));
+                unsigned count = LLVMGetArrayLength(valuetype);
+                if ((unsigned)index >= count) {
+                    translateError(env,
+                        "array offset is out of bounds.");
+                }
+            } break;
+            default: {
+                auto _ = env->with_expr(expr->nth(1));
+                translateError(env,
+                    "value passed to extractvalue has illegal type. Struct or array type expected.");
+                return NULL;
+            } break;
+        }
+
         LLVMValueRef result = LLVMBuildExtractValue(env->getBuilder(), value, index, "");
         if (!result) {
-            translateError(env, "can not use extract on this value\n");
+            translateError(env, "can not use extract on this value");
         }
         return result;
 
@@ -3059,7 +2668,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
                     }
                 }
             } else {
-                translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types\n",
+                translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types",
                     argcount, paramcount);
                 return NULL;
             }
@@ -3092,7 +2701,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
             if (!expr_pair)
                 return NULL;
             if (expr_pair->size() != 2) {
-                translateError(env, "exactly 2 parameters expected\n");
+                translateError(env, "exactly 2 parameters expected");
                 return NULL;
             }
             LLVMValueRef value = translateValue(env, expr_pair->nth(0));
@@ -3273,7 +2882,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     */
     } else {
         auto _ = env->with_expr(head);
-        translateError(env, "unhandled special form: %s\n", head->c_str());
+        translateError(env, "unhandled special form: %s", head->c_str());
         return NULL;
     }
 }
@@ -3295,7 +2904,7 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
             penv = penv->parent;
         }
 
-        translateError(env, "no such value: %s\n", sym->c_str());
+        translateError(env, "no such value: %s", sym->c_str());
         return NULL;
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
         return LLVMConstString(str->c_str(), str->size(), false);
@@ -3304,7 +2913,7 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     } else if (auto real = llvm::dyn_cast<Real>(expr)) {
         return LLVMConstReal(LLVMFloatType(), (float)real->getValue());
     } else {
-        translateError(env, "expected value, not %s\n",
+        translateError(env, "expected value, not %s",
             valueKindName(expr->getKind()));
         return NULL;
     }
@@ -3312,13 +2921,13 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
 
 static LLVMTypeRef translateTypeFromList (Environment *env, Table *expr) {
     if (expr->size() == 0) {
-        translateError(env, "type expected\n");
+        translateError(env, "type expected");
         return NULL;
     }
     auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
     if (!head) {
         auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of table must be symbol, not %s\n",
+        translateError(env, "first element of table must be symbol, not %s",
             valueKindName(expr->nth(0)->getKind()));
         return NULL;
     }
@@ -3333,7 +2942,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, Table *expr) {
         }
 
         if (argcount < 0) {
-            translateError(env, "vararg function is missing return type\n");
+            translateError(env, "vararg function is missing return type");
             return NULL;
         }
 
@@ -3420,7 +3029,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, Table *expr) {
         return result;
     } else {
         auto _ = env->with_expr(head);
-        translateError(env, "unhandled special form: %s\n", head->c_str());
+        translateError(env, "unhandled special form: %s", head->c_str());
         return NULL;
     }
 }
@@ -3435,13 +3044,13 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         LLVMTypeRef result = resolveType(env, sym->getValue());
         if (!result) {
-            translateError(env, "no such type: %s\n", sym->c_str());
+            translateError(env, "no such type: %s", sym->c_str());
             return NULL;
         }
 
         return result;
     } else {
-        translateError(env, "expected type, not %s\n",
+        translateError(env, "expected type, not %s",
             valueKindName(expr->getKind()));
         return NULL;
     }
@@ -3450,8 +3059,6 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 static void init() {
     if (!gc_root)
         gc_root = new Table();
-
-    setupTypes();
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -3517,7 +3124,7 @@ static void compileModule (Environment *env, ValueRef expr, int offset) {
     if (auto table = llvm::dyn_cast<Table>(expr)) {
         translateRootValueList (env, table, offset);
     } else {
-        translateError(env, "unexpected %s\n",
+        translateError(env, "unexpected %s",
             valueKindName(expr->getKind()));
     }
 }
@@ -3532,7 +3139,7 @@ static void compileMain (ValueRef expr) {
         auto _ = env.with_expr(expr);
         std::string header = expr->getHeader();
         if (header != "IR") {
-            translateError(&env, "unrecognized header: '%s'; try 'IR' instead.\n", header.c_str());
+            translateError(&env, "unrecognized header: '%s'; try 'IR' instead.", header.c_str());
             return;
         }
     }
@@ -3728,6 +3335,33 @@ ValueRef bang_get_key(ValueRef expr, const char *key) {
         }
     }
     return NULL;
+}
+
+ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx) {
+    if (expr && map) {
+        if (auto table = llvm::cast<bang::Table>(expr)) {
+            bang::Table *newlist = new bang::Table();
+            newlist->anchor = table->anchor;
+            for (int i = 0; i < (int)table->size(); ++i) {
+                ValueRef elem = table->nth(i);
+                elem = map(elem, i, ctx);
+                if (elem)
+                    newlist->append(elem);
+            }
+        }
+    }
+    return NULL;
+}
+
+ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
+    if (anchorexpr && toexpr) {
+        if (anchorexpr->anchor.isValid()) {
+            ValueRef clone = toexpr->clone();
+            clone->anchor = anchorexpr->anchor;
+            return clone;
+        }
+    }
+    return toexpr;
 }
 
 //------------------------------------------------------------------------------
