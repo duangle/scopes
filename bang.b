@@ -14,76 +14,81 @@ IR
 
 # opaque declarations for the bang compiler Environment and the Values of
 # its S-Expression tree, which can be Table, String, Symbol, Integer, Real.
-struct Environment
-struct Value
-
-struct PValue
+struct _Environment
+struct _Value
+struct opaque
 
 deftype rawstring (* i8)
 
-declare printf (function i32 (* i8) ...)
+declare printf (function i32 rawstring ...)
 declare strcmp (function i32 rawstring rawstring)
 
 declare bang_print (function void rawstring)
 
-deftype EnvironmentRef (* Environment)
-deftype ValueRef (* Value)
+deftype Environment (* _Environment)
+deftype Value (* _Value)
 
 defvalue dump-value
-    declare "bang_dump_value" (function void ValueRef)
+    declare "bang_dump_value" (function void Value)
 
 deftype preprocessor-func
-    function ValueRef EnvironmentRef ValueRef
+    function Value Environment Value
 
 defvalue set-preprocessor
     declare "bang_set_preprocessor" (function void (* preprocessor-func))
 
 defvalue kind?
-    declare "bang_get_kind" (function i32 ValueRef)
+    declare "bang_get_kind" (function i32 Value)
 
 defvalue table-size
-    declare "bang_size" (function i32 ValueRef)
+    declare "bang_size" (function i32 Value)
 
 defvalue table-at
-    declare "bang_at" (function ValueRef ValueRef i32)
+    declare "bang_at" (function Value Value i32)
 
 defvalue set-at
-    declare "bang_set_at" (function ValueRef ValueRef i32 ValueRef)
+    declare "bang_set_at" (function Value Value i32 Value)
 
 defvalue set-key
-    declare "bang_set_key" (function void ValueRef rawstring ValueRef)
+    declare "bang_set_key" (function void Value rawstring Value)
 
 defvalue get-key
-    declare "bang_get_key" (function ValueRef ValueRef rawstring)
+    declare "bang_get_key" (function Value Value rawstring)
+
+defvalue handle-value
+    declare "bang_handle_value" (function (* opaque) Value)
+
+defvalue handle
+    declare "bang_handle" (function Value (* opaque))
 
 defvalue slice
-    declare "bang_slice" (function ValueRef ValueRef i32 i32)
+    declare "bang_slice" (function Value Value i32 i32)
 
 defvalue merge
-    declare "bang_merge" (function ValueRef ValueRef ValueRef)
+    declare "bang_merge" (function Value Value Value)
 
 defvalue value==
-    declare "bang_eq" (function i1 ValueRef ValueRef)
+    declare "bang_eq" (function i1 Value Value)
 
 defvalue string-value
-    declare "bang_string_value" (function rawstring ValueRef)
+    declare "bang_string_value" (function rawstring Value)
 
 defvalue error-message
-    declare "bang_error_message" (function void ValueRef rawstring ...)
+    declare "bang_error_message" (function void Value rawstring ...)
 
-defvalue value-type-none (int i32 0)
-defvalue value-type-table (int i32 1)
-defvalue value-type-string (int i32 2)
-defvalue value-type-symbol (int i32 3)
-defvalue value-type-integer (int i32 4)
-defvalue value-type-real (int i32 5)
+defvalue value-type-none 0
+defvalue value-type-table 1
+defvalue value-type-string 2
+defvalue value-type-symbol 3
+defvalue value-type-integer 4
+defvalue value-type-real 5
 
 ################################################################################
 # fundamental helper functions
 
 defvalue table?
     define "" (value)
-        function i1 ValueRef
+        function i1 Value
         label ""
             ret
                 icmp ==
@@ -92,7 +97,7 @@ defvalue table?
 
 defvalue symbol?
     define "" (value)
-        function i1 ValueRef
+        function i1 Value
         label ""
             ret
                 icmp ==
@@ -101,63 +106,119 @@ defvalue symbol?
 
 defvalue empty?
     define "" (value)
-        function i1 ValueRef
+        function i1 Value
         label ""
             ret
-                icmp ==
+                icmp == 0
                     call table-size value
-                    int i32 0
+
+defvalue expression?
+    define "" (value expected-head)
+        function i1 Value Value
+        label ""
+            ret
+                call value==
+                    call table-at value 0
+                    expected-head
 
 ################################################################################
 # build and install the preprocessor hook function.
 
-# all top level expressions go through the preprocessor, which then descends
-# the expression tree and translates it to bang IR.
-define global-preprocessor (env value)
-    preprocessor-func
+# 0: typename, 1: value
+struct TypedValue rawstring Value
+
+deftype MacroFunction
+    function TypedValue Value Value
+
+define expand-macro (value env)
+    MacroFunction
     label ""
         # here we can implement our own language
         cond-br
             call table? value
-            label if-table
-                cond-br
-                    call empty? value
-                    label fail
-                    label if-not-empty
-                        defvalue head
-                            call table-at value (int i32 0)
-                        cond-br
-                            call value== head
-                                quote Value IR
-                            label if-IR
-                                call printf
-                                    bitcast
-                                        global "" "is table!\n"
-                                        rawstring
-                                    call kind? value
-                                defvalue ir-value
-                                    call set-at value
-                                        int i32 0
-                                        quote Value do
-                                br
-                                    label done
-                            label wrong-head
-                                call error-message value
-                                    bitcast (global "" "unknown special form\n") rawstring
-                                ret
-                                    null ValueRef
-            label fail
-    label fail
+            label $is-table
+            label $is-atom
+
+    label $is-table
+        cond-br
+            call empty? value
+            label $is-empty-table
+            label $is-expression
+
+    label $is-atom
         call error-message value
-            bitcast (global "" "unhandled expression\n") rawstring
+            bitcast (global "" "unknown atom\n") rawstring
         br
-            label done
-    label done
+            label $error
+    label $is-empty-table
+        call error-message value
+            bitcast (global "" "expression is empty\n") rawstring
+        br
+            label $error
+
+    label $is-expression
+        defvalue head
+            call table-at value 0
+        defvalue handler
+            bitcast
+                call handle-value
+                    call get-key env
+                        call string-value head
+                * MacroFunction
+        cond-br
+            icmp ==
+                null (* MacroFunction)
+                handler
+            label $has-no-handler
+            label $has-handler
+
+    label $has-handler
         ret
-            phi
-                ValueRef
-                ir-value if-IR
-                (null ValueRef) fail
+            call
+                phi (* MacroFunction)
+                    handler $is-expression
+                value
+                env
+
+    label $has-no-handler
+        call error-message value
+            bitcast (global "" "unknown special form, macro or function\n") rawstring
+        br
+            label $error
+
+    label $error
+        ret
+            null TypedValue
+
+    ///
+        defvalue result
+            alloca TypedValue
+        store
+            null rawstring
+            getelementptr result 0 0
+        store
+            null Value
+            getelementptr result 0 1
+        ret
+            load result
+
+defvalue global-env
+    quote _Value ()
+
+# all top level expressions go through the preprocessor, which then descends
+# the expression tree and translates it to bang IR.
+define global-preprocessor (ir-env value)
+    preprocessor-func
+    label ""
+        cond-br
+            call expression? value (quote _Value bang)
+            label $is-bang
+                ret
+                    extractvalue
+                        call expand-macro value global-env
+                        1
+            label $else
+                ret value
 
 # install preprocessor and continue evaluating the module
 run
@@ -171,166 +232,167 @@ run
 # which means from here, we're in a new context
 ################################################################################
 
-IR
-    defvalue hello-world
-        bitcast
-            global ""
-                "Hello World!\n"
-            * i8
+bang sshhhhiiiiit
 
-    define main ()
-        function void
-        label ""
-            call dump-value
-                quote Value
-                    run
-                        print "'\"" '"\''
-                        print "yo
-                        yo" "hey hey" "ho"
-                        print (
-                        ) a b c (
-                         ) d e f
-                            g h i
-                        # compare
-                        do
-                            if cond1:
-                                do-this;
-                            else if cond2:
-                                do-that;
-                            else:
-                                do-something;
+defvalue hello-world
+    bitcast
+        global ""
+            "Hello World!\n"
+        rawstring
 
-                        # to
-                        do
-                            if (cond1) {
-                                do-this;
-                            } else if (cond2) {
-                                do-that;
-                            } else {
-                                do-that;
-                            }
-                        0x1A.25A 0x.e 0xaF0.3 0 1 1e+5 .134123123 123 012.3 12.512e+12 0 0 0 0 0 +1 -0.1 +0.1 2.5 +1 -1 +100 -100 +100
-                        0666 ..5 ... :: .: a. a: a:a:a .a .a ...a 35.3 0x7fffffffffffffff 0x10 +inf -inf +nan -nan
-                        -.0 1.0 1.594 1 .1e+12 .0 0. +5 +.5 .5 -1 -.5 - +a +0 -0 -2 2.5 inf nan n na i in
-                        ... a. a: aa a,b,c 0.
-                        a = 3, b = 4, c = 5;
-                        {a b c} [(d)f g]
-                        {a,(),;b, c;d e;}[]
-                        [abc:a,b,c d,d;a,b,c,d;]
-                        [][a,b,d,e f;]
-                        [a = b,c = d,e = f]
-                        [a b: c d,q,d e,e,]
-                        [a b: c d;q;d e;e;]
-                        ab.bc..cd...de.a.b.c.d
-                        [ptr, * ptr, const * ptr]
-                        int x, int y; x = 5, y = z
-                        do                                # (do
-                            a; b; c d
-                        . .. ... ....
-                        {
-                            if a: b q, c d, d e;
-                            if b: c;
-                            if c {
-                                b q;
-                                c d;
-                                d e;
-                                };
-                            }
-                        a b;c d;
-                            f g
-                        do
-                            print x; print
-                                a + b
-                        if q: a b, c d;
-                        a b c,
-                            d e f
-                        e f, g h, i j k,m;
-                        g h, i j k;
-                        n o;
-                        f g,q,w,q e
-                        (if a == b && c == d: print a; print b;)
-                        if a == b && c == d:
-                            print "yes"; print "no"
-                            print c
-                        {
-                            if (true)
+define main ()
+    function void
+    label ""
+        /// call dump-value
+            quote _Value
+                run
+                    print "'\"" '"\''
+                    print "yo
+                    yo" "hey hey" "ho"
+                    print (
+                    ) a b c (
+                     ) d e f
+                        g h i
+                    # compare
+                    do
+                        if cond1:
+                            do-this;
+                        else if cond2:
+                            do-that;
+                        else:
+                            do-something;
 
-                            {
-                            }
-                            else if (false)
-                            {
-                            }
-                            else
-                            {
-                            };
-                            print("hi",1,2,3,auto(),5,2 + 1);
+                    # to
+                    do
+                        if (cond1) {
+                            do-this;
+                        } else if (cond2) {
+                            do-that;
+                        } else {
+                            do-that;
                         }
+                    0x1A.25A 0x.e 0xaF0.3 0 1 1e+5 .134123123 123 012.3 12.512e+12 0 0 0 0 0 +1 -0.1 +0.1 2.5 +1 -1 +100 -100 +100
+                    0666 ..5 ... :: .: a. a: a:a:a .a .a ...a 35.3 0x7fffffffffffffff 0x10 +inf -inf +nan -nan
+                    -.0 1.0 1.594 1 .1e+12 .0 0. +5 +.5 .5 -1 -.5 - +a +0 -0 -2 2.5 inf nan n na i in
+                    ... a. a: aa a,b,c 0.
+                    a = 3, b = 4, c = 5;
+                    {a b c} [(d)f g]
+                    {a,(),;b, c;d e;}[]
+                    [abc:a,b,c d,d;a,b,c,d;]
+                    [][a,b,d,e f;]
+                    [a = b,c = d,e = f]
+                    [a b: c d,q,d e,e,]
+                    [a b: c d;q;d e;e;]
+                    ab.bc..cd...de.a.b.c.d
+                    [ptr, * ptr, const * ptr]
+                    int x, int y; x = 5, y = z
+                    do                                # (do
+                        a; b; c d
+                    . .. ... ....
+                    {
+                        if a: b q, c d, d e;
+                        if b: c;
+                        if c {
+                            b q;
+                            c d;
+                            d e;
+                            };
+                        }
+                    a b;c d;
+                        f g
+                    do
+                        print x; print
+                            a + b
+                    if q: a b, c d;
+                    a b c,
+                        d e f
+                    e f, g h, i j k,m;
+                    g h, i j k;
+                    n o;
+                    f g,q,w,q e
+                    (if a == b && c == d: print a; print b;)
+                    if a == b && c == d:
+                        print "yes"; print "no"
+                        print c
+                    {
+                        if (true)
 
-                        if a == b && c == d: print a; print b;
-                        if a; q e
-                            a b c d;
-                            e f;
-                            g h; [i];
-                            g h; j; k; l; m
-                            j k; l m
-                            teamo beamo
+                        {
+                        }
+                        else if (false)
+                        {
+                        }
                         else
-                            e f g
-                        define "" ()
-                            # comment
-                            function void
-                            label ""
-                                call printf
-                                    bitcast
-                                        global ""
-                                            "running in compiler!\n"
-                                        * i8
-                                ret;
+                        {
+                        };
+                        print("hi",1,2,3,auto(),5,2 + 1);
+                    }
 
-            defvalue Q
-                quote Value word
-            call printf
-                bitcast
-                    global ""
-                        "quote = %x %p %p\n"
-                    * i8
-                dump
-                    load
-                        getelementptr
-                            bitcast
-                                Q
-                                * i32
-                            int i32 0
-                Q
-                Q
+                    if a == b && c == d: print a; print b;
+                    if a; q e
+                        a b c d;
+                        e f;
+                        g h; [i];
+                        g h; j; k; l; m
+                        j k; l m
+                        teamo beamo
+                    else
+                        e f g
+                    define "" ()
+                        # comment
+                        function void
+                        label ""
+                            call printf
+                                bitcast
+                                    global ""
+                                        "running in compiler!\n"
+                                    rawstring
+                            ret;
 
-            call printf hello-world
-            cond-br
-                int i1 1
-                label then
-                label else
-        label then
-            defvalue c0
-                bitcast
-                    global "" "Choice 1\n"
-                    * i8
-            br
-                label done
-        label else
-            defvalue c1
-                bitcast
-                    global "" "Choice 2\n"
-                    * i8
-            br
-                label done
-        label done
-            call printf
-                phi
-                    * i8
-                    c0 then
-                    c1 else
-            ret;
+        defvalue Q
+            quote _Value word
+        call printf
+            bitcast
+                global ""
+                    "quote = %x %p %p\n"
+                rawstring
+            dump
+                load
+                    getelementptr
+                        bitcast
+                            Q
+                            * i32
+                        0
+            Q
+            Q
 
-    # dump-module
-    run main
+        call printf hello-world
+        cond-br
+            int i1 1
+            label then
+            label else
+    label then
+        defvalue c0
+            bitcast
+                global "" "Choice 1\n"
+                rawstring
+        br
+            label done
+    label else
+        defvalue c1
+            bitcast
+                global "" "Choice 2\n"
+                rawstring
+        br
+            label done
+    label done
+        call printf
+            phi
+                rawstring
+                c0 then
+                c1 else
+        ret;
+
+# dump-module
+run main
 

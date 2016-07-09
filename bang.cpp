@@ -2,16 +2,13 @@
 #define BANG0_CPP
 
 /*
-there are two semantics at play here:
-
-stage 1 is a self-expanding high level language that ultimately evaluates
-to the LLVM DSL.
-
-stage 2 is the LLVM DSL which executes statements.
-
-stage 1 expressions:
-
-stage 2 expressions:
+TODO:
+    - validate getelementptr arguments where possible
+    - validate that used values are in the same block
+    - validate: Call parameter type does not match function signature!
+    - validate: PHI node operands are not the same type as the result!
+    - validate: Called function must be a pointer!
+    - validate: Function return type does not match operand type of return inst!
 
 type expressions:
 (function return-type-expr ([param-type-expr [...]] [`...`])
@@ -76,6 +73,8 @@ int bang_get_kind(ValueRef expr);
 int bang_size(ValueRef expr);
 ValueRef bang_at(ValueRef expr, int index);
 const char *bang_string_value(ValueRef expr);
+void *bang_handle_value(ValueRef expr);
+ValueRef bang_handle(void *ptr);
 ValueRef bang_set_at(ValueRef expr, int index, ValueRef value);
 void bang_set_key(ValueRef expr, const char *key, ValueRef value);
 ValueRef bang_get_key(ValueRef expr, const char *key);
@@ -729,7 +728,8 @@ enum ValueKind {
     V_String = 2,
     V_Symbol = 3,
     V_Integer = 4,
-    V_Real = 5
+    V_Real = 5,
+    V_Handle = 6
 };
 
 static const char *valueKindName(int kind) {
@@ -1025,6 +1025,32 @@ struct Symbol : String {
         return V_Symbol;
     }
 
+};
+
+//------------------------------------------------------------------------------
+
+struct Handle : Value {
+protected:
+    void *value;
+
+public:
+    Handle(void *ptr) :
+        Value(V_Handle),
+        value(ptr)
+        {}
+
+    void *getValue() const {
+        return value;
+    }
+
+    static bool classof(const Value *expr) {
+        auto kind = expr->getKind();
+        return (kind == V_Handle);
+    }
+
+    static ValueKind kind() {
+        return V_Handle;
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -1793,6 +1819,12 @@ static void printValue(ValueRef e, size_t depth, bool naked)
     case V_Real: {
         const Real *a = llvm::cast<Real>(e);
         printf("%g", a->getValue());
+        if (naked)
+            putchar('\n');
+    } return;
+    case V_Handle: {
+        const Handle *h = llvm::cast<Handle>(e);
+        printf("#%p#", h->getValue());
         if (naked)
             putchar('\n');
     } return;
@@ -2593,6 +2625,16 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         }
 
         return value;
+    } else if (matchSpecialForm(env, expr, "dumptype", 1, 1)) {
+
+        ValueRef expr_arg = expr->nth(1);
+
+        LLVMTypeRef type = translateType(env, expr_arg);
+        if (type) {
+            LLVMDumpType(type);
+        }
+
+        return NULL;
 
     } else if (matchSpecialForm(env, expr, "global", 2, 2)) {
 
@@ -2869,8 +2911,8 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         LLVMTypeRef type = translateType(env, expr->nth(1));
         if (!type) return NULL;
-        LLVMValueRef value = translateValue(env, expr->nth(2));
-        if (value) {
+        if (expr->nth(2)) {
+            LLVMValueRef value = translateValue(env, expr->nth(2));
             return LLVMBuildArrayAlloca(env->getBuilder(), type, value, "");
         } else {
             return LLVMBuildAlloca(env->getBuilder(), type, "");
@@ -3257,6 +3299,10 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
         return NULL;
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
         return LLVMConstString(str->c_str(), str->size(), false);
+    } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
+        return LLVMConstInt(LLVMInt32Type(), integer->getValue(), 1);
+    } else if (auto real = llvm::dyn_cast<Real>(expr)) {
+        return LLVMConstReal(LLVMFloatType(), (float)real->getValue());
     } else {
         translateError(env, "expected value, not %s\n",
             valueKindName(expr->getKind()));
@@ -3625,6 +3671,21 @@ const char *bang_string_value(ValueRef expr) {
         }
     }
     return NULL;
+}
+
+void *bang_handle_value(ValueRef expr) {
+    if (expr) {
+        if (auto handle = llvm::cast<bang::Handle>(expr)) {
+            return handle->getValue();
+        }
+    }
+    return NULL;
+}
+
+ValueRef bang_handle(void *ptr) {
+    auto handle = new bang::Handle(ptr);
+    bang::gc_root->append(handle);
+    return handle;
 }
 
 void bang_error_message(ValueRef context, const char *format, ...) {
