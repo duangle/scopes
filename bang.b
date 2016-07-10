@@ -79,6 +79,12 @@ defvalue error-message
 defvalue set-anchor
     declare "bang_set_anchor" (function Value Value Value)
 
+defvalue wrap
+    declare "bang_wrap" (function Value Value)
+
+defvalue prepend
+    declare "bang_prepend" (function Value Value Value)
+
 # redeclare pointer types to specialize our mapping handler
 deftype bang-mapper-func
     function Value Value i32 Value
@@ -94,6 +100,15 @@ defvalue value-type-real 5
 
 ################################################################################
 # fundamental helper functions
+
+# non-table or empty table
+defvalue atom?
+    define "" (value)
+        function i1 Value
+        label ""
+            ret
+                icmp == 0
+                    call table-size value
 
 defvalue table?
     define "" (value)
@@ -163,7 +178,6 @@ deftype MacroFunction
 define expand-macro (value env)
     MacroFunction
     label ""
-        # here we can implement our own language
         cond-br
             call table? value
             label $is-table
@@ -231,6 +245,107 @@ define expand-macro (value env)
 defvalue global-env
     quote _Value ()
 
+define qquote-1 (value)
+    function Value Value
+    label ""
+        cond-br
+            call atom? value
+            label $is-not-list
+            label $is-list
+    label $is-not-list
+        ret
+            call prepend
+                call wrap value
+                quote _Value quote
+    label $is-list
+        cond-br
+            call expression? value
+                quote _Value unquote
+            label $is-unquote
+            label $is-not-unquote
+    label $is-unquote
+        ret
+            call get-at value 1
+    label $is-not-unquote
+        cond-br
+            call expression? value
+                quote _Value qquote
+            label $is-qquote
+            label $is-not-qquote
+    label $is-qquote
+        ret
+            call qquote-1
+                call qquote-1
+                    call get-at value 1
+    label $is-not-qquote
+        cond-br
+            call atom?
+                call get-at value 0
+            label $head-is-not-list
+            label $head-is-list
+    label $head-is-not-list
+        br
+            label $is-not-unquote-splice
+    label $head-is-list
+        cond-br
+            call expression?
+                call get-at value 0
+                quote _Value unquote-splice
+            label $is-unquote-splice
+            label $is-not-unquote-splice
+    label $is-unquote-splice
+        ret
+            call prepend
+                call merge
+                    call wrap
+                        call get-at
+                            call get-at value 0
+                            1
+                    call wrap
+                        call qquote-1
+                            call slice value 1 -1
+                quote _Value merge
+    label $is-not-unquote-splice
+        ret
+            call prepend
+                call merge
+                    call wrap
+                        call qquote-1
+                            call slice value 1 -1
+                    call wrap
+                        call qquote-1
+                            call get-at value 0
+                quote _Value prepend
+
+
+///
+    function backquote-1 (x)
+        if (ast-atom? x)
+            ast-list "quote" x
+            if (== (@ x 0) "unquote")
+                @ x 1
+                if (== (@ x 0) "backquote")
+                    backquote-1 (backquote-1 (@ x 1))
+                    if (ast-atom? (@ x 0))
+                        ast-list "ast-list-prepend"
+                            backquote-1 (ast-list-slice x 1)
+                            backquote-1 (@ x 0)
+                        if (== (@ x 0 0) "unquote-splice")
+                            ast-list "ast-list-concat" (@ x 0 1)
+                                backquote-1 (ast-list-slice x 1)
+                            ast-list "ast-list-prepend"
+                                backquote-1 (ast-list-slice x 1)
+                                backquote-1 (@ x 0)
+
+define macro-qquote (value env)
+    MacroFunction
+    label ""
+        defvalue qq
+            call qquote-1
+                call get-at value 1
+        call dump-value qq
+        ret qq
+
 define bang-mapper (value index env)
     bang-mapper-func
     label ""
@@ -261,6 +376,15 @@ run
     define "" ()
         function void
         label ""
+            call set-key global-env
+                bitcast
+                    global "" "qquote"
+                    rawstring
+                call handle
+                    bitcast
+                        macro-qquote
+                        * opaque
+
             call set-preprocessor global-preprocessor
             ret;
 
@@ -274,9 +398,13 @@ defvalue hello-world
         rawstring
 
 bang
-    escape
-        dump
-            call printf hello-world
+    qquote
+        do
+            qquote test
+            word1
+            unquote-splice
+                (generate-list)
+            word2
 
 define main ()
     function void

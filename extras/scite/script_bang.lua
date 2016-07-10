@@ -25,7 +25,8 @@ keyword_str = getprop("keywords.bang") or
         .. " call int real defvalue deftype label phi br ret cond-br bitcast"
         .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
-        .. " compiler-do icmp fcmp and or add sub IR alloca dumptype escape"
+        .. " compiler-do icmp fcmp and or add sub IR alloca dumptype escape qquote"
+        .. " unquote unquote-splice"
 
 operator_str = getprop("operators.bang") or
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
@@ -71,7 +72,12 @@ end
 
 local chr = string.char
 function deref(ptr)
-    return chr(editor.CharAt[ptr])
+    local ch = editor.CharAt[ptr]
+    if ch >= 0 and ch <= 255 then
+        return chr(editor.CharAt[ptr])
+    else
+        return "?"
+    end
 end
 
 function Lexer()

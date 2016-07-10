@@ -85,6 +85,8 @@ ValueRef bang_merge(ValueRef left, ValueRef right);
 typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
 ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx);
 ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr);
+ValueRef bang_wrap(ValueRef expr);
+ValueRef bang_prepend(ValueRef expr, ValueRef left);
 
 void bang_error_message(ValueRef context, const char *format, ...);
 
@@ -2155,6 +2157,13 @@ static LLVMTypeRef resolveType(Environment *env, const std::string &name) {
     return NULL;
 }
 
+static std::string getTypeString(LLVMTypeRef type) {
+    char *s = LLVMPrintTypeToString(type);
+    std::string result = s;
+    LLVMDisposeMessage(s);
+    return result;
+}
+
 static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     if (expr->size() == 0) {
         translateError(env, "value expected");
@@ -2802,12 +2811,21 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         if (!verifyParameterCount(env, expr, mincount, maxcount, 2))
             return NULL;
 
+        LLVMTypeRef ptypes[count];
+        LLVMGetParamTypes(functype, ptypes);
         LLVMValueRef args[argcount];
         for (int i = 0; i < argcount; ++i) {
             args[i] = translateValue(env, expr->nth(i + 2));
             if (!args[i]) return NULL;
+            if ((i < count) && (LLVMTypeOf(args[i]) != ptypes[i])) {
+                auto _ = env->with_expr(expr->nth(i + 2));
+
+                translateError(env, "call parameter type (%s) does not match function signature (%s)",
+                    getTypeString(LLVMTypeOf(args[i])).c_str(),
+                    getTypeString(ptypes[i]).c_str());
+                return NULL;
+            }
         }
-        //void LLVMGetParamTypes(LLVMTypeRef FunctionTy, LLVMTypeRef *Dest);
 
         return LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
 
@@ -3215,7 +3233,7 @@ int bang_get_kind(ValueRef expr) {
 
 int bang_size(ValueRef expr) {
     if (expr) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             return table->size();
         }
     }
@@ -3224,7 +3242,7 @@ int bang_size(ValueRef expr) {
 
 ValueRef bang_at(ValueRef expr, int index) {
     if (expr) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             return table->nth(index);
         }
     }
@@ -3233,8 +3251,9 @@ ValueRef bang_at(ValueRef expr, int index) {
 
 ValueRef bang_set_at(ValueRef expr, int index, ValueRef value) {
     if (expr && value) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             bang::Table *newlist = new bang::Table();
+            newlist->style = table->style;
             newlist->anchor = table->anchor;
             for (int i = 0; i < index; ++i) {
                 ValueRef elem = table->nth(i);
@@ -3253,12 +3272,13 @@ ValueRef bang_set_at(ValueRef expr, int index, ValueRef value) {
 
 ValueRef bang_slice(ValueRef expr, int start, int end) {
     if (expr) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             bang::Table *newlist = new bang::Table();
+            newlist->style = table->style;
             newlist->anchor = table->anchor;
             if (end == -1)
                 end = (int)table->size();
-            for (int i = start; i <= end; ++i) {
+            for (int i = start; i < end; ++i) {
                 ValueRef elem = table->nth(i);
                 if (!elem) break;
                 newlist->append(elem);
@@ -3271,10 +3291,11 @@ ValueRef bang_slice(ValueRef expr, int start, int end) {
 
 ValueRef bang_merge(ValueRef left, ValueRef right) {
     if (left && right) {
-        auto ltable = llvm::cast<bang::Table>(left);
-        auto rtable = llvm::cast<bang::Table>(right);
+        auto ltable = llvm::dyn_cast<bang::Table>(left);
+        auto rtable = llvm::dyn_cast<bang::Table>(right);
         if (ltable && rtable) {
             bang::Table *newlist = new bang::Table();
+            newlist->style = ltable->style;
             newlist->anchor = ltable->anchor;
             int size1 = (int)ltable->size();
             for (int i = 0; i < size1; ++i) {
@@ -3292,7 +3313,7 @@ ValueRef bang_merge(ValueRef left, ValueRef right) {
 
 const char *bang_string_value(ValueRef expr) {
     if (expr) {
-        if (auto str = llvm::cast<bang::String>(expr)) {
+        if (auto str = llvm::dyn_cast<bang::String>(expr)) {
             return str->getValue().c_str();
         }
     }
@@ -3301,7 +3322,7 @@ const char *bang_string_value(ValueRef expr) {
 
 void *bang_handle_value(ValueRef expr) {
     if (expr) {
-        if (auto handle = llvm::cast<bang::Handle>(expr)) {
+        if (auto handle = llvm::dyn_cast<bang::Handle>(expr)) {
             return handle->getValue();
         }
     }
@@ -3341,7 +3362,7 @@ int bang_eq(Value *a, Value *b) {
 
 void bang_set_key(ValueRef expr, const char *key, ValueRef value) {
     if (expr && key && value) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             table->setKey(key, value);
         }
     }
@@ -3349,7 +3370,7 @@ void bang_set_key(ValueRef expr, const char *key, ValueRef value) {
 
 ValueRef bang_get_key(ValueRef expr, const char *key) {
     if (expr && key) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             return table->getKey(key);
         }
     }
@@ -3358,8 +3379,9 @@ ValueRef bang_get_key(ValueRef expr, const char *key) {
 
 ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx) {
     if (expr && map) {
-        if (auto table = llvm::cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
             bang::Table *newlist = new bang::Table();
+            newlist->style = table->style;
             newlist->anchor = table->anchor;
             for (int i = 0; i < (int)table->size(); ++i) {
                 ValueRef elem = table->nth(i);
@@ -3382,6 +3404,34 @@ ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
         }
     }
     return toexpr;
+}
+
+ValueRef bang_wrap(ValueRef expr) {
+    if (expr) {
+        bang::Table *newlist = new bang::Table();
+        newlist->style = '(';
+        newlist->anchor = expr->anchor;
+        newlist->append(expr);
+        return newlist;
+    }
+    return NULL;
+}
+
+ValueRef bang_prepend(ValueRef expr, ValueRef left) {
+    if (expr && left) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
+            bang::Table *newlist = new bang::Table();
+            newlist->style = table->style;
+            newlist->anchor = table->anchor;
+            newlist->append(left);
+            for (int i = 0; i < (int)table->size(); ++i) {
+                ValueRef elem = table->nth(i);
+                newlist->append(elem);
+            }
+            return newlist;
+        }
+    }
+    return expr;
 }
 
 //------------------------------------------------------------------------------
