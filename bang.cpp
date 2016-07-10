@@ -2019,10 +2019,10 @@ static void translateError (Environment *env, const char *format, ...) {
     va_end (args);
 }
 
-static bool verifyParameterCount (Environment *env, Table *expr, int mincount, int maxcount) {
+static bool verifyParameterCount (Environment *env, Table *expr, int mincount, int maxcount, int start = 1) {
     if (expr) {
         auto _ = env->with_expr(expr);
-        int argcount = (int)expr->size() - 1;
+        int argcount = (int)expr->size() - start;
         if ((mincount >= 0) && (argcount < mincount)) {
             translateError(env, "at least %i arguments expected", mincount);
             return false;
@@ -2455,7 +2455,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         if (!translateInt64(env, expr->nth(2), index)) return NULL;
 
         LLVMTypeRef valuetype = LLVMTypeOf(value);
-        LLVMTypeKind kind = LLVMGetTypeKind(LLVMTypeOf(value));
+        LLVMTypeKind kind = LLVMGetTypeKind(valuetype);
         switch(kind) {
             case LLVMStructTypeKind: {
                 auto _ = env->with_expr(expr->nth(2));
@@ -2783,12 +2783,31 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         ValueRef expr_func = expr->nth(1);
         LLVMValueRef callee = translateValue(env, expr_func);
         if (!callee) return NULL;
+        LLVMTypeRef functype = LLVMTypeOf(callee);
+        LLVMTypeKind kind = LLVMGetTypeKind(functype);
+        if (kind == LLVMPointerTypeKind) {
+            functype = LLVMGetElementType(functype);
+            kind = LLVMGetTypeKind(functype);
+        }
+        if (kind != LLVMFunctionTypeKind) {
+            auto _ = env->with_expr(expr->nth(1));
+            translateError(env, "callee is not a function.");
+            return NULL;
+        }
+
+        int count = (int)LLVMCountParamTypes(functype);
+        bool vararg = LLVMIsFunctionVarArg(functype);
+        int mincount = count;
+        int maxcount = vararg?-1:count;
+        if (!verifyParameterCount(env, expr, mincount, maxcount, 2))
+            return NULL;
 
         LLVMValueRef args[argcount];
         for (int i = 0; i < argcount; ++i) {
             args[i] = translateValue(env, expr->nth(i + 2));
             if (!args[i]) return NULL;
         }
+        //void LLVMGetParamTypes(LLVMTypeRef FunctionTy, LLVMTypeRef *Dest);
 
         return LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
 
@@ -3348,6 +3367,7 @@ ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx) {
                 if (elem)
                     newlist->append(elem);
             }
+            return newlist;
         }
     }
     return NULL;

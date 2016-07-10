@@ -43,7 +43,7 @@ defvalue kind?
 defvalue table-size
     declare "bang_size" (function i32 Value)
 
-defvalue table-at
+defvalue get-at
     declare "bang_at" (function Value Value i32)
 
 defvalue set-at
@@ -127,7 +127,7 @@ defvalue expression?
         label ""
             ret
                 call value==
-                    call table-at value 0
+                    call get-at value 0
                     expected-head
 
 defvalue type-key
@@ -188,26 +188,34 @@ define expand-macro (value env)
 
     label $is-expression
         defvalue head
-            call table-at value 0
-        defvalue handler
-            bitcast
-                call handle-value
-                    call get-key env
-                        call string-value head
-                * MacroFunction
+            call get-at value 0
         cond-br
-            icmp ==
-                null (* MacroFunction)
-                handler
-            label $has-no-handler
-            label $has-handler
+            call expression? value (quote _Value escape)
+            label $is-escape
+                ret
+                    call get-at value 1
+            label $is-not-escape
+                defvalue handler
+                    bitcast
+                        call handle-value
+                            call get-key env
+                                call string-value head
+                        * MacroFunction
+                cond-br
+                    icmp ==
+                        null (* MacroFunction)
+                        handler
+                    label $has-no-handler
+                    label $has-handler
 
     label $has-handler
         ret
-            call
-                phi (* MacroFunction)
-                    handler $is-expression
-                value
+            call expand-macro
+                call
+                    phi (* MacroFunction)
+                        handler $is-not-escape
+                    value
+                    env
                 env
 
     label $has-no-handler
@@ -230,7 +238,7 @@ define bang-mapper (value index env)
             icmp == index 0
             label $is-head
                 ret
-                    quote _Value do
+                    quote _Value do-splice
             label $is-body
                 ret
                     call expand-macro value global-env
@@ -259,14 +267,16 @@ run
 # all top level expressions from here go through the preprocessor
 # we only recognize and expand expressions that start with (bang ...)
 
-bang
-    printf "hello world"
-
 defvalue hello-world
     bitcast
         global ""
             "Hello World!\n"
         rawstring
+
+bang
+    escape
+        dump
+            call printf hello-world
 
 define main ()
     function void
