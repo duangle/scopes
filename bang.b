@@ -13,7 +13,7 @@ IR
 # declarations yet.
 
 # opaque declarations for the bang compiler Environment and the Values of
-# its S-Expression tree, which can be Table, String, Symbol, Integer, Real.
+# its S-Expression tree, which can be List, String, Symbol, Integer, Real.
 struct _Environment
 struct _Value
 struct opaque
@@ -37,17 +37,17 @@ deftype preprocessor-func
 defvalue set-preprocessor
     declare "bang_set_preprocessor" (function void (* preprocessor-func))
 
-defvalue kind?
+defvalue kind-of
     declare "bang_get_kind" (function i32 Value)
 
-defvalue table-size
-    declare "bang_size" (function i32 Value)
+defvalue at
+    declare "bang_at" (function Value Value)
 
-defvalue get-at
-    declare "bang_at" (function Value Value i32)
+defvalue next
+    declare "bang_next" (function Value Value)
 
-defvalue set-at
-    declare "bang_set_at" (function Value Value i32 Value)
+defvalue cons
+    declare "bang_cons" (function Value Value Value)
 
 defvalue set-key
     declare "bang_set_key" (function void Value rawstring Value)
@@ -61,12 +61,6 @@ defvalue handle-value
 defvalue handle
     declare "bang_handle" (function Value (* opaque))
 
-defvalue slice
-    declare "bang_slice" (function Value Value i32 i32)
-
-defvalue merge
-    declare "bang_merge" (function Value Value Value)
-
 defvalue value==
     declare "bang_eq" (function i1 Value Value)
 
@@ -79,12 +73,6 @@ defvalue error-message
 defvalue set-anchor
     declare "bang_set_anchor" (function Value Value Value)
 
-defvalue wrap
-    declare "bang_wrap" (function Value Value)
-
-defvalue prepend
-    declare "bang_prepend" (function Value Value Value)
-
 # redeclare pointer types to specialize our mapping handler
 deftype bang-mapper-func
     function Value Value i32 Value
@@ -92,7 +80,7 @@ defvalue bang-map
     declare "bang_map" (function Value Value (* bang-mapper-func) Value)
 
 defvalue value-type-none 0
-defvalue value-type-table 1
+defvalue value-type-list 1
 defvalue value-type-string 2
 defvalue value-type-symbol 3
 defvalue value-type-integer 4
@@ -101,23 +89,29 @@ defvalue value-type-real 5
 ################################################################################
 # fundamental helper functions
 
-# non-table or empty table
-defvalue atom?
-    define "" (value)
-        function i1 Value
-        label ""
-            ret
-                icmp == 0
-                    call table-size value
-
-defvalue table?
+defvalue list?
     define "" (value)
         function i1 Value
         label ""
             ret
                 icmp ==
-                    call kind? value
-                    value-type-table
+                    call kind-of value
+                    value-type-list
+
+# non-list or empty list
+defvalue atom?
+    define "" (value)
+        function i1 Value
+        label ""
+            cond-br
+                icmp == value
+                    null Value
+                label $is-null
+                    ret (int i1 1)
+                label $is-not-null
+                    ret
+                        sub (int i1 1)
+                            call list? value
 
 defvalue symbol?
     define "" (value)
@@ -125,16 +119,8 @@ defvalue symbol?
         label ""
             ret
                 icmp ==
-                    call kind? value
+                    call kind-of value
                     value-type-symbol
-
-defvalue empty?
-    define "" (value)
-        function i1 Value
-        label ""
-            ret
-                icmp == 0
-                    call table-size value
 
 defvalue expression?
     define "" (value expected-head)
@@ -142,7 +128,7 @@ defvalue expression?
         label ""
             ret
                 call value==
-                    call get-at value 0
+                    call at value
                     expected-head
 
 defvalue type-key
@@ -179,14 +165,14 @@ define expand-macro (value env)
     MacroFunction
     label ""
         cond-br
-            call table? value
-            label $is-table
+            call list? value
+            label $is-list
             label $is-atom
 
-    label $is-table
+    label $is-list
         cond-br
-            call empty? value
-            label $is-empty-table
+            call atom? value
+            label $is-empty-list
             label $is-expression
 
     label $is-atom
@@ -194,7 +180,7 @@ define expand-macro (value env)
             bitcast (global "" "unknown atom") rawstring
         br
             label $error
-    label $is-empty-table
+    label $is-empty-list
         call error-message value
             bitcast (global "" "expression is empty") rawstring
         br
@@ -202,12 +188,13 @@ define expand-macro (value env)
 
     label $is-expression
         defvalue head
-            call get-at value 0
+            call at value
         cond-br
             call expression? value (quote _Value escape)
             label $is-escape
                 ret
-                    call get-at value 1
+                    call at
+                        call next value
             label $is-not-escape
                 defvalue handler
                     bitcast
@@ -243,7 +230,7 @@ define expand-macro (value env)
             null Value
 
 defvalue global-env
-    quote _Value ()
+    quote _Value (())
 
 define qquote-1 (value)
     function Value Value
@@ -254,9 +241,11 @@ define qquote-1 (value)
             label $is-list
     label $is-not-list
         ret
-            call prepend
-                call wrap value
+            call cons
                 quote _Value quote
+                call cons
+                    value
+                    null Value
     label $is-list
         cond-br
             call expression? value
@@ -265,7 +254,8 @@ define qquote-1 (value)
             label $is-not-unquote
     label $is-unquote
         ret
-            call get-at value 1
+            call at
+                call next value
     label $is-not-unquote
         cond-br
             call expression? value
@@ -276,11 +266,12 @@ define qquote-1 (value)
         ret
             call qquote-1
                 call qquote-1
-                    call get-at value 1
+                    call at
+                        call next value
     label $is-not-qquote
         cond-br
             call atom?
-                call get-at value 0
+                call at value
             label $head-is-not-list
             label $head-is-list
     label $head-is-not-list
@@ -289,34 +280,47 @@ define qquote-1 (value)
     label $head-is-list
         cond-br
             call expression?
-                call get-at value 0
+                call at value
                 quote _Value unquote-splice
             label $is-unquote-splice
             label $is-not-unquote-splice
     label $is-unquote-splice
         ret
-            call prepend
-                call merge
-                    call wrap
-                        call get-at
-                            call get-at value 0
-                            1
-                    call wrap
+            call cons
+                quote _Value append
+                call cons
+                    call at
+                        call next
+                            call at value
+                    call cons
                         call qquote-1
-                            call slice value 1 -1
-                quote _Value merge
+                            call next value
+                        null Value
     label $is-not-unquote-splice
         ret
-            call prepend
-                call merge
-                    call wrap
+            call cons
+                quote _Value cons
+                call cons
+                    call qquote-1
+                        call at value
+                    call cons
                         call qquote-1
-                            call slice value 1 -1
-                    call wrap
-                        call qquote-1
-                            call get-at value 0
-                quote _Value prepend
+                            call next value
+                        null Value
 
+///
+    (define (backquote-1 x)
+      (if (atom? x)
+          (list ''quote x)
+        (if (eq (first x) ''unquote)
+        (second x)
+          (if (eq (first x) ''backquote)
+          (backquote-1 (backquote-1 (second x)))
+        (if (atom? (first x))
+            (list ''cons (backquote-1 (first x)) (backquote-1 (rest x)))
+          (if (eq (first (first x)) ''unquote-splice)
+              (list ''append (second (first x)) (backquote-1 (rest x)))
+            (list ''cons (backquote-1 (first x)) (backquote-1 (rest x)))))))))
 
 ///
     function backquote-1 (x)
@@ -342,7 +346,8 @@ define macro-qquote (value env)
     label ""
         defvalue qq
             call qquote-1
-                call get-at value 1
+                call at
+                    call next value
         call dump-value qq
         ret qq
 
@@ -397,13 +402,13 @@ defvalue hello-world
             "Hello World!\n"
         rawstring
 
-bang
+/// bang
     qquote
         do
             qquote test
             word1
             unquote-splice
-                (generate-list)
+                (a b c)
             word2
 
 define main ()

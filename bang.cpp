@@ -72,21 +72,18 @@ void bang_set_preprocessor(bang_preprocessor f);
 bang_preprocessor bang_get_preprocessor();
 
 int bang_get_kind(ValueRef expr);
-int bang_size(ValueRef expr);
-ValueRef bang_at(ValueRef expr, int index);
+ValueRef bang_at(ValueRef expr);
+ValueRef bang_next(ValueRef expr);
+ValueRef bang_cons(ValueRef lhs, ValueRef rhs);
+
 const char *bang_string_value(ValueRef expr);
 void *bang_handle_value(ValueRef expr);
 ValueRef bang_handle(void *ptr);
-ValueRef bang_set_at(ValueRef expr, int index, ValueRef value);
 void bang_set_key(ValueRef expr, const char *key, ValueRef value);
 ValueRef bang_get_key(ValueRef expr, const char *key);
-ValueRef bang_slice(ValueRef expr, int start, int end);
-ValueRef bang_merge(ValueRef left, ValueRef right);
 typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
 ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx);
 ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr);
-ValueRef bang_wrap(ValueRef expr);
-ValueRef bang_prepend(ValueRef expr, ValueRef left);
 
 void bang_error_message(ValueRef context, const char *format, ...);
 
@@ -120,6 +117,8 @@ int bang_eq(Value *a, Value *b);
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdlib.h>
+
+//#include <execinfo.h>
 
 #include <map>
 #include <string>
@@ -163,13 +162,13 @@ std::string format( const std::string& format, Args ... args ) {
 
 template <typename R, typename... Args>
 std::function<R (Args...)> memo(R (*fn)(Args...)) {
-    std::map<std::tuple<Args...>, R> table;
-    return [fn, table](Args... args) mutable -> R {
+    std::map<std::tuple<Args...>, R> list;
+    return [fn, list](Args... args) mutable -> R {
         auto argt = std::make_tuple(args...);
-        auto memoized = table.find(argt);
-        if(memoized == table.end()) {
+        auto memoized = list.find(argt);
+        if(memoized == list.end()) {
             auto result = fn(args...);
-            table[argt] = result;
+            list[argt] = result;
             return result;
         } else {
             return memoized->second;
@@ -289,7 +288,7 @@ static void dumpFileLine(const char *path, int offset) {
 
 enum ValueKind {
     V_None = 0,
-    V_Table = 1,
+    V_List = 1,
     V_String = 2,
     V_Symbol = 3,
     V_Integer = 4,
@@ -300,7 +299,7 @@ enum ValueKind {
 static const char *valueKindName(int kind) {
     switch(kind) {
     case V_None: return "?";
-    case V_Table: return "table";
+    case V_List: return "list";
     case V_String: return "string";
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
@@ -368,12 +367,10 @@ public:
         return kind;
     }
 
-    bool isListComment() const;
-    bool isComment() const;
-
     std::string getHeader() const;
 
     virtual void tag();
+
     static int collect(ValueRef gcroot);
     virtual ValueRef clone() const = 0;
 
@@ -384,70 +381,63 @@ Value::CollectionType Value::collection;
 
 //------------------------------------------------------------------------------
 
-struct Table : Value {
+static ValueRef at(ValueRef expr);
+static ValueRef next(ValueRef expr);
+static bool isAtom(ValueRef expr);
+
+// NULL = empty list
+struct List : Value {
 protected:
-    std::vector< ValueRef > values;
+    ValueRef _at;
+    // NULL = end of list
+    ValueRef _next;
     std::map< std::string, ValueRef > string_map;
 public:
-
-    // 0 = naked, any
-    // '(' = parens
-    // '[' = square
-    // '{' = curly
-    char style;
-
-    Table() :
-        Value(V_Table),
-        style(0)
-        {}
-
-    ValueRef append(ValueRef expr) {
-        assert(expr);
-        expr->tag();
-        values.push_back(expr);
-        return expr;
+    List(ValueRef at = NULL, ValueRef next = NULL) :
+        Value(V_List),
+        _at(at),
+        _next(next) {
+        if (at && at->anchor.isValid()) {
+            anchor = at->anchor;
+        } else if (next && next->anchor.isValid()) {
+            anchor = next->anchor;
+        }
+        assert(!_next || (_next->getKind() == V_List));
     }
 
-    ValueRef remove(size_t i) {
-        ValueRef tmp = values[i];
-        values.erase(values.begin() + i);
-        return tmp;
+    ValueRef getAt() const {
+        return _at;
     }
 
-    size_t size() const {
-        return values.size();
-    };
-
-    ValueRef &getElement(size_t i) {
-        return values[i];
+    ValueRef getNext() const {
+        return _next;
     }
 
-    const ValueRef &getElement(size_t i) const {
-        return values[i];
+    void setAt(ValueRef at) {
+        this->_at = at;
     }
 
-    ValueRef nth(int i) const {
-        if (i < 0)
-            i = (int)values.size() + i;
-        if ((i < 0) || ((size_t)i >= values.size()))
-            return NULL;
-        else
-            return values[i];
+    void setNext(ValueRef next) {
+        this->_next = next;
     }
 
-    ValueRef nth(int i) {
-        if (i < 0)
-            i = (int)values.size() + i;
-        if ((i < 0) || ((size_t)i >= values.size()))
-            return NULL;
-        else
-            return values[i];
+    size_t count() {
+        ValueRef self = this;
+        size_t count = 0;
+        while (self) {
+            ++ count;
+            self = next(self);
+        }
+        return count;
+    }
+
+    List *cons(ValueRef at_ = NULL, ValueRef next_ = NULL) {
+        List *list = new List(at_, next_);
+        list->anchor = this->anchor;
+        return list;
     }
 
     void setKey(const std::string &key, ValueRef value) {
-        if (value) {
-            value->tag();
-        }
         string_map[key] = value;
     }
 
@@ -456,21 +446,87 @@ public:
     }
 
     static bool classof(const Value *expr) {
-        return expr->getKind() == V_Table;
+        return expr->getKind() == V_List;
     }
 
     static ValueKind kind() {
-        return V_Table;
+        return V_List;
     }
 
-    virtual void tag();
+    virtual void tag() {
+        if (tagged()) return;
+        Value::tag();
+
+        if (_at)
+            _at->tag();
+        if (_next)
+            _next->tag();
+    }
 
     virtual ValueRef clone() const {
-        return new Table(*this);
+        return new List(*this);
     }
 };
 
-static Table *gc_root = NULL;
+static List *gc_root = NULL;
+
+static ValueRef at(ValueRef expr) {
+    if (expr) {
+        if (auto list = llvm::dyn_cast<List>(expr)) {
+            return list->getAt();
+        }
+        return expr;
+    }
+    return NULL;
+}
+
+template<typename T>
+static T *kindAt(ValueRef expr) {
+    ValueRef val = at(expr);
+    if (val) {
+        return llvm::dyn_cast<T>(val);
+    }
+    return NULL;
+}
+
+static int kindOf(ValueRef expr) {
+    if (expr) {
+        return expr->getKind();
+    }
+    // empty list
+    return V_List;
+}
+
+static int countOf(ValueRef expr) {
+    int count = 0;
+    while (expr) {
+        ++ count;
+        expr = next(expr);
+    }
+    return count;
+}
+
+template<typename T>
+static bool isKindOf(ValueRef expr) {
+    return kindOf(expr) == T::kind();
+}
+
+static ValueRef next(ValueRef expr) {
+    if (expr) {
+        if (auto list = llvm::dyn_cast<List>(expr)) {
+            return list->getNext();
+        }
+    }
+    return NULL;
+}
+
+static bool isAtom(ValueRef expr) {
+    if (expr) {
+        return expr->getKind() != V_List;
+    }
+    // empty list
+    return true;
+}
 
 //------------------------------------------------------------------------------
 
@@ -555,6 +611,11 @@ public:
         value(s, len)
         {}
 
+    String(const char *s) :
+        Value(V_String),
+        value(s, strlen(s))
+        {}
+
     const std::string &getValue() const {
         return value;
     }
@@ -593,11 +654,24 @@ public:
     }
 };
 
+const char *stringAt(ValueRef expr) {
+    ValueRef val = at(expr);
+    if (val) {
+        if (auto sym = llvm::dyn_cast<String>(val)) {
+            return sym->c_str();
+        }
+    }
+    return NULL;
+}
+
 //------------------------------------------------------------------------------
 
 struct Symbol : String {
     Symbol(const char *s, size_t len) :
         String(V_Symbol, s, len) {}
+
+    Symbol(const char *s) :
+        String(V_Symbol, s, strlen(s)) {}
 
     static bool classof(const Value *expr) {
         return expr->getKind() == V_Symbol;
@@ -644,26 +718,10 @@ public:
 
 //------------------------------------------------------------------------------
 
-bool Value::isListComment() const {
-    if (auto table = llvm::dyn_cast<Table>(this)) {
-        if (table->size() > 0) {
-            if (auto head = llvm::dyn_cast<Symbol>(table->nth(0))) {
-                if (head->getValue().substr(0, 3) == "///")
-                    return true;
-            }
-        }
-    }
-    return false;
-}
-
-bool Value::isComment() const {
-    return isListComment();
-}
-
 std::string Value::getHeader() const {
-    if (auto table = llvm::dyn_cast<Table>(this)) {
-        if (table->size() >= 1) {
-            if (auto head = llvm::dyn_cast<Symbol>(table->nth(0))) {
+    if (auto list = llvm::dyn_cast<List>(this)) {
+        if (list->getAt()) {
+            if (auto head = llvm::dyn_cast<Symbol>(list->getAt())) {
                 return head->getValue();
             }
         }
@@ -674,19 +732,6 @@ std::string Value::getHeader() const {
 void Value::tag() {
     // reset age
     age = 0;
-}
-
-void Table::tag() {
-    if (tagged()) return;
-    Value::tag();
-
-    for (size_t i = 0; i < values.size(); ++i) {
-        values[i]->tag();
-    }
-
-    for (auto k : string_map) {
-        k.second->tag();
-    }
 }
 
 int Value::collect(ValueRef gcroot) {
@@ -719,28 +764,30 @@ int Value::collect(ValueRef gcroot) {
 
 //------------------------------------------------------------------------------
 
-ValueRef strip(ValueRef expr) {
-    assert(expr);
-    if (expr->isComment()) {
-        return nullptr;
-    } else if (expr->getKind() == V_Table) {
-        auto table = llvm::cast<Table>(expr);
-        auto result = new Table();
-        bool changed = false;
-        for (size_t i = 0; i < table->size(); ++i) {
-            auto oldelem = table->getElement(i);
-            auto newelem = strip(oldelem);
-            if (oldelem != newelem)
-                changed = true;
-            if (newelem)
-                result->append(newelem);
-        }
-        if (changed) {
-            result->anchor = expr->anchor;
-            return result;
-        }
+static bool isComment(ValueRef expr) {
+    if (isAtom(expr)) return false;
+    if (isKindOf<Symbol>(at(expr)) && !memcmp(stringAt(expr),"///",3)) {
+        return true;
     }
-    return expr;
+    return false;
+}
+
+// mutable
+static ValueRef strip(ValueRef expr) {
+    if (isAtom(expr)) return expr;
+    ValueRef atelem = at(expr);
+    ValueRef nextelem = next(expr);
+    if (isComment(atelem)) {
+        // skip
+        return strip(nextelem);
+    } else {
+        ValueRef newatelem = strip(atelem);
+        ValueRef newnextelem = strip(nextelem);
+        if ((newatelem == atelem) && (newnextelem == nextelem))
+            return expr;
+        else
+            return llvm::cast<List>(expr)->cons(newatelem, newnextelem);
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -1074,14 +1121,18 @@ struct Parser {
     Anchor error_origin;
     Anchor parse_origin;
     std::string error_string;
+    int errors;
 
-    Parser() {}
+    Parser() :
+        errors(0)
+        {}
 
     void init() {
         error_string.clear();
     }
 
     void error( const char *format, ... ) {
+        ++errors;
         lexer.initAnchor(error_origin);
         parse_origin = error_origin;
         va_list args;
@@ -1094,54 +1145,74 @@ struct Parser {
         va_end (args);
     }
 
-    bool splitList(
-        Table *result, int list_split_start, char style = 0) {
-        int count = (int)result->size();
-        if (list_split_start == count) {
-            error("empty expression");
-            return false;
-        } else {
-            auto wrapped_result = new Table();
-            wrapped_result->style = style;
-            wrapped_result->anchor =
-                result->getElement(list_split_start)->anchor;
-            for (int i = list_split_start; i < count; ++i) {
-                wrapped_result->append(result->getElement(i));
+    struct ListBuilder {
+        List *result;
+        List *start;
+        List *tail;
+        Anchor anchor;
+
+        ListBuilder(Lexer &lexer) :
+            result(nullptr),
+            start(nullptr),
+            tail(nullptr) {
+            lexer.initAnchor(anchor);
+        }
+
+        void resetStart() {
+            start = nullptr;
+        }
+
+        bool split() {
+            if (!start) {
+                return false;
             }
-            for (int i = count - 1; i >= list_split_start; --i) {
-                result->remove(i);
-            }
-            result->append(wrapped_result);
+            // wrap in new list
+            ValueRef sublist = start->clone();
+            start->setAt(sublist);
+            start->setNext(nullptr);
+            tail = start;
+            start = nullptr;
             return true;
         }
-    }
+
+        void append(ValueRef elem) {
+            auto newtail = new List(elem);
+            if (tail) {
+                tail->setNext(newtail);
+            } else if (!result) {
+                result = newtail;
+                result->anchor = anchor;
+            }
+            tail = newtail;
+            if (!start)
+                start = tail;
+        }
+
+    };
 
     ValueRef parseList(int end_token) {
-        auto result = new Table();
-        result->style = lexer.token;
-        lexer.initAnchor(result->anchor);
-        int statement_start = 0;
+        ListBuilder builder(lexer);
         while (true) {
             lexer.readToken();
             if (lexer.token == end_token) {
                 break;
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket");
-                // point to beginning of table
-                error_origin = result->anchor;
+                // point to beginning of list
+                error_origin = builder.anchor;
                 return nullptr;
             } else if (lexer.token == token_statement) {
-                if (!splitList(result, statement_start))
+                if (!builder.split()) {
+                    error("empty expression");
                     return nullptr;
-                statement_start++;
+                }
             } else {
-                if (auto elem = parseAny())
-                    result->append(elem);
-                else
-                    return nullptr;
+                auto elem = parseAny();
+                if (errors) return nullptr;
+                builder.append(elem);
             }
         }
-        return result;
+        return builder.result;
     }
 
     ValueRef parseAny () {
@@ -1149,9 +1220,13 @@ struct Parser {
         if (lexer.token == token_open) {
             return parseList(token_close);
         } else if (lexer.token == token_square_open) {
-            return parseList(token_square_close);
+            auto list = parseList(token_square_close);
+            if (errors) return nullptr;
+            return new List(new Symbol("["), list);
         } else if (lexer.token == token_curly_open) {
-            return parseList(token_curly_close);
+            auto list = parseList(token_curly_close);
+            if (errors) return nullptr;
+            return new List(new Symbol("{"), list);
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -1177,17 +1252,15 @@ struct Parser {
         bool escape = false;
         int subcolumn = 0;
 
-        auto result = new Table();
-        lexer.initAnchor(result->anchor);
+        ListBuilder builder(lexer);
 
-        int statement_start = 0;
         while (lexer.token != token_eof) {
             if (lexer.token == token_escape) {
                 escape = true;
                 lexer.readToken();
                 if (lexer.lineno <= lineno) {
                     error("escape character is not at end of line");
-                    parse_origin = result->anchor;
+                    parse_origin = builder.anchor;
                     return nullptr;
                 }
                 lineno = lexer.lineno;
@@ -1197,28 +1270,27 @@ struct Parser {
                         subcolumn = lexer.column();
                     } else if (lexer.column() != subcolumn) {
                         error("indentation mismatch");
-                        parse_origin = result->anchor;
+                        parse_origin = builder.anchor;
                         return nullptr;
                     }
                 } else {
                     subcolumn = lexer.column();
                 }
                 escape = false;
-                statement_start = (int)result->size();
+                builder.resetStart();
                 lineno = lexer.lineno;
                 // keep adding elements while we're in the same line
                 while ((lexer.token != token_eof)
                         && (lexer.lineno == lineno)) {
-                    if (auto elem = parseNaked(subcolumn, depth + 1)) {
-                        result->append(elem);
-                    } else {
-                        return nullptr;
-                    }
+                    auto elem = parseNaked(subcolumn, depth + 1);
+                    if (errors) return nullptr;
+                    builder.append(elem);
                 }
             } else if (lexer.token == token_statement) {
-                if (!splitList(result, statement_start))
+                if (!builder.split()) {
+                    error("empty expression");
                     return nullptr;
-                statement_start++;
+                }
                 lexer.readToken();
                 if (depth > 0) {
                     // if we are in the same line and there was no preceding ":",
@@ -1227,10 +1299,9 @@ struct Parser {
                         break;
                 }
             } else {
-                if (auto elem = parseAny())
-                    result->append(elem);
-                else
-                    return nullptr;
+                auto elem = parseAny();
+                if (errors) return nullptr;
+                builder.append(elem);
                 lineno = lexer.next_lineno;
                 lexer.readToken();
             }
@@ -1243,13 +1314,13 @@ struct Parser {
             }
         }
 
-        if (result->size() == 0) {
+        if (!builder.result) {
             assert(depth == 0);
             return nullptr;
-        } else if (result->size() == 1) {
-            return result->getElement(0);
+        } else if (!builder.result->getNext()) {
+            return builder.result->getAt();
         } else {
-            return result;
+            return builder.result;
         }
     }
 
@@ -1307,90 +1378,84 @@ struct Parser {
 //------------------------------------------------------------------------------
 
 static bool isNested(ValueRef e) {
-    if (e->getKind() == V_Table) {
-        Table *l = llvm::cast<Table>(e);
-        for (size_t i = 0; i < l->size(); ++i) {
-            if (l->nth(i)->getKind() == V_Table)
-                return true;
-        }
+    if (isAtom(e)) return false;
+    while (e) {
+        if (!isAtom(at(e)))
+            return true;
+        e = next(e);
     }
     return false;
 }
 
 static void printAnchor(ValueRef e, size_t depth=0) {
-    printf("%s:%i:%i: ",
-        e->anchor.path,
-        e->anchor.lineno,
-        e->anchor.column);
+    if (e) {
+        printf("%s:%i:%i: ",
+            e->anchor.path,
+            e->anchor.lineno,
+            e->anchor.column);
+    }
     for(size_t i = 0; i < depth; i++) printf("    ");
 }
 
-static void printValue(ValueRef e, size_t depth, bool naked)
-{
-	if (!e) {
-        printf("#null#");
-        if (naked) putchar('\n');
-        return;
-    }
-
+static void printValue(ValueRef e, size_t depth, bool naked) {
     if (naked) {
         printAnchor(e, depth);
     }
 
+	if (!e) {
+        printf("()");
+        if (naked) putchar('\n');
+        return;
+    }
+
 	switch(e->getKind()) {
-	case V_Table: {
-        Table *l = llvm::cast<Table>(e);
-        if (naked && !l->style) {
-            if (l->size() == 0) {
-                printf("()\n");
-            } else {
-                size_t offset = 0;
-                ValueRef e0 = l->nth(0);
-                if (e0->getKind() == V_Table) {
-                    printf(";\n");
-                    goto print_sparse;
-                }
-            print_terse:
+	case V_List: {
+        if (naked) {
+            int offset = 0;
+            bool single = !next(e);
+            ValueRef e0 = at(e);
+        print_terse:
+            printValue(e0, depth, false);
+            e = next(e);
+            offset++;
+            while (e) {
+                e0 = at(e);
+                if (isNested(e0))
+                    break;
+                putchar(' ');
                 printValue(e0, depth, false);
+                e = next(e);
                 offset++;
-                while (offset < l->size()) {
-                    e0 = l->nth(offset);
-                    if (isNested(e0))
-                        break;
-                    putchar(' ');
-                    printValue(e0, depth, false);
-                    offset++;
-                }
-                printf((l->size() == 1)?" ;\n":"\n");
-            print_sparse:
-                while (offset < l->size()) {
-                    e0 = l->nth(offset);
-                    if ((e0->getKind() != V_Table) // not a table
-                        && (offset >= 1) // not first element in table
-                        && (offset < (l->size() - 1)) // not last element in table
-                        && !isNested(l->nth(offset+1))) { // next element can be terse packed too
-                        printAnchor(e0, depth + 1);
-                        printf("\\ ");
-                        goto print_terse;
-                    }
-                    printValue(e0, depth + 1);
-                    offset++;
-                }
             }
+            printf(single?";\n":"\n");
+        //print_sparse:
+            while (e) {
+                e0 = at(e);
+                if (isAtom(e0) // not a list
+                    && (offset >= 1) // not first element in list
+                    && next(e0) // not last element in list
+                    && !isNested(at(next(e0)))) { // next element can be terse packed too
+                    single = false;
+                    printAnchor(e0, depth + 1);
+                    printf("\\ ");
+                    goto print_terse;
+                }
+                printValue(e0, depth + 1);
+                e = next(e);
+                offset++;
+            }
+
         } else {
-            putchar((l->style == 0)?'(':l->style);
-            for (size_t i = 0; i < l->size(); i++) {
-                if (i > 0)
+            putchar('(');
+            int offset = 0;
+            while (e) {
+                if (offset > 0)
                     putchar(' ');
-                printValue(l->nth(i), depth + 1, false);
+                printValue(at(e), depth + 1, false);
+                e = next(e);
+                offset++;
             }
-            switch(l->style) {
-                case '[': putchar(']'); break;
-                case '{': putchar('}'); break;
-                case 0:
-                default:
-                    putchar(')'); break;
-            }
+            putchar(')');
             if (naked)
                 putchar('\n');
         }
@@ -1423,8 +1488,7 @@ static void printValue(ValueRef e, size_t depth, bool naked)
 		if (a->getKind() == V_String) putchar('"');
 		for (size_t i = 0; i < a->size(); i++) {
 			switch((*a)[i]) {
-			case '"':
-			case '\\':
+			case '"': case '\\':
 				putchar('\\');
                 putchar((*a)[i]);
 				break;
@@ -1440,8 +1504,7 @@ static void printValue(ValueRef e, size_t depth, bool naked)
             case 0:
                 printf("\\0");
                 break;
-            case '(':
-			case ')':
+            case '[': case ']': case '{': case '}': case '(': case ')':
 				if (a->getKind() == V_Symbol)
 					putchar('\\');
                 putchar((*a)[i]);
@@ -1467,7 +1530,7 @@ static void printValue(ValueRef e, size_t depth, bool naked)
 
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
 typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
-typedef std::map<LLVMValueRef, void *> GlobalPtrMap;
+typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
 
 //------------------------------------------------------------------------------
 
@@ -1482,7 +1545,7 @@ struct TranslationGlobals {
     // meta env; only valid for proto environments
     Environment *meta;
     // global pointers
-    GlobalPtrMap globalptrs;
+    GlobalPtrList globalptrs;
 
     TranslationGlobals() :
         compile_errors(0),
@@ -1571,8 +1634,8 @@ struct Environment {
     }
 
     void addQuote(LLVMValueRef value, ValueRef expr) {
-        globals->globalptrs[value] = (void *)expr;
-        gc_root->append(expr);
+        globals->globalptrs.push_back(std::make_tuple(value, (void *)expr));
+        gc_root = new List(expr, gc_root);
     }
 
 };
@@ -1831,7 +1894,7 @@ public:
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
         std::vector<Type> argtypes;
-        //proto is null if the function was declared without an argument table (e.g. void foo() and not void foo(void))
+        //proto is null if the function was declared without an argument list (e.g. void foo() and not void foo(void))
         //we don't support old-style C parameter lists, we just treat them as empty
         if(proto) {
             for(size_t i = 0; i < proto->getNumParams(); i++) {
@@ -1998,6 +2061,23 @@ static LLVMModuleRef importCModule (Environment *env,
 
 //------------------------------------------------------------------------------
 
+static void dumpTraceback() {
+/*
+    void *array[10];
+    size_t size;
+    char **strings;
+    size_t i;
+
+    size = backtrace (array, 10);
+    strings = backtrace_symbols (array, size);
+
+    for (i = 0; i < size; i++)
+        printf ("%s\n", strings[i]);
+
+    free (strings);
+*/
+}
+
 static void translateErrorV (Environment *env, const char *format, va_list args) {
     ++env->globals->compile_errors;
     if (env->expr) {
@@ -2012,6 +2092,7 @@ static void translateErrorV (Environment *env, const char *format, va_list args)
         Anchor anchor = env->expr->anchor;
         dumpFileLine(anchor.path, anchor.offset);
     }
+    dumpTraceback();
 }
 
 static void translateError (Environment *env, const char *format, ...) {
@@ -2021,22 +2102,30 @@ static void translateError (Environment *env, const char *format, ...) {
     va_end (args);
 }
 
-static bool verifyParameterCount (Environment *env, Table *expr, int mincount, int maxcount, int start = 1) {
-    if (expr) {
-        auto _ = env->with_expr(expr);
-        int argcount = (int)expr->size() - start;
-        if ((mincount >= 0) && (argcount < mincount)) {
-            translateError(env, "at least %i arguments expected", mincount);
-            return false;
-        }
+static bool verifyCount (Environment *env, ValueRef expr, int mincount, int maxcount) {
+    auto _ = env->with_expr(expr);
+
+    int argcount = 0;
+    while (expr) {
+        ++ argcount;
         if ((maxcount >= 0) && (argcount > maxcount)) {
-            auto _ = env->with_expr(expr->nth(maxcount + 1));
+            auto _ = env->with_expr(expr);
             translateError(env, "excess argument. At most %i arguments expected.", maxcount);
             return false;
         }
-        return true;
+        expr = next(expr);
     }
-    return false;
+    if ((mincount >= 0) && (argcount < mincount)) {
+        translateError(env, "at least %i arguments expected", mincount);
+        return false;
+    }
+    return true;
+}
+
+static bool verifyParameterCount (Environment *env, ValueRef expr, int mincount, int maxcount) {
+    if (mincount >= 0) mincount++;
+    if (maxcount >= 0) maxcount++;
+    return verifyCount(env, expr, mincount, maxcount);
 }
 
 static bool isSymbol (const Value *expr, const char *sym) {
@@ -2047,26 +2136,34 @@ static bool isSymbol (const Value *expr, const char *sym) {
     return false;
 }
 
-static bool matchSpecialForm (Environment *env, Table *expr, const char *name, int mincount, int maxcount) {
-    return isSymbol(expr->nth(0), name) && verifyParameterCount(env, expr, mincount, maxcount);
+static bool matchSpecialForm (Environment *env, ValueRef expr, const char *name, int mincount, int maxcount) {
+    return isSymbol(at(expr), name) && verifyParameterCount(env, expr, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
 
-template<typename T>
+template <typename T>
 static T *translateKind(Environment *env, ValueRef expr) {
-    if (expr) {
-        auto _ = env->with_expr(expr);
-        T *co = llvm::dyn_cast<T>(expr);
-        if (co) {
-            return co;
-        } else {
-            translateError(env, "%s expected, not %s",
-                valueKindName(T::kind()),
-                valueKindName(expr->getKind()));
-        }
+    auto _ = env->with_expr(expr);
+    T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
+    if (obj) {
+        return obj;
+    } else {
+        translateError(env, "%s expected, not %s",
+            valueKindName(T::kind()),
+            valueKindName(kindOf(expr)));
     }
     return nullptr;
+}
+
+template <typename T>
+static bool verifyKind(Environment *env, ValueRef expr) {
+    auto _ = env->with_expr(expr);
+    if (isKindOf<T>(expr)) return true;
+    translateError(env, "%s expected, not %s",
+        valueKindName(T::kind()),
+        valueKindName(kindOf(expr)));
+    return false;
 }
 
 static bool translateInt64 (Environment *env, ValueRef expr, int64_t &value) {
@@ -2100,12 +2197,12 @@ static const char *translateString (Environment *env, ValueRef expr) {
 static LLVMTypeRef translateType (Environment *env, ValueRef expr);
 static LLVMValueRef translateValue (Environment *env, ValueRef expr);
 
-static bool translateValueList (Environment *env, Table *expr, int offset) {
-    int argcount = (int)expr->size() - offset;
-    for (int i = 0; i < argcount; ++i) {
-        translateValue(env, expr->nth(i + offset));
+static bool translateValueList (Environment *env, ValueRef expr) {
+    while (expr) {
+        translateValue(env, at(expr));
         if (env->hasErrors())
             return false;
+        expr = next(expr);
     }
     return true;
 }
@@ -2164,39 +2261,46 @@ static std::string getTypeString(LLVMTypeRef type) {
     return result;
 }
 
-static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
-    if (expr->size() == 0) {
+#define UNPACK_ARG(expr, name) \
+    expr = next(expr); ValueRef name = at(expr)
+#define UNPACK_ARG_REF(expr, name) \
+    expr = next(expr); ValueRef name = expr
+
+static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
+    if (!expr) {
         translateError(env, "value expected");
         return NULL;
     }
-    auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
+    Symbol *head = kindAt<Symbol>(expr);
     if (!head) {
-        auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of table must be symbol, not %s",
-            valueKindName(expr->nth(0)->getKind()));
+        auto _ = env->with_expr(at(expr));
+        translateError(env, "first element of list must be symbol, not %s",
+            valueKindName(kindOf(at(expr))));
         return NULL;
     }
     if (matchSpecialForm(env, expr, "int", 2, 2)) {
 
-        ValueRef expr_type = expr->nth(1);
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG(expr, expr_value);
 
         LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         int64_t value;
-        if (!translateInt64(env, expr->nth(2), value)) return NULL;
+        if (!translateInt64(env, expr_value, value)) return NULL;
 
         return LLVMConstInt(type, value, 1);
 
     } else if (matchSpecialForm(env, expr, "real", 2, 2)) {
 
-        ValueRef expr_type = expr->nth(1);
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG(expr, expr_value);
 
         LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         double value;
-        if (!translateDouble(env, expr->nth(2), value)) return NULL;
+        if (!translateDouble(env, expr_value, value)) return NULL;
 
         return LLVMConstReal(type, value);
 
@@ -2208,7 +2312,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
     } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
-        ValueRef expr_arg = expr->nth(1);
+        UNPACK_ARG(expr, expr_arg);
 
         LLVMValueRef value = translateValue(env, expr_arg);
         if (value) {
@@ -2218,7 +2322,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         return value;
     } else if (matchSpecialForm(env, expr, "dumptype", 1, 1)) {
 
-        ValueRef expr_arg = expr->nth(1);
+        UNPACK_ARG(expr, expr_arg);
 
         LLVMTypeRef type = translateType(env, expr_arg);
         if (type) {
@@ -2229,10 +2333,11 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
     } else if (matchSpecialForm(env, expr, "global", 2, 2)) {
 
-        const char *name = translateString(env, expr->nth(1));
-        if (!name) return NULL;
+        UNPACK_ARG(expr, expr_name);
+        UNPACK_ARG(expr, expr_value);
 
-        ValueRef expr_value = expr->nth(2);
+        const char *name = translateString(env, expr_name);
+        if (!name) return NULL;
 
         auto _ = env->with_expr(expr_value);
 
@@ -2254,27 +2359,33 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         if (inlined)
             LLVMSetLinkage(result, LLVMLinkOnceAnyLinkage);
 
-        if (llvm::isa<Symbol>(expr->nth(1)))
+        if (isKindOf<Symbol>(expr_name))
             env->values[name] = result;
 
         return result;
 
     } else if (matchSpecialForm(env, expr, "quote", 2, 2)) {
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG(expr, expr_value);
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, "quote");
-        env->addQuote(result, expr->nth(2));
+        env->addQuote(result, expr_value);
 
         return result;
 
     } else if (matchSpecialForm(env, expr, "bitcast", 2, 2)) {
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_type);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
-        LLVMTypeRef type = translateType(env, expr->nth(2));
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         if (LLVMIsConstant(value)) {
@@ -2288,9 +2399,13 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "ptrtoint", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_type);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
-        LLVMTypeRef type = translateType(env, expr->nth(2));
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         return LLVMBuildPtrToInt(env->getBuilder(), value, type, "");
@@ -2298,9 +2413,13 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "inttoptr", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_type);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
-        LLVMTypeRef type = translateType(env, expr->nth(2));
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
@@ -2308,9 +2427,11 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "and", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_lhs);
+        UNPACK_ARG(expr, expr_rhs);
+        LLVMValueRef lhs = translateValue(env, expr_lhs);
         if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        LLVMValueRef rhs = translateValue(env, expr_rhs);
         if (!rhs) return NULL;
 
         return LLVMBuildAnd(env->getBuilder(), lhs, rhs, "");
@@ -2318,9 +2439,11 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "or", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_lhs);
+        UNPACK_ARG(expr, expr_rhs);
+        LLVMValueRef lhs = translateValue(env, expr_lhs);
         if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        LLVMValueRef rhs = translateValue(env, expr_rhs);
         if (!rhs) return NULL;
 
         return LLVMBuildOr(env->getBuilder(), lhs, rhs, "");
@@ -2328,9 +2451,11 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "add", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_lhs);
+        UNPACK_ARG(expr, expr_rhs);
+        LLVMValueRef lhs = translateValue(env, expr_lhs);
         if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        LLVMValueRef rhs = translateValue(env, expr_rhs);
         if (!rhs) return NULL;
 
         return LLVMBuildAdd(env->getBuilder(), lhs, rhs, "");
@@ -2338,9 +2463,11 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "sub", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef lhs = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_lhs);
+        UNPACK_ARG(expr, expr_rhs);
+        LLVMValueRef lhs = translateValue(env, expr_lhs);
         if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr->nth(2));
+        LLVMValueRef rhs = translateValue(env, expr_rhs);
         if (!rhs) return NULL;
 
         return LLVMBuildSub(env->getBuilder(), lhs, rhs, "");
@@ -2348,11 +2475,15 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "icmp", 3, 3)) {
         if (!verifyInBlock(env)) return NULL;
 
-        const char *opname = translateString(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_op);
+        UNPACK_ARG(expr, expr_lhs);
+        UNPACK_ARG(expr, expr_rhs);
+
+        const char *opname = translateString(env, expr_op);
         if (!opname) return NULL;
-        LLVMValueRef lhs = translateValue(env, expr->nth(2));
+        LLVMValueRef lhs = translateValue(env, expr_lhs);
         if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr->nth(3));
+        LLVMValueRef rhs = translateValue(env, expr_rhs);
         if (!rhs) return NULL;
 
         LLVMIntPredicate op;
@@ -2367,7 +2498,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         } else if (!strcmp(opname, "i<")) {  op = LLVMIntSLT;
         } else if (!strcmp(opname, "i<=")) { op = LLVMIntSLE;
         } else {
-            auto _ = env->with_expr(expr->nth(1));
+            auto _ = env->with_expr(expr_op);
             translateError(env,
                 "illegal operand. Try one of == != u> u>= u< u<= i> i>= i< i<=.");
             return NULL;
@@ -2378,11 +2509,15 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "fcmp", 3, 3)) {
         if (!verifyInBlock(env)) return NULL;
 
-        const char *opname = translateString(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_op);
+        UNPACK_ARG(expr, expr_lhs);
+        UNPACK_ARG(expr, expr_rhs);
+
+        const char *opname = translateString(env, expr_op);
         if (!opname) return NULL;
-        LLVMValueRef lhs = translateValue(env, expr->nth(2));
+        LLVMValueRef lhs = translateValue(env, expr_lhs);
         if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr->nth(3));
+        LLVMValueRef rhs = translateValue(env, expr_rhs);
         if (!rhs) return NULL;
 
         LLVMRealPredicate op;
@@ -2403,7 +2538,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         } else if (!strcmp(opname, "u!=")) {  op = LLVMRealUNE;
         } else if (!strcmp(opname, "true")) { op = LLVMRealPredicateTrue;
         } else {
-            auto _ = env->with_expr(expr->nth(1));
+            auto _ = env->with_expr(expr_op);
             translateError(env,
                 "illegal operand. Try one of false true ord uno o== o!= o> o>= o< o<= u== u!= u> u>= u< u<=.");
             return NULL;
@@ -2413,7 +2548,8 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
     } else if (matchSpecialForm(env, expr, "getelementptr", 1, -1)) {
 
-        ValueRef expr_array = expr->nth(1);
+        UNPACK_ARG(expr, expr_array);
+
         LLVMValueRef ptr = translateValue(env, expr_array);
         if (!ptr) return NULL;
 
@@ -2421,14 +2557,19 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         bool all_const = LLVMIsConstant(ptr);
 
-        int valuecount = (int)expr->size() - 2;
+        expr = next(expr);
+
+        int valuecount = countOf(expr);
         LLVMValueRef indices[valuecount];
-        for (int i = 0; i < valuecount; ++i) {
-            indices[i] = translateValue(env, expr->nth(i + 2));
+        int i = 0;
+        while (expr) {
+            indices[i] = translateValue(env, at(expr));
             if (indices[i] == NULL) {
                 return NULL;
             }
             all_const = all_const && LLVMIsConstant(indices[i]);
+            expr = next(expr);
+            ++i;
         }
 
         if (all_const) {
@@ -2441,11 +2582,13 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "extractelement", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_index);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
-
-        LLVMValueRef index = translateValue(env, expr->nth(2));
+        LLVMValueRef index = translateValue(env, expr_index);
         if (!index) return NULL;
 
         LLVMValueRef result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
@@ -2457,17 +2600,20 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "extractvalue", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_index);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
         int64_t index;
-        if (!translateInt64(env, expr->nth(2), index)) return NULL;
+        if (!translateInt64(env, expr_index, index)) return NULL;
 
         LLVMTypeRef valuetype = LLVMTypeOf(value);
         LLVMTypeKind kind = LLVMGetTypeKind(valuetype);
         switch(kind) {
             case LLVMStructTypeKind: {
-                auto _ = env->with_expr(expr->nth(2));
+                auto _ = env->with_expr(expr_index);
                 unsigned count = LLVMCountStructElementTypes(valuetype);
                 if ((unsigned)index >= count) {
                     translateError(env,
@@ -2475,7 +2621,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
                 }
             } break;
             case LLVMArrayTypeKind: {
-                auto _ = env->with_expr(expr->nth(2));
+                auto _ = env->with_expr(expr_index);
                 unsigned count = LLVMGetArrayLength(valuetype);
                 if ((unsigned)index >= count) {
                     translateError(env,
@@ -2483,7 +2629,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
                 }
             } break;
             default: {
-                auto _ = env->with_expr(expr->nth(1));
+                auto _ = env->with_expr(expr_value);
                 translateError(env,
                     "value passed to extractvalue has illegal type. Struct or array type expected.");
                 return NULL;
@@ -2497,11 +2643,15 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         return result;
 
     } else if (matchSpecialForm(env, expr, "align", 2, 2)) {
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_bytes);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
         int64_t bytes;
-        if (!translateInt64(env, expr->nth(2), bytes)) return NULL;
+        if (!translateInt64(env, expr_bytes, bytes)) return NULL;
 
         LLVMSetAlignment(value, bytes);
         return value;
@@ -2509,7 +2659,9 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "load", 1, 1)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
 
         return LLVMBuildLoad(env->getBuilder(), value, "");
@@ -2517,9 +2669,12 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "store", 2, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_ptr);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
-        LLVMValueRef ptr = translateValue(env, expr->nth(2));
+        LLVMValueRef ptr = translateValue(env, expr_ptr);
         if (!ptr) return NULL;
 
         return LLVMBuildStore(env->getBuilder(), value, ptr);
@@ -2527,10 +2682,13 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "alloca", 1, 2)) {
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_type);
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
-        if (expr->nth(2)) {
-            LLVMValueRef value = translateValue(env, expr->nth(2));
+        if (next(expr)) {
+            UNPACK_ARG(expr, expr_value);
+            LLVMValueRef value = translateValue(env, expr_value);
             return LLVMBuildArrayAlloca(env->getBuilder(), type, value, "");
         } else {
             return LLVMBuildAlloca(env->getBuilder(), type, "");
@@ -2538,23 +2696,27 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
     } else if (matchSpecialForm(env, expr, "defvalue", 2, 2)) {
 
-        const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
-        ValueRef expr_value = expr->nth(2);
+        UNPACK_ARG(expr, expr_name);
+        UNPACK_ARG(expr, expr_value);
+
+        const Symbol *sym_name = translateKind<Symbol>(env, expr_name);
         LLVMValueRef result = translateValue(env, expr_value);
         if (!result) return NULL;
 
-        const char *name = expr_name->c_str();
+        const char *name = sym_name->c_str();
         env->values[name] = result;
 
         return result;
     } else if (matchSpecialForm(env, expr, "deftype", 2, 2)) {
 
-        const Symbol *expr_name = translateKind<Symbol>(env, expr->nth(1));
-        ValueRef expr_value = expr->nth(2);
+        UNPACK_ARG(expr, expr_name);
+        UNPACK_ARG(expr, expr_value);
+
+        const Symbol *sym_name = translateKind<Symbol>(env, expr_name);
         LLVMTypeRef result = translateType(env, expr_value);
         if (!result) return NULL;
 
-        const char *name = expr_name->c_str();
+        const char *name = sym_name->c_str();
         env->types[name] = result;
 
         return NULL;
@@ -2567,7 +2729,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!verifyInFunction(env)) return NULL;
 
-        ValueRef expr_name = expr->nth(1);
+        UNPACK_ARG(expr, expr_name);
 
         const char *name = translateString(env, expr_name);
         if (!name) return NULL;
@@ -2576,7 +2738,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         // continue existing label
         LLVMBasicBlockRef block = NULL;
-        if (llvm::isa<Symbol>(expr_name)) {
+        if (isKindOf<Symbol>(expr_name)) {
             LLVMValueRef maybe_block = env->values[name];
             if (maybe_block) {
                 block = verifyBasicBlock(env, maybe_block);
@@ -2587,7 +2749,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!block) {
             block = LLVMAppendBasicBlock(env->function, name);
-            if (llvm::isa<Symbol>(expr_name))
+            if (isKindOf<Symbol>(expr_name))
                 env->values[name] = LLVMBasicBlockAsValue(block);
         }
 
@@ -2597,7 +2759,8 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         LLVMValueRef oldblockvalue = env->block;
         env->block = blockvalue;
-        translateValueList(env, expr, 2);
+        expr = next(expr);
+        translateValueList(env, expr);
         env->block = oldblockvalue;
 
         if (env->hasErrors()) return NULL;
@@ -2609,31 +2772,39 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
     } else if (matchSpecialForm(env, expr, "null", 1, 1)) {
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_type);
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         return LLVMConstNull(type);
 
     } else if (matchSpecialForm(env, expr, "do", 0, -1)) {
 
+        expr = next(expr);
+
         Environment subenv(env);
-        translateValueList(&subenv, expr, 1);
+        translateValueList(&subenv, expr);
 
         return NULL;
     } else if (matchSpecialForm(env, expr, "do-splice", 0, -1)) {
 
-        translateValueList(env, expr, 1);
+        expr = next(expr);
+
+        translateValueList(env, expr);
 
         return NULL;
     } else if (matchSpecialForm(env, expr, "define", 4, -1)) {
 
-        const char *name = translateString(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_name);
+        UNPACK_ARG(expr, expr_params);
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG_REF(expr, body_expr);
+
+        const char *name = translateString(env, expr_name);
         if (!name) return NULL;
-        Table *expr_params = translateKind<Table>(env, expr->nth(2));
-        if (!expr_params)
+        if (!verifyKind<List>(env, expr_params))
             return NULL;
-        ValueRef expr_type = expr->nth(3);
-        ValueRef body_expr = expr->nth(4);
 
         LLVMTypeRef functype = translateType(env, expr_type);
 
@@ -2652,7 +2823,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         LLVMValueRef func = LLVMAddFunction(
             env->getModule(), name, functype);
 
-        if (llvm::isa<Symbol>(expr->nth(1)))
+        if (isKindOf<Symbol>(expr_name))
             env->values[name] = func;
         if (inlined)
             LLVMSetLinkage(func, LLVMLinkOnceAnyLinkage);
@@ -2663,18 +2834,21 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         {
             auto _ = env->with_expr(expr_params);
 
-            int argcount = (int)expr_params->size();
+            int argcount = countOf(expr_params);
             int paramcount = LLVMCountParams(func);
             if (argcount == paramcount) {
                 LLVMValueRef params[paramcount];
                 LLVMGetParams(func, params);
-                for (int i = 0; i < argcount; ++i) {
-                    const Symbol *expr_param = translateKind<Symbol>(env, expr_params->nth(i));
+                int i = 0;
+                while (expr_params) {
+                    const Symbol *expr_param = translateKind<Symbol>(env, at(expr_params));
                     if (expr_param) {
                         const char *name = expr_param->c_str();
                         LLVMSetValueName(params[i], name);
                         subenv.values[name] = params[i];
                     }
+                    expr_params = next(expr_params);
+                    i++;
                 }
             } else {
                 translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types",
@@ -2688,7 +2862,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         {
             auto _ = env->with_expr(body_expr);
 
-            translateValueList(&subenv, expr, 4);
+            translateValueList(&subenv, body_expr);
             if (env->hasErrors()) return NULL;
         }
 
@@ -2698,27 +2872,37 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_type);
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
-        int branchcount = expr->size() - 2;
+        expr = next(expr);
+        int branchcount = countOf(expr);
         LLVMValueRef values[branchcount];
         LLVMBasicBlockRef blocks[branchcount];
-        for (int i = 0; i < branchcount; ++i) {
-            Table *expr_pair = translateKind<Table>(env, expr->nth(2 + i));
-            auto _ = env->with_expr(expr_pair);
-            if (!expr_pair)
+        int i = 0;
+        while (expr) {
+            ValueRef expr_pair = at(expr);
+            if (!verifyKind<List>(env, expr_pair))
                 return NULL;
-            if (expr_pair->size() != 2) {
+            auto _ = env->with_expr(expr_pair);
+            if (!verifyCount(env, expr_pair, 2, 2)) {
                 translateError(env, "exactly 2 parameters expected");
                 return NULL;
             }
-            LLVMValueRef value = translateValue(env, expr_pair->nth(0));
+            ValueRef expr_value = at(expr_pair);
+            ValueRef expr_block = at(next(expr_pair));
+
+            LLVMValueRef value = translateValue(env, expr_value);
             if (!value) return NULL;
-            LLVMBasicBlockRef block = verifyBasicBlock(env, translateValue(env, expr_pair->nth(1)));
+            LLVMBasicBlockRef block = verifyBasicBlock(env, translateValue(env, expr_block));
             if (!block) return NULL;
             values[i] = value;
             blocks[i] = block;
+
+            expr = next(expr);
+            i++;
         }
 
         LLVMValueRef result =
@@ -2730,7 +2914,9 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMBasicBlockRef value = verifyBasicBlock(env, translateValue(env, expr->nth(1)));
+        UNPACK_ARG(expr, expr_value);
+
+        LLVMBasicBlockRef value = verifyBasicBlock(env, translateValue(env, expr_value));
         if (!value) return NULL;
 
         return LLVMBuildBr(env->getBuilder(), value);
@@ -2739,11 +2925,15 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_value);
+        UNPACK_ARG(expr, expr_then);
+        UNPACK_ARG(expr, expr_else);
+
+        LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
-        LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr->nth(2)));
+        LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr_then));
         if (!then_block) return NULL;
-        LLVMBasicBlockRef else_block = verifyBasicBlock(env, translateValue(env, expr->nth(3)));
+        LLVMBasicBlockRef else_block = verifyBasicBlock(env, translateValue(env, expr_else));
         if (!else_block) return NULL;
 
         return LLVMBuildCondBr(env->getBuilder(), value, then_block, else_block);
@@ -2752,10 +2942,12 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
-        ValueRef expr_value = expr->nth(1);
-        if (!expr_value) {
+        expr = next(expr);
+
+        if (!expr) {
             LLVMBuildRetVoid(env->getBuilder());
         } else {
+            ValueRef expr_value = at(expr);
             LLVMValueRef value = translateValue(env, expr_value);
             if (!value) return NULL;
             LLVMBuildRet(env->getBuilder(), value);
@@ -2764,9 +2956,11 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         return NULL;
     } else if (matchSpecialForm(env, expr, "declare", 2, 2)) {
 
-        const char *name = translateString(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_name);
+        UNPACK_ARG(expr, expr_type);
+
+        const char *name = translateString(env, expr_name);
         if (!name) return NULL;
-        ValueRef expr_type = expr->nth(2);
 
         LLVMTypeRef functype = translateType(env, expr_type);
 
@@ -2778,7 +2972,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         LLVMValueRef result = LLVMAddFunction(
             env->getModule(), name, functype);
 
-        if (llvm::isa<Symbol>(expr->nth(1)))
+        if (isKindOf<Symbol>(expr_name))
             env->values[name] = result;
 
         return result;
@@ -2787,9 +2981,8 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
-        int argcount = (int)expr->size() - 2;
+        UNPACK_ARG(expr, expr_func);
 
-        ValueRef expr_func = expr->nth(1);
         LLVMValueRef callee = translateValue(env, expr_func);
         if (!callee) return NULL;
         LLVMTypeRef functype = LLVMTypeOf(callee);
@@ -2799,32 +2992,38 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
             kind = LLVMGetTypeKind(functype);
         }
         if (kind != LLVMFunctionTypeKind) {
-            auto _ = env->with_expr(expr->nth(1));
+            auto _ = env->with_expr(expr_func);
             translateError(env, "callee is not a function.");
             return NULL;
         }
+
+        expr = next(expr);
 
         int count = (int)LLVMCountParamTypes(functype);
         bool vararg = LLVMIsFunctionVarArg(functype);
         int mincount = count;
         int maxcount = vararg?-1:count;
-        if (!verifyParameterCount(env, expr, mincount, maxcount, 2))
+        if (!verifyCount(env, expr, mincount, maxcount))
             return NULL;
 
+        int argcount = countOf(expr);
         LLVMTypeRef ptypes[count];
         LLVMGetParamTypes(functype, ptypes);
         LLVMValueRef args[argcount];
-        for (int i = 0; i < argcount; ++i) {
-            args[i] = translateValue(env, expr->nth(i + 2));
+        int i = 0;
+        while (expr) {
+            args[i] = translateValue(env, at(expr));
             if (!args[i]) return NULL;
             if ((i < count) && (LLVMTypeOf(args[i]) != ptypes[i])) {
-                auto _ = env->with_expr(expr->nth(i + 2));
+                auto _ = env->with_expr(expr);
 
                 translateError(env, "call parameter type (%s) does not match function signature (%s)",
                     getTypeString(LLVMTypeOf(args[i])).c_str(),
                     getTypeString(ptypes[i]).c_str());
                 return NULL;
             }
+            expr = next(expr);
+            ++i;
         }
 
         return LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
@@ -2836,7 +3035,9 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
 
     } else if (matchSpecialForm(env, expr, "run", 1, 1)) {
 
-        LLVMValueRef callee = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_callee);
+
+        LLVMValueRef callee = translateValue(env, expr_callee);
         if (!callee) return NULL;
 
         char *error = NULL;
@@ -2862,7 +3063,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
         }
 
         for (auto it : env->globals->globalptrs) {
-            LLVMAddGlobalMapping(engine, it.first, it.second);
+            LLVMAddGlobalMapping(engine, std::get<0>(it), std::get<1>(it));
         }
 
         printf("running...\n");
@@ -2897,7 +3098,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
         const char *modulename = translateString(env, expr->nth(1));
         const char *name = translateString(env, expr->nth(2));
-        Table *args_expr = translateKind<Table>(env, expr->nth(3));
+        List *args_expr = translateKind<List>(env, expr->nth(3));
 
         if (modulename && name && args_expr) {
             int argcount = (int)args_expr->size();
@@ -2919,7 +3120,7 @@ static LLVMValueRef translateValueFromList (Environment *env, Table *expr) {
     */
     } else {
         auto _ = env->with_expr(head);
-        translateError(env, "unhandled special form: %s", head->c_str());
+        translateError(env, "unhandled special form: %s. Did you forget a 'call'?", head->c_str());
         return NULL;
     }
 }
@@ -2929,8 +3130,8 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     assert(expr);
     auto _ = env->with_expr(expr);
 
-    if (auto table = llvm::dyn_cast<Table>(expr)) {
-        return translateValueFromList(env, table);
+    if (isKindOf<List>(expr)) {
+        return translateValueFromList(env, expr);
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         Environment *penv = (Environment *)env;
         while (penv) {
@@ -2951,53 +3152,59 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
         return LLVMConstReal(LLVMFloatType(), (float)real->getValue());
     } else {
         translateError(env, "expected value, not %s",
-            valueKindName(expr->getKind()));
+            valueKindName(kindOf(expr)));
         return NULL;
     }
 }
 
-static LLVMTypeRef translateTypeFromList (Environment *env, Table *expr) {
-    if (expr->size() == 0) {
+static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
+    if (!expr) {
         translateError(env, "type expected");
         return NULL;
     }
-    auto head = llvm::dyn_cast<Symbol>(expr->nth(0));
+    Symbol *head = kindAt<Symbol>(expr);
     if (!head) {
-        auto _ = env->with_expr(expr->nth(0));
-        translateError(env, "first element of table must be symbol, not %s",
-            valueKindName(expr->nth(0)->getKind()));
+        auto _ = env->with_expr(at(expr));
+        translateError(env, "first element of list must be symbol, not %s",
+            valueKindName(kindOf(at(expr))));
         return NULL;
     }
+
     if (matchSpecialForm(env, expr, "function", 1, -1)) {
 
-        ValueRef tail = expr->nth(-1);
-        bool vararg = false;
-        int argcount = (int)expr->size() - 2;
-        if (isSymbol(tail, "...")) {
-            vararg = true;
-            --argcount;
-        }
+        UNPACK_ARG(expr, expr_rettype);
 
-        if (argcount < 0) {
-            translateError(env, "vararg function is missing return type");
-            return NULL;
-        }
-
-        LLVMTypeRef rettype = translateType(env, expr->nth(1));
+        LLVMTypeRef rettype = translateType(env, expr_rettype);
         if (!rettype) return NULL;
 
+        bool vararg = false;
+        expr = next(expr);
+        int argcount = countOf(expr);
         LLVMTypeRef paramtypes[argcount];
-        for (int i = 0; i < argcount; ++i) {
-            paramtypes[i] = translateType(env, expr->nth(2 + i));
+        int i = 0;
+        while (expr) {
+            if (isSymbol(at(expr), "...")) {
+                vararg = true;
+                --argcount;
+                if (i != argcount) {
+                    auto _ = env->with_expr(expr);
+                    translateError(env, "... must be last parameter.");
+                    return NULL;
+                }
+                break;
+            }
+            paramtypes[i] = translateType(env, at(expr));
             if (!paramtypes[i]) {
                 return NULL;
             }
+            expr = next(expr);
+            ++i;
         }
 
         return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
     } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
 
-        ValueRef expr_arg = expr->nth(1);
+        UNPACK_ARG(expr, expr_arg);
 
         LLVMTypeRef type = translateType(env, expr_arg);
         if (type) {
@@ -3007,57 +3214,73 @@ static LLVMTypeRef translateTypeFromList (Environment *env, Table *expr) {
         return type;
     } else if (matchSpecialForm(env, expr, "*", 1, 1)) {
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_arg);
+
+        LLVMTypeRef type = translateType(env, expr_arg);
         if (!type) return NULL;
 
         return LLVMPointerType(type, 0);
 
     } else if (matchSpecialForm(env, expr, "typeof", 1, 1)) {
 
-        LLVMValueRef value = translateValue(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_arg);
+
+        LLVMValueRef value = translateValue(env, expr_arg);
         if (!value) return NULL;
 
         return LLVMTypeOf(value);
 
     } else if (matchSpecialForm(env, expr, "array", 2, 2)) {
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG(expr, expr_count);
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         int64_t count;
-        if (!translateInt64(env, expr->nth(2), count)) return NULL;
+        if (!translateInt64(env, expr_count, count)) return NULL;
 
         return LLVMArrayType(type, count);
     } else if (matchSpecialForm(env, expr, "vector", 2, 2)) {
 
-        LLVMTypeRef type = translateType(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG(expr, expr_count);
+
+        LLVMTypeRef type = translateType(env, expr_type);
         if (!type) return NULL;
 
         int64_t count;
-        if (!translateInt64(env, expr->nth(2), count)) return NULL;
+        if (!translateInt64(env, expr_count, count)) return NULL;
 
         return LLVMVectorType(type, count);
     } else if (matchSpecialForm(env, expr, "struct", 1, -1)) {
 
-        const char *name = translateString(env, expr->nth(1));
+        UNPACK_ARG(expr, expr_name);
+
+        const char *name = translateString(env, expr_name);
         if (!name) return NULL;
 
         LLVMTypeRef result = LLVMStructCreateNamed(LLVMGetGlobalContext(), name);
-        if (llvm::isa<Symbol>(expr->nth(1)))
+        if (isKindOf<Symbol>(expr_name))
             env->types[name] = result;
 
-        int offset = 2;
+        expr = next(expr);
+
         bool packed = false;
-        if (isSymbol(expr->nth(offset), "packed")) {
-            offset++;
+        if (isSymbol(at(expr), "packed")) {
             packed = true;
+            expr = next(expr);
         }
 
-        int elemcount = expr->size() - offset;
+        int elemcount = countOf(expr);
         LLVMTypeRef elemtypes[elemcount];
-        for (int i = 0; i < elemcount; ++i) {
-            elemtypes[i] = translateType(env, expr->nth(offset + i));
+        int i = 0;
+        while (expr) {
+            elemtypes[i] = translateType(env, at(expr));
             if (!elemtypes[i]) return NULL;
+            expr = next(expr);
+            ++i;
         }
 
         if (elemcount)
@@ -3076,8 +3299,8 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     assert(expr);
     auto _ = env->with_expr(expr);
 
-    if (auto table = llvm::dyn_cast<Table>(expr)) {
-        return translateTypeFromList(env, table);
+    if (auto list = llvm::dyn_cast<List>(expr)) {
+        return translateTypeFromList(env, list);
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         LLVMTypeRef result = resolveType(env, sym->getValue());
         if (!result) {
@@ -3095,7 +3318,7 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 
 static void init() {
     if (!gc_root)
-        gc_root = new Table();
+        gc_root = new List();
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -3133,10 +3356,9 @@ static void teardownRootEnvironment (Environment *env) {
 
 static Environment *theEnv = NULL;
 
-static bool translateRootValueList (Environment *env, Table *expr, int offset) {
-    int argcount = (int)expr->size() - offset;
-    for (int i = 0; i < argcount; ++i) {
-        Value *stmt = expr->nth(i + offset);
+static bool translateRootValueList (Environment *env, ValueRef expr) {
+    while (expr) {
+        ValueRef stmt = at(expr);
         if (Environment::preprocessor) {
             theEnv = env;
             stmt = Environment::preprocessor(env, stmt);
@@ -3148,22 +3370,18 @@ static bool translateRootValueList (Environment *env, Table *expr, int offset) {
             translateValue(env, stmt);
         if (env->hasErrors())
             return false;
+        expr = next(expr);
     }
     return true;
 }
 
-static void compileModule (Environment *env, ValueRef expr, int offset) {
+static void compileModule (Environment *env, ValueRef expr) {
     assert(expr);
     assert(env->getBuilder());
     assert(env->getModule());
 
     auto _ = env->with_expr(expr);
-    if (auto table = llvm::dyn_cast<Table>(expr)) {
-        translateRootValueList (env, table, offset);
-    } else {
-        translateError(env, "unexpected %s",
-            valueKindName(expr->getKind()));
-    }
+    translateRootValueList (env, expr);
 }
 
 static void compileMain (ValueRef expr) {
@@ -3174,16 +3392,16 @@ static void compileMain (ValueRef expr) {
 
     {
         auto _ = env.with_expr(expr);
-        std::string header = expr->getHeader();
-        if (header != "IR") {
-            translateError(&env, "unrecognized header: '%s'; try 'IR' instead.", header.c_str());
+        Symbol *header = kindAt<Symbol>(expr);
+        if (strcmp(header->c_str(), "IR")) {
+            translateError(&env, "unrecognized header; try 'IR' instead.");
             return;
         }
     }
 
     setupRootEnvironment(&env, "main");
 
-    compileModule(&env, expr, 1);
+    compileModule(&env, next(expr));
 
     teardownRootEnvironment(&env);
 }
@@ -3205,8 +3423,10 @@ int bang_main(int argc, char ** argv) {
     if (argv && argv[1]) {
         bang::Parser parser;
         auto expr = parser.parseFile(argv[1]);
-        bang::gc_root->append(expr);
+        bang::gc_root =
+            new bang::List(expr, bang::gc_root);
         if (expr) {
+            //printValue(expr);
             bang::compileMain(expr);
         } else {
             result = 1;
@@ -3225,90 +3445,19 @@ bang_preprocessor bang_get_preprocessor() {
 }
 
 int bang_get_kind(ValueRef expr) {
-    if (expr) {
-        return expr->getKind();
-    }
-    return bang::V_None;
+    return kindOf(expr);
 }
 
-int bang_size(ValueRef expr) {
-    if (expr) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            return table->size();
-        }
-    }
-    return 0;
+ValueRef bang_at(ValueRef expr) {
+    return at(expr);
 }
 
-ValueRef bang_at(ValueRef expr, int index) {
-    if (expr) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            return table->nth(index);
-        }
-    }
-    return NULL;
+ValueRef bang_next(ValueRef expr) {
+    return next(expr);
 }
 
-ValueRef bang_set_at(ValueRef expr, int index, ValueRef value) {
-    if (expr && value) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            bang::Table *newlist = new bang::Table();
-            newlist->style = table->style;
-            newlist->anchor = table->anchor;
-            for (int i = 0; i < index; ++i) {
-                ValueRef elem = table->nth(i);
-                if (!elem) break;
-                newlist->append(elem);
-            }
-            newlist->append(value);
-            for (size_t i = index + 1; i < table->size(); ++i) {
-                newlist->append(table->nth(i));
-            }
-            return newlist;
-        }
-    }
-    return NULL;
-}
-
-ValueRef bang_slice(ValueRef expr, int start, int end) {
-    if (expr) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            bang::Table *newlist = new bang::Table();
-            newlist->style = table->style;
-            newlist->anchor = table->anchor;
-            if (end == -1)
-                end = (int)table->size();
-            for (int i = start; i < end; ++i) {
-                ValueRef elem = table->nth(i);
-                if (!elem) break;
-                newlist->append(elem);
-            }
-            return newlist;
-        }
-    }
-    return NULL;
-}
-
-ValueRef bang_merge(ValueRef left, ValueRef right) {
-    if (left && right) {
-        auto ltable = llvm::dyn_cast<bang::Table>(left);
-        auto rtable = llvm::dyn_cast<bang::Table>(right);
-        if (ltable && rtable) {
-            bang::Table *newlist = new bang::Table();
-            newlist->style = ltable->style;
-            newlist->anchor = ltable->anchor;
-            int size1 = (int)ltable->size();
-            for (int i = 0; i < size1; ++i) {
-                newlist->append(ltable->nth(i));
-            }
-            int size2 = (int)rtable->size();
-            for (int i = 0; i < size2; ++i) {
-                newlist->append(rtable->nth(i));
-            }
-            return newlist;
-        }
-    }
-    return NULL;
+ValueRef bang_cons(ValueRef lhs, ValueRef rhs) {
+    return new bang::List(lhs, rhs);
 }
 
 const char *bang_string_value(ValueRef expr) {
@@ -3331,7 +3480,7 @@ void *bang_handle_value(ValueRef expr) {
 
 ValueRef bang_handle(void *ptr) {
     auto handle = new bang::Handle(ptr);
-    bang::gc_root->append(handle);
+    bang::gc_root = new bang::List(handle, bang::gc_root);
     return handle;
 }
 
@@ -3362,37 +3511,35 @@ int bang_eq(Value *a, Value *b) {
 
 void bang_set_key(ValueRef expr, const char *key, ValueRef value) {
     if (expr && key && value) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            table->setKey(key, value);
+        if (auto list = llvm::dyn_cast<bang::List>(expr)) {
+            list->setKey(key, value);
         }
     }
 }
 
 ValueRef bang_get_key(ValueRef expr, const char *key) {
     if (expr && key) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            return table->getKey(key);
+        if (auto list = llvm::dyn_cast<bang::List>(expr)) {
+            return list->getKey(key);
         }
     }
     return NULL;
 }
 
+static ValueRef bang_map_1(ValueRef expr, int idx, bang_mapper map, void *ctx) {
+    if (!expr) return NULL;
+    ValueRef elem = at(expr);
+    elem = map(elem, idx, ctx);
+    ++idx;
+    expr = next(expr);
+    if (elem)
+        return new bang::List(elem, bang_map_1(expr, idx, map, ctx));
+    else
+        return bang_map_1(expr, idx, map, ctx);
+}
+
 ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx) {
-    if (expr && map) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            bang::Table *newlist = new bang::Table();
-            newlist->style = table->style;
-            newlist->anchor = table->anchor;
-            for (int i = 0; i < (int)table->size(); ++i) {
-                ValueRef elem = table->nth(i);
-                elem = map(elem, i, ctx);
-                if (elem)
-                    newlist->append(elem);
-            }
-            return newlist;
-        }
-    }
-    return NULL;
+    return bang_map_1(expr, 0, map, ctx);
 }
 
 ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
@@ -3404,34 +3551,6 @@ ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
         }
     }
     return toexpr;
-}
-
-ValueRef bang_wrap(ValueRef expr) {
-    if (expr) {
-        bang::Table *newlist = new bang::Table();
-        newlist->style = '(';
-        newlist->anchor = expr->anchor;
-        newlist->append(expr);
-        return newlist;
-    }
-    return NULL;
-}
-
-ValueRef bang_prepend(ValueRef expr, ValueRef left) {
-    if (expr && left) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
-            bang::Table *newlist = new bang::Table();
-            newlist->style = table->style;
-            newlist->anchor = table->anchor;
-            newlist->append(left);
-            for (int i = 0; i < (int)table->size(); ++i) {
-                ValueRef elem = table->nth(i);
-                newlist->append(elem);
-            }
-            return newlist;
-        }
-    }
-    return expr;
 }
 
 //------------------------------------------------------------------------------
