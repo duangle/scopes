@@ -155,6 +155,23 @@ defvalue get-type
                     value
                     type-key
 
+# appends ys to xs; ys must be a list
+define append (xs ys)
+    function Value Value Value
+    label ""
+        cond-br
+            icmp == xs
+                null Value
+            label $is-null
+                ret ys
+            label $is-not-null
+                ret
+                    call cons
+                        call at xs
+                        call append
+                            call next xs
+                            ys
+
 ################################################################################
 # build and install the preprocessor hook function.
 
@@ -308,39 +325,6 @@ define qquote-1 (value)
                             call next value
                         null Value
 
-///
-    (define (backquote-1 x)
-      (if (atom? x)
-          (list ''quote x)
-        (if (eq (first x) ''unquote)
-        (second x)
-          (if (eq (first x) ''backquote)
-          (backquote-1 (backquote-1 (second x)))
-        (if (atom? (first x))
-            (list ''cons (backquote-1 (first x)) (backquote-1 (rest x)))
-          (if (eq (first (first x)) ''unquote-splice)
-              (list ''append (second (first x)) (backquote-1 (rest x)))
-            (list ''cons (backquote-1 (first x)) (backquote-1 (rest x)))))))))
-
-///
-    function backquote-1 (x)
-        if (ast-atom? x)
-            ast-list "quote" x
-            if (== (@ x 0) "unquote")
-                @ x 1
-                if (== (@ x 0) "backquote")
-                    backquote-1 (backquote-1 (@ x 1))
-                    if (ast-atom? (@ x 0))
-                        ast-list "ast-list-prepend"
-                            backquote-1 (ast-list-slice x 1)
-                            backquote-1 (@ x 0)
-                        if (== (@ x 0 0) "unquote-splice")
-                            ast-list "ast-list-concat" (@ x 0 1)
-                                backquote-1 (ast-list-slice x 1)
-                            ast-list "ast-list-prepend"
-                                backquote-1 (ast-list-slice x 1)
-                                backquote-1 (@ x 0)
-
 define macro-qquote (value env)
     MacroFunction
     label ""
@@ -396,6 +380,8 @@ run
 # all top level expressions from here go through the preprocessor
 # we only recognize and expand expressions that start with (bang ...)
 
+
+
 defvalue hello-world
     bitcast
         global ""
@@ -414,6 +400,12 @@ defvalue hello-world
 define main ()
     function void
     label ""
+        /// call dump-value
+            call cons
+                call append
+                    quote _Value (a (b (bb)) c)
+                    quote _Value d
+                null Value
         /// call dump-value
             quote _Value
                 run

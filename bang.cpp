@@ -402,6 +402,7 @@ public:
         } else if (next && next->anchor.isValid()) {
             anchor = next->anchor;
         }
+        // prevent dotted cons cells
         assert(!_next || (_next->getKind() == V_List));
     }
 
@@ -1419,22 +1420,35 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
             e = next(e);
             offset++;
             while (e) {
-                e0 = at(e);
-                if (isNested(e0))
-                    break;
-                putchar(' ');
-                printValue(e0, depth, false);
-                e = next(e);
-                offset++;
+                if (isAtom(e)) {
+                    printf(" :. ");
+                    printValue(e, depth, false);
+                    e = nullptr;
+                } else {
+                    e0 = at(e);
+                    if (isNested(e0))
+                        break;
+                    putchar(' ');
+                    printValue(e0, depth, false);
+                    e = next(e);
+                    offset++;
+                }
             }
             printf(single?";\n":"\n");
         //print_sparse:
             while (e) {
+                if (isAtom(e)) {
+                    printAnchor(e, depth + 1);
+                    printf("\\ :. ");
+                    printValue(e, depth, false);
+                    putchar('\n');
+                    break;
+                }
                 e0 = at(e);
                 if (isAtom(e0) // not a list
                     && (offset >= 1) // not first element in list
-                    && next(e0) // not last element in list
-                    && !isNested(at(next(e0)))) { // next element can be terse packed too
+                    && next(e) // not last element in list
+                    && !isNested(at(next(e)))) { // next element can be terse packed too
                     single = false;
                     printAnchor(e0, depth + 1);
                     printf("\\ ");
@@ -1451,9 +1465,15 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
             while (e) {
                 if (offset > 0)
                     putchar(' ');
-                printValue(at(e), depth + 1, false);
-                e = next(e);
-                offset++;
+                if (isAtom(e)) {
+                    printf(":. ");
+                    printValue(e, depth + 1, false);
+                    break;
+                } else {
+                    printValue(at(e), depth + 1, false);
+                    e = next(e);
+                    offset++;
+                }
             }
             putchar(')');
             if (naked)
