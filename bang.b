@@ -46,8 +46,11 @@ defvalue at
 defvalue next
     declare "bang_next" (function Value Value)
 
-defvalue cons
-    declare "bang_cons" (function Value Value Value)
+defvalue set-next
+    declare "bang_set_next" (function Value Value Value)
+
+defvalue ref
+    declare "bang_ref" (function Value Value)
 
 defvalue set-key
     declare "bang_set_key" (function void Value rawstring Value)
@@ -104,14 +107,14 @@ defvalue atom?
         function i1 Value
         label ""
             cond-br
-                icmp == value
-                    null Value
-                label $is-null
-                    ret (int i1 1)
-                label $is-not-null
+                call list? value
+                label $is-list
                     ret
-                        sub (int i1 1)
-                            call list? value
+                        icmp ==
+                            call at value
+                            null Value
+                label $is-not-list
+                    ret (int i1 1)
 
 defvalue symbol?
     define "" (value)
@@ -126,10 +129,15 @@ defvalue expression?
     define "" (value expected-head)
         function i1 Value Value
         label ""
-            ret
-                call value==
-                    call at value
-                    expected-head
+            cond-br
+                call atom? value
+                label $is-atom
+                    ret (int i1 0)
+                label $is-not-atom
+                    ret
+                        call value==
+                            call at value
+                            expected-head
 
 defvalue type-key
     getelementptr
@@ -155,8 +163,16 @@ defvalue get-type
                     value
                     type-key
 
-# appends ys to xs; ys must be a list
-define append (xs ys)
+defvalue ref-set-next
+    define "" (lhs rhs)
+        function Value Value Value
+        label ""
+            ret
+                call ref
+                    call set-next lhs rhs
+
+# appends ys ... to xs ...
+define join (xs ys)
     function Value Value Value
     label ""
         cond-br
@@ -166,9 +182,8 @@ define append (xs ys)
                 ret ys
             label $is-not-null
                 ret
-                    call cons
-                        call at xs
-                        call append
+                    call set-next xs
+                        call join
                             call next xs
                             ys
 
@@ -247,7 +262,7 @@ define expand-macro (value env)
             null Value
 
 defvalue global-env
-    quote _Value (())
+    quote _Value ()
 
 define qquote-1 (value)
     function Value Value
@@ -258,11 +273,12 @@ define qquote-1 (value)
             label $is-list
     label $is-not-list
         ret
-            call cons
-                quote _Value quote
-                call cons
-                    value
-                    null Value
+            call ref
+                call set-next
+                    quote _Value quote
+                    call set-next
+                        value
+                        null Value
     label $is-list
         cond-br
             call expression? value
@@ -271,8 +287,8 @@ define qquote-1 (value)
             label $is-not-unquote
     label $is-unquote
         ret
-            call at
-                call next value
+            call next
+                call at value
     label $is-not-unquote
         cond-br
             call expression? value
@@ -283,55 +299,52 @@ define qquote-1 (value)
         ret
             call qquote-1
                 call qquote-1
-                    call at
-                        call next value
+                    call next
+                        call at value
     label $is-not-qquote
         cond-br
             call atom?
                 call at value
-            label $head-is-not-list
+            label $is-arbitrary-list
             label $head-is-list
-    label $head-is-not-list
-        br
-            label $is-not-unquote-splice
     label $head-is-list
         cond-br
             call expression?
                 call at value
                 quote _Value unquote-splice
             label $is-unquote-splice
-            label $is-not-unquote-splice
+            label $is-arbitrary-list
     label $is-unquote-splice
         ret
-            call cons
+            call ref-set-next
                 quote _Value append
-                call cons
-                    call at
-                        call next
+                call set-next
+                    call next
+                        call at
                             call at value
-                    call cons
-                        call qquote-1
-                            call next value
-                        null Value
-    label $is-not-unquote-splice
+                    call qquote-1
+                        call ref
+                            call next
+                                call at value
+    label $is-arbitrary-list
         ret
-            call cons
-                quote _Value cons
-                call cons
+            call ref-set-next
+                quote _Value prepend
+                call set-next
                     call qquote-1
                         call at value
-                    call cons
-                        call qquote-1
-                            call next value
-                        null Value
+                    call qquote-1
+                        call ref
+                            call next
+                                call at value
 
 define macro-qquote (value env)
     MacroFunction
     label ""
         defvalue qq
             call qquote-1
-                call at
-                    call next value
+                call next
+                    call at value
         call dump-value qq
         ret qq
 
@@ -356,7 +369,9 @@ define global-preprocessor (ir-env value)
             call expression? value (quote _Value bang)
             label $is-bang
                 ret
-                    call bang-map value bang-mapper global-env
+                    call bang-map
+                        call at value
+                        \ bang-mapper global-env
             label $else
                 ret value
 
@@ -391,21 +406,21 @@ defvalue hello-world
 /// bang
     qquote
         do
-            qquote test
+            #qquote (x y z)
             word1
             unquote-splice
-                (a b c)
+                a b c
             word2
 
 define main ()
     function void
     label ""
-        /// call dump-value
-            call cons
-                call append
-                    quote _Value (a (b (bb)) c)
-                    quote _Value d
-                null Value
+        call dump-value
+            call ref
+                call join
+                    quote _Value (a b)
+                    call at
+                        quote _Value (a b c)
         /// call dump-value
             quote _Value
                 run

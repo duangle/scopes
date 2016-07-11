@@ -74,7 +74,8 @@ bang_preprocessor bang_get_preprocessor();
 int bang_get_kind(ValueRef expr);
 ValueRef bang_at(ValueRef expr);
 ValueRef bang_next(ValueRef expr);
-ValueRef bang_cons(ValueRef lhs, ValueRef rhs);
+ValueRef bang_set_next(ValueRef lhs, ValueRef rhs);
+ValueRef bang_ref(ValueRef lhs);
 
 const char *bang_string_value(ValueRef expr);
 void *bang_handle_value(ValueRef expr);
@@ -288,7 +289,7 @@ static void dumpFileLine(const char *path, int offset) {
 
 enum ValueKind {
     V_None = 0,
-    V_List = 1,
+    V_Pointer = 1,
     V_String = 2,
     V_Symbol = 3,
     V_Integer = 4,
@@ -299,7 +300,7 @@ enum ValueKind {
 static const char *valueKindName(int kind) {
     switch(kind) {
     case V_None: return "?";
-    case V_List: return "list";
+    case V_Pointer: return "pointer";
     case V_String: return "string";
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
@@ -343,14 +344,22 @@ struct Anchor {
 struct Value;
 static void printValue(ValueRef e, size_t depth=0, bool naked=true);
 
+static ValueRef next(ValueRef expr);
+
 struct Value {
 private:
     const ValueKind kind;
     int age;
+    // NULL = end of list
+    ValueRef next;
 protected:
-    Value(ValueKind kind_) :
+    Value(ValueKind kind_, ValueRef next_ = nullptr) :
         kind(kind_),
-        age(0) {
+        age(0),
+        next(next_) {
+        if (next && next->anchor.isValid()) {
+            anchor = next->anchor;
+        }
         collection.push_back(this);
     }
 
@@ -362,6 +371,24 @@ public:
     Anchor anchor;
 
     virtual ~Value() {}
+
+    ValueRef getNext() const {
+        return next;
+    }
+
+    void setNext(ValueRef next) {
+        this->next = next;
+    }
+
+    size_t count() {
+        ValueRef self = this;
+        size_t count = 0;
+        while (self) {
+            ++ count;
+            self = bang::next(self);
+        }
+        return count;
+    }
 
     ValueKind getKind() const {
         return kind;
@@ -382,60 +409,28 @@ Value::CollectionType Value::collection;
 //------------------------------------------------------------------------------
 
 static ValueRef at(ValueRef expr);
-static ValueRef next(ValueRef expr);
 static bool isAtom(ValueRef expr);
 
 // NULL = empty list
-struct List : Value {
+struct Pointer : Value {
 protected:
     ValueRef _at;
-    // NULL = end of list
-    ValueRef _next;
     std::map< std::string, ValueRef > string_map;
 public:
-    List(ValueRef at = NULL, ValueRef next = NULL) :
-        Value(V_List),
-        _at(at),
-        _next(next) {
+    Pointer(ValueRef at = NULL, ValueRef next_ = NULL) :
+        Value(V_Pointer, next_),
+        _at(at) {
         if (at && at->anchor.isValid()) {
             anchor = at->anchor;
-        } else if (next && next->anchor.isValid()) {
-            anchor = next->anchor;
         }
-        // prevent dotted cons cells
-        assert(!_next || (_next->getKind() == V_List));
     }
 
     ValueRef getAt() const {
         return _at;
     }
 
-    ValueRef getNext() const {
-        return _next;
-    }
-
     void setAt(ValueRef at) {
         this->_at = at;
-    }
-
-    void setNext(ValueRef next) {
-        this->_next = next;
-    }
-
-    size_t count() {
-        ValueRef self = this;
-        size_t count = 0;
-        while (self) {
-            ++ count;
-            self = next(self);
-        }
-        return count;
-    }
-
-    List *cons(ValueRef at_ = NULL, ValueRef next_ = NULL) {
-        List *list = new List(at_, next_);
-        list->anchor = this->anchor;
-        return list;
     }
 
     void setKey(const std::string &key, ValueRef value) {
@@ -447,11 +442,11 @@ public:
     }
 
     static bool classof(const Value *expr) {
-        return expr->getKind() == V_List;
+        return expr->getKind() == V_Pointer;
     }
 
     static ValueKind kind() {
-        return V_List;
+        return V_Pointer;
     }
 
     virtual void tag() {
@@ -460,23 +455,19 @@ public:
 
         if (_at)
             _at->tag();
-        if (_next)
-            _next->tag();
     }
 
     virtual ValueRef clone() const {
-        return new List(*this);
+        return new Pointer(*this);
     }
 };
 
-static List *gc_root = NULL;
+static ValueRef gc_root = NULL;
 
 static ValueRef at(ValueRef expr) {
-    if (expr) {
-        if (auto list = llvm::dyn_cast<List>(expr)) {
-            return list->getAt();
-        }
-        return expr;
+    assert(expr && (expr->getKind() == V_Pointer));
+    if (auto pointer = llvm::dyn_cast<Pointer>(expr)) {
+        return pointer->getAt();
     }
     return NULL;
 }
@@ -494,8 +485,7 @@ static int kindOf(ValueRef expr) {
     if (expr) {
         return expr->getKind();
     }
-    // empty list
-    return V_List;
+    return V_None;
 }
 
 static int countOf(ValueRef expr) {
@@ -507,6 +497,13 @@ static int countOf(ValueRef expr) {
     return count;
 }
 
+static ValueRef cons(ValueRef lhs, ValueRef rhs) {
+    assert(lhs);
+    lhs = lhs->clone();
+    lhs->setNext(rhs);
+    return lhs;
+}
+
 template<typename T>
 static bool isKindOf(ValueRef expr) {
     return kindOf(expr) == T::kind();
@@ -514,16 +511,17 @@ static bool isKindOf(ValueRef expr) {
 
 static ValueRef next(ValueRef expr) {
     if (expr) {
-        if (auto list = llvm::dyn_cast<List>(expr)) {
-            return list->getNext();
-        }
+        return expr->getNext();
     }
     return NULL;
 }
 
 static bool isAtom(ValueRef expr) {
     if (expr) {
-        return expr->getKind() != V_List;
+        if (kindOf(expr) == V_Pointer) {
+            if (at(expr))
+                return false;
+        }
     }
     // empty list
     return true;
@@ -537,10 +535,16 @@ protected:
     bool is_unsigned;
 
 public:
-    Integer(int64_t number, bool is_unsigned_ = false) :
-        Value(V_Integer),
+    Integer(int64_t number, bool is_unsigned_, ValueRef next_ = NULL) :
+        Value(V_Integer, next_),
         value(number),
         is_unsigned(is_unsigned_)
+        {}
+
+    Integer(int64_t number, ValueRef next_ = NULL) :
+        Value(V_Integer, next_),
+        value(number),
+        is_unsigned(false)
         {}
 
     bool isUnsigned() const {
@@ -572,8 +576,8 @@ protected:
     double value;
 
 public:
-    Real(double number) :
-        Value(V_Real),
+    Real(double number, ValueRef next_ = NULL) :
+        Value(V_Real, next_),
         value(number)
         {}
 
@@ -601,19 +605,19 @@ struct String : Value {
 protected:
     std::string value;
 
-    String(ValueKind kind, const char *s, size_t len) :
-        Value(kind),
+    String(ValueKind kind, const char *s, size_t len, ValueRef next_) :
+        Value(kind, next_),
         value(s, len)
         {}
 
 public:
-    String(const char *s, size_t len) :
-        Value(V_String),
+    String(const char *s, size_t len, ValueRef next_ = NULL) :
+        Value(V_String, next_),
         value(s, len)
         {}
 
-    String(const char *s) :
-        Value(V_String),
+    String(const char *s, ValueRef next_ = NULL) :
+        Value(V_String, next_),
         value(s, strlen(s))
         {}
 
@@ -668,11 +672,11 @@ const char *stringAt(ValueRef expr) {
 //------------------------------------------------------------------------------
 
 struct Symbol : String {
-    Symbol(const char *s, size_t len) :
-        String(V_Symbol, s, len) {}
+    Symbol(const char *s, size_t len, ValueRef next_ = NULL) :
+        String(V_Symbol, s, len, next_) {}
 
-    Symbol(const char *s) :
-        String(V_Symbol, s, strlen(s)) {}
+    Symbol(const char *s, ValueRef next_ = NULL) :
+        String(V_Symbol, s, strlen(s), next_) {}
 
     static bool classof(const Value *expr) {
         return expr->getKind() == V_Symbol;
@@ -694,8 +698,8 @@ protected:
     void *value;
 
 public:
-    Handle(void *ptr) :
-        Value(V_Handle),
+    Handle(void *ptr, ValueRef next_ = NULL) :
+        Value(V_Handle, next_),
         value(ptr)
         {}
 
@@ -720,9 +724,9 @@ public:
 //------------------------------------------------------------------------------
 
 std::string Value::getHeader() const {
-    if (auto list = llvm::dyn_cast<List>(this)) {
-        if (list->getAt()) {
-            if (auto head = llvm::dyn_cast<Symbol>(list->getAt())) {
+    if (auto pointer = llvm::dyn_cast<Pointer>(this)) {
+        if (pointer->getAt()) {
+            if (auto head = llvm::dyn_cast<Symbol>(pointer->getAt())) {
                 return head->getValue();
             }
         }
@@ -731,8 +735,11 @@ std::string Value::getHeader() const {
 }
 
 void Value::tag() {
+    if (tagged()) return;
     // reset age
     age = 0;
+    if (next)
+        next->tag();
 }
 
 int Value::collect(ValueRef gcroot) {
@@ -765,6 +772,7 @@ int Value::collect(ValueRef gcroot) {
 
 //------------------------------------------------------------------------------
 
+// matches ((///...))
 static bool isComment(ValueRef expr) {
     if (isAtom(expr)) return false;
     if (isKindOf<Symbol>(at(expr)) && !memcmp(stringAt(expr),"///",3)) {
@@ -773,21 +781,30 @@ static bool isComment(ValueRef expr) {
     return false;
 }
 
-// mutable
 static ValueRef strip(ValueRef expr) {
-    if (isAtom(expr)) return expr;
-    ValueRef atelem = at(expr);
-    ValueRef nextelem = next(expr);
-    if (isComment(atelem)) {
+    if (!expr) return nullptr;
+    if (isComment(expr)) {
         // skip
-        return strip(nextelem);
-    } else {
+        return strip(next(expr));
+    } else if (!isAtom(expr)) {
+        ValueRef atelem = at(expr);
+        ValueRef nextelem = next(expr);
         ValueRef newatelem = strip(atelem);
         ValueRef newnextelem = strip(nextelem);
         if ((newatelem == atelem) && (newnextelem == nextelem))
             return expr;
         else
-            return llvm::cast<List>(expr)->cons(newatelem, newnextelem);
+            return new Pointer(newatelem, newnextelem);
+    } else {
+        ValueRef nextelem = next(expr);
+        ValueRef newnextelem = strip(nextelem);
+        if (newnextelem == nextelem)
+            return expr;
+        else {
+            expr = expr->clone();
+            expr->setNext(newnextelem);
+            return expr;
+        }
     }
 }
 
@@ -1147,14 +1164,16 @@ struct Parser {
     }
 
     struct ListBuilder {
-        List *result;
-        List *start;
-        List *tail;
+        ValueRef result;
+        ValueRef start;
+        ValueRef lastend;
+        ValueRef tail;
         Anchor anchor;
 
         ListBuilder(Lexer &lexer) :
             result(nullptr),
             start(nullptr),
+            lastend(nullptr),
             tail(nullptr) {
             lexer.initAnchor(anchor);
         }
@@ -1164,20 +1183,25 @@ struct Parser {
         }
 
         bool split() {
+            // wrap newly added elements in new list
             if (!start) {
                 return false;
             }
-            // wrap in new list
-            ValueRef sublist = start->clone();
-            start->setAt(sublist);
-            start->setNext(nullptr);
-            tail = start;
+            ValueRef sublist = new Pointer(start);
+            if (lastend) {
+                // if a previous tail is known, reroute
+                lastend->setNext(sublist);
+            } else {
+                // list starts with sublist
+                result = sublist;
+            }
+            lastend = sublist;
+            tail = sublist;
             start = nullptr;
             return true;
         }
 
-        void append(ValueRef elem) {
-            auto newtail = new List(elem);
+        void append(ValueRef newtail) {
             if (tail) {
                 tail->setNext(newtail);
             } else if (!result) {
@@ -1213,7 +1237,7 @@ struct Parser {
                 builder.append(elem);
             }
         }
-        return builder.result;
+        return new Pointer(builder.result);
     }
 
     ValueRef parseAny () {
@@ -1223,11 +1247,11 @@ struct Parser {
         } else if (lexer.token == token_square_open) {
             auto list = parseList(token_square_close);
             if (errors) return nullptr;
-            return new List(new Symbol("["), list);
+            return new Pointer(new Symbol("["), list);
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return nullptr;
-            return new List(new Symbol("{"), list);
+            return new Pointer(new Symbol("{"), list);
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -1317,11 +1341,11 @@ struct Parser {
 
         if (!builder.result) {
             assert(depth == 0);
-            return nullptr;
+            return new Pointer(nullptr);
         } else if (!builder.result->getNext()) {
-            return builder.result->getAt();
-        } else {
             return builder.result;
+        } else {
+            return new Pointer(builder.result);
         }
     }
 
@@ -1377,12 +1401,16 @@ struct Parser {
 };
 
 //------------------------------------------------------------------------------
+// PRINTING
+//------------------------------------------------------------------------------
 
 static bool isNested(ValueRef e) {
     if (isAtom(e)) return false;
+    e = at(e);
     while (e) {
-        if (!isAtom(at(e)))
+        if (!isAtom(e)) {
             return true;
+        }
         e = next(e);
     }
     return false;
@@ -1404,57 +1432,48 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
     }
 
 	if (!e) {
-        printf("()");
+        printf("#null#");
         if (naked) putchar('\n');
         return;
     }
 
 	switch(e->getKind()) {
-	case V_List: {
+	case V_Pointer: {
+        e = at(e);
+        if (!e) {
+            printf("()");
+            if (naked)
+                putchar('\n');
+            break;
+        }
         if (naked) {
             int offset = 0;
             bool single = !next(e);
-            ValueRef e0 = at(e);
         print_terse:
-            printValue(e0, depth, false);
+            printValue(e, depth, false);
             e = next(e);
             offset++;
             while (e) {
-                if (isAtom(e)) {
-                    printf(" :. ");
-                    printValue(e, depth, false);
-                    e = nullptr;
-                } else {
-                    e0 = at(e);
-                    if (isNested(e0))
-                        break;
-                    putchar(' ');
-                    printValue(e0, depth, false);
-                    e = next(e);
-                    offset++;
-                }
+                if (isNested(e))
+                    break;
+                putchar(' ');
+                printValue(e, depth, false);
+                e = next(e);
+                offset++;
             }
             printf(single?";\n":"\n");
         //print_sparse:
             while (e) {
-                if (isAtom(e)) {
-                    printAnchor(e, depth + 1);
-                    printf("\\ :. ");
-                    printValue(e, depth, false);
-                    putchar('\n');
-                    break;
-                }
-                e0 = at(e);
-                if (isAtom(e0) // not a list
+                if (isAtom(e) // not a list
                     && (offset >= 1) // not first element in list
                     && next(e) // not last element in list
-                    && !isNested(at(next(e)))) { // next element can be terse packed too
+                    && !isNested(next(e))) { // next element can be terse packed too
                     single = false;
-                    printAnchor(e0, depth + 1);
+                    printAnchor(e, depth + 1);
                     printf("\\ ");
                     goto print_terse;
                 }
-                printValue(e0, depth + 1);
+                printValue(e, depth + 1);
                 e = next(e);
                 offset++;
             }
@@ -1465,15 +1484,9 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
             while (e) {
                 if (offset > 0)
                     putchar(' ');
-                if (isAtom(e)) {
-                    printf(":. ");
-                    printValue(e, depth + 1, false);
-                    break;
-                } else {
-                    printValue(at(e), depth + 1, false);
-                    e = next(e);
-                    offset++;
-                }
+                printValue(e, depth + 1, false);
+                e = next(e);
+                offset++;
             }
             putchar(')');
             if (naked)
@@ -1655,7 +1668,7 @@ struct Environment {
 
     void addQuote(LLVMValueRef value, ValueRef expr) {
         globals->globalptrs.push_back(std::make_tuple(value, (void *)expr));
-        gc_root = new List(expr, gc_root);
+        gc_root = cons(expr, gc_root);
     }
 
 };
@@ -2143,9 +2156,7 @@ static bool verifyCount (Environment *env, ValueRef expr, int mincount, int maxc
 }
 
 static bool verifyParameterCount (Environment *env, ValueRef expr, int mincount, int maxcount) {
-    if (mincount >= 0) mincount++;
-    if (maxcount >= 0) maxcount++;
-    return verifyCount(env, expr, mincount, maxcount);
+    return verifyCount(env, next(expr), mincount, maxcount);
 }
 
 static bool isSymbol (const Value *expr, const char *sym) {
@@ -2157,7 +2168,7 @@ static bool isSymbol (const Value *expr, const char *sym) {
 }
 
 static bool matchSpecialForm (Environment *env, ValueRef expr, const char *name, int mincount, int maxcount) {
-    return isSymbol(at(expr), name) && verifyParameterCount(env, expr, mincount, maxcount);
+    return isSymbol(expr, name) && verifyParameterCount(env, expr, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
@@ -2216,10 +2227,11 @@ static const char *translateString (Environment *env, ValueRef expr) {
 
 static LLVMTypeRef translateType (Environment *env, ValueRef expr);
 static LLVMValueRef translateValue (Environment *env, ValueRef expr);
+static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
 
 static bool translateValueList (Environment *env, ValueRef expr) {
     while (expr) {
-        translateValue(env, at(expr));
+        translateValue(env, expr);
         if (env->hasErrors())
             return false;
         expr = next(expr);
@@ -2239,6 +2251,11 @@ static bool verifyInBlock(Environment *env) {
     if (!verifyInFunction(env)) return false;
     if (!env->block) {
         translateError(env, "illegal use outside of labeled block");
+        return false;
+    }
+    LLVMBasicBlockRef block = LLVMValueAsBasicBlock(env->block);
+    if (LLVMGetBasicBlockTerminator(block)) {
+        translateError(env, "labeled block is already terminated.");
         return false;
     }
     return true;
@@ -2281,23 +2298,27 @@ static std::string getTypeString(LLVMTypeRef type) {
     return result;
 }
 
+LLVMTypeRef extractFunctionType(Environment *env, LLVMValueRef callee) {
+    LLVMTypeRef functype = LLVMTypeOf(callee);
+    LLVMTypeKind kind = LLVMGetTypeKind(functype);
+    if (kind == LLVMPointerTypeKind) {
+        functype = LLVMGetElementType(functype);
+        kind = LLVMGetTypeKind(functype);
+    }
+    if (kind != LLVMFunctionTypeKind) {
+        translateError(env, "value is not a function.");
+        return NULL;
+    }
+    return functype;
+}
+
 #define UNPACK_ARG(expr, name) \
-    expr = next(expr); ValueRef name = at(expr)
-#define UNPACK_ARG_REF(expr, name) \
     expr = next(expr); ValueRef name = expr
 
 static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
-    if (!expr) {
-        translateError(env, "value expected");
-        return NULL;
-    }
-    Symbol *head = kindAt<Symbol>(expr);
-    if (!head) {
-        auto _ = env->with_expr(at(expr));
-        translateError(env, "first element of list must be symbol, not %s",
-            valueKindName(kindOf(at(expr))));
-        return NULL;
-    }
+    assert(expr);
+    Symbol *head = translateKind<Symbol>(env, expr);
+    if (!head) return NULL;
     if (matchSpecialForm(env, expr, "int", 2, 2)) {
 
         UNPACK_ARG(expr, expr_type);
@@ -2583,7 +2604,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         LLVMValueRef indices[valuecount];
         int i = 0;
         while (expr) {
-            indices[i] = translateValue(env, at(expr));
+            indices[i] = translateValue(env, expr);
             if (indices[i] == NULL) {
                 return NULL;
             }
@@ -2742,7 +2763,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         return NULL;
     } else if (matchSpecialForm(env, expr, "struct", -1, -1)) {
 
-        translateType(env, expr);
+        translateTypeFromList(env, expr);
         return NULL;
 
     } else if (matchSpecialForm(env, expr, "label", 1, -1)) {
@@ -2777,11 +2798,19 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         LLVMPositionBuilderAtEnd(env->getBuilder(), block);
 
-        LLVMValueRef oldblockvalue = env->block;
-        env->block = blockvalue;
         expr = next(expr);
-        translateValueList(env, expr);
-        env->block = oldblockvalue;
+        if (expr) {
+            LLVMValueRef oldblockvalue = env->block;
+            env->block = blockvalue;
+            translateValueList(env, expr);
+            if (env->hasErrors()) return NULL;
+            env->block = oldblockvalue;
+            LLVMValueRef t = LLVMGetBasicBlockTerminator(block);
+            if (!t) {
+                translateError(env, "labeled block must be terminated.");
+                return NULL;
+            }
+        }
 
         if (env->hasErrors()) return NULL;
 
@@ -2819,11 +2848,11 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         UNPACK_ARG(expr, expr_name);
         UNPACK_ARG(expr, expr_params);
         UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG_REF(expr, body_expr);
+        UNPACK_ARG(expr, body_expr);
 
         const char *name = translateString(env, expr_name);
         if (!name) return NULL;
-        if (!verifyKind<List>(env, expr_params))
+        if (!verifyKind<Pointer>(env, expr_params))
             return NULL;
 
         LLVMTypeRef functype = translateType(env, expr_type);
@@ -2854,6 +2883,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         {
             auto _ = env->with_expr(expr_params);
 
+            expr_params = at(expr_params);
             int argcount = countOf(expr_params);
             int paramcount = LLVMCountParams(func);
             if (argcount == paramcount) {
@@ -2861,7 +2891,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
                 LLVMGetParams(func, params);
                 int i = 0;
                 while (expr_params) {
-                    const Symbol *expr_param = translateKind<Symbol>(env, at(expr_params));
+                    const Symbol *expr_param = translateKind<Symbol>(env, expr_params);
                     if (expr_param) {
                         const char *name = expr_param->c_str();
                         LLVMSetValueName(params[i], name);
@@ -2903,16 +2933,17 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         LLVMBasicBlockRef blocks[branchcount];
         int i = 0;
         while (expr) {
-            ValueRef expr_pair = at(expr);
-            if (!verifyKind<List>(env, expr_pair))
+            ValueRef expr_pair = expr;
+            if (!verifyKind<Pointer>(env, expr_pair))
                 return NULL;
             auto _ = env->with_expr(expr_pair);
+            expr_pair = at(expr_pair);
             if (!verifyCount(env, expr_pair, 2, 2)) {
                 translateError(env, "exactly 2 parameters expected");
                 return NULL;
             }
-            ValueRef expr_value = at(expr_pair);
-            ValueRef expr_block = at(next(expr_pair));
+            ValueRef expr_value = expr_pair;
+            ValueRef expr_block = next(expr_pair);
 
             LLVMValueRef value = translateValue(env, expr_value);
             if (!value) return NULL;
@@ -2962,14 +2993,32 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
+        auto _ = env->with_expr(expr);
+
         expr = next(expr);
 
+        LLVMTypeRef functype = extractFunctionType(env, env->function);
+        if (!functype) return NULL;
+
+        LLVMTypeRef rettype = LLVMGetReturnType(functype);
+
         if (!expr) {
+            if (rettype != LLVMVoidType()) {
+                translateError(env, "return type does not match function signature.");
+                return NULL;
+            }
+
             LLVMBuildRetVoid(env->getBuilder());
         } else {
-            ValueRef expr_value = at(expr);
+            ValueRef expr_value = expr;
             LLVMValueRef value = translateValue(env, expr_value);
             if (!value) return NULL;
+            auto _ = env->with_expr(expr_value);
+            if (rettype != LLVMTypeOf(value)) {
+                translateError(env, "return type does not match function signature.");
+                return NULL;
+            }
+
             LLVMBuildRet(env->getBuilder(), value);
         }
 
@@ -3005,17 +3054,10 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         LLVMValueRef callee = translateValue(env, expr_func);
         if (!callee) return NULL;
-        LLVMTypeRef functype = LLVMTypeOf(callee);
-        LLVMTypeKind kind = LLVMGetTypeKind(functype);
-        if (kind == LLVMPointerTypeKind) {
-            functype = LLVMGetElementType(functype);
-            kind = LLVMGetTypeKind(functype);
-        }
-        if (kind != LLVMFunctionTypeKind) {
-            auto _ = env->with_expr(expr_func);
-            translateError(env, "callee is not a function.");
-            return NULL;
-        }
+
+        auto _ = env->with_expr(expr_func);
+        LLVMTypeRef functype = extractFunctionType(env, callee);
+        if (!functype) return NULL;
 
         expr = next(expr);
 
@@ -3032,7 +3074,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         LLVMValueRef args[argcount];
         int i = 0;
         while (expr) {
-            args[i] = translateValue(env, at(expr));
+            args[i] = translateValue(env, expr);
             if (!args[i]) return NULL;
             if ((i < count) && (LLVMTypeOf(args[i]) != ptypes[i])) {
                 auto _ = env->with_expr(expr);
@@ -3118,7 +3160,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
     } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
         const char *modulename = translateString(env, expr->nth(1));
         const char *name = translateString(env, expr->nth(2));
-        List *args_expr = translateKind<List>(env, expr->nth(3));
+        Pointer *args_expr = translateKind<Pointer>(env, expr->nth(3));
 
         if (modulename && name && args_expr) {
             int argcount = (int)args_expr->size();
@@ -3138,6 +3180,8 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
             }
         }
     */
+    } else if (env->hasErrors()) {
+        return NULL;
     } else {
         auto _ = env->with_expr(head);
         translateError(env, "unhandled special form: %s. Did you forget a 'call'?", head->c_str());
@@ -3150,8 +3194,8 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     assert(expr);
     auto _ = env->with_expr(expr);
 
-    if (isKindOf<List>(expr)) {
-        return translateValueFromList(env, expr);
+    if (!isAtom(expr)) {
+        return translateValueFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         Environment *penv = (Environment *)env;
         while (penv) {
@@ -3178,18 +3222,9 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
 }
 
 static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
-    if (!expr) {
-        translateError(env, "type expected");
-        return NULL;
-    }
-    Symbol *head = kindAt<Symbol>(expr);
-    if (!head) {
-        auto _ = env->with_expr(at(expr));
-        translateError(env, "first element of list must be symbol, not %s",
-            valueKindName(kindOf(at(expr))));
-        return NULL;
-    }
-
+    assert(expr);
+    Symbol *head = translateKind<Symbol>(env, expr);
+    if (!head) return NULL;
     if (matchSpecialForm(env, expr, "function", 1, -1)) {
 
         UNPACK_ARG(expr, expr_rettype);
@@ -3203,7 +3238,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
         LLVMTypeRef paramtypes[argcount];
         int i = 0;
         while (expr) {
-            if (isSymbol(at(expr), "...")) {
+            if (isSymbol(expr, "...")) {
                 vararg = true;
                 --argcount;
                 if (i != argcount) {
@@ -3213,7 +3248,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
                 }
                 break;
             }
-            paramtypes[i] = translateType(env, at(expr));
+            paramtypes[i] = translateType(env, expr);
             if (!paramtypes[i]) {
                 return NULL;
             }
@@ -3288,7 +3323,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
         expr = next(expr);
 
         bool packed = false;
-        if (isSymbol(at(expr), "packed")) {
+        if (isSymbol(expr, "packed")) {
             packed = true;
             expr = next(expr);
         }
@@ -3297,7 +3332,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
         LLVMTypeRef elemtypes[elemcount];
         int i = 0;
         while (expr) {
-            elemtypes[i] = translateType(env, at(expr));
+            elemtypes[i] = translateType(env, expr);
             if (!elemtypes[i]) return NULL;
             expr = next(expr);
             ++i;
@@ -3307,6 +3342,8 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
             LLVMStructSetBody(result, elemtypes, elemcount, packed);
 
         return result;
+    } else if (env->hasErrors()) {
+        return NULL;
     } else {
         auto _ = env->with_expr(head);
         translateError(env, "unhandled special form: %s", head->c_str());
@@ -3319,8 +3356,8 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     assert(expr);
     auto _ = env->with_expr(expr);
 
-    if (auto list = llvm::dyn_cast<List>(expr)) {
-        return translateTypeFromList(env, list);
+    if (!isAtom(expr)) {
+        return translateTypeFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         LLVMTypeRef result = resolveType(env, sym->getValue());
         if (!result) {
@@ -3331,14 +3368,14 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
         return result;
     } else {
         translateError(env, "expected type, not %s",
-            valueKindName(expr->getKind()));
+            valueKindName(kindOf(expr)));
         return NULL;
     }
 }
 
 static void init() {
     if (!gc_root)
-        gc_root = new List();
+        gc_root = new Pointer();
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -3378,7 +3415,7 @@ static Environment *theEnv = NULL;
 
 static bool translateRootValueList (Environment *env, ValueRef expr) {
     while (expr) {
-        ValueRef stmt = at(expr);
+        ValueRef stmt = expr;
         if (Environment::preprocessor) {
             theEnv = env;
             stmt = Environment::preprocessor(env, stmt);
@@ -3395,6 +3432,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     return true;
 }
 
+// parses stmt ...
 static void compileModule (Environment *env, ValueRef expr) {
     assert(expr);
     assert(env->getBuilder());
@@ -3421,7 +3459,7 @@ static void compileMain (ValueRef expr) {
 
     setupRootEnvironment(&env, "main");
 
-    compileModule(&env, next(expr));
+    compileModule(&env, next(at(expr)));
 
     teardownRootEnvironment(&env);
 }
@@ -3443,10 +3481,10 @@ int bang_main(int argc, char ** argv) {
     if (argv && argv[1]) {
         bang::Parser parser;
         auto expr = parser.parseFile(argv[1]);
-        bang::gc_root =
-            new bang::List(expr, bang::gc_root);
         if (expr) {
+            assert(bang::isKindOf<bang::Pointer>(expr));
             //printValue(expr);
+            bang::gc_root = cons(expr, bang::gc_root);
             bang::compileMain(expr);
         } else {
             result = 1;
@@ -3469,15 +3507,23 @@ int bang_get_kind(ValueRef expr) {
 }
 
 ValueRef bang_at(ValueRef expr) {
-    return at(expr);
+    if (expr) {
+        if (bang::isKindOf<bang::Pointer>(expr)) {
+            return at(expr);
+        }
+    }
+    return NULL;
 }
 
 ValueRef bang_next(ValueRef expr) {
     return next(expr);
 }
 
-ValueRef bang_cons(ValueRef lhs, ValueRef rhs) {
-    return new bang::List(lhs, rhs);
+ValueRef bang_set_next(ValueRef lhs, ValueRef rhs) {
+    if (lhs) {
+        return cons(lhs, rhs);
+    }
+    return NULL;
 }
 
 const char *bang_string_value(ValueRef expr) {
@@ -3500,7 +3546,7 @@ void *bang_handle_value(ValueRef expr) {
 
 ValueRef bang_handle(void *ptr) {
     auto handle = new bang::Handle(ptr);
-    bang::gc_root = new bang::List(handle, bang::gc_root);
+    bang::gc_root = new bang::Pointer(handle, bang::gc_root);
     return handle;
 }
 
@@ -3531,16 +3577,16 @@ int bang_eq(Value *a, Value *b) {
 
 void bang_set_key(ValueRef expr, const char *key, ValueRef value) {
     if (expr && key && value) {
-        if (auto list = llvm::dyn_cast<bang::List>(expr)) {
-            list->setKey(key, value);
+        if (auto pointer = llvm::dyn_cast<bang::Pointer>(expr)) {
+            pointer->setKey(key, value);
         }
     }
 }
 
 ValueRef bang_get_key(ValueRef expr, const char *key) {
     if (expr && key) {
-        if (auto list = llvm::dyn_cast<bang::List>(expr)) {
-            return list->getKey(key);
+        if (auto pointer = llvm::dyn_cast<bang::Pointer>(expr)) {
+            return pointer->getKey(key);
         }
     }
     return NULL;
@@ -3548,12 +3594,12 @@ ValueRef bang_get_key(ValueRef expr, const char *key) {
 
 static ValueRef bang_map_1(ValueRef expr, int idx, bang_mapper map, void *ctx) {
     if (!expr) return NULL;
-    ValueRef elem = at(expr);
+    ValueRef elem = expr;
     elem = map(elem, idx, ctx);
     ++idx;
     expr = next(expr);
     if (elem)
-        return new bang::List(elem, bang_map_1(expr, idx, map, ctx));
+        return new bang::Pointer(elem, bang_map_1(expr, idx, map, ctx));
     else
         return bang_map_1(expr, idx, map, ctx);
 }
@@ -3571,6 +3617,10 @@ ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
         }
     }
     return toexpr;
+}
+
+ValueRef bang_ref(ValueRef lhs) {
+    return new bang::Pointer(lhs);
 }
 
 //------------------------------------------------------------------------------
