@@ -2228,13 +2228,21 @@ static void translateError (Environment *env, const char *format, ...) {
 static bool verifyCount (Environment *env, ValueRef expr, int mincount, int maxcount) {
     auto _ = env->with_expr(expr);
 
+    if ((mincount <= 0) && (maxcount == -1))
+        return true;
+
     int argcount = 0;
     while (expr) {
         ++ argcount;
-        if ((maxcount >= 0) && (argcount > maxcount)) {
-            auto _ = env->with_expr(expr);
-            translateError(env, "excess argument. At most %i arguments expected.", maxcount);
-            return false;
+        if (maxcount >= 0) {
+            if (argcount > maxcount) {
+                auto _ = env->with_expr(expr);
+                translateError(env, "excess argument. At most %i arguments expected.", maxcount);
+                return false;
+            }
+        } else if (mincount >= 0) {
+            if (argcount >= mincount)
+                break;
         }
         expr = next(expr);
     }
@@ -2454,973 +2462,1098 @@ bool translateCallParams(Environment *env, ValueRef expr,
     return true;
 }
 
+//------------------------------------------------------------------------------
+
+template<typename ResultT>
+struct TranslateTable {
+    typedef ResultT (*TranslatorFunc)(Environment *env, ValueRef expr);
+
+    struct Translator {
+        int mincount;
+        int maxcount;
+
+        TranslatorFunc translate;
+
+        Translator() :
+            mincount(-1),
+            maxcount(-1),
+            translate(NULL)
+            {}
+
+    };
+
+    std::unordered_map<std::string, Translator> translators;
+
+    void set(TranslatorFunc translate, const std::string &name, int mincount, int maxcount) {
+        Translator translator;
+        translator.mincount = mincount;
+        translator.maxcount = maxcount;
+        translator.translate = translate;
+        translators[name] = translator;
+    }
+
+    TranslatorFunc match(Environment *env, ValueRef expr) {
+        Symbol *head = translateKind<Symbol>(env, expr);
+        if (!head) return NULL;
+        auto &t = translators[head->getValue()];
+        if (!t.translate) return NULL;
+        if (!verifyParameterCount(env, expr, t.mincount, t.maxcount))
+            return NULL;
+        return t.translate;
+    }
+
+};
+
+//------------------------------------------------------------------------------
+// TRANSLATE VALUES
+//------------------------------------------------------------------------------
+
+static TranslateTable<LLVMValueRef> valueTranslators;
+
+static LLVMValueRef tr_value_int (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    int64_t value;
+    if (!translateInt64(env, expr_value, value)) return NULL;
+
+    return LLVMConstInt(type, value, 1);
+}
+
+static LLVMValueRef tr_value_real (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    double value;
+    if (!translateDouble(env, expr_value, value)) return NULL;
+
+    return LLVMConstReal(type, value);
+}
+
+static LLVMValueRef tr_value_dump_module (Environment *env, ValueRef expr) {
+    LLVMDumpModule(env->getModule());
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_dump (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMValueRef value = translateValue(env, expr_arg);
+    if (value) {
+        LLVMDumpValue(value);
+    }
+
+    return value;
+}
+
+static LLVMValueRef tr_value_dumptype (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (type) {
+        LLVMDumpType(type);
+    }
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_constant (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+    LLVMValueRef init = LLVMGetInitializer(value);
+    if (!init) {
+        translateError(env, "global has no initializer.");
+        return NULL;
+    }
+    if (!LLVMIsConstant(init)) {
+        translateError(env, "global initializer isn't constant.");
+        return NULL;
+    }
+    LLVMSetGlobalConstant(value, true);
+    return value;
+}
+
+static LLVMValueRef tr_value_global (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_value);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+
+    auto _ = env->with_expr(expr_value);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    bool inlined = false;
+    if (!strcmp(name, "")) {
+        inlined = true;
+        name = "global";
+    }
+
+    LLVMValueRef result = LLVMAddGlobal(env->getModule(), LLVMTypeOf(value), name);
+    LLVMSetInitializer(result, value);
+
+    if (inlined)
+        LLVMSetLinkage(result, LLVMLinkOnceAnyLinkage);
+
+    if (isKindOf<Symbol>(expr_name))
+        env->values[name] = result;
+
+    return result;
+}
+
+static LLVMValueRef tr_value_quote (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, "quote");
+    env->addQuote(result, expr_value);
+    LLVMSetGlobalConstant(result, true);
+
+    return result;
+}
+
+static LLVMValueRef tr_value_bitcast (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    if (LLVMIsConstant(value)) {
+        return LLVMConstBitCast(value, type);
+
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildBitCast(env->getBuilder(), value, type, "");
+    }
+}
+
+static LLVMValueRef tr_value_ptrtoint (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    return LLVMBuildPtrToInt(env->getBuilder(), value, type, "");
+}
+
+static LLVMValueRef tr_value_inttoptr (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
+}
+
+static LLVMValueRef tr_value_and (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_lhs);
+    UNPACK_ARG(expr, expr_rhs);
+    LLVMValueRef lhs = translateValue(env, expr_lhs);
+    if (!lhs) return NULL;
+    LLVMValueRef rhs = translateValue(env, expr_rhs);
+    if (!rhs) return NULL;
+
+    return LLVMBuildAnd(env->getBuilder(), lhs, rhs, "");
+}
+
+static LLVMValueRef tr_value_or (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_lhs);
+    UNPACK_ARG(expr, expr_rhs);
+    LLVMValueRef lhs = translateValue(env, expr_lhs);
+    if (!lhs) return NULL;
+    LLVMValueRef rhs = translateValue(env, expr_rhs);
+    if (!rhs) return NULL;
+
+    return LLVMBuildOr(env->getBuilder(), lhs, rhs, "");
+}
+
+static LLVMValueRef tr_value_add (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_lhs);
+    UNPACK_ARG(expr, expr_rhs);
+    LLVMValueRef lhs = translateValue(env, expr_lhs);
+    if (!lhs) return NULL;
+    LLVMValueRef rhs = translateValue(env, expr_rhs);
+    if (!rhs) return NULL;
+
+    return LLVMBuildAdd(env->getBuilder(), lhs, rhs, "");
+}
+
+static LLVMValueRef tr_value_sub (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_lhs);
+    UNPACK_ARG(expr, expr_rhs);
+    LLVMValueRef lhs = translateValue(env, expr_lhs);
+    if (!lhs) return NULL;
+    LLVMValueRef rhs = translateValue(env, expr_rhs);
+    if (!rhs) return NULL;
+
+    return LLVMBuildSub(env->getBuilder(), lhs, rhs, "");
+}
+
+static LLVMValueRef tr_value_icmp (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_op);
+    UNPACK_ARG(expr, expr_lhs);
+    UNPACK_ARG(expr, expr_rhs);
+
+    const char *opname = translateString(env, expr_op);
+    if (!opname) return NULL;
+    LLVMValueRef lhs = translateValue(env, expr_lhs);
+    if (!lhs) return NULL;
+    LLVMValueRef rhs = translateValue(env, expr_rhs);
+    if (!rhs) return NULL;
+
+    LLVMIntPredicate op;
+    if (!strcmp(opname, "==")) {         op = LLVMIntEQ;
+    } else if (!strcmp(opname, "!=")) {  op = LLVMIntNE;
+    } else if (!strcmp(opname, "u>")) {  op = LLVMIntUGT;
+    } else if (!strcmp(opname, "u>=")) { op = LLVMIntUGE;
+    } else if (!strcmp(opname, "u<")) {  op = LLVMIntULT;
+    } else if (!strcmp(opname, "u<=")) { op = LLVMIntULE;
+    } else if (!strcmp(opname, "i>")) {  op = LLVMIntSGT;
+    } else if (!strcmp(opname, "i>=")) { op = LLVMIntSGE;
+    } else if (!strcmp(opname, "i<")) {  op = LLVMIntSLT;
+    } else if (!strcmp(opname, "i<=")) { op = LLVMIntSLE;
+    } else {
+        auto _ = env->with_expr(expr_op);
+        translateError(env,
+            "illegal operand. Try one of == != u> u>= u< u<= i> i>= i< i<=.");
+        return NULL;
+    }
+
+    return LLVMBuildICmp(env->getBuilder(), op, lhs, rhs, "");
+}
+
+static LLVMValueRef tr_value_fcmp (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_op);
+    UNPACK_ARG(expr, expr_lhs);
+    UNPACK_ARG(expr, expr_rhs);
+
+    const char *opname = translateString(env, expr_op);
+    if (!opname) return NULL;
+    LLVMValueRef lhs = translateValue(env, expr_lhs);
+    if (!lhs) return NULL;
+    LLVMValueRef rhs = translateValue(env, expr_rhs);
+    if (!rhs) return NULL;
+
+    LLVMRealPredicate op;
+    if (!strcmp(opname, "false")) {       op = LLVMRealPredicateFalse;
+    } else if (!strcmp(opname, "o==")) {  op = LLVMRealOEQ;
+    } else if (!strcmp(opname, "o>")) {   op = LLVMRealOGT;
+    } else if (!strcmp(opname, "o>=")) {  op = LLVMRealOGE;
+    } else if (!strcmp(opname, "o<")) {   op = LLVMRealOLT;
+    } else if (!strcmp(opname, "o<=")) {  op = LLVMRealOLE;
+    } else if (!strcmp(opname, "o!=")) {  op = LLVMRealONE;
+    } else if (!strcmp(opname, "ord")) {  op = LLVMRealORD;
+    } else if (!strcmp(opname, "uno")) {  op = LLVMRealUNO;
+    } else if (!strcmp(opname, "u==")) {  op = LLVMRealUEQ;
+    } else if (!strcmp(opname, "u>")) {   op = LLVMRealUGT;
+    } else if (!strcmp(opname, "u>=")) {  op = LLVMRealUGE;
+    } else if (!strcmp(opname, "u<")) {   op = LLVMRealULT;
+    } else if (!strcmp(opname, "u<=")) {  op = LLVMRealULE;
+    } else if (!strcmp(opname, "u!=")) {  op = LLVMRealUNE;
+    } else if (!strcmp(opname, "true")) { op = LLVMRealPredicateTrue;
+    } else {
+        auto _ = env->with_expr(expr_op);
+        translateError(env,
+            "illegal operand. Try one of false true ord uno o== o!= o> o>= o< o<= u== u!= u> u>= u< u<=.");
+        return NULL;
+    }
+
+    return LLVMBuildFCmp(env->getBuilder(), op, lhs, rhs, "");
+}
+
+static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_array);
+
+    LLVMValueRef ptr = translateValue(env, expr_array);
+    if (!ptr) return NULL;
+
+    auto _ = env->with_expr(expr_array);
+
+    bool all_const = LLVMIsConstant(ptr);
+
+    expr = next(expr);
+
+    int valuecount = countOf(expr);
+    LLVMValueRef indices[valuecount];
+    int i = 0;
+    while (expr) {
+        indices[i] = translateValue(env, expr);
+        if (indices[i] == NULL) {
+            return NULL;
+        }
+        all_const = all_const && LLVMIsConstant(indices[i]);
+        expr = next(expr);
+        ++i;
+    }
+
+    if (all_const) {
+        return LLVMConstInBoundsGEP(ptr, indices, valuecount);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildGEP(env->getBuilder(), ptr, indices, valuecount, "");
+    }
+}
+
+static LLVMValueRef tr_value_extractelement (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_index);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    LLVMValueRef index = translateValue(env, expr_index);
+    if (!index) return NULL;
+
+    LLVMValueRef result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
+    if (!result) {
+        translateError(env, "can not use extract on this value");
+    }
+    return result;
+}
+
+static LLVMValueRef tr_value_extractvalue (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_index);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    int64_t index;
+    if (!translateInt64(env, expr_index, index)) return NULL;
+
+    LLVMTypeRef valuetype = LLVMTypeOf(value);
+    LLVMTypeKind kind = LLVMGetTypeKind(valuetype);
+    switch(kind) {
+        case LLVMStructTypeKind: {
+            auto _ = env->with_expr(expr_index);
+            unsigned count = LLVMCountStructElementTypes(valuetype);
+            if ((unsigned)index >= count) {
+                translateError(env,
+                    "struct field index is out of bounds.");
+            }
+        } break;
+        case LLVMArrayTypeKind: {
+            auto _ = env->with_expr(expr_index);
+            unsigned count = LLVMGetArrayLength(valuetype);
+            if ((unsigned)index >= count) {
+                translateError(env,
+                    "array offset is out of bounds.");
+            }
+        } break;
+        default: {
+            auto _ = env->with_expr(expr_value);
+            translateError(env,
+                "value passed to extractvalue has illegal type. Struct or array type expected.");
+            return NULL;
+        } break;
+    }
+
+    LLVMValueRef result = LLVMBuildExtractValue(env->getBuilder(), value, index, "");
+    if (!result) {
+        translateError(env, "can not use extract on this value");
+    }
+    return result;
+}
+
+static LLVMValueRef tr_value_align (Environment *env, ValueRef expr) {
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_bytes);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    int64_t bytes;
+    if (!translateInt64(env, expr_bytes, bytes)) return NULL;
+
+    LLVMSetAlignment(value, bytes);
+    return value;
+}
+
+static LLVMValueRef tr_value_load (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    return LLVMBuildLoad(env->getBuilder(), value, "");
+}
+
+static LLVMValueRef tr_value_store (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_ptr);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+    LLVMValueRef ptr = translateValue(env, expr_ptr);
+    if (!ptr) return NULL;
+
+    return LLVMBuildStore(env->getBuilder(), value, ptr);
+}
+
+static LLVMValueRef tr_value_alloca (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+    if (next(expr)) {
+        UNPACK_ARG(expr, expr_value);
+        LLVMValueRef value = translateValue(env, expr_value);
+        return LLVMBuildArrayAlloca(env->getBuilder(), type, value, "");
+    } else {
+        return LLVMBuildAlloca(env->getBuilder(), type, "");
+    }
+}
+
+static LLVMValueRef tr_value_defvalue (Environment *env, ValueRef expr) {
+
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_value);
+
+    const Symbol *sym_name = translateKind<Symbol>(env, expr_name);
+    LLVMValueRef result = translateValue(env, expr_value);
+    if (!result) return NULL;
+
+    const char *name = sym_name->c_str();
+    env->values[name] = result;
+
+    return result;
+}
+
+static LLVMValueRef tr_value_deftype (Environment *env, ValueRef expr) {
+
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_value);
+
+    const Symbol *sym_name = translateKind<Symbol>(env, expr_name);
+    LLVMTypeRef result = translateType(env, expr_value);
+    if (!result) return NULL;
+
+    const char *name = sym_name->c_str();
+    env->types[name] = result;
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_struct (Environment *env, ValueRef expr) {
+    translateTypeFromList(env, expr);
+    return NULL;
+}
+
+static LLVMValueRef tr_value_label (Environment *env, ValueRef expr) {
+    if (!verifyInFunction(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_name);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+
+    LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->getBuilder());
+
+    // continue existing label
+    LLVMBasicBlockRef block = NULL;
+    if (isKindOf<Symbol>(expr_name)) {
+        LLVMValueRef maybe_block = env->values[name];
+        if (maybe_block) {
+            block = verifyBasicBlock(env, maybe_block);
+            if (!block)
+                return NULL;
+        }
+    }
+
+    if (!block) {
+        block = LLVMAppendBasicBlock(env->function, name);
+        if (isKindOf<Symbol>(expr_name))
+            env->values[name] = LLVMBasicBlockAsValue(block);
+    }
+
+    LLVMValueRef blockvalue = LLVMBasicBlockAsValue(block);
+
+    LLVMPositionBuilderAtEnd(env->getBuilder(), block);
+
+    expr = next(expr);
+    if (expr) {
+        LLVMValueRef oldblockvalue = env->block;
+        env->block = blockvalue;
+        translateValueList(env, expr);
+        if (env->hasErrors()) return NULL;
+        env->block = oldblockvalue;
+        LLVMValueRef t = LLVMGetBasicBlockTerminator(block);
+        if (!t) {
+            translateError(env, "labeled block must be terminated.");
+            return NULL;
+        }
+    }
+
+    if (env->hasErrors()) return NULL;
+
+    if (oldblock)
+        LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
+
+    return blockvalue;
+}
+
+static LLVMValueRef tr_value_null (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    return LLVMConstNull(type);
+}
+
+static LLVMValueRef tr_value_do (Environment *env, ValueRef expr) {
+    expr = next(expr);
+
+    Environment subenv(env);
+    translateValueList(&subenv, expr);
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_do_splice (Environment *env, ValueRef expr) {
+    expr = next(expr);
+
+    translateValueList(env, expr);
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
+
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_params);
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, body_expr);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+    if (!verifyKind<Pointer>(env, expr_params))
+        return NULL;
+
+    LLVMTypeRef functype = translateType(env, expr_type);
+
+    if (!functype)
+        return NULL;
+
+    auto _ = env->with_expr(expr_type);
+
+    bool inlined = false;
+    if (!strcmp(name, "")) {
+        inlined = true;
+        name = "inlined";
+    }
+
+    // todo: external linkage?
+    LLVMValueRef func = LLVMAddFunction(
+        env->getModule(), name, functype);
+
+    if (isKindOf<Symbol>(expr_name))
+        env->values[name] = func;
+    if (inlined)
+        LLVMSetLinkage(func, LLVMLinkOnceAnyLinkage);
+
+    Environment subenv(env);
+    subenv.function = func;
+
+    {
+        auto _ = env->with_expr(expr_params);
+
+        expr_params = at(expr_params);
+        int argcount = countOf(expr_params);
+        int paramcount = LLVMCountParams(func);
+        if (argcount == paramcount) {
+            LLVMValueRef params[paramcount];
+            LLVMGetParams(func, params);
+            int i = 0;
+            while (expr_params) {
+                const Symbol *expr_param = translateKind<Symbol>(env, expr_params);
+                if (expr_param) {
+                    const char *name = expr_param->c_str();
+                    LLVMSetValueName(params[i], name);
+                    subenv.values[name] = params[i];
+                }
+                expr_params = next(expr_params);
+                i++;
+            }
+        } else {
+            translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types",
+                argcount, paramcount);
+            return NULL;
+        }
+    }
+
+    if (env->hasErrors()) return NULL;
+
+    {
+        auto _ = env->with_expr(body_expr);
+
+        translateValueList(&subenv, body_expr);
+        if (env->hasErrors()) return NULL;
+    }
+
+    return func;
+}
+
+static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    expr = next(expr);
+    int branchcount = countOf(expr);
+    LLVMValueRef values[branchcount];
+    LLVMBasicBlockRef blocks[branchcount];
+    int i = 0;
+    while (expr) {
+        ValueRef expr_pair = expr;
+        if (!verifyKind<Pointer>(env, expr_pair))
+            return NULL;
+        auto _ = env->with_expr(expr_pair);
+        expr_pair = at(expr_pair);
+        if (!verifyCount(env, expr_pair, 2, 2)) {
+            translateError(env, "exactly 2 parameters expected");
+            return NULL;
+        }
+        ValueRef expr_value = expr_pair;
+        ValueRef expr_block = next(expr_pair);
+
+        LLVMValueRef value = translateValue(env, expr_value);
+        if (!value) return NULL;
+        LLVMBasicBlockRef block = verifyBasicBlock(env, translateValue(env, expr_block));
+        if (!block) return NULL;
+        values[i] = value;
+        blocks[i] = block;
+
+        expr = next(expr);
+        i++;
+    }
+
+    LLVMValueRef result =
+        LLVMBuildPhi(env->getBuilder(), type, "");
+    LLVMAddIncoming(result, values, blocks, branchcount);
+    return result;
+}
+
+static LLVMValueRef tr_value_br (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMBasicBlockRef value = verifyBasicBlock(env, translateValue(env, expr_value));
+    if (!value) return NULL;
+
+    return LLVMBuildBr(env->getBuilder(), value);
+}
+
+static LLVMValueRef tr_value_cond_br (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_then);
+    UNPACK_ARG(expr, expr_else);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+    LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr_then));
+    if (!then_block) return NULL;
+    LLVMBasicBlockRef else_block = verifyBasicBlock(env, translateValue(env, expr_else));
+    if (!else_block) return NULL;
+
+    return LLVMBuildCondBr(env->getBuilder(), value, then_block, else_block);
+}
+
+static LLVMValueRef tr_value_ret (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    auto _ = env->with_expr(expr);
+
+    expr = next(expr);
+
+    LLVMTypeRef functype = extractFunctionType(env, env->function);
+    if (!functype) return NULL;
+
+    LLVMTypeRef rettype = LLVMGetReturnType(functype);
+
+    if (!expr) {
+        if (rettype != LLVMVoidType()) {
+            translateError(env, "return type does not match function signature.");
+            return NULL;
+        }
+
+        LLVMBuildRetVoid(env->getBuilder());
+    } else {
+        ValueRef expr_value = expr;
+        LLVMValueRef value = translateValue(env, expr_value);
+        if (!value) return NULL;
+        auto _ = env->with_expr(expr_value);
+        if (rettype != LLVMTypeOf(value)) {
+            translateError(env, "return type does not match function signature.");
+            return NULL;
+        }
+
+        LLVMBuildRet(env->getBuilder(), value);
+    }
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_declare (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_type);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+
+    LLVMTypeRef functype = translateType(env, expr_type);
+
+    auto _ = env->with_expr(expr_type);
+
+    if (!functype)
+        return NULL;
+
+    LLVMValueRef result = LLVMAddFunction(
+        env->getModule(), name, functype);
+
+    if (isKindOf<Symbol>(expr_name))
+        env->values[name] = result;
+
+    return result;
+}
+
+static LLVMValueRef tr_value_call (Environment *env, ValueRef expr) {
+
+    if (!verifyInBlock(env)) return NULL;
+
+    expr = next(expr);
+
+    LLVMValueRef callee;
+    LLVMValueRef *args;
+    int argcount;
+    if (!translateCallParams(env, expr, callee, args, argcount))
+        return NULL;
+
+    LLVMValueRef result = LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
+    delete args;
+    return result;
+}
+
+static LLVMValueRef tr_value_invoke (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_call);
+    UNPACK_ARG(expr, expr_then);
+    UNPACK_ARG(expr, expr_catch);
+
+    if (isAtom(expr_call)
+        || !matchSpecialForm(env, at(expr_call), "call", 1, -1)) {
+        auto _ = env->with_expr(expr_call);
+        translateError(env, "call expression expected.");
+        return NULL;
+    }
+
+    expr_call = next(at(expr_call));
+
+    LLVMValueRef callee;
+    LLVMValueRef *args;
+    int argcount;
+    if (!translateCallParams(env, expr_call, callee, args, argcount))
+        return NULL;
+
+    LLVMValueRef result = NULL;
+
+    LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr_then));
+    if (then_block) {
+        LLVMBasicBlockRef catch_block = verifyBasicBlock(env, translateValue(env, expr_catch));
+        if (catch_block) {
+            result = LLVMBuildInvoke(env->getBuilder(),
+                callee, args, argcount, then_block, catch_block, "");
+        }
+    }
+
+    delete args;
+    return result;
+}
+
+static LLVMValueRef tr_value_landingpad (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, expr_persfn);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+    LLVMValueRef persfn = translateValue(env, expr_persfn);
+    if (!persfn) return NULL;
+
+    expr = next(expr);
+    bool cleanup = false;
+    if (isSymbol(expr, "cleanup")) {
+        cleanup = true;
+        expr = next(expr);
+    }
+
+    int clausecount = countOf(expr);
+    LLVMValueRef result = LLVMBuildLandingPad(
+        env->getBuilder(), type, persfn, clausecount, "");
+
+    if (cleanup)
+        LLVMSetCleanup(result, true);
+
+    int i = 0;
+    while (expr) {
+        LLVMValueRef clauseval = translateValue(env, expr);
+        LLVMAddClause(result, clauseval);
+        expr = next(expr);
+        ++i;
+    }
+
+    return result;
+}
+
+static LLVMValueRef tr_value_resume (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_value);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    return LLVMBuildResume(env->getBuilder(), value);
+}
+
+static LLVMValueRef tr_value_unreachable (Environment *env, ValueRef expr) {
+    if (!verifyInBlock(env)) return NULL;
+
+    return LLVMBuildUnreachable(env->getBuilder());
+}
+
+static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+
+    bang::Parser parser;
+    expr = parser.parseFile(name);
+    if (!expr) {
+        translateError(env, "unable to parse file.");
+        return NULL;
+    }
+
+    assert(bang::isKindOf<bang::Pointer>(expr));
+    bang::gc_root = cons(expr, bang::gc_root);
+
+    auto _ = env->with_expr(expr);
+    expr = at(expr);
+
+    compileModule (env, expr);
+
+    return NULL;
+}
+
+static LLVMValueRef tr_value_nop (Environment *env, ValueRef expr) {
+    // do nothing
+    return NULL;
+}
+
+static LLVMValueRef tr_value_run (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_callee);
+
+    LLVMValueRef callee = translateValue(env, expr_callee);
+    if (!callee) return NULL;
+
+    char *error = NULL;
+    LLVMVerifyModule(env->getModule(), LLVMAbortProcessAction, &error);
+    LLVMDisposeMessage(error);
+
+    int opt_level = 0;
+
+    error = NULL;
+    LLVMExecutionEngineRef engine;
+    int result = LLVMCreateJITCompilerForModule(
+        &engine, env->getModule(), opt_level, &error);
+
+    if (error) {
+        fprintf(stderr, "error: %s\n", error);
+        LLVMDisposeMessage(error);
+        exit(EXIT_FAILURE);
+    }
+
+    if (result != 0) {
+        fprintf(stderr, "failed to create execution engine\n");
+        abort();
+    }
+
+    for (auto it : env->globals->globalptrs) {
+        LLVMAddGlobalMapping(engine, std::get<0>(it), std::get<1>(it));
+    }
+
+    printf("running...\n");
+    LLVMRunStaticConstructors(engine);
+    LLVMRunFunction(engine, callee, 0, NULL);
+    //LLVMRunStaticDestructors(engine);
+
+    printf("done.\n");
+
+    return NULL;
+}
+
+/*
+} else if (matchSpecialForm(env, expr, "module", 1, -1)) {
+
+    const char *name = translateString(env, expr->nth(1));
+    if (!name) return NULL;
+
+    TranslationGlobals globals(env);
+
+    Environment module_env;
+    module_env.globals = &globals;
+
+    setupRootEnvironment(&module_env, name);
+
+    compileModule(&module_env, expr, 2);
+
+    teardownRootEnvironment(&module_env);
+    return NULL;
+*/
+/*
+} else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
+    const char *modulename = translateString(env, expr->nth(1));
+    const char *name = translateString(env, expr->nth(2));
+    Pointer *args_expr = translateKind<Pointer>(env, expr->nth(3));
+
+    if (modulename && name && args_expr) {
+        int argcount = (int)args_expr->size();
+        const char *args[argcount];
+        bool success = true;
+        for (int i = 0; i < argcount; ++i) {
+            const char *arg = translateString(env, args_expr->nth(i));
+            if (arg) {
+                args[i] = arg;
+            } else {
+                success = false;
+                break;
+            }
+        }
+        if (success) {
+            importCModule(env, modulename, name, args, argcount);
+        }
+    }
+*/
+
+static void registerValueTranslators() {
+    auto &t = valueTranslators;
+
+    t.set(tr_value_int, "int", 2, 2);
+    t.set(tr_value_real, "real", 2, 2);
+    t.set(tr_value_dump_module, "dump-module", 0, 0);
+    t.set(tr_value_dump, "dump", 1, 1);
+    t.set(tr_value_dumptype, "dumptype", 1, 1);
+    t.set(tr_value_constant, "constant", 1, 1);
+    t.set(tr_value_global, "global", 2, 2);
+    t.set(tr_value_quote, "quote", 2, 2);
+    t.set(tr_value_bitcast, "bitcast", 2, 2);
+    t.set(tr_value_ptrtoint, "ptrtoint", 2, 2);
+    t.set(tr_value_inttoptr, "inttoptr", 2, 2);
+    t.set(tr_value_and, "and", 2, 2);
+    t.set(tr_value_or, "or", 2, 2);
+    t.set(tr_value_add, "add", 2, 2);
+    t.set(tr_value_sub, "sub", 2, 2);
+    t.set(tr_value_icmp, "icmp", 3, 3);
+    t.set(tr_value_fcmp, "fcmp", 3, 3);
+    t.set(tr_value_getelementptr, "getelementptr", 1, -1);
+    t.set(tr_value_extractelement, "extractelement", 2, 2);
+    t.set(tr_value_extractvalue, "extractvalue", 2, 2);
+    t.set(tr_value_align, "align", 2, 2);
+    t.set(tr_value_load, "load", 1, 1);
+    t.set(tr_value_store, "store", 2, 2);
+    t.set(tr_value_alloca, "alloca", 1, 2);
+    t.set(tr_value_defvalue, "defvalue", 2, 2);
+    t.set(tr_value_deftype, "deftype", 2, 2);
+    t.set(tr_value_struct, "struct", -1, -1);
+    t.set(tr_value_label, "label", 1, -1);
+    t.set(tr_value_null, "null", 1, 1);
+    t.set(tr_value_do, "do", 0, -1);
+    t.set(tr_value_do_splice, "do-splice", 0, -1);
+    t.set(tr_value_define, "define", 4, -1);
+    t.set(tr_value_phi, "phi", 1, -1);
+    t.set(tr_value_br, "br", 1, 1);
+    t.set(tr_value_cond_br, "cond-br", 3, 3);
+    t.set(tr_value_ret, "ret", 0, 1);
+    t.set(tr_value_declare, "declare", 2, 2);
+    t.set(tr_value_call, "call", 1, -1);
+    t.set(tr_value_invoke, "invoke", 3, 3);
+    t.set(tr_value_landingpad, "landingpad", 2, -1);
+    t.set(tr_value_resume, "resume", 1, 1);
+    t.set(tr_value_unreachable, "unreachable", 0, 0);
+    t.set(tr_value_include, "include", 1, 1);
+    t.set(tr_value_nop, "nop", 0, 0);
+    t.set(tr_value_run, "run", 1, 1);
+
+}
+
 static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
     assert(expr);
     Symbol *head = translateKind<Symbol>(env, expr);
     if (!head) return NULL;
-    if (matchSpecialForm(env, expr, "int", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        int64_t value;
-        if (!translateInt64(env, expr_value, value)) return NULL;
-
-        return LLVMConstInt(type, value, 1);
-
-    } else if (matchSpecialForm(env, expr, "real", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        double value;
-        if (!translateDouble(env, expr_value, value)) return NULL;
-
-        return LLVMConstReal(type, value);
-
-    } else if (matchSpecialForm(env, expr, "dump-module", 0, 0)) {
-
-        LLVMDumpModule(env->getModule());
-
-        return NULL;
-
-    } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_arg);
-
-        LLVMValueRef value = translateValue(env, expr_arg);
-        if (value) {
-            LLVMDumpValue(value);
-        }
-
-        return value;
-    } else if (matchSpecialForm(env, expr, "dumptype", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_arg);
-
-        LLVMTypeRef type = translateType(env, expr_arg);
-        if (type) {
-            LLVMDumpType(type);
-        }
-
-        return NULL;
-
-    } else if (matchSpecialForm(env, expr, "constant", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-        LLVMValueRef init = LLVMGetInitializer(value);
-        if (!init) {
-            translateError(env, "global has no initializer.");
-            return NULL;
-        }
-        if (!LLVMIsConstant(init)) {
-            translateError(env, "global initializer isn't constant.");
-            return NULL;
-        }
-        LLVMSetGlobalConstant(value, true);
-        return value;
-
-    } else if (matchSpecialForm(env, expr, "global", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_name);
-        UNPACK_ARG(expr, expr_value);
-
-        const char *name = translateString(env, expr_name);
-        if (!name) return NULL;
-
-        auto _ = env->with_expr(expr_value);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        bool inlined = false;
-        if (!strcmp(name, "")) {
-            inlined = true;
-            name = "global";
-        }
-
-        LLVMValueRef result = LLVMAddGlobal(env->getModule(), LLVMTypeOf(value), name);
-        LLVMSetInitializer(result, value);
-
-        if (inlined)
-            LLVMSetLinkage(result, LLVMLinkOnceAnyLinkage);
-
-        if (isKindOf<Symbol>(expr_name))
-            env->values[name] = result;
-
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "quote", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, "quote");
-        env->addQuote(result, expr_value);
-        LLVMSetGlobalConstant(result, true);
-
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "bitcast", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_type);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        if (LLVMIsConstant(value)) {
-            return LLVMConstBitCast(value, type);
-
-        } else {
-            if (!verifyInBlock(env)) return NULL;
-            return LLVMBuildBitCast(env->getBuilder(), value, type, "");
-        }
-
-    } else if (matchSpecialForm(env, expr, "ptrtoint", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_type);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        return LLVMBuildPtrToInt(env->getBuilder(), value, type, "");
-
-    } else if (matchSpecialForm(env, expr, "inttoptr", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_type);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
-
-    } else if (matchSpecialForm(env, expr, "and", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_lhs);
-        UNPACK_ARG(expr, expr_rhs);
-        LLVMValueRef lhs = translateValue(env, expr_lhs);
-        if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr_rhs);
-        if (!rhs) return NULL;
-
-        return LLVMBuildAnd(env->getBuilder(), lhs, rhs, "");
-
-    } else if (matchSpecialForm(env, expr, "or", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_lhs);
-        UNPACK_ARG(expr, expr_rhs);
-        LLVMValueRef lhs = translateValue(env, expr_lhs);
-        if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr_rhs);
-        if (!rhs) return NULL;
-
-        return LLVMBuildOr(env->getBuilder(), lhs, rhs, "");
-
-    } else if (matchSpecialForm(env, expr, "add", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_lhs);
-        UNPACK_ARG(expr, expr_rhs);
-        LLVMValueRef lhs = translateValue(env, expr_lhs);
-        if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr_rhs);
-        if (!rhs) return NULL;
-
-        return LLVMBuildAdd(env->getBuilder(), lhs, rhs, "");
-
-    } else if (matchSpecialForm(env, expr, "sub", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_lhs);
-        UNPACK_ARG(expr, expr_rhs);
-        LLVMValueRef lhs = translateValue(env, expr_lhs);
-        if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr_rhs);
-        if (!rhs) return NULL;
-
-        return LLVMBuildSub(env->getBuilder(), lhs, rhs, "");
-
-    } else if (matchSpecialForm(env, expr, "icmp", 3, 3)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_op);
-        UNPACK_ARG(expr, expr_lhs);
-        UNPACK_ARG(expr, expr_rhs);
-
-        const char *opname = translateString(env, expr_op);
-        if (!opname) return NULL;
-        LLVMValueRef lhs = translateValue(env, expr_lhs);
-        if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr_rhs);
-        if (!rhs) return NULL;
-
-        LLVMIntPredicate op;
-        if (!strcmp(opname, "==")) {         op = LLVMIntEQ;
-        } else if (!strcmp(opname, "!=")) {  op = LLVMIntNE;
-        } else if (!strcmp(opname, "u>")) {  op = LLVMIntUGT;
-        } else if (!strcmp(opname, "u>=")) { op = LLVMIntUGE;
-        } else if (!strcmp(opname, "u<")) {  op = LLVMIntULT;
-        } else if (!strcmp(opname, "u<=")) { op = LLVMIntULE;
-        } else if (!strcmp(opname, "i>")) {  op = LLVMIntSGT;
-        } else if (!strcmp(opname, "i>=")) { op = LLVMIntSGE;
-        } else if (!strcmp(opname, "i<")) {  op = LLVMIntSLT;
-        } else if (!strcmp(opname, "i<=")) { op = LLVMIntSLE;
-        } else {
-            auto _ = env->with_expr(expr_op);
-            translateError(env,
-                "illegal operand. Try one of == != u> u>= u< u<= i> i>= i< i<=.");
-            return NULL;
-        }
-
-        return LLVMBuildICmp(env->getBuilder(), op, lhs, rhs, "");
-
-    } else if (matchSpecialForm(env, expr, "fcmp", 3, 3)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_op);
-        UNPACK_ARG(expr, expr_lhs);
-        UNPACK_ARG(expr, expr_rhs);
-
-        const char *opname = translateString(env, expr_op);
-        if (!opname) return NULL;
-        LLVMValueRef lhs = translateValue(env, expr_lhs);
-        if (!lhs) return NULL;
-        LLVMValueRef rhs = translateValue(env, expr_rhs);
-        if (!rhs) return NULL;
-
-        LLVMRealPredicate op;
-        if (!strcmp(opname, "false")) {       op = LLVMRealPredicateFalse;
-        } else if (!strcmp(opname, "o==")) {  op = LLVMRealOEQ;
-        } else if (!strcmp(opname, "o>")) {   op = LLVMRealOGT;
-        } else if (!strcmp(opname, "o>=")) {  op = LLVMRealOGE;
-        } else if (!strcmp(opname, "o<")) {   op = LLVMRealOLT;
-        } else if (!strcmp(opname, "o<=")) {  op = LLVMRealOLE;
-        } else if (!strcmp(opname, "o!=")) {  op = LLVMRealONE;
-        } else if (!strcmp(opname, "ord")) {  op = LLVMRealORD;
-        } else if (!strcmp(opname, "uno")) {  op = LLVMRealUNO;
-        } else if (!strcmp(opname, "u==")) {  op = LLVMRealUEQ;
-        } else if (!strcmp(opname, "u>")) {   op = LLVMRealUGT;
-        } else if (!strcmp(opname, "u>=")) {  op = LLVMRealUGE;
-        } else if (!strcmp(opname, "u<")) {   op = LLVMRealULT;
-        } else if (!strcmp(opname, "u<=")) {  op = LLVMRealULE;
-        } else if (!strcmp(opname, "u!=")) {  op = LLVMRealUNE;
-        } else if (!strcmp(opname, "true")) { op = LLVMRealPredicateTrue;
-        } else {
-            auto _ = env->with_expr(expr_op);
-            translateError(env,
-                "illegal operand. Try one of false true ord uno o== o!= o> o>= o< o<= u== u!= u> u>= u< u<=.");
-            return NULL;
-        }
-
-        return LLVMBuildFCmp(env->getBuilder(), op, lhs, rhs, "");
-
-    } else if (matchSpecialForm(env, expr, "getelementptr", 1, -1)) {
-
-        UNPACK_ARG(expr, expr_array);
-
-        LLVMValueRef ptr = translateValue(env, expr_array);
-        if (!ptr) return NULL;
-
-        auto _ = env->with_expr(expr_array);
-
-        bool all_const = LLVMIsConstant(ptr);
-
-        expr = next(expr);
-
-        int valuecount = countOf(expr);
-        LLVMValueRef indices[valuecount];
-        int i = 0;
-        while (expr) {
-            indices[i] = translateValue(env, expr);
-            if (indices[i] == NULL) {
-                return NULL;
-            }
-            all_const = all_const && LLVMIsConstant(indices[i]);
-            expr = next(expr);
-            ++i;
-        }
-
-        if (all_const) {
-            return LLVMConstInBoundsGEP(ptr, indices, valuecount);
-        } else {
-            if (!verifyInBlock(env)) return NULL;
-            return LLVMBuildGEP(env->getBuilder(), ptr, indices, valuecount, "");
-        }
-
-    } else if (matchSpecialForm(env, expr, "extractelement", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_index);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        LLVMValueRef index = translateValue(env, expr_index);
-        if (!index) return NULL;
-
-        LLVMValueRef result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
-        if (!result) {
-            translateError(env, "can not use extract on this value");
-        }
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "extractvalue", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_index);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        int64_t index;
-        if (!translateInt64(env, expr_index, index)) return NULL;
-
-        LLVMTypeRef valuetype = LLVMTypeOf(value);
-        LLVMTypeKind kind = LLVMGetTypeKind(valuetype);
-        switch(kind) {
-            case LLVMStructTypeKind: {
-                auto _ = env->with_expr(expr_index);
-                unsigned count = LLVMCountStructElementTypes(valuetype);
-                if ((unsigned)index >= count) {
-                    translateError(env,
-                        "struct field index is out of bounds.");
-                }
-            } break;
-            case LLVMArrayTypeKind: {
-                auto _ = env->with_expr(expr_index);
-                unsigned count = LLVMGetArrayLength(valuetype);
-                if ((unsigned)index >= count) {
-                    translateError(env,
-                        "array offset is out of bounds.");
-                }
-            } break;
-            default: {
-                auto _ = env->with_expr(expr_value);
-                translateError(env,
-                    "value passed to extractvalue has illegal type. Struct or array type expected.");
-                return NULL;
-            } break;
-        }
-
-        LLVMValueRef result = LLVMBuildExtractValue(env->getBuilder(), value, index, "");
-        if (!result) {
-            translateError(env, "can not use extract on this value");
-        }
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "align", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_bytes);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        int64_t bytes;
-        if (!translateInt64(env, expr_bytes, bytes)) return NULL;
-
-        LLVMSetAlignment(value, bytes);
-        return value;
-
-    } else if (matchSpecialForm(env, expr, "load", 1, 1)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        return LLVMBuildLoad(env->getBuilder(), value, "");
-
-    } else if (matchSpecialForm(env, expr, "store", 2, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_ptr);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-        LLVMValueRef ptr = translateValue(env, expr_ptr);
-        if (!ptr) return NULL;
-
-        return LLVMBuildStore(env->getBuilder(), value, ptr);
-
-    } else if (matchSpecialForm(env, expr, "alloca", 1, 2)) {
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_type);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-        if (next(expr)) {
-            UNPACK_ARG(expr, expr_value);
-            LLVMValueRef value = translateValue(env, expr_value);
-            return LLVMBuildArrayAlloca(env->getBuilder(), type, value, "");
-        } else {
-            return LLVMBuildAlloca(env->getBuilder(), type, "");
-        }
-
-    } else if (matchSpecialForm(env, expr, "defvalue", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_name);
-        UNPACK_ARG(expr, expr_value);
-
-        const Symbol *sym_name = translateKind<Symbol>(env, expr_name);
-        LLVMValueRef result = translateValue(env, expr_value);
-        if (!result) return NULL;
-
-        const char *name = sym_name->c_str();
-        env->values[name] = result;
-
-        return result;
-    } else if (matchSpecialForm(env, expr, "deftype", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_name);
-        UNPACK_ARG(expr, expr_value);
-
-        const Symbol *sym_name = translateKind<Symbol>(env, expr_name);
-        LLVMTypeRef result = translateType(env, expr_value);
-        if (!result) return NULL;
-
-        const char *name = sym_name->c_str();
-        env->types[name] = result;
-
-        return NULL;
-    } else if (matchSpecialForm(env, expr, "struct", -1, -1)) {
-
-        translateTypeFromList(env, expr);
-        return NULL;
-
-    } else if (matchSpecialForm(env, expr, "label", 1, -1)) {
-
-        if (!verifyInFunction(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_name);
-
-        const char *name = translateString(env, expr_name);
-        if (!name) return NULL;
-
-        LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->getBuilder());
-
-        // continue existing label
-        LLVMBasicBlockRef block = NULL;
-        if (isKindOf<Symbol>(expr_name)) {
-            LLVMValueRef maybe_block = env->values[name];
-            if (maybe_block) {
-                block = verifyBasicBlock(env, maybe_block);
-                if (!block)
-                    return NULL;
-            }
-        }
-
-        if (!block) {
-            block = LLVMAppendBasicBlock(env->function, name);
-            if (isKindOf<Symbol>(expr_name))
-                env->values[name] = LLVMBasicBlockAsValue(block);
-        }
-
-        LLVMValueRef blockvalue = LLVMBasicBlockAsValue(block);
-
-        LLVMPositionBuilderAtEnd(env->getBuilder(), block);
-
-        expr = next(expr);
-        if (expr) {
-            LLVMValueRef oldblockvalue = env->block;
-            env->block = blockvalue;
-            translateValueList(env, expr);
-            if (env->hasErrors()) return NULL;
-            env->block = oldblockvalue;
-            LLVMValueRef t = LLVMGetBasicBlockTerminator(block);
-            if (!t) {
-                translateError(env, "labeled block must be terminated.");
-                return NULL;
-            }
-        }
-
-        if (env->hasErrors()) return NULL;
-
-        if (oldblock)
-            LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
-
-        return blockvalue;
-
-    } else if (matchSpecialForm(env, expr, "null", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_type);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        return LLVMConstNull(type);
-
-    } else if (matchSpecialForm(env, expr, "do", 0, -1)) {
-
-        expr = next(expr);
-
-        Environment subenv(env);
-        translateValueList(&subenv, expr);
-
-        return NULL;
-    } else if (matchSpecialForm(env, expr, "do-splice", 0, -1)) {
-
-        expr = next(expr);
-
-        translateValueList(env, expr);
-
-        return NULL;
-    } else if (matchSpecialForm(env, expr, "define", 4, -1)) {
-
-        UNPACK_ARG(expr, expr_name);
-        UNPACK_ARG(expr, expr_params);
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, body_expr);
-
-        const char *name = translateString(env, expr_name);
-        if (!name) return NULL;
-        if (!verifyKind<Pointer>(env, expr_params))
-            return NULL;
-
-        LLVMTypeRef functype = translateType(env, expr_type);
-
-        if (!functype)
-            return NULL;
-
-        auto _ = env->with_expr(expr_type);
-
-        bool inlined = false;
-        if (!strcmp(name, "")) {
-            inlined = true;
-            name = "inlined";
-        }
-
-        // todo: external linkage?
-        LLVMValueRef func = LLVMAddFunction(
-            env->getModule(), name, functype);
-
-        if (isKindOf<Symbol>(expr_name))
-            env->values[name] = func;
-        if (inlined)
-            LLVMSetLinkage(func, LLVMLinkOnceAnyLinkage);
-
-        Environment subenv(env);
-        subenv.function = func;
-
-        {
-            auto _ = env->with_expr(expr_params);
-
-            expr_params = at(expr_params);
-            int argcount = countOf(expr_params);
-            int paramcount = LLVMCountParams(func);
-            if (argcount == paramcount) {
-                LLVMValueRef params[paramcount];
-                LLVMGetParams(func, params);
-                int i = 0;
-                while (expr_params) {
-                    const Symbol *expr_param = translateKind<Symbol>(env, expr_params);
-                    if (expr_param) {
-                        const char *name = expr_param->c_str();
-                        LLVMSetValueName(params[i], name);
-                        subenv.values[name] = params[i];
-                    }
-                    expr_params = next(expr_params);
-                    i++;
-                }
-            } else {
-                translateError(env, "parameter name count mismatch (%i != %i); must name all parameter types",
-                    argcount, paramcount);
-                return NULL;
-            }
-        }
-
-        if (env->hasErrors()) return NULL;
-
-        {
-            auto _ = env->with_expr(body_expr);
-
-            translateValueList(&subenv, body_expr);
-            if (env->hasErrors()) return NULL;
-        }
-
-        return func;
-
-    } else if (matchSpecialForm(env, expr, "phi", 1, -1)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_type);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        expr = next(expr);
-        int branchcount = countOf(expr);
-        LLVMValueRef values[branchcount];
-        LLVMBasicBlockRef blocks[branchcount];
-        int i = 0;
-        while (expr) {
-            ValueRef expr_pair = expr;
-            if (!verifyKind<Pointer>(env, expr_pair))
-                return NULL;
-            auto _ = env->with_expr(expr_pair);
-            expr_pair = at(expr_pair);
-            if (!verifyCount(env, expr_pair, 2, 2)) {
-                translateError(env, "exactly 2 parameters expected");
-                return NULL;
-            }
-            ValueRef expr_value = expr_pair;
-            ValueRef expr_block = next(expr_pair);
-
-            LLVMValueRef value = translateValue(env, expr_value);
-            if (!value) return NULL;
-            LLVMBasicBlockRef block = verifyBasicBlock(env, translateValue(env, expr_block));
-            if (!block) return NULL;
-            values[i] = value;
-            blocks[i] = block;
-
-            expr = next(expr);
-            i++;
-        }
-
-        LLVMValueRef result =
-            LLVMBuildPhi(env->getBuilder(), type, "");
-        LLVMAddIncoming(result, values, blocks, branchcount);
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "br", 1, 1)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMBasicBlockRef value = verifyBasicBlock(env, translateValue(env, expr_value));
-        if (!value) return NULL;
-
-        return LLVMBuildBr(env->getBuilder(), value);
-
-    } else if (matchSpecialForm(env, expr, "cond-br", 3, 3)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-        UNPACK_ARG(expr, expr_then);
-        UNPACK_ARG(expr, expr_else);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-        LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr_then));
-        if (!then_block) return NULL;
-        LLVMBasicBlockRef else_block = verifyBasicBlock(env, translateValue(env, expr_else));
-        if (!else_block) return NULL;
-
-        return LLVMBuildCondBr(env->getBuilder(), value, then_block, else_block);
-
-    } else if (matchSpecialForm(env, expr, "ret", 0, 1)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        auto _ = env->with_expr(expr);
-
-        expr = next(expr);
-
-        LLVMTypeRef functype = extractFunctionType(env, env->function);
-        if (!functype) return NULL;
-
-        LLVMTypeRef rettype = LLVMGetReturnType(functype);
-
-        if (!expr) {
-            if (rettype != LLVMVoidType()) {
-                translateError(env, "return type does not match function signature.");
-                return NULL;
-            }
-
-            LLVMBuildRetVoid(env->getBuilder());
-        } else {
-            ValueRef expr_value = expr;
-            LLVMValueRef value = translateValue(env, expr_value);
-            if (!value) return NULL;
-            auto _ = env->with_expr(expr_value);
-            if (rettype != LLVMTypeOf(value)) {
-                translateError(env, "return type does not match function signature.");
-                return NULL;
-            }
-
-            LLVMBuildRet(env->getBuilder(), value);
-        }
-
-        return NULL;
-    } else if (matchSpecialForm(env, expr, "declare", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_name);
-        UNPACK_ARG(expr, expr_type);
-
-        const char *name = translateString(env, expr_name);
-        if (!name) return NULL;
-
-        LLVMTypeRef functype = translateType(env, expr_type);
-
-        auto _ = env->with_expr(expr_type);
-
-        if (!functype)
-            return NULL;
-
-        LLVMValueRef result = LLVMAddFunction(
-            env->getModule(), name, functype);
-
-        if (isKindOf<Symbol>(expr_name))
-            env->values[name] = result;
-
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "call", 1, -1)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        expr = next(expr);
-
-        LLVMValueRef callee;
-        LLVMValueRef *args;
-        int argcount;
-        if (!translateCallParams(env, expr, callee, args, argcount))
-            return NULL;
-
-        LLVMValueRef result = LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
-        delete args;
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "invoke", 3, 3)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_call);
-        UNPACK_ARG(expr, expr_then);
-        UNPACK_ARG(expr, expr_catch);
-
-        if (isAtom(expr_call)
-            || !matchSpecialForm(env, at(expr_call), "call", 1, -1)) {
-            auto _ = env->with_expr(expr_call);
-            translateError(env, "call expression expected.");
-            return NULL;
-        }
-
-        expr_call = next(at(expr_call));
-
-        LLVMValueRef callee;
-        LLVMValueRef *args;
-        int argcount;
-        if (!translateCallParams(env, expr_call, callee, args, argcount))
-            return NULL;
-
-        LLVMValueRef result = NULL;
-
-        LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr_then));
-        if (then_block) {
-            LLVMBasicBlockRef catch_block = verifyBasicBlock(env, translateValue(env, expr_catch));
-            if (catch_block) {
-                result = LLVMBuildInvoke(env->getBuilder(),
-                    callee, args, argcount, then_block, catch_block, "");
-            }
-        }
-
-        delete args;
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "landingpad", 2, -1)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, expr_persfn);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-        LLVMValueRef persfn = translateValue(env, expr_persfn);
-        if (!persfn) return NULL;
-
-        expr = next(expr);
-        bool cleanup = false;
-        if (isSymbol(expr, "cleanup")) {
-            cleanup = true;
-            expr = next(expr);
-        }
-
-        int clausecount = countOf(expr);
-        LLVMValueRef result = LLVMBuildLandingPad(
-            env->getBuilder(), type, persfn, clausecount, "");
-
-        if (cleanup)
-            LLVMSetCleanup(result, true);
-
-        int i = 0;
-        while (expr) {
-            LLVMValueRef clauseval = translateValue(env, expr);
-            LLVMAddClause(result, clauseval);
-            expr = next(expr);
-            ++i;
-        }
-
-        return result;
-
-    } else if (matchSpecialForm(env, expr, "resume", 1, 1)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        UNPACK_ARG(expr, expr_value);
-
-        LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
-
-        return LLVMBuildResume(env->getBuilder(), value);
-
-    } else if (matchSpecialForm(env, expr, "unreachable", 0, 0)) {
-
-        if (!verifyInBlock(env)) return NULL;
-
-        return LLVMBuildUnreachable(env->getBuilder());
-
-    } else if (matchSpecialForm(env, expr, "include", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_name);
-
-        const char *name = translateString(env, expr_name);
-        if (!name) return NULL;
-
-        bang::Parser parser;
-        expr = parser.parseFile(name);
-        if (!expr) {
-            translateError(env, "unable to parse file.");
-            return NULL;
-        }
-
-        assert(bang::isKindOf<bang::Pointer>(expr));
-        bang::gc_root = cons(expr, bang::gc_root);
-
-        auto _ = env->with_expr(expr);
-        expr = at(expr);
-
-        compileModule (env, expr);
-
-        return NULL;
-
-    } else if (matchSpecialForm(env, expr, "nop", 0, 0)) {
-
-        // do nothing
-        return NULL;
-
-    } else if (matchSpecialForm(env, expr, "run", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_callee);
-
-        LLVMValueRef callee = translateValue(env, expr_callee);
-        if (!callee) return NULL;
-
-        char *error = NULL;
-        LLVMVerifyModule(env->getModule(), LLVMAbortProcessAction, &error);
-        LLVMDisposeMessage(error);
-
-        int opt_level = 0;
-
-        error = NULL;
-        LLVMExecutionEngineRef engine;
-        int result = LLVMCreateJITCompilerForModule(
-            &engine, env->getModule(), opt_level, &error);
-
-        if (error) {
-            fprintf(stderr, "error: %s\n", error);
-            LLVMDisposeMessage(error);
-            exit(EXIT_FAILURE);
-        }
-
-        if (result != 0) {
-            fprintf(stderr, "failed to create execution engine\n");
-            abort();
-        }
-
-        for (auto it : env->globals->globalptrs) {
-            LLVMAddGlobalMapping(engine, std::get<0>(it), std::get<1>(it));
-        }
-
-        printf("running...\n");
-        LLVMRunStaticConstructors(engine);
-        LLVMRunFunction(engine, callee, 0, NULL);
-        //LLVMRunStaticDestructors(engine);
-
-        printf("done.\n");
-
-        return NULL;
-
-    /*
-    } else if (matchSpecialForm(env, expr, "module", 1, -1)) {
-
-        const char *name = translateString(env, expr->nth(1));
-        if (!name) return NULL;
-
-        TranslationGlobals globals(env);
-
-        Environment module_env;
-        module_env.globals = &globals;
-
-        setupRootEnvironment(&module_env, name);
-
-        compileModule(&module_env, expr, 2);
-
-        teardownRootEnvironment(&module_env);
-        return NULL;
-    */
-
-    /*
-    } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
-        const char *modulename = translateString(env, expr->nth(1));
-        const char *name = translateString(env, expr->nth(2));
-        Pointer *args_expr = translateKind<Pointer>(env, expr->nth(3));
-
-        if (modulename && name && args_expr) {
-            int argcount = (int)args_expr->size();
-            const char *args[argcount];
-            bool success = true;
-            for (int i = 0; i < argcount; ++i) {
-                const char *arg = translateString(env, args_expr->nth(i));
-                if (arg) {
-                    args[i] = arg;
-                } else {
-                    success = false;
-                    break;
-                }
-            }
-            if (success) {
-                importCModule(env, modulename, name, args, argcount);
-            }
-        }
-    */
+    if (auto func = valueTranslators.match(env, expr)) {
+        return func(env, expr);
     } else if (env->hasErrors()) {
         return NULL;
     } else {
@@ -3462,127 +3595,152 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     }
 }
 
+//------------------------------------------------------------------------------
+// TRANSLATE TYPES
+//------------------------------------------------------------------------------
+
+static TranslateTable<LLVMTypeRef> typeTranslators;
+
+static LLVMTypeRef tr_type_function (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_rettype);
+
+    LLVMTypeRef rettype = translateType(env, expr_rettype);
+    if (!rettype) return NULL;
+
+    bool vararg = false;
+    expr = next(expr);
+    int argcount = countOf(expr);
+    LLVMTypeRef paramtypes[argcount];
+    int i = 0;
+    while (expr) {
+        if (isSymbol(expr, "...")) {
+            vararg = true;
+            --argcount;
+            if (i != argcount) {
+                auto _ = env->with_expr(expr);
+                translateError(env, "... must be last parameter.");
+                return NULL;
+            }
+            break;
+        }
+        paramtypes[i] = translateType(env, expr);
+        if (!paramtypes[i]) {
+            return NULL;
+        }
+        expr = next(expr);
+        ++i;
+    }
+
+    return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
+}
+
+static LLVMTypeRef tr_type_dump (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (type) {
+        LLVMDumpType(type);
+    }
+
+    return type;
+}
+
+static LLVMTypeRef tr_type_pointer (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (!type) return NULL;
+
+    return LLVMPointerType(type, 0);
+}
+
+static LLVMTypeRef tr_type_typeof (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMValueRef value = translateValue(env, expr_arg);
+    if (!value) return NULL;
+
+    return LLVMTypeOf(value);
+}
+
+static LLVMTypeRef tr_type_array (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, expr_count);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    int64_t count;
+    if (!translateInt64(env, expr_count, count)) return NULL;
+
+    return LLVMArrayType(type, count);
+}
+
+static LLVMTypeRef tr_type_vector (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+    UNPACK_ARG(expr, expr_count);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    int64_t count;
+    if (!translateInt64(env, expr_count, count)) return NULL;
+
+    return LLVMVectorType(type, count);
+}
+
+static LLVMTypeRef tr_type_struct (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+
+    LLVMTypeRef result = LLVMStructCreateNamed(LLVMGetGlobalContext(), name);
+    if (isKindOf<Symbol>(expr_name))
+        env->types[name] = result;
+
+    expr = next(expr);
+
+    bool packed = false;
+    if (isSymbol(expr, "packed")) {
+        packed = true;
+        expr = next(expr);
+    }
+
+    int elemcount = countOf(expr);
+    LLVMTypeRef elemtypes[elemcount];
+    int i = 0;
+    while (expr) {
+        elemtypes[i] = translateType(env, expr);
+        if (!elemtypes[i]) return NULL;
+        expr = next(expr);
+        ++i;
+    }
+
+    if (elemcount)
+        LLVMStructSetBody(result, elemtypes, elemcount, packed);
+
+    return result;
+}
+
+static void registerTypeTranslators() {
+    auto &t = typeTranslators;
+    t.set(tr_type_function, "function", 1, -1);
+    t.set(tr_type_dump, "dump", 1, 1);
+    t.set(tr_type_pointer, "*", 1, 1);
+    t.set(tr_type_typeof, "typeof", 1, 1);
+    t.set(tr_type_array, "array", 2, 2);
+    t.set(tr_type_vector, "vector", 2, 2);
+    t.set(tr_type_struct, "struct", 1, -1);
+
+}
+
 static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
     assert(expr);
     Symbol *head = translateKind<Symbol>(env, expr);
     if (!head) return NULL;
-    if (matchSpecialForm(env, expr, "function", 1, -1)) {
-
-        UNPACK_ARG(expr, expr_rettype);
-
-        LLVMTypeRef rettype = translateType(env, expr_rettype);
-        if (!rettype) return NULL;
-
-        bool vararg = false;
-        expr = next(expr);
-        int argcount = countOf(expr);
-        LLVMTypeRef paramtypes[argcount];
-        int i = 0;
-        while (expr) {
-            if (isSymbol(expr, "...")) {
-                vararg = true;
-                --argcount;
-                if (i != argcount) {
-                    auto _ = env->with_expr(expr);
-                    translateError(env, "... must be last parameter.");
-                    return NULL;
-                }
-                break;
-            }
-            paramtypes[i] = translateType(env, expr);
-            if (!paramtypes[i]) {
-                return NULL;
-            }
-            expr = next(expr);
-            ++i;
-        }
-
-        return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
-    } else if (matchSpecialForm(env, expr, "dump", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_arg);
-
-        LLVMTypeRef type = translateType(env, expr_arg);
-        if (type) {
-            LLVMDumpType(type);
-        }
-
-        return type;
-    } else if (matchSpecialForm(env, expr, "*", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_arg);
-
-        LLVMTypeRef type = translateType(env, expr_arg);
-        if (!type) return NULL;
-
-        return LLVMPointerType(type, 0);
-
-    } else if (matchSpecialForm(env, expr, "typeof", 1, 1)) {
-
-        UNPACK_ARG(expr, expr_arg);
-
-        LLVMValueRef value = translateValue(env, expr_arg);
-        if (!value) return NULL;
-
-        return LLVMTypeOf(value);
-
-    } else if (matchSpecialForm(env, expr, "array", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, expr_count);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        int64_t count;
-        if (!translateInt64(env, expr_count, count)) return NULL;
-
-        return LLVMArrayType(type, count);
-    } else if (matchSpecialForm(env, expr, "vector", 2, 2)) {
-
-        UNPACK_ARG(expr, expr_type);
-        UNPACK_ARG(expr, expr_count);
-
-        LLVMTypeRef type = translateType(env, expr_type);
-        if (!type) return NULL;
-
-        int64_t count;
-        if (!translateInt64(env, expr_count, count)) return NULL;
-
-        return LLVMVectorType(type, count);
-    } else if (matchSpecialForm(env, expr, "struct", 1, -1)) {
-
-        UNPACK_ARG(expr, expr_name);
-
-        const char *name = translateString(env, expr_name);
-        if (!name) return NULL;
-
-        LLVMTypeRef result = LLVMStructCreateNamed(LLVMGetGlobalContext(), name);
-        if (isKindOf<Symbol>(expr_name))
-            env->types[name] = result;
-
-        expr = next(expr);
-
-        bool packed = false;
-        if (isSymbol(expr, "packed")) {
-            packed = true;
-            expr = next(expr);
-        }
-
-        int elemcount = countOf(expr);
-        LLVMTypeRef elemtypes[elemcount];
-        int i = 0;
-        while (expr) {
-            elemtypes[i] = translateType(env, expr);
-            if (!elemtypes[i]) return NULL;
-            expr = next(expr);
-            ++i;
-        }
-
-        if (elemcount)
-            LLVMStructSetBody(result, elemtypes, elemcount, packed);
-
-        return result;
+    if (auto func = typeTranslators.match(env, expr)) {
+        return func(env, expr);
     } else if (env->hasErrors()) {
         return NULL;
     } else {
@@ -3614,7 +3772,14 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     }
 }
 
+//------------------------------------------------------------------------------
+// INITIALIZATION
+//------------------------------------------------------------------------------
+
 static void init() {
+    registerValueTranslators();
+    registerTypeTranslators();
+
     if (!gc_root)
         gc_root = new Pointer();
 
