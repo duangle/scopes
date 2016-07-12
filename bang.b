@@ -13,7 +13,7 @@ IR
 # declarations yet.
 
 # opaque declarations for the bang compiler Environment and the Values of
-# its S-Expression tree, which can be List, String, Symbol, Integer, Real.
+# its S-Expression tree, which can be Pointer, String, Symbol, Integer, Real.
 struct _Environment
 struct _Value
 struct opaque
@@ -52,11 +52,14 @@ defvalue set-next
 defvalue ref
     declare "bang_ref" (function Value Value)
 
+defvalue table
+    declare "bang_table" (function Value)
+
 defvalue set-key
-    declare "bang_set_key" (function void Value rawstring Value)
+    declare "bang_set_key" (function void Value Value Value)
 
 defvalue get-key
-    declare "bang_get_key" (function Value Value rawstring)
+    declare "bang_get_key" (function Value Value Value)
 
 defvalue handle-value
     declare "bang_handle_value" (function (* opaque) Value)
@@ -83,7 +86,7 @@ defvalue bang-map
     declare "bang_map" (function Value Value (* bang-mapper-func) Value)
 
 defvalue value-type-none 0
-defvalue value-type-list 1
+defvalue value-type-pointer 1
 defvalue value-type-string 2
 defvalue value-type-symbol 3
 defvalue value-type-integer 4
@@ -92,28 +95,28 @@ defvalue value-type-real 5
 ################################################################################
 # fundamental helper functions
 
-defvalue list?
+defvalue pointer?
     define "" (value)
         function i1 Value
         label ""
             ret
                 icmp ==
                     call kind-of value
-                    value-type-list
+                    value-type-pointer
 
-# non-list or empty list
+# non-pointer or null pointer
 defvalue atom?
     define "" (value)
         function i1 Value
         label ""
             cond-br
-                call list? value
-                label $is-list
+                call pointer? value
+                label $is-pointer
                     ret
                         icmp ==
                             call at value
                             null Value
-                label $is-not-list
+                label $is-not-pointer
                     ret (int i1 1)
 
 defvalue symbol?
@@ -140,9 +143,7 @@ defvalue expression?
                             expected-head
 
 defvalue type-key
-    getelementptr
-        global "" "#bang-type"
-        \ 0 0
+    quote _Value "#bang-type"
 
 defvalue set-type
     define "" (value value-type)
@@ -197,14 +198,8 @@ define expand-macro (value env)
     MacroFunction
     label ""
         cond-br
-            call list? value
-            label $is-list
-            label $is-atom
-
-    label $is-list
-        cond-br
             call atom? value
-            label $is-empty-list
+            label $is-atom
             label $is-expression
 
     label $is-atom
@@ -231,8 +226,7 @@ define expand-macro (value env)
                 defvalue handler
                     bitcast
                         call handle-value
-                            call get-key env
-                                call string-value head
+                            call get-key env head
                         * MacroFunction
                 cond-br
                     icmp ==
@@ -262,7 +256,8 @@ define expand-macro (value env)
             null Value
 
 defvalue global-env
-    quote _Value ()
+    global global-env
+        null Value
 
 define qquote-1 (value)
     function Value Value
@@ -358,7 +353,8 @@ define bang-mapper (value index env)
                     quote _Value do-splice
             label $is-body
                 ret
-                    call expand-macro value global-env
+                    call expand-macro value
+                        load global-env
 
 # all top level expressions go through the preprocessor, which then descends
 # the expression tree and translates it to bang IR.
@@ -371,7 +367,8 @@ define global-preprocessor (ir-env value)
                 ret
                     call bang-map
                         call at value
-                        \ bang-mapper global-env
+                        bang-mapper
+                        load global-env
             label $else
                 ret value
 
@@ -380,10 +377,12 @@ run
     define "" ()
         function void
         label ""
-            call set-key global-env
-                bitcast
-                    global "" "qquote"
-                    rawstring
+            store
+                call table
+                global-env
+            call set-key
+                load global-env
+                quote _Value "qquote"
                 call handle
                     bitcast
                         macro-qquote

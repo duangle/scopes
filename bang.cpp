@@ -80,8 +80,9 @@ ValueRef bang_ref(ValueRef lhs);
 const char *bang_string_value(ValueRef expr);
 void *bang_handle_value(ValueRef expr);
 ValueRef bang_handle(void *ptr);
-void bang_set_key(ValueRef expr, const char *key, ValueRef value);
-ValueRef bang_get_key(ValueRef expr, const char *key);
+ValueRef bang_table();
+void bang_set_key(ValueRef expr, ValueRef key, ValueRef value);
+ValueRef bang_get_key(ValueRef expr, ValueRef key);
 typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
 ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx);
 ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr);
@@ -294,18 +295,20 @@ enum ValueKind {
     V_Symbol = 3,
     V_Integer = 4,
     V_Real = 5,
-    V_Handle = 6
+    V_Handle = 6,
+    V_Table = 7
 };
 
 static const char *valueKindName(int kind) {
     switch(kind) {
-    case V_None: return "?";
+    case V_None: return "null";
     case V_Pointer: return "pointer";
     case V_String: return "string";
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
     case V_Real: return "real";
-    default: return "<corrupted>";
+    case V_Table: return "table";
+    default: return "#corrupted#";
     }
 }
 
@@ -415,7 +418,6 @@ static bool isAtom(ValueRef expr);
 struct Pointer : Value {
 protected:
     ValueRef _at;
-    std::map< std::string, ValueRef > string_map;
 public:
     Pointer(ValueRef at = NULL, ValueRef next_ = NULL) :
         Value(V_Pointer, next_),
@@ -431,14 +433,6 @@ public:
 
     void setAt(ValueRef at) {
         this->_at = at;
-    }
-
-    void setKey(const std::string &key, ValueRef value) {
-        string_map[key] = value;
-    }
-
-    ValueRef getKey(const std::string &key) {
-        return string_map[key];
     }
 
     static bool classof(const Value *expr) {
@@ -718,6 +712,87 @@ public:
 
     virtual ValueRef clone() const {
         return new Handle(*this);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct Table : Value {
+protected:
+    std::map< std::string, ValueRef > string_map;
+    std::map< int64_t, ValueRef > integer_map;
+    std::map< double, ValueRef > real_map;
+    std::map< void *, ValueRef > handle_map;
+    std::map< ValueRef, ValueRef > value_map;
+
+public:
+    Table(ValueRef next_ = NULL) :
+        Value(V_Table, next_)
+        {}
+
+    void setKey(ValueRef key, ValueRef value) {
+        switch(kindOf(key)) {
+            case V_String:
+            case V_Symbol:
+                string_map[ llvm::cast<String>(key)->getValue() ] = value;
+                break;
+            case V_Integer:
+                integer_map[ llvm::cast<Integer>(key)->getValue() ] = value;
+                break;
+            case V_Real:
+                real_map[ llvm::cast<Real>(key)->getValue() ] = value;
+                break;
+            case V_Handle:
+                handle_map[ llvm::cast<Handle>(key)->getValue() ] = value;
+                break;
+            default:
+                value_map[ key ] = value;
+                break;
+        }
+    }
+
+    ValueRef getKey(ValueRef key) {
+        switch(kindOf(key)) {
+            case V_String:
+            case V_Symbol:
+                return string_map[ llvm::cast<String>(key)->getValue() ];
+            case V_Integer:
+                return integer_map[ llvm::cast<Integer>(key)->getValue() ];
+            case V_Real:
+                return real_map[ llvm::cast<Real>(key)->getValue() ];
+            case V_Handle:
+                return handle_map[ llvm::cast<Handle>(key)->getValue() ];
+            default:
+                return value_map[ key ];
+        }
+    }
+
+    static bool classof(const Value *expr) {
+        auto kind = expr->getKind();
+        return (kind == V_Table);
+    }
+
+    static ValueKind kind() {
+        return V_Table;
+    }
+
+    virtual ValueRef clone() const {
+        return new Table(*this);
+    }
+
+    virtual void tag() {
+        if (tagged()) return;
+        Value::tag();
+
+        for (auto val : string_map) { assert(val.second); val.second->tag(); }
+        for (auto val : integer_map) { assert(val.second); val.second->tag(); }
+        for (auto val : real_map) { assert(val.second); val.second->tag(); }
+        for (auto val : handle_map) { assert(val.second); val.second->tag(); }
+        for (auto val : value_map) {
+            if (val.first) val.first->tag();
+            assert(val.second);
+            val.second->tag();
+        }
     }
 };
 
@@ -1493,6 +1568,11 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
                 putchar('\n');
         }
     } return;
+    case V_Table: {
+        printf("#table %p#", (void *)e);
+        if (naked)
+            putchar('\n');
+    } return;
     case V_Integer: {
         const Integer *a = llvm::cast<Integer>(e);
 
@@ -1511,7 +1591,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
     } return;
     case V_Handle: {
         const Handle *h = llvm::cast<Handle>(e);
-        printf("#%p#", h->getValue());
+        printf("#handle %p#", h->getValue());
         if (naked)
             putchar('\n');
     } return;
@@ -2372,6 +2452,24 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         return NULL;
 
+    } else if (matchSpecialForm(env, expr, "constant", 1, 1)) {
+
+        UNPACK_ARG(expr, expr_value);
+
+        LLVMValueRef value = translateValue(env, expr_value);
+        if (!value) return NULL;
+        LLVMValueRef init = LLVMGetInitializer(value);
+        if (!init) {
+            translateError(env, "global has no initializer.");
+            return NULL;
+        }
+        if (!LLVMIsConstant(init)) {
+            translateError(env, "global initializer isn't constant.");
+            return NULL;
+        }
+        LLVMSetGlobalConstant(value, true);
+        return value;
+
     } else if (matchSpecialForm(env, expr, "global", 2, 2)) {
 
         UNPACK_ARG(expr, expr_name);
@@ -2393,9 +2491,6 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         LLVMValueRef result = LLVMAddGlobal(env->getModule(), LLVMTypeOf(value), name);
         LLVMSetInitializer(result, value);
-        if (LLVMIsConstant(value)) {
-            LLVMSetGlobalConstant(result, true);
-        }
 
         if (inlined)
             LLVMSetLinkage(result, LLVMLinkOnceAnyLinkage);
@@ -2415,6 +2510,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, "quote");
         env->addQuote(result, expr_value);
+        LLVMSetGlobalConstant(result, true);
 
         return result;
 
@@ -3575,18 +3671,22 @@ int bang_eq(Value *a, Value *b) {
     return false;
 }
 
-void bang_set_key(ValueRef expr, const char *key, ValueRef value) {
-    if (expr && key && value) {
-        if (auto pointer = llvm::dyn_cast<bang::Pointer>(expr)) {
-            pointer->setKey(key, value);
+ValueRef bang_table() {
+    return new bang::Table();
+}
+
+void bang_set_key(ValueRef expr, ValueRef key, ValueRef value) {
+    if (expr && key) {
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
+            table->setKey(key, value);
         }
     }
 }
 
-ValueRef bang_get_key(ValueRef expr, const char *key) {
+ValueRef bang_get_key(ValueRef expr, ValueRef key) {
     if (expr && key) {
-        if (auto pointer = llvm::dyn_cast<bang::Pointer>(expr)) {
-            return pointer->getKey(key);
+        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
+            return table->getKey(key);
         }
     }
     return NULL;
