@@ -26,7 +26,8 @@ keyword_str = getprop("keywords.bang") or
         .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
         .. " compiler-do icmp fcmp and or add sub IR alloca dumptype escape qquote"
-        .. " unquote unquote-splice constant"
+        .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
+        .. " include"
 
 operator_str = getprop("operators.bang") or
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="

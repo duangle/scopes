@@ -1322,11 +1322,11 @@ struct Parser {
         } else if (lexer.token == token_square_open) {
             auto list = parseList(token_square_close);
             if (errors) return nullptr;
-            return new Pointer(new Symbol("["), list);
+            return new Pointer(new Symbol("[", at(list)));
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return nullptr;
-            return new Pointer(new Symbol("{"), list);
+            return new Pointer(new Symbol("{", at(list)));
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -1448,7 +1448,7 @@ struct Parser {
                 file->strptr(), file->strptr() + file->size(),
                 path);
             if (!error_string.empty()) {
-                printf("%s:%i:%i: error: %s",
+                printf("%s:%i:%i: error: %s\n",
                     error_origin.path,
                     error_origin.lineno,
                     error_origin.column,
@@ -2308,6 +2308,7 @@ static const char *translateString (Environment *env, ValueRef expr) {
 static LLVMTypeRef translateType (Environment *env, ValueRef expr);
 static LLVMValueRef translateValue (Environment *env, ValueRef expr);
 static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
+static void compileModule (Environment *env, ValueRef expr);
 
 static bool translateValueList (Environment *env, ValueRef expr) {
     while (expr) {
@@ -2386,7 +2387,7 @@ LLVMTypeRef extractFunctionType(Environment *env, LLVMValueRef callee) {
         kind = LLVMGetTypeKind(functype);
     }
     if (kind != LLVMFunctionTypeKind) {
-        translateError(env, "value is not a function.");
+        translateError(env, "function expected.");
         return NULL;
     }
     return functype;
@@ -2394,6 +2395,54 @@ LLVMTypeRef extractFunctionType(Environment *env, LLVMValueRef callee) {
 
 #define UNPACK_ARG(expr, name) \
     expr = next(expr); ValueRef name = expr
+
+bool translateCallParams(Environment *env, ValueRef expr,
+    LLVMValueRef &callee, LLVMValueRef *&args, int &argcount) {
+
+    ValueRef expr_func = expr;
+
+    callee = translateValue(env, expr_func);
+    if (!callee) return false;
+
+    auto _ = env->with_expr(expr_func);
+    LLVMTypeRef functype = extractFunctionType(env, callee);
+    if (!functype) return false;
+
+    expr = next(expr);
+
+    int count = (int)LLVMCountParamTypes(functype);
+    bool vararg = LLVMIsFunctionVarArg(functype);
+    int mincount = count;
+    int maxcount = vararg?-1:count;
+    if (!verifyCount(env, expr, mincount, maxcount))
+        return false;
+
+    argcount = countOf(expr);
+    LLVMTypeRef ptypes[count];
+    LLVMGetParamTypes(functype, ptypes);
+    args = new LLVMValueRef[argcount];
+    int i = 0;
+    while (expr) {
+        args[i] = translateValue(env, expr);
+        if (!args[i]) {
+            delete args;
+            return false;
+        }
+        if ((i < count) && (LLVMTypeOf(args[i]) != ptypes[i])) {
+            auto _ = env->with_expr(expr);
+
+            translateError(env, "call parameter type (%s) does not match function signature (%s)",
+                getTypeString(LLVMTypeOf(args[i])).c_str(),
+                getTypeString(ptypes[i]).c_str());
+            delete args;
+            return false;
+        }
+        expr = next(expr);
+        ++i;
+    }
+
+    return true;
+}
 
 static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
     assert(expr);
@@ -3146,45 +3195,131 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
 
         if (!verifyInBlock(env)) return NULL;
 
-        UNPACK_ARG(expr, expr_func);
-
-        LLVMValueRef callee = translateValue(env, expr_func);
-        if (!callee) return NULL;
-
-        auto _ = env->with_expr(expr_func);
-        LLVMTypeRef functype = extractFunctionType(env, callee);
-        if (!functype) return NULL;
-
         expr = next(expr);
 
-        int count = (int)LLVMCountParamTypes(functype);
-        bool vararg = LLVMIsFunctionVarArg(functype);
-        int mincount = count;
-        int maxcount = vararg?-1:count;
-        if (!verifyCount(env, expr, mincount, maxcount))
+        LLVMValueRef callee;
+        LLVMValueRef *args;
+        int argcount;
+        if (!translateCallParams(env, expr, callee, args, argcount))
             return NULL;
 
-        int argcount = countOf(expr);
-        LLVMTypeRef ptypes[count];
-        LLVMGetParamTypes(functype, ptypes);
-        LLVMValueRef args[argcount];
+        LLVMValueRef result = LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
+        delete args;
+        return result;
+
+    } else if (matchSpecialForm(env, expr, "invoke", 3, 3)) {
+
+        if (!verifyInBlock(env)) return NULL;
+
+        UNPACK_ARG(expr, expr_call);
+        UNPACK_ARG(expr, expr_then);
+        UNPACK_ARG(expr, expr_catch);
+
+        if (isAtom(expr_call)
+            || !matchSpecialForm(env, at(expr_call), "call", 1, -1)) {
+            auto _ = env->with_expr(expr_call);
+            translateError(env, "call expression expected.");
+            return NULL;
+        }
+
+        expr_call = next(at(expr_call));
+
+        LLVMValueRef callee;
+        LLVMValueRef *args;
+        int argcount;
+        if (!translateCallParams(env, expr_call, callee, args, argcount))
+            return NULL;
+
+        LLVMValueRef result = NULL;
+
+        LLVMBasicBlockRef then_block = verifyBasicBlock(env, translateValue(env, expr_then));
+        if (then_block) {
+            LLVMBasicBlockRef catch_block = verifyBasicBlock(env, translateValue(env, expr_catch));
+            if (catch_block) {
+                result = LLVMBuildInvoke(env->getBuilder(),
+                    callee, args, argcount, then_block, catch_block, "");
+            }
+        }
+
+        delete args;
+        return result;
+
+    } else if (matchSpecialForm(env, expr, "landingpad", 2, -1)) {
+
+        if (!verifyInBlock(env)) return NULL;
+
+        UNPACK_ARG(expr, expr_type);
+        UNPACK_ARG(expr, expr_persfn);
+
+        LLVMTypeRef type = translateType(env, expr_type);
+        if (!type) return NULL;
+        LLVMValueRef persfn = translateValue(env, expr_persfn);
+        if (!persfn) return NULL;
+
+        expr = next(expr);
+        bool cleanup = false;
+        if (isSymbol(expr, "cleanup")) {
+            cleanup = true;
+            expr = next(expr);
+        }
+
+        int clausecount = countOf(expr);
+        LLVMValueRef result = LLVMBuildLandingPad(
+            env->getBuilder(), type, persfn, clausecount, "");
+
+        if (cleanup)
+            LLVMSetCleanup(result, true);
+
         int i = 0;
         while (expr) {
-            args[i] = translateValue(env, expr);
-            if (!args[i]) return NULL;
-            if ((i < count) && (LLVMTypeOf(args[i]) != ptypes[i])) {
-                auto _ = env->with_expr(expr);
-
-                translateError(env, "call parameter type (%s) does not match function signature (%s)",
-                    getTypeString(LLVMTypeOf(args[i])).c_str(),
-                    getTypeString(ptypes[i]).c_str());
-                return NULL;
-            }
+            LLVMValueRef clauseval = translateValue(env, expr);
+            LLVMAddClause(result, clauseval);
             expr = next(expr);
             ++i;
         }
 
-        return LLVMBuildCall(env->getBuilder(), callee, args, argcount, "");
+        return result;
+
+    } else if (matchSpecialForm(env, expr, "resume", 1, 1)) {
+
+        if (!verifyInBlock(env)) return NULL;
+
+        UNPACK_ARG(expr, expr_value);
+
+        LLVMValueRef value = translateValue(env, expr_value);
+        if (!value) return NULL;
+
+        return LLVMBuildResume(env->getBuilder(), value);
+
+    } else if (matchSpecialForm(env, expr, "unreachable", 0, 0)) {
+
+        if (!verifyInBlock(env)) return NULL;
+
+        return LLVMBuildUnreachable(env->getBuilder());
+
+    } else if (matchSpecialForm(env, expr, "include", 1, 1)) {
+
+        UNPACK_ARG(expr, expr_name);
+
+        const char *name = translateString(env, expr_name);
+        if (!name) return NULL;
+
+        bang::Parser parser;
+        expr = parser.parseFile(name);
+        if (!expr) {
+            translateError(env, "unable to parse file.");
+            return NULL;
+        }
+
+        assert(bang::isKindOf<bang::Pointer>(expr));
+        bang::gc_root = cons(expr, bang::gc_root);
+
+        auto _ = env->with_expr(expr);
+        expr = at(expr);
+
+        compileModule (env, expr);
+
+        return NULL;
 
     } else if (matchSpecialForm(env, expr, "nop", 0, 0)) {
 
@@ -3511,16 +3646,15 @@ static Environment *theEnv = NULL;
 
 static bool translateRootValueList (Environment *env, ValueRef expr) {
     while (expr) {
-        ValueRef stmt = expr;
         if (Environment::preprocessor) {
             theEnv = env;
-            stmt = Environment::preprocessor(env, stmt);
+            expr = Environment::preprocessor(env, expr);
             theEnv = NULL;
             if (env->hasErrors())
                 return false;
+            if (!expr) return true;
         }
-        if (stmt)
-            translateValue(env, stmt);
+        translateValue(env, expr);
         if (env->hasErrors())
             return false;
         expr = next(expr);
@@ -3535,6 +3669,14 @@ static void compileModule (Environment *env, ValueRef expr) {
     assert(env->getModule());
 
     auto _ = env->with_expr(expr);
+
+    if (!matchSpecialForm(env, expr, "IR", -1, -1)) {
+        translateError(env, "unrecognized header; try 'IR' instead.");
+        return;
+    }
+
+    expr = next(expr);
+
     translateRootValueList (env, expr);
 }
 
@@ -3544,18 +3686,9 @@ static void compileMain (ValueRef expr) {
 
     env.globals = &globals;
 
-    {
-        auto _ = env.with_expr(expr);
-        Symbol *header = kindAt<Symbol>(expr);
-        if (strcmp(header->c_str(), "IR")) {
-            translateError(&env, "unrecognized header; try 'IR' instead.");
-            return;
-        }
-    }
-
     setupRootEnvironment(&env, "main");
 
-    compileModule(&env, next(at(expr)));
+    compileModule(&env, at(expr));
 
     teardownRootEnvironment(&env);
 }
