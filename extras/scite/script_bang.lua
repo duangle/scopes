@@ -25,9 +25,11 @@ keyword_str = getprop("keywords.bang") or
         .. " call int real defvalue deftype label phi br ret cond-br bitcast"
         .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
-        .. " compiler-do icmp fcmp and or add sub IR alloca dumptype escape qquote"
+        .. " compiler-do icmp fcmp IR alloca dumptype escape qquote"
         .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
         .. " include"
+        .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
+        .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor"
 
 operator_str = getprop("operators.bang") or
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
