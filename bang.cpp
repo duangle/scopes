@@ -2464,6 +2464,10 @@ bool translateCallParams(Environment *env, ValueRef expr,
 
 //------------------------------------------------------------------------------
 
+enum {
+    BlockInst = (1 << 0),
+};
+
 template<typename ResultT>
 struct TranslateTable {
     typedef ResultT (*TranslatorFunc)(Environment *env, ValueRef expr);
@@ -2471,12 +2475,14 @@ struct TranslateTable {
     struct Translator {
         int mincount;
         int maxcount;
+        unsigned flags;
 
         TranslatorFunc translate;
 
         Translator() :
             mincount(-1),
             maxcount(-1),
+            flags(0),
             translate(NULL)
             {}
 
@@ -2484,11 +2490,13 @@ struct TranslateTable {
 
     std::unordered_map<std::string, Translator> translators;
 
-    void set(TranslatorFunc translate, const std::string &name, int mincount, int maxcount) {
+    void set(TranslatorFunc translate, const std::string &name,
+        int mincount, int maxcount, unsigned flags=0) {
         Translator translator;
         translator.mincount = mincount;
         translator.maxcount = maxcount;
         translator.translate = translate;
+        translator.flags = flags;
         translators[name] = translator;
     }
 
@@ -2498,6 +2506,8 @@ struct TranslateTable {
         auto &t = translators[head->getValue()];
         if (!t.translate) return NULL;
         if (!verifyParameterCount(env, expr, t.mincount, t.maxcount))
+            return NULL;
+        if ((t.flags & BlockInst) && (!verifyInBlock(env)))
             return NULL;
         return t.translate;
     }
@@ -2509,6 +2519,29 @@ struct TranslateTable {
 //------------------------------------------------------------------------------
 
 static TranslateTable<LLVMValueRef> valueTranslators;
+
+typedef LLVMValueRef (*LLVMBinaryOpBuilderFunc)(
+    LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+
+template<LLVMBinaryOpBuilderFunc func>
+void setBinaryOp(const std::string &name) {
+    struct TranslateValueBinary {
+        static LLVMValueRef translate (Environment *env, ValueRef expr) {
+            if (!verifyInBlock(env)) return NULL;
+
+            UNPACK_ARG(expr, expr_lhs);
+            UNPACK_ARG(expr, expr_rhs);
+            LLVMValueRef lhs = translateValue(env, expr_lhs);
+            if (!lhs) return NULL;
+            LLVMValueRef rhs = translateValue(env, expr_rhs);
+            if (!rhs) return NULL;
+
+            return func(env->getBuilder(), lhs, rhs, "");
+        }
+    };
+
+    valueTranslators.set(TranslateValueBinary::translate, name, 2, 2, BlockInst);
+}
 
 static LLVMValueRef tr_value_int (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_type);
@@ -2646,8 +2679,6 @@ static LLVMValueRef tr_value_bitcast (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_ptrtoint (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
     UNPACK_ARG(expr, expr_type);
 
@@ -2661,8 +2692,6 @@ static LLVMValueRef tr_value_ptrtoint (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_inttoptr (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
     UNPACK_ARG(expr, expr_type);
 
@@ -2675,61 +2704,7 @@ static LLVMValueRef tr_value_inttoptr (Environment *env, ValueRef expr) {
     return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
 }
 
-static LLVMValueRef tr_value_and (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
-    UNPACK_ARG(expr, expr_lhs);
-    UNPACK_ARG(expr, expr_rhs);
-    LLVMValueRef lhs = translateValue(env, expr_lhs);
-    if (!lhs) return NULL;
-    LLVMValueRef rhs = translateValue(env, expr_rhs);
-    if (!rhs) return NULL;
-
-    return LLVMBuildAnd(env->getBuilder(), lhs, rhs, "");
-}
-
-static LLVMValueRef tr_value_or (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
-    UNPACK_ARG(expr, expr_lhs);
-    UNPACK_ARG(expr, expr_rhs);
-    LLVMValueRef lhs = translateValue(env, expr_lhs);
-    if (!lhs) return NULL;
-    LLVMValueRef rhs = translateValue(env, expr_rhs);
-    if (!rhs) return NULL;
-
-    return LLVMBuildOr(env->getBuilder(), lhs, rhs, "");
-}
-
-static LLVMValueRef tr_value_add (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
-    UNPACK_ARG(expr, expr_lhs);
-    UNPACK_ARG(expr, expr_rhs);
-    LLVMValueRef lhs = translateValue(env, expr_lhs);
-    if (!lhs) return NULL;
-    LLVMValueRef rhs = translateValue(env, expr_rhs);
-    if (!rhs) return NULL;
-
-    return LLVMBuildAdd(env->getBuilder(), lhs, rhs, "");
-}
-
-static LLVMValueRef tr_value_sub (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
-    UNPACK_ARG(expr, expr_lhs);
-    UNPACK_ARG(expr, expr_rhs);
-    LLVMValueRef lhs = translateValue(env, expr_lhs);
-    if (!lhs) return NULL;
-    LLVMValueRef rhs = translateValue(env, expr_rhs);
-    if (!rhs) return NULL;
-
-    return LLVMBuildSub(env->getBuilder(), lhs, rhs, "");
-}
-
 static LLVMValueRef tr_value_icmp (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_op);
     UNPACK_ARG(expr, expr_lhs);
     UNPACK_ARG(expr, expr_rhs);
@@ -2763,8 +2738,6 @@ static LLVMValueRef tr_value_icmp (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_fcmp (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_op);
     UNPACK_ARG(expr, expr_lhs);
     UNPACK_ARG(expr, expr_rhs);
@@ -2837,8 +2810,6 @@ static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_extractelement (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
     UNPACK_ARG(expr, expr_index);
 
@@ -2856,8 +2827,6 @@ static LLVMValueRef tr_value_extractelement (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_extractvalue (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
     UNPACK_ARG(expr, expr_index);
 
@@ -2917,8 +2886,6 @@ static LLVMValueRef tr_value_align (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_load (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
 
     LLVMValueRef value = translateValue(env, expr_value);
@@ -2928,8 +2895,6 @@ static LLVMValueRef tr_value_load (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_store (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
     UNPACK_ARG(expr, expr_ptr);
 
@@ -2942,8 +2907,6 @@ static LLVMValueRef tr_value_store (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_alloca (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_type);
 
     LLVMTypeRef type = translateType(env, expr_type);
@@ -3148,8 +3111,6 @@ static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_type);
 
     LLVMTypeRef type = translateType(env, expr_type);
@@ -3191,8 +3152,6 @@ static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_br (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
 
     LLVMBasicBlockRef value = verifyBasicBlock(env, translateValue(env, expr_value));
@@ -3202,7 +3161,6 @@ static LLVMValueRef tr_value_br (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_cond_br (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
 
     UNPACK_ARG(expr, expr_value);
     UNPACK_ARG(expr, expr_then);
@@ -3219,8 +3177,6 @@ static LLVMValueRef tr_value_cond_br (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_ret (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     auto _ = env->with_expr(expr);
 
     expr = next(expr);
@@ -3277,9 +3233,6 @@ static LLVMValueRef tr_value_declare (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_call (Environment *env, ValueRef expr) {
-
-    if (!verifyInBlock(env)) return NULL;
-
     expr = next(expr);
 
     LLVMValueRef callee;
@@ -3294,8 +3247,6 @@ static LLVMValueRef tr_value_call (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_invoke (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_call);
     UNPACK_ARG(expr, expr_then);
     UNPACK_ARG(expr, expr_catch);
@@ -3331,8 +3282,6 @@ static LLVMValueRef tr_value_invoke (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_landingpad (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_type);
     UNPACK_ARG(expr, expr_persfn);
 
@@ -3367,8 +3316,6 @@ static LLVMValueRef tr_value_landingpad (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_resume (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     UNPACK_ARG(expr, expr_value);
 
     LLVMValueRef value = translateValue(env, expr_value);
@@ -3378,8 +3325,6 @@ static LLVMValueRef tr_value_resume (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_unreachable (Environment *env, ValueRef expr) {
-    if (!verifyInBlock(env)) return NULL;
-
     return LLVMBuildUnreachable(env->getBuilder());
 }
 
@@ -3509,21 +3454,21 @@ static void registerValueTranslators() {
     t.set(tr_value_global, "global", 2, 2);
     t.set(tr_value_quote, "quote", 2, 2);
     t.set(tr_value_bitcast, "bitcast", 2, 2);
-    t.set(tr_value_ptrtoint, "ptrtoint", 2, 2);
-    t.set(tr_value_inttoptr, "inttoptr", 2, 2);
-    t.set(tr_value_and, "and", 2, 2);
-    t.set(tr_value_or, "or", 2, 2);
-    t.set(tr_value_add, "add", 2, 2);
-    t.set(tr_value_sub, "sub", 2, 2);
-    t.set(tr_value_icmp, "icmp", 3, 3);
-    t.set(tr_value_fcmp, "fcmp", 3, 3);
+    t.set(tr_value_ptrtoint, "ptrtoint", 2, 2, BlockInst);
+    t.set(tr_value_inttoptr, "inttoptr", 2, 2, BlockInst);
+    setBinaryOp<LLVMBuildAnd>("and");
+    setBinaryOp<LLVMBuildOr>("or");
+    setBinaryOp<LLVMBuildAdd>("add");
+    setBinaryOp<LLVMBuildSub>("sub");
+    t.set(tr_value_icmp, "icmp", 3, 3, BlockInst);
+    t.set(tr_value_fcmp, "fcmp", 3, 3, BlockInst);
     t.set(tr_value_getelementptr, "getelementptr", 1, -1);
-    t.set(tr_value_extractelement, "extractelement", 2, 2);
-    t.set(tr_value_extractvalue, "extractvalue", 2, 2);
+    t.set(tr_value_extractelement, "extractelement", 2, 2, BlockInst);
+    t.set(tr_value_extractvalue, "extractvalue", 2, 2, BlockInst);
     t.set(tr_value_align, "align", 2, 2);
-    t.set(tr_value_load, "load", 1, 1);
-    t.set(tr_value_store, "store", 2, 2);
-    t.set(tr_value_alloca, "alloca", 1, 2);
+    t.set(tr_value_load, "load", 1, 1, BlockInst);
+    t.set(tr_value_store, "store", 2, 2, BlockInst);
+    t.set(tr_value_alloca, "alloca", 1, 2, BlockInst);
     t.set(tr_value_defvalue, "defvalue", 2, 2);
     t.set(tr_value_deftype, "deftype", 2, 2);
     t.set(tr_value_struct, "struct", -1, -1);
@@ -3532,16 +3477,16 @@ static void registerValueTranslators() {
     t.set(tr_value_do, "do", 0, -1);
     t.set(tr_value_do_splice, "do-splice", 0, -1);
     t.set(tr_value_define, "define", 4, -1);
-    t.set(tr_value_phi, "phi", 1, -1);
-    t.set(tr_value_br, "br", 1, 1);
-    t.set(tr_value_cond_br, "cond-br", 3, 3);
-    t.set(tr_value_ret, "ret", 0, 1);
+    t.set(tr_value_phi, "phi", 1, -1, BlockInst);
+    t.set(tr_value_br, "br", 1, 1, BlockInst);
+    t.set(tr_value_cond_br, "cond-br", 3, 3, BlockInst);
+    t.set(tr_value_ret, "ret", 0, 1, BlockInst);
     t.set(tr_value_declare, "declare", 2, 2);
-    t.set(tr_value_call, "call", 1, -1);
-    t.set(tr_value_invoke, "invoke", 3, 3);
-    t.set(tr_value_landingpad, "landingpad", 2, -1);
-    t.set(tr_value_resume, "resume", 1, 1);
-    t.set(tr_value_unreachable, "unreachable", 0, 0);
+    t.set(tr_value_call, "call", 1, -1, BlockInst);
+    t.set(tr_value_invoke, "invoke", 3, 3, BlockInst);
+    t.set(tr_value_landingpad, "landingpad", 2, -1, BlockInst);
+    t.set(tr_value_resume, "resume", 1, 1, BlockInst);
+    t.set(tr_value_unreachable, "unreachable", 0, 0, BlockInst);
     t.set(tr_value_include, "include", 1, 1);
     t.set(tr_value_nop, "nop", 0, 0);
     t.set(tr_value_run, "run", 1, 1);
