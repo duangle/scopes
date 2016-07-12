@@ -7,7 +7,9 @@ global test-quotes
         run
             print "'\"" '"\''
             print "yo
-            yo" "hey hey" "ho"
+            yo""""hey
+            hey" "ho"
+            """test"""
             print (
             ) a b c (
              ) d e f

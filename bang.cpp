@@ -1281,11 +1281,17 @@ struct Parser {
                 tail->setNext(newtail);
             } else if (!result) {
                 result = newtail;
-                result->anchor = anchor;
+                //result->anchor = anchor;
             }
             tail = newtail;
             if (!start)
                 start = tail;
+        }
+
+        ValueRef getResult() {
+            auto ptr = new Pointer(result);
+            ptr->anchor = anchor;
+            return ptr;
         }
 
     };
@@ -1312,7 +1318,7 @@ struct Parser {
                 builder.append(elem);
             }
         }
-        return new Pointer(builder.result);
+        return builder.getResult();
     }
 
     ValueRef parseAny () {
@@ -1322,11 +1328,15 @@ struct Parser {
         } else if (lexer.token == token_square_open) {
             auto list = parseList(token_square_close);
             if (errors) return nullptr;
-            return new Pointer(new Symbol("[", at(list)));
+            auto result = new Pointer(new Symbol("[", at(list)));
+            result->anchor = list->anchor;
+            return result;
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return nullptr;
-            return new Pointer(new Symbol("{", at(list)));
+            auto result = new Pointer(new Symbol("{", at(list)));
+            result->anchor = list->anchor;
+            return result;
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -1416,11 +1426,11 @@ struct Parser {
 
         if (!builder.result) {
             assert(depth == 0);
-            return new Pointer(nullptr);
+            return builder.getResult();
         } else if (!builder.result->getNext()) {
             return builder.result;
         } else {
-            return new Pointer(builder.result);
+            return builder.getResult();
         }
     }
 
