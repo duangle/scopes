@@ -1,5 +1,5 @@
-The Bang Interchange Format
-===========================
+The Interchange Format
+======================
 
 This chapter outlines the syntax of Bang source code at the data interchange
 format level from the perspective of nesting arbitrary lists. No programming

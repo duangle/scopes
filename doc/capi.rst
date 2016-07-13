@@ -1,5 +1,5 @@
-The Bang C API
-==============
+C API Reference
+===============
 
 The Bang C API can be used from within Bang programs and as a C library, and is
 defined in ``api.b`` and in the header part of ``bang.cpp``. It is primarily

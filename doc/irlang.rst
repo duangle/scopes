@@ -1,5 +1,5 @@
-The Bang IR Language
-====================
+Using Bang IR
+=============
 
 The Bang IR language closely mirrors most LLVM language features and is therefore
 equivalent in features and function. Each IR expression aids in constructing
