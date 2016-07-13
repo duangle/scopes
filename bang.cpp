@@ -3443,12 +3443,12 @@ static LLVMValueRef tr_value_run (Environment *env, ValueRef expr) {
         LLVMAddGlobalMapping(engine, std::get<0>(it), std::get<1>(it));
     }
 
-    printf("running...\n");
+    //printf("running...\n");
     LLVMRunStaticConstructors(engine);
     LLVMRunFunction(engine, callee, 0, NULL);
     //LLVMRunStaticDestructors(engine);
 
-    printf("done.\n");
+    //printf("done.\n");
 
     return NULL;
 }
@@ -3654,7 +3654,7 @@ static LLVMTypeRef tr_type_function (Environment *env, ValueRef expr) {
     return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
 }
 
-static LLVMTypeRef tr_type_dump (Environment *env, ValueRef expr) {
+static LLVMTypeRef tr_type_dumptype (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_arg);
 
     LLVMTypeRef type = translateType(env, expr_arg);
@@ -3746,7 +3746,7 @@ static LLVMTypeRef tr_type_struct (Environment *env, ValueRef expr) {
 static void registerTypeTranslators() {
     auto &t = typeTranslators;
     t.set(tr_type_function, "function", 1, -1);
-    t.set(tr_type_dump, "dump", 1, 1);
+    t.set(tr_type_dumptype, "dumptype", 1, 1);
     t.set(tr_type_pointer, "*", 1, 1);
     t.set(tr_type_typeof, "typeof", 1, 1);
     t.set(tr_type_array, "array", 2, 2);

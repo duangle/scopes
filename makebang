@@ -29,8 +29,8 @@ if [ $MODE = "release" ]; then
     && clang++ \
         -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -O2 -L$DIR \
         -Wl,-rpath '-Wl,$ORIGIN' -lbang \
-    && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
-    # && $DIR/bang $DIR/bang.b
+    && $DIR/bang $DIR/bang.b
+    # && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
 else
     echo Building with clang debug version...
     PATH=$DIR/../../llvm/build/bin:$PATH
@@ -54,6 +54,6 @@ else
     && clang++ \
         -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -O2 -L$DIR \
         -Wl,-rpath '-Wl,$ORIGIN' -lbang \
-    && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
-    # && $DIR/bang $DIR/bang.b
+    && $DIR/bang $DIR/bang.b
+    # && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
 fi

@@ -1,9 +1,11 @@
-First Steps
-===========
-
+Getting Started
+===============
 
 Installation
 ------------
+
+You can either download a binary distribution of Bang from the
+`website <https://bitbucket.org/duangle/bang>`_ or build Bang from source.
 
 How to build Bang on Linux:
 
@@ -22,7 +24,52 @@ How to build Bang on Windows:
   ``makebang.bat`` and change the path accordingly.
 * copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll`` and ``libwinpthread-1.dll`` from
   the msys2 installation into the repo folder. ``bang.exe`` will depend on them.
-* execute ``./makebang.bat``
+* run ``makebang.bat``
+
+There should now be a ``bang`` executable in your root folder.
+
+Running
+-------
+
+To compile and execute a Bang program, pass the source file as first argument
+to the ``bang`` compiler-interpreter::
+
+    bang <path-to-file.b>
+
+Hello World
+-----------
+
+A simple "Hello World" program in Bang IR looks as follows::
+
+    IR
+
+    # include C stdlib definitions
+    include "../libc.b"
+
+    # define global string constant and include
+    # constant bitcast instruction
+    defvalue hello-world
+        bitcast
+            global "" "hello world!\n"
+            rawstring
+
+    # our main function
+    define main ()
+        # the function type of this function
+        function void
+
+        # the first label is always the entry point
+        label ""
+
+            # call printf with argument hello-world
+            call printf hello-world
+
+            # return without argument
+            ret;
+
+    # run the main function
+    run main
+
 
 TODO
 

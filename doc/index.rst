@@ -18,15 +18,17 @@ Contents:
    :numbered:
 
    intro
-   architecture
    dataformat
+   irlang
+   capi
+   ir-ref
+
+..
+   architecture
    banglang
    debugging
    meta
-   irlang
-   capi
    bang-ref
-   ir-ref
 
 
 Indices and tables
