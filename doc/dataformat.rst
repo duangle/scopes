@@ -1,9 +1,10 @@
-The Data Interchange Language
-=============================
+The Bang Interchange Format
+===========================
 
 This chapter outlines the syntax of Bang source code at the data interchange
 format level from the perspective of nesting arbitrary lists. No programming
-happens at this stage, it's just data formatting.
+happens at this stage, it's just data formatting, which means that the format
+can also act as a replacement for other interchange formats like XML and JSON.
 
 Element Types
 -------------
