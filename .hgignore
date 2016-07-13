@@ -6,9 +6,11 @@ syntax: glob
 *.dll
 *.a
 *.def
+*.pyc
 
 syntax: regexp
 
 ^clang
 ^bang$
 ^bang[.]h$
+^doc/_build/

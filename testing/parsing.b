@@ -32,6 +32,23 @@ global test-quotes
                 } else {
                     do-that;
                 }
+            ((((a b)
+                c d)
+                    e f)
+                        g h)
+            (a b; c d) e f;
+                \ g h
+            (a
+                ((b
+                    (c d)) e)
+                f g
+                (h i))
+            # naked
+            a
+                b (c d);
+                    e
+                \ f g
+                h i
             0x1A.25A 0x.e 0xaF0.3 0 1 1e+5 .134123123 123 012.3 12.512e+12
             0 0 0 0 0 +1 -0.1 +0.1 2.5 +1 -1 +100 -100 +100
             0666 ..5 ... :: .: a. a: a:a:a .a .a ...a 35.3
