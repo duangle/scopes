@@ -11,6 +11,6 @@ syntax: glob
 syntax: regexp
 
 ^clang
-^bang$
-^bang[.]h$
+^bangra$
+^bangra[.]h$
 ^doc/_build/

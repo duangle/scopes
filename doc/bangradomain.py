@@ -13,11 +13,11 @@ from sphinx.directives import ObjectDescription
 from sphinx.util.nodes import make_refnode
 from sphinx.util.docfields import Field, TypedField
 
-import bangparser as parser
+import bangraparser as parser
 
-domain_name = 'bang'
-ref_prefix = 'bang.'
-xref_prefix = 'bang:'
+domain_name = 'bangra'
+ref_prefix = 'bangra.'
+xref_prefix = 'bangra:'
 
 # RE to split at word boundaries
 wsplit_re = re.compile(r'(\W+)')
@@ -44,9 +44,9 @@ c_funcptr_arg_sig_re = re.compile(
     ''', re.VERBOSE)
 c_funcptr_name_re = re.compile(r'^\(\s*\*\s*(.*?)\s*\)$')
 
-class BangObject(ObjectDescription):
+class BangraObject(ObjectDescription):
     """
-    Description of a Bang language object.
+    Description of a Bangra language object.
     """
 
     doc_field_types = [
@@ -63,7 +63,7 @@ class BangObject(ObjectDescription):
               names=('assoc',)),
     ]
 
-    # These Bang types aren't described anywhere, so don't try to create
+    # These Bangra types aren't described anywhere, so don't try to create
     # a cross-reference to them
     stopwords = set((
         # 'const', 'void', 'char', 'wchar_t', 'int', 'short',
@@ -73,7 +73,7 @@ class BangObject(ObjectDescription):
     ))
 
     def handle_signature(self, sig, signode):
-        """Transform a Bang declaration into RST nodes."""
+        """Transform a Bangra declaration into RST nodes."""
         # first try the function pointer signature regex, it's more specific
         expr = parser.compile(sig, "<signature>").strip()
 
@@ -140,7 +140,7 @@ class BangObject(ObjectDescription):
 
     def add_target_and_index(self, name, sig, signode):
         #print("add_target_and_index",name,sig,signode)
-        # for Bang items we add a prefix since names are usually not qualified
+        # for Bangra items we add a prefix since names are usually not qualified
         # by a module name and so easily clash with e.g. section titles
         #name, objtype = name
         keyname = name[1] + '.' + name[0]
@@ -153,7 +153,7 @@ class BangObject(ObjectDescription):
             inv = self.env.domaindata[domain_name]['objects']
             if keyname in inv:
                 self.state_machine.reporter.warning(
-                    'duplicate Bang object description of %s, ' % keyname +
+                    'duplicate Bangra object description of %s, ' % keyname +
                     'other instance in ' + self.env.doc2path(inv[keyname][0]),
                     line=self.lineno)
             inv[keyname] = (self.env.docname, self.objtype)
@@ -176,15 +176,15 @@ class BangObject(ObjectDescription):
         if self.typename_set:
             self.env.ref_context.pop('c:type', None)
 
-class BangXRefRole(XRefRole):
+class BangraXRefRole(XRefRole):
     def process_link(self, env, refnode, has_explicit_title, title, target):
         #print("process_link",env,refnode,has_explicit_title,title,target)
         return title, target
 
-class BangDomain(Domain):
-    """Bang language domain."""
+class BangraDomain(Domain):
+    """Bangra language domain."""
     name = domain_name
-    label = 'Bang'
+    label = 'Bangra'
     object_types = {
         'special': ObjType(l_('special'), 'special'),
         'macro':    ObjType(l_('macro'),    'macro'),
@@ -201,35 +201,35 @@ class BangDomain(Domain):
     }
 
     directives = {
-        'special': BangObject,
-        'macro':    BangObject,
-        'infix-macro':    BangObject,
-        'symbol-prefix':    BangObject,
-        'function': BangObject,
-        'var': BangObject,
+        'special': BangraObject,
+        'macro':    BangraObject,
+        'infix-macro':    BangraObject,
+        'symbol-prefix':    BangraObject,
+        'function': BangraObject,
+        'var': BangraObject,
 
-        'ir-special': BangObject,
-        'ir-macro': BangObject,
-        'ir-infix-macro': BangObject,
-        'ir-symbol-prefix': BangObject,
-        'ir-function': BangObject,
-        'ir-type': BangObject,
+        'ir-special': BangraObject,
+        'ir-macro': BangraObject,
+        'ir-infix-macro': BangraObject,
+        'ir-symbol-prefix': BangraObject,
+        'ir-function': BangraObject,
+        'ir-type': BangraObject,
     }
     roles = {
-        'func' :  BangXRefRole(),
-        'special' :  BangXRefRole(),
-        'macro' :  BangXRefRole(),
-        'infix-macro' :  BangXRefRole(),
-        'symbol-prefix':    BangXRefRole(),
-        'var':    BangXRefRole(),
-        'obj':    BangXRefRole(),
+        'func' :  BangraXRefRole(),
+        'special' :  BangraXRefRole(),
+        'macro' :  BangraXRefRole(),
+        'infix-macro' :  BangraXRefRole(),
+        'symbol-prefix':    BangraXRefRole(),
+        'var':    BangraXRefRole(),
+        'obj':    BangraXRefRole(),
 
-        'ir-special': BangXRefRole(),
-        'ir-macro': BangXRefRole(),
-        'ir-infix-macro': BangXRefRole(),
-        'ir-symbol-prefix': BangXRefRole(),
-        'ir-function': BangXRefRole(),
-        'ir-type': BangXRefRole(),
+        'ir-special': BangraXRefRole(),
+        'ir-macro': BangraXRefRole(),
+        'ir-infix-macro': BangraXRefRole(),
+        'ir-symbol-prefix': BangraXRefRole(),
+        'ir-function': BangraXRefRole(),
+        'ir-type': BangraXRefRole(),
     }
 
     role_map = {
@@ -293,4 +293,4 @@ class BangDomain(Domain):
             yield (refname, refname, type, docname, ref_prefix + refname, 1)
 
 def setup(app):
-    app.add_domain(BangDomain)
+    app.add_domain(BangraDomain)

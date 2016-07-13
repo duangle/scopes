@@ -1,7 +1,7 @@
 The Interchange Format
 ======================
 
-This chapter outlines the syntax of Bang source code at the data interchange
+This chapter outlines the syntax of Bangra source code at the data interchange
 format level from the perspective of nesting arbitrary lists. No programming
 happens at this stage, it's just data formatting, which means that the format
 can also act as a replacement for other interchange formats like XML and JSON.
@@ -9,7 +9,7 @@ can also act as a replacement for other interchange formats like XML and JSON.
 Element Types
 -------------
 
-The Bang parser has been designed for minimalism and recognizes only five element
+The Bangra parser has been designed for minimalism and recognizes only five element
 types:
 
 * Symbols
@@ -106,7 +106,7 @@ are chained in a single link that terminates with a null pointer. Empty lists
 are stored as null pointers.
 
 Lists can be empty or contain an unlimited number of elements, separated by
-whitespace. They typically describe expressions in Bang.
+whitespace. They typically describe expressions in Bangra.
 
 Here are some examples for valid lists::
 
@@ -120,7 +120,7 @@ Here are some examples for valid lists::
 Naked & Coated Lists
 --------------------
 
-Every Bang source file is parsed as a top level list, where the head element
+Every Bangra source file is parsed as a top level list, where the head element
 is the language name.
 
 The classic notation (what we will call *coated notation*) uses the syntax known
@@ -140,7 +140,7 @@ as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>`_::
     # scripts usually return null.
     null)
 
-As a modern alternative, Bang offers a *naked notation* where the scope of
+As a modern alternative, Bangra offers a *naked notation* where the scope of
 lists is implicitly balanced by indentation, an approach used by
 `Python <http://en.wikipedia.org/wiki/Python_(programming_language)>`_,
 `Haskell <http://en.wikipedia.org/wiki/Haskell_(programming_language)>`_,
@@ -197,13 +197,13 @@ Purists and enthusiasts may however prefer to keep only the top level naked,
 as in most Lisp-like languages, and work exclusively with coated lists
 otherwise.
 
-Therefore Bang's reference documentation describes all available symbols in
+Therefore Bangra's reference documentation describes all available symbols in
 coated notation, while code examples make ample use of naked notation.
 
 Block Comments
 --------------
 
-In addition to ``# single line comments``, Bang recognizes and strips a special
+In addition to ``# single line comments``, Bangra recognizes and strips a special
 kind of multi-line comment.
 
 A list beginning with a symbol that starts with a ``///`` (triple slash)

@@ -11,14 +11,14 @@ MODE=release
 if [ $MODE = "release" ]; then
     echo Building with clang release version...
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.8/bin:$PATH
-    clang -x c -o $DIR/bang.h -C -E $DIR/bang.cpp \
+    clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     && clang++ \
         -shared \
-        -o $DIR/libbang.so $DIR/bang.cpp \
+        -o $DIR/libbangra.so $DIR/bangra.cpp \
         -pedantic -g \
         -ferror-limit=1 \
         -Wno-vla-extension \
-        -DBANG_CPP_IMPL \
+        -DBANGRA_CPP_IMPL \
         -lpthread -lm -ldl -ltinfo -lz \
         -lclangFrontend -lclangDriver \
         -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
@@ -27,21 +27,21 @@ if [ $MODE = "release" ]; then
         `llvm-config --cxxflags` \
         `llvm-config --ldflags --libs` \
     && clang++ \
-        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -O2 -L$DIR \
-        -Wl,-rpath '-Wl,$ORIGIN' -lbang \
-    && $DIR/bang $DIR/bang.b
-    # && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
+        -o $DIR/bangra $DIR/bangra.cpp -DBANGRA_MAIN_CPP_IMPL -O2 -L$DIR \
+        -Wl,-rpath '-Wl,$ORIGIN' -lbangra \
+    && $DIR/bangra $DIR/bangra.b
+    # && gdb --ex r --silent --args $DIR/bangra $DIR/bangra.b
 else
     echo Building with clang debug version...
     PATH=$DIR/../../llvm/build/bin:$PATH
-    clang -x c -o $DIR/bang.h -C -E $DIR/bang.cpp \
+    clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     && clang++ \
         -shared \
-        -o $DIR/libbang.so $DIR/bang.cpp \
+        -o $DIR/libbangra.so $DIR/bangra.cpp \
         -pedantic -g \
         -ferror-limit=1 \
         -Wno-vla-extension \
-        -DBANG_CPP_IMPL \
+        -DBANGRA_CPP_IMPL \
         -lpthread -lm -ldl -ltinfo -lz \
         -lclangFrontend -lclangDriver \
         -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
@@ -52,8 +52,8 @@ else
         -I$DIR/../../llvm/llvm/tools/clang/include \
         -I$DIR/../../llvm/build/tools/clang/include \
     && clang++ \
-        -o $DIR/bang $DIR/bang.cpp -DBANG_MAIN_CPP_IMPL -O2 -L$DIR \
-        -Wl,-rpath '-Wl,$ORIGIN' -lbang \
-    && $DIR/bang $DIR/bang.b
-    # && gdb --ex r --silent --args $DIR/bang $DIR/bang.b
+        -o $DIR/bangra $DIR/bangra.cpp -DBANGRA_MAIN_CPP_IMPL -O2 -L$DIR \
+        -Wl,-rpath '-Wl,$ORIGIN' -lbangra \
+    && $DIR/bangra $DIR/bangra.b
+    # && gdb --ex r --silent --args $DIR/bangra $DIR/bangra.b
 fi

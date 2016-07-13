@@ -1,5 +1,5 @@
-The Bang Language
-=================
+The Bangra Language
+===================
 
 TODO
 

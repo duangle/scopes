@@ -157,8 +157,8 @@ define macro-qquote (value env)
         call dump-value qq
         ret qq
 
-define bang-mapper (value index env)
-    bang-mapper-func
+define bangra-mapper (value index env)
+    bangra-mapper-func
     label ""
         cond-br
             icmp == index 0
@@ -171,17 +171,17 @@ define bang-mapper (value index env)
                         load global-env
 
 # all top level expressions go through the preprocessor, which then descends
-# the expression tree and translates it to bang IR.
+# the expression tree and translates it to bangra IR.
 define global-preprocessor (ir-env value)
     preprocessor-func
     label ""
         cond-br
-            call expression? value (quote _Value bang)
-            label $is-bang
+            call expression? value (quote _Value bangra)
+            label $is-bangra
                 ret
-                    call bang-map
+                    call bangra-map
                         call at value
-                        bang-mapper
+                        bangra-mapper
                         load global-env
             label $else
                 ret value
@@ -206,6 +206,6 @@ run
             ret;
 
 # all top level expressions from here go through the preprocessor
-# we only recognize and expand expressions that start with (bang ...)
+# we only recognize and expand expressions that start with (bangra ...)
 
 

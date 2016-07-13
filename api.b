@@ -3,15 +3,13 @@ IR
 include "libc.b"
 
 ################################################################################
-# declare the bang API as we don't have the means to comfortably import clang
+# declare the bangra API as we don't have the means to comfortably import clang
 # declarations yet.
 
-# opaque declarations for the bang compiler Environment and the Values of
+# opaque declarations for the bangra compiler Environment and the Values of
 # its S-Expression tree, which can be Pointer, String, Symbol, Integer, Real.
 struct _Environment
 struct _Value
-
-declare bang_print (function void rawstring)
 
 deftype Environment (* _Environment)
 deftype Value (* _Value)
@@ -27,80 +25,80 @@ defvalue value-type-real 5
 #-------------------------------------------------------------------------------
 
 defvalue kind-of
-    declare "bang_get_kind" (function i32 Value)
+    declare "bangra_get_kind" (function i32 Value)
 defvalue value==
-    declare "bang_eq" (function i1 Value Value)
+    declare "bangra_eq" (function i1 Value Value)
 
 defvalue next
-    declare "bang_next" (function Value Value)
+    declare "bangra_next" (function Value Value)
 defvalue set-next
-    declare "bang_set_next" (function Value Value Value)
+    declare "bangra_set_next" (function Value Value Value)
 
 defvalue dump-value
-    declare "bang_dump_value" (function void Value)
+    declare "bangra_dump_value" (function void Value)
 
 defvalue anchor-path
-    declare "bang_anchor_path" (function rawstring Value)
+    declare "bangra_anchor_path" (function rawstring Value)
 defvalue anchor-lineno
-    declare "bang_anchor_lineno" (function i32 Value)
+    declare "bangra_anchor_lineno" (function i32 Value)
 defvalue anchor-column
-    declare "bang_anchor_column" (function i32 Value)
+    declare "bangra_anchor_column" (function i32 Value)
 defvalue anchor-offset
-    declare "bang_anchor_offset" (function i32 Value)
+    declare "bangra_anchor_offset" (function i32 Value)
 defvalue set-anchor
-    declare "bang_set_anchor" (function Value Value rawstring i32 i32 i32)
+    declare "bangra_set_anchor" (function Value Value rawstring i32 i32 i32)
 
 # pointer
 #-------------------------------------------------------------------------------
 
 defvalue ref
-    declare "bang_ref" (function Value Value)
+    declare "bangra_ref" (function Value Value)
 defvalue at
-    declare "bang_at" (function Value Value)
+    declare "bangra_at" (function Value Value)
 
 # string and symbol
 #-------------------------------------------------------------------------------
 
 defvalue new-string
-    declare "bang_string" (function Value rawstring)
+    declare "bangra_string" (function Value rawstring)
 defvalue new-symbol
-    declare "bang_symbol" (function Value rawstring)
+    declare "bangra_symbol" (function Value rawstring)
 defvalue string-value
-    declare "bang_string_value" (function rawstring Value)
+    declare "bangra_string_value" (function rawstring Value)
 
 # real
 #-------------------------------------------------------------------------------
 
 defvalue new-real
-    declare "bang_real" (function Value double)
+    declare "bangra_real" (function Value double)
 defvalue real-value
-    declare "bang_real_value" (function double Value)
+    declare "bangra_real_value" (function double Value)
 
 # integer
 #-------------------------------------------------------------------------------
 
 defvalue new-integer
-    declare "bang_integer" (function Value i64)
+    declare "bangra_integer" (function Value i64)
 defvalue integer-value
-    declare "bang_integer_value" (function i64 Value)
+    declare "bangra_integer_value" (function i64 Value)
 
 # table
 #-------------------------------------------------------------------------------
 
 defvalue new-table
-    declare "bang_table" (function Value)
+    declare "bangra_table" (function Value)
 defvalue set-key
-    declare "bang_set_key" (function void Value Value Value)
+    declare "bangra_set_key" (function void Value Value Value)
 defvalue get-key
-    declare "bang_get_key" (function Value Value Value)
+    declare "bangra_get_key" (function Value Value Value)
 
 # handle
 #-------------------------------------------------------------------------------
 
 defvalue new-handle
-    declare "bang_handle" (function Value (* opaque))
+    declare "bangra_handle" (function Value (* opaque))
 defvalue handle-value
-    declare "bang_handle_value" (function (* opaque) Value)
+    declare "bangra_handle_value" (function (* opaque) Value)
 
 # preprocessing
 #-------------------------------------------------------------------------------
@@ -109,15 +107,15 @@ deftype preprocessor-func
     function Value Environment Value
 
 defvalue error-message
-    declare "bang_error_message" (function void Value rawstring ...)
+    declare "bangra_error_message" (function void Value rawstring ...)
 defvalue set-preprocessor
-    declare "bang_set_preprocessor" (function void (* preprocessor-func))
+    declare "bangra_set_preprocessor" (function void (* preprocessor-func))
 
 # redeclare pointer types to specialize our mapping handler
-deftype bang-mapper-func
+deftype bangra-mapper-func
     function Value Value i32 Value
-defvalue bang-map
-    declare "bang_map" (function Value Value (* bang-mapper-func) Value)
+defvalue bangra-map
+    declare "bangra_map" (function Value Value (* bangra-mapper-func) Value)
 
 # helpers
 ################################################################################
@@ -170,7 +168,7 @@ defvalue expression?
                             expected-head
 
 defvalue type-key
-    quote _Value "#bang-type"
+    quote _Value "#bangra-type"
 
 defvalue set-type
     define "" (value value-type)

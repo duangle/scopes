@@ -1,7 +1,7 @@
 IR Language Reference
 =====================
 
-This chapter will provide reference information for Bang IR in a future release.
+This chapter will provide reference information for Bangra IR in a future release.
 
 Built-in Types
 --------------

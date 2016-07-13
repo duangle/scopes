@@ -1,5 +1,5 @@
-#ifndef BANG0_CPP
-#define BANG0_CPP
+#ifndef BANGRA_CPP
+#define BANGRA_CPP
 
 /*
 TODO:
@@ -50,13 +50,13 @@ value expressions:
 extern "C" {
 #endif
 
-#ifdef BANG_CPP_IMPL
-namespace bang {
+#ifdef BANGRA_CPP_IMPL
+namespace bangra {
 struct Value;
 struct Environment;
-} // namespace bang
-typedef bang::Value Value;
-typedef bang::Environment Environment;
+} // namespace bangra
+typedef bangra::Value Value;
+typedef bangra::Environment Environment;
 #else
 typedef struct _Environment Environment;
 typedef struct _Value Value;
@@ -64,54 +64,54 @@ typedef struct _Value Value;
 
 typedef Value *ValueRef;
 
-void bang_dump_value(ValueRef expr);
-int bang_main(int argc, char ** argv);
+void bangra_dump_value(ValueRef expr);
+int bangra_main(int argc, char ** argv);
 
-typedef ValueRef (*bang_preprocessor)(Environment *, ValueRef );
-void bang_set_preprocessor(bang_preprocessor f);
-bang_preprocessor bang_get_preprocessor();
+typedef ValueRef (*bangra_preprocessor)(Environment *, ValueRef );
+void bangra_set_preprocessor(bangra_preprocessor f);
+bangra_preprocessor bangra_get_preprocessor();
 
-int bang_get_kind(ValueRef expr);
-ValueRef bang_at(ValueRef expr);
-ValueRef bang_next(ValueRef expr);
-ValueRef bang_set_next(ValueRef lhs, ValueRef rhs);
-ValueRef bang_ref(ValueRef lhs);
+int bangra_get_kind(ValueRef expr);
+ValueRef bangra_at(ValueRef expr);
+ValueRef bangra_next(ValueRef expr);
+ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
+ValueRef bangra_ref(ValueRef lhs);
 
-const char *bang_string_value(ValueRef expr);
-void *bang_handle_value(ValueRef expr);
-ValueRef bang_handle(void *ptr);
-ValueRef bang_table();
+const char *bangra_string_value(ValueRef expr);
+void *bangra_handle_value(ValueRef expr);
+ValueRef bangra_handle(void *ptr);
+ValueRef bangra_table();
 
-ValueRef bang_string(const char *value);
-ValueRef bang_symbol(const char *value);
+ValueRef bangra_string(const char *value);
+ValueRef bangra_symbol(const char *value);
 
-ValueRef bang_real(double value);
-double bang_real_value(ValueRef value);
+ValueRef bangra_real(double value);
+double bangra_real_value(ValueRef value);
 
-ValueRef bang_integer(signed long long int value);
-signed long long int bang_integer_value(ValueRef value);
+ValueRef bangra_integer(signed long long int value);
+signed long long int bangra_integer_value(ValueRef value);
 
-void bang_set_key(ValueRef expr, ValueRef key, ValueRef value);
-ValueRef bang_get_key(ValueRef expr, ValueRef key);
-typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
-ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx);
-ValueRef bang_set_anchor(
+void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value);
+ValueRef bangra_get_key(ValueRef expr, ValueRef key);
+typedef ValueRef (*bangra_mapper)(ValueRef, int, void *);
+ValueRef bangra_map(ValueRef expr, bangra_mapper map, void *ctx);
+ValueRef bangra_set_anchor(
     ValueRef expr, const char *path, int lineno, int column, int offset);
-const char *bang_anchor_path(ValueRef expr);
-int bang_anchor_lineno(ValueRef expr);
-int bang_anchor_column(ValueRef expr);
-int bang_anchor_offset(ValueRef expr);
+const char *bangra_anchor_path(ValueRef expr);
+int bangra_anchor_lineno(ValueRef expr);
+int bangra_anchor_column(ValueRef expr);
+int bangra_anchor_offset(ValueRef expr);
 
-void bang_error_message(ValueRef context, const char *format, ...);
+void bangra_error_message(ValueRef context, const char *format, ...);
 
-int bang_eq(Value *a, Value *b);
+int bangra_eq(Value *a, Value *b);
 
 #if defined __cplusplus
 }
 #endif
 
-#endif // BANG0_CPP
-#ifdef BANG_CPP_IMPL
+#endif // BANGRA_CPP
+#ifdef BANGRA_CPP_IMPL
 
 //------------------------------------------------------------------------------
 // SHARED LIBRARY IMPLEMENTATION
@@ -163,7 +163,7 @@ int bang_eq(Value *a, Value *b);
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 
-namespace bang {
+namespace bangra {
 
 //------------------------------------------------------------------------------
 // UTILITIES
@@ -404,7 +404,7 @@ public:
         size_t count = 0;
         while (self) {
             ++ count;
-            self = bang::next(self);
+            self = bangra::next(self);
         }
         return count;
     }
@@ -1719,7 +1719,7 @@ struct Environment {
     // parent env
     Environment *parent;
 
-    static bang_preprocessor preprocessor;
+    static bangra_preprocessor preprocessor;
 
     struct WithValue {
         ValueRef prevexpr;
@@ -1779,7 +1779,7 @@ struct Environment {
 
 };
 
-bang_preprocessor Environment::preprocessor = NULL;
+bangra_preprocessor Environment::preprocessor = NULL;
 
 //------------------------------------------------------------------------------
 // CLANG SERVICES
@@ -2171,7 +2171,7 @@ static LLVMModuleRef importCModule (Environment *env,
     //~ if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
         //~ compiler.getHeaderSearchOpts().ResourceDir.empty())
         //~ compiler.getHeaderSearchOpts().ResourceDir =
-            //~ CompilerInvocation::GetResourcesPath(bang_argv[0], MainAddr);
+            //~ CompilerInvocation::GetResourcesPath(bangra_argv[0], MainAddr);
 
     LLVMModuleRef M = NULL;
 
@@ -3387,7 +3387,7 @@ static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
     auto filepath = format("%s/%s", dirname(relative_pathc), name);
     free(relative_pathc);
 
-    bang::Parser parser;
+    bangra::Parser parser;
     expr = parser.parseFile(filepath.c_str());
     if (!expr) {
         translateError(env, "unable to parse file at '%s'.",
@@ -3395,8 +3395,8 @@ static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
         return NULL;
     }
 
-    assert(bang::isKindOf<bang::Pointer>(expr));
-    bang::gc_root = cons(expr, bang::gc_root);
+    assert(bangra::isKindOf<bangra::Pointer>(expr));
+    bangra::gc_root = cons(expr, bangra::gc_root);
 
     auto _ = env->with_expr(expr);
     expr = at(expr);
@@ -3888,28 +3888,28 @@ static void compileMain (ValueRef expr) {
     teardownRootEnvironment(&env);
 }
 
-} // namespace bang
+} // namespace bangra
 
 // C API
 //------------------------------------------------------------------------------
 
-void bang_dump_value(ValueRef expr) {
-    return bang::printValue(expr);
+void bangra_dump_value(ValueRef expr) {
+    return bangra::printValue(expr);
 }
 
-int bang_main(int argc, char ** argv) {
-    bang::init();
+int bangra_main(int argc, char ** argv) {
+    bangra::init();
 
     int result = 0;
 
     if (argv && argv[1]) {
-        bang::Parser parser;
+        bangra::Parser parser;
         auto expr = parser.parseFile(argv[1]);
         if (expr) {
-            assert(bang::isKindOf<bang::Pointer>(expr));
+            assert(bangra::isKindOf<bangra::Pointer>(expr));
             //printValue(expr);
-            bang::gc_root = cons(expr, bang::gc_root);
-            bang::compileMain(expr);
+            bangra::gc_root = cons(expr, bangra::gc_root);
+            bangra::compileMain(expr);
         } else {
             result = 1;
         }
@@ -3918,80 +3918,80 @@ int bang_main(int argc, char ** argv) {
     return result;
 }
 
-void bang_set_preprocessor(bang_preprocessor f) {
+void bangra_set_preprocessor(bangra_preprocessor f) {
     Environment::preprocessor = f;
 }
 
-bang_preprocessor bang_get_preprocessor() {
+bangra_preprocessor bangra_get_preprocessor() {
     return Environment::preprocessor;
 }
 
-int bang_get_kind(ValueRef expr) {
+int bangra_get_kind(ValueRef expr) {
     return kindOf(expr);
 }
 
-ValueRef bang_at(ValueRef expr) {
+ValueRef bangra_at(ValueRef expr) {
     if (expr) {
-        if (bang::isKindOf<bang::Pointer>(expr)) {
+        if (bangra::isKindOf<bangra::Pointer>(expr)) {
             return at(expr);
         }
     }
     return NULL;
 }
 
-ValueRef bang_next(ValueRef expr) {
+ValueRef bangra_next(ValueRef expr) {
     return next(expr);
 }
 
-ValueRef bang_set_next(ValueRef lhs, ValueRef rhs) {
+ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs) {
     if (lhs) {
         return cons(lhs, rhs);
     }
     return NULL;
 }
 
-const char *bang_string_value(ValueRef expr) {
+const char *bangra_string_value(ValueRef expr) {
     if (expr) {
-        if (auto str = llvm::dyn_cast<bang::String>(expr)) {
+        if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
             return str->getValue().c_str();
         }
     }
     return NULL;
 }
 
-void *bang_handle_value(ValueRef expr) {
+void *bangra_handle_value(ValueRef expr) {
     if (expr) {
-        if (auto handle = llvm::dyn_cast<bang::Handle>(expr)) {
+        if (auto handle = llvm::dyn_cast<bangra::Handle>(expr)) {
             return handle->getValue();
         }
     }
     return NULL;
 }
 
-ValueRef bang_handle(void *ptr) {
-    auto handle = new bang::Handle(ptr);
-    bang::gc_root = new bang::Pointer(handle, bang::gc_root);
+ValueRef bangra_handle(void *ptr) {
+    auto handle = new bangra::Handle(ptr);
+    bangra::gc_root = new bangra::Pointer(handle, bangra::gc_root);
     return handle;
 }
 
-void bang_error_message(ValueRef context, const char *format, ...) {
-    assert(bang::theEnv);
-    auto _ = bang::theEnv->with_expr(context);
+void bangra_error_message(ValueRef context, const char *format, ...) {
+    assert(bangra::theEnv);
+    auto _ = bangra::theEnv->with_expr(context);
     va_list args;
     va_start (args, format);
-    bang::translateErrorV(bang::theEnv, format, args);
+    bangra::translateErrorV(bangra::theEnv, format, args);
     va_end (args);
 }
 
-int bang_eq(Value *a, Value *b) {
+int bangra_eq(Value *a, Value *b) {
     if (a == b) return true;
     if (a && b) {
         auto kind = a->getKind();
         if (kind != b->getKind())
             return false;
-        if (kind == bang::V_Symbol) {
-            bang::Symbol *sa = llvm::cast<bang::Symbol>(a);
-            bang::Symbol *sb = llvm::cast<bang::Symbol>(b);
+        if (kind == bangra::V_Symbol) {
+            bangra::Symbol *sa = llvm::cast<bangra::Symbol>(a);
+            bangra::Symbol *sb = llvm::cast<bangra::Symbol>(b);
             if (sa->size() != sb->size()) return false;
             if (!memcmp(sa->c_str(), sb->c_str(), sa->size())) return true;
         }
@@ -3999,44 +3999,44 @@ int bang_eq(Value *a, Value *b) {
     return false;
 }
 
-ValueRef bang_table() {
-    return new bang::Table();
+ValueRef bangra_table() {
+    return new bangra::Table();
 }
 
-void bang_set_key(ValueRef expr, ValueRef key, ValueRef value) {
+void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value) {
     if (expr && key) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
             table->setKey(key, value);
         }
     }
 }
 
-ValueRef bang_get_key(ValueRef expr, ValueRef key) {
+ValueRef bangra_get_key(ValueRef expr, ValueRef key) {
     if (expr && key) {
-        if (auto table = llvm::dyn_cast<bang::Table>(expr)) {
+        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
             return table->getKey(key);
         }
     }
     return NULL;
 }
 
-static ValueRef bang_map_1(ValueRef expr, int idx, bang_mapper map, void *ctx) {
+static ValueRef bangra_map_1(ValueRef expr, int idx, bangra_mapper map, void *ctx) {
     if (!expr) return NULL;
     ValueRef elem = expr;
     elem = map(elem, idx, ctx);
     ++idx;
     expr = next(expr);
     if (elem)
-        return new bang::Pointer(elem, bang_map_1(expr, idx, map, ctx));
+        return new bangra::Pointer(elem, bangra_map_1(expr, idx, map, ctx));
     else
-        return bang_map_1(expr, idx, map, ctx);
+        return bangra_map_1(expr, idx, map, ctx);
 }
 
-ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx) {
-    return bang_map_1(expr, 0, map, ctx);
+ValueRef bangra_map(ValueRef expr, bangra_mapper map, void *ctx) {
+    return bangra_map_1(expr, 0, map, ctx);
 }
 
-ValueRef bang_set_anchor(
+ValueRef bangra_set_anchor(
     ValueRef expr, const char *path, int lineno, int column, int offset) {
     if (expr) {
         ValueRef clone = expr->clone();
@@ -4049,71 +4049,71 @@ ValueRef bang_set_anchor(
     return NULL;
 }
 
-ValueRef bang_ref(ValueRef lhs) {
-    return new bang::Pointer(lhs);
+ValueRef bangra_ref(ValueRef lhs) {
+    return new bangra::Pointer(lhs);
 }
 
-ValueRef bang_string(const char *value) {
-    return new bang::String(value);
+ValueRef bangra_string(const char *value) {
+    return new bangra::String(value);
 }
-ValueRef bang_symbol(const char *value) {
-    return new bang::Symbol(value);
+ValueRef bangra_symbol(const char *value) {
+    return new bangra::Symbol(value);
 }
 
-ValueRef bang_real(double value) {
-    return new bang::Real(value);
+ValueRef bangra_real(double value) {
+    return new bangra::Real(value);
 }
-double bang_real_value(ValueRef value) {
+double bangra_real_value(ValueRef value) {
     if (value) {
-        if (auto real = llvm::dyn_cast<bang::Real>(value)) {
+        if (auto real = llvm::dyn_cast<bangra::Real>(value)) {
             return real->getValue();
         }
     }
     return 0.0;
 }
 
-ValueRef bang_integer(signed long long int value) {
-    return new bang::Integer(value);
+ValueRef bangra_integer(signed long long int value) {
+    return new bangra::Integer(value);
 }
-signed long long int bang_integer_value(ValueRef value) {
+signed long long int bangra_integer_value(ValueRef value) {
     if (value) {
-        if (auto integer = llvm::dyn_cast<bang::Integer>(value)) {
+        if (auto integer = llvm::dyn_cast<bangra::Integer>(value)) {
             return integer->getValue();
         }
     }
     return 0;
 }
 
-const char *bang_anchor_path(ValueRef expr) {
+const char *bangra_anchor_path(ValueRef expr) {
     if (expr) { return expr->anchor.path; }
     return NULL;
 }
 
-int bang_anchor_lineno(ValueRef expr) {
+int bangra_anchor_lineno(ValueRef expr) {
     if (expr) { return expr->anchor.lineno; }
     return 0;
 }
 
-int bang_anchor_column(ValueRef expr) {
+int bangra_anchor_column(ValueRef expr) {
     if (expr) { return expr->anchor.column; }
     return 0;
 }
 
-int bang_anchor_offset(ValueRef expr) {
+int bangra_anchor_offset(ValueRef expr) {
     if (expr) { return expr->anchor.offset; }
     return 0;
 }
 
 //------------------------------------------------------------------------------
 
-#endif // BANG_CPP_IMPL
-#ifdef BANG_MAIN_CPP_IMPL
+#endif // BANGRA_CPP_IMPL
+#ifdef BANGRA_MAIN_CPP_IMPL
 
 //------------------------------------------------------------------------------
 // MAIN EXECUTABLE IMPLEMENTATION
 //------------------------------------------------------------------------------
 
 int main(int argc, char ** argv) {
-    return bang_main(argc, argv);
+    return bangra_main(argc, argv);
 }
 #endif
