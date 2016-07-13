@@ -40,8 +40,8 @@ Strings
 Strings describe sequences of unsigned 8-bit characters in the range of 0-255 and
 are stored as zero-terminated string arrays. A string begins and ends with
 ``"`` (double quotes).  The ``\`` escape character can be used to include quotes
-in a string and describe unprintable control characters such as `\n` (return)
-and `\t` (tab). The parser parses strings as-is, so UTF-8 encoded strings will
+in a string and describe unprintable control characters such as `\\n` (return)
+and `\\t` (tab). The parser parses strings as-is, so UTF-8 encoded strings will
 be copied over verbatim, and return characters will be preserved, allowing
 strings to span multiple lines.
 
