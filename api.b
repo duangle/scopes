@@ -1,12 +1,6 @@
 IR
 
-# the bootstrap language is feature equivalent to LLVM IR, and translates
-# directly to LLVM API commands. It sounds like a Turing tarpit, but the fact
-# that it gives us simple means to get out of it and extend those means
-# turns it more into Turing lube.
-
-# from here, outside the confines of the horribly slow and tedious C++ compiler
-# context, we're going to implement our own language.
+include "libc.b"
 
 ################################################################################
 # declare the bang API as we don't have the means to comfortably import clang
@@ -16,74 +10,11 @@ IR
 # its S-Expression tree, which can be Pointer, String, Symbol, Integer, Real.
 struct _Environment
 struct _Value
-struct opaque
-
-deftype rawstring (* i8)
-
-declare printf (function i32 rawstring ...)
-declare strcmp (function i32 rawstring rawstring)
 
 declare bang_print (function void rawstring)
 
 deftype Environment (* _Environment)
 deftype Value (* _Value)
-
-defvalue dump-value
-    declare "bang_dump_value" (function void Value)
-
-deftype preprocessor-func
-    function Value Environment Value
-
-defvalue set-preprocessor
-    declare "bang_set_preprocessor" (function void (* preprocessor-func))
-
-defvalue kind-of
-    declare "bang_get_kind" (function i32 Value)
-
-defvalue at
-    declare "bang_at" (function Value Value)
-
-defvalue next
-    declare "bang_next" (function Value Value)
-
-defvalue set-next
-    declare "bang_set_next" (function Value Value Value)
-
-defvalue ref
-    declare "bang_ref" (function Value Value)
-
-defvalue table
-    declare "bang_table" (function Value)
-
-defvalue set-key
-    declare "bang_set_key" (function void Value Value Value)
-
-defvalue get-key
-    declare "bang_get_key" (function Value Value Value)
-
-defvalue handle-value
-    declare "bang_handle_value" (function (* opaque) Value)
-
-defvalue handle
-    declare "bang_handle" (function Value (* opaque))
-
-defvalue value==
-    declare "bang_eq" (function i1 Value Value)
-
-defvalue string-value
-    declare "bang_string_value" (function rawstring Value)
-
-defvalue error-message
-    declare "bang_error_message" (function void Value rawstring ...)
-
-defvalue set-anchor
-    declare "bang_set_anchor" (function Value Value Value)
-
-# redeclare pointer types to specialize our mapping handler
-deftype bang-mapper-func
-    function Value Value i32 Value
-defvalue bang-map
-    declare "bang_map" (function Value Value (* bang-mapper-func) Value)
 
 defvalue value-type-none 0
 defvalue value-type-pointer 1
@@ -92,8 +23,93 @@ defvalue value-type-symbol 3
 defvalue value-type-integer 4
 defvalue value-type-real 5
 
+# methods that apply to all types
+#-------------------------------------------------------------------------------
+
+defvalue kind-of
+    declare "bang_get_kind" (function i32 Value)
+defvalue next
+    declare "bang_next" (function Value Value)
+defvalue set-next
+    declare "bang_set_next" (function Value Value Value)
+defvalue set-anchor
+    declare "bang_set_anchor" (function Value Value Value)
+defvalue value==
+    declare "bang_eq" (function i1 Value Value)
+defvalue dump-value
+    declare "bang_dump_value" (function void Value)
+
+# pointer
+#-------------------------------------------------------------------------------
+
+defvalue ref
+    declare "bang_ref" (function Value Value)
+defvalue at
+    declare "bang_at" (function Value Value)
+
+# string and symbol
+#-------------------------------------------------------------------------------
+
+defvalue new-string
+    declare "bang_string" (function Value rawstring)
+defvalue new-symbol
+    declare "bang_symbol" (function Value rawstring)
+defvalue string-value
+    declare "bang_string_value" (function rawstring Value)
+
+# real
+#-------------------------------------------------------------------------------
+
+defvalue new-real
+    declare "bang_real" (function Value double)
+defvalue real-value
+    declare "bang_real_value" (function double Value)
+
+# integer
+#-------------------------------------------------------------------------------
+
+defvalue new-integer
+    declare "bang_integer" (function Value i64)
+defvalue integer-value
+    declare "bang_integer_value" (function i64 Value)
+
+# table
+#-------------------------------------------------------------------------------
+
+defvalue new-table
+    declare "bang_table" (function Value)
+defvalue set-key
+    declare "bang_set_key" (function void Value Value Value)
+defvalue get-key
+    declare "bang_get_key" (function Value Value Value)
+
+# handle
+#-------------------------------------------------------------------------------
+
+defvalue new-handle
+    declare "bang_handle" (function Value (* opaque))
+defvalue handle-value
+    declare "bang_handle_value" (function (* opaque) Value)
+
+# preprocessing
+#-------------------------------------------------------------------------------
+
+deftype preprocessor-func
+    function Value Environment Value
+
+defvalue error-message
+    declare "bang_error_message" (function void Value rawstring ...)
+defvalue set-preprocessor
+    declare "bang_set_preprocessor" (function void (* preprocessor-func))
+
+# redeclare pointer types to specialize our mapping handler
+deftype bang-mapper-func
+    function Value Value i32 Value
+defvalue bang-map
+    declare "bang_map" (function Value Value (* bang-mapper-func) Value)
+
+# helpers
 ################################################################################
-# fundamental helper functions
 
 defvalue pointer?
     define "" (value)

@@ -81,6 +81,16 @@ const char *bang_string_value(ValueRef expr);
 void *bang_handle_value(ValueRef expr);
 ValueRef bang_handle(void *ptr);
 ValueRef bang_table();
+
+ValueRef bang_string(const char *value);
+ValueRef bang_symbol(const char *value);
+
+ValueRef bang_real(double value);
+double bang_real_value(ValueRef value);
+
+ValueRef bang_integer(signed long long int value);
+signed long long int bang_integer_value(ValueRef value);
+
 void bang_set_key(ValueRef expr, ValueRef key, ValueRef value);
 ValueRef bang_get_key(ValueRef expr, ValueRef key);
 typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
@@ -119,6 +129,7 @@ int bang_eq(Value *a, Value *b);
 #include <ctype.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <libgen.h>
 
 //#include <execinfo.h>
 
@@ -1477,7 +1488,7 @@ struct Parser {
                 expr = strip(expr);
             return expr;
         } else {
-            fprintf(stderr, "unable to open file: %s", path);
+            fprintf(stderr, "unable to open file: %s\n", path);
             return NULL;
         }
     }
@@ -3356,15 +3367,26 @@ static LLVMValueRef tr_value_unreachable (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
+    const char *relative_path = expr->anchor.path;
+    if (!relative_path) {
+        translateError(env, "can not infer relative path from anchor.");
+        return NULL;
+    }
+
     UNPACK_ARG(expr, expr_name);
 
     const char *name = translateString(env, expr_name);
     if (!name) return NULL;
 
+    char *relative_pathc = strdup(relative_path);
+    auto filepath = format("%s/%s", dirname(relative_pathc), name);
+    free(relative_pathc);
+
     bang::Parser parser;
-    expr = parser.parseFile(name);
+    expr = parser.parseFile(filepath.c_str());
     if (!expr) {
-        translateError(env, "unable to parse file.");
+        translateError(env, "unable to parse file at '%s'.",
+            filepath.c_str());
         return NULL;
     }
 
@@ -4022,6 +4044,37 @@ ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
 
 ValueRef bang_ref(ValueRef lhs) {
     return new bang::Pointer(lhs);
+}
+
+ValueRef bang_string(const char *value) {
+    return new bang::String(value);
+}
+ValueRef bang_symbol(const char *value) {
+    return new bang::Symbol(value);
+}
+
+ValueRef bang_real(double value) {
+    return new bang::Real(value);
+}
+double bang_real_value(ValueRef value) {
+    if (value) {
+        if (auto real = llvm::dyn_cast<bang::Real>(value)) {
+            return real->getValue();
+        }
+    }
+    return 0.0;
+}
+
+ValueRef bang_integer(signed long long int value) {
+    return new bang::Integer(value);
+}
+signed long long int bang_integer_value(ValueRef value) {
+    if (value) {
+        if (auto integer = llvm::dyn_cast<bang::Integer>(value)) {
+            return integer->getValue();
+        }
+    }
+    return 0;
 }
 
 //------------------------------------------------------------------------------
