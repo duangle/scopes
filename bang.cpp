@@ -3110,13 +3110,7 @@ static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
     return func;
 }
 
-static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_type);
-
-    LLVMTypeRef type = translateType(env, expr_type);
-    if (!type) return NULL;
-
-    expr = next(expr);
+static bool translateIncoming(Environment *env, ValueRef expr, LLVMValueRef phi) {
     int branchcount = countOf(expr);
     LLVMValueRef values[branchcount];
     LLVMBasicBlockRef blocks[branchcount];
@@ -3124,20 +3118,20 @@ static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
     while (expr) {
         ValueRef expr_pair = expr;
         if (!verifyKind<Pointer>(env, expr_pair))
-            return NULL;
+            return false;
         auto _ = env->with_expr(expr_pair);
         expr_pair = at(expr_pair);
         if (!verifyCount(env, expr_pair, 2, 2)) {
             translateError(env, "exactly 2 parameters expected");
-            return NULL;
+            return false;
         }
         ValueRef expr_value = expr_pair;
         ValueRef expr_block = next(expr_pair);
 
         LLVMValueRef value = translateValue(env, expr_value);
-        if (!value) return NULL;
+        if (!value) return false;
         LLVMBasicBlockRef block = verifyBasicBlock(env, translateValue(env, expr_block));
-        if (!block) return NULL;
+        if (!block) return false;
         values[i] = value;
         blocks[i] = block;
 
@@ -3145,9 +3139,42 @@ static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
         i++;
     }
 
-    LLVMValueRef result =
-        LLVMBuildPhi(env->getBuilder(), type, "");
-    LLVMAddIncoming(result, values, blocks, branchcount);
+    LLVMAddIncoming(phi, values, blocks, branchcount);
+    return true;
+}
+
+static LLVMValueRef tr_value_phi (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    LLVMValueRef result = LLVMBuildPhi(env->getBuilder(), type, "");
+
+    expr = next(expr);
+    if (!translateIncoming(env, expr, result))
+        return NULL;
+
+    return result;
+}
+
+static LLVMValueRef tr_value_incoming (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_phi);
+
+    LLVMValueRef result = translateValue(env, expr_phi);
+    if (!result) return NULL;
+
+    // continue existing phi
+
+    if (LLVMGetInstructionOpcode(result) != LLVMPHI) {
+        translateError(env, "value is not a phi instruction.");
+        return NULL;
+    }
+
+    expr = next(expr);
+    if (!translateIncoming(env, expr, result))
+        return NULL;
+
     return result;
 }
 
@@ -3498,6 +3525,7 @@ static void registerValueTranslators() {
     t.set(tr_value_do_splice, "do-splice", 0, -1);
     t.set(tr_value_define, "define", 4, -1);
     t.set(tr_value_phi, "phi", 1, -1, BlockInst);
+    t.set(tr_value_incoming, "incoming", 1, -1, BlockInst);
     t.set(tr_value_br, "br", 1, 1, BlockInst);
     t.set(tr_value_cond_br, "cond-br", 3, 3, BlockInst);
     t.set(tr_value_ret, "ret", 0, 1, BlockInst);

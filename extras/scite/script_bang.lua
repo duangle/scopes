@@ -20,23 +20,23 @@ function splitstr(str)
     return result
 end
 
-keyword_str = getprop("keywords.bang") or
+keyword_str = getprop("keywords.bang_ir") or
     "bang import-c dump-module function"
         .. " call int real defvalue deftype label phi br ret cond-br bitcast"
         .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
         .. " compiler-do icmp fcmp IR alloca dumptype escape qquote"
         .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
-        .. " include"
+        .. " include incoming"
         .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
         .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor"
 
-operator_str = getprop("operators.bang") or
+operator_str = getprop("operators.bang_ir") or
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
         .. " *= /= %= ^= &= |= ~= i> i>= i< i<= u> u>= u< u<= o> o>= o< o<="
         .. " o== o!= u== u!="
 
-type_str = getprop("types.bang") or
+type_str = getprop("types.bang_ir") or
     "i1 i8 i16 i32 i64 half float double void"
 
 real_str = "inf +inf -inf nan +nan -nan"
