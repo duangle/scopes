@@ -28,16 +28,27 @@ defvalue value-type-real 5
 
 defvalue kind-of
     declare "bang_get_kind" (function i32 Value)
+defvalue value==
+    declare "bang_eq" (function i1 Value Value)
+
 defvalue next
     declare "bang_next" (function Value Value)
 defvalue set-next
     declare "bang_set_next" (function Value Value Value)
-defvalue set-anchor
-    declare "bang_set_anchor" (function Value Value Value)
-defvalue value==
-    declare "bang_eq" (function i1 Value Value)
+
 defvalue dump-value
     declare "bang_dump_value" (function void Value)
+
+defvalue anchor-path
+    declare "bang_anchor_path" (function rawstring Value)
+defvalue anchor-lineno
+    declare "bang_anchor_lineno" (function i32 Value)
+defvalue anchor-column
+    declare "bang_anchor_column" (function i32 Value)
+defvalue anchor-offset
+    declare "bang_anchor_offset" (function i32 Value)
+defvalue set-anchor
+    declare "bang_set_anchor" (function Value Value rawstring i32 i32 i32)
 
 # pointer
 #-------------------------------------------------------------------------------

@@ -95,7 +95,12 @@ void bang_set_key(ValueRef expr, ValueRef key, ValueRef value);
 ValueRef bang_get_key(ValueRef expr, ValueRef key);
 typedef ValueRef (*bang_mapper)(ValueRef, int, void *);
 ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx);
-ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr);
+ValueRef bang_set_anchor(
+    ValueRef expr, const char *path, int lineno, int column, int offset);
+const char *bang_anchor_path(ValueRef expr);
+int bang_anchor_lineno(ValueRef expr);
+int bang_anchor_column(ValueRef expr);
+int bang_anchor_offset(ValueRef expr);
 
 void bang_error_message(ValueRef context, const char *format, ...);
 
@@ -4031,15 +4036,17 @@ ValueRef bang_map(ValueRef expr, bang_mapper map, void *ctx) {
     return bang_map_1(expr, 0, map, ctx);
 }
 
-ValueRef bang_set_anchor(ValueRef toexpr, ValueRef anchorexpr) {
-    if (anchorexpr && toexpr) {
-        if (anchorexpr->anchor.isValid()) {
-            ValueRef clone = toexpr->clone();
-            clone->anchor = anchorexpr->anchor;
-            return clone;
-        }
+ValueRef bang_set_anchor(
+    ValueRef expr, const char *path, int lineno, int column, int offset) {
+    if (expr) {
+        ValueRef clone = expr->clone();
+        clone->anchor.path = path;
+        clone->anchor.lineno = lineno;
+        clone->anchor.column = column;
+        clone->anchor.offset = offset;
+        return clone;
     }
-    return toexpr;
+    return NULL;
 }
 
 ValueRef bang_ref(ValueRef lhs) {
@@ -4074,6 +4081,26 @@ signed long long int bang_integer_value(ValueRef value) {
             return integer->getValue();
         }
     }
+    return 0;
+}
+
+const char *bang_anchor_path(ValueRef expr) {
+    if (expr) { return expr->anchor.path; }
+    return NULL;
+}
+
+int bang_anchor_lineno(ValueRef expr) {
+    if (expr) { return expr->anchor.lineno; }
+    return 0;
+}
+
+int bang_anchor_column(ValueRef expr) {
+    if (expr) { return expr->anchor.column; }
+    return 0;
+}
+
+int bang_anchor_offset(ValueRef expr) {
+    if (expr) { return expr->anchor.offset; }
     return 0;
 }
 
