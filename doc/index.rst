@@ -17,6 +17,7 @@ Contents:
    :maxdepth: 2
    :numbered:
 
+   about
    intro
    dataformat
    irlang
