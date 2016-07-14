@@ -187,9 +187,9 @@ Metaprogramming
     defined. ``filename-string`` is the path to the source file to be included,
     relative to the path of the expression's anchor.
 
-.. ir-special:: (run function-value)
+.. ir-special:: (execute function-value)
 
-    Runs a function in the module as it is being defined. The function must
+    Executes a function in the module as it is being defined. The function must
     match the signature ``(function void [Environment])``. If the environment
     parameter is defined, then the currently active translation environment
     will be passed.

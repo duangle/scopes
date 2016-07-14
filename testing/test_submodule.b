@@ -14,7 +14,7 @@ module "submodule"
     include "../api.b"
     include "../libc.b"
 
-    run
+    execute
         define "" (env)
             function void Environment
             label ""

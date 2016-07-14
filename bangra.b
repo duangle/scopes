@@ -187,7 +187,7 @@ define global-preprocessor (ir-env value)
                 ret value
 
 # install preprocessor and continue evaluating the module
-run
+execute
     define "" ()
         function void
         label ""

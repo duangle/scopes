@@ -4,7 +4,7 @@ include "../api.b"
 
 global test-quotes
     quote _Value
-        run
+        execute
             print "'\"" '"\''
             print "yo
             yo""""hey
@@ -138,5 +138,5 @@ define main ()
         ret;
 
 # dump-module
-run main
+execute main
 

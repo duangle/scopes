@@ -25,4 +25,4 @@ define main ()
         ret;
 
 # run the main function
-run main
+execute main

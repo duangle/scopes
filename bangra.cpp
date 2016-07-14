@@ -3419,7 +3419,7 @@ static LLVMValueRef tr_value_nop (Environment *env, ValueRef expr) {
     return NULL;
 }
 
-static LLVMValueRef tr_value_run (Environment *env, ValueRef expr) {
+static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_callee);
 
     LLVMValueRef callee = translateValue(env, expr_callee);
@@ -3616,7 +3616,7 @@ static void registerValueTranslators() {
     t.set(tr_value_unreachable, "unreachable", 0, 0, BlockInst);
     t.set(tr_value_include, "include", 1, 1);
     t.set(tr_value_nop, "nop", 0, 0);
-    t.set(tr_value_run, "run", 1, 1);
+    t.set(tr_value_execute, "execute", 1, 1);
     t.set(tr_value_module, "module", 1, -1);
 
 }

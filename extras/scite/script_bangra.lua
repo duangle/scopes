@@ -23,7 +23,7 @@ end
 keyword_str = getprop("keywords.bangra_ir") or
     "bangra import-c dump-module function"
         .. " call int real defvalue deftype label phi br ret cond-br bitcast"
-        .. " inttoptr ptrtoint getelementptr define declare type packed run module vector array struct"
+        .. " inttoptr ptrtoint getelementptr define declare type packed execute module vector array struct"
         .. " do do-splice null global quote typeof dump extractelement extractvalue load store ..."
         .. " compiler-do icmp fcmp IR alloca dumptype escape qquote"
         .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"

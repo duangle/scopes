@@ -1,6 +1,7 @@
 IR
 
 include "../api.b"
+include "../libc.b"
 
 defvalue hello-world
     bitcast
@@ -77,4 +78,4 @@ define main ()
         ret;
 
 # dump-module
-run main
+execute main

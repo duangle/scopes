@@ -26,7 +26,7 @@ define test-loop (n)
     label $done
         ret;
 
-run
+execute
     define "" ()
         function void
         label ""
