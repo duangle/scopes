@@ -1,47 +1,6 @@
 #ifndef BANGRA_CPP
 #define BANGRA_CPP
 
-/*
-TODO:
-    - validate getelementptr arguments where possible
-    - validate that used values are in the same block
-    - validate: Call parameter type does not match function signature!
-    - validate: PHI node operands are not the same type as the result!
-    - validate: Called function must be a pointer!
-    - validate: Function return type does not match operand type of return inst!
-    - validate: Function arguments must have first-class types!
-        (passing function without pointer to constructor)
-
-type expressions:
-(function return-type-expr ([param-type-expr [...]] [`...`])
-(* type-expr)
-(dump type-expr)
-(struct name-expr [`packed`] [type-expr [...]])
-
-value expressions:
-(int type-expr number)
-(real type-expr number)
-(dump-module)
-(dump value-expr)
-(gep value-expr index-expr [index-expr [...]])
-(global value-expr)
-(bitcast value-expr type-expr)
-(inttoptr value-expr type-expr)
-(ptrtoint value-expr type-expr)
-(defvalue symbol-name value-expr)
-(deftype symbol-name type-expr)
-(define external-name ([param-name [...]]) type-expr body-expr [...])
-(label label-name body-expr [...])
-(br label-expr)
-(cond-br value-expr then-label-expr else-label-expr)
-(ret [value-expr])
-(declare external-name type-expr)
-(call value-expr [param-expr [...]])
-(phi type-expr [(value-expr block-expr) [...]])
-(run function-expr)
-(nop)
-*/
-
 //------------------------------------------------------------------------------
 // C HEADER
 //------------------------------------------------------------------------------
@@ -106,12 +65,31 @@ void bangra_error_message(ValueRef context, const char *format, ...);
 
 int bangra_eq(Value *a, Value *b);
 
+Environment *bangra_parent_env(Environment *env);
+Environment *bangra_meta_env(Environment *env);
+void *bangra_llvm_module(Environment *env);
+void *bangra_llvm_engine(Environment *env);
+void *bangra_llvm_value(Environment *env, const char *name);
+void *bangra_llvm_type(Environment *env, const char *name);
+
 #if defined __cplusplus
 }
 #endif
 
 #endif // BANGRA_CPP
 #ifdef BANGRA_CPP_IMPL
+
+/*
+TODO:
+    - validate getelementptr arguments where possible
+    - validate that used values are in the same block
+    - validate: Call parameter type does not match function signature!
+    - validate: PHI node operands are not the same type as the result!
+    - validate: Called function must be a pointer!
+    - validate: Function return type does not match operand type of return inst!
+    - validate: Function arguments must have first-class types!
+        (passing function without pointer to constructor)
+*/
 
 //------------------------------------------------------------------------------
 // SHARED LIBRARY IMPLEMENTATION
@@ -1673,36 +1651,7 @@ typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
 
 //------------------------------------------------------------------------------
 
-struct Environment;
-
-struct TranslationGlobals {
-    int compile_errors;
-    // module for this translation
-    LLVMModuleRef module;
-    // builder for this translation
-    LLVMBuilderRef builder;
-    // meta env; only valid for proto environments
-    Environment *meta;
-    // global pointers
-    GlobalPtrList globalptrs;
-
-    TranslationGlobals() :
-        compile_errors(0),
-        module(NULL),
-        builder(NULL),
-        meta(NULL)
-        {}
-
-    TranslationGlobals(Environment *env) :
-        compile_errors(0),
-        module(NULL),
-        builder(NULL),
-        meta(env)
-        {}
-
-};
-
-//------------------------------------------------------------------------------
+struct TranslationGlobals;
 
 struct Environment {
     TranslationGlobals *globals;
@@ -1756,30 +1705,103 @@ struct Environment {
         return WithValue(this, expr);
     }
 
-    Environment *getMeta() const {
-        return globals->meta;
+    Environment *getMeta() const;
+    bool hasErrors() const;
+    LLVMBuilderRef getBuilder() const;
+    LLVMModuleRef getModule() const;
+    LLVMExecutionEngineRef getEngine() const;
+    void addQuote(LLVMValueRef value, ValueRef expr);
+
+    LLVMValueRef resolveValue(const std::string &name) {
+        Environment *penv = this;
+        while (penv) {
+            LLVMValueRef result = (*penv).values[name];
+            if (result) {
+                return result;
+            }
+            penv = penv->parent;
+        }
+        return NULL;
     }
 
-    bool hasErrors() const {
-        return globals->compile_errors != 0;
-    };
+    LLVMTypeRef resolveType(const std::string &name) {
+        Environment *penv = this;
+        while (penv) {
+            LLVMTypeRef result = (*penv).types[name];
+            if (result) {
+                return result;
+            }
+            penv = (penv->parent)?penv->parent:penv->getMeta();
+        }
+        return NULL;
+    }
+};
 
-    LLVMBuilderRef getBuilder() const {
-        return globals->builder;
+bangra_preprocessor Environment::preprocessor = NULL;
+
+//------------------------------------------------------------------------------
+
+struct TranslationGlobals {
+    int compile_errors;
+    // module for this translation
+    LLVMModuleRef module;
+    // builder for this translation
+    LLVMBuilderRef builder;
+    // execution engine if available
+    LLVMExecutionEngineRef engine;
+    // meta env; only valid for proto environments
+    Environment *meta;
+    // global pointers
+    GlobalPtrList globalptrs;
+    // root environment
+    Environment rootenv;
+
+    TranslationGlobals() :
+        compile_errors(0),
+        module(NULL),
+        builder(NULL),
+        engine(NULL),
+        meta(NULL) {
+        rootenv.globals = this;
     }
 
-    LLVMModuleRef getModule() const {
-        return globals->module;
-    }
-
-    void addQuote(LLVMValueRef value, ValueRef expr) {
-        globals->globalptrs.push_back(std::make_tuple(value, (void *)expr));
-        gc_root = cons(expr, gc_root);
+    TranslationGlobals(Environment *env) :
+        compile_errors(0),
+        module(NULL),
+        builder(NULL),
+        engine(NULL),
+        meta(env) {
+        rootenv.globals = this;
     }
 
 };
 
-bangra_preprocessor Environment::preprocessor = NULL;
+//------------------------------------------------------------------------------
+
+Environment *Environment::getMeta() const {
+    return globals->meta;
+}
+
+bool Environment::hasErrors() const {
+    return globals->compile_errors != 0;
+};
+
+LLVMBuilderRef Environment::getBuilder() const {
+    return globals->builder;
+}
+
+LLVMModuleRef Environment::getModule() const {
+    return globals->module;
+}
+
+LLVMExecutionEngineRef Environment::getEngine() const {
+    return globals->engine;
+}
+
+void Environment::addQuote(LLVMValueRef value, ValueRef expr) {
+    globals->globalptrs.push_back(std::make_tuple(value, (void *)expr));
+    gc_root = cons(expr, gc_root);
+}
 
 //------------------------------------------------------------------------------
 // CLANG SERVICES
@@ -2194,12 +2216,6 @@ static LLVMModuleRef importCModule (Environment *env,
 // TRANSLATION
 //------------------------------------------------------------------------------
 
-//static void setupRootEnvironment (Environment *env, const char *modulename);
-//static void teardownRootEnvironment (Environment *env);
-//static void compileModule (Environment *env, ValueRef expr, int offset);
-
-//------------------------------------------------------------------------------
-
 static void dumpTraceback() {
 /*
     void *array[10];
@@ -2342,7 +2358,11 @@ static const char *translateString (Environment *env, ValueRef expr) {
 static LLVMTypeRef translateType (Environment *env, ValueRef expr);
 static LLVMValueRef translateValue (Environment *env, ValueRef expr);
 static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
+
+static void setupRootEnvironment (Environment *env, const char *modulename);
+static void teardownRootEnvironment (Environment *env);
 static void compileModule (Environment *env, ValueRef expr);
+static void compileModuleWithHeader (Environment *env, ValueRef expr);
 
 static bool translateValueList (Environment *env, ValueRef expr) {
     while (expr) {
@@ -2392,18 +2412,6 @@ static LLVMBasicBlockRef verifyBasicBlock(Environment *env, LLVMValueRef value) 
         return NULL;
     }
     return LLVMValueAsBasicBlock(value);
-}
-
-static LLVMTypeRef resolveType(Environment *env, const std::string &name) {
-    Environment *penv = (Environment *)env;
-    while (penv) {
-        LLVMTypeRef result = (*penv).types[name];
-        if (result) {
-            return result;
-        }
-        penv = (penv->parent)?penv->parent:penv->getMeta();
-    }
-    return NULL;
 }
 
 static std::string getTypeString(LLVMTypeRef type) {
@@ -3401,7 +3409,7 @@ static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
     auto _ = env->with_expr(expr);
     expr = at(expr);
 
-    compileModule (env, expr);
+    compileModuleWithHeader (env, expr);
 
     return NULL;
 }
@@ -3416,6 +3424,36 @@ static LLVMValueRef tr_value_run (Environment *env, ValueRef expr) {
 
     LLVMValueRef callee = translateValue(env, expr_callee);
     if (!callee) return NULL;
+
+    LLVMTypeRef functype = extractFunctionType(env, callee);
+    if (!functype) return NULL;
+
+    if (LLVMGetReturnType(functype) != LLVMVoidType()) {
+        translateError(env, "function needs to have return type void.\n");
+        return NULL;
+    }
+
+    if (LLVMIsFunctionVarArg(functype)) {
+        translateError(env, "function must not have variable number of parameters.\n");
+        return NULL;
+    }
+
+    unsigned paramcount = LLVMCountParamTypes(functype);
+    if (paramcount > 1) {
+        translateError(env, "function must not have more than one parameter.\n");
+        return NULL;
+    }
+
+    LLVMTypeRef paramtypes[paramcount];
+    LLVMGetParamTypes(functype, paramtypes);
+
+    if (paramcount >= 1) {
+        LLVMTypeKind kind = LLVMGetTypeKind(paramtypes[0]);
+        if (kind != LLVMPointerTypeKind) {
+            translateError(env, "first function parameter must be pointer to environment.\n");
+            return NULL;
+        }
+    }
 
     char *error = NULL;
     LLVMVerifyModule(env->getModule(), LLVMAbortProcessAction, &error);
@@ -3445,7 +3483,22 @@ static LLVMValueRef tr_value_run (Environment *env, ValueRef expr) {
 
     //printf("running...\n");
     LLVMRunStaticConstructors(engine);
-    LLVMRunFunction(engine, callee, 0, NULL);
+
+    void *f = LLVMGetPointerToGlobal(engine, callee);
+
+    env->globals->engine = engine;
+
+    if (paramcount == 0) {
+        typedef void (*signature)();
+        ((signature)f)();
+    } else {
+        typedef void (*signature)(Environment *env);
+        ((signature)f)(env);
+    }
+
+    env->globals->engine = NULL;
+
+    //LLVMRunFunction(engine, callee, 0, NULL);
     //LLVMRunStaticDestructors(engine);
 
     //printf("done.\n");
@@ -3453,24 +3506,23 @@ static LLVMValueRef tr_value_run (Environment *env, ValueRef expr) {
     return NULL;
 }
 
-/*
-} else if (matchSpecialForm(env, expr, "module", 1, -1)) {
+static LLVMValueRef tr_value_module (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_body);
 
-    const char *name = translateString(env, expr->nth(1));
+    const char *name = translateString(env, expr_name);
     if (!name) return NULL;
 
     TranslationGlobals globals(env);
 
-    Environment module_env;
-    module_env.globals = &globals;
+    setupRootEnvironment(&globals.rootenv, name);
 
-    setupRootEnvironment(&module_env, name);
+    compileModule(&globals.rootenv, expr_body);
 
-    compileModule(&module_env, expr, 2);
-
-    teardownRootEnvironment(&module_env);
+    teardownRootEnvironment(&globals.rootenv);
     return NULL;
-*/
+}
+
 /*
 } else if (matchSpecialForm(env, expr, "import-c", 3, 3)) {
     const char *modulename = translateString(env, expr->nth(1));
@@ -3565,6 +3617,7 @@ static void registerValueTranslators() {
     t.set(tr_value_include, "include", 1, 1);
     t.set(tr_value_nop, "nop", 0, 0);
     t.set(tr_value_run, "run", 1, 1);
+    t.set(tr_value_module, "module", 1, -1);
 
 }
 
@@ -3591,17 +3644,13 @@ static LLVMValueRef translateValue (Environment *env, ValueRef expr) {
     if (!isAtom(expr)) {
         return translateValueFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
-        Environment *penv = (Environment *)env;
-        while (penv) {
-            LLVMValueRef result = (*penv).values[sym->getValue()];
-            if (result) {
-                return result;
-            }
-            penv = penv->parent;
+        LLVMValueRef result = env->resolveValue(sym->getValue());
+        if (!result) {
+            translateError(env, "no such value: %s", sym->c_str());
+            return NULL;
         }
 
-        translateError(env, "no such value: %s", sym->c_str());
-        return NULL;
+        return result;
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
         return LLVMConstString(str->c_str(), str->size(), false);
     } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
@@ -3778,7 +3827,7 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
     if (!isAtom(expr)) {
         return translateTypeFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
-        LLVMTypeRef result = resolveType(env, sym->getValue());
+        LLVMTypeRef result = env->resolveType(sym->getValue());
         if (!result) {
             translateError(env, "no such type: %s", sym->c_str());
             return NULL;
@@ -3796,12 +3845,17 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
+static LLVMTypeRef _opaque = NULL;
+
 static void init() {
     registerValueTranslators();
     registerTypeTranslators();
 
     if (!gc_root)
         gc_root = new Pointer();
+
+    if (!_opaque)
+        _opaque = LLVMStructCreateNamed(LLVMGetGlobalContext(), "opaque");
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -3831,6 +3885,9 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
     env->types["i16"] = LLVMInt16Type();
     env->types["i32"] = LLVMInt32Type();
     env->types["i64"] = LLVMInt64Type();
+
+    env->types["rawstring"] = LLVMPointerType(LLVMInt8Type(), 0);
+    env->types["opaque"] = _opaque;
 }
 
 static void teardownRootEnvironment (Environment *env) {
@@ -3865,6 +3922,16 @@ static void compileModule (Environment *env, ValueRef expr) {
 
     auto _ = env->with_expr(expr);
 
+    translateRootValueList (env, expr);
+}
+
+static void compileModuleWithHeader (Environment *env, ValueRef expr) {
+    assert(expr);
+    assert(env->getBuilder());
+    assert(env->getModule());
+
+    auto _ = env->with_expr(expr);
+
     if (!matchSpecialForm(env, expr, "IR", -1, -1)) {
         translateError(env, "unrecognized header; try 'IR' instead.");
         return;
@@ -3876,16 +3943,13 @@ static void compileModule (Environment *env, ValueRef expr) {
 }
 
 static void compileMain (ValueRef expr) {
-    Environment env;
     TranslationGlobals globals;
 
-    env.globals = &globals;
+    setupRootEnvironment(&globals.rootenv, "main");
 
-    setupRootEnvironment(&env, "main");
+    compileModuleWithHeader(&globals.rootenv, at(expr));
 
-    compileModule(&env, at(expr));
-
-    teardownRootEnvironment(&env);
+    teardownRootEnvironment(&globals.rootenv);
 }
 
 } // namespace bangra
@@ -4102,6 +4166,30 @@ int bangra_anchor_column(ValueRef expr) {
 int bangra_anchor_offset(ValueRef expr) {
     if (expr) { return expr->anchor.offset; }
     return 0;
+}
+
+Environment *bangra_parent_env(Environment *env) {
+    return env->parent;
+}
+
+Environment *bangra_meta_env(Environment *env) {
+    return env->getMeta();
+}
+
+void *bangra_llvm_module(Environment *env) {
+    return env->getModule();
+}
+
+void *bangra_llvm_engine(Environment *env) {
+    return env->getEngine();
+}
+
+void *bangra_llvm_value(Environment *env, const char *name) {
+    return env->resolveValue(name);
+}
+
+void *bangra_llvm_type(Environment *env, const char *name) {
+    return env->resolveType(name);
 }
 
 //------------------------------------------------------------------------------

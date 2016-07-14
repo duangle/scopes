@@ -181,11 +181,29 @@ Debugging
 Metaprogramming
 ---------------
 
-.. ir-special:: (quote type element)
-
 .. ir-special:: (include filename-string)
+
+    Includes expressions from another source file into the module currently being
+    defined. ``filename-string`` is the path to the source file to be included,
+    relative to the path of the expression's anchor.
 
 .. ir-special:: (run function-value)
 
+    Runs a function in the module as it is being defined. The function must
+    match the signature ``(function void [Environment])``. If the environment
+    parameter is defined, then the currently active translation environment
+    will be passed.
+
+.. ir-special:: (module name (? expression ...))
+
+    Declares a new LLVM module with a new empty namespace.
+
+.. ir-special:: (quote type element)
+
+    Adds the symbolic expression ``element`` as global constant pointer to the
+    module currently being defined and returns its value handle. This allows
+    programs to create and process properly anchored expressions.
+
 .. ir-special:: (nop)
 
+    Ponders the futility of existence.

@@ -1,7 +1,5 @@
 IR
 
-include "libc.b"
-
 ################################################################################
 # declare the bangra API as we don't have the means to comfortably import clang
 # declarations yet.
@@ -20,6 +18,24 @@ defvalue value-type-string 2
 defvalue value-type-symbol 3
 defvalue value-type-integer 4
 defvalue value-type-real 5
+
+# LLVM compatibility
+#-------------------------------------------------------------------------------
+
+include "llvm.b"
+
+defvalue parent-env
+    declare "bangra_parent_env" (function Environment Environment)
+defvalue meta-env
+    declare "bangra_meta_env" (function Environment Environment)
+defvalue llvm-module
+    declare "bangra_llvm_module" (function LLVMModuleRef Environment)
+defvalue llvm-value
+    declare "bangra_llvm_value" (function LLVMValueRef Environment)
+defvalue llvm-type
+    declare "bangra_llvm_type" (function LLVMTypeRef Environment)
+defvalue llvm-engine
+    declare "bangra_llvm_engine" (function LLVMExecutionEngineRef Environment)
 
 # methods that apply to all types
 #-------------------------------------------------------------------------------
