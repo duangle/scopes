@@ -116,7 +116,7 @@ defvalue new-handle
 defvalue handle-value
     declare "bangra_handle_value" (function (* opaque) Value)
 
-# preprocessing
+# metaprogramming
 #-------------------------------------------------------------------------------
 
 deftype preprocessor-func
@@ -125,7 +125,9 @@ deftype preprocessor-func
 defvalue error-message
     declare "bangra_error_message" (function void Value rawstring ...)
 defvalue set-preprocessor
-    declare "bangra_set_preprocessor" (function void (* preprocessor-func))
+    declare "bangra_set_preprocessor" (function void rawstring (* preprocessor-func))
+defvalue get-preprocessor
+    declare "bangra_get_preprocessor" (function (* preprocessor-func) rawstring)
 
 # redeclare pointer types to specialize our mapping handler
 deftype bangra-mapper-func

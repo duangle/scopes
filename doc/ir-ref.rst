@@ -194,9 +194,11 @@ Metaprogramming
     parameter is defined, then the currently active translation environment
     will be passed.
 
-.. ir-special:: (module name (? expression ...))
+.. ir-special:: (module name (| _:IR language) (? expression ...))
 
-    Declares a new LLVM module with a new empty namespace.
+    Declares a new LLVM module with a new empty namespace. ``language`` must be
+    a name with which a preprocessor has been registered, or ``IR`` for the
+    default.
 
 .. ir-special:: (quote type element)
 

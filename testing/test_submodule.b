@@ -10,7 +10,8 @@ define main ()
         ret;
 
 # use a new module to write the parent module to an object file
-module "submodule"
+module "submodule" IR
+
     include "../api.b"
     include "../libc.b"
 

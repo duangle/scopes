@@ -23,12 +23,13 @@ typedef struct _Value Value;
 
 typedef Value *ValueRef;
 
+typedef ValueRef (*bangra_preprocessor)(Environment *, ValueRef );
+
 void bangra_dump_value(ValueRef expr);
 int bangra_main(int argc, char ** argv);
 
-typedef ValueRef (*bangra_preprocessor)(Environment *, ValueRef );
-void bangra_set_preprocessor(bangra_preprocessor f);
-bangra_preprocessor bangra_get_preprocessor();
+void bangra_set_preprocessor(const char *name, bangra_preprocessor f);
+bangra_preprocessor bangra_get_preprocessor(const char *name);
 
 int bangra_get_kind(ValueRef expr);
 ValueRef bangra_at(ValueRef expr);
@@ -296,7 +297,7 @@ enum ValueKind {
 static const char *valueKindName(int kind) {
     switch(kind) {
     case V_None: return "null";
-    case V_Pointer: return "pointer";
+    case V_Pointer: return "list";
     case V_String: return "string";
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
@@ -1668,7 +1669,7 @@ struct Environment {
     // parent env
     Environment *parent;
 
-    static bangra_preprocessor preprocessor;
+    bangra_preprocessor preprocessor;
 
     struct WithValue {
         ValueRef prevexpr;
@@ -1690,7 +1691,8 @@ struct Environment {
         function(NULL),
         block(NULL),
         expr(NULL),
-        parent(NULL)
+        parent(NULL),
+        preprocessor(NULL)
         {}
 
     Environment(Environment *parent_) :
@@ -1698,7 +1700,8 @@ struct Environment {
         function(parent_->function),
         block(parent_->block),
         expr(parent_->expr),
-        parent(parent_)
+        parent(parent_),
+        preprocessor(parent_->preprocessor)
         {}
 
     WithValue with_expr(ValueRef expr) {
@@ -1737,7 +1740,7 @@ struct Environment {
     }
 };
 
-bangra_preprocessor Environment::preprocessor = NULL;
+static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 //------------------------------------------------------------------------------
 
@@ -2362,7 +2365,6 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
 static void setupRootEnvironment (Environment *env, const char *modulename);
 static void teardownRootEnvironment (Environment *env);
 static void compileModule (Environment *env, ValueRef expr);
-static void compileModuleWithHeader (Environment *env, ValueRef expr);
 
 static bool translateValueList (Environment *env, ValueRef expr) {
     while (expr) {
@@ -3409,7 +3411,7 @@ static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
     auto _ = env->with_expr(expr);
     expr = at(expr);
 
-    compileModuleWithHeader (env, expr);
+    compileModule(env, expr);
 
     return NULL;
 }
@@ -3898,14 +3900,6 @@ static Environment *theEnv = NULL;
 
 static bool translateRootValueList (Environment *env, ValueRef expr) {
     while (expr) {
-        if (Environment::preprocessor) {
-            theEnv = env;
-            expr = Environment::preprocessor(env, expr);
-            theEnv = NULL;
-            if (env->hasErrors())
-                return false;
-            if (!expr) return true;
-        }
         translateValue(env, expr);
         if (env->hasErrors())
             return false;
@@ -3914,7 +3908,6 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     return true;
 }
 
-// parses stmt ...
 static void compileModule (Environment *env, ValueRef expr) {
     assert(expr);
     assert(env->getBuilder());
@@ -3922,19 +3915,27 @@ static void compileModule (Environment *env, ValueRef expr) {
 
     auto _ = env->with_expr(expr);
 
-    translateRootValueList (env, expr);
-}
-
-static void compileModuleWithHeader (Environment *env, ValueRef expr) {
-    assert(expr);
-    assert(env->getBuilder());
-    assert(env->getModule());
-
-    auto _ = env->with_expr(expr);
-
-    if (!matchSpecialForm(env, expr, "IR", -1, -1)) {
-        translateError(env, "unrecognized header; try 'IR' instead.");
-        return;
+    std::string lastlang = "";
+    while (true) {
+        Symbol *head = translateKind<Symbol>(env, expr);
+        if (!head) return;
+        if (head->getValue() == "IR")
+            break;
+        auto preprocessor = preprocessors[head->getValue()];
+        if (!preprocessor) {
+            translateError(env, "unrecognized header: '%s'; try 'IR' instead.",
+                head->getValue().c_str());
+            return;
+        }
+        if (lastlang == head->getValue()) {
+            translateError(env,
+                "header has not changed after preprocessing; is still '%s'.",
+                head->getValue().c_str());
+        }
+        lastlang = head->getValue();
+        expr = preprocessor(env, expr);
+        if (env->hasErrors())
+            return;
     }
 
     expr = next(expr);
@@ -3947,7 +3948,7 @@ static void compileMain (ValueRef expr) {
 
     setupRootEnvironment(&globals.rootenv, "main");
 
-    compileModuleWithHeader(&globals.rootenv, at(expr));
+    compileModule(&globals.rootenv, at(expr));
 
     teardownRootEnvironment(&globals.rootenv);
 }
@@ -3982,12 +3983,12 @@ int bangra_main(int argc, char ** argv) {
     return result;
 }
 
-void bangra_set_preprocessor(bangra_preprocessor f) {
-    Environment::preprocessor = f;
+void bangra_set_preprocessor(const char *name, bangra_preprocessor f) {
+    bangra::preprocessors[name] = f;
 }
 
-bangra_preprocessor bangra_get_preprocessor() {
-    return Environment::preprocessor;
+bangra_preprocessor bangra_get_preprocessor(const char *name) {
+    return bangra::preprocessors[name];
 }
 
 int bangra_get_kind(ValueRef expr) {

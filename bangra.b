@@ -186,7 +186,7 @@ define global-preprocessor (ir-env value)
             label $else
                 ret value
 
-# install preprocessor and continue evaluating the module
+# install bangra preprocessor
 execute
     define "" ()
         function void
@@ -202,8 +202,8 @@ execute
                         macro-qquote
                         * opaque
 
-            call set-preprocessor global-preprocessor
+            call set-preprocessor
+                bitcast (global "" "bangra") rawstring
+                global-preprocessor
             ret;
 
-# all top level expressions from here go through the preprocessor
-# we only recognize and expand expressions that start with (bangra ...)
