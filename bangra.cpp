@@ -4025,23 +4025,23 @@ static ValueRef parseLoader(const char *executable_path) {
         fprintf(stderr, "footer expression does not begin with symbol\n");
         return NULL;
     }
-    if (!isSymbol(expr, "from-offset"))  {
-        fprintf(stderr, "footer expression does not begin with 'from-offset'\n");
+    if (!isSymbol(expr, "script-size"))  {
+        fprintf(stderr, "footer expression does not begin with 'script-size'\n");
         return NULL;
     }
     expr = next(expr);
     if (expr->getKind() != V_Integer)  {
-        fprintf(stderr, "from-offset argument is not integer\n");
+        fprintf(stderr, "script-size argument is not integer\n");
         return NULL;
     }
     auto offset = llvm::cast<Integer>(expr)->getValue();
-    if (offset < 0) {
-        fprintf(stderr, "offset argument is negative\n");
+    if (offset <= 0) {
+        fprintf(stderr, "script-size must be larger than zero\n");
         return NULL;
     }
     bangra::Parser parser;
-    auto script_start = ptr + offset;
-    return parser.parseMemory(script_start, ptr + size, executable_path, offset);
+    auto script_start = cursor - offset;
+    return parser.parseMemory(script_start, cursor, executable_path, script_start - ptr);
 }
 
 } // namespace bangra
