@@ -907,9 +907,9 @@ typedef enum {
     token_real = 'R',
 } Token;
 
-const char symbol_terminators[]  = "()[]{}\"';#:,.";
-const char integer_terminators[] = "()[]{}\"';#:,";
-const char real_terminators[]    = "()[]{}\"';#:,.";
+const char symbol_terminators[]  = "()[]{}\"';#";
+const char integer_terminators[] = "()[]{}\"';#";
+const char real_terminators[]    = "()[]{}\"';#";
 
 struct Lexer {
     const char *path;
@@ -1003,23 +1003,6 @@ struct Lexer {
                 escape = true;
             } else if (isspace(c)
                 || strchr(symbol_terminators, c)) {
-                -- next_cursor;
-                break;
-            }
-        }
-        string = cursor;
-        string_len = next_cursor - cursor;
-    }
-
-    void readDotSequence () {
-        while (true) {
-            if (next_cursor == eof) {
-                break;
-            }
-            char c = *next_cursor++;
-            if (strchr(".:", c)) {
-                // consume
-            } else {
                 -- next_cursor;
                 break;
             }
@@ -1156,23 +1139,11 @@ struct Lexer {
             } else if (c == ';') {
                 token = token_statement;
                 break;
-            } else if (c == ',') {
-                token = token_symbol;
-                readSingleSymbol();
-                break;
-            } else if (c == ':') {
-                token = token_symbol;
-                readDotSequence();
-                break;
             } else if (readInteger() || readUInteger()) {
                 token = token_integer;
                 break;
             } else if (readReal()) {
                 token = token_real;
-                break;
-            } else if (c == '.') {
-                token = token_symbol;
-                readDotSequence();
                 break;
             } else {
                 token = token_symbol;
