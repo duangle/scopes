@@ -19,6 +19,13 @@ defvalue value-type-symbol 3
 defvalue value-type-integer 4
 defvalue value-type-real 5
 
+defvalue argc
+    declare-global "bang_argc" i32
+defvalue argv
+    declare-global "bang_argv" (* rawstring)
+defvalue executable-path
+    declare-global "bang_executable_path" rawstring
+
 # LLVM compatibility
 #-------------------------------------------------------------------------------
 

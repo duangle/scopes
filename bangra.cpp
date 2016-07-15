@@ -73,6 +73,10 @@ void *bangra_llvm_engine(Environment *env);
 void *bangra_llvm_value(Environment *env, const char *name);
 void *bangra_llvm_type(Environment *env, const char *name);
 
+extern int bang_argc;
+extern char **bang_argv;
+extern char *bang_executable_path;
+
 #if defined __cplusplus
 }
 #endif
@@ -916,6 +920,8 @@ struct Lexer {
     int lineno;
     int next_lineno;
 
+    int base_offset;
+
     int token;
     const char *string;
     int string_len;
@@ -927,11 +933,12 @@ struct Lexer {
 
     Lexer() {}
 
-    void init (const char *input_stream, const char *eof, const char *path) {
+    void init (const char *input_stream, const char *eof, const char *path, int offset = 0) {
         if (eof == NULL) {
             eof = input_stream + strlen(input_stream);
         }
 
+        this->base_offset = offset;
         this->path = path;
         this->input_stream = input_stream;
         this->eof = eof;
@@ -946,7 +953,7 @@ struct Lexer {
     }
 
     int offset () {
-        return cursor - input_stream;
+        return base_offset + (cursor - input_stream);
     }
 
     int column () {
@@ -957,7 +964,7 @@ struct Lexer {
         anchor.path = path;
         anchor.lineno = lineno;
         anchor.column = column();
-        anchor.offset = cursor - input_stream;
+        anchor.offset = offset();
     }
 
     void error( const char *format, ... ) {
@@ -1429,9 +1436,10 @@ struct Parser {
         }
     }
 
-    ValueRef parseRoot (
-        const char *input_stream, const char *eof, const char *path) {
-        lexer.init(input_stream, eof, path);
+    ValueRef parseMemory (
+        const char *input_stream, const char *eof, const char *path, int offset = 0) {
+        init();
+        lexer.init(input_stream, eof, path, offset);
 
         lexer.readToken();
 
@@ -1439,38 +1447,37 @@ struct Parser {
 
         if (error_string.empty() && !lexer.error_string.empty()) {
             error_string = lexer.error_string;
+            lexer.initAnchor(error_origin);
+            parse_origin = error_origin;
+        }
+
+        if (!error_string.empty()) {
+            printf("%s:%i:%i: error: %s\n",
+                error_origin.path,
+                error_origin.lineno,
+                error_origin.column,
+                error_string.c_str());
+            dumpFileLine(path, error_origin.offset);
+            if (!(parse_origin == error_origin)) {
+                printf("%s:%i:%i: while parsing expression\n",
+                    parse_origin.path,
+                    parse_origin.lineno,
+                    parse_origin.column);
+                dumpFileLine(path, parse_origin.offset);
+            }
             return nullptr;
         }
 
-        return result;
+        assert(result);
+        return strip(result);
     }
 
     ValueRef parseFile (const char *path) {
         auto file = MappedFile::open(path);
         if (file) {
-            init();
-            auto expr = parseRoot(
+            return parseMemory(
                 file->strptr(), file->strptr() + file->size(),
                 path);
-            if (!error_string.empty()) {
-                printf("%s:%i:%i: error: %s\n",
-                    error_origin.path,
-                    error_origin.lineno,
-                    error_origin.column,
-                    error_string.c_str());
-                dumpFileLine(path, error_origin.offset);
-                assert(expr == NULL);
-                if (!(parse_origin == error_origin)) {
-                    printf("%s:%i:%i: while parsing expression",
-                        parse_origin.path,
-                        parse_origin.lineno,
-                        parse_origin.column);
-                    dumpFileLine(path, parse_origin.offset);
-                }
-            }
-            if (expr)
-                expr = strip(expr);
-            return expr;
         } else {
             fprintf(stderr, "unable to open file: %s\n", path);
             return NULL;
@@ -2641,6 +2648,24 @@ static LLVMValueRef tr_value_constant (Environment *env, ValueRef expr) {
     return value;
 }
 
+static LLVMValueRef tr_value_declare_global (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_type);
+
+    const char *name = translateString(env, expr_name);
+    if (!name) return NULL;
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, name);
+
+    if (isKindOf<Symbol>(expr_name))
+        env->values[name] = result;
+
+    return result;
+}
+
 static LLVMValueRef tr_value_global (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_name);
     UNPACK_ARG(expr, expr_value);
@@ -3559,6 +3584,7 @@ static void registerValueTranslators() {
     t.set(tr_value_dump, "dump", 1, 1);
     t.set(tr_value_dumptype, "dumptype", 1, 1);
     t.set(tr_value_constant, "constant", 1, 1);
+    t.set(tr_value_declare_global, "declare-global", 2, 2);
     t.set(tr_value_global, "global", 2, 2);
     t.set(tr_value_quote, "quote", 2, 2);
     t.set(tr_value_bitcast, "bitcast", 2, 2);
@@ -3953,34 +3979,116 @@ static void compileMain (ValueRef expr) {
     teardownRootEnvironment(&globals.rootenv);
 }
 
+// This function isn't referenced outside its translation unit, but it
+// can't use the "static" keyword because its address is used for
+// GetMainExecutable (since some platforms don't support taking the
+// address of main, and some platforms can't implement GetMainExecutable
+// without being given the address of a function in the main executable).
+std::string GetExecutablePath(const char *Argv0) {
+  // This just needs to be some symbol in the binary; C++ doesn't
+  // allow taking the address of ::main however.
+  void *MainAddr = (void*) (intptr_t) GetExecutablePath;
+  return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
+}
+
+static ValueRef parseLoader(const char *executable_path) {
+    // attempt to read bootstrap expression from end of binary
+    auto file = MappedFile::open(executable_path);
+    if (!file) {
+        fprintf(stderr, "could not open binary\n");
+        return NULL;
+    }
+    auto ptr = file->strptr();
+    auto size = file->size();
+    auto cursor = ptr + size - 1;
+    if (*cursor != '\n') return NULL;
+    cursor--;
+    if (*cursor != ')') return NULL;
+    cursor--;
+    // seek backwards to find beginning of expression
+    while ((cursor >= ptr) && (*cursor != '('))
+        cursor--;
+
+    bangra::Parser footerParser;
+    ValueRef expr = footerParser.parseMemory(
+        cursor, ptr + size, executable_path, cursor - ptr);
+    if (!expr) {
+        fprintf(stderr, "could not parse footer expression\n");
+        return NULL;
+    }
+    if (expr->getKind() != V_Pointer)  {
+        fprintf(stderr, "footer expression is not a list\n");
+        return NULL;
+    }
+    expr = at(expr);
+    if (expr->getKind() != V_Symbol)  {
+        fprintf(stderr, "footer expression does not begin with symbol\n");
+        return NULL;
+    }
+    if (!isSymbol(expr, "from-offset"))  {
+        fprintf(stderr, "footer expression does not begin with 'from-offset'\n");
+        return NULL;
+    }
+    expr = next(expr);
+    if (expr->getKind() != V_Integer)  {
+        fprintf(stderr, "from-offset argument is not integer\n");
+        return NULL;
+    }
+    auto offset = llvm::cast<Integer>(expr)->getValue();
+    if (offset < 0) {
+        fprintf(stderr, "offset argument is negative\n");
+        return NULL;
+    }
+    bangra::Parser parser;
+    auto script_start = ptr + offset;
+    return parser.parseMemory(script_start, ptr + size, executable_path, offset);
+}
+
 } // namespace bangra
 
 // C API
 //------------------------------------------------------------------------------
 
-void bangra_dump_value(ValueRef expr) {
-    return bangra::printValue(expr);
-}
+char *bang_executable_path = NULL;
+int bang_argc = 0;
+char **bang_argv = NULL;
 
 int bangra_main(int argc, char ** argv) {
+    bang_argc = argc;
+    bang_argv = argv;
+
     bangra::init();
 
     int result = 0;
 
-    if (argv && argv[1]) {
-        bangra::Parser parser;
-        auto expr = parser.parseFile(argv[1]);
-        if (expr) {
-            assert(bangra::isKindOf<bangra::Pointer>(expr));
-            //printValue(expr);
-            bangra::gc_root = cons(expr, bangra::gc_root);
-            bangra::compileMain(expr);
-        } else {
-            result = 1;
+    ValueRef expr = NULL;
+
+    if (argv) {
+        if (argv[0]) {
+            std::string loader = bangra::GetExecutablePath(argv[0]);
+            // string must be kept resident
+            bang_executable_path = strdup(loader.c_str());
+            expr = bangra::parseLoader(bang_executable_path);
+        }
+        if (!expr && argv[1]) {
+            bangra::Parser parser;
+            expr = parser.parseFile(argv[1]);
         }
     }
 
+    if (expr) {
+        assert(bangra::isKindOf<bangra::Pointer>(expr));
+        bangra::gc_root = cons(expr, bangra::gc_root);
+        bangra::compileMain(expr);
+    } else {
+        result = 1;
+    }
+
     return result;
+}
+
+void bangra_dump_value(ValueRef expr) {
+    return bangra::printValue(expr);
 }
 
 void bangra_set_preprocessor(const char *name, bangra_preprocessor f) {

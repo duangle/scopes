@@ -1,6 +1,6 @@
 IR
 
-include "api.b"
+include "../api.b"
 
 ################################################################################
 # build and install the preprocessor hook function.

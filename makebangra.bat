@@ -41,7 +41,7 @@ g++ -shared -o libbangra.dll %DIR%bangra.cpp mman.o ^
 if errorlevel 1 goto :fail
 g++ -o bangra.exe %DIR%bangra.cpp -DBANGRA_MAIN_CPP_IMPL -L%DIR% -lbangra -O2
 if errorlevel 1 goto :fail
-%DIR%bangra.exe %DIR%bangra.b
+%DIR%bangra.exe %DIR%testing\test_bangra.b
 if errorlevel 1 goto :fail
 echo success.
 goto :done

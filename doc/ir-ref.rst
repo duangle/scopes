@@ -41,6 +41,8 @@ Definitions
 
 .. ir-special:: (declare c-symbol-string type)
 
+.. ir-special:: (declare-global c-symbol-string type)
+
 Constant Values
 ---------------
 

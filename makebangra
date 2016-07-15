@@ -36,5 +36,5 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
 && clang++ \
     -o $DIR/bangra $DIR/bangra.cpp -DBANGRA_MAIN_CPP_IMPL -O2 -L$DIR \
     -Wl,-rpath '-Wl,$ORIGIN' -lbangra \
-&& $DIR/bangra $DIR/bangra.b
-# && gdb --ex r --silent --args $DIR/bangra $DIR/bangra.b
+&& $DIR/bangra $DIR/testing/test_bangra.b
+# && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b
