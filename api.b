@@ -56,6 +56,8 @@ defvalue next
     declare "bangra_next" (function Value Value)
 defvalue set-next
     declare "bangra_set_next" (function Value Value Value)
+defvalue set-next!
+    declare "bangra_set_next_mutable" (function Value Value Value)
 
 defvalue dump-value
     declare "bangra_dump_value" (function void Value)
@@ -70,6 +72,8 @@ defvalue anchor-offset
     declare "bangra_anchor_offset" (function i32 Value)
 defvalue set-anchor
     declare "bangra_set_anchor" (function Value Value rawstring i32 i32 i32)
+defvalue set-anchor!
+    declare "bangra_set_anchor_mutable" (function Value Value rawstring i32 i32 i32)
 
 # pointer
 #-------------------------------------------------------------------------------
@@ -78,6 +82,8 @@ defvalue ref
     declare "bangra_ref" (function Value Value)
 defvalue at
     declare "bangra_at" (function Value Value)
+defvalue set-at!
+    declare "bangra_set_at_mutable" (function Value Value Value)
 
 # string and symbol
 #-------------------------------------------------------------------------------

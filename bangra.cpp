@@ -37,6 +37,9 @@ ValueRef bangra_next(ValueRef expr);
 ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_ref(ValueRef lhs);
 
+ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
+ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
+
 const char *bangra_string_value(ValueRef expr);
 void *bangra_handle_value(ValueRef expr);
 ValueRef bangra_handle(void *ptr);
@@ -56,6 +59,8 @@ ValueRef bangra_get_key(ValueRef expr, ValueRef key);
 typedef ValueRef (*bangra_mapper)(ValueRef, int, void *);
 ValueRef bangra_map(ValueRef expr, bangra_mapper map, void *ctx);
 ValueRef bangra_set_anchor(
+    ValueRef expr, const char *path, int lineno, int column, int offset);
+ValueRef bangra_set_anchor_mutable(
     ValueRef expr, const char *path, int lineno, int column, int offset);
 const char *bangra_anchor_path(ValueRef expr);
 int bangra_anchor_lineno(ValueRef expr);
@@ -4123,6 +4128,24 @@ ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs) {
     return NULL;
 }
 
+ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs) {
+    if (lhs) {
+        if (auto ptr = llvm::dyn_cast<bangra::Pointer>(lhs)) {
+            ptr->setAt(rhs);
+        }
+    }
+    return NULL;
+}
+
+ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs) {
+    if (lhs) {
+        if (auto ptr = llvm::dyn_cast<bangra::Pointer>(lhs)) {
+            ptr->setNext(rhs);
+        }
+    }
+    return NULL;
+}
+
 const char *bangra_string_value(ValueRef expr) {
     if (expr) {
         if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
@@ -4218,6 +4241,18 @@ ValueRef bangra_set_anchor(
         clone->anchor.column = column;
         clone->anchor.offset = offset;
         return clone;
+    }
+    return NULL;
+}
+
+ValueRef bangra_set_anchor_mutable(
+    ValueRef expr, const char *path, int lineno, int column, int offset) {
+    if (expr) {
+        expr->anchor.path = path;
+        expr->anchor.lineno = lineno;
+        expr->anchor.column = column;
+        expr->anchor.offset = offset;
+        return expr;
     }
     return NULL;
 }
