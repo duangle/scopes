@@ -136,17 +136,11 @@ deftype preprocessor-func
     function Value Environment Value
 
 defvalue error-message
-    declare "bangra_error_message" (function void Value rawstring ...)
+    declare "bangra_error_message" (function void Environment Value rawstring ...)
 defvalue set-preprocessor
     declare "bangra_set_preprocessor" (function void rawstring (* preprocessor-func))
 defvalue get-preprocessor
     declare "bangra_get_preprocessor" (function (* preprocessor-func) rawstring)
-
-# redeclare pointer types to specialize our mapping handler
-deftype bangra-mapper-func
-    function Value Value i32 Value
-defvalue bangra-map
-    declare "bangra_map" (function Value Value (* bangra-mapper-func) Value)
 
 # helpers
 ################################################################################

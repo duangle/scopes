@@ -56,8 +56,6 @@ signed long long int bangra_integer_value(ValueRef value);
 
 void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value);
 ValueRef bangra_get_key(ValueRef expr, ValueRef key);
-typedef ValueRef (*bangra_mapper)(ValueRef, int, void *);
-ValueRef bangra_map(ValueRef expr, bangra_mapper map, void *ctx);
 ValueRef bangra_set_anchor(
     ValueRef expr, const char *path, int lineno, int column, int offset);
 ValueRef bangra_set_anchor_mutable(
@@ -67,7 +65,7 @@ int bangra_anchor_lineno(ValueRef expr);
 int bangra_anchor_column(ValueRef expr);
 int bangra_anchor_offset(ValueRef expr);
 
-void bangra_error_message(ValueRef context, const char *format, ...);
+void bangra_error_message(Environment *env, ValueRef context, const char *format, ...);
 
 int bangra_eq(Value *a, Value *b);
 
@@ -3898,8 +3896,6 @@ static void teardownRootEnvironment (Environment *env) {
     LLVMDisposeBuilder(env->getBuilder());
 }
 
-static Environment *theEnv = NULL;
-
 static bool translateRootValueList (Environment *env, ValueRef expr) {
     while (expr) {
         translateValue(env, expr);
@@ -3935,9 +3931,16 @@ static void compileModule (Environment *env, ValueRef expr) {
                 head->getValue().c_str());
         }
         lastlang = head->getValue();
-        expr = preprocessor(env, expr);
+        expr = preprocessor(env, new Pointer(expr));
         if (env->hasErrors())
             return;
+        if (!expr) {
+            translateError(env,
+                "preprocessor returned null.",
+                head->getValue().c_str());
+            return;
+        }
+        expr = at(expr);
     }
 
     expr = next(expr);
@@ -4141,12 +4144,11 @@ ValueRef bangra_handle(void *ptr) {
     return handle;
 }
 
-void bangra_error_message(ValueRef context, const char *format, ...) {
-    assert(bangra::theEnv);
-    auto _ = bangra::theEnv->with_expr(context);
+void bangra_error_message(Environment *env, ValueRef context, const char *format, ...) {
+    auto _ = env->with_expr(context);
     va_list args;
     va_start (args, format);
-    bangra::translateErrorV(bangra::theEnv, format, args);
+    bangra::translateErrorV(env, format, args);
     va_end (args);
 }
 
@@ -4185,22 +4187,6 @@ ValueRef bangra_get_key(ValueRef expr, ValueRef key) {
         }
     }
     return NULL;
-}
-
-static ValueRef bangra_map_1(ValueRef expr, int idx, bangra_mapper map, void *ctx) {
-    if (!expr) return NULL;
-    ValueRef elem = expr;
-    elem = map(elem, idx, ctx);
-    ++idx;
-    expr = next(expr);
-    if (elem)
-        return new bangra::Pointer(elem, bangra_map_1(expr, idx, map, ctx));
-    else
-        return bangra_map_1(expr, idx, map, ctx);
-}
-
-ValueRef bangra_map(ValueRef expr, bangra_mapper map, void *ctx) {
-    return bangra_map_1(expr, 0, map, ctx);
 }
 
 ValueRef bangra_set_anchor(

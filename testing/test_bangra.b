@@ -8,6 +8,16 @@ include "../api.b"
 deftype MacroFunction
     function Value Value Value
 
+define get-ir-env (env)
+    function Environment Value
+    label ""
+        ret
+            bitcast
+                call handle-value
+                    call get-key env
+                        quote _Value "ir-env"
+                Environment
+
 define expand-macro (value env)
     MacroFunction
     label ""
@@ -17,12 +27,16 @@ define expand-macro (value env)
             label $is-expression
 
     label $is-atom
-        call error-message value
+        call error-message
+            call get-ir-env env
+            value
             bitcast (global "" "unknown atom") rawstring
         br
             label $error
     label $is-empty-list
-        call error-message value
+        call error-message
+            call get-ir-env env
+            value
             bitcast (global "" "expression is empty") rawstring
         br
             label $error
@@ -60,7 +74,9 @@ define expand-macro (value env)
                 env
 
     label $has-no-handler
-        call error-message value
+        call error-message
+            call get-ir-env env
+            value
             bitcast (global "" "unknown special form, macro or function") rawstring
         br
             label $error
@@ -157,34 +173,53 @@ define macro-qquote (value env)
         call dump-value qq
         ret qq
 
-define bangra-mapper (value index env)
-    bangra-mapper-func
-    label ""
+define expand-expression-list (value env)
+    function Value Value Value
+    label $entry
         cond-br
-            icmp == index 0
-            label $is-head
+            icmp == value
+                null Value
+            label $empty
                 ret
-                    quote _Value do-splice
-            label $is-body
-                ret
-                    call expand-macro value
-                        load global-env
+                    null Value
+            label $loop
+                defvalue expr
+                    phi Value
+                        value $entry
+                call dump-value expr
+
+
+                defvalue next-expr
+                    call next expr
+                incoming expr
+                    next-expr $loop
+                cond-br
+                    icmp == next-expr
+                        null Value
+                    label $done
+                        ret
+                            null Value
+                    $loop
 
 # all top level expressions go through the preprocessor, which then descends
 # the expression tree and translates it to bangra IR.
 define global-preprocessor (ir-env value)
     preprocessor-func
     label ""
-        cond-br
-            call expression? value (quote _Value bangra)
-            label $is-bangra
-                ret
-                    call bangra-map
-                        call at value
-                        bangra-mapper
-                        load global-env
-            label $else
-                ret value
+        call set-key
+            load global-env
+            quote _Value "ir-env"
+            call new-handle
+                bitcast
+                    ir-env
+                    * opaque
+        defvalue result
+            call expand-expression-list
+                call next
+                    call at value
+                load global-env
+        call dump-value result
+        ret result
 
 # install bangra preprocessor
 execute
@@ -207,3 +242,6 @@ execute
                 global-preprocessor
             ret;
 
+module test-bangra bangra
+
+    qquote test
