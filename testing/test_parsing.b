@@ -132,10 +132,9 @@ global test-quotes
 
 define main ()
     function void
-    label ""
-        call dump-value
-            load test-quotes
-        ret;
+    call dump-value
+        load test-quotes
+    ret;
 
 # dump-module
 execute main

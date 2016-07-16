@@ -63,7 +63,9 @@ Constant Values
 Flow Control
 ------------
 
-.. ir-special:: (label name (? expression ...))
+.. ir-special:: (block name)
+
+.. ir-special:: (set-block block-expr)
 
 .. ir-special:: (call callee (? argument-value ...))
 
@@ -207,6 +209,8 @@ Metaprogramming
     Adds the symbolic expression ``element`` as global constant pointer to the
     module currently being defined and returns its value handle. This allows
     programs to create and process properly anchored expressions.
+
+.. ir-special:: (splice (? expression ...))
 
 .. ir-special:: (nop)
 

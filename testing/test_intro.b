@@ -15,14 +15,11 @@ define main ()
     # the function type of this function
     function void
 
-    # the first label is always the entry point
-    label ""
+    # call printf with argument hello-world
+    call printf hello-world
 
-        # call printf with argument hello-world
-        call printf hello-world
-
-        # return without argument
-        ret;
+    # return without argument
+    ret;
 
 # run the main function
 execute main

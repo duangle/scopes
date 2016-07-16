@@ -60,7 +60,7 @@ defvalue set-next!
     declare "bangra_set_next_mutable" (function Value Value Value)
 
 defvalue dump-value
-    declare "bangra_dump_value" (function void Value)
+    declare "bangra_dump_value" (function Value Value)
 
 defvalue anchor-path
     declare "bangra_anchor_path" (function rawstring Value)
@@ -141,6 +141,12 @@ defvalue set-preprocessor
     declare "bangra_set_preprocessor" (function void rawstring (* preprocessor-func))
 defvalue get-preprocessor
     declare "bangra_get_preprocessor" (function (* preprocessor-func) rawstring)
+defvalue set-macro
+    declare "bangra_set_macro" (function void Environment rawstring (* preprocessor-func))
+defvalue get-macro
+    declare "bangra_get_macro" (function (* preprocessor-func) Environment rawstring)
+defvalue unique-symbol
+    declare "bangra_unique_symbol" (function Value rawstring)
 
 # helpers
 ################################################################################
@@ -148,49 +154,49 @@ defvalue get-preprocessor
 defvalue pointer?
     define "" (value)
         function i1 Value
-        label ""
-            ret
-                icmp ==
-                    call kind-of value
-                    value-type-pointer
+        ret
+            icmp ==
+                call kind-of value
+                value-type-pointer
 
 # non-pointer or null pointer
 defvalue atom?
     define "" (value)
         function i1 Value
-        label ""
-            cond-br
-                call pointer? value
-                label $is-pointer
-                    ret
-                        icmp ==
-                            call at value
-                            null Value
-                label $is-not-pointer
-                    ret (int i1 1)
+        cond-br
+            call pointer? value
+            block $is-pointer
+            block $is-not-pointer
+        set-block $is-pointer
+        ret
+            icmp ==
+                call at value
+                null Value
+        set-block $is-not-pointer
+        ret (int i1 1)
 
 defvalue symbol?
     define "" (value)
         function i1 Value
-        label ""
-            ret
-                icmp ==
-                    call kind-of value
-                    value-type-symbol
+        ret
+            icmp ==
+                call kind-of value
+                value-type-symbol
 
 defvalue expression?
     define "" (value expected-head)
         function i1 Value Value
-        label ""
-            cond-br
-                call atom? value
-                label $is-atom
-                    ret (int i1 0)
-                label $is-not-atom
-                    ret
-                        call value==
-                            call at value
-                            expected-head
+        cond-br
+            call atom? value
+            block $is-atom
+            block $is-not-atom
+        set-block $is-atom
+        ret (int i1 0)
+        set-block $is-not-atom
+        ret
+            call value==
+                call at value
+                expected-head
 
 defvalue type-key
     quote _Value "#bangra-type"
@@ -198,42 +204,46 @@ defvalue type-key
 defvalue set-type
     define "" (value value-type)
         function void Value Value
-        label ""
-            call set-key
-                value
-                type-key
-                value-type
-            ret;
+        call set-key
+            value
+            type-key
+            value-type
+        ret;
 
 defvalue get-type
     define "" (value)
         function Value Value
-        label ""
-            ret
-                call get-key
-                    value
-                    type-key
+        ret
+            call get-key
+                value
+                type-key
 
 defvalue ref-set-next
     define "" (lhs rhs)
         function Value Value Value
-        label ""
-            ret
-                call ref
-                    call set-next lhs rhs
+        ret
+            call ref
+                call set-next lhs rhs
 
 # appends ys ... to xs ...
 define join (xs ys)
     function Value Value Value
-    label ""
-        cond-br
-            icmp == xs
-                null Value
-            label $is-null
-                ret ys
-            label $is-not-null
-                ret
-                    call set-next xs
-                        call join
-                            call next xs
-                            ys
+    cond-br
+        icmp == xs
+            null Value
+        block $is-null
+        block $is-not-null
+    set-block $is-null
+    ret ys
+    set-block $is-not-null
+    ret
+        call set-next xs
+            call join
+                call next xs
+                ys
+
+define prepend (xs ys)
+    function Value Value Value
+    ret
+        call ref
+            call join xs (call at ys)

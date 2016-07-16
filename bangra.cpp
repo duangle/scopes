@@ -25,17 +25,20 @@ typedef Value *ValueRef;
 
 typedef ValueRef (*bangra_preprocessor)(Environment *, ValueRef );
 
-void bangra_dump_value(ValueRef expr);
+ValueRef bangra_dump_value(ValueRef expr);
 int bangra_main(int argc, char ** argv);
 
 void bangra_set_preprocessor(const char *name, bangra_preprocessor f);
 bangra_preprocessor bangra_get_preprocessor(const char *name);
+void bangra_set_macro(Environment *env, const char *name, bangra_preprocessor f);
+bangra_preprocessor bangra_get_macro(Environment *env, const char *name);
 
 int bangra_get_kind(ValueRef expr);
 ValueRef bangra_at(ValueRef expr);
 ValueRef bangra_next(ValueRef expr);
 ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_ref(ValueRef lhs);
+ValueRef bangra_unique_symbol(const char *name);
 
 ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
@@ -1630,6 +1633,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
 typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
 typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
+typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 
 //------------------------------------------------------------------------------
 
@@ -1646,6 +1650,7 @@ struct Environment {
 
     NameLLVMValueMap values;
     NameLLVMTypeMap types;
+    NameMacroMap macros;
 
     // parent env
     Environment *parent;
@@ -1716,6 +1721,18 @@ struct Environment {
                 return result;
             }
             penv = (penv->parent)?penv->parent:penv->getMeta();
+        }
+        return NULL;
+    }
+
+    bangra_preprocessor resolveMacro(const std::string &name) {
+        Environment *penv = this;
+        while (penv) {
+            bangra_preprocessor result = (*penv).macros[name];
+            if (result) {
+                return result;
+            }
+            penv = penv->parent;
         }
         return NULL;
     }
@@ -2347,14 +2364,15 @@ static void setupRootEnvironment (Environment *env, const char *modulename);
 static void teardownRootEnvironment (Environment *env);
 static void compileModule (Environment *env, ValueRef expr);
 
-static bool translateValueList (Environment *env, ValueRef expr) {
+static LLVMValueRef translateValueList (Environment *env, ValueRef expr) {
+    LLVMValueRef lastresult = NULL;
     while (expr) {
-        translateValue(env, expr);
+        lastresult = translateValue(env, expr);
         if (env->hasErrors())
-            return false;
+            return NULL;
         expr = next(expr);
     }
-    return true;
+    return lastresult;
 }
 
 static bool verifyInFunction(Environment *env) {
@@ -2373,10 +2391,18 @@ static bool verifyInBlock(Environment *env) {
     }
     LLVMBasicBlockRef block = LLVMValueAsBasicBlock(env->block);
     if (LLVMGetBasicBlockTerminator(block)) {
-        translateError(env, "labeled block is already terminated.");
+        translateError(env, "block is already terminated.");
         return false;
     }
     return true;
+}
+
+static void translateSetBlock(Environment *env, LLVMBasicBlockRef block) {
+    if (block)
+        LLVMPositionBuilderAtEnd(env->getBuilder(), block);
+    LLVMValueRef blockvalue = block?LLVMBasicBlockAsValue(block):NULL;
+    env->block = blockvalue;
+    env->values["this-block"] = blockvalue;
 }
 
 /*
@@ -2955,6 +2981,12 @@ static LLVMValueRef tr_value_defvalue (Environment *env, ValueRef expr) {
     if (!result) return NULL;
 
     const char *name = sym_name->c_str();
+
+    if (!strcmp(name, "this-block")) {
+        translateError(env, "name is reserved.");
+        return NULL;
+    }
+
     env->values[name] = result;
 
     return result;
@@ -2980,7 +3012,7 @@ static LLVMValueRef tr_value_struct (Environment *env, ValueRef expr) {
     return NULL;
 }
 
-static LLVMValueRef tr_value_label (Environment *env, ValueRef expr) {
+static LLVMValueRef tr_value_block (Environment *env, ValueRef expr) {
     if (!verifyInFunction(env)) return NULL;
 
     UNPACK_ARG(expr, expr_name);
@@ -2988,47 +3020,32 @@ static LLVMValueRef tr_value_label (Environment *env, ValueRef expr) {
     const char *name = translateString(env, expr_name);
     if (!name) return NULL;
 
-    LLVMBasicBlockRef oldblock = LLVMGetInsertBlock(env->getBuilder());
-
-    // continue existing label
-    LLVMBasicBlockRef block = NULL;
-    if (isKindOf<Symbol>(expr_name)) {
-        LLVMValueRef maybe_block = env->values[name];
-        if (maybe_block) {
-            block = verifyBasicBlock(env, maybe_block);
-            if (!block)
-                return NULL;
-        }
-    }
-
-    if (!block) {
-        block = LLVMAppendBasicBlock(env->function, name);
-        if (isKindOf<Symbol>(expr_name))
-            env->values[name] = LLVMBasicBlockAsValue(block);
-    }
+    LLVMBasicBlockRef block = LLVMAppendBasicBlock(env->function, name);
+    if (isKindOf<Symbol>(expr_name))
+        env->values[name] = LLVMBasicBlockAsValue(block);
 
     LLVMValueRef blockvalue = LLVMBasicBlockAsValue(block);
 
-    LLVMPositionBuilderAtEnd(env->getBuilder(), block);
+    return blockvalue;
+}
 
-    expr = next(expr);
-    if (expr) {
-        LLVMValueRef oldblockvalue = env->block;
-        env->block = blockvalue;
-        translateValueList(env, expr);
-        if (env->hasErrors()) return NULL;
-        env->block = oldblockvalue;
-        LLVMValueRef t = LLVMGetBasicBlockTerminator(block);
-        if (!t) {
-            translateError(env, "labeled block must be terminated.");
-            return NULL;
-        }
+static LLVMValueRef tr_value_set_block (Environment *env, ValueRef expr) {
+    if (!verifyInFunction(env)) return NULL;
+
+    UNPACK_ARG(expr, expr_block);
+
+    LLVMValueRef blockvalue = translateValue(env, expr_block);
+    if (!blockvalue) return NULL;
+    LLVMBasicBlockRef block = verifyBasicBlock(env, blockvalue);
+    if (!block) return NULL;
+
+    LLVMValueRef t = LLVMGetBasicBlockTerminator(block);
+    if (t) {
+        translateError(env, "block is already terminated.");
+        return NULL;
     }
 
-    if (env->hasErrors()) return NULL;
-
-    if (oldblock)
-        LLVMPositionBuilderAtEnd(env->getBuilder(), oldblock);
+    translateSetBlock(env, block);
 
     return blockvalue;
 }
@@ -3042,21 +3059,10 @@ static LLVMValueRef tr_value_null (Environment *env, ValueRef expr) {
     return LLVMConstNull(type);
 }
 
-static LLVMValueRef tr_value_do (Environment *env, ValueRef expr) {
+static LLVMValueRef tr_value_splice (Environment *env, ValueRef expr) {
     expr = next(expr);
 
-    Environment subenv(env);
-    translateValueList(&subenv, expr);
-
-    return NULL;
-}
-
-static LLVMValueRef tr_value_do_splice (Environment *env, ValueRef expr) {
-    expr = next(expr);
-
-    translateValueList(env, expr);
-
-    return NULL;
+    return translateValueList(env, expr);
 }
 
 static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
@@ -3125,12 +3131,17 @@ static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
 
     if (env->hasErrors()) return NULL;
 
+    translateSetBlock(&subenv, LLVMAppendBasicBlock(func, ""));
+
     {
         auto _ = env->with_expr(body_expr);
 
         translateValueList(&subenv, body_expr);
         if (env->hasErrors()) return NULL;
     }
+
+    if (env->block)
+        LLVMPositionBuilderAtEnd(env->getBuilder(), LLVMValueAsBasicBlock(env->block));
 
     return func;
 }
@@ -3209,7 +3220,9 @@ static LLVMValueRef tr_value_br (Environment *env, ValueRef expr) {
     LLVMBasicBlockRef value = verifyBasicBlock(env, translateValue(env, expr_value));
     if (!value) return NULL;
 
-    return LLVMBuildBr(env->getBuilder(), value);
+    LLVMValueRef result = LLVMBuildBr(env->getBuilder(), value);
+    translateSetBlock(env, NULL);
+    return result;
 }
 
 static LLVMValueRef tr_value_cond_br (Environment *env, ValueRef expr) {
@@ -3225,7 +3238,9 @@ static LLVMValueRef tr_value_cond_br (Environment *env, ValueRef expr) {
     LLVMBasicBlockRef else_block = verifyBasicBlock(env, translateValue(env, expr_else));
     if (!else_block) return NULL;
 
-    return LLVMBuildCondBr(env->getBuilder(), value, then_block, else_block);
+    LLVMValueRef result = LLVMBuildCondBr(env->getBuilder(), value, then_block, else_block);
+    translateSetBlock(env, NULL);
+    return result;
 }
 
 static LLVMValueRef tr_value_ret (Environment *env, ValueRef expr) {
@@ -3238,13 +3253,14 @@ static LLVMValueRef tr_value_ret (Environment *env, ValueRef expr) {
 
     LLVMTypeRef rettype = LLVMGetReturnType(functype);
 
+    LLVMValueRef result;
     if (!expr) {
         if (rettype != LLVMVoidType()) {
             translateError(env, "return type does not match function signature.");
             return NULL;
         }
 
-        LLVMBuildRetVoid(env->getBuilder());
+        result = LLVMBuildRetVoid(env->getBuilder());
     } else {
         ValueRef expr_value = expr;
         LLVMValueRef value = translateValue(env, expr_value);
@@ -3255,10 +3271,10 @@ static LLVMValueRef tr_value_ret (Environment *env, ValueRef expr) {
             return NULL;
         }
 
-        LLVMBuildRet(env->getBuilder(), value);
+        result = LLVMBuildRet(env->getBuilder(), value);
     }
-
-    return NULL;
+    translateSetBlock(env, NULL);
+    return result;
 }
 
 static LLVMValueRef tr_value_declare (Environment *env, ValueRef expr) {
@@ -3600,10 +3616,10 @@ static void registerValueTranslators() {
     t.set(tr_value_defvalue, "defvalue", 2, 2);
     t.set(tr_value_deftype, "deftype", 2, 2);
     t.set(tr_value_struct, "struct", -1, -1);
-    t.set(tr_value_label, "label", 1, -1);
+    t.set(tr_value_block, "block", 1, 1);
+    t.set(tr_value_set_block, "set-block", 1, 1);
     t.set(tr_value_null, "null", 1, 1);
-    t.set(tr_value_do, "do", 0, -1);
-    t.set(tr_value_do_splice, "do-splice", 0, -1);
+    t.set(tr_value_splice, "splice", 0, -1);
     t.set(tr_value_define, "define", 4, -1);
     t.set(tr_value_phi, "phi", 1, -1, BlockInst);
     t.set(tr_value_incoming, "incoming", 1, -1, BlockInst);
@@ -3627,13 +3643,27 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
     assert(expr);
     Symbol *head = translateKind<Symbol>(env, expr);
     if (!head) return NULL;
+    if (head->getValue() == "escape") {
+        expr = at(next(expr));
+        head = translateKind<Symbol>(env, expr);
+        if (!head) return NULL;
+    } else if (auto macro = env->resolveMacro(head->getValue())) {
+        expr = macro(env, next(expr));
+        if (env->hasErrors())
+            return NULL;
+        if (!expr) {
+            translateError(env, "macro returned null");
+            return NULL;
+        }
+        return translateValue(env, expr);
+    }
     if (auto func = valueTranslators.match(env, expr)) {
         return func(env, expr);
     } else if (env->hasErrors()) {
         return NULL;
     } else {
         auto _ = env->with_expr(head);
-        translateError(env, "unhandled special form: %s. Did you forget a 'call'?", head->c_str());
+        translateError(env, "unhandled special form or macro: %s. Did you forget a 'call'?", head->c_str());
         return NULL;
     }
 }
@@ -4066,8 +4096,9 @@ int bangra_main(int argc, char ** argv) {
     return result;
 }
 
-void bangra_dump_value(ValueRef expr) {
-    return bangra::printValue(expr);
+ValueRef bangra_dump_value(ValueRef expr) {
+    bangra::printValue(expr);
+    return expr;
 }
 
 void bangra_set_preprocessor(const char *name, bangra_preprocessor f) {
@@ -4277,6 +4308,14 @@ Environment *bangra_meta_env(Environment *env) {
     return env->getMeta();
 }
 
+void bangra_set_macro(Environment *env, const char *name, bangra_preprocessor f) {
+    env->macros[name] = f;
+}
+
+bangra_preprocessor bangra_get_macro(Environment *env, const char *name) {
+    return env->macros[name];
+}
+
 void *bangra_llvm_module(Environment *env) {
     return env->getModule();
 }
@@ -4291,6 +4330,14 @@ void *bangra_llvm_value(Environment *env, const char *name) {
 
 void *bangra_llvm_type(Environment *env, const char *name) {
     return env->resolveType(name);
+}
+
+static int unique_symbol_counter = 0;
+ValueRef bangra_unique_symbol(const char *name) {
+    if (!name)
+        name = "";
+    auto symname = bangra::format("#%s%i", name, unique_symbol_counter++);
+    return new bangra::Symbol(symname.c_str());
 }
 
 //------------------------------------------------------------------------------
