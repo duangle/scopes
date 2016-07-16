@@ -60,6 +60,10 @@ Constant Values
 
     Constructs a zero initializer for ``type``.
 
+.. ir-special:: (@str string)
+
+    Constructs a global string constant and returns it as ``* i8``.
+
 Flow Control
 ------------
 
@@ -78,6 +82,12 @@ Flow Control
 .. ir-special:: (phi type (? (value label-value) ...))
 
 .. ir-special:: (incoming phi-value (? (value label-value) ...))
+
+.. ir-macro:: (? condition-expr then-expr else-expr)
+
+.. ir-macro:: (if (condition-expr expression ...) ... (? (_:else expression ...)))
+
+.. ir-macro:: (loop var-name init-expr condition-expr iterate-expr expression ...)
 
 Binary Operators
 ----------------
@@ -136,6 +146,8 @@ Comparators
 .. ir-special:: (icmp op lhs rhs)
 
 .. ir-special:: (fcmp op lhs rhs)
+
+.. ir-special:: (select condition-expr then-value else-value)
 
 Accessors
 ---------
@@ -197,6 +209,8 @@ Metaprogramming
     match the signature ``(function void [Environment])``. If the environment
     parameter is defined, then the currently active translation environment
     will be passed.
+
+.. ir-macro:: (run expression ...)
 
 .. ir-special:: (module name (| _:IR language) (? expression ...))
 

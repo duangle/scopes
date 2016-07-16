@@ -1757,6 +1757,8 @@ struct TranslationGlobals {
     // root environment
     Environment rootenv;
 
+    std::unordered_map<std::string, bool> includes;
+
     TranslationGlobals() :
         compile_errors(0),
         module(NULL),
@@ -1773,6 +1775,14 @@ struct TranslationGlobals {
         engine(NULL),
         meta(env) {
         rootenv.globals = this;
+    }
+
+    bool hasInclude(const std::string &path) {
+        return includes[path];
+    }
+
+    void addInclude(const std::string &path) {
+        includes[path] = true;
     }
 
 };
@@ -2992,6 +3002,21 @@ static LLVMValueRef tr_value_defvalue (Environment *env, ValueRef expr) {
     return result;
 }
 
+static LLVMValueRef tr_value_select (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_if);
+    UNPACK_ARG(expr, expr_then);
+    UNPACK_ARG(expr, expr_else);
+
+    LLVMValueRef value_if = translateValue(env, expr_if);
+    if (!value_if) return NULL;
+    LLVMValueRef value_then = translateValue(env, expr_then);
+    if (!value_then) return NULL;
+    LLVMValueRef value_else = translateValue(env, expr_else);
+    if (!value_else) return NULL;
+
+    return LLVMBuildSelect(env->getBuilder(), value_if, value_then, value_else, "");
+}
+
 static LLVMValueRef tr_value_deftype (Environment *env, ValueRef expr) {
 
     UNPACK_ARG(expr, expr_name);
@@ -3412,8 +3437,24 @@ static LLVMValueRef tr_value_include (Environment *env, ValueRef expr) {
     auto filepath = format("%s/%s", dirname(relative_pathc), name);
     free(relative_pathc);
 
+    char filepathbuf[PATH_MAX];
+    char *realfilepath = realpath(filepath.c_str(), filepathbuf);
+
+    if (!realfilepath) {
+        translateError(env, "could not resolve path.");
+        return NULL;
+    }
+
+    if (env->globals->hasInclude(realfilepath))
+        return NULL;
+
+    env->globals->addInclude(realfilepath);
+
+    // keep resident copy of string
+    char *str_filepath = strdup(realfilepath);
+
     bangra::Parser parser;
-    expr = parser.parseFile(filepath.c_str());
+    expr = parser.parseFile(str_filepath);
     if (!expr) {
         translateError(env, "unable to parse file at '%s'.",
             filepath.c_str());
@@ -3626,6 +3667,7 @@ static void registerValueTranslators() {
     t.set(tr_value_br, "br", 1, 1, BlockInst);
     t.set(tr_value_cond_br, "cond-br", 3, 3, BlockInst);
     t.set(tr_value_ret, "ret", 0, 1, BlockInst);
+    t.set(tr_value_select, "select", 3, 3, BlockInst);
     t.set(tr_value_declare, "declare", 2, 2);
     t.set(tr_value_call, "call", 1, -1, BlockInst);
     t.set(tr_value_invoke, "invoke", 3, 3, BlockInst);
@@ -3655,7 +3697,12 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
             translateError(env, "macro returned null");
             return NULL;
         }
-        return translateValue(env, expr);
+        LLVMValueRef result = translateValue(env, expr);
+        if (env->hasErrors()) {
+            translateError(env, "while expanding macro");
+            return NULL;
+        }
+        return result;
     }
     if (auto func = valueTranslators.match(env, expr)) {
         return func(env, expr);

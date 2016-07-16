@@ -1,6 +1,7 @@
 IR
 
 include "../api.b"
+include "../macros.b"
 
 ################################################################################
 # build and install the preprocessor hook function.
@@ -9,9 +10,9 @@ deftype MacroFunction
     function Value Value Value
 
 defvalue key-symbols
-    quote _Value "symbols"
+    quote "symbols"
 defvalue key-ir-env
-    quote _Value "ir-env"
+    quote "ir-env"
 
 define get-ir-env (env)
     function Environment Value
@@ -38,49 +39,40 @@ define get-handler (env head)
 
 define expand-macro (value env)
     MacroFunction
-    cond-br
-        call atom? value
-        label $is-atom
-            call error-message
-                call get-ir-env env
-                value
-                bitcast (global "" "unknown atom") rawstring
-            br
-                label $error
-                    ret
-                        null Value
-        label $is-expression
-            defvalue head
-                call at value
-            cond-br
-                call expression? value (quote _Value escape)
-                label $is-escape
-                    ret
+    ret
+        ?
+            call atom? value
+            splice
+                call error-message
+                    call get-ir-env env
+                    value
+                    bitcast (global "" "unknown atom") rawstring
+                null Value
+            splice
+                defvalue head
+                    call at value
+                ?
+                    call expression? value (quote escape)
+                    splice
                         call set-next
                             call next
                                 call at value
                             call next value
-                label $is-not-escape
-                    defvalue handler
-                        call get-handler env head
-                    cond-br
-                        icmp ==
-                            null (* MacroFunction)
-                            handler
-                        label $has-no-handler
-                            call error-message
-                                call get-ir-env env
-                                value
-                                bitcast (global "" "unknown special form, macro or function") rawstring
-                            br $error
-                        label $has-handler
-                            ret
+                    splice
+                        defvalue handler
+                            call get-handler env head
+                        ?
+                            icmp ==
+                                null (* MacroFunction)
+                                handler
+                            splice
+                                call error-message
+                                    call get-ir-env env
+                                    value
+                                    bitcast (global "" "unknown special form, macro or function") rawstring
+                                null Value
                                 call expand-macro
-                                    call
-                                        phi (* MacroFunction)
-                                            handler $is-not-escape
-                                        value
-                                        env
+                                    call handler value env
                                     env
 
 defvalue global-env
@@ -89,112 +81,33 @@ defvalue global-env
 
 define set-global-syntax (head handler)
     function void Value (* MacroFunction)
-    label ""
-        call set-key
-            call get-symbols
-                load global-env
-            head
-            call new-handle
-                bitcast
-                    handler
-                    * opaque
-        ret;
-
-define qquote-1 (value)
-    function Value Value
-    label ""
-        cond-br
-            call atom? value
-            label $is-not-list
-                ret
-                    call ref
-                        call set-next
-                            quote _Value quote
-                            call set-next
-                                value
-                                null Value
-            label $is-list
-                cond-br
-                    call expression? value
-                        quote _Value unquote
-                    label $is-unquote
-                        ret
-                            call next
-                                call at value
-                    label $is-not-unquote
-                        cond-br
-                            call expression? value
-                                quote _Value qquote
-                            label $is-qquote
-                                ret
-                                    call qquote-1
-                                        call qquote-1
-                                            call next
-                                                call at value
-                            label $is-not-qquote
-                                cond-br
-                                    call atom?
-                                        call at value
-                                    label $is-arbitrary-list
-                                        ret
-                                            call ref-set-next
-                                                quote _Value prepend
-                                                call set-next
-                                                    call qquote-1
-                                                        call at value
-                                                    call qquote-1
-                                                        call ref
-                                                            call next
-                                                                call at value
-                                    label $head-is-list
-                                        cond-br
-                                            call expression?
-                                                call at value
-                                                quote _Value unquote-splice
-                                            label $is-unquote-splice
-                                                ret
-                                                    call ref-set-next
-                                                        quote _Value append
-                                                        call set-next
-                                                            call next
-                                                                call at
-                                                                    call at value
-                                                            call qquote-1
-                                                                call ref
-                                                                    call next
-                                                                        call at value
-                                            $is-arbitrary-list
-
-define macro-qquote (value env)
-    MacroFunction
-    label ""
-        defvalue qq
-            call qquote-1
-                call next
-                    call at value
-        #call dump-value qq
-        ret qq
+    call set-key
+        call get-symbols
+            load global-env
+        head
+        call new-handle
+            bitcast
+                handler
+                * opaque
+    ret;
 
 # expression list is expanded chain-aware
 define expand-expression-list (value env)
     function Value Value Value
-    label $entry
-        cond-br
+    ret
+        ?
             icmp == value
                 null Value
-            label $empty
-                ret
-                    null Value
-            label $first-expr
+            null Value
+            splice
                 defvalue expanded-first-expr
                     call expand-macro value env
                 defvalue second-expr
                     call next expanded-first-expr
-                cond-br
+                ?
                     icmp == second-expr
                         null Value
-                    label $done
-                        ret expanded-first-expr
+                    expanded-first-expr
                     label $loop
                         defvalue expr
                             phi Value
@@ -214,7 +127,7 @@ define expand-expression-list (value env)
                         cond-br
                             icmp == next-expr
                                 null Value
-                            $done
+                            expanded-first-expr
                             $loop
 
 # all top level expressions go through the preprocessor, which then descends

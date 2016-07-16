@@ -192,6 +192,7 @@ class BangraDomain(Domain):
         'symbol-prefix':    ObjType(l_('symbol-prefix'), 'symbol-prefix'),
         'function': ObjType(l_('function'), 'function'),
         'var': ObjType(l_('var'), 'var'),
+        'ir-global': ObjType(l_('ir-global'), 'ir-global'),
         'ir-special': ObjType(l_('ir-special'), 'ir-special'),
         'ir-macro':    ObjType(l_('ir-macro'),    'ir-macro'),
         'ir-infix-macro':    ObjType(l_('ir-infix-macro'), 'ir-infix-macro'),
@@ -208,6 +209,7 @@ class BangraDomain(Domain):
         'function': BangraObject,
         'var': BangraObject,
 
+        'ir-global': BangraObject,
         'ir-special': BangraObject,
         'ir-macro': BangraObject,
         'ir-infix-macro': BangraObject,
@@ -224,6 +226,7 @@ class BangraDomain(Domain):
         'var':    BangraXRefRole(),
         'obj':    BangraXRefRole(),
 
+        'ir-global': BangraXRefRole(),
         'ir-special': BangraXRefRole(),
         'ir-macro': BangraXRefRole(),
         'ir-infix-macro': BangraXRefRole(),

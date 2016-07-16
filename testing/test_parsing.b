@@ -23,7 +23,11 @@ global test-quotes
                 else:
                     do-something;
 
-            # to
+            #
+            phi
+                typeof (unquote value-then)
+                unquote value-then; unquote label-then-br;
+                unquote value-else; unquote label-else-br;
             do
                 if (cond1) {
                     do-this;
