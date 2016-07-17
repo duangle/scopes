@@ -3967,6 +3967,9 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
 
     env->types["rawstring"] = LLVMPointerType(LLVMInt8Type(), 0);
     env->types["opaque"] = _opaque;
+
+    env->values["true"] = LLVMConstInt(LLVMInt1Type(), 1, 1);
+    env->values["false"] = LLVMConstInt(LLVMInt1Type(), 0, 1);
 }
 
 static void teardownRootEnvironment (Environment *env) {
