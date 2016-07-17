@@ -148,6 +148,9 @@ TODO:
 
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
+#include "llvm/IR/IRBuilder.h"
+//#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DebugInfo.h"
 #include "llvm/Support/Casting.h"
 
 #include "clang/Frontend/CompilerInstance.h"
@@ -2258,7 +2261,7 @@ static void dumpTraceback() {
 
 static void translateErrorV (Environment *env, const char *format, va_list args) {
     ++env->globals->compile_errors;
-    if (env->expr) {
+    if (env->expr && env->expr->anchor.isValid()) {
         Anchor anchor = env->expr->anchor;
         printf("%s:%i:%i: error: ", anchor.path, anchor.lineno, anchor.column);
     } else {
@@ -2562,8 +2565,21 @@ struct TranslateTable {
         if (!t.translate) return NULL;
         if (!verifyParameterCount(env, expr, t.mincount, t.maxcount))
             return NULL;
-        if ((t.flags & BlockInst) && (!verifyInBlock(env)))
-            return NULL;
+        if (t.flags & BlockInst) {
+            if (!verifyInBlock(env)) return NULL;
+#if 0 // TODO
+            if (expr->anchor.path) {
+                auto fileloc =
+                    llvm::DIFile::get(
+                        *llvm::unwrap(LLVMGetGlobalContext()),
+                        llvm::StringRef(expr->anchor.path, strlen(expr->anchor.path)),
+                        llvm::StringRef("", 0));
+                auto loc = llvm::DebugLoc::get(
+                    expr->anchor.lineno, expr->anchor.column, fileloc);
+                llvm::unwrap(env->getBuilder())->SetCurrentDebugLocation(loc);
+            }
+#endif
+        }
         return t.translate;
     }
 
@@ -3187,6 +3203,7 @@ static bool translateIncoming(Environment *env, ValueRef expr, LLVMValueRef phi)
     int branchcount = countOf(expr);
     LLVMValueRef values[branchcount];
     LLVMBasicBlockRef blocks[branchcount];
+    LLVMTypeRef phitype = LLVMTypeOf(phi);
     int i = 0;
     while (expr) {
         ValueRef expr_pair = expr;
@@ -3205,6 +3222,11 @@ static bool translateIncoming(Environment *env, ValueRef expr, LLVMValueRef phi)
         if (!value) return false;
         LLVMBasicBlockRef block = verifyBasicBlock(env, translateValue(env, expr_block));
         if (!block) return false;
+        if (phitype != LLVMTypeOf(value)) {
+            translateError(env, "phi node operand is not the same type as the result.");
+            return false;
+        }
+
         values[i] = value;
         blocks[i] = block;
 

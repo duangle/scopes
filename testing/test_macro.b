@@ -53,9 +53,13 @@ run
     loop i 0 (icmp u< i 10) (add i 1)
         call printf
             @str "-----\n"
-        call printf
-            @str "boing! %i\n"
-            i
+        ? (icmp == (urem i 2) 0)
+            call printf
+                @str "even %i\n"
+                i
+            call printf
+                @str "odd %i\n"
+                i
 
     loop expr
         call at (quote (a b c d))
@@ -64,3 +68,4 @@ run
 
         call dump-value expr
 
+dump-module;

@@ -280,12 +280,12 @@ define macro-loop (env expr)
         qquote
             splice
                 defvalue
-                    unquote label-entry
-                    this-block
-                defvalue
                     unquote value-init
                     unquote
                         call set-next init-expr (null Value)
+                defvalue
+                    unquote label-entry
+                    this-block
                 br
                     block
                         unquote label-cond
@@ -311,7 +311,7 @@ define macro-loop (env expr)
                 incoming
                     unquote param-varname
                     unquote (call set-next next-expr (null Value));
-                        unquote label-loop
+                        this-block
                 br
                     unquote label-cond
                 set-block
