@@ -57,3 +57,11 @@ run
         call printf
             @str "boing! %i\n"
             i
+
+    loop expr
+        call at (quote (a b c d))
+        icmp != expr (null Value)
+        call next expr
+
+        call dump-value expr
+
