@@ -31,7 +31,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     `llvm-config --cxxflags` \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
-    `llvm-config --libs engine` \
+    `llvm-config --libs engine passes option objcarcopts` \
     -Wl,--no-whole-archive \
 && clang++ \
     -o $DIR/bangra $DIR/bangra.cpp -DBANGRA_MAIN_CPP_IMPL -O2 -L$DIR \

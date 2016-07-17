@@ -78,6 +78,8 @@ void *bangra_llvm_module(Environment *env);
 void *bangra_llvm_engine(Environment *env);
 void *bangra_llvm_value(Environment *env, const char *name);
 void *bangra_llvm_type(Environment *env, const char *name);
+void *bangra_import_c_module(ValueRef dest,
+    const char *modulename, const char *path, const char **args, int argcount);
 
 extern int bang_argc;
 extern char **bang_argv;
@@ -1819,27 +1821,37 @@ void Environment::addQuote(LLVMValueRef value, ValueRef expr) {
 // CLANG SERVICES
 //------------------------------------------------------------------------------
 
-/*
-static void translateError (Environment *env, const char *format, ...);
-
 class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
 public:
-    Environment *env;
+    ValueRef dest;
+    ValueRef lastref;
     clang::ASTContext *Context;
-
-    NameTypeMap taggedStructs;
-    NameTypeMap namedStructs;
+    std::unordered_map<std::string, bool> done;
 
     CVisitor() : Context(NULL) {
     }
 
-    void SetContext(clang::ASTContext * ctx, Environment *env_) {
-        Context = ctx;
-        env = env_;
+    void appendValue(ValueRef decl) {
+        if (!lastref) {
+            llvm::cast<Pointer>(dest)->setAt(decl);
+            lastref = decl;
+        } else {
+            lastref->setNext(decl);
+            lastref = decl;
+        }
     }
 
-    bool GetFields(clang::RecordDecl * rd) {
+    void SetContext(clang::ASTContext * ctx, ValueRef dest_) {
+        Context = ctx;
+        dest = dest_;
+        lastref = NULL;
+    }
+
+    ValueRef GetFields(clang::RecordDecl * rd) {
         // ASTContext::getASTRecordLayout(const RecordDecl *D)
+
+        ValueRef head = NULL;
+        ValueRef tail = NULL;
 
         //check the fields of this struct, if any one of them is not understandable, then this struct becomes 'opaque'
         //that is, we insert the type, and link it to its llvm type, so it can be used in terra code
@@ -1862,18 +1874,27 @@ public:
                 declstr = declname.getAsString();
             }
             clang::QualType FT = it->getType();
-            Type fieldtype = TranslateType(FT);
-            if(fieldtype == Type::Undefined) {
+            ValueRef fieldtype = TranslateType(FT);
+            if(!fieldtype) {
                 opaque = true;
                 continue;
             }
+            ValueRef fielddef =
+                new Pointer(
+                    new Symbol(declstr.c_str(),
+                        fieldtype));
+            if (!tail) {
+                head = fielddef;
+            } else {
+                tail->setNext(fielddef);
+            }
+            tail = fielddef;
             //printf("%s\n", declstr.c_str());
         }
-        return !opaque;
-
+        return opaque?NULL:head;
     }
 
-    Type TranslateRecord(clang::RecordDecl * rd) {
+    ValueRef TranslateRecord(clang::RecordDecl * rd) {
         if(rd->isStruct() || rd->isUnion()) {
             std::string name = rd->getName();
 
@@ -1887,40 +1908,44 @@ public:
                 }
             }
 
-            Type structtype = (tagged)?taggedStructs[name]:namedStructs[name];
+            if (!done[name]) {
+                done[name] = true;
+                // size_t argpos = RegisterRecordType(Context->getRecordType(rd));
+                // thenamespace->setfield(name.c_str()); //register the type
 
-            if (structtype == Type::Undefined) {
-                structtype = Type::createStruct(name);
+                ValueRef fields = NULL;
 
-                if (tagged)
-                    taggedStructs[name] = structtype;
-                else
-                    namedStructs[name] = structtype;
-            }
-
-            // size_t argpos = RegisterRecordType(Context->getRecordType(rd));
-            // thenamespace->setfield(name.c_str()); //register the type
-
-            clang::RecordDecl * defn = rd->getDefinition();
-            if (defn != NULL) {
-                if (GetFields(defn)) {
-                    if(!defn->isUnion()) {
-                        //structtype.entries = {entry1, entry2, ... }
-                    } else {
-                        //add as a union:
-                        //structtype.entries = { {entry1,entry2,...} }
+                clang::RecordDecl * defn = rd->getDefinition();
+                if (defn != NULL) {
+                    fields = GetFields(defn);
+                    if (fields) {
+                        if(!defn->isUnion()) {
+                            //structtype.entries = {entry1, entry2, ... }
+                        } else {
+                            //add as a union:
+                            //structtype.entries = { {entry1,entry2,...} }
+                        }
                     }
                 }
+
+                const char *title = tagged?"struct":"typedef-struct";
+
+                appendValue(
+                    new Pointer(
+                        new Symbol(title,
+                            new Symbol(name.c_str(),
+                                fields))));
+
             }
 
-            return structtype;
+            return new Symbol(name.c_str());
         } else {
             //return ImportError("non-struct record types are not supported");
-            return Type::Undefined;
+            return NULL;
         }
     }
 
-    Type TranslateType(clang::QualType T) {
+    ValueRef TranslateType(clang::QualType T) {
         using namespace clang;
 
         T = Context->getCanonicalType(T);
@@ -1936,10 +1961,10 @@ public:
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
             case clang::BuiltinType::Void: {
-                return Type::Void;
+                return new Symbol("void");
             } break;
             case clang::BuiltinType::Bool: {
-                return Type::Bool;
+                return new Symbol("i1");
             } break;
             case clang::BuiltinType::Char_S:
             case clang::BuiltinType::Char_U:
@@ -1958,34 +1983,18 @@ public:
             case clang::BuiltinType::Char16:
             case clang::BuiltinType::Char32: {
                 int sz = Context->getTypeSize(T);
-                if (Ty->isUnsignedIntegerType()) {
-                    if (sz == 8)
-                        return Type::UInt8;
-                    else if (sz == 16)
-                        return Type::UInt16;
-                    else if (sz == 32)
-                        return Type::UInt32;
-                    else if (sz == 64)
-                        return Type::UInt64;
-                } else {
-                    if (sz == 8)
-                        return Type::Int8;
-                    else if (sz == 16)
-                        return Type::Int16;
-                    else if (sz == 32)
-                        return Type::Int32;
-                    else if (sz == 64)
-                        return Type::Int64;
-                }
+                return new Symbol(format("%c%i",
+                    Ty->isUnsignedIntegerType()?'u':'i',
+                    sz).c_str());
             } break;
             case clang::BuiltinType::Half: {
-                return Type::Half;
+                return new Symbol("half");
             } break;
             case clang::BuiltinType::Float: {
-                return Type::Float;
+                return new Symbol("float");
             } break;
             case clang::BuiltinType::Double: {
-                return Type::Double;
+                return new Symbol("double");
             } break;
             case clang::BuiltinType::LongDouble:
             case clang::BuiltinType::NullPtr:
@@ -2000,11 +2009,9 @@ public:
         case clang::Type::Pointer: {
             const PointerType *PTy = cast<PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            Type pointee = TranslateType(ETy);
-            if (pointee != Type::Undefined) {
-                if (pointee == Type::Void)
-                    pointee = Type::Opaque;
-                return Type::pointer(pointee);
+            ValueRef pointee = TranslateType(ETy);
+            if (pointee != NULL) {
+                return new Pointer(new Symbol("*", pointee));
             }
         } break;
         case clang::Type::VariableArray:
@@ -2012,19 +2019,21 @@ public:
             break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
-            Type at = TranslateType(ATy->getElementType());
-            if(at != Type::Undefined) {
+            ValueRef at = TranslateType(ATy->getElementType());
+            if(at) {
                 int sz = ATy->getSize().getZExtValue();
-                return Type::array(at, sz);
+                at->setNext(new Integer(sz));
+                return new Pointer(new Symbol("array", at));
             }
         } break;
         case clang::Type::ExtVector:
         case clang::Type::Vector: {
                 const VectorType *VT = cast<VectorType>(T);
-                Type at = TranslateType(VT->getElementType());
-                if(at != Type::Undefined) {
+                ValueRef at = TranslateType(VT->getElementType());
+                if(at) {
                     int n = VT->getNumElements();
-                    return Type::vector(at, n);
+                    at->setNext(new Integer(n));
+                    return new Pointer(new Symbol("vector", at));
                 }
         } break;
         case clang::Type::FunctionNoProto:
@@ -2038,7 +2047,7 @@ public:
         case clang::Type::ObjCInterface: break;
         case clang::Type::ObjCObjectPointer: break;
         case clang::Type::Enum: {
-            return Type::Int32;
+            return new Symbol("i32");
         } break;
         case clang::Type::BlockPointer:
         case clang::Type::MemberPointer:
@@ -2052,40 +2061,41 @@ public:
         //~ ss << "type not understood: " << T.getAsString().c_str() << " " << Ty->getTypeClass();
         //~ return ImportError(ss.str().c_str());
         // TODO: print error
-        return Type::Undefined;
+        return NULL;
     }
 
-    Type TranslateFuncType(const clang::FunctionType * f) {
+    ValueRef TranslateFuncType(const clang::FunctionType * f) {
 
         bool valid = true; // decisions about whether this function can be exported or not are delayed until we have seen all the potential problems
         clang::QualType RT = f->getReturnType();
 
-        Type returntype = TranslateType(RT);
+        ValueRef returntype = TranslateType(RT);
 
-        if (returntype == Type::Undefined)
+        if (!returntype)
             valid = false;
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
-        std::vector<Type> argtypes;
+        ValueRef tail = returntype;
         //proto is null if the function was declared without an argument list (e.g. void foo() and not void foo(void))
         //we don't support old-style C parameter lists, we just treat them as empty
         if(proto) {
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
-                Type paramtype = TranslateType(PT);
-                if(paramtype == Type::Undefined) {
+                ValueRef paramtype = TranslateType(PT);
+                if(!paramtype) {
                     valid = false; //keep going with attempting to parse type to make sure we see all the reasons why we cannot support this function
                 } else if(valid) {
-                    argtypes.push_back(paramtype);
+                    tail->setNext(paramtype);
+                    tail = paramtype;
                 }
             }
         }
 
         if(valid) {
-            return Type::function(returntype, argtypes, proto ? proto->isVariadic() : false);
+            return new Pointer(new Symbol("function", returntype));
         }
 
-        return Type::Undefined;
+        return NULL;
     }
 
     bool TraverseFunctionDecl(clang::FunctionDecl *f) {
@@ -2108,8 +2118,8 @@ public:
             //~ SetErrorReport(FuncName.c_str());
             //~ return true;
         //~ }
-        Type functype = TranslateFuncType(fntyp);
-        if (functype == Type::Undefined)
+        ValueRef functype = TranslateFuncType(fntyp);
+        if (!functype)
             return true;
 
         std::string InternalName = FuncName;
@@ -2127,7 +2137,11 @@ public:
 
         //LLVMDumpType(functype);
 
-        ;
+        appendValue(
+            new Pointer(
+                new Symbol("declare",
+                    new Symbol(FuncName.c_str(),
+                        functype))));
 
         // TODO
         //~ env->names[FuncName] = TypedValue(Type::pointer(functype),
@@ -2141,14 +2155,14 @@ public:
 
 class CodeGenProxy : public clang::ASTConsumer {
 public:
-    Environment *env;
+    ValueRef dest;
     CVisitor visitor;
 
-    CodeGenProxy(Environment *env_) : env(env_) {}
+    CodeGenProxy(ValueRef dest_) : dest(dest_) {}
     virtual ~CodeGenProxy() {}
 
     virtual void Initialize(clang::ASTContext &Context) {
-        visitor.SetContext(&Context, env);
+        visitor.SetContext(&Context, dest);
     }
 
     virtual bool HandleTopLevelDecl(clang::DeclGroupRef D) {
@@ -2161,11 +2175,11 @@ public:
 // see ASTConsumers.h for more utilities
 class BangEmitLLVMOnlyAction : public clang::EmitLLVMOnlyAction {
 public:
-    Environment *env;
+    ValueRef dest;
 
-    BangEmitLLVMOnlyAction(Environment *env_) :
+    BangEmitLLVMOnlyAction(ValueRef dest_) :
         EmitLLVMOnlyAction((llvm::LLVMContext *)LLVMGetGlobalContext()),
-        env(env_)
+        dest(dest_)
     {
     }
 
@@ -2174,12 +2188,12 @@ public:
 
         std::vector< std::unique_ptr<clang::ASTConsumer> > consumers;
         consumers.push_back(clang::EmitLLVMOnlyAction::CreateASTConsumer(CI, InFile));
-        consumers.push_back(llvm::make_unique<CodeGenProxy>(env));
+        consumers.push_back(llvm::make_unique<CodeGenProxy>(dest));
         return llvm::make_unique<clang::MultiplexConsumer>(std::move(consumers));
     }
 };
 
-static LLVMModuleRef importCModule (Environment *env,
+static LLVMModuleRef importCModule (ValueRef dest,
     const char *modulename, const char *path, const char **args, int argcount) {
     using namespace clang;
 
@@ -2210,19 +2224,16 @@ static LLVMModuleRef importCModule (Environment *env,
     LLVMModuleRef M = NULL;
 
     // Create and execute the frontend to generate an LLVM bitcode module.
-    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(env));
+    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(dest));
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
-        //LLVMDumpModule(M);
         //LLVMAddModule(env->globals->engine, M);
-    } else {
-        translateError(env, "compiler failed");
+        return M;
     }
 
-    return M;
+    return NULL;
 }
-*/
 
 //------------------------------------------------------------------------------
 // TRANSLATION
@@ -4136,8 +4147,7 @@ int bangra_main(int argc, char ** argv) {
         }
     }
 
-    if (expr) {
-        assert(bangra::isKindOf<bangra::Pointer>(expr));
+    if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
         bangra::gc_root = cons(expr, bangra::gc_root);
         bangra::compileMain(expr);
     } else {
@@ -4389,6 +4399,11 @@ ValueRef bangra_unique_symbol(const char *name) {
         name = "";
     auto symname = bangra::format("#%s%i", name, unique_symbol_counter++);
     return new bangra::Symbol(symname.c_str());
+}
+
+void *bangra_import_c_module(ValueRef dest,
+    const char *modulename, const char *path, const char **args, int argcount) {
+    return bangra::importCModule(dest, modulename, path, args, argcount);
 }
 
 //------------------------------------------------------------------------------
