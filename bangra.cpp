@@ -110,6 +110,7 @@ TODO:
 #include <sys/types.h>
 #ifdef _WIN32
 #include "mman.h"
+#include "stdlib_ex.h"
 #else
 #include <sys/mman.h>
 #include <unistd.h>
@@ -1795,7 +1796,7 @@ Environment *Environment::getMeta() const {
 
 bool Environment::hasErrors() const {
     return globals->compile_errors != 0;
-};
+}
 
 LLVMBuilderRef Environment::getBuilder() const {
     return globals->builder;
