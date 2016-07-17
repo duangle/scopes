@@ -4061,8 +4061,14 @@ static ValueRef parseLoader(const char *executable_path) {
     auto ptr = file->strptr();
     auto size = file->size();
     auto cursor = ptr + size - 1;
-    if (*cursor != '\n') return NULL;
-    cursor--;
+    while ((*cursor == '\n')
+        || (*cursor == '\r')
+        || (*cursor == ' ')) {
+        // skip the trailing text formatting garbage
+        // that win32 echo produces
+        cursor--;
+        if (cursor < ptr) return NULL;
+    }
     if (*cursor != ')') return NULL;
     cursor--;
     // seek backwards to find beginning of expression
