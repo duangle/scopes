@@ -1,3 +1,4 @@
+#!/usr/bin/env bangra
 IR
 
 # include C stdlib definitions
