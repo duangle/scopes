@@ -12,9 +12,10 @@ gcc -c -o mman.o %DIR%win32\mman.c -O2 -Wno-shift-count-overflow
 if errorlevel 1 goto :fail
 gcc -c -o realpath.o %DIR%win32\realpath.c -O2
 if errorlevel 1 goto :fail
-g++ -shared -o libbangra.dll %DIR%bangra.cpp mman.o realpath.o ^
-    -Wl,--output-def,libbangra.def,--out-implib,libbangra.a -I%DIR%win32 ^
-    -I%CLANGPATH%/include -Wno-vla -DBANGRA_CPP_IMPL -D_GNU_SOURCE ^
+g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
+    -I%DIR%win32 ^
+    -I%CLANGPATH%/include -Wno-vla -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL ^
+    -D_GNU_SOURCE ^
     -D_LIBCPP_HAS_NO_CONSTEXPR -Wall -W -Wno-unused-parameter -Wwrite-strings ^
     -Wcast-qual -Wno-missing-field-initializers -pedantic -Wno-long-long ^
     -Wno-maybe-uninitialized -Wdelete-non-virtual-dtor -Wno-comment ^
@@ -41,8 +42,6 @@ g++ -shared -o libbangra.dll %DIR%bangra.cpp mman.o realpath.o ^
     -Wl,--no-whole-archive ^
     -lLLVMInterpreter ^
     -lole32 -luuid
-if errorlevel 1 goto :fail
-g++ -o bangra.exe %DIR%bangra.cpp -DBANGRA_MAIN_CPP_IMPL -L%DIR% -lbangra -O2
 if errorlevel 1 goto :fail
 %DIR%bangra.exe %DIR%testing\test_bangra.b
 if errorlevel 1 goto :fail

@@ -9,6 +9,12 @@
 extern "C" {
 #endif
 
+#ifdef _WIN32
+#define BANGRA_EXTERN __declspec(dllexport)
+#else
+#define BANGRA_EXTERN
+#endif
+
 #ifdef BANGRA_CPP_IMPL
 namespace bangra {
 struct Value;
@@ -25,65 +31,65 @@ typedef Value *ValueRef;
 
 typedef ValueRef (*bangra_preprocessor)(Environment *, ValueRef );
 
-ValueRef bangra_dump_value(ValueRef expr);
-int bangra_main(int argc, char ** argv);
+BANGRA_EXTERN ValueRef bangra_dump_value(ValueRef expr);
+BANGRA_EXTERN int bangra_main(int argc, char ** argv);
 
-void bangra_set_preprocessor(const char *name, bangra_preprocessor f);
-bangra_preprocessor bangra_get_preprocessor(const char *name);
-void bangra_set_macro(Environment *env, const char *name, bangra_preprocessor f);
-bangra_preprocessor bangra_get_macro(Environment *env, const char *name);
+BANGRA_EXTERN void bangra_set_preprocessor(const char *name, bangra_preprocessor f);
+BANGRA_EXTERN bangra_preprocessor bangra_get_preprocessor(const char *name);
+BANGRA_EXTERN void bangra_set_macro(Environment *env, const char *name, bangra_preprocessor f);
+BANGRA_EXTERN bangra_preprocessor bangra_get_macro(Environment *env, const char *name);
 
-int bangra_get_kind(ValueRef expr);
-ValueRef bangra_at(ValueRef expr);
-ValueRef bangra_next(ValueRef expr);
-ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
-ValueRef bangra_ref(ValueRef lhs);
-ValueRef bangra_unique_symbol(const char *name);
+BANGRA_EXTERN int bangra_get_kind(ValueRef expr);
+BANGRA_EXTERN ValueRef bangra_at(ValueRef expr);
+BANGRA_EXTERN ValueRef bangra_next(ValueRef expr);
+BANGRA_EXTERN ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
+BANGRA_EXTERN ValueRef bangra_ref(ValueRef lhs);
+BANGRA_EXTERN ValueRef bangra_unique_symbol(const char *name);
 
-ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
-ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
+BANGRA_EXTERN ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
+BANGRA_EXTERN ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
 
-const char *bangra_string_value(ValueRef expr);
-void *bangra_handle_value(ValueRef expr);
-ValueRef bangra_handle(void *ptr);
-ValueRef bangra_table();
+BANGRA_EXTERN const char *bangra_string_value(ValueRef expr);
+BANGRA_EXTERN void *bangra_handle_value(ValueRef expr);
+BANGRA_EXTERN ValueRef bangra_handle(void *ptr);
+BANGRA_EXTERN ValueRef bangra_table();
 
-ValueRef bangra_string(const char *value);
-ValueRef bangra_symbol(const char *value);
+BANGRA_EXTERN ValueRef bangra_string(const char *value);
+BANGRA_EXTERN ValueRef bangra_symbol(const char *value);
 
-ValueRef bangra_real(double value);
-double bangra_real_value(ValueRef value);
+BANGRA_EXTERN ValueRef bangra_real(double value);
+BANGRA_EXTERN double bangra_real_value(ValueRef value);
 
-ValueRef bangra_integer(signed long long int value);
-signed long long int bangra_integer_value(ValueRef value);
+BANGRA_EXTERN ValueRef bangra_integer(signed long long int value);
+BANGRA_EXTERN signed long long int bangra_integer_value(ValueRef value);
 
-void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value);
-ValueRef bangra_get_key(ValueRef expr, ValueRef key);
-ValueRef bangra_set_anchor(
+BANGRA_EXTERN void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value);
+BANGRA_EXTERN ValueRef bangra_get_key(ValueRef expr, ValueRef key);
+BANGRA_EXTERN ValueRef bangra_set_anchor(
     ValueRef expr, const char *path, int lineno, int column, int offset);
-ValueRef bangra_set_anchor_mutable(
+BANGRA_EXTERN ValueRef bangra_set_anchor_mutable(
     ValueRef expr, const char *path, int lineno, int column, int offset);
-const char *bangra_anchor_path(ValueRef expr);
-int bangra_anchor_lineno(ValueRef expr);
-int bangra_anchor_column(ValueRef expr);
-int bangra_anchor_offset(ValueRef expr);
+BANGRA_EXTERN const char *bangra_anchor_path(ValueRef expr);
+BANGRA_EXTERN int bangra_anchor_lineno(ValueRef expr);
+BANGRA_EXTERN int bangra_anchor_column(ValueRef expr);
+BANGRA_EXTERN int bangra_anchor_offset(ValueRef expr);
 
-void bangra_error_message(Environment *env, ValueRef context, const char *format, ...);
+BANGRA_EXTERN void bangra_error_message(Environment *env, ValueRef context, const char *format, ...);
 
-int bangra_eq(Value *a, Value *b);
+BANGRA_EXTERN int bangra_eq(Value *a, Value *b);
 
-Environment *bangra_parent_env(Environment *env);
-Environment *bangra_meta_env(Environment *env);
-void *bangra_llvm_module(Environment *env);
-void *bangra_llvm_engine(Environment *env);
-void *bangra_llvm_value(Environment *env, const char *name);
-void *bangra_llvm_type(Environment *env, const char *name);
-void *bangra_import_c_module(ValueRef dest,
+BANGRA_EXTERN Environment *bangra_parent_env(Environment *env);
+BANGRA_EXTERN Environment *bangra_meta_env(Environment *env);
+BANGRA_EXTERN void *bangra_llvm_module(Environment *env);
+BANGRA_EXTERN void *bangra_llvm_engine(Environment *env);
+BANGRA_EXTERN void *bangra_llvm_value(Environment *env, const char *name);
+BANGRA_EXTERN void *bangra_llvm_type(Environment *env, const char *name);
+BANGRA_EXTERN void *bangra_import_c_module(ValueRef dest,
     const char *modulename, const char *path, const char **args, int argcount);
 
-extern int bang_argc;
-extern char **bang_argv;
-extern char *bang_executable_path;
+BANGRA_EXTERN extern int bang_argc;
+BANGRA_EXTERN extern char **bang_argv;
+BANGRA_EXTERN extern char *bang_executable_path;
 
 #if defined __cplusplus
 }
@@ -3977,6 +3983,7 @@ static void init() {
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
     LLVMInitializeNativeDisassembler();
+
 }
 
 //------------------------------------------------------------------------------
