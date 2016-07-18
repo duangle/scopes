@@ -232,6 +232,21 @@ static char parse_hexchar(char c) {
     return -1;
 }
 
+static char *extension(char *path) {
+    char *dot = path + strlen(path);
+    while (dot > path) {
+        switch(*dot) {
+            case '.': return dot; break;
+            case '/': case '\\': {
+                return NULL;
+            } break;
+            default: break;
+        }
+        dot--;
+    }
+    return NULL;
+}
+
 static size_t inplace_unescape(char *buf) {
     char *dst = buf;
     char *src = buf;
@@ -4201,7 +4216,13 @@ static ValueRef parseLoader(const char *executable_path) {
 }
 
 static bool compileStartupScript() {
-    std::string path = format("%s.b", bang_executable_path);
+    char *base = strdup(bang_executable_path);
+    char *ext = extension(base);
+    if (ext) {
+        *ext = 0;
+    }
+    std::string path = format("%s.b", base);
+    free(base);
 
     ValueRef expr = NULL;
     {
@@ -4250,15 +4271,17 @@ int bangra_main(int argc, char ** argv) {
             expr = bangra::parseLoader(bang_executable_path);
         }
 
-        if (!expr && argv[1]) {
+        if (!expr) {
             if (bang_executable_path) {
                 if (!bangra::compileStartupScript()) {
                     return 1;
                 }
             }
 
-            bangra::Parser parser;
-            expr = parser.parseFile(argv[1]);
+            if (argv[1]) {
+                bangra::Parser parser;
+                expr = parser.parseFile(argv[1]);
+            }
         }
     }
 
