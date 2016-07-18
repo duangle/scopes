@@ -4200,6 +4200,30 @@ static ValueRef parseLoader(const char *executable_path) {
     return parser.parseMemory(script_start, cursor, executable_path, script_start - ptr);
 }
 
+static bool compileStartupScript() {
+    std::string path = format("%s.b", bang_executable_path);
+
+    ValueRef expr = NULL;
+    {
+        auto file = MappedFile::open(path.c_str());
+        if (file) {
+            // keep a resident copy
+            char *pathcpy = strdup(path.c_str());
+            bangra::Parser parser;
+            expr = parser.parseMemory(
+                file->strptr(), file->strptr() + file->size(),
+                pathcpy);
+        }
+    }
+
+    if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
+        bangra::gc_root = cons(expr, bangra::gc_root);
+        bangra::compileMain(expr);
+    }
+
+    return true;
+}
+
 } // namespace bangra
 
 // C API
@@ -4215,8 +4239,6 @@ int bangra_main(int argc, char ** argv) {
 
     bangra::init();
 
-    int result = 0;
-
     ValueRef expr = NULL;
 
     if (argv) {
@@ -4224,9 +4246,17 @@ int bangra_main(int argc, char ** argv) {
             std::string loader = bangra::GetExecutablePath(argv[0]);
             // string must be kept resident
             bang_executable_path = strdup(loader.c_str());
+
             expr = bangra::parseLoader(bang_executable_path);
         }
+
         if (!expr && argv[1]) {
+            if (bang_executable_path) {
+                if (!bangra::compileStartupScript()) {
+                    return 1;
+                }
+            }
+
             bangra::Parser parser;
             expr = parser.parseFile(argv[1]);
         }
@@ -4236,10 +4266,10 @@ int bangra_main(int argc, char ** argv) {
         bangra::gc_root = cons(expr, bangra::gc_root);
         bangra::compileMain(expr);
     } else {
-        result = 1;
+        return 1;
     }
 
-    return result;
+    return 0;
 }
 
 ValueRef bangra_dump_value(ValueRef expr) {
