@@ -4311,12 +4311,43 @@ int bangra_eq(Value *a, Value *b) {
         auto kind = a->getKind();
         if (kind != b->getKind())
             return false;
-        if (kind == bangra::V_Symbol) {
-            bangra::Symbol *sa = llvm::cast<bangra::Symbol>(a);
-            bangra::Symbol *sb = llvm::cast<bangra::Symbol>(b);
-            if (sa->size() != sb->size()) return false;
-            if (!memcmp(sa->c_str(), sb->c_str(), sa->size())) return true;
-        }
+        switch (kind) {
+            case bangra::V_Symbol: {
+                bangra::Symbol *sa = llvm::cast<bangra::Symbol>(a);
+                bangra::Symbol *sb = llvm::cast<bangra::Symbol>(b);
+                if (sa->size() != sb->size()) return false;
+                if (!memcmp(sa->c_str(), sb->c_str(), sa->size())) return true;
+            } break;
+            case bangra::V_Real: {
+                bangra::Real *sa = llvm::cast<bangra::Real>(a);
+                bangra::Real *sb = llvm::cast<bangra::Real>(b);
+                return sa->getValue() == sb->getValue();
+            } break;
+            case bangra::V_Integer: {
+                bangra::Integer *sa = llvm::cast<bangra::Integer>(a);
+                bangra::Integer *sb = llvm::cast<bangra::Integer>(b);
+                return sa->getValue() == sb->getValue();
+            } break;
+            case bangra::V_Pointer: {
+                bangra::Pointer *sa = llvm::cast<bangra::Pointer>(a);
+                bangra::Pointer *sb = llvm::cast<bangra::Pointer>(b);
+                Value *na = sa->getAt();
+                Value *nb = sb->getAt();
+                while (na && nb) {
+                    if (!bangra_eq(na, nb))
+                        return false;
+                    na = na->getNext();
+                    nb = nb->getNext();
+                }
+                return na == nb;
+            } break;
+            case bangra::V_Handle: {
+                bangra::Handle *sa = llvm::cast<bangra::Handle>(a);
+                bangra::Handle *sb = llvm::cast<bangra::Handle>(b);
+                return sa->getValue() == sb->getValue();
+            } break;
+            default: break;
+        };
     }
     return false;
 }
