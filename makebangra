@@ -17,24 +17,21 @@ else
 fi
 clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
 && clang++ \
-    -shared \
-    -o $DIR/libbangra.so $DIR/bangra.cpp \
+    -o $DIR/bangra $DIR/bangra.cpp \
     -pedantic -g \
     -ferror-limit=1 \
     -Wno-vla-extension \
-    -DBANGRA_CPP_IMPL \
+    -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
     -lpthread -lm -ldl -ltinfo -lz \
     -lclangFrontend -lclangDriver \
     -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
     -lclangAnalysis \
     -lclangEdit -lclangAST -lclangLex -lclangBasic \
+    -Wl,--export-dynamic \
     `llvm-config --cxxflags` \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
     `llvm-config --libs engine passes option objcarcopts` \
     -Wl,--no-whole-archive \
-&& clang++ \
-    -o $DIR/bangra $DIR/bangra.cpp -DBANGRA_MAIN_CPP_IMPL -O2 -L$DIR \
-    -Wl,-rpath '-Wl,$ORIGIN' -lbangra \
 && $DIR/bangra $DIR/testing/test_bangra.b
 # && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b
