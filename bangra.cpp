@@ -221,6 +221,17 @@ std::function<R (Args...)> memo(R (*fn)(Args...)) {
     };
 }
 
+static char parse_hexchar(char c) {
+    if ((c >= '0') && (c <= '9')) {
+        return c - '0';
+    } else if ((c >= 'a') && (c <= 'f')) {
+        return c - 'a' + 10;
+    } else if ((c >= 'A') && (c <= 'F')) {
+        return c - 'A' + 10;
+    }
+    return -1;
+}
+
 static size_t inplace_unescape(char *buf) {
     char *dst = buf;
     char *src = buf;
@@ -235,6 +246,16 @@ static size_t inplace_unescape(char *buf) {
                 *dst = '\t';
             } else if (*src == 'r') {
                 *dst = '\r';
+            } else if (*src == 'x') {
+                char c0 = parse_hexchar(*(src + 1));
+                char c1 = parse_hexchar(*(src + 2));
+                if ((c0 >= 0) && (c1 >= 0)) {
+                    *dst = (c0 << 4) | c1;
+                    src += 2;
+                } else {
+                    src--;
+                    *dst = *src;
+                }
             } else {
                 *dst = *src;
             }
@@ -1627,10 +1648,11 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
         const String *a = llvm::cast<String>(e);
 		if (a->getKind() == V_String) putchar('"');
 		for (size_t i = 0; i < a->size(); i++) {
-			switch((*a)[i]) {
+            char c = (*a)[i];
+			switch(c) {
 			case '"': case '\\':
 				putchar('\\');
-                putchar((*a)[i]);
+                putchar(c);
 				break;
             case '\n':
                 printf("\\n");
@@ -1641,16 +1663,18 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
             case '\t':
                 printf("\\t");
                 break;
-            case 0:
-                printf("\\0");
-                break;
             case '[': case ']': case '{': case '}': case '(': case ')':
 				if (a->getKind() == V_Symbol)
 					putchar('\\');
-                putchar((*a)[i]);
+                putchar(c);
 				break;
             default:
-                putchar((*a)[i]);
+                if ((c < 32) || (c >= 127)) {
+                    unsigned char uc = c;
+                    printf("\\x%02x", uc);
+                } else {
+                    putchar(c);
+                }
                 break;
 			}
 		}
