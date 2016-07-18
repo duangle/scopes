@@ -25,6 +25,7 @@ g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
     -lclangCodeGen -lclangParse -lclangSema -lclangAnalysis -lclangEdit ^
     -lclangAST -lclangLex -lclangBasic ^
     -Wl,--whole-archive ^
+    -Wl,--export-all-symbols ^
     -lLLVMLTO -lLLVMObjCARCOpts ^
     -lLLVMMIRParser -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoDWARF ^
     -lLLVMTableGen -lLLVMLineEditor -lLLVMOrcJIT -lLLVMCppBackendCodeGen ^
