@@ -46,6 +46,9 @@ defvalue llvm-engine
 defvalue import-c-module
     declare "bangra_import_c_module"
         function LLVMModuleRef Value rawstring rawstring (* rawstring) i32
+defvalue import-c-string
+    declare "bangra_import_c_string"
+        function LLVMModuleRef Value rawstring rawstring rawstring (* rawstring) i32
 
 # methods that apply to all types
 #-------------------------------------------------------------------------------
