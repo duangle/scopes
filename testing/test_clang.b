@@ -30,6 +30,9 @@ typedef struct {
 typedef void (*testf)(int k, bool g, E value);
 
 T test(int, float, void*);
+
+extern struct { float v[3]; } somevar;
+
 "
 
 run

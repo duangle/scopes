@@ -2309,6 +2309,25 @@ public:
         return false;
     }
 
+    bool TraverseVarDecl(clang::VarDecl *vd) {
+        if (vd->isExternC()) {
+            Anchor anchor = anchorFromLocation(vd->getSourceRange().getBegin());
+
+            ValueRef type = TranslateType(vd->getType(), true);
+            if (!type) return false;
+
+            appendValue(
+                fixAnchor(anchor,
+                    new Pointer(
+                        new Symbol("global",
+                            new Symbol(vd->getName().data(), type)))));
+
+        }
+
+        return false;
+
+    }
+
     bool TraverseTypedefDecl(clang::TypedefDecl *td) {
 
         Anchor anchor = anchorFromLocation(td->getSourceRange().getBegin());
