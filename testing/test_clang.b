@@ -5,10 +5,16 @@ include "../macros.b"
 defvalue sourcecode
     @str "
 
-typedef int bool;
+typedef _Bool bool;
+
+typedef enum {
+    A,
+    B,C,D,
+    F = 1 << 12,
+} E;
 
 typedef struct {
-    int a;
+    int a[8];
     union {
         char *x;
         struct {
@@ -20,12 +26,6 @@ typedef struct {
         } K;
     };
 } T;
-
-typedef enum {
-    A,
-    B,C,D,
-    F,
-} E;
 
 typedef void (*testf)(int k, bool g, E value);
 

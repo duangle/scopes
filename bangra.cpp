@@ -189,6 +189,7 @@ TODO:
 
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/RecordLayout.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 
@@ -1968,7 +1969,7 @@ public:
     }
 
     ValueRef GetFields(clang::RecordDecl * rd) {
-        // ASTContext::getASTRecordLayout(const RecordDecl *D)
+        auto &rl = Context->getASTRecordLayout(rd);
 
         ValueRef head = NULL;
         ValueRef tail = NULL;
@@ -1979,6 +1980,11 @@ public:
         bool opaque = false;
         for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
             clang::DeclarationName declname = it->getDeclName();
+
+            unsigned idx = it->getFieldIndex();
+
+            auto offset = rl.getFieldOffset(idx);
+            //unsigned width = it->getBitWidthValue(*Context);
 
             if(it->isBitField() || (!it->isAnonymousStructOrUnion() && !declname)) {
                 opaque = true;
@@ -1997,7 +2003,8 @@ public:
                             new Symbol(
                                 it->isAnonymousStructOrUnion()?"$":
                                     declname.getAsString().c_str(),
-                                fieldtype)));
+                                cons(fieldtype,
+                                    new Integer(offset)))));
             if (!tail) {
                 head = fielddef;
             } else {
@@ -2010,7 +2017,12 @@ public:
 
     ValueRef TranslateRecord(clang::RecordDecl *rd, bool doInline) {
         if(rd->isStruct() || rd->isUnion()) {
+            auto &rl = Context->getASTRecordLayout(rd);
+
             std::string name = rd->getName();
+
+            auto align = rl.getAlignment();
+            auto size = rl.getSize();
 
             bool declare = false;
 
@@ -2046,10 +2058,11 @@ public:
 
                 ValueRef structdef =
                     fixAnchor(anchor,
-                        new Pointer(
-                            new Symbol(rd->isUnion()?"union":"struct",
-                                new Symbol(name.c_str(),
-                                    fields))));
+                    new Pointer(
+                    new Symbol(rd->isUnion()?"union":"struct",
+                    new Symbol(name.c_str(),
+                    new Integer(align.getQuantity(),
+                    new Integer(size.getQuantity(), fields))))));
 
                 if (declare)
                     appendValue(structdef);
