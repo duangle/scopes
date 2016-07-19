@@ -1931,8 +1931,9 @@ public:
     ValueRef dest;
     ValueRef lastref;
     clang::ASTContext *Context;
-    std::unordered_map<std::string, bool> record_done;
-    std::unordered_map<std::string, bool> enum_done;
+    std::unordered_map<clang::RecordDecl *, bool> record_defined;
+    std::unordered_map<clang::EnumDecl *, bool> enum_defined;
+    std::unordered_map<const char *, char *> path_cache;
 
     CVisitor() : Context(NULL) {
     }
@@ -1944,7 +1945,15 @@ public:
         auto PLoc = SM.getPresumedLoc(loc);
 
         if (PLoc.isValid()) {
-            anchor.path = PLoc.getFilename();
+            auto fname = PLoc.getFilename();
+            // get resident path by pointer
+            char *rpath = path_cache[fname];
+            if (!rpath) {
+                rpath = strdup(fname);
+                path_cache[fname] = rpath;
+            }
+
+            anchor.path = rpath;
             anchor.lineno = PLoc.getLine();
             anchor.column = PLoc.getColumn();
         }
@@ -1991,7 +2000,7 @@ public:
                 break;
             }
             clang::QualType FT = it->getType();
-            ValueRef fieldtype = TranslateType(FT, true);
+            ValueRef fieldtype = TranslateType(FT);
             if(!fieldtype) {
                 opaque = true;
                 break;
@@ -2015,99 +2024,50 @@ public:
         return opaque?NULL:head;
     }
 
-    ValueRef TranslateRecord(clang::RecordDecl *rd, bool doInline) {
-        if(rd->isStruct() || rd->isUnion()) {
+    ValueRef TranslateRecord(clang::RecordDecl *rd) {
+        if (!rd->isStruct() && !rd->isUnion()) return NULL;
+
+        std::string name = rd->getName();
+        if (name == "") {
+            name = "$";
+        }
+
+        const char *catname = rd->isUnion()?"union":"struct";
+
+        Anchor anchor = anchorFromLocation(rd->getSourceRange().getBegin());
+
+        clang::RecordDecl * defn = rd->getDefinition();
+        ValueRef body = NULL;
+        if (defn && !record_defined[rd]) {
+            ValueRef fields = GetFields(defn);
+
             auto &rl = Context->getASTRecordLayout(rd);
-
-            std::string name = rd->getName();
-
             auto align = rl.getAlignment();
             auto size = rl.getSize();
 
-            bool declare = false;
-
-            std::string typedef_name;
-
-            if(name == "") {
-                name = "$";
-                clang::TypedefNameDecl * decl = rd->getTypedefNameForAnonDecl();
-                if(decl) {
-                    typedef_name = decl->getName();
-                } else {
-                    typedef_name = "#error#";
-                }
-            } else {
-                typedef_name = name;
-                if (!record_done[name]) {
-                    record_done[name] = true;
-                    declare = true;
-                } else {
-                    doInline = false;
-                }
-            }
-
-            Anchor anchor = anchorFromLocation(rd->getSourceRange().getBegin());
-
-            if (declare || doInline) {
-                ValueRef fields = NULL;
-
-                clang::RecordDecl * defn = rd->getDefinition();
-                if (defn != NULL) {
-                    fields = GetFields(defn);
-                }
-
-                ValueRef structdef =
-                    fixAnchor(anchor,
-                    new Pointer(
-                    new Symbol(rd->isUnion()?"union":"struct",
-                    new Symbol(name.c_str(),
-                    new Integer(align.getQuantity(),
-                    new Integer(size.getQuantity(), fields))))));
-
-                if (declare)
-                    appendValue(structdef);
-
-                if (doInline)
-                    return structdef;
-            }
-
-            return fixAnchor(anchor, new Symbol(typedef_name.c_str()));
-        } else {
-            //return ImportError("non-struct record types are not supported");
-            return NULL;
+            record_defined[rd] = true;
+            body = new Integer(align.getQuantity(),
+                new Integer(size.getQuantity(), fields));
         }
+
+        return fixAnchor(anchor,
+            new Pointer(
+                new Symbol(catname,
+                    new Symbol(name.c_str(), body))));
     }
 
-    ValueRef TranslateEnum(clang::EnumDecl *ed, bool doInline) {
+    ValueRef TranslateEnum(clang::EnumDecl *ed) {
         std::string name = ed->getName();
-
-        bool declare = false;
-
-        std::string typedef_name;
 
         if(name == "") {
             name = "$";
-            clang::TypedefNameDecl * decl = ed->getTypedefNameForAnonDecl();
-            if(decl) {
-                typedef_name = decl->getName();
-            } else {
-                typedef_name = "#error#";
-            }
-        } else {
-            typedef_name = name;
-            if (!enum_done[name]) {
-                enum_done[name] = true;
-                declare = true;
-            } else {
-                doInline = false;
-            }
         }
 
         Anchor anchor = anchorFromLocation(ed->getIntegerTypeRange().getBegin());
 
-        if (declare || doInline) {
-            assert(ed->isComplete());
-
+        clang::EnumDecl * defn = ed->getDefinition();
+        ValueRef body = NULL;
+        if (defn && !enum_defined[ed]) {
             ValueRef head = NULL;
             ValueRef tail = NULL;
             for (auto it : ed->enumerators()) {
@@ -2128,37 +2088,47 @@ public:
                 tail = constdef;
             }
 
-            ValueRef type = TranslateType(ed->getIntegerType(), false);
-
-            ValueRef enumdef =
-                fixAnchor(anchor,
-                    new Pointer(
-                        new Symbol("enum",
-                            new Symbol(name.c_str(),
-                                cons(type, head)))));
-
-            if (declare)
-                appendValue(enumdef);
-
-            if (doInline)
-                return enumdef;
+            enum_defined[ed] = true;
+            ValueRef type = TranslateType(ed->getIntegerType());
+            body = cons(type, head);
         }
 
-        return fixAnchor(anchor, new Symbol(typedef_name.c_str()));
+        return fixAnchor(anchor,
+            new Pointer(
+                new Symbol("enum",
+                    new Symbol(name.c_str(), body))));
+
     }
 
-    ValueRef TranslateType(clang::QualType T, bool doInline) {
+    ValueRef TranslateType(clang::QualType T) {
         using namespace clang;
 
-        T = Context->getCanonicalType(T);
         const clang::Type *Ty = T.getTypePtr();
 
         switch (Ty->getTypeClass()) {
+        case clang::Type::Elaborated: {
+            const ElaboratedType *et = dyn_cast<ElaboratedType>(Ty);
+            return TranslateType(et->getNamedType());
+        } break;
+        case clang::Type::Paren: {
+            const ParenType *pt = dyn_cast<ParenType>(Ty);
+            return TranslateType(pt->getInnerType());
+        } break;
+        case clang::Type::Typedef: {
+            const TypedefType *tt = dyn_cast<TypedefType>(Ty);
+            TypedefNameDecl * td = tt->getDecl();
+            return new Symbol(td->getName().data());
+        } break;
         case clang::Type::Record: {
             const RecordType *RT = dyn_cast<RecordType>(Ty);
             RecordDecl * rd = RT->getDecl();
-            return TranslateRecord(rd, doInline);
+            return TranslateRecord(rd);
         }  break;
+        case clang::Type::Enum: {
+            const EnumType *ET = dyn_cast<EnumType>(Ty);
+            EnumDecl * ed = ET->getDecl();
+            return TranslateEnum(ed);
+        } break;
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
             case clang::BuiltinType::Void: {
@@ -2210,7 +2180,7 @@ public:
         case clang::Type::Pointer: {
             const PointerType *PTy = cast<PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            ValueRef pointee = TranslateType(ETy, doInline);
+            ValueRef pointee = TranslateType(ETy);
             if (pointee != NULL) {
                 return new Pointer(new Symbol("*", pointee));
             }
@@ -2220,7 +2190,7 @@ public:
             break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
-            ValueRef at = TranslateType(ATy->getElementType(), doInline);
+            ValueRef at = TranslateType(ATy->getElementType());
             if(at) {
                 int sz = ATy->getSize().getZExtValue();
                 at->setNext(new Integer(sz));
@@ -2230,7 +2200,7 @@ public:
         case clang::Type::ExtVector:
         case clang::Type::Vector: {
                 const VectorType *VT = cast<VectorType>(T);
-                ValueRef at = TranslateType(VT->getElementType(), doInline);
+                ValueRef at = TranslateType(VT->getElementType());
                 if(at) {
                     int n = VT->getNumElements();
                     at->setNext(new Integer(n));
@@ -2241,17 +2211,12 @@ public:
         case clang::Type::FunctionProto: {
             const FunctionType *FT = cast<FunctionType>(Ty);
             if (FT) {
-                return TranslateFuncType(FT, doInline);
+                return TranslateFuncType(FT);
             }
         } break;
         case clang::Type::ObjCObject: break;
         case clang::Type::ObjCInterface: break;
         case clang::Type::ObjCObjectPointer: break;
-        case clang::Type::Enum: {
-            const EnumType *ET = dyn_cast<EnumType>(Ty);
-            EnumDecl * ed = ET->getDecl();
-            return TranslateEnum(ed, doInline);
-        } break;
         case clang::Type::BlockPointer:
         case clang::Type::MemberPointer:
         case clang::Type::Atomic:
@@ -2265,12 +2230,12 @@ public:
         return NULL;
     }
 
-    ValueRef TranslateFuncType(const clang::FunctionType * f, bool doInline) {
+    ValueRef TranslateFuncType(const clang::FunctionType * f) {
 
         bool valid = true; // decisions about whether this function can be exported or not are delayed until we have seen all the potential problems
         clang::QualType RT = f->getReturnType();
 
-        ValueRef returntype = TranslateType(RT, false);
+        ValueRef returntype = TranslateType(RT);
 
         if (!returntype)
             valid = false;
@@ -2282,7 +2247,7 @@ public:
         if(proto) {
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
-                ValueRef paramtype = TranslateType(PT, false);
+                ValueRef paramtype = TranslateType(PT);
                 if(!paramtype) {
                     valid = false; //keep going with attempting to parse type to make sure we see all the reasons why we cannot support this function
                 } else if(valid) {
@@ -2300,21 +2265,25 @@ public:
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
-        TranslateRecord(rd, true);
-        return false;
+        if (rd->isFreeStanding()) {
+            appendValue(TranslateRecord(rd));
+        }
+        return true;
     }
 
     bool TraverseEnumDecl(clang::EnumDecl *ed) {
-        TranslateEnum(ed, true);
-        return false;
+        if (ed->isFreeStanding()) {
+            appendValue(TranslateEnum(ed));
+        }
+        return true;
     }
 
     bool TraverseVarDecl(clang::VarDecl *vd) {
         if (vd->isExternC()) {
             Anchor anchor = anchorFromLocation(vd->getSourceRange().getBegin());
 
-            ValueRef type = TranslateType(vd->getType(), true);
-            if (!type) return false;
+            ValueRef type = TranslateType(vd->getType());
+            if (!type) return true;
 
             appendValue(
                 fixAnchor(anchor,
@@ -2324,7 +2293,7 @@ public:
 
         }
 
-        return false;
+        return true;
 
     }
 
@@ -2332,8 +2301,8 @@ public:
 
         Anchor anchor = anchorFromLocation(td->getSourceRange().getBegin());
 
-        ValueRef type = TranslateType(td->getUnderlyingType(), true);
-        if (!type) return false;
+        ValueRef type = TranslateType(td->getUnderlyingType());
+        if (!type) return true;
 
         appendValue(
             fixAnchor(anchor,
@@ -2341,7 +2310,7 @@ public:
                     new Symbol("typedef",
                         new Symbol(td->getName().data(), type)))));
 
-        return false;
+        return true;
     }
 
     bool TraverseFunctionDecl(clang::FunctionDecl *f) {
@@ -2350,15 +2319,15 @@ public:
         const clang::FunctionType * fntyp = f->getType()->getAs<clang::FunctionType>();
 
         if(!fntyp)
-            return false;
+            return true;
 
         if(f->getStorageClass() == clang::SC_Static) {
-            return false;
+            return true;
         }
 
-        ValueRef functype = TranslateFuncType(fntyp, false);
+        ValueRef functype = TranslateFuncType(fntyp);
         if (!functype)
-            return false;
+            return true;
 
         std::string InternalName = FuncName;
         clang::AsmLabelAttr * asmlabel = f->getAttr<clang::AsmLabelAttr>();
@@ -2379,7 +2348,7 @@ public:
                         new Symbol(FuncName.c_str(),
                             functype)))));
 
-        return false;
+        return true;
     }
 };
 
