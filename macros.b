@@ -13,9 +13,9 @@ define macro-quote (env expr)
                     call join
                         call at
                             quote _Value (quote _Value)
-                        expr
+                        call next expr
 
-define macro-@str (env expr)
+define macro-&str (env expr)
     preprocessor-func
     ret
         call ref
@@ -26,7 +26,7 @@ define macro-@str (env expr)
                         call join
                             call at
                                 quote _Value (global "")
-                            expr
+                            call next expr
                 quote _Value rawstring
 
 execute
@@ -36,8 +36,8 @@ execute
             bitcast (global "" "quote") rawstring
             macro-quote
         call set-macro env
-            bitcast (global "" "@str") rawstring
-            macro-@str
+            bitcast (global "" "&str") rawstring
+            macro-&str
         ret;
 
 define qquote-1 (value)
@@ -93,7 +93,8 @@ define qquote-1 (value)
 define macro-qquote (env expr)
     preprocessor-func
     ret
-        call qquote-1 expr
+        call qquote-1
+            call next expr
 
 define macro-run (env expr)
     preprocessor-func
@@ -107,17 +108,18 @@ define macro-run (env expr)
                             quote (define "" (env))
                         call join
                             quote (function void Environment)
-                            call join expr
+                            call join
+                                call next expr
                                 quote (ret)
 
 execute
     define "" (env)
         function void Environment
         call set-macro env
-            @str "run"
+            &str "run"
             macro-run
         call set-macro env
-            @str "qquote"
+            &str "qquote"
             macro-qquote
         ret;
 
@@ -127,14 +129,15 @@ define macro-? (env expr)
         call next
             defvalue then-expr
                 call next
-                    defvalue condition expr
-    defvalue label-then (call unique-symbol (@str "then"))
-    defvalue label-else (call unique-symbol (@str "else"))
-    defvalue label-finally (call unique-symbol (@str "if-end"))
-    defvalue label-then-br (call unique-symbol (@str "then-br"))
-    defvalue label-else-br (call unique-symbol (@str "else-br"))
-    defvalue value-then (call unique-symbol (@str "value"))
-    defvalue value-else (call unique-symbol (@str "value"))
+                    defvalue condition
+                        call next expr
+    defvalue label-then (call unique-symbol (&str "then"))
+    defvalue label-else (call unique-symbol (&str "else"))
+    defvalue label-finally (call unique-symbol (&str "if-end"))
+    defvalue label-then-br (call unique-symbol (&str "then-br"))
+    defvalue label-else-br (call unique-symbol (&str "else-br"))
+    defvalue value-then (call unique-symbol (&str "value"))
+    defvalue value-else (call unique-symbol (&str "value"))
     cond-br
         icmp == else-expr (null Value)
         block $no-else
@@ -220,14 +223,15 @@ define macro-? (env expr)
 
 run
     call set-macro env
-        @str "?"
+        &str "?"
         macro-?
 
 define macro-if (env expr)
     preprocessor-func
     defvalue second-block
         call next
-            defvalue first-block expr
+            defvalue first-block
+                call next expr
 
     ret
         ?
@@ -268,12 +272,13 @@ define macro-loop (env expr)
                         call next
                             defvalue init-expr
                                 call next
-                                    defvalue varname expr
-    defvalue value-init (call unique-symbol (@str "init"))
-    defvalue label-entry (call unique-symbol (@str "entry"))
-    defvalue label-cond (call unique-symbol (@str "cond"))
-    defvalue label-loop (call unique-symbol (@str "loop"))
-    defvalue label-finally (call unique-symbol (@str "finally"))
+                                    defvalue varname
+                                        call next expr
+    defvalue value-init (call unique-symbol (&str "init"))
+    defvalue label-entry (call unique-symbol (&str "entry"))
+    defvalue label-cond (call unique-symbol (&str "cond"))
+    defvalue label-loop (call unique-symbol (&str "loop"))
+    defvalue label-finally (call unique-symbol (&str "finally"))
     defvalue param-varname
         call set-next varname (null Value)
     ret
@@ -319,8 +324,8 @@ define macro-loop (env expr)
 
 run
     call set-macro env
-        @str "if"
+        &str "if"
         macro-if
     call set-macro env
-        @str "loop"
+        &str "loop"
         macro-loop

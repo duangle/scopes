@@ -8,11 +8,11 @@ struct LLVMType
 struct LLVMExecutionEngine
 struct LLVMTargetMachine
 
-deftype LLVMModuleRef (* LLVMModule)
-deftype LLVMValueRef (* LLVMValue)
-deftype LLVMTypeRef (* LLVMType)
-deftype LLVMExecutionEngineRef (* LLVMExecutionEngine)
-deftype LLVMTargetMachineRef (* LLVMTargetMachine)
+deftype LLVMModuleRef (& LLVMModule)
+deftype LLVMValueRef (& LLVMValue)
+deftype LLVMTypeRef (& LLVMType)
+deftype LLVMExecutionEngineRef (& LLVMExecutionEngine)
+deftype LLVMTargetMachineRef (& LLVMTargetMachine)
 
 # Core.h
 #-------------------------------------------------------------------------------
@@ -37,6 +37,6 @@ defvalue LLVMObjectFile 1
 declare LLVMTargetMachineEmitToFile
     function i1 LLVMTargetMachineRef LLVMModuleRef rawstring
         i32 # LLVMCodeGenFileType
-        * rawstring
+        & rawstring
 
 #-------------------------------------------------------------------------------

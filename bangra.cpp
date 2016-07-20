@@ -2588,7 +2588,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
 
 static void setupRootEnvironment (Environment *env, const char *modulename);
 static void teardownRootEnvironment (Environment *env);
-static void compileModule (Environment *env, ValueRef expr);
+static bool compileModule (Environment *env, ValueRef expr);
 
 static LLVMValueRef translateValueList (Environment *env, ValueRef expr) {
     LLVMValueRef lastresult = NULL;
@@ -3886,9 +3886,13 @@ static LLVMValueRef tr_value_module (Environment *env, ValueRef expr) {
 
     setupRootEnvironment(&globals.rootenv, name);
 
-    compileModule(&globals.rootenv, expr_body);
+    bool result = compileModule(&globals.rootenv, expr_body);
 
     teardownRootEnvironment(&globals.rootenv);
+    if (!result) {
+        auto _ = env->with_expr(expr_name);
+        translateError(env, "while constructing module");
+    }
     return NULL;
 }
 
@@ -4001,7 +4005,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         head = translateKind<Symbol>(env, expr);
         if (!head) return NULL;
     } else if (auto macro = env->resolveMacro(head->getValue())) {
-        expr = macro(env, next(expr));
+        expr = macro(env, expr);
         if (env->hasErrors())
             return NULL;
         if (!expr) {
@@ -4122,6 +4126,29 @@ static LLVMTypeRef tr_type_typeof (Environment *env, ValueRef expr) {
     return LLVMTypeOf(value);
 }
 
+static LLVMTypeRef tr_type_elementtype (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (!type) return NULL;
+
+    LLVMTypeKind kind = LLVMGetTypeKind(type);
+    switch(kind) {
+        case LLVMPointerTypeKind:
+        case LLVMVectorTypeKind:
+        case LLVMArrayTypeKind: {
+        } break;
+        default: {
+            auto _ = env->with_expr(expr_arg);
+            translateError(env,
+                "Pointer, vector or array type expected.");
+            return NULL;
+        } break;
+    }
+
+    return LLVMGetElementType(type);
+}
+
 static LLVMTypeRef tr_type_array (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_type);
     UNPACK_ARG(expr, expr_count);
@@ -4186,8 +4213,9 @@ static void registerTypeTranslators() {
     auto &t = typeTranslators;
     t.set(tr_type_function, "function", 1, -1);
     t.set(tr_type_dumptype, "dumptype", 1, 1);
-    t.set(tr_type_pointer, "*", 1, 1);
+    t.set(tr_type_pointer, "&", 1, 1);
     t.set(tr_type_typeof, "typeof", 1, 1);
+    t.set(tr_type_elementtype, "@", 1, 1);
     t.set(tr_type_array, "array", 2, 2);
     t.set(tr_type_vector, "vector", 2, 2);
     t.set(tr_type_struct, "struct", 1, -1);
@@ -4298,7 +4326,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     return true;
 }
 
-static void compileModule (Environment *env, ValueRef expr) {
+static bool compileModule (Environment *env, ValueRef expr) {
     assert(expr);
     assert(env->getBuilder());
     assert(env->getModule());
@@ -4308,14 +4336,14 @@ static void compileModule (Environment *env, ValueRef expr) {
     std::string lastlang = "";
     while (true) {
         Symbol *head = translateKind<Symbol>(env, expr);
-        if (!head) return;
+        if (!head) return false;
         if (head->getValue() == "IR")
             break;
         auto preprocessor = preprocessors[head->getValue()];
         if (!preprocessor) {
             translateError(env, "unrecognized header: '%s'; try 'IR' instead.",
                 head->getValue().c_str());
-            return;
+            return false;
         }
         if (lastlang == head->getValue()) {
             translateError(env,
@@ -4325,29 +4353,31 @@ static void compileModule (Environment *env, ValueRef expr) {
         lastlang = head->getValue();
         expr = preprocessor(env, new Pointer(expr));
         if (env->hasErrors())
-            return;
+            return false;
         if (!expr) {
             translateError(env,
                 "preprocessor returned null.",
                 head->getValue().c_str());
-            return;
+            return false;
         }
         expr = at(expr);
     }
 
     expr = next(expr);
 
-    translateRootValueList (env, expr);
+    return translateRootValueList (env, expr);
 }
 
-static void compileMain (ValueRef expr) {
+static bool compileMain (ValueRef expr) {
     TranslationGlobals globals;
 
     setupRootEnvironment(&globals.rootenv, "main");
 
-    compileModule(&globals.rootenv, at(expr));
+    bool result = compileModule(&globals.rootenv, at(expr));
 
     teardownRootEnvironment(&globals.rootenv);
+
+    return result;
 }
 
 // This function isn't referenced outside its translation unit, but it
@@ -4445,7 +4475,7 @@ static bool compileStartupScript() {
 
     if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
         bangra::gc_root = cons(expr, bangra::gc_root);
-        bangra::compileMain(expr);
+        return bangra::compileMain(expr);
     }
 
     return true;

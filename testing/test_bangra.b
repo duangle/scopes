@@ -28,14 +28,14 @@ define get-symbols (env)
         call get-key env key-symbols
 
 define get-handler (env head)
-    function (* MacroFunction) Value Value
+    function (& MacroFunction) Value Value
     ret
         bitcast
             call handle-value
                 call get-key
                     call get-symbols env
                     head
-            * MacroFunction
+            & MacroFunction
 
 define expand-macro (value env)
     MacroFunction
@@ -63,7 +63,7 @@ define expand-macro (value env)
                             call get-handler env head
                         ?
                             icmp ==
-                                null (* MacroFunction)
+                                null (& MacroFunction)
                                 handler
                             splice
                                 call error-message
@@ -80,7 +80,7 @@ defvalue global-env
         null Value
 
 define set-global-syntax (head handler)
-    function void Value (* MacroFunction)
+    function void Value (& MacroFunction)
     call set-key
         call get-symbols
             load global-env
@@ -88,7 +88,7 @@ define set-global-syntax (head handler)
         call new-handle
             bitcast
                 handler
-                * opaque
+                & opaque
     ret;
 
 # expression list is expanded chain-aware
@@ -136,7 +136,7 @@ define global-preprocessor (ir-env value)
         call new-handle
             bitcast
                 ir-env
-                * opaque
+                & opaque
     defvalue result
         call expand-expression-list
             call next
@@ -173,7 +173,7 @@ module test-bangra bangra
             define test-func ()
                 function void
                 call printf
-                    @str "hello world!\n"
+                    &str "hello world!\n"
                 ret;
 
     escape

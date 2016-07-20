@@ -3,7 +3,7 @@ IR
 include "../macros.b"
 
 defvalue sourcecode
-    @str "#line 7 \"test_clang.b\"
+    &str "#line 7 \"test_clang.b\"
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -64,24 +64,24 @@ run
     defvalue opts
         alloca rawstring argc
     store
-        @str "-I/usr/lib/gcc/x86_64-linux-gnu/5/include"
+        &str "-I/usr/lib/gcc/x86_64-linux-gnu/5/include"
         getelementptr opts 0
     store
-        @str "-I/usr/local/include"
+        &str "-I/usr/local/include"
         getelementptr opts 1
     store
-        @str "-I/usr/lib/gcc/x86_64-linux-gnu/5/include-fixed"
+        &str "-I/usr/lib/gcc/x86_64-linux-gnu/5/include-fixed"
         getelementptr opts 2
     store
-        @str "-I/usr/include/x86_64-linux-gnu"
+        &str "-I/usr/include/x86_64-linux-gnu"
         getelementptr opts 3
     store
-        @str "-I/usr/include"
+        &str "-I/usr/include"
         getelementptr opts 4
     call import-c-string dest
-        @str "C-Module"
+        &str "C-Module"
         sourcecode
-        @str "memfile.cpp"
+        &str "memfile.cpp"
         opts #bitcast opts (* (* i8))
         argc
     call dump-value dest
@@ -89,9 +89,10 @@ run
         call ref
             null Value
     call import-c-module dest2
-        @str "C-Module"
-        @str "../bangra.h"
-        null (* rawstring)
+        &str "C-Module"
+        &str "../bangra.h"
+        #@str "../clang/include/llvm-c/Core.h"
+        null (& rawstring)
         0
     call dump-value dest2
 

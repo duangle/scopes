@@ -12,7 +12,7 @@ define main ()
         quote "hello w\xaa\x1förld!\n"
 
     call printf
-        @str "hello wörld!\n"
+        &str "hello wörld!\n"
 
     # return without argument
     ret;

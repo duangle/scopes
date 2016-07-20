@@ -43,7 +43,7 @@ define main ()
                 getelementptr
                     bitcast
                         Q
-                        * i32
+                        & i32
                     0
         Q
         Q

@@ -14,13 +14,15 @@ Built-in Types
 .. ir-type:: i64
 .. ir-type:: float
 .. ir-type:: double
+.. ir-type:: rawstring
+.. ir-type:: opaque
 
 Type Constructors
 -----------------
 
 .. ir-special:: (function return-type (? param-type ...) (? _:...))
 
-.. ir-special:: (* type)
+.. ir-special:: (& type)
 
 .. ir-special:: (array type count)
 
@@ -29,6 +31,8 @@ Type Constructors
 .. ir-special:: (struct name (? _:packed) (? type ...))
 
 .. ir-special:: (typeof value)
+
+.. ir-special:: (@ type)
 
 Definitions
 -----------
@@ -60,9 +64,9 @@ Constant Values
 
     Constructs a zero initializer for ``type``.
 
-.. ir-special:: (@str string)
+.. ir-special:: (&str string)
 
-    Constructs a global string constant and returns it as ``* i8``.
+    Constructs a global string constant and returns it as ``rawstring``.
 
 Flow Control
 ------------

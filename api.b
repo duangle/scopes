@@ -9,8 +9,8 @@ IR
 struct _Environment
 struct _Value
 
-deftype Environment (* _Environment)
-deftype Value (* _Value)
+deftype Environment (& _Environment)
+deftype Value (& _Value)
 
 defvalue value-type-none 0
 defvalue value-type-pointer 1
@@ -22,7 +22,7 @@ defvalue value-type-real 5
 defvalue argc
     declare-global "bang_argc" i32
 defvalue argv
-    declare-global "bang_argv" (* rawstring)
+    declare-global "bang_argv" (& rawstring)
 defvalue executable-path
     declare-global "bang_executable_path" rawstring
 
@@ -43,12 +43,16 @@ defvalue llvm-type
     declare "bangra_llvm_type" (function LLVMTypeRef Environment)
 defvalue llvm-engine
     declare "bangra_llvm_engine" (function LLVMExecutionEngineRef Environment)
+
+# C compatibility
+#-------------------------------------------------------------------------------
+
 defvalue import-c-module
     declare "bangra_import_c_module"
-        function LLVMModuleRef Value rawstring rawstring (* rawstring) i32
+        function LLVMModuleRef Value rawstring rawstring (& rawstring) i32
 defvalue import-c-string
     declare "bangra_import_c_string"
-        function LLVMModuleRef Value rawstring rawstring rawstring (* rawstring) i32
+        function LLVMModuleRef Value rawstring rawstring rawstring (& rawstring) i32
 
 # methods that apply to all types
 #-------------------------------------------------------------------------------
@@ -131,9 +135,9 @@ defvalue get-key
 #-------------------------------------------------------------------------------
 
 defvalue new-handle
-    declare "bangra_handle" (function Value (* opaque))
+    declare "bangra_handle" (function Value (& opaque))
 defvalue handle-value
-    declare "bangra_handle_value" (function (* opaque) Value)
+    declare "bangra_handle_value" (function (& opaque) Value)
 
 # metaprogramming
 #-------------------------------------------------------------------------------
@@ -144,13 +148,13 @@ deftype preprocessor-func
 defvalue error-message
     declare "bangra_error_message" (function void Environment Value rawstring ...)
 defvalue set-preprocessor
-    declare "bangra_set_preprocessor" (function void rawstring (* preprocessor-func))
+    declare "bangra_set_preprocessor" (function void rawstring (& preprocessor-func))
 defvalue get-preprocessor
-    declare "bangra_get_preprocessor" (function (* preprocessor-func) rawstring)
+    declare "bangra_get_preprocessor" (function (& preprocessor-func) rawstring)
 defvalue set-macro
-    declare "bangra_set_macro" (function void Environment rawstring (* preprocessor-func))
+    declare "bangra_set_macro" (function void Environment rawstring (& preprocessor-func))
 defvalue get-macro
-    declare "bangra_get_macro" (function (* preprocessor-func) Environment rawstring)
+    declare "bangra_get_macro" (function (& preprocessor-func) Environment rawstring)
 defvalue unique-symbol
     declare "bangra_unique_symbol" (function Value rawstring)
 

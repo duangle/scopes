@@ -8,4 +8,4 @@ include "macros.b"
 
 run
     call printf
-        @str "startup script loaded.\n"
+        &str "startup script loaded.\n"
