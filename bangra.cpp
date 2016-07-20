@@ -3066,6 +3066,10 @@ static LLVMValueRef tr_value_fcmp (Environment *env, ValueRef expr) {
     return LLVMBuildFCmp(env->getBuilder(), op, lhs, rhs, "");
 }
 
+static bool isConstantInteger(LLVMValueRef value) {
+    return LLVMIsConstant(value) && (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMIntegerTypeKind);
+}
+
 static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_array);
 
@@ -3078,6 +3082,12 @@ static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
 
     expr = next(expr);
 
+    LLVMTypeRef ptrtype = LLVMTypeOf(ptr);
+    if (LLVMGetTypeKind(ptrtype) != LLVMPointerTypeKind) {
+        translateError(env, "base value must be pointer.");
+        return NULL;
+    }
+
     int valuecount = countOf(expr);
     LLVMValueRef indices[valuecount];
     int i = 0;
@@ -3086,7 +3096,73 @@ static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
         if (indices[i] == NULL) {
             return NULL;
         }
-        all_const = all_const && LLVMIsConstant(indices[i]);
+
+        // for non-constant indices, we can only verify that the typing makes sense
+        // for constant indices, we can also verify the range
+        bool is_const = LLVMIsConstant(indices[i]);
+
+        LLVMTypeKind kind = LLVMGetTypeKind(ptrtype);
+        switch(kind) {
+            case LLVMPointerTypeKind: {
+                auto _ = env->with_expr(expr);
+                if (i != 0) {
+                    translateError(env, "subsequent indices must not be pointers.");
+                    return NULL;
+                }
+                ptrtype = LLVMGetElementType(ptrtype);
+            } break;
+            case LLVMStructTypeKind: {
+                auto _ = env->with_expr(expr);
+                if (LLVMTypeOf(indices[i]) != LLVMInt32Type()) {
+                    translateError(env, "index into struct must be i32.");
+                    return NULL;
+                }
+                if (!is_const) {
+                    translateError(env, "index into struct must be constant.");
+                    return NULL;
+                }
+                unsigned idx = (unsigned)LLVMConstIntGetSExtValue(indices[i]);
+                unsigned count = LLVMCountStructElementTypes(ptrtype);
+                if ((unsigned)idx >= count) {
+                    translateError(env,
+                        "struct field index is out of bounds.");
+                    return NULL;
+                }
+                ptrtype = LLVMStructGetTypeAtIndex(ptrtype, idx);
+            } break;
+            case LLVMVectorTypeKind: {
+                if (isConstantInteger(indices[i])) {
+                    unsigned idx = (unsigned)LLVMConstIntGetSExtValue(indices[i]);
+                    unsigned count = LLVMGetVectorSize(ptrtype);
+                    if (idx >= count) {
+                        auto _ = env->with_expr(expr);
+                        translateError(env,
+                            "vector index is out of bounds.");
+                    }
+                }
+                ptrtype = LLVMGetElementType(ptrtype);
+            } break;
+            case LLVMArrayTypeKind: {
+                if (isConstantInteger(indices[i])) {
+                    unsigned idx = (unsigned)LLVMConstIntGetSExtValue(indices[i]);
+                    unsigned count = LLVMGetArrayLength(ptrtype);
+                    if (idx >= count) {
+                        auto _ = env->with_expr(expr);
+                        translateError(env,
+                            "array index is out of bounds.");
+                    }
+                }
+                ptrtype = LLVMGetElementType(ptrtype);
+            } break;
+            default: {
+                auto _ = env->with_expr(expr);
+                translateError(env,
+                    "can not index value with this type. Struct, pointer, vector or array type expected.");
+                return NULL;
+            } break;
+        }
+
+        all_const = all_const && is_const;
         expr = next(expr);
         ++i;
     }

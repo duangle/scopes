@@ -3,13 +3,17 @@ IR
 include "../macros.b"
 
 defvalue sourcecode
-    @str "
-
+    @str "#line 7 \"test_clang.b\"
 #include <stdbool.h>
 #include <stdint.h>
 
 typedef struct _Q1 Q1;
 typedef struct _Q2 Q2;
+
+class X {
+public:
+    void method();
+};
 
 typedef enum {
     A,
@@ -45,7 +49,8 @@ struct _TT {
 };
 struct _TT test3(enum _EE, EE);
 
-enum XX { XA, XB } test4();
+enum XX { XA, XB };
+XX test4();
 
 extern struct { float v[3]; } somevar;
 
@@ -55,29 +60,30 @@ run
     defvalue dest
         call ref
             null Value
+    defvalue argc 5
     defvalue opts
-        alloca (array rawstring 5)
+        alloca rawstring argc
     store
         @str "-I/usr/lib/gcc/x86_64-linux-gnu/5/include"
-        getelementptr opts 0 0
+        getelementptr opts 0
     store
         @str "-I/usr/local/include"
-        getelementptr opts 0 1
+        getelementptr opts 1
     store
         @str "-I/usr/lib/gcc/x86_64-linux-gnu/5/include-fixed"
-        getelementptr opts 0 2
+        getelementptr opts 2
     store
         @str "-I/usr/include/x86_64-linux-gnu"
-        getelementptr opts 0 3
+        getelementptr opts 3
     store
         @str "-I/usr/include"
-        getelementptr opts 0 4
+        getelementptr opts 4
     call import-c-string dest
         @str "C-Module"
         sourcecode
-        @str "memfile.c"
-        bitcast opts (* (* i8))
-        5
+        @str "memfile.cpp"
+        opts #bitcast opts (* (* i8))
+        argc
     call dump-value dest
     defvalue dest2
         call ref
