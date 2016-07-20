@@ -2954,6 +2954,36 @@ static LLVMValueRef tr_value_sizeof (Environment *env, ValueRef expr) {
     return LLVMSizeOf(type);
 }
 
+static LLVMValueRef tr_value_lengthof (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (!type) return NULL;
+
+    unsigned size = 0;
+    switch(LLVMGetTypeKind(type)) {
+        case LLVMArrayTypeKind: {
+            size = LLVMGetArrayLength(type);
+        } break;
+        case LLVMVectorTypeKind: {
+            size = LLVMGetVectorSize(type);
+        } break;
+        case LLVMStructTypeKind: {
+            size = LLVMCountStructElementTypes(type);
+        } break;
+        case LLVMFunctionTypeKind: {
+            // plus return value (index 0)
+            size = LLVMCountParamTypes(type) + 1;
+        } break;
+        case LLVMPointerTypeKind: {
+            size = 1;
+        } break;
+        default: break;
+    }
+
+    return LLVMConstInt(LLVMInt32Type(), size, 1);
+}
+
 static LLVMValueRef tr_value_constant (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_value);
 
@@ -3241,6 +3271,27 @@ static LLVMValueRef tr_value_vectorof (Environment *env, ValueRef expr) {
     }
 }
 
+static LLVMValueRef tr_value_error (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_context);
+    UNPACK_ARG(expr, expr_msg);
+
+    LLVMValueRef msg = translateValue(env, expr_msg);
+    if (!msg) return NULL;
+
+    if (!LLVMIsConstantString(msg)) {
+        auto _ = env->with_expr(expr_msg);
+        translateError(env, "constant string expected.");
+        return NULL;
+    }
+
+    auto _ = env->with_expr(expr_context);
+    size_t size = 0;
+    const char *str = LLVMGetAsString(msg, &size);
+    translateError(env, "%.*s", size, str);
+
+    return NULL;
+}
+
 static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_array);
 
@@ -3309,6 +3360,7 @@ static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
                         auto _ = env->with_expr(expr);
                         translateError(env,
                             "vector index is out of bounds.");
+                        return NULL;
                     }
                 }
                 ptrtype = LLVMGetElementType(ptrtype);
@@ -3321,6 +3373,7 @@ static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
                         auto _ = env->with_expr(expr);
                         translateError(env,
                             "array index is out of bounds.");
+                        return NULL;
                     }
                 }
                 ptrtype = LLVMGetElementType(ptrtype);
@@ -3581,19 +3634,33 @@ static LLVMValueRef tr_value_select (Environment *env, ValueRef expr) {
 
     LLVMValueRef value_if = translateValue(env, expr_if);
     if (!value_if) return NULL;
-    LLVMValueRef value_then = translateValue(env, expr_then);
-    if (!value_then) return NULL;
-    LLVMValueRef value_else = translateValue(env, expr_else);
-    if (!value_else) return NULL;
-
-    if (LLVMIsConstant(value_if)
-        && LLVMIsConstant(value_then)
-        && LLVMIsConstant(value_else)) {
-        return LLVMConstSelect(value_if, value_then, value_else);
+    if (LLVMIsConstant(value_if)) {
+        if (LLVMTypeOf(value_if) != LLVMInt1Type()) {
+            auto _ = env->with_expr(expr_if);
+            translateError(env, "value type must be i1.");
+            return NULL;
+        }
+        long long x = LLVMConstIntGetSExtValue(value_if);
+        if (!x) {
+            return translateValue(env, expr_else);
+        } else {
+            return translateValue(env, expr_then);
+        }
     } else {
-        if (!verifyInBlock(env)) return NULL;
-        return LLVMBuildSelect(env->getBuilder(),
-            value_if, value_then, value_else, "");
+        LLVMValueRef value_then = translateValue(env, expr_then);
+        if (!value_then) return NULL;
+        LLVMValueRef value_else = translateValue(env, expr_else);
+        if (!value_else) return NULL;
+
+        if (LLVMIsConstant(value_if)
+            && LLVMIsConstant(value_then)
+            && LLVMIsConstant(value_else)) {
+            return LLVMConstSelect(value_if, value_then, value_else);
+        } else {
+            if (!verifyInBlock(env)) return NULL;
+            return LLVMBuildSelect(env->getBuilder(),
+                value_if, value_then, value_else, "");
+        }
     }
 }
 
@@ -4223,7 +4290,6 @@ static LLVMValueRef tr_value_module (Environment *env, ValueRef expr) {
     }
 */
 
-
 static void registerValueTranslators() {
     auto &t = valueTranslators;
 
@@ -4238,10 +4304,13 @@ static void registerValueTranslators() {
     t.set(tr_value_quote, "quote", 2, 2);
     t.set(tr_value_alignof, "alignof", 1, 1);
     t.set(tr_value_sizeof, "sizeof", 1, 1);
+    t.set(tr_value_lengthof, "lengthof", 1, 1);
 
     t.set(tr_value_structof, "structof", 1, -1);
     t.set(tr_value_arrayof, "arrayof", 1, -1);
     t.set(tr_value_vectorof, "vectorof", 1, -1);
+
+    t.set(tr_value_error, "error", 2, 2);
 
     setCastOp<LLVMBuildTrunc, LLVMConstTrunc>("trunc");
     setCastOp<LLVMBuildZExt, LLVMConstZExt>("zext");
@@ -4452,27 +4521,84 @@ static LLVMTypeRef tr_type_typeof (Environment *env, ValueRef expr) {
     return LLVMTypeOf(value);
 }
 
-static LLVMTypeRef tr_type_elementtype (Environment *env, ValueRef expr) {
+static LLVMTypeRef tr_type_getelementtype (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_arg);
 
-    LLVMTypeRef type = translateType(env, expr_arg);
-    if (!type) return NULL;
+    LLVMTypeRef ptrtype = translateType(env, expr_arg);
+    if (!ptrtype) return NULL;
 
-    LLVMTypeKind kind = LLVMGetTypeKind(type);
-    switch(kind) {
-        case LLVMPointerTypeKind:
-        case LLVMVectorTypeKind:
-        case LLVMArrayTypeKind: {
-        } break;
-        default: {
-            auto _ = env->with_expr(expr_arg);
-            translateError(env,
-                "Pointer, vector or array type expected.");
+    expr = next(expr);
+
+    int i = 0;
+    while (expr) {
+        long long index;
+        if (!translateConstInt(env, expr, index)) {
             return NULL;
-        } break;
+        }
+
+        LLVMTypeKind kind = LLVMGetTypeKind(ptrtype);
+        switch(kind) {
+            case LLVMPointerTypeKind: {
+                ptrtype = LLVMGetElementType(ptrtype);
+            } break;
+            case LLVMFunctionTypeKind: {
+                unsigned count = LLVMCountParamTypes(ptrtype);
+                if (index == 0) {
+                    return LLVMGetReturnType(ptrtype);
+                } else if ((index >= 1) && (index <= (long long)count)) {
+                    LLVMTypeRef paramtypes[count];
+                    LLVMGetParamTypes(ptrtype, paramtypes);
+                    ptrtype = paramtypes[index - 1];
+                } else {
+                    auto _ = env->with_expr(expr);
+                    translateError(env,
+                        "function parameter index is out of bounds.");
+                    return NULL;
+                }
+            } break;
+            case LLVMStructTypeKind: {
+                unsigned count = LLVMCountStructElementTypes(ptrtype);
+                if ((unsigned)index >= count) {
+                    auto _ = env->with_expr(expr);
+                    translateError(env,
+                        "struct field index is out of bounds.");
+                    return NULL;
+                }
+                ptrtype = LLVMStructGetTypeAtIndex(ptrtype, index);
+            } break;
+            case LLVMVectorTypeKind: {
+                unsigned count = LLVMGetVectorSize(ptrtype);
+                if ((unsigned)index >= count) {
+                    auto _ = env->with_expr(expr);
+                    translateError(env,
+                        "vector index is out of bounds.");
+                    return NULL;
+                }
+                ptrtype = LLVMGetElementType(ptrtype);
+            } break;
+            case LLVMArrayTypeKind: {
+                unsigned count = LLVMGetArrayLength(ptrtype);
+                if ((unsigned)index >= count) {
+                    auto _ = env->with_expr(expr);
+                    translateError(env,
+                        "array index is out of bounds.");
+                    return NULL;
+                }
+                ptrtype = LLVMGetElementType(ptrtype);
+            } break;
+            default: {
+                auto _ = env->with_expr(expr);
+                translateError(env,
+                    "can not index value with this type. Function, struct, pointer, vector or array type expected.");
+                return NULL;
+            } break;
+        }
+
+        expr = next(expr);
+        ++i;
     }
 
-    return LLVMGetElementType(type);
+    return ptrtype;
 }
 
 static LLVMTypeRef tr_type_array (Environment *env, ValueRef expr) {
@@ -4545,7 +4671,7 @@ static void registerTypeTranslators() {
     t.set(tr_type_dumptype, "dumptype", 1, 1);
     t.set(tr_type_pointer, "&", 1, 1);
     t.set(tr_type_typeof, "typeof", 1, 1);
-    t.set(tr_type_elementtype, "@", 1, 1);
+    t.set(tr_type_getelementtype, "getelementtype", 1, -1);
     t.set(tr_type_array, "array", 2, 2);
     t.set(tr_type_vector, "vector", 2, 2);
     t.set(tr_type_struct, "struct", 1, -1);

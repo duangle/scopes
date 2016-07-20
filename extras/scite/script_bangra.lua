@@ -24,7 +24,7 @@ keyword_str = getprop("keywords.bangra_ir") or
     "bangra import-c dump-module function"
         .. " call int real defvalue deftype phi br ret cond-br defstruct"
         .. " trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr"
-        .. " bitcast addrspacecast alignof sizeof undef"
+        .. " bitcast addrspacecast alignof sizeof lengthof getelementtype undef error"
         .. " structof arrayof vectorof insertvalue insertelement shufflevector"
         .. " getelementptr define declare type packed execute module vector array struct"
         .. " splice null global quote typeof dump extractelement extractvalue load store ..."

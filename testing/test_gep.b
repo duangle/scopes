@@ -7,10 +7,24 @@ include "../macros.b"
 defstruct RT i8 (array (array i32 20) 10) i8
 defstruct ST i32 double RT
 
+dumptype
+    getelementtype (& ST) 1 2 1 5 13
+
 define foo (s)
     function (& i32) (& ST)
     ret
         getelementptr s 1 2 1 5 13
+
+dump
+    icmp ==
+        lengthof
+            getelementtype
+                typeof foo
+                0
+        2
+
+dumptype
+    getelementtype (typeof foo) 0 0
 
 #dump-module;
 run

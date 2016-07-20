@@ -10,6 +10,10 @@ dumptype
 defvalue sumv
     add 2 3
 
+select false
+    error 0 "should never be triggered!"
+    true
+
 dump
     structof "" 1 2 3.5
 dump

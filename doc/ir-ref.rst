@@ -32,7 +32,7 @@ Type Constructors
 
 .. ir-special:: (typeof value)
 
-.. ir-special:: (@ type)
+.. ir-special:: (getelementtype type (? index ...))
 
 Definitions
 -----------
@@ -78,6 +78,8 @@ Constant Values
 .. ir-special:: (alignof type)
 
 .. ir-special:: (sizeof type)
+
+.. ir-special:: (lengthof type)
 
 .. ir-macro:: (&str string)
 
@@ -272,6 +274,8 @@ Metaprogramming
     programs to create and process properly anchored expressions.
 
 .. ir-special:: (splice (? expression ...))
+
+.. ir-special:: (error message-string)
 
 .. ir-special:: (nop)
 
