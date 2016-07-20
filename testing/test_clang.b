@@ -1,6 +1,7 @@
 IR
 
 include "../macros.b"
+include "../libc.b"
 
 defvalue sourcecode
     &str "#line 7 \"test_clang.b\"
@@ -54,7 +55,18 @@ XX test4();
 
 extern struct { float v[3]; } somevar;
 
+extern \"C\" {
+
+int embedded_func() {
+    return 303;
+}
+
+} // extern C
+
 "
+
+declare embedded_func
+    function i32
 
 run
     defvalue dest
@@ -78,21 +90,26 @@ run
     store
         &str "-I/usr/include"
         getelementptr opts 4
-    call import-c-string dest
-        &str "C-Module"
-        sourcecode
-        &str "memfile.cpp"
-        opts #bitcast opts (* (* i8))
-        argc
+    defvalue MI
+        call import-c-string dest
+            sourcecode
+            &str "memfile.cpp"
+            opts #bitcast opts (* (* i8))
+            argc
+    call link-llvm-module env MI
     call dump-value dest
     defvalue dest2
         call ref
             null Value
-    call import-c-module dest2
-        &str "C-Module"
-        &str "../bangra.h"
-        #@str "../clang/include/llvm-c/Core.h"
-        null (& rawstring)
-        0
+    defvalue M
+        call import-c-module dest2
+            &str "../bangra.h"
+            #@str "../clang/include/llvm-c/Core.h"
+            null (& rawstring)
+            0
     call dump-value dest2
 
+run
+    call printf
+        &str "embedded_func() == %i\n"
+        call embedded_func

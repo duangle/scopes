@@ -27,6 +27,8 @@ declare LLVMDumpModule (function void LLVMModuleRef)
 
 declare LLVMGetExecutionEngineTargetMachine
     function LLVMTargetMachineRef LLVMExecutionEngineRef
+declare LLVMAddModule
+    function void LLVMExecutionEngineRef LLVMModuleRef
 
 # TargetMachine.h
 #-------------------------------------------------------------------------------

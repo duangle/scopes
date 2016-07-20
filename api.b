@@ -43,16 +43,18 @@ defvalue llvm-type
     declare "bangra_llvm_type" (function LLVMTypeRef Environment)
 defvalue llvm-engine
     declare "bangra_llvm_engine" (function LLVMExecutionEngineRef Environment)
+defvalue link-llvm-module
+    declare "bangra_link_llvm_module" (function void Environment LLVMModuleRef)
 
 # C compatibility
 #-------------------------------------------------------------------------------
 
 defvalue import-c-module
     declare "bangra_import_c_module"
-        function LLVMModuleRef Value rawstring rawstring (& rawstring) i32
+        function LLVMModuleRef Value rawstring (& rawstring) i32
 defvalue import-c-string
     declare "bangra_import_c_string"
-        function LLVMModuleRef Value rawstring rawstring rawstring (& rawstring) i32
+        function LLVMModuleRef Value rawstring rawstring (& rawstring) i32
 
 # methods that apply to all types
 #-------------------------------------------------------------------------------

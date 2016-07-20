@@ -41,10 +41,12 @@ void *bangra_llvm_module(Environment *env);
 void *bangra_llvm_value(Environment *env, const char *name);
 void *bangra_llvm_type(Environment *env, const char *name);
 void *bangra_llvm_engine(Environment *env);
+void bangra_link_llvm_module(Environment *env, void *module);
 void *bangra_import_c_module(ValueRef dest,
-    const char *modulename, const char *path, const char **args, int argcount);
+    const char *path, const char **args, int argcount);
 void *bangra_import_c_string(ValueRef dest,
-    const char *modulename, const char *str, const char *path, const char **args, int argcount);
+    const char *str, const char *path, const char **args, int argcount);
+
 
 // methods that apply to all types
 //------------------------------------------------------------------------------
@@ -1741,6 +1743,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
 typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
 typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
+typedef std::list< LLVMModuleRef > GlobalModuleList;
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 
 //------------------------------------------------------------------------------
@@ -1862,6 +1865,8 @@ struct TranslationGlobals {
     Environment *meta;
     // global pointers
     GlobalPtrList globalptrs;
+    // global modules
+    GlobalModuleList globalmodules;
     // root environment
     Environment rootenv;
 
@@ -2393,7 +2398,7 @@ public:
 };
 
 static LLVMModuleRef importCModule (ValueRef dest,
-    const char *modulename, const char *path, const char **args, int argcount,
+    const char *path, const char **args, int argcount,
     const char *buffer = NULL) {
     using namespace clang;
 
@@ -2432,7 +2437,6 @@ static LLVMModuleRef importCModule (ValueRef dest,
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
-        //LLVMAddModule(env->globals->engine, M);
         return M;
     }
 
@@ -3850,6 +3854,10 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
         LLVMAddGlobalMapping(engine, std::get<0>(it), std::get<1>(it));
     }
 
+    for (auto m : env->globals->globalmodules) {
+        LLVMAddModule(engine, m);
+    }
+
     //printf("running...\n");
     LLVMRunStaticConstructors(engine);
 
@@ -3993,7 +4001,6 @@ static void registerValueTranslators() {
     t.set(tr_value_nop, "nop", 0, 0);
     t.set(tr_value_execute, "execute", 1, 1);
     t.set(tr_value_module, "module", 1, -1);
-
 }
 
 static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
@@ -4806,15 +4813,18 @@ ValueRef bangra_unique_symbol(const char *name) {
     return new bangra::Symbol(symname.c_str());
 }
 
+void bangra_link_llvm_module(Environment *env, void *module) {
+    env->globals->globalmodules.push_back((LLVMModuleRef)module);
+}
+
 void *bangra_import_c_module(ValueRef dest,
-    const char *modulename, const char *path, const char **args, int argcount) {
-    return bangra::importCModule(dest, modulename, path, args, argcount);
+    const char *path, const char **args, int argcount) {
+    return bangra::importCModule(dest, path, args, argcount);
 }
 
 void *bangra_import_c_string(ValueRef dest,
-    const char *modulename, const char *str, const char *path,
-    const char **args, int argcount) {
-    return bangra::importCModule(dest, modulename, path, args, argcount, str);
+    const char *str, const char *path, const char **args, int argcount) {
+    return bangra::importCModule(dest, path, args, argcount, str);
 }
 
 //------------------------------------------------------------------------------
