@@ -3311,6 +3311,19 @@ static LLVMValueRef tr_value_select (Environment *env, ValueRef expr) {
     return LLVMBuildSelect(env->getBuilder(), value_if, value_then, value_else, "");
 }
 
+static LLVMValueRef tr_value_va_arg (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_list);
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMValueRef value_list = translateValue(env, expr_list);
+    if (!value_list) return NULL;
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    return LLVMBuildVAArg(env->getBuilder(), value_list, type, "");
+}
+
 static LLVMValueRef tr_value_deftype (Environment *env, ValueRef expr) {
 
     UNPACK_ARG(expr, expr_name);
@@ -3990,6 +4003,7 @@ static void registerValueTranslators() {
     t.set(tr_value_cond_br, "cond-br", 3, 3, BlockInst);
     t.set(tr_value_ret, "ret", 0, 1, BlockInst);
     t.set(tr_value_select, "select", 3, 3, BlockInst);
+    t.set(tr_value_va_arg, "va_arg", 2, 2, BlockInst);
     t.set(tr_value_declare, "declare", 2, 2);
     t.set(tr_value_call, "call", 1, -1, BlockInst);
     t.set(tr_value_invoke, "invoke", 3, 3, BlockInst);
