@@ -2799,12 +2799,16 @@ static TranslateTable<LLVMValueRef> valueTranslators;
 typedef LLVMValueRef (*LLVMBinaryOpBuilderFunc)(
     LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
 
+typedef LLVMValueRef (*LLVMCastBuilderFunc)(
+    LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
+typedef LLVMValueRef (*LLVMConstCastFunc)(
+    LLVMValueRef, LLVMTypeRef);
+
 template<LLVMBinaryOpBuilderFunc func>
 void setBinaryOp(const std::string &name) {
     struct TranslateValueBinary {
         static LLVMValueRef translate (Environment *env, ValueRef expr) {
-            if (!verifyInBlock(env)) return NULL;
-
+            //if (!verifyInBlock(env)) return NULL;
             UNPACK_ARG(expr, expr_lhs);
             UNPACK_ARG(expr, expr_rhs);
             LLVMValueRef lhs = translateValue(env, expr_lhs);
@@ -2817,6 +2821,32 @@ void setBinaryOp(const std::string &name) {
     };
 
     valueTranslators.set(TranslateValueBinary::translate, name, 2, 2, BlockInst);
+}
+
+template<LLVMCastBuilderFunc func, LLVMConstCastFunc const_func>
+void setCastOp(const std::string &name) {
+    struct TranslateValueCast {
+        static LLVMValueRef translate (Environment *env, ValueRef expr) {
+            UNPACK_ARG(expr, expr_value);
+            UNPACK_ARG(expr, expr_type);
+
+            LLVMValueRef value = translateValue(env, expr_value);
+            if (!value) return NULL;
+
+            LLVMTypeRef type = translateType(env, expr_type);
+            if (!type) return NULL;
+
+            if (LLVMIsConstant(value)) {
+                return const_func(value, type);
+
+            } else {
+                if (!verifyInBlock(env)) return NULL;
+                return func(env->getBuilder(), value, type, "");
+            }
+        }
+    };
+
+    valueTranslators.set(TranslateValueCast::translate, name, 2, 2);
 }
 
 static LLVMValueRef tr_value_int (Environment *env, ValueRef expr) {
@@ -2951,51 +2981,6 @@ static LLVMValueRef tr_value_quote (Environment *env, ValueRef expr) {
     LLVMSetGlobalConstant(result, true);
 
     return result;
-}
-
-static LLVMValueRef tr_value_bitcast (Environment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_value);
-    UNPACK_ARG(expr, expr_type);
-
-    LLVMValueRef value = translateValue(env, expr_value);
-    if (!value) return NULL;
-
-    LLVMTypeRef type = translateType(env, expr_type);
-    if (!type) return NULL;
-
-    if (LLVMIsConstant(value)) {
-        return LLVMConstBitCast(value, type);
-
-    } else {
-        if (!verifyInBlock(env)) return NULL;
-        return LLVMBuildBitCast(env->getBuilder(), value, type, "");
-    }
-}
-
-static LLVMValueRef tr_value_ptrtoint (Environment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_value);
-    UNPACK_ARG(expr, expr_type);
-
-    LLVMValueRef value = translateValue(env, expr_value);
-    if (!value) return NULL;
-
-    LLVMTypeRef type = translateType(env, expr_type);
-    if (!type) return NULL;
-
-    return LLVMBuildPtrToInt(env->getBuilder(), value, type, "");
-}
-
-static LLVMValueRef tr_value_inttoptr (Environment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_value);
-    UNPACK_ARG(expr, expr_type);
-
-    LLVMValueRef value = translateValue(env, expr_value);
-    if (!value) return NULL;
-
-    LLVMTypeRef type = translateType(env, expr_type);
-    if (!type) return NULL;
-
-    return LLVMBuildIntToPtr(env->getBuilder(), value, type, "");
 }
 
 static LLVMValueRef tr_value_icmp (Environment *env, ValueRef expr) {
@@ -3929,6 +3914,7 @@ static LLVMValueRef tr_value_module (Environment *env, ValueRef expr) {
     }
 */
 
+
 static void registerValueTranslators() {
     auto &t = valueTranslators;
 
@@ -3941,9 +3927,21 @@ static void registerValueTranslators() {
     t.set(tr_value_declare_global, "declare-global", 2, 2);
     t.set(tr_value_global, "global", 2, 2);
     t.set(tr_value_quote, "quote", 2, 2);
-    t.set(tr_value_bitcast, "bitcast", 2, 2);
-    t.set(tr_value_ptrtoint, "ptrtoint", 2, 2, BlockInst);
-    t.set(tr_value_inttoptr, "inttoptr", 2, 2, BlockInst);
+
+    setCastOp<LLVMBuildTrunc, LLVMConstTrunc>("trunc");
+    setCastOp<LLVMBuildZExt, LLVMConstZExt>("zext");
+    setCastOp<LLVMBuildSExt, LLVMConstSExt>("sext");
+    setCastOp<LLVMBuildFPTrunc, LLVMConstFPTrunc>("fptrunc");
+    setCastOp<LLVMBuildFPExt, LLVMConstFPExt>("fpext");
+    setCastOp<LLVMBuildFPToUI, LLVMConstFPToUI>("fptoui");
+    setCastOp<LLVMBuildFPToSI, LLVMConstFPToSI>("fptosi");
+    setCastOp<LLVMBuildUIToFP, LLVMConstUIToFP>("uitofp");
+    setCastOp<LLVMBuildSIToFP, LLVMConstSIToFP>("sitofp");
+    setCastOp<LLVMBuildPtrToInt, LLVMConstPtrToInt>("ptrtoint");
+    setCastOp<LLVMBuildIntToPtr, LLVMConstIntToPtr>("inttoptr");
+    setCastOp<LLVMBuildBitCast, LLVMConstBitCast>("bitcast");
+    setCastOp<LLVMBuildAddrSpaceCast, LLVMConstAddrSpaceCast>("addrspacecast");
+
     setBinaryOp<LLVMBuildAdd>("add");
     setBinaryOp<LLVMBuildNSWAdd>("add-nsw");
     setBinaryOp<LLVMBuildNUWAdd>("add-nuw");
@@ -3968,6 +3966,7 @@ static void registerValueTranslators() {
     setBinaryOp<LLVMBuildAnd>("and");
     setBinaryOp<LLVMBuildOr>("or");
     setBinaryOp<LLVMBuildXor>("xor");
+
     t.set(tr_value_icmp, "icmp", 3, 3, BlockInst);
     t.set(tr_value_fcmp, "fcmp", 3, 3, BlockInst);
     t.set(tr_value_getelementptr, "getelementptr", 1, -1);
