@@ -41,11 +41,22 @@ Definitions
 
 .. ir-special:: (deftype value)
 
+.. ir-special:: (defstruct name (? _:packed) (? type ...))
+
 .. ir-special:: (define name ((? param ...)) type (? expression ...))
 
 .. ir-special:: (declare c-symbol-string type)
 
 .. ir-special:: (declare-global c-symbol-string type)
+
+Aggregate Constructors
+----------------------
+
+.. ir-special:: (structof (| (? "" (? _:packed)) type) (? const-value ...))
+
+.. ir-special:: (arrayof type (? const-value ...))
+
+.. ir-special:: (vectorof const-value (? ...))
 
 Constant Values
 ---------------
@@ -64,7 +75,11 @@ Constant Values
 
     Constructs a zero initializer for ``type``.
 
-.. ir-special:: (&str string)
+.. ir-special:: (alignof type)
+
+.. ir-special:: (sizeof type)
+
+.. ir-macro:: (&str string)
 
     Constructs a global string constant and returns it as ``rawstring``.
 
@@ -153,14 +168,20 @@ Comparators
 
 .. ir-special:: (select condition-expr then-value else-value)
 
-Accessors
----------
+Composition
+-----------
 
 .. ir-special:: (getelementptr value (? index-value ...))
 
 .. ir-special:: (extractelement value index)
 
+.. ir-special:: (insertelement value element index)
+
+.. ir-special:: (shufflevector value1 value2 mask)
+
 .. ir-special:: (extractvalue value index)
+
+.. ir-special:: (insertvalue value element index)
 
 Memory
 ------
@@ -173,6 +194,8 @@ Memory
 
 .. ir-special:: (alloca type (? count-value))
 
+.. ir-special:: (va_arg va_list-value type)
+
 Global Values
 -------------
 
@@ -183,11 +206,31 @@ Global Values
 Casting
 -------
 
-.. ir-special:: (bitcast value type)
+.. ir-special:: (trunc value type)
+
+.. ir-special:: (zext value type)
+
+.. ir-special:: (sext value type)
+
+.. ir-special:: (fptrunc value type)
+
+.. ir-special:: (fpext value type)
+
+.. ir-special:: (fptoui value type)
+
+.. ir-special:: (fptosi value type)
+
+.. ir-special:: (uitofp value type)
+
+.. ir-special:: (sitofp value type)
 
 .. ir-special:: (ptrtoint value type)
 
 .. ir-special:: (intotptr value type)
+
+.. ir-special:: (bitcast value type)
+
+.. ir-special:: (addrspacecast value type)
 
 Debugging
 ---------

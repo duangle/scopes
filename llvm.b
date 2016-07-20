@@ -2,11 +2,11 @@ IR
 
 # not much is here yet; waiting for the bangra-clang bridge to get finished
 
-struct LLVMModule
-struct LLVMValue
-struct LLVMType
-struct LLVMExecutionEngine
-struct LLVMTargetMachine
+defstruct LLVMModule
+defstruct LLVMValue
+defstruct LLVMType
+defstruct LLVMExecutionEngine
+defstruct LLVMTargetMachine
 
 deftype LLVMModuleRef (& LLVMModule)
 deftype LLVMValueRef (& LLVMValue)

@@ -4,8 +4,8 @@ include "../macros.b"
 
 # from http://llvm.org/docs/LangRef.html#getelementptr-instruction
 
-struct RT i8 (array (array i32 20) 10) i8
-struct ST i32 double RT
+defstruct RT i8 (array (array i32 20) 10) i8
+defstruct ST i32 double RT
 
 define foo (s)
     function (& i32) (& ST)

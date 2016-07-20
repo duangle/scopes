@@ -2528,11 +2528,28 @@ static bool isSymbol (const Value *expr, const char *sym) {
     return false;
 }
 
+static bool isString (const Value *expr, const char *sym) {
+    if (expr) {
+        if (auto symexpr = llvm::dyn_cast<String>(expr))
+            return (symexpr->getValue() == sym);
+    }
+    return false;
+}
+
 static bool matchSpecialForm (Environment *env, ValueRef expr, const char *name, int mincount, int maxcount) {
     return isSymbol(expr, name) && verifyParameterCount(env, expr, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
+
+static LLVMTypeRef translateType (Environment *env, ValueRef expr);
+static LLVMValueRef translateValue (Environment *env, ValueRef expr);
+static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
+
+static void setupRootEnvironment (Environment *env, const char *modulename);
+static void teardownRootEnvironment (Environment *env);
+static bool compileModule (Environment *env, ValueRef expr);
+
 
 template <typename T>
 static T *translateKind(Environment *env, ValueRef expr) {
@@ -2568,6 +2585,24 @@ static bool translateInt64 (Environment *env, ValueRef expr, int64_t &value) {
     return false;
 }
 
+static bool isConstantInteger(LLVMValueRef value) {
+    return LLVMIsConstant(value) && (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMIntegerTypeKind);
+}
+
+static bool translateConstInt (Environment *env, ValueRef expr, long long &value) {
+    LLVMValueRef value_index = translateValue(env, expr);
+    if (!value_index) return false;
+
+    if (!isConstantInteger(value_index)) {
+        auto _ = env->with_expr(expr);
+        translateError(env, "constant integer expected.");
+        return false;
+    }
+
+    value = LLVMConstIntGetSExtValue(value_index);
+    return true;
+}
+
 static bool translateDouble (Environment *env, ValueRef expr, double &value) {
     if (expr) {
         if (auto i = translateKind<Real>(env, expr)) {
@@ -2585,14 +2620,6 @@ static const char *translateString (Environment *env, ValueRef expr) {
     }
     return nullptr;
 }
-
-static LLVMTypeRef translateType (Environment *env, ValueRef expr);
-static LLVMValueRef translateValue (Environment *env, ValueRef expr);
-static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr);
-
-static void setupRootEnvironment (Environment *env, const char *modulename);
-static void teardownRootEnvironment (Environment *env);
-static bool compileModule (Environment *env, ValueRef expr);
 
 static LLVMValueRef translateValueList (Environment *env, ValueRef expr) {
     LLVMValueRef lastresult = NULL;
@@ -2798,17 +2825,18 @@ static TranslateTable<LLVMValueRef> valueTranslators;
 
 typedef LLVMValueRef (*LLVMBinaryOpBuilderFunc)(
     LLVMBuilderRef, LLVMValueRef, LLVMValueRef, const char *);
+typedef LLVMValueRef (*LLVMConstBinaryOpFunc)(
+    LLVMValueRef, LLVMValueRef);
 
 typedef LLVMValueRef (*LLVMCastBuilderFunc)(
     LLVMBuilderRef, LLVMValueRef, LLVMTypeRef, const char *);
 typedef LLVMValueRef (*LLVMConstCastFunc)(
     LLVMValueRef, LLVMTypeRef);
 
-template<LLVMBinaryOpBuilderFunc func>
+template<LLVMBinaryOpBuilderFunc func, LLVMConstBinaryOpFunc const_func>
 void setBinaryOp(const std::string &name) {
     struct TranslateValueBinary {
         static LLVMValueRef translate (Environment *env, ValueRef expr) {
-            //if (!verifyInBlock(env)) return NULL;
             UNPACK_ARG(expr, expr_lhs);
             UNPACK_ARG(expr, expr_rhs);
             LLVMValueRef lhs = translateValue(env, expr_lhs);
@@ -2816,11 +2844,16 @@ void setBinaryOp(const std::string &name) {
             LLVMValueRef rhs = translateValue(env, expr_rhs);
             if (!rhs) return NULL;
 
-            return func(env->getBuilder(), lhs, rhs, "");
+            if (LLVMIsConstant(lhs) && LLVMIsConstant(rhs)) {
+                return const_func(lhs, rhs);
+            } else {
+                if (!verifyInBlock(env)) return NULL;
+                return func(env->getBuilder(), lhs, rhs, "");
+            }
         }
     };
 
-    valueTranslators.set(TranslateValueBinary::translate, name, 2, 2, BlockInst);
+    valueTranslators.set(TranslateValueBinary::translate, name, 2, 2);
 }
 
 template<LLVMCastBuilderFunc func, LLVMConstCastFunc const_func>
@@ -2901,6 +2934,24 @@ static LLVMValueRef tr_value_dumptype (Environment *env, ValueRef expr) {
     }
 
     return NULL;
+}
+
+static LLVMValueRef tr_value_alignof (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (!type) return NULL;
+
+    return LLVMAlignOf(type);
+}
+
+static LLVMValueRef tr_value_sizeof (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_arg);
+
+    LLVMTypeRef type = translateType(env, expr_arg);
+    if (!type) return NULL;
+
+    return LLVMSizeOf(type);
 }
 
 static LLVMValueRef tr_value_constant (Environment *env, ValueRef expr) {
@@ -3013,7 +3064,13 @@ static LLVMValueRef tr_value_icmp (Environment *env, ValueRef expr) {
         return NULL;
     }
 
-    return LLVMBuildICmp(env->getBuilder(), op, lhs, rhs, "");
+    if (LLVMIsConstant(lhs)
+        && LLVMIsConstant(rhs)) {
+        return LLVMConstICmp(op, lhs, rhs);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildICmp(env->getBuilder(), op, lhs, rhs, "");
+    }
 }
 
 static LLVMValueRef tr_value_fcmp (Environment *env, ValueRef expr) {
@@ -3052,11 +3109,136 @@ static LLVMValueRef tr_value_fcmp (Environment *env, ValueRef expr) {
         return NULL;
     }
 
-    return LLVMBuildFCmp(env->getBuilder(), op, lhs, rhs, "");
+    if (LLVMIsConstant(lhs)
+        && LLVMIsConstant(rhs)) {
+        return LLVMConstFCmp(op, lhs, rhs);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildFCmp(env->getBuilder(), op, lhs, rhs, "");
+    }
 }
 
-static bool isConstantInteger(LLVMValueRef value) {
-    return LLVMIsConstant(value) && (LLVMGetTypeKind(LLVMTypeOf(value)) == LLVMIntegerTypeKind);
+static LLVMValueRef tr_value_structof (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = NULL;
+    if (!isString(expr_type, "")) {
+        type = translateType(env, expr_type);
+        if (!type) return NULL;
+    }
+
+    expr = next(expr);
+
+    bool packed = false;
+    if (!type) {
+        if (isSymbol(expr, "packed")) {
+            packed = true;
+            expr = next(expr);
+        }
+    }
+
+    bool is_const = true;
+
+    int elemcount = countOf(expr);
+    LLVMValueRef elems[elemcount];
+    int i = 0;
+    while (expr) {
+        elems[i] = translateValue(env, expr);
+        if (!elems[i]) return NULL;
+        is_const = is_const && LLVMIsConstant(elems[i]);
+        expr = next(expr);
+        ++i;
+    }
+
+    if (is_const) {
+        if (type) {
+            return LLVMConstNamedStruct(type, elems, elemcount);
+        } else {
+            return LLVMConstStruct(elems, elemcount, packed);
+        }
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        LLVMValueRef result = NULL;
+        if (type) {
+            result = LLVMGetUndef(type);
+        } else {
+            LLVMTypeRef elemtypes[elemcount];
+            for (int j = 0; j < elemcount; ++j) {
+                elemtypes[j] = LLVMTypeOf(elems[j]);
+            }
+            result = LLVMGetUndef(LLVMStructType(elemtypes, elemcount, packed));
+        }
+        for (int k = 0; k < elemcount; ++k) {
+            result = LLVMBuildInsertValue(env->getBuilder(), result, elems[k], k, "");
+        }
+        return result;
+    }
+}
+
+static LLVMValueRef tr_value_arrayof (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    expr = next(expr);
+
+    bool is_const = true;
+
+    int elemcount = countOf(expr);
+    LLVMValueRef elems[elemcount];
+    int i = 0;
+    while (expr) {
+        elems[i] = translateValue(env, expr);
+        if (!elems[i]) return NULL;
+        is_const = is_const && LLVMIsConstant(elems[i]);
+        expr = next(expr);
+        ++i;
+    }
+
+    if (is_const) {
+        return LLVMConstArray(type, elems, elemcount);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        LLVMValueRef result = LLVMGetUndef(LLVMArrayType(type, elemcount));
+        for (int k = 0; k < elemcount; ++k) {
+            result = LLVMBuildInsertValue(env->getBuilder(), result, elems[k], k, "");
+        }
+        return result;
+    }
+}
+
+static LLVMValueRef tr_value_vectorof (Environment *env, ValueRef expr) {
+    expr = next(expr);
+
+    bool is_const = true;
+
+    int elemcount = countOf(expr);
+    LLVMValueRef elems[elemcount];
+    int i = 0;
+    while (expr) {
+        elems[i] = translateValue(env, expr);
+        if (!elems[i]) return NULL;
+        is_const = is_const && LLVMIsConstant(elems[i]);
+        expr = next(expr);
+        ++i;
+    }
+
+    if (is_const) {
+        return LLVMConstVector(elems, elemcount);
+    } else {
+        assert(elemcount > 0);
+        if (!verifyInBlock(env)) return NULL;
+        LLVMValueRef result = LLVMGetUndef(LLVMVectorType(LLVMTypeOf(elems[0]), elemcount));
+        for (int k = 0; k < elemcount; ++k) {
+            result = LLVMBuildInsertElement(
+                env->getBuilder(),
+                result,
+                elems[k],
+                LLVMConstInt(LLVMInt32Type(), k, 1), "");
+        }
+        return result;
+    }
 }
 
 static LLVMValueRef tr_value_getelementptr (Environment *env, ValueRef expr) {
@@ -3174,11 +3356,92 @@ static LLVMValueRef tr_value_extractelement (Environment *env, ValueRef expr) {
     LLVMValueRef index = translateValue(env, expr_index);
     if (!index) return NULL;
 
-    LLVMValueRef result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
+    LLVMValueRef result = NULL;
+    if (LLVMIsConstant(value) && LLVMIsConstant(index)) {
+        result = LLVMConstExtractElement(value, index);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        result = LLVMBuildExtractElement(env->getBuilder(), value, index, "");
+    }
     if (!result) {
         translateError(env, "can not use extract on this value");
     }
     return result;
+}
+
+static LLVMValueRef tr_value_insertelement (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_elem);
+    UNPACK_ARG(expr, expr_index);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+    LLVMValueRef element = translateValue(env, expr_elem);
+    if (!element) return NULL;
+    LLVMValueRef index = translateValue(env, expr_index);
+    if (!index) return NULL;
+
+    if (LLVMIsConstant(value)
+        && LLVMIsConstant(element)
+        && LLVMIsConstant(index)) {
+        return LLVMConstInsertElement(value, element, index);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildInsertElement(env->getBuilder(),
+            value, element, index, "");
+    }
+}
+
+static LLVMValueRef tr_value_shufflevector (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_v1);
+    UNPACK_ARG(expr, expr_v2);
+    UNPACK_ARG(expr, expr_mask);
+
+    LLVMValueRef value_v1 = translateValue(env, expr_v1);
+    if (!value_v1) return NULL;
+    LLVMValueRef value_v2 = translateValue(env, expr_v2);
+    if (!value_v2) return NULL;
+    LLVMValueRef value_mask = translateValue(env, expr_mask);
+    if (!value_mask) return NULL;
+
+    if (LLVMIsConstant(value_v1)
+        && LLVMIsConstant(value_v2)
+        && LLVMIsConstant(value_mask)) {
+        return LLVMConstShuffleVector(value_v1, value_v2, value_mask);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildShuffleVector(env->getBuilder(),
+            value_v1, value_v2, value_mask, "");
+    }
+}
+
+bool verifyValidConstantIndex(Environment *env, LLVMValueRef value, unsigned index) {
+    LLVMTypeRef valuetype = LLVMTypeOf(value);
+    LLVMTypeKind kind = LLVMGetTypeKind(valuetype);
+    switch(kind) {
+        case LLVMStructTypeKind: {
+            unsigned count = LLVMCountStructElementTypes(valuetype);
+            if (index >= count) {
+                translateError(env,
+                    "struct field index is out of bounds.");
+                return false;
+            }
+        } break;
+        case LLVMArrayTypeKind: {
+            unsigned count = LLVMGetArrayLength(valuetype);
+            if (index >= count) {
+                translateError(env,
+                    "array offset is out of bounds.");
+                return false;
+            }
+        } break;
+        default: {
+            translateError(env,
+                "value passed has illegal type. Struct or array type expected.");
+            return false;
+        } break;
+    }
+    return true;
 }
 
 static LLVMValueRef tr_value_extractvalue (Environment *env, ValueRef expr) {
@@ -3188,41 +3451,55 @@ static LLVMValueRef tr_value_extractvalue (Environment *env, ValueRef expr) {
     LLVMValueRef value = translateValue(env, expr_value);
     if (!value) return NULL;
 
-    int64_t index;
-    if (!translateInt64(env, expr_index, index)) return NULL;
+    long long llindex;
+    if (!translateConstInt(env, expr_index, llindex)) return NULL;
+    unsigned index = (unsigned)llindex;
 
-    LLVMTypeRef valuetype = LLVMTypeOf(value);
-    LLVMTypeKind kind = LLVMGetTypeKind(valuetype);
-    switch(kind) {
-        case LLVMStructTypeKind: {
-            auto _ = env->with_expr(expr_index);
-            unsigned count = LLVMCountStructElementTypes(valuetype);
-            if ((unsigned)index >= count) {
-                translateError(env,
-                    "struct field index is out of bounds.");
-            }
-        } break;
-        case LLVMArrayTypeKind: {
-            auto _ = env->with_expr(expr_index);
-            unsigned count = LLVMGetArrayLength(valuetype);
-            if ((unsigned)index >= count) {
-                translateError(env,
-                    "array offset is out of bounds.");
-            }
-        } break;
-        default: {
-            auto _ = env->with_expr(expr_value);
-            translateError(env,
-                "value passed to extractvalue has illegal type. Struct or array type expected.");
-            return NULL;
-        } break;
+    {
+        auto _ = env->with_expr(expr_index);
+        if (!verifyValidConstantIndex(env, value, index)) return NULL;
     }
 
-    LLVMValueRef result = LLVMBuildExtractValue(env->getBuilder(), value, index, "");
+    LLVMValueRef result = NULL;
+    if (LLVMIsConstant(value)) {
+        result = LLVMConstExtractValue(value, &index, 1);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        result = LLVMBuildExtractValue(env->getBuilder(), value, index, "");
+    }
     if (!result) {
         translateError(env, "can not use extract on this value");
     }
     return result;
+}
+
+static LLVMValueRef tr_value_insertvalue (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_value);
+    UNPACK_ARG(expr, expr_elem);
+    UNPACK_ARG(expr, expr_index);
+
+    LLVMValueRef value = translateValue(env, expr_value);
+    if (!value) return NULL;
+
+    LLVMValueRef elem = translateValue(env, expr_elem);
+    if (!elem) return NULL;
+
+    long long llindex;
+    if (!translateConstInt(env, expr_index, llindex)) return NULL;
+    unsigned index = (unsigned)llindex;
+
+    {
+        auto _ = env->with_expr(expr_index);
+        if (!verifyValidConstantIndex(env, value, index)) return NULL;
+    }
+
+    if (LLVMIsConstant(value)
+        && LLVMIsConstant(elem)) {
+        return LLVMConstInsertValue(value, elem, &index, 1);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildInsertValue(env->getBuilder(), value, elem, index, "");
+    }
 }
 
 static LLVMValueRef tr_value_align (Environment *env, ValueRef expr) {
@@ -3233,8 +3510,9 @@ static LLVMValueRef tr_value_align (Environment *env, ValueRef expr) {
     LLVMValueRef value = translateValue(env, expr_value);
     if (!value) return NULL;
 
-    int64_t bytes;
-    if (!translateInt64(env, expr_bytes, bytes)) return NULL;
+    long long llbytes;
+    if (!translateConstInt(env, expr_bytes, llbytes)) return NULL;
+    unsigned bytes = (unsigned)llbytes;
 
     LLVMSetAlignment(value, bytes);
     return value;
@@ -3308,7 +3586,15 @@ static LLVMValueRef tr_value_select (Environment *env, ValueRef expr) {
     LLVMValueRef value_else = translateValue(env, expr_else);
     if (!value_else) return NULL;
 
-    return LLVMBuildSelect(env->getBuilder(), value_if, value_then, value_else, "");
+    if (LLVMIsConstant(value_if)
+        && LLVMIsConstant(value_then)
+        && LLVMIsConstant(value_else)) {
+        return LLVMConstSelect(value_if, value_then, value_else);
+    } else {
+        if (!verifyInBlock(env)) return NULL;
+        return LLVMBuildSelect(env->getBuilder(),
+            value_if, value_then, value_else, "");
+    }
 }
 
 static LLVMValueRef tr_value_va_arg (Environment *env, ValueRef expr) {
@@ -3339,8 +3625,9 @@ static LLVMValueRef tr_value_deftype (Environment *env, ValueRef expr) {
     return NULL;
 }
 
-static LLVMValueRef tr_value_struct (Environment *env, ValueRef expr) {
-    translateTypeFromList(env, expr);
+static LLVMTypeRef tr_type_struct (Environment *env, ValueRef expr);
+static LLVMValueRef tr_value_defstruct (Environment *env, ValueRef expr) {
+    tr_type_struct(env, expr);
     return NULL;
 }
 
@@ -3380,6 +3667,15 @@ static LLVMValueRef tr_value_set_block (Environment *env, ValueRef expr) {
     translateSetBlock(env, block);
 
     return blockvalue;
+}
+
+static LLVMValueRef tr_value_undef (Environment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_type);
+
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type) return NULL;
+
+    return LLVMGetUndef(type);
 }
 
 static LLVMValueRef tr_value_null (Environment *env, ValueRef expr) {
@@ -3940,6 +4236,12 @@ static void registerValueTranslators() {
     t.set(tr_value_declare_global, "declare-global", 2, 2);
     t.set(tr_value_global, "global", 2, 2);
     t.set(tr_value_quote, "quote", 2, 2);
+    t.set(tr_value_alignof, "alignof", 1, 1);
+    t.set(tr_value_sizeof, "sizeof", 1, 1);
+
+    t.set(tr_value_structof, "structof", 1, -1);
+    t.set(tr_value_arrayof, "arrayof", 1, -1);
+    t.set(tr_value_vectorof, "vectorof", 1, -1);
 
     setCastOp<LLVMBuildTrunc, LLVMConstTrunc>("trunc");
     setCastOp<LLVMBuildZExt, LLVMConstZExt>("zext");
@@ -3955,45 +4257,49 @@ static void registerValueTranslators() {
     setCastOp<LLVMBuildBitCast, LLVMConstBitCast>("bitcast");
     setCastOp<LLVMBuildAddrSpaceCast, LLVMConstAddrSpaceCast>("addrspacecast");
 
-    setBinaryOp<LLVMBuildAdd>("add");
-    setBinaryOp<LLVMBuildNSWAdd>("add-nsw");
-    setBinaryOp<LLVMBuildNUWAdd>("add-nuw");
-    setBinaryOp<LLVMBuildFAdd>("fadd");
-    setBinaryOp<LLVMBuildSub>("sub");
-    setBinaryOp<LLVMBuildNSWSub>("sub-nsw");
-    setBinaryOp<LLVMBuildNUWSub>("sub-nuw");
-    setBinaryOp<LLVMBuildFSub>("fsub");
-    setBinaryOp<LLVMBuildMul>("mul");
-    setBinaryOp<LLVMBuildNSWMul>("mul-nsw");
-    setBinaryOp<LLVMBuildNUWMul>("mul-nuw");
-    setBinaryOp<LLVMBuildFMul>("fmul");
-    setBinaryOp<LLVMBuildUDiv>("udiv");
-    setBinaryOp<LLVMBuildSDiv>("sdiv");
-    setBinaryOp<LLVMBuildExactSDiv>("exact-sdiv");
-    setBinaryOp<LLVMBuildURem>("urem");
-    setBinaryOp<LLVMBuildSRem>("srem");
-    setBinaryOp<LLVMBuildFRem>("frem");
-    setBinaryOp<LLVMBuildShl>("shl");
-    setBinaryOp<LLVMBuildLShr>("lshr");
-    setBinaryOp<LLVMBuildAShr>("ashr");
-    setBinaryOp<LLVMBuildAnd>("and");
-    setBinaryOp<LLVMBuildOr>("or");
-    setBinaryOp<LLVMBuildXor>("xor");
+    setBinaryOp<LLVMBuildAdd, LLVMConstAdd>("add");
+    setBinaryOp<LLVMBuildNSWAdd, LLVMConstNSWAdd>("add-nsw");
+    setBinaryOp<LLVMBuildNUWAdd, LLVMConstNUWAdd>("add-nuw");
+    setBinaryOp<LLVMBuildFAdd, LLVMConstFAdd>("fadd");
+    setBinaryOp<LLVMBuildSub, LLVMConstSub>("sub");
+    setBinaryOp<LLVMBuildNSWSub, LLVMConstNSWSub>("sub-nsw");
+    setBinaryOp<LLVMBuildNUWSub, LLVMConstNUWSub>("sub-nuw");
+    setBinaryOp<LLVMBuildFSub, LLVMConstFSub>("fsub");
+    setBinaryOp<LLVMBuildMul, LLVMConstMul>("mul");
+    setBinaryOp<LLVMBuildNSWMul, LLVMConstNSWMul>("mul-nsw");
+    setBinaryOp<LLVMBuildNUWMul, LLVMConstNUWMul>("mul-nuw");
+    setBinaryOp<LLVMBuildFMul, LLVMConstFMul>("fmul");
+    setBinaryOp<LLVMBuildUDiv, LLVMConstUDiv>("udiv");
+    setBinaryOp<LLVMBuildSDiv, LLVMConstSDiv>("sdiv");
+    setBinaryOp<LLVMBuildExactSDiv, LLVMConstExactSDiv>("exact-sdiv");
+    setBinaryOp<LLVMBuildURem, LLVMConstURem>("urem");
+    setBinaryOp<LLVMBuildSRem, LLVMConstSRem>("srem");
+    setBinaryOp<LLVMBuildFRem, LLVMConstFRem>("frem");
+    setBinaryOp<LLVMBuildShl, LLVMConstShl>("shl");
+    setBinaryOp<LLVMBuildLShr, LLVMConstLShr>("lshr");
+    setBinaryOp<LLVMBuildAShr, LLVMConstAShr>("ashr");
+    setBinaryOp<LLVMBuildAnd, LLVMConstAnd>("and");
+    setBinaryOp<LLVMBuildOr, LLVMConstOr>("or");
+    setBinaryOp<LLVMBuildXor, LLVMConstXor>("xor");
 
-    t.set(tr_value_icmp, "icmp", 3, 3, BlockInst);
-    t.set(tr_value_fcmp, "fcmp", 3, 3, BlockInst);
+    t.set(tr_value_icmp, "icmp", 3, 3);
+    t.set(tr_value_fcmp, "fcmp", 3, 3);
     t.set(tr_value_getelementptr, "getelementptr", 1, -1);
-    t.set(tr_value_extractelement, "extractelement", 2, 2, BlockInst);
-    t.set(tr_value_extractvalue, "extractvalue", 2, 2, BlockInst);
+    t.set(tr_value_extractelement, "extractelement", 2, 2);
+    t.set(tr_value_insertelement, "insertelement", 3, 3);
+    t.set(tr_value_shufflevector, "shufflevector", 3, 3);
+    t.set(tr_value_extractvalue, "extractvalue", 2, 2);
+    t.set(tr_value_insertvalue, "insertvalue", 3, 3);
     t.set(tr_value_align, "align", 2, 2);
     t.set(tr_value_load, "load", 1, 1, BlockInst);
     t.set(tr_value_store, "store", 2, 2, BlockInst);
     t.set(tr_value_alloca, "alloca", 1, 2, BlockInst);
     t.set(tr_value_defvalue, "defvalue", 2, 2);
     t.set(tr_value_deftype, "deftype", 2, 2);
-    t.set(tr_value_struct, "struct", -1, -1);
+    t.set(tr_value_defstruct, "defstruct", -1, -1);
     t.set(tr_value_block, "block", 1, 1);
     t.set(tr_value_set_block, "set-block", 1, 1);
+    t.set(tr_value_undef, "undef", 1, 1);
     t.set(tr_value_null, "null", 1, 1);
     t.set(tr_value_splice, "splice", 0, -1);
     t.set(tr_value_define, "define", 4, -1);
@@ -4002,7 +4308,7 @@ static void registerValueTranslators() {
     t.set(tr_value_br, "br", 1, 1, BlockInst);
     t.set(tr_value_cond_br, "cond-br", 3, 3, BlockInst);
     t.set(tr_value_ret, "ret", 0, 1, BlockInst);
-    t.set(tr_value_select, "select", 3, 3, BlockInst);
+    t.set(tr_value_select, "select", 3, 3);
     t.set(tr_value_va_arg, "va_arg", 2, 2, BlockInst);
     t.set(tr_value_declare, "declare", 2, 2);
     t.set(tr_value_call, "call", 1, -1, BlockInst);
@@ -4201,10 +4507,6 @@ static LLVMTypeRef tr_type_struct (Environment *env, ValueRef expr) {
     const char *name = translateString(env, expr_name);
     if (!name) return NULL;
 
-    LLVMTypeRef result = LLVMStructCreateNamed(LLVMGetGlobalContext(), name);
-    if (isKindOf<Symbol>(expr_name))
-        env->types[name] = result;
-
     expr = next(expr);
 
     bool packed = false;
@@ -4223,8 +4525,16 @@ static LLVMTypeRef tr_type_struct (Environment *env, ValueRef expr) {
         ++i;
     }
 
-    if (elemcount)
-        LLVMStructSetBody(result, elemtypes, elemcount, packed);
+    LLVMTypeRef result = NULL;
+    if (*name == 0) {
+        result = LLVMStructType(elemtypes, elemcount, packed);
+    } else {
+        result = LLVMStructCreateNamed(LLVMGetGlobalContext(), name);
+        if (elemcount)
+            LLVMStructSetBody(result, elemtypes, elemcount, packed);
+        if (isKindOf<Symbol>(expr_name))
+            env->types[name] = result;
+    }
 
     return result;
 }
