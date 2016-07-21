@@ -195,16 +195,6 @@ TODO:
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 
-//------------------------------------------------------------------------------
-// Auxiliary LLVM C API
-//------------------------------------------------------------------------------
-
-void LLVMInsertBasicBlockInto(LLVMBasicBlockRef BB,
-    LLVMValueRef parent, LLVMBasicBlockRef insertBefore) {
-    llvm::unwrap(BB)->insertInto(llvm::unwrap<llvm::Function>(parent),
-        llvm::unwrap(insertBefore));
-}
-
 namespace bangra {
 
 //------------------------------------------------------------------------------
@@ -2637,13 +2627,6 @@ static LLVMValueRef translateValueList (Environment *env, ValueRef expr) {
         lastresult = translateValue(env, expr);
         if (env->hasErrors())
             return NULL;
-        if (env->function && lastresult && LLVMValueIsBasicBlock(lastresult)) {
-            LLVMBasicBlockRef BB = LLVMValueAsBasicBlock(lastresult);
-            if (!LLVMGetBasicBlockParent(BB)) {
-                LLVMInsertBasicBlockInto(BB, env->function, NULL);
-            }
-        }
-
         expr = next(expr);
     }
     return lastresult;
@@ -2658,7 +2641,7 @@ static bool verifyInFunction(Environment *env) {
 }
 
 static bool verifyInBlock(Environment *env) {
-    //if (!verifyInFunction(env)) return false;
+    if (!verifyInFunction(env)) return false;
     if (!env->block) {
         translateError(env, "illegal use outside of labeled block");
         return false;
@@ -3716,21 +3699,14 @@ static LLVMValueRef tr_value_defstruct (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_block (Environment *env, ValueRef expr) {
-    //if (!verifyInFunction(env)) return NULL;
+    if (!verifyInFunction(env)) return NULL;
 
     UNPACK_ARG(expr, expr_name);
 
     const char *name = translateString(env, expr_name);
     if (!name) return NULL;
 
-    //LLVMBasicBlockRef block = LLVMAppendBasicBlock(env->function, name);
-    LLVMBasicBlockRef block = LLVMAppendBasicBlock(NULL, name);
-
-    /*
-    LLVMInsertBasicBlockInto(block,
-        env->function, NULL);
-    */
-
+    LLVMBasicBlockRef block = LLVMAppendBasicBlock(env->function, name);
     if (isKindOf<Symbol>(expr_name))
         env->values[name] = LLVMBasicBlockAsValue(block);
 
@@ -3740,7 +3716,7 @@ static LLVMValueRef tr_value_block (Environment *env, ValueRef expr) {
 }
 
 static LLVMValueRef tr_value_set_block (Environment *env, ValueRef expr) {
-    //if (!verifyInFunction(env)) return NULL;
+    if (!verifyInFunction(env)) return NULL;
 
     UNPACK_ARG(expr, expr_block);
 
@@ -3973,33 +3949,28 @@ static LLVMValueRef tr_value_ret (Environment *env, ValueRef expr) {
 
     expr = next(expr);
 
-    /*
     LLVMTypeRef functype = extractFunctionType(env, env->function);
     if (!functype) return NULL;
 
     LLVMTypeRef rettype = LLVMGetReturnType(functype);
-    */
 
     LLVMValueRef result;
     if (!expr) {
-        /*
         if (rettype != LLVMVoidType()) {
             translateError(env, "return type does not match function signature.");
             return NULL;
         }
-        */
+
         result = LLVMBuildRetVoid(env->getBuilder());
     } else {
         ValueRef expr_value = expr;
         LLVMValueRef value = translateValue(env, expr_value);
         if (!value) return NULL;
-        /*
         auto _ = env->with_expr(expr_value);
         if (rettype != LLVMTypeOf(value)) {
             translateError(env, "return type does not match function signature.");
             return NULL;
         }
-        */
 
         result = LLVMBuildRet(env->getBuilder(), value);
     }
