@@ -391,6 +391,7 @@ static const char *valueKindName(int kind) {
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
     case V_Real: return "real";
+    case V_Handle: return "handle";
     case V_Table: return "table";
     default: return "#corrupted#";
     }
@@ -1665,7 +1666,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
         }
     } return;
     case V_Table: {
-        printf("#table %p#", (void *)e);
+        printf("<table@%p>", (void *)e);
         if (naked)
             putchar('\n');
     } return;
@@ -1687,7 +1688,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
     } return;
     case V_Handle: {
         const Handle *h = llvm::cast<Handle>(e);
-        printf("#handle %p#", h->getValue());
+        printf("<handle@%p>", h->getValue());
         if (naked)
             putchar('\n');
     } return;
@@ -1811,6 +1812,7 @@ struct Environment {
     LLVMModuleRef getModule() const;
     LLVMExecutionEngineRef getEngine() const;
     void addQuote(LLVMValueRef value, ValueRef expr);
+    void addGlobal(LLVMValueRef value, void *ptr);
 
     LLVMValueRef resolveValue(const std::string &name) {
         Environment *penv = this;
@@ -1923,8 +1925,12 @@ LLVMExecutionEngineRef Environment::getEngine() const {
 }
 
 void Environment::addQuote(LLVMValueRef value, ValueRef expr) {
-    globals->globalptrs.push_back(std::make_tuple(value, (void *)expr));
+    addGlobal(value, (void *)expr);
     gc_root = cons(expr, gc_root);
+}
+
+void Environment::addGlobal(LLVMValueRef value, void *ptr) {
+    globals->globalptrs.push_back(std::make_tuple(value, ptr));
 }
 
 //------------------------------------------------------------------------------
@@ -3058,7 +3064,15 @@ static LLVMValueRef tr_value_quote (Environment *env, ValueRef expr) {
     if (!type) return NULL;
 
     LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, "quote");
-    env->addQuote(result, expr_value);
+    if (auto handle = llvm::dyn_cast<Handle>(expr_value)) {
+        env->addGlobal(result, handle->getValue());
+    } else {
+        if (!LLVMIsOpaqueStruct(type)) {
+            translateError(env, "value type must be opaque struct.");
+            return NULL;
+        }
+        env->addQuote(result, expr_value);
+    }
     LLVMSetGlobalConstant(result, true);
 
     return result;
@@ -3785,12 +3799,19 @@ static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
         name = "inlined";
     }
 
-    // todo: external linkage?
-    LLVMValueRef func = LLVMAddFunction(
-        env->getModule(), name, functype);
+    bool isSymbol = isKindOf<Symbol>(expr_name);
 
-    if (isKindOf<Symbol>(expr_name))
-        env->values[name] = func;
+    LLVMValueRef func = isSymbol?env->values[name]:NULL;
+    if (!func) {
+        // todo: external linkage?
+        func = LLVMAddFunction(
+            env->getModule(), name, functype);
+
+        if (isSymbol)
+            env->values[name] = func;
+    } else {
+        if (!extractFunctionType(env, func)) return NULL;
+    }
     if (inlined)
         LLVMSetLinkage(func, LLVMLinkOnceAnyLinkage);
 
@@ -5081,11 +5102,11 @@ int bangra_eq(Value *a, Value *b) {
         if (kind != b->getKind())
             return false;
         switch (kind) {
+            case bangra::V_String:
             case bangra::V_Symbol: {
-                bangra::Symbol *sa = llvm::cast<bangra::Symbol>(a);
-                bangra::Symbol *sb = llvm::cast<bangra::Symbol>(b);
-                if (sa->size() != sb->size()) return false;
-                if (!memcmp(sa->c_str(), sb->c_str(), sa->size())) return true;
+                bangra::String *sa = llvm::cast<bangra::String>(a);
+                bangra::String *sb = llvm::cast<bangra::String>(b);
+                return sa->getValue() == sb->getValue();
             } break;
             case bangra::V_Real: {
                 bangra::Real *sa = llvm::cast<bangra::Real>(a);
@@ -5100,15 +5121,7 @@ int bangra_eq(Value *a, Value *b) {
             case bangra::V_Pointer: {
                 bangra::Pointer *sa = llvm::cast<bangra::Pointer>(a);
                 bangra::Pointer *sb = llvm::cast<bangra::Pointer>(b);
-                Value *na = sa->getAt();
-                Value *nb = sb->getAt();
-                while (na && nb) {
-                    if (!bangra_eq(na, nb))
-                        return false;
-                    na = na->getNext();
-                    nb = nb->getNext();
-                }
-                return na == nb;
+                return sa->getAt() == sb->getAt();
             } break;
             case bangra::V_Handle: {
                 bangra::Handle *sa = llvm::cast<bangra::Handle>(a);

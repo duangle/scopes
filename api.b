@@ -18,6 +18,8 @@ defvalue value-type-string 2
 defvalue value-type-symbol 3
 defvalue value-type-integer 4
 defvalue value-type-real 5
+defvalue value-type-handle 6
+defvalue value-type-table 7
 
 defvalue argc
     declare-global "bang_argc" i32
@@ -128,9 +130,9 @@ defvalue integer-value
 
 defvalue new-table
     declare "bangra_table" (function Value)
-defvalue set-key
+defvalue set-key!
     declare "bangra_set_key" (function void Value Value Value)
-defvalue get-key
+defvalue get-key!
     declare "bangra_get_key" (function Value Value Value)
 
 # handle
@@ -195,6 +197,30 @@ defvalue symbol?
                 call kind-of value
                 value-type-symbol
 
+defvalue string?
+    define "" (value)
+        function i1 Value
+        ret
+            icmp ==
+                call kind-of value
+                value-type-string
+
+defvalue handle?
+    define "" (value)
+        function i1 Value
+        ret
+            icmp ==
+                call kind-of value
+                value-type-handle
+
+defvalue table?
+    define "" (value)
+        function i1 Value
+        ret
+            icmp ==
+                call kind-of value
+                value-type-table
+
 defvalue expression?
     define "" (value expected-head)
         function i1 Value Value
@@ -216,7 +242,7 @@ defvalue type-key
 defvalue set-type
     define "" (value value-type)
         function void Value Value
-        call set-key
+        call set-key!
             value
             type-key
             value-type
@@ -226,7 +252,7 @@ defvalue get-type
     define "" (value)
         function Value Value
         ret
-            call get-key
+            call get-key!
                 value
                 type-key
 
