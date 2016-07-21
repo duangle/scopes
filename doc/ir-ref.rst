@@ -22,7 +22,7 @@ Type Constructors
 
 .. ir-special:: (function return-type (? param-type ...) (? _:...))
 
-.. ir-special:: (& type)
+.. ir-special:: (pointer type)
 
 .. ir-special:: (array type count)
 

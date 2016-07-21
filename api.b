@@ -9,8 +9,8 @@ IR
 defstruct _Environment
 defstruct _Value
 
-deftype Environment (& _Environment)
-deftype Value (& _Value)
+deftype Environment (pointer _Environment)
+deftype Value (pointer _Value)
 
 defvalue value-type-none 0
 defvalue value-type-pointer 1
@@ -22,7 +22,7 @@ defvalue value-type-real 5
 defvalue argc
     declare-global "bang_argc" i32
 defvalue argv
-    declare-global "bang_argv" (& rawstring)
+    declare-global "bang_argv" (pointer rawstring)
 defvalue executable-path
     declare-global "bang_executable_path" rawstring
 
@@ -51,10 +51,10 @@ defvalue link-llvm-module
 
 defvalue import-c-module
     declare "bangra_import_c_module"
-        function LLVMModuleRef Value rawstring (& rawstring) i32
+        function LLVMModuleRef Value rawstring (pointer rawstring) i32
 defvalue import-c-string
     declare "bangra_import_c_string"
-        function LLVMModuleRef Value rawstring rawstring (& rawstring) i32
+        function LLVMModuleRef Value rawstring rawstring (pointer rawstring) i32
 
 # methods that apply to all types
 #-------------------------------------------------------------------------------
@@ -137,9 +137,9 @@ defvalue get-key
 #-------------------------------------------------------------------------------
 
 defvalue new-handle
-    declare "bangra_handle" (function Value (& opaque))
+    declare "bangra_handle" (function Value (pointer opaque))
 defvalue handle-value
-    declare "bangra_handle_value" (function (& opaque) Value)
+    declare "bangra_handle_value" (function (pointer opaque) Value)
 
 # metaprogramming
 #-------------------------------------------------------------------------------
@@ -150,13 +150,13 @@ deftype preprocessor-func
 defvalue error-message
     declare "bangra_error_message" (function void Environment Value rawstring ...)
 defvalue set-preprocessor
-    declare "bangra_set_preprocessor" (function void rawstring (& preprocessor-func))
+    declare "bangra_set_preprocessor" (function void rawstring (pointer preprocessor-func))
 defvalue get-preprocessor
-    declare "bangra_get_preprocessor" (function (& preprocessor-func) rawstring)
+    declare "bangra_get_preprocessor" (function (pointer preprocessor-func) rawstring)
 defvalue set-macro
-    declare "bangra_set_macro" (function void Environment rawstring (& preprocessor-func))
+    declare "bangra_set_macro" (function void Environment rawstring (pointer preprocessor-func))
 defvalue get-macro
-    declare "bangra_get_macro" (function (& preprocessor-func) Environment rawstring)
+    declare "bangra_get_macro" (function (pointer preprocessor-func) Environment rawstring)
 defvalue unique-symbol
     declare "bangra_unique_symbol" (function Value rawstring)
 

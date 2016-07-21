@@ -4669,7 +4669,7 @@ static void registerTypeTranslators() {
     auto &t = typeTranslators;
     t.set(tr_type_function, "function", 1, -1);
     t.set(tr_type_dumptype, "dumptype", 1, 1);
-    t.set(tr_type_pointer, "&", 1, 1);
+    t.set(tr_type_pointer, "pointer", 1, 1);
     t.set(tr_type_typeof, "typeof", 1, 1);
     t.set(tr_type_getelementtype, "getelementtype", 1, -1);
     t.set(tr_type_array, "array", 2, 2);

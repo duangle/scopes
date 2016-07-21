@@ -8,10 +8,10 @@ defstruct RT i8 (array (array i32 20) 10) i8
 defstruct ST i32 double RT
 
 dumptype
-    getelementtype (& ST) 1 2 1 5 13
+    getelementtype (pointer ST) 1 2 1 5 13
 
 define foo (s)
-    function (& i32) (& ST)
+    function (pointer i32) (pointer ST)
     ret
         getelementptr s 1 2 1 5 13
 
@@ -29,4 +29,4 @@ dumptype
 #dump-module;
 run
     call foo
-        null (& ST)
+        null (pointer ST)

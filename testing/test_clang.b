@@ -105,7 +105,7 @@ run
         call import-c-module dest2
             &str "../bangra.h"
             #@str "../clang/include/llvm-c/Core.h"
-            null (& rawstring)
+            null (pointer rawstring)
             0
     call dump-value dest2
 
