@@ -44,7 +44,7 @@ g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
     -lLLVMInterpreter ^
     -lole32 -luuid
 if errorlevel 1 goto :fail
-%DIR%bangra.exe %DIR%testing\test_bangra.b
+%DIR%bangra.exe %DIR%testing\test_all.b
 if errorlevel 1 goto :fail
 echo success.
 goto :done

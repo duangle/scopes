@@ -33,5 +33,5 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     -Wl,--whole-archive \
     `llvm-config --libs engine passes option objcarcopts` \
     -Wl,--no-whole-archive \
-&& $DIR/bangra $DIR/testing/test_bangra.b
+&& $DIR/bangra $DIR/testing/test_all.b
 # && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b
