@@ -1,20 +1,22 @@
 IR
 
-'
+"
 
-the bangra language only deals with dynamic data types (Value) on its top level
+the typed bangra expression format is
+    (: expression type)
 
-every bangra function follows this IR signature::
-    (function Value Upvalues Value)
+at this point it is assumed that all expressions nested in <expression> are
+typed.
 
-where the return value is the first element of a chain of return values, the
-first argument is a chain of upvalues, and the second argument is the first
-element of a chain of arguments. All three arguments can be null.
+a root expression that is not a typed expression is expanded / resolved before
+expansion continues.
 
-a bangra module is specified to export a bangra function "::ret::" which
-returns a table that maps symbols to other objects.
 
-'
+
+
+
+
+"
 
 include "../api.b"
 include "../macros.b"
@@ -225,7 +227,9 @@ define expand-expression (value env)
                                 else
                                     qquote
                                         error
-                                            unquote value
+                                            unquote
+                                                call set-next value
+                                                    null Value
                                             "function expected"
             tail
 
@@ -302,22 +306,6 @@ define global-preprocessor (ir-env value)
                 IR
                     #include "../libc.b"
 
-                    defvalue ref
-                        declare "bangra_ref" (function Value Value)
-                    defvalue set-next
-                        declare "bangra_set_next" (function Value Value Value)
-                    defvalue set-next!
-                        declare "bangra_set_next_mutable" (function Value Value Value)
-                    unquote
-                        call export-global-function (quote print) print
-                    unquote
-                        call export-global-function (quote +) add
-                    defvalue cons
-                        quote (function Value Value Value)
-                            unquote
-                                call new-handle
-                                    bitcast cons &opaque
-
                     define ::ret:: ()
                         function void
                         unquote result
@@ -345,10 +333,17 @@ run
         global-preprocessor
 
 module test-bangra bangra
-    var x
-        + 1 2 3 4 5 6 7
 
-    print 1 2 3
-        x
-        "test"
+    let
+        :
+            printf
+            function i32 rawstring ...
+
+    :
+        printf
+            :
+                bitcast (global "" "hello world") rawstring
+                rawstring
+        i32
+
 
