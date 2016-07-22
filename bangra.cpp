@@ -4741,6 +4741,8 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 //------------------------------------------------------------------------------
 
 static LLVMTypeRef _opaque = NULL;
+static LLVMTypeRef _t_Value = NULL;
+static LLVMTypeRef _t_Environment = NULL;
 
 static void init() {
     registerValueTranslators();
@@ -4749,8 +4751,14 @@ static void init() {
     if (!gc_root)
         gc_root = new Pointer();
 
-    if (!_opaque)
-        _opaque = LLVMStructCreateNamed(LLVMGetGlobalContext(), "opaque");
+    if (!_opaque) {
+        _opaque = LLVMStructCreateNamed(
+            LLVMGetGlobalContext(), "opaque");
+        _t_Value = LLVMStructCreateNamed(
+            LLVMGetGlobalContext(), "_Value");
+        _t_Environment = LLVMStructCreateNamed(
+            LLVMGetGlobalContext(), "_Environment");
+    }
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -4784,6 +4792,11 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
 
     env->types["rawstring"] = LLVMPointerType(LLVMInt8Type(), 0);
     env->types["opaque"] = _opaque;
+
+    env->types["_Value"] = _t_Value;
+    env->types["Value"] = LLVMPointerType(_t_Value, 0);
+    env->types["_Environment"] = _t_Environment;
+    env->types["Environment"] = LLVMPointerType(_t_Environment, 0);
 
     env->values["true"] = LLVMConstInt(LLVMInt1Type(), 1, 1);
     env->values["false"] = LLVMConstInt(LLVMInt1Type(), 0, 1);

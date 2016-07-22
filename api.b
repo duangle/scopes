@@ -6,11 +6,6 @@ IR
 
 # opaque declarations for the bangra compiler Environment and the Values of
 # its S-Expression tree, which can be Pointer, String, Symbol, Integer, Real.
-defstruct _Environment
-defstruct _Value
-
-deftype Environment (pointer _Environment)
-deftype Value (pointer _Value)
 
 defvalue value-type-none 0
 defvalue value-type-pointer 1

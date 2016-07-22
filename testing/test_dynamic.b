@@ -297,33 +297,31 @@ define global-preprocessor (ir-env value)
             load global-env
 
     ret
-        call dump-value
-            qquote
-                IR
-                    #include "../libc.b"
+        qquote
+            IR
+                #include "../libc.b"
 
-                    defvalue ref
-                        declare "bangra_ref" (function Value Value)
-                    defvalue set-next
-                        declare "bangra_set_next" (function Value Value Value)
-                    defvalue set-next!
-                        declare "bangra_set_next_mutable" (function Value Value Value)
-                    unquote
-                        call export-global-function (quote print) print
-                    unquote
-                        call export-global-function (quote +) add
-                    defvalue cons
-                        quote (function Value Value Value)
-                            unquote
-                                call new-handle
-                                    bitcast cons &opaque
+                defvalue ref
+                    declare "bangra_ref" (function Value Value)
+                defvalue set-next
+                    declare "bangra_set_next" (function Value Value Value)
+                defvalue set-next!
+                    declare "bangra_set_next_mutable" (function Value Value Value)
+                unquote
+                    call export-global-function (quote print) print
+                unquote
+                    call export-global-function (quote +) add
+                defvalue cons
+                    quote (function Value Value Value)
+                        unquote
+                            call new-handle
+                                bitcast cons &opaque
 
-                    define ::ret:: ()
-                        function void
-                        unquote result
-                        ret;
-                    dump-module;
-                    execute ::ret::
+                define ::ret:: ()
+                    function void
+                    unquote result
+                    ret;
+                execute ::ret::
 
 # install bangra preprocessor
 run
@@ -345,10 +343,9 @@ run
         global-preprocessor
 
 module test-bangra bangra
-    var x
-        + 1 2 3 4 5 6 7
-
-    print 1 2 3
-        x
+    print
+        + 1 2 3
+        \ 1 2 3
+        + 1 2 3 4 5
         "test"
 
