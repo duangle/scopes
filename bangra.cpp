@@ -5069,9 +5069,7 @@ ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs) {
 
 ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs) {
     if (lhs) {
-        if (auto ptr = llvm::dyn_cast<bangra::Pointer>(lhs)) {
-            ptr->setNext(rhs);
-        }
+        lhs->setNext(rhs);
     }
     return NULL;
 }

@@ -25,45 +25,7 @@ include "../libc.b"
 ################################################################################
 # build and install the preprocessor hook function.
 
-deftype Upvalues Value
 deftype &opaque (pointer opaque)
-
-defvalue internal
-    quote internal
-
-defvalue header-function
-    quote function
-
-deftype Function
-    function Value Upvalues Value
-
-define print (upval param)
-    Function
-    call dump-value
-        call ref param
-    ret
-        null Value
-
-define add (upval param)
-    Function
-    defvalue result
-        alloca i64
-    store
-        int i64 0
-        result
-    loop value
-        param
-        icmp != value (null Value)
-        call next value
-        store
-            add
-                load result
-                call integer-value value
-            result
-
-    ret
-        call new-integer
-            load result
 
 define wrap-pointer (head ptr)
     function Value Value &opaque
@@ -73,13 +35,6 @@ define wrap-pointer (head ptr)
                 unquote
                     call new-handle ptr
 
-define wrap-function (f)
-    function Value (pointer Function)
-    ret
-        call wrap-pointer
-            header-function
-            bitcast f &opaque
-
 deftype MacroFunction
     function Value Value Value
 
@@ -87,17 +42,6 @@ defvalue key-symbols
     quote "symbols"
 defvalue key-ir-env
     quote "ir-env"
-
-define function? (value)
-    function i1 Value
-    defvalue head
-        call at value
-    ret
-        ?
-            call value== head header-function
-            call handle?
-                call next head
-            false
 
 define get-ir-env (env)
     function Environment Value
@@ -160,78 +104,55 @@ define expand-expression-list (value env)
                     store expanded-expr prev-expr
                 load head-expr
 
-define make-call-params (value)
+define single (value)
     function Value Value
     ret
-        ?
-            icmp == value (null Value)
-            quote (null Value)
-            qquote
-                call cons
-                    unquote
-                        call set-next value
-                            null Value
-                    unquote
-                        call make-call-params
-                            call next value
+        call set-next value (null Value)
 
 define expand-expression (value env)
     MacroFunction
     defvalue tail
         call next value
     ret
-        call set-next
-            ?
-                call atom? value
-                if
-                    icmp != (call symbol? value) true;
-                        qquote
-                            quote _Value
-                                unquote
-                                    call set-next value (null Value)
-                    else
-                        qquote
-                            call error-message
-                                call get-ir-env env
-                                value
-                                &str "unknown atom"
-                            null Value
-                splice
-                    defvalue head
-                        call at value
-                    ?
-                        call expression? value (quote escape)
-                        splice
-                            call set-next
-                                call next
-                                    call at value
-                                call next value
-                        splice
-                            defvalue handler
-                                call get-key!
-                                    call get-symbols env
-                                    head
-                            if
-                                icmp == handler internal;
-                                    defvalue params
-                                        call make-call-params
-                                            call expand-expression-list
-                                                call next head
-                                                env
-                                    qquote
-                                        call
-                                            unquote
-                                                call set-next head (null Value)
-                                            null Value
-                                            unquote params
-                                else
-                                    qquote
-                                        error
-                                            unquote
-                                                call set-next value
-                                                    null Value
-                                            "function expected"
-            tail
+        ?
+            call atom? value
+            call set-next
+                qquote
+                    error
+                        unquote
+                            call single value
+                        "unknown atom"
+                tail
+            splice
+                defvalue head
+                    call at value
+                ?
+                    call value== head (quote :)
+                    call set-next
+                        call next head
+                        tail
+                    splice
+                        defvalue handler
+                            call get-key!
+                                call get-symbols env
+                                head
+                        if
+                            call handle? handler;
+                                call expand-expression
+                                    call
+                                        bitcast
+                                            call handle-value handler
+                                            pointer MacroFunction
+                                        value
+                                        env
+                                    env
+                            else
+                                qquote
+                                    error
+                                        unquote
+                                            call set-next value
+                                                null Value
+                                        "unable to resolve symbol"
 
 global global-env
     null Value
@@ -254,33 +175,6 @@ define set-global-syntax (head handler)
                 handler
                 pointer opaque
     ret;
-
-define export-global-function (name f)
-    function Value Value (pointer Function)
-    ret
-        qquote
-            defvalue
-                unquote name
-                quote
-                    Function
-                    unquote
-                        call new-handle
-                            bitcast f &opaque
-
-define cons (a b)
-    function Value Value Value
-    cond-br
-        icmp == a (null Value)
-        block $is-null
-        block $else
-    set-block $is-null
-    ret
-        call set-next
-            call ref a
-            b
-    set-block $else
-    ret
-        call set-next a b
 
 # the top level expression goes through the preprocessor, which then descends
 # the expression tree and translates it to bangra IR.
@@ -325,8 +219,17 @@ run
         key-symbols
         symtable
 
-    call set-global (quote print) internal
-    call set-global (quote +) internal
+    call set-global-syntax
+        quote let
+        define "" (value env)
+            MacroFunction
+            ret
+                call set-next
+                    qquote
+                        :
+                            true
+                            boolean
+                    call next value
 
     call set-preprocessor
         &str "bangra"
@@ -334,16 +237,14 @@ run
 
 module test-bangra bangra
 
-    let
-        :
-            printf
+    :
+        declare printf
             function i32 rawstring ...
+        function i32 rawstring ...
 
     :
-        printf
-            :
-                bitcast (global "" "hello world") rawstring
-                rawstring
+        call printf
+            bitcast (global "" "hello world\n") rawstring
         i32
 
 
