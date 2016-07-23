@@ -82,18 +82,40 @@ define get-expr (value)
         call next
             call at value
 
-define replace (fromvalue tovalue)
-    function Value Value Value
-    ret
-        call set-next tovalue
-            call next fromvalue
-
 define get-type (value)
     function Value Value
     ret
         call next
             call next
                 call at value
+
+define typed (value-expr type-expr)
+    function Value Value Value
+    ret
+        call ref
+            call set-next (quote :)
+                    call set-next value-expr
+                        call clear-next type-expr
+
+define function? (value)
+    function i1 Value
+    ret
+        call value==
+            call at value
+            quote function
+
+define return-type (value)
+    function Value Value
+    ret
+        call next
+            call at value
+
+define replace (fromvalue tovalue)
+    function Value Value Value
+    ret
+        call set-next tovalue
+            call next fromvalue
+
 
 declare expand-expression
     MacroFunction
@@ -133,45 +155,6 @@ define expand-expression-list (value env f)
                     store expanded-expr prev-expr
                 load head-expr
 
-define expand-expression (value env)
-    MacroFunction
-    defvalue tail
-        call next value
-    ret
-        ?
-            call atom? value
-            call replace value
-                qquote
-                    error
-                        unquote value
-                        "unknown atom"
-            splice
-                defvalue head
-                    call at value
-                ?
-                    call typed? value
-                    value
-                    splice
-                        defvalue handler
-                            call get-key!
-                                call get-symbols env
-                                head
-                        if
-                            call handle? handler;
-                                call expand-expression
-                                    call
-                                        bitcast
-                                            call handle-value handler
-                                            pointer MacroFunction
-                                        value
-                                        env
-                                    env
-                            else
-                                qquote
-                                    error
-                                        unquote value
-                                        "unable to resolve symbol"
-
 define expand-untype-expression (value env)
     MacroFunction
     defvalue expanded-value
@@ -181,6 +164,79 @@ define expand-untype-expression (value env)
             call replace value
                 call get-expr expanded-value
             expanded-value
+
+define expand-expression (value env)
+    MacroFunction
+    defvalue tail
+        call next value
+    ret
+        ?
+            call atom? value
+            splice
+                defvalue resolved-sym
+                    call get-key!
+                        call get-symbols env
+                        value
+                ?
+                    icmp == resolved-sym (null Value)
+                    qquote
+                        error
+                            unquote value
+                            "unknown atom"
+                    resolved-sym
+            splice
+                defvalue head
+                    call at value
+                ?
+                    call typed? value
+                    value
+                    splice
+                        # resolve first argument
+                        defvalue resolved-head
+                            call expand-expression
+                                head
+                                env
+                        if
+                            # macro?
+                            call handle? resolved-head;
+                                call expand-expression
+                                    call
+                                        bitcast
+                                            call handle-value resolved-head
+                                            pointer MacroFunction
+                                        value
+                                        env
+                                    env
+                            # function call
+                            else
+                                defvalue resolved-params
+                                    call expand-expression-list
+                                        call next
+                                            call at value
+                                        env
+                                        expand-expression
+                                defvalue sym-type
+                                    call get-type resolved-head
+                                if
+                                    call function? sym-type;
+                                        call typed
+                                            qquote
+                                                call
+                                                    unquote
+                                                        call get-expr resolved-head
+                                                    unquote-splice
+                                                        call expand-expression-list
+                                                            call next
+                                                                call at value
+                                                            env
+                                                            expand-untype-expression
+                                            call return-type sym-type
+                                    else
+                                        qquote
+                                            error
+                                                unquote value
+                                                "symbol is not a function or macro"
+
 
 global global-env
     null Value
@@ -227,8 +283,6 @@ define global-preprocessor (ir-env value)
         call dump-value
             qquote
                 IR
-                    #include "../libc.b"
-
                     define ::ret:: ()
                         function void
                         unquote-splice result
@@ -257,14 +311,24 @@ run
                     defvalue name
                         call next
                             call at value
-            ret
+            defvalue expr-type
+                call get-type expr
+            defvalue newexpr
                 call replace value
-                    qquote
-                        :
+                    call typed
+                        qquote
                             defvalue
                                 unquote name
                                 unquote
                                     call get-expr expr
+                        expr-type
+            call set-key!
+                call get-symbols env
+                name
+                call typed
+                    name
+                    expr-type
+            ret newexpr
 
     call set-preprocessor
         &str "bangra"
@@ -278,9 +342,9 @@ module test-bangra bangra
                 function i32 rawstring ...
             function i32 rawstring ...
 
-    :
-        call printf
+    printf
+        :
             bitcast (global "" "hello world\n") rawstring
-        i32
+            rawstring
 
 

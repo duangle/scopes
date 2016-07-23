@@ -231,31 +231,12 @@ defvalue expression?
                 call at value
                 expected-head
 
-defvalue type-key
-    quote _Value "#bangra-type"
-
 defvalue clear-next
     define "" (value)
         function Value Value
         ret
             call set-next value (null Value)
 
-defvalue set-type
-    define "" (value value-type)
-        function void Value Value
-        call set-key!
-            value
-            type-key
-            value-type
-        ret;
-
-defvalue get-type
-    define "" (value)
-        function Value Value
-        ret
-            call get-key!
-                value
-                type-key
 
 defvalue ref-set-next
     define "" (lhs rhs)
