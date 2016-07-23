@@ -97,18 +97,38 @@ define typed (value-expr type-expr)
                     call set-next value-expr
                         call clear-next type-expr
 
-define function? (value)
+define function-type? (value)
     function i1 Value
     ret
         call value==
             call at value
             quote function
 
+define pointer-type? (value)
+    function i1 Value
+    ret
+        call value==
+            call at value
+            quote pointer
+
+define element-type (value)
+    function Value Value
+    ret
+        call next
+            call at value
+
 define return-type (value)
     function Value Value
     ret
         call next
             call at value
+
+define param-types (value)
+    function Value Value
+    ret
+        call next
+            call next
+                call at value
 
 define replace (fromvalue tovalue)
     function Value Value Value
@@ -120,8 +140,8 @@ define replace (fromvalue tovalue)
 declare expand-expression
     MacroFunction
 
-# expression list is expanded chain-aware
-define expand-expression-list (value env f)
+# list is mapped chain-aware
+define map (value ctx f)
     function Value Value Value (pointer MacroFunction)
     ret
         ?
@@ -140,7 +160,7 @@ define expand-expression-list (value env f)
                     icmp != expr (null Value)
                     call next expanded-expr
                     defvalue expanded-expr
-                        call f expr env
+                        call f expr ctx
                     defvalue @prev-expr
                         load prev-expr
                     ? (icmp == @prev-expr (null Value))
@@ -165,6 +185,66 @@ define expand-untype-expression (value env)
                 call get-expr expanded-value
             expanded-value
 
+defvalue ellipsis
+    quote ...
+
+define type== (value1 value2)
+    function i1 Value Value
+    ret
+        if
+            call value== value1 ellipsis;
+                true
+            call value== value2 ellipsis;
+                true
+            or (call pointer? value1) (call pointer? value2);
+                call type==
+                    call at value1
+                    call at value2
+            call value== value1 value2;
+                ?
+                    and
+                        icmp == value1 (null Value)
+                        icmp == value2 (null Value)
+                    true
+                    call type==
+                        call next value1
+                        call next value2
+            else false
+
+define cast-untype-parameter (value env)
+    MacroFunction
+    defvalue src-tuple
+        call next
+            defvalue dest-types value
+    defvalue dest-type
+        call at dest-types
+    # if ellipsis, keep, otherwise iterate to next type
+    defvalue next-dest-type
+        select
+            call value== dest-type (quote ...)
+            dest-type
+            call next dest-type
+    defvalue src-value
+        call get-expr src-tuple
+    defvalue src-type
+        call get-type src-tuple
+    defvalue casted-src-value
+        ?
+            call type== src-type dest-type
+            src-value
+            qquote
+                bitcast
+                    unquote src-value
+                    unquote dest-type
+    ret
+        call set-next casted-src-value
+            select
+                icmp == next-dest-type (null Value)
+                null Value
+                call set-next!
+                    call ref next-dest-type
+                    call next src-tuple
+
 define expand-expression (value env)
     MacroFunction
     defvalue tail
@@ -173,17 +253,45 @@ define expand-expression (value env)
         ?
             call atom? value
             splice
-                defvalue resolved-sym
-                    call get-key!
-                        call get-symbols env
-                        value
-                ?
-                    icmp == resolved-sym (null Value)
-                    qquote
-                        error
-                            unquote value
-                            "unknown atom"
-                    resolved-sym
+                if
+                    call symbol? value;
+                        defvalue resolved-sym
+                            call get-key!
+                                call get-symbols env
+                                value
+                        ?
+                            icmp == resolved-sym (null Value)
+                            qquote
+                                :
+                                    error
+                                        unquote value
+                                        "unknown symbol"
+                                    error
+                            call replace value resolved-sym
+                    call string? value;
+                        call replace value
+                            qquote
+                                :
+                                    global ""
+                                        unquote value
+                                    pointer
+                                        array i8
+                                            unquote
+                                                call new-integer
+                                                    call string-size value
+                    call integer? value;
+                        call replace value
+                            qquote
+                                :
+                                    unquote value
+                                    i32
+                    else
+                        qquote
+                            :
+                                error
+                                    unquote value
+                                    "invalid atom"
+                                error
             splice
                 defvalue head
                     call at value
@@ -210,7 +318,7 @@ define expand-expression (value env)
                             # function call
                             else
                                 defvalue resolved-params
-                                    call expand-expression-list
+                                    call map
                                         call next
                                             call at value
                                         env
@@ -218,24 +326,41 @@ define expand-expression (value env)
                                 defvalue sym-type
                                     call get-type resolved-head
                                 if
-                                    call function? sym-type;
+                                    call function-type? sym-type;
+                                        defvalue funcname
+                                            call get-expr resolved-head
+                                        defvalue funcparamtypes
+                                            call param-types sym-type
+                                        # expand params to retrieve final types
+                                        defvalue params
+                                            call map
+                                                call next
+                                                    call at value
+                                                env
+                                                expand-expression
+                                        # casted params
+                                        defvalue castedparams
+                                            call map
+                                                # prepend types to params so mapping
+                                                # function can read them
+                                                call set-next
+                                                    call ref funcparamtypes
+                                                    params
+                                                env
+                                                cast-untype-parameter
                                         call typed
                                             qquote
                                                 call
-                                                    unquote
-                                                        call get-expr resolved-head
-                                                    unquote-splice
-                                                        call expand-expression-list
-                                                            call next
-                                                                call at value
-                                                            env
-                                                            expand-untype-expression
+                                                    unquote funcname
+                                                    unquote-splice castedparams
                                             call return-type sym-type
                                     else
                                         qquote
-                                            error
-                                                unquote value
-                                                "symbol is not a function or macro"
+                                            :
+                                                error
+                                                    unquote value
+                                                    "symbol is not a function or macro"
+                                                error
 
 
 global global-env
@@ -273,7 +398,7 @@ define global-preprocessor (ir-env value)
                 pointer opaque
 
     defvalue result
-        call expand-expression-list
+        call map
             call next
                 call at value
             load global-env
@@ -342,9 +467,7 @@ module test-bangra bangra
                 function i32 rawstring ...
             function i32 rawstring ...
 
-    printf
-        :
-            bitcast (global "" "hello world\n") rawstring
-            rawstring
+    printf "%s %s\n" "hello" "world"
+
 
 

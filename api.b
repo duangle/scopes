@@ -103,6 +103,8 @@ defvalue new-symbol
     declare "bangra_symbol" (function Value rawstring)
 defvalue string-value
     declare "bangra_string_value" (function rawstring Value)
+defvalue string-size
+    declare "bangra_string_size" (function i64 Value)
 
 # real
 #-------------------------------------------------------------------------------
@@ -183,6 +185,14 @@ defvalue atom?
                 null Value
         set-block $is-not-pointer
         ret (int i1 1)
+
+defvalue integer?
+    define "" (value)
+        function i1 Value
+        ret
+            icmp ==
+                call kind-of value
+                value-type-integer
 
 defvalue symbol?
     define "" (value)

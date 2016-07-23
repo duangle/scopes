@@ -82,6 +82,7 @@ ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_string(const char *value);
 ValueRef bangra_symbol(const char *value);
 const char *bangra_string_value(ValueRef expr);
+signed long long int bangra_string_size(ValueRef expr);
 
 // real
 //------------------------------------------------------------------------------
@@ -5065,6 +5066,7 @@ ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs) {
     if (lhs) {
         if (auto ptr = llvm::dyn_cast<bangra::Pointer>(lhs)) {
             ptr->setAt(rhs);
+            return lhs;
         }
     }
     return NULL;
@@ -5073,6 +5075,7 @@ ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs) {
 ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs) {
     if (lhs) {
         lhs->setNext(rhs);
+        return lhs;
     }
     return NULL;
 }
@@ -5084,6 +5087,15 @@ const char *bangra_string_value(ValueRef expr) {
         }
     }
     return NULL;
+}
+
+signed long long int bangra_string_size(ValueRef expr) {
+    if (expr) {
+        if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
+            return (signed long long int)str->getValue().size() + 1;
+        }
+    }
+    return 0;
 }
 
 void *bangra_handle_value(ValueRef expr) {
