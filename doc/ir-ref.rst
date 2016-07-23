@@ -275,7 +275,9 @@ Metaprogramming
 
 .. ir-special:: (splice (? expression ...))
 
-.. ir-special:: (error message-string)
+.. ir-macro:: (print (? value ...))
+
+.. ir-special:: (error expression message-string)
 
 .. ir-special:: (nop)
 

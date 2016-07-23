@@ -31,7 +31,7 @@ define wrap-pointer (head ptr)
     function Value Value &opaque
     ret
         qquote
-            unquote head;
+            unquote-splice head;
                 unquote
                     call new-handle ptr
 
@@ -66,12 +66,41 @@ define get-handler (env head)
                     head
             pointer MacroFunction
 
+define single (value)
+    function Value Value
+    ret
+        call set-next value (null Value)
+
+define typed? (value)
+    function i1 Value
+    ret
+        call value== (call at value) (quote :)
+
+define get-expr (value)
+    function Value Value
+    ret
+        call next
+            call at value
+
+define replace (fromvalue tovalue)
+    function Value Value Value
+    ret
+        call set-next tovalue
+            call next fromvalue
+
+define get-type (value)
+    function Value Value
+    ret
+        call next
+            call next
+                call at value
+
 declare expand-expression
     MacroFunction
 
 # expression list is expanded chain-aware
-define expand-expression-list (value env)
-    function Value Value Value
+define expand-expression-list (value env f)
+    function Value Value Value (pointer MacroFunction)
     ret
         ?
             icmp == value
@@ -89,7 +118,7 @@ define expand-expression-list (value env)
                     icmp != expr (null Value)
                     call next expanded-expr
                     defvalue expanded-expr
-                        call expand-expression expr env
+                        call f expr env
                     defvalue @prev-expr
                         load prev-expr
                     ? (icmp == @prev-expr (null Value))
@@ -104,11 +133,6 @@ define expand-expression-list (value env)
                     store expanded-expr prev-expr
                 load head-expr
 
-define single (value)
-    function Value Value
-    ret
-        call set-next value (null Value)
-
 define expand-expression (value env)
     MacroFunction
     defvalue tail
@@ -116,21 +140,17 @@ define expand-expression (value env)
     ret
         ?
             call atom? value
-            call set-next
+            call replace value
                 qquote
                     error
-                        unquote
-                            call single value
+                        unquote value
                         "unknown atom"
-                tail
             splice
                 defvalue head
                     call at value
                 ?
-                    call value== head (quote :)
-                    call set-next
-                        call next head
-                        tail
+                    call typed? value
+                    value
                     splice
                         defvalue handler
                             call get-key!
@@ -149,10 +169,18 @@ define expand-expression (value env)
                             else
                                 qquote
                                     error
-                                        unquote
-                                            call set-next value
-                                                null Value
+                                        unquote value
                                         "unable to resolve symbol"
+
+define expand-untype-expression (value env)
+    MacroFunction
+    defvalue expanded-value
+        call expand-expression value env
+    ret
+        ? (call typed? expanded-value)
+            call replace value
+                call get-expr expanded-value
+            expanded-value
 
 global global-env
     null Value
@@ -193,6 +221,7 @@ define global-preprocessor (ir-env value)
             call next
                 call at value
             load global-env
+            expand-untype-expression
 
     ret
         call dump-value
@@ -202,7 +231,7 @@ define global-preprocessor (ir-env value)
 
                     define ::ret:: ()
                         function void
-                        unquote result
+                        unquote-splice result
                         ret;
                     dump-module;
                     execute ::ret::
@@ -223,13 +252,19 @@ run
         quote let
         define "" (value env)
             MacroFunction
+            defvalue expr
+                call next
+                    defvalue name
+                        call next
+                            call at value
             ret
-                call set-next
+                call replace value
                     qquote
                         :
-                            true
-                            boolean
-                    call next value
+                            defvalue
+                                unquote name
+                                unquote
+                                    call get-expr expr
 
     call set-preprocessor
         &str "bangra"
@@ -237,10 +272,11 @@ run
 
 module test-bangra bangra
 
-    :
-        declare printf
+    let printf
+        :
+            declare "printf"
+                function i32 rawstring ...
             function i32 rawstring ...
-        function i32 rawstring ...
 
     :
         call printf

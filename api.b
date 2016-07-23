@@ -68,8 +68,8 @@ defvalue set-next
 defvalue set-next!
     declare "bangra_set_next_mutable" (function Value Value Value)
 
-defvalue dump-value
-    declare "bangra_dump_value" (function Value Value)
+defvalue print-value
+    declare "bangra_print_value" (function void Value i32)
 
 defvalue anchor-path
     declare "bangra_anchor_path" (function rawstring Value)
@@ -234,6 +234,12 @@ defvalue expression?
 defvalue type-key
     quote _Value "#bangra-type"
 
+defvalue clear-next
+    define "" (value)
+        function Value Value
+        ret
+            call set-next value (null Value)
+
 defvalue set-type
     define "" (value value-type)
         function void Value Value
@@ -280,3 +286,9 @@ define prepend (xs ys)
     ret
         call ref
             call join xs (call at ys)
+
+define dump-value (value)
+    function Value Value
+    call print-value value 0
+    ret value
+

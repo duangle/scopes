@@ -58,7 +58,7 @@ ValueRef bangra_next(ValueRef expr);
 ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
 
-ValueRef bangra_dump_value(ValueRef expr);
+void bangra_print_value(ValueRef expr, int depth);
 
 const char *bangra_anchor_path(ValueRef expr);
 int bangra_anchor_lineno(ValueRef expr);
@@ -5021,9 +5021,12 @@ int bangra_main(int argc, char ** argv) {
     return 0;
 }
 
-ValueRef bangra_dump_value(ValueRef expr) {
-    bangra::printValue(expr);
-    return expr;
+void bangra_print_value(ValueRef expr, int depth) {
+    if (depth < 0) {
+        bangra::printValue(expr, 0, false);
+    } else {
+        bangra::printValue(expr, (size_t)depth, true);
+    }
 }
 
 void bangra_set_preprocessor(const char *name, bangra_preprocessor f) {

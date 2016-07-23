@@ -2,6 +2,7 @@ IR
 
 # requires api.b to be included first
 include "api.b"
+include "libc.b"
 
 define macro-quote (env expr)
     preprocessor-func
@@ -62,9 +63,23 @@ define qquote-1 (value)
         block $is-not-unquote
     set-block $is-unquote
     ret
+        call ref
+            call join
+                call at
+                    quote (call clear-next)
+                call next
+                    call at value
+    set-block $is-not-unquote
+    cond-br
+        call expression? value
+            quote unquote-splice
+        block $is-unquote-splice
+        block $is-not-unquote-splice
+    set-block $is-unquote-splice
+    ret
         call next
             call at value
-    set-block $is-not-unquote
+    set-block $is-not-unquote-splice
     cond-br
         call expression? value
             quote qquote
@@ -165,8 +180,7 @@ define macro-? (env expr)
                             unquote label-else
                         defvalue
                             unquote value-else
-                            unquote
-                                call set-next else-expr (null Value)
+                            unquote else-expr
                         defvalue
                             unquote label-else-br
                             this-block
@@ -200,8 +214,7 @@ define macro-? (env expr)
                 block
                     unquote label-finally
                 cond-br
-                    unquote
-                        call set-next condition (null Value)
+                    unquote condition
                     block
                         unquote label-then
                     unquote opt-else-blockdef
@@ -209,14 +222,13 @@ define macro-? (env expr)
                     unquote label-then
                 defvalue
                     unquote value-then
-                    unquote
-                        call set-next then-expr (null Value)
+                    unquote then-expr
                 defvalue
                     unquote label-then-br
                     this-block
                 br
                     unquote label-finally
-                unquote opt-else-expr
+                unquote-splice opt-else-expr
                 set-block
                     unquote label-finally
                 unquote opt-else-phi
@@ -240,17 +252,15 @@ define macro-if (env expr)
                 call at first-block
             qquote
                 splice
-                    unquote
+                    unquote-splice
                         call next
                             call at first-block
             qquote
                 ?
                     unquote
-                        call set-next
-                            call at first-block
-                            null Value
+                        call at first-block
                     splice
-                        unquote
+                        unquote-splice
                             call next
                                 call at first-block
                     unquote
@@ -258,7 +268,7 @@ define macro-if (env expr)
                             null Value
                             qquote
                                 if
-                                    unquote second-block
+                                    unquote-splice second-block
 
 
 # (loop varname init-expr cond-expr next-expr body-expr ...)
@@ -312,7 +322,7 @@ define macro-loop (env expr)
                         unquote label-finally
                 set-block
                     unquote label-loop
-                unquote body-expr
+                unquote-splice body-expr
                 incoming
                     unquote param-varname
                     unquote (call set-next next-expr (null Value));
@@ -329,3 +339,58 @@ run
     call set-macro env
         &str "loop"
         macro-loop
+
+defvalue space
+    &str " "
+defvalue newline
+    &str "\n"
+
+define macro-print (env expr)
+    preprocessor-func
+    defvalue param
+        call next expr
+    defvalue head
+        alloca Value
+    store (null Value) head
+    defvalue tail
+        alloca Value
+    store (null Value) tail
+    loop value
+        param
+        icmp != value(null Value)
+        call next value
+
+        defvalue xvalue
+            qquote
+                splice
+                    call print-value
+                        unquote value
+                        -1
+                    call printf
+                        unquote
+                            ?
+                                icmp == (call next value) (null Value)
+                                quote newline
+                                quote space
+
+        ? (icmp == (load tail) (null Value))
+            splice
+                store xvalue head
+                false
+            splice
+                call set-next!
+                    load tail
+                    xvalue
+                false
+        store xvalue tail
+    ret
+        qquote
+            splice
+                unquote-splice
+                    load head
+
+run
+    call set-macro env
+        &str "print"
+        macro-print
+

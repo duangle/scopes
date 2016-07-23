@@ -30,11 +30,11 @@ keyword_str = getprop("keywords.bangra_ir") or
         .. " splice null global quote typeof dump extractelement extractvalue load store ..."
         .. " compiler-do icmp fcmp IR alloca dumptype escape qquote block set-block"
         .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
-        .. " include incoming module declare-global select pointer"
+        .. " include incoming module declare-global select pointer va_arg"
         .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
         .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor true false"
         -- macros
-        .. " ? if else run &str loop"
+        .. " ? if else run &str loop print"
 
 operator_str = getprop("operators.bangra_ir") or
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
