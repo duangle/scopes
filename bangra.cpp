@@ -3009,24 +3009,6 @@ static LLVMValueRef tr_value_constant (Environment *env, ValueRef expr) {
     return value;
 }
 
-static LLVMValueRef tr_value_declare_global (Environment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_name);
-    UNPACK_ARG(expr, expr_type);
-
-    const char *name = translateString(env, expr_name);
-    if (!name) return NULL;
-
-    LLVMTypeRef type = translateType(env, expr_type);
-    if (!type) return NULL;
-
-    LLVMValueRef result = LLVMAddGlobal(env->getModule(), type, name);
-
-    if (isKindOf<Symbol>(expr_name))
-        env->values[name] = result;
-
-    return result;
-}
-
 static LLVMValueRef tr_value_global (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_name);
     UNPACK_ARG(expr, expr_value);
@@ -4007,15 +3989,17 @@ static LLVMValueRef tr_value_declare (Environment *env, ValueRef expr) {
     const char *name = translateString(env, expr_name);
     if (!name) return NULL;
 
-    LLVMTypeRef functype = translateType(env, expr_type);
-
-    auto _ = env->with_expr(expr_type);
-
-    if (!functype)
+    LLVMTypeRef type = translateType(env, expr_type);
+    if (!type)
         return NULL;
 
-    LLVMValueRef result = LLVMAddFunction(
-        env->getModule(), name, functype);
+    LLVMValueRef result = NULL;
+    LLVMTypeKind kind = LLVMGetTypeKind(type);
+    if (kind == LLVMFunctionTypeKind) {
+        result = LLVMAddFunction(env->getModule(), name, type);
+    } else {
+        result = LLVMAddGlobal(env->getModule(), type, name);
+    }
 
     if (isKindOf<Symbol>(expr_name))
         env->values[name] = result;
@@ -4321,7 +4305,6 @@ static void registerValueTranslators() {
     t.set(tr_value_dump, "dump", 1, 1);
     t.set(tr_value_dumptype, "dumptype", 1, 1);
     t.set(tr_value_constant, "constant", 1, 1);
-    t.set(tr_value_declare_global, "declare-global", 2, 2);
     t.set(tr_value_global, "global", 2, 2);
     t.set(tr_value_quote, "quote", 2, 2);
     t.set(tr_value_alignof, "alignof", 1, 1);

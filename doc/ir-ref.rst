@@ -45,9 +45,7 @@ Definitions
 
 .. ir-special:: (define name ((? param ...)) type (? expression ...))
 
-.. ir-special:: (declare c-symbol-string type)
-
-.. ir-special:: (declare-global c-symbol-string type)
+.. ir-special:: (declare symbol-string type)
 
 Aggregate Constructors
 ----------------------

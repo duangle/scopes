@@ -17,11 +17,11 @@ defvalue value-type-handle 6
 defvalue value-type-table 7
 
 defvalue argc
-    declare-global "bang_argc" i32
+    declare "bang_argc" i32
 defvalue argv
-    declare-global "bang_argv" (pointer rawstring)
+    declare "bang_argv" (pointer rawstring)
 defvalue executable-path
-    declare-global "bang_executable_path" rawstring
+    declare "bang_executable_path" rawstring
 
 # LLVM compatibility
 #-------------------------------------------------------------------------------
