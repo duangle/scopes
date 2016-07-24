@@ -238,6 +238,42 @@ run
         &str "?"
         macro-?
 
+define macro-and? (env expr)
+    preprocessor-func
+    defvalue value-b
+        call next
+            defvalue value-a
+                call next expr
+    defvalue tmp-a (call unique-symbol (&str "tmp"))
+    ret
+        qquote
+            splice
+                defvalue
+                    unquote tmp-a
+                    unquote value-a
+                ?
+                    unquote tmp-a
+                    unquote value-b
+                    unquote tmp-a
+
+define macro-or? (env expr)
+    preprocessor-func
+    defvalue value-b
+        call next
+            defvalue value-a
+                call next expr
+    defvalue tmp-a (call unique-symbol (&str "tmp"))
+    ret
+        qquote
+            splice
+                defvalue
+                    unquote tmp-a
+                    unquote value-a
+                ?
+                    unquote tmp-a
+                    unquote tmp-a
+                    unquote value-b
+
 define macro-if (env expr)
     preprocessor-func
     defvalue second-block
@@ -333,6 +369,12 @@ define macro-loop (env expr)
                     unquote label-finally
 
 run
+    call set-macro env
+        &str "and?"
+        macro-and?
+    call set-macro env
+        &str "or?"
+        macro-or?
     call set-macro env
         &str "if"
         macro-if

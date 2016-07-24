@@ -89,6 +89,13 @@ define get-type (value)
             call next
                 call at value
 
+define error? (value)
+    function i1 Value
+    ret
+        call value==
+            call get-type value
+            quote error
+
 define typed (value-expr type-expr)
     function Value Value Value
     ret
@@ -245,6 +252,54 @@ define cast-untype-parameter (value env)
                     call ref next-dest-type
                     call next src-tuple
 
+define expand-call (resolved-head value env)
+    function Value Value Value Value
+    defvalue resolved-params
+        call map
+            call next
+                call at value
+            env
+            expand-expression
+    defvalue sym-type
+        call get-type resolved-head
+    ret
+        if
+            call function-type? sym-type;
+                defvalue funcname
+                    call get-expr resolved-head
+                defvalue funcparamtypes
+                    call param-types sym-type
+                # expand params to retrieve final types
+                defvalue params
+                    call map
+                        call next
+                            call at value
+                        env
+                        expand-expression
+                # casted params
+                defvalue castedparams
+                    call map
+                        # prepend types to params so mapping
+                        # function can read them
+                        call set-next
+                            call ref funcparamtypes
+                            params
+                        env
+                        cast-untype-parameter
+                call typed
+                    qquote
+                        call
+                            unquote funcname
+                            unquote-splice castedparams
+                    call return-type sym-type
+            else
+                qquote
+                    :
+                        error
+                            unquote value
+                            "symbol is not a function or macro"
+                        error
+
 define expand-expression (value env)
     MacroFunction
     defvalue tail
@@ -317,51 +372,7 @@ define expand-expression (value env)
                                     env
                             # function call
                             else
-                                defvalue resolved-params
-                                    call map
-                                        call next
-                                            call at value
-                                        env
-                                        expand-expression
-                                defvalue sym-type
-                                    call get-type resolved-head
-                                if
-                                    call function-type? sym-type;
-                                        defvalue funcname
-                                            call get-expr resolved-head
-                                        defvalue funcparamtypes
-                                            call param-types sym-type
-                                        # expand params to retrieve final types
-                                        defvalue params
-                                            call map
-                                                call next
-                                                    call at value
-                                                env
-                                                expand-expression
-                                        # casted params
-                                        defvalue castedparams
-                                            call map
-                                                # prepend types to params so mapping
-                                                # function can read them
-                                                call set-next
-                                                    call ref funcparamtypes
-                                                    params
-                                                env
-                                                cast-untype-parameter
-                                        call typed
-                                            qquote
-                                                call
-                                                    unquote funcname
-                                                    unquote-splice castedparams
-                                            call return-type sym-type
-                                    else
-                                        qquote
-                                            :
-                                                error
-                                                    unquote value
-                                                    "symbol is not a function or macro"
-                                                error
-
+                                call expand-call resolved-head value env
 
 global global-env
     null Value
@@ -426,16 +437,78 @@ run
         load global-env
         key-symbols
         symtable
+    call set-global
+        quote int
+        quote
+            : i32 type
+    call set-global
+        quote rawstring
+        quote
+            : rawstring type
+    call set-global
+        quote ...
+        quote
+            : ... type
+
+    call set-global-syntax
+        quote <-
+        define "" (value env)
+            MacroFunction
+            defvalue arg-params
+                call next
+                    defvalue arg-rettype
+                        call next
+                            call at value
+            defvalue rettype
+                call expand-expression arg-rettype env
+            defvalue params
+                call map
+                    call at arg-params
+                    env
+                    expand-untype-expression
+            ret
+                call replace value
+                    qquote
+                        :
+                            function
+                                unquote
+                                    call get-expr rettype
+                                unquote-splice params
+                            type
+
+    call set-global-syntax
+        quote declare
+        define "" (value env)
+            MacroFunction
+            defvalue namestr
+                call next
+                    call at value
+            defvalue type
+                call expand-expression
+                    call next namestr
+                    env
+            defvalue type-expr
+                call get-expr type
+            ret
+                call replace value
+                    qquote
+                        :
+                            declare
+                                unquote namestr
+                                unquote type-expr
+                            unquote type-expr
 
     call set-global-syntax
         quote let
         define "" (value env)
             MacroFunction
             defvalue expr
-                call next
-                    defvalue name
-                        call next
-                            call at value
+                call expand-expression
+                    call next
+                        defvalue name
+                            call next
+                                call at value
+                    env
             defvalue expr-type
                 call get-type expr
             defvalue newexpr
@@ -462,12 +535,13 @@ run
 module test-bangra bangra
 
     let printf
-        :
-            declare "printf"
-                function i32 rawstring ...
-            function i32 rawstring ...
+        declare "printf"
+            <- int (rawstring ...)
 
-    printf "%s %s\n" "hello" "world"
+    let hello "hello"
+    let world "world"
+
+    printf "%s %s\n" hello world
 
 
 

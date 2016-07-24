@@ -3268,7 +3268,8 @@ static LLVMValueRef tr_value_vectorof (Environment *env, ValueRef expr) {
     }
 }
 
-static LLVMValueRef tr_value_error (Environment *env, ValueRef expr) {
+template<typename ReturnT>
+static ReturnT tr_error (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_context);
     UNPACK_ARG(expr, expr_msg);
 
@@ -4315,7 +4316,7 @@ static void registerValueTranslators() {
     t.set(tr_value_arrayof, "arrayof", 1, -1);
     t.set(tr_value_vectorof, "vectorof", 1, -1);
 
-    t.set(tr_value_error, "error", 2, 2);
+    t.set(tr_error<LLVMValueRef>, "error", 2, 2);
 
     setCastOp<LLVMBuildTrunc, LLVMConstTrunc>("trunc");
     setCastOp<LLVMBuildZExt, LLVMConstZExt>("zext");
@@ -4425,7 +4426,7 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         return NULL;
     } else {
         auto _ = env->with_expr(head);
-        translateError(env, "unhandled special form or macro: %s. Did you forget a 'call'?", head->c_str());
+        translateError(env, "unhandled special form or macro in value: %s. Did you forget a 'call'?", head->c_str());
         return NULL;
     }
 }
@@ -4681,6 +4682,8 @@ static void registerTypeTranslators() {
     t.set(tr_type_vector, "vector", 2, 2);
     t.set(tr_type_struct, "struct", 1, -1);
 
+    t.set(tr_error<LLVMTypeRef>, "error", 2, 2);
+
 }
 
 static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
@@ -4693,7 +4696,7 @@ static LLVMTypeRef translateTypeFromList (Environment *env, ValueRef expr) {
         return NULL;
     } else {
         auto _ = env->with_expr(head);
-        translateError(env, "unhandled special form: %s", head->c_str());
+        translateError(env, "unhandled special form in type: %s", head->c_str());
         return NULL;
     }
 }

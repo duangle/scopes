@@ -20,6 +20,7 @@ run
         &str "testfile"
         macro-testfile
 
+testfile "test_andor.b"
 testfile "test_constexpr.b"
 testfile "test_intrinsic.b"
 testfile "test_argv.b"

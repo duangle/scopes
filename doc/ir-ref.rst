@@ -104,6 +104,10 @@ Flow Control
 
 .. ir-macro:: (? condition-expr then-expr else-expr)
 
+.. ir-macro:: (and? a-expr b-expr)
+
+.. ir-macro:: (or? a-expr b-expr)
+
 .. ir-macro:: (if (condition-expr expression ...) ... (? (_:else expression ...)))
 
 .. ir-macro:: (loop var-name init-expr condition-expr iterate-expr expression ...)
