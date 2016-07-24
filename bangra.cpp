@@ -3270,8 +3270,8 @@ static LLVMValueRef tr_value_vectorof (Environment *env, ValueRef expr) {
 
 template<typename ReturnT>
 static ReturnT tr_error (Environment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_context);
     UNPACK_ARG(expr, expr_msg);
+    UNPACK_ARG(expr, expr_context);
 
     LLVMValueRef msg = translateValue(env, expr_msg);
     if (!msg) return NULL;

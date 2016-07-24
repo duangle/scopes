@@ -279,7 +279,7 @@ Metaprogramming
 
 .. ir-macro:: (print (? value ...))
 
-.. ir-special:: (error expression message-string)
+.. ir-special:: (error message-string expression)
 
 .. ir-special:: (nop)
 

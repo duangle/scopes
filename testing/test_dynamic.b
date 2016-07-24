@@ -102,20 +102,20 @@ define get-ir-env (env)
     ret
         bitcast
             call handle-value
-                call get-key! env key-ir-env
+                call get-key env key-ir-env
             Environment
 
 define get-symbols (env)
     function Value Value
     ret
-        call get-key! env key-symbols
+        call get-key env key-symbols
 
 define get-handler (env head)
     function (pointer MacroFunction) Value Value
     ret
         bitcast
             call handle-value
-                call get-key!
+                call get-key
                     call get-symbols env
                     head
             pointer MacroFunction
@@ -206,7 +206,7 @@ define expand-expression (value env)
                                 call next value
                         splice
                             defvalue handler
-                                call get-key!
+                                call get-key
                                     call get-symbols env
                                     head
                             if

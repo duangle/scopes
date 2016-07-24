@@ -129,7 +129,7 @@ defvalue new-table
     declare "bangra_table" (function Value)
 defvalue set-key!
     declare "bangra_set_key" (function void Value Value Value)
-defvalue get-key!
+defvalue get-key
     declare "bangra_get_key" (function Value Value Value)
 
 # handle
@@ -170,6 +170,22 @@ defvalue pointer?
                 call kind-of value
                 value-type-pointer
 
+# null pointer
+defvalue nullpointer?
+    define "" (value)
+        function i1 Value
+        cond-br
+            call pointer? value
+            block $is-pointer
+            block $is-not-pointer
+        set-block $is-pointer
+        ret
+            icmp ==
+                call at value
+                null Value
+        set-block $is-not-pointer
+        ret (int i1 0)
+
 # non-pointer or null pointer
 defvalue atom?
     define "" (value)
@@ -193,6 +209,14 @@ defvalue integer?
             icmp ==
                 call kind-of value
                 value-type-integer
+
+defvalue real?
+    define "" (value)
+        function i1 Value
+        ret
+            icmp ==
+                call kind-of value
+                value-type-real
 
 defvalue symbol?
     define "" (value)

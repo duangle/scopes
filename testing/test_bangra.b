@@ -42,29 +42,67 @@ defvalue key-symbols
     quote "symbols"
 defvalue key-ir-env
     quote "ir-env"
+defvalue key-definition
+    quote "definition"
+defvalue key-env-meta
+    quote meta
 
 define get-ir-env (env)
     function Environment Value
     ret
         bitcast
             call handle-value
-                call get-key! env key-ir-env
+                call get-key env key-ir-env
             Environment
 
 define get-symbols (env)
     function Value Value
     ret
-        call get-key! env key-symbols
+        call get-key env key-symbols
 
-define get-handler (env head)
-    function (pointer MacroFunction) Value Value
+define new-env (meta-env)
+    function Value Value
+    defvalue obj
+        call new-table
+    defvalue symtable
+        call new-table
+    call set-key! obj key-symbols symtable
+    call set-key! obj key-env-meta meta-env
+    ret obj
+
+define get-symbol (env name)
+    function Value Value Value
     ret
-        bitcast
-            call handle-value
-                call get-key!
-                    call get-symbols env
-                    head
-            pointer MacroFunction
+        call get-key
+            call get-symbols env
+            name
+
+define resolve-symbol (env name)
+    function Value Value Value
+    defvalue result
+        call get-key
+            call get-symbols env
+            name
+    ret
+        ?
+            icmp != result (null Value)
+            result
+            splice
+                defvalue meta-env
+                    call get-key env key-env-meta
+                ?
+                    icmp == meta-env (null Value)
+                    null Value
+                    call resolve-symbol meta-env name
+
+
+define set-symbol (env name value)
+    function void Value Value Value
+    call set-key!
+        call get-symbols env
+        name
+        value
+    ret;
 
 define single (value)
     function Value Value
@@ -103,6 +141,32 @@ define typed (value-expr type-expr)
             call set-next (quote :)
                     call set-next value-expr
                         call clear-next type-expr
+
+define type? (value)
+    function i1 Value
+    ret
+        call value== value
+            quote type
+
+define typeclass? (value)
+    function i1 Value
+    ret
+        call value==
+            call at value
+            quote typeclass
+
+define typeclass-name (value)
+    function Value Value
+    ret
+        call next
+            call at value
+
+define typeclass-table (value)
+    function Value Value
+    ret
+        call next
+            call next
+                call at value
 
 define function-type? (value)
     function i1 Value
@@ -182,15 +246,24 @@ define map (value ctx f)
                     store expanded-expr prev-expr
                 load head-expr
 
+defvalue key-result-type
+    quote "result-type"
+
+# stores type of last element in env
 define expand-untype-expression (value env)
     MacroFunction
     defvalue expanded-value
         call expand-expression value env
-    ret
+    defvalue result
         ? (call typed? expanded-value)
-            call replace value
-                call get-expr expanded-value
+            splice
+                defvalue expanded-type
+                    call get-type expanded-value
+                call set-key! env key-result-type expanded-type
+                call replace value
+                    call get-expr expanded-value
             expanded-value
+    ret result
 
 defvalue ellipsis
     quote ...
@@ -252,14 +325,32 @@ define cast-untype-parameter (value env)
                     call ref next-dest-type
                     call next src-tuple
 
+define extract-type-map-parameters (value env)
+    MacroFunction
+    defvalue input-type
+        call get-type
+            defvalue input-expr
+                call next
+                    defvalue input-names value
+    defvalue input-name
+        call at input-names
+    call set-symbol env input-name
+        call typed input-name input-type
+    defvalue next-input-name
+        call next input-name
+    #print input-name input-type
+    ret
+        call set-next
+            input-type
+            select
+                icmp == next-input-name (null Value)
+                null Value
+                call set-next!
+                    call ref next-input-name
+                    call next input-expr
+
 define expand-call (resolved-head value env)
     function Value Value Value Value
-    defvalue resolved-params
-        call map
-            call next
-                call at value
-            env
-            expand-expression
     defvalue sym-type
         call get-type resolved-head
     ret
@@ -286,24 +377,86 @@ define expand-call (resolved-head value env)
                             params
                         env
                         cast-untype-parameter
-                call typed
-                    qquote
-                        call
-                            unquote funcname
-                            unquote-splice castedparams
-                    call return-type sym-type
+                call replace value
+                    call typed
+                        qquote
+                            call
+                                unquote funcname
+                                unquote-splice castedparams
+                        call return-type sym-type
+            call type? sym-type;
+                defvalue typedef
+                    call get-expr resolved-head
+                if
+                    call typeclass? typedef;
+                        defvalue obj
+                            call typeclass-table typedef
+                        defvalue type-params
+                            call get-key obj key-definition
+                        defvalue body
+                            call next type-params
+                        # expand params to retrieve final types
+                        defvalue params
+                            call map
+                                call next
+                                    call at value
+                                env
+                                expand-expression
+                        defvalue subenv
+                            call new-env env
+                        defvalue paramtypes
+                            call map
+                                call set-next
+                                    type-params
+                                    params
+                                subenv
+                                extract-type-map-parameters
+                        defvalue untyped-params
+                            call map params env
+                                expand-untype-expression
+                        defvalue expanded-body
+                            call map body subenv
+                                expand-untype-expression
+                        defvalue return-type
+                            call get-key subenv key-result-type
+                        print
+                            call ref body
+                        print
+                            call ref expanded-body
+                        defvalue function-type
+                            qquote
+                                function
+                                    unquote return-type
+                                    unquote-splice paramtypes
+                        defvalue function-decl
+                            qquote
+                                define "" (unquote type-params)
+                                    unquote function-type
+                                    ret
+                                        splice
+                                            unquote-splice expanded-body
+                        call replace value
+                            qquote
+                                :
+                                    call
+                                        unquote function-decl
+                                        unquote-splice untyped-params
+                                    unquote return-type
+                    else
+                        qquote
+                            :
+                                error "can not instantiate type"
+                                    unquote value
+                                error
             else
                 qquote
                     :
-                        error
+                        error "symbol is not a function or macro"
                             unquote value
-                            "symbol is not a function or macro"
                         error
 
 define expand-expression (value env)
     MacroFunction
-    defvalue tail
-        call next value
     ret
         ?
             call atom? value
@@ -311,16 +464,13 @@ define expand-expression (value env)
                 if
                     call symbol? value;
                         defvalue resolved-sym
-                            call get-key!
-                                call get-symbols env
-                                value
+                            call resolve-symbol env value
                         ?
                             icmp == resolved-sym (null Value)
                             qquote
                                 :
-                                    error
+                                    error "unknown symbol"
                                         unquote value
-                                        "unknown symbol"
                                     error
                             call replace value resolved-sym
                     call string? value;
@@ -340,12 +490,17 @@ define expand-expression (value env)
                                 :
                                     unquote value
                                     i32
+                    call real? value;
+                        call replace value
+                            qquote
+                                :
+                                    unquote value
+                                    float
                     else
                         qquote
                             :
-                                error
+                                error "invalid atom"
                                     unquote value
-                                    "invalid atom"
                                 error
             splice
                 defvalue head
@@ -356,9 +511,7 @@ define expand-expression (value env)
                     splice
                         # resolve first argument
                         defvalue resolved-head
-                            call expand-expression
-                                head
-                                env
+                            call expand-expression head env
                         if
                             # macro?
                             call handle? resolved-head;
@@ -379,9 +532,8 @@ global global-env
 
 define set-global (key value)
     function void Value Value
-    call set-key!
-        call get-symbols
-            load global-env
+    call set-symbol
+        load global-env
         key
         value
     ret;
@@ -429,14 +581,9 @@ define global-preprocessor (ir-env value)
 # install bangra preprocessor
 run
     store
-        call new-table
+        call new-env
+            null Value
         global-env
-    defvalue symtable
-        call new-table
-    call set-key!
-        load global-env
-        key-symbols
-        symtable
     call set-global
         quote int
         quote
@@ -477,6 +624,26 @@ run
                             type
 
     call set-global-syntax
+        quote function
+        define "" (value env)
+            MacroFunction
+            defvalue params
+                call next
+                    call at value
+            defvalue template
+                call new-table
+            call set-key! template
+                key-definition
+                params
+            ret
+                call replace value
+                    qquote
+                        :
+                            typeclass template
+                                unquote template
+                            type
+
+    call set-global-syntax
         quote declare
         define "" (value env)
             MacroFunction
@@ -511,22 +678,29 @@ run
                     env
             defvalue expr-type
                 call get-type expr
-            defvalue newexpr
-                call replace value
-                    call typed
-                        qquote
-                            defvalue
-                                unquote name
-                                unquote
-                                    call get-expr expr
-                        expr-type
-            call set-key!
-                call get-symbols env
-                name
-                call typed
-                    name
-                    expr-type
-            ret newexpr
+            ret
+                ?
+                    call type? expr-type
+                    splice
+                        call set-symbol env name expr
+                        call replace value
+                            qquote
+                                :
+                                    splice;
+                                    void
+                    splice
+                        call set-symbol env name
+                            call typed
+                                name
+                                expr-type
+                        call replace value
+                            call typed
+                                qquote
+                                    defvalue
+                                        unquote name
+                                        unquote
+                                            call get-expr expr
+                                expr-type
 
     call set-preprocessor
         &str "bangra"
@@ -538,10 +712,13 @@ module test-bangra bangra
         declare "printf"
             <- int (rawstring ...)
 
-    let hello "hello"
-    let world "world"
+    let testf2
+        function (arg1 arg2)
+            printf "%s %s\n" arg1 arg2
 
-    printf "%s %s\n" hello world
+    let testf
+        function (arg1 arg2)
+            testf2 arg1 arg2
 
-
-
+    printf "%i\n"
+        testf "hello" "world"
