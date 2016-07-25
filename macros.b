@@ -492,6 +492,14 @@ define macro-table (env expr)
                     load head
                 unquote table-sym
 
+define macro-list (env expr)
+    preprocessor-func
+    # transform unknown lists to calls
+    ret
+        qquote
+            call
+                unquote-splice expr
+
 run
     call set-macro env
         &str "print"
@@ -499,4 +507,6 @@ run
     call set-macro env
         &str "table"
         macro-table
-
+    call set-macro env
+        &str "#list#"
+        macro-list

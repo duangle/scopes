@@ -4511,6 +4511,20 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
     } else if (env->hasErrors()) {
         return NULL;
     } else {
+        if (auto fallback_macro = env->resolveMacro("#list#")) {
+            ValueRef newexpr = fallback_macro(env, expr);
+            if (env->hasErrors())
+                return NULL;
+            if (newexpr) {
+                LLVMValueRef result = translateValue(env, newexpr);
+                if (env->hasErrors()) {
+                    translateError(env, "while expanding macro");
+                    return NULL;
+                }
+                return result;
+            }
+        }
+
         auto _ = env->with_expr(head);
         translateError(env, "unhandled special form or macro in value: %s. Did you forget a 'call'?", head->c_str());
         return NULL;
