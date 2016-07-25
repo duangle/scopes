@@ -512,7 +512,7 @@ define expand-expression (value env)
 
 global global-env
     null Value
-global type
+global type-type
     null Value
 
 define set-global (key value)
@@ -582,22 +582,123 @@ define macro-bangra (ir-env value)
             run
                 unquote-splice result
 
+# TYPE CONSTRUCTORS
+#-------------------------------------------------------------------------------
+
+global int-type-cache
+    null Value
+global uint-type-cache
+    null Value
+global pointer-cache
+    null Value
+
+defvalue pointer-type
+    define "" (element-type)
+        function Value Value
+        defvalue cache
+            load pointer-cache
+        defvalue key element-type
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue newtype
+                        table
+                            "element-type" element-type
+                    set-key! cache key newtype
+                    newtype
+
+defvalue int-type
+    define "" (width signed)
+        function Value i32 i1
+        defvalue cache
+            load
+                ? signed
+                    int-type-cache
+                    uint-type-cache
+        defvalue key
+            new-integer
+                zext width i64
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue newtype
+                        table
+                            "width" key
+                            "signed"
+                                new-integer
+                                    zext signed i64
+                    set-key! cache key newtype
+                    newtype
+
+global boolean-type
+    null Value
+
+global int8-type
+    null Value
+global int16-type
+    null Value
+global int32-type
+    null Value
+global int64-type
+    null Value
+
+global uint8-type
+    null Value
+global uint16-type
+    null Value
+global uint32-type
+    null Value
+global uint64-type
+    null Value
+
+global rawstring-type
+    null Value
+
 # install bangra preprocessor
 run
+    store (new-table) int-type-cache
+    store (new-table) uint-type-cache
+    store (new-table) pointer-cache
+
+    store (int-type 8 true) int8-type
+    store (int-type 16 true) int16-type
+    store (int-type 32 true) int32-type
+    store (int-type 64 true) int64-type
+
+    store (int-type 1 false) boolean-type
+
+    store (int-type 8 false) uint8-type
+    store (int-type 16 false) uint16-type
+    store (int-type 32 false) uint32-type
+    store (int-type 64 false) uint64-type
+
+    store (pointer-type (load int8-type)) rawstring-type
+
     store
         new-env
             null Value
         global-env
 
-    defvalue type-type
+    store
         new-table;
+        type-type
 
     set-global
         quote type
         qquote
             :
-                unquote type-type
-                unquote type-type
+                unquote
+                    load type-type
+                unquote
+                    load type-type
 
     set-global
         quote int
