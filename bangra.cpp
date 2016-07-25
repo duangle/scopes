@@ -815,54 +815,55 @@ public:
 
 //------------------------------------------------------------------------------
 
-struct Table : Value {
+struct TableBody {
+    friend struct Table;
 protected:
     std::map< std::string, ValueRef > string_map;
     std::map< int64_t, ValueRef > integer_map;
     std::map< double, ValueRef > real_map;
     std::map< void *, ValueRef > handle_map;
+    std::map< std::shared_ptr<TableBody> , ValueRef > table_map;
     std::map< ValueRef, ValueRef > value_map;
+
+    void setKey(ValueRef key, ValueRef value);
+
+    ValueRef getKey(ValueRef key);
+
+    void tag() {
+        for (auto val : string_map) { assert(val.second); val.second->tag(); }
+        for (auto val : integer_map) { assert(val.second); val.second->tag(); }
+        for (auto val : real_map) { assert(val.second); val.second->tag(); }
+        for (auto val : handle_map) { assert(val.second); val.second->tag(); }
+        for (auto val : value_map) {
+            if (val.first) val.first->tag();
+            assert(val.second);
+            val.second->tag();
+        }
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct Table : Value {
+protected:
+    std::shared_ptr<TableBody> body;
 
 public:
     Table(ValueRef next_ = NULL) :
-        Value(V_Table, next_)
+        Value(V_Table, next_),
+        body(new TableBody())
         {}
 
     void setKey(ValueRef key, ValueRef value) {
-        switch(kindOf(key)) {
-            case V_String:
-            case V_Symbol:
-                string_map[ llvm::cast<String>(key)->getValue() ] = value;
-                break;
-            case V_Integer:
-                integer_map[ llvm::cast<Integer>(key)->getValue() ] = value;
-                break;
-            case V_Real:
-                real_map[ llvm::cast<Real>(key)->getValue() ] = value;
-                break;
-            case V_Handle:
-                handle_map[ llvm::cast<Handle>(key)->getValue() ] = value;
-                break;
-            default:
-                value_map[ key ] = value;
-                break;
-        }
+        body->setKey(key, value);
     }
 
     ValueRef getKey(ValueRef key) {
-        switch(kindOf(key)) {
-            case V_String:
-            case V_Symbol:
-                return string_map[ llvm::cast<String>(key)->getValue() ];
-            case V_Integer:
-                return integer_map[ llvm::cast<Integer>(key)->getValue() ];
-            case V_Real:
-                return real_map[ llvm::cast<Real>(key)->getValue() ];
-            case V_Handle:
-                return handle_map[ llvm::cast<Handle>(key)->getValue() ];
-            default:
-                return value_map[ key ];
-        }
+        return body->getKey(key);
+    }
+
+    std::shared_ptr<TableBody> getValue() {
+        return body;
     }
 
     static bool classof(const Value *expr) {
@@ -882,17 +883,51 @@ public:
         if (tagged()) return;
         Value::tag();
 
-        for (auto val : string_map) { assert(val.second); val.second->tag(); }
-        for (auto val : integer_map) { assert(val.second); val.second->tag(); }
-        for (auto val : real_map) { assert(val.second); val.second->tag(); }
-        for (auto val : handle_map) { assert(val.second); val.second->tag(); }
-        for (auto val : value_map) {
-            if (val.first) val.first->tag();
-            assert(val.second);
-            val.second->tag();
-        }
+        body->tag();
     }
 };
+
+void TableBody::setKey(ValueRef key, ValueRef value) {
+    switch(kindOf(key)) {
+        case V_String:
+        case V_Symbol:
+            string_map[ llvm::cast<String>(key)->getValue() ] = value;
+            break;
+        case V_Integer:
+            integer_map[ llvm::cast<Integer>(key)->getValue() ] = value;
+            break;
+        case V_Real:
+            real_map[ llvm::cast<Real>(key)->getValue() ] = value;
+            break;
+        case V_Handle:
+            handle_map[ llvm::cast<Handle>(key)->getValue() ] = value;
+            break;
+        case V_Table:
+            table_map[ llvm::cast<Table>(key)->getValue() ] = value;
+            break;
+        default:
+            value_map[ key ] = value;
+            break;
+    }
+}
+
+ValueRef TableBody::getKey(ValueRef key) {
+    switch(kindOf(key)) {
+        case V_String:
+        case V_Symbol:
+            return string_map[ llvm::cast<String>(key)->getValue() ];
+        case V_Integer:
+            return integer_map[ llvm::cast<Integer>(key)->getValue() ];
+        case V_Real:
+            return real_map[ llvm::cast<Real>(key)->getValue() ];
+        case V_Handle:
+            return handle_map[ llvm::cast<Handle>(key)->getValue() ];
+        case V_Table:
+            return table_map[ llvm::cast<Table>(key)->getValue() ];
+        default:
+            return value_map[ key ];
+    }
+}
 
 //------------------------------------------------------------------------------
 
@@ -1669,7 +1704,9 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
         }
     } return;
     case V_Table: {
-        printf("<table@%p>", (void *)e);
+        Table *a = llvm::cast<Table>(e);
+        void *ptr = (void *)a->getValue().get();
+        printf("<table@%p>", ptr);
         if (naked)
             putchar('\n');
     } return;
@@ -5185,6 +5222,11 @@ int bangra_eq(Value *a, Value *b) {
             case bangra::V_Handle: {
                 bangra::Handle *sa = llvm::cast<bangra::Handle>(a);
                 bangra::Handle *sb = llvm::cast<bangra::Handle>(b);
+                return sa->getValue() == sb->getValue();
+            } break;
+            case bangra::V_Table: {
+                bangra::Table *sa = llvm::cast<bangra::Table>(a);
+                bangra::Table *sb = llvm::cast<bangra::Table>(b);
                 return sa->getValue() == sb->getValue();
             } break;
             default: break;

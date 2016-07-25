@@ -520,6 +520,8 @@ define expand-expression (value env)
 
 global global-env
     null Value
+global type
+    null Value
 
 define set-global (key value)
     function void Value Value
@@ -594,6 +596,17 @@ run
         call new-env
             null Value
         global-env
+
+    defvalue type-type
+        call new-table
+
+    call set-global
+        quote type
+        qquote
+            :
+                unquote type-type
+                unquote type-type
+
     call set-global
         quote int
         quote
