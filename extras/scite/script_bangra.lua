@@ -4,7 +4,7 @@ print("Bangra Lexer loaded.")
 -- lua scripting intro is here http://www.scintilla.org/SciTELua.html
 -- API is here http://www.scintilla.org/PaneAPI.html
 
-function getprop(name)
+local function getprop(name)
     local prop = props[name]
     if (#prop == 0) then
         return
@@ -12,7 +12,7 @@ function getprop(name)
     return prop
 end
 
-function splitstr(str)
+local function splitstr(str)
     local result = {}
     for s in string.gmatch(str, "%S+") do
       result[s] = true
@@ -20,36 +20,73 @@ function splitstr(str)
     return result
 end
 
-keyword_str = getprop("keywords.bangra_ir") or
-    "bangra import-c dump-module function"
-        .. " call int real defvalue deftype phi br ret cond-br defstruct"
-        .. " trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr"
-        .. " bitcast addrspacecast alignof sizeof lengthof getelementtype undef error"
-        .. " structof arrayof vectorof insertvalue insertelement shufflevector"
-        .. " getelementptr define declare type packed execute module vector array struct"
-        .. " splice null global quote typeof dump extractelement extractvalue load store ..."
-        .. " compiler-do icmp fcmp IR alloca dumptype escape qquote block set-block"
-        .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
-        .. " include incoming module select pointer va_arg"
-        .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
-        .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor true false"
-        -- macros
-        .. " ? if else run &str loop print and? or?"
+local function IR_symbols()
+    return {
+    KEYWORDS = splitstr(getprop("keywords.bangra_ir") or
+        "bangra import-c dump-module function"
+            .. " call int real defvalue deftype phi br ret cond-br defstruct"
+            .. " trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr"
+            .. " bitcast addrspacecast alignof sizeof lengthof getelementtype undef error"
+            .. " structof arrayof vectorof insertvalue insertelement shufflevector"
+            .. " getelementptr define declare type packed execute module vector array struct"
+            .. " splice null global quote typeof dump extractelement extractvalue load store ..."
+            .. " compiler-do icmp fcmp IR alloca dumptype escape qquote block set-block"
+            .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
+            .. " include incoming module select pointer va_arg"
+            .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
+            .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor true false"
+            -- macros
+            .. " ? if else run &str loop print and? or?"
+        ),
 
-operator_str = getprop("operators.bangra_ir") or
-    "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-        .. " *= /= %= ^= &= |= ~= i> i>= i< i<= u> u>= u< u<= o> o>= o< o<="
-        .. " o== o!= u== u!= this-block"
+    OPERATORS = splitstr(getprop("operators.bangra_ir") or
+        "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
+            .. " *= /= %= ^= &= |= ~= i> i>= i< i<= u> u>= u< u<= o> o>= o< o<="
+            .. " o== o!= u== u!= this-block"
+        ),
 
-type_str = getprop("types.bangra_ir") or
-    "i1 i8 i16 i32 i64 half float double void"
 
-real_str = "inf +inf -inf nan +nan -nan"
 
-KEYWORDS = splitstr(keyword_str)
-OPERATORS = splitstr(operator_str)
-TYPES = splitstr(type_str)
-REALCONST = splitstr(real_str)
+    TYPES = splitstr(getprop("types.bangra_ir") or
+        "i1 i8 i16 i32 i64 half float double void rawstring opaque Value Environment"
+        )
+    }
+end
+
+local function bangra_symbols()
+    return {
+    KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
+        "let function extern-C bangra"
+        ),
+
+    OPERATORS = splitstr(getprop("operators.bangra_lang") or
+        "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
+            .. " *= /= %= ^= &= |= ~= <-"
+        ),
+
+
+    TYPES = splitstr(getprop("types.bangra_lang") or
+        "int void rawstring opaque ..."
+        )
+    }
+end
+
+local function unknown_symbols()
+    return {
+    KEYWORDS = {},
+
+    OPERATORS = {},
+
+    TYPES = {}
+    }
+end
+
+local dsl_table = {
+    IR = IR_symbols,
+    bangra = bangra_symbols
+}
+
+REALCONST = splitstr("inf +inf -inf nan +nan -nan")
 
 local symbol_terminators = "()[]{}\"';#:,."
 local integer_terminators = "()[]{}\"';#:,"
@@ -70,16 +107,16 @@ local token_statement = ';'
 local token_number = 'N'
 local token_comment = '#'
 
-function strchr(str, c)
+local function strchr(str, c)
     return str:find(c, 1, true)
 end
 
-function isspace(c)
+local function isspace(c)
     return strchr(" \t\n", c)
 end
 
 local chr = string.char
-function deref(ptr)
+local function deref(ptr)
     local ch = editor.CharAt[ptr]
     if ch >= 0 and ch <= 255 then
         return chr(editor.CharAt[ptr])
@@ -88,7 +125,7 @@ function deref(ptr)
     end
 end
 
-function Lexer()
+local function Lexer()
     local start = 0
     local eof = 0
     local cursor = 0
@@ -182,7 +219,7 @@ function Lexer()
         end
     end
 
-    function skipCharSet(p, chars)
+    local function skipCharSet(p, chars)
         while (p < eof) do
             local c = deref(p)
             if not strchr(chars, c) then
@@ -193,7 +230,7 @@ function Lexer()
         return p
     end
 
-    function skipNumber(p)
+    local function skipNumber(p)
         local np
         if strchr("+-", deref(p)) then
             p = p + 1
@@ -230,7 +267,7 @@ function Lexer()
         return p
     end
 
-    function readNumber()
+    local function readNumber()
         local p = skipNumber(cursor)
         if (not p) then return end
         local c = deref(p)
@@ -326,7 +363,7 @@ function Lexer()
 end
 
 
-function makeset(...)
+local function makeset(...)
     local set = {}
     for i=1,select("#",...) do
         set[select(i,...)] = true
@@ -338,7 +375,23 @@ local brace_tokens = makeset(token_open, token_close, token_square_open,
     token_square_close, token_curly_open, token_curly_close, token_escape,
     token_statement)
 
+local function getHeader()
+    local lexer = Lexer()
+    local s = editor:GetText()
+    lexer.init(0, #s, 0)
+
+    while true do
+        local token = lexer.readToken()
+        if (token == token_eof) then return end
+        if (token == token_symbol) then return lexer.string() end
+        if (token ~= token_comment) then return end
+    end
+end
+
 function OnStyle(styler)
+    local header = getHeader()
+    local symbols = (dsl_table[header] or unknown_symbols)()
+
     S_DEFAULT = 32
     S_WHITESPACE = 0
     S_LINECOMMENT = 1
@@ -379,11 +432,11 @@ function OnStyle(styler)
         editor:StartStyling(offset, 0)
         if token == token_symbol then
             local sym = lexer.string()
-            if (KEYWORDS[sym]) then
+            if (symbols.KEYWORDS[sym]) then
                 editor:SetStyling(length, S_KEYWORD)
-            elseif (OPERATORS[sym]) then
+            elseif (symbols.OPERATORS[sym]) then
                 editor:SetStyling(length, S_OPERATOR)
-            elseif (TYPES[sym]) then
+            elseif (symbols.TYPES[sym]) then
                 editor:SetStyling(length, S_TYPE)
             elseif (REALCONST[sym]) then
                 editor:SetStyling(length, S_NUMBER)

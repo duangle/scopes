@@ -79,10 +79,12 @@ ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
 // string and symbol
 //------------------------------------------------------------------------------
 
-ValueRef bangra_string(const char *value);
+ValueRef bangra_string(const char *value, signed long long int size);
 ValueRef bangra_symbol(const char *value);
 const char *bangra_string_value(ValueRef expr);
 signed long long int bangra_string_size(ValueRef expr);
+ValueRef bangra_string_concat(ValueRef a, ValueRef b);
+ValueRef bangra_string_slice(ValueRef expr, int start, int end);
 
 // real
 //------------------------------------------------------------------------------
@@ -5084,6 +5086,51 @@ signed long long int bangra_string_size(ValueRef expr) {
     return 0;
 }
 
+ValueRef bangra_string_concat(ValueRef a, ValueRef b) {
+    if (a && b) {
+        auto str_a = llvm::dyn_cast<bangra::String>(a);
+        auto str_b = llvm::dyn_cast<bangra::String>(b);
+        if (str_a && str_b) {
+            auto str_result = str_a->getValue() + str_b->getValue();
+            if (str_a->getKind() == bangra::V_String) {
+                return new bangra::String(str_result.c_str(), str_result.size());
+            } else {
+                return new bangra::Symbol(str_result.c_str(), str_result.size());
+            }
+        }
+    }
+    return NULL;
+}
+
+ValueRef bangra_string_slice(ValueRef expr, int start, int end) {
+    if (expr) {
+        if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
+            auto value = str->getValue();
+            int size = (int)value.size();
+            if (start < 0)
+                start = size + start;
+            if (start < 0)
+                start = 0;
+            else if (start > size)
+                start = size;
+            if (end < 0)
+                end = size + end;
+            if (end < start)
+                end = start;
+            else if (end > size)
+                end = size;
+            int len = end - start;
+            value = value.substr((size_t)start, (size_t)len);
+            if (str->getKind() == bangra::V_String) {
+                return new bangra::String(value.c_str(), value.size());
+            } else {
+                return new bangra::Symbol(value.c_str(), value.size());
+            }
+        }
+    }
+    return NULL;
+}
+
 void *bangra_handle_value(ValueRef expr) {
     if (expr) {
         if (auto handle = llvm::dyn_cast<bangra::Handle>(expr)) {
@@ -5196,8 +5243,10 @@ ValueRef bangra_ref(ValueRef lhs) {
     return new bangra::Pointer(lhs);
 }
 
-ValueRef bangra_string(const char *value) {
-    return new bangra::String(value);
+ValueRef bangra_string(const char *value, signed long long int size) {
+    if (size < 0)
+        size = strlen(value);
+    return new bangra::String(value, (size_t)size);
 }
 ValueRef bangra_symbol(const char *value) {
     return new bangra::Symbol(value);

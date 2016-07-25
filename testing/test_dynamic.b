@@ -339,10 +339,10 @@ run
     call set-global (quote +) internal
 
     call set-preprocessor
-        &str "bangra"
+        &str "dynamic"
         global-preprocessor
 
-module test-bangra bangra
+module test-bangra dynamic
     print
         + 1 2 3
         \ 1 2 3

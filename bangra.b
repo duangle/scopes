@@ -5,6 +5,7 @@ IR
 
 include "libc.b"
 include "macros.b"
+include "lang.b"
 
 run
     call printf

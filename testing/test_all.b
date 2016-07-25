@@ -20,6 +20,7 @@ run
         &str "testfile"
         macro-testfile
 
+testfile "test_string.b"
 testfile "test_andor.b"
 testfile "test_constexpr.b"
 testfile "test_intrinsic.b"
@@ -34,6 +35,7 @@ testfile "test_macro.b"
 testfile "test_parsing.b"
 testfile "test_quoteloc.b"
 testfile "test_submodule.b"
+testfile "test_bangra.b"
 
 run
     call printf

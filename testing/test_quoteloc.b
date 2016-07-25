@@ -12,7 +12,7 @@ define macro__file__ (env expr)
             icmp == path
                 null (typeof path)
             null Value
-            call new-string path
+            call new-string path (int i64 -1)
 
 define macro__line__ (env expr)
     preprocessor-func

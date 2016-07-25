@@ -98,13 +98,17 @@ defvalue set-at!
 #-------------------------------------------------------------------------------
 
 defvalue new-string
-    declare "bangra_string" (function Value rawstring)
+    declare "bangra_string" (function Value rawstring i64)
 defvalue new-symbol
     declare "bangra_symbol" (function Value rawstring)
 defvalue string-value
     declare "bangra_string_value" (function rawstring Value)
 defvalue string-size
     declare "bangra_string_size" (function i64 Value)
+defvalue string-concat
+    declare "bangra_string_concat" (function Value Value Value)
+defvalue string-slice
+    declare "bangra_string_slice" (function Value Value i32 i32)
 
 # real
 #-------------------------------------------------------------------------------
