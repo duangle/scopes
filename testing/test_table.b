@@ -15,5 +15,3 @@ run
         call get-key test-table (quote a)
         call get-key test-table (quote b)
         call get-key test-table (quote c)
-
-dump-module;
