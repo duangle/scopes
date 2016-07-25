@@ -75,6 +75,8 @@ defvalue set-next!
 
 defvalue print-value
     declare "bangra_print_value" (function void Value i32)
+defvalue format-value
+    declare "bangra_format_value" (function Value Value i32)
 
 defvalue anchor-path
     declare "bangra_anchor_path" (function rawstring Value)

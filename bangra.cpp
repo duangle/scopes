@@ -59,6 +59,7 @@ ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
 
 void bangra_print_value(ValueRef expr, int depth);
+ValueRef bangra_format_value(ValueRef expr, int depth);
 
 const char *bangra_anchor_path(ValueRef expr);
 int bangra_anchor_lineno(ValueRef expr);
@@ -174,6 +175,7 @@ TODO:
 #include <vector>
 #include <memory>
 #include <sstream>
+#include <iostream>
 #include <unordered_map>
 #include <unordered_set>
 #include <cstdlib>
@@ -434,6 +436,7 @@ struct Anchor {
 
 struct Value;
 static void printValue(ValueRef e, size_t depth=0, bool naked=true);
+static std::string formatValue(ValueRef e, size_t depth=0, bool naked=true);
 
 static ValueRef next(ValueRef expr);
 
@@ -1623,27 +1626,32 @@ static bool isNested(ValueRef e) {
     return false;
 }
 
-static void printAnchor(ValueRef e, size_t depth=0) {
+template<typename T>
+static void streamAnchor(T &stream, ValueRef e, size_t depth=0) {
     if (e) {
         Anchor *anchor = e->findValidAnchor();
         if (!anchor)
             anchor = &e->anchor;
-        printf("%s:%i:%i: ",
-            anchor->path,
-            anchor->lineno,
-            anchor->column);
+        stream <<
+            format("%s:%i:%i: ",
+                anchor->path,
+                anchor->lineno,
+                anchor->column);
     }
-    for(size_t i = 0; i < depth; i++) printf("    ");
+    for(size_t i = 0; i < depth; i++)
+        stream << "    ";
 }
 
-static void printValue(ValueRef e, size_t depth, bool naked) {
+template<typename T>
+static void streamValue(T &stream, ValueRef e, size_t depth=0, bool naked=true) {
     if (naked) {
-        printAnchor(e, depth);
+        streamAnchor(stream, e, depth);
     }
 
 	if (!e) {
-        printf("#null#");
-        if (naked) putchar('\n');
+        stream << "#null#";
+        if (naked)
+            stream << '\n';
         return;
     }
 
@@ -1651,27 +1659,27 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 	case V_Pointer: {
         e = at(e);
         if (!e) {
-            printf("()");
+            stream << "()";
             if (naked)
-                putchar('\n');
+                stream << '\n';
             break;
         }
         if (naked) {
             int offset = 0;
             bool single = !next(e);
         print_terse:
-            printValue(e, depth, false);
+            streamValue(stream, e, depth, false);
             e = next(e);
             offset++;
             while (e) {
                 if (isNested(e))
                     break;
-                putchar(' ');
-                printValue(e, depth, false);
+                stream << ' ';
+                streamValue(stream, e, depth, false);
                 e = next(e);
                 offset++;
             }
-            printf(single?";\n":"\n");
+            stream << (single?";\n":"\n");
         //print_sparse:
             while (e) {
                 if (isAtom(e) // not a list
@@ -1679,103 +1687,114 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
                     && next(e) // not last element in list
                     && !isNested(next(e))) { // next element can be terse packed too
                     single = false;
-                    printAnchor(e, depth + 1);
-                    printf("\\ ");
+                    streamAnchor(stream, e, depth + 1);
+                    stream << "\\ ";
                     goto print_terse;
                 }
-                printValue(e, depth + 1);
+                streamValue(stream, e, depth + 1);
                 e = next(e);
                 offset++;
             }
 
         } else {
-            putchar('(');
+            stream << '(';
             int offset = 0;
             while (e) {
                 if (offset > 0)
-                    putchar(' ');
-                printValue(e, depth + 1, false);
+                    stream << ' ';
+                streamValue(stream, e, depth + 1, false);
                 e = next(e);
                 offset++;
             }
-            putchar(')');
+            stream << ')';
             if (naked)
-                putchar('\n');
+                stream << '\n';
         }
     } return;
     case V_Table: {
         Table *a = llvm::cast<Table>(e);
         void *ptr = (void *)a->getValue().get();
-        printf("<table@%p>", ptr);
+        stream << format("<table@%p>", ptr);
         if (naked)
-            putchar('\n');
+            stream << '\n';
     } return;
     case V_Integer: {
         const Integer *a = llvm::cast<Integer>(e);
 
         if (a->isUnsigned())
-            printf("%" PRIu64, a->getValue());
+            stream << format("%" PRIu64, a->getValue());
         else
-            printf("%" PRIi64, a->getValue());
+            stream << format("%" PRIi64, a->getValue());
         if (naked)
-            putchar('\n');
+            stream << '\n';
     } return;
     case V_Real: {
         const Real *a = llvm::cast<Real>(e);
-        printf("%g", a->getValue());
+        stream << format("%g", a->getValue());
         if (naked)
-            putchar('\n');
+            stream << '\n';
     } return;
     case V_Handle: {
         const Handle *h = llvm::cast<Handle>(e);
-        printf("<handle@%p>", h->getValue());
+        stream << format("<handle@%p>", h->getValue());
         if (naked)
-            putchar('\n');
+            stream << '\n';
     } return;
 	case V_Symbol:
 	case V_String: {
         const String *a = llvm::cast<String>(e);
-		if (a->getKind() == V_String) putchar('"');
+		if (a->getKind() == V_String) stream << '"';
 		for (size_t i = 0; i < a->size(); i++) {
             char c = (*a)[i];
 			switch(c) {
 			case '"': case '\\':
-				putchar('\\');
-                putchar(c);
+				stream << '\\';
+                stream << c;
 				break;
             case '\n':
-                printf("\\n");
+                stream << "\\n";
                 break;
             case '\r':
-                printf("\\r");
+                stream << "\\r";
                 break;
             case '\t':
-                printf("\\t");
+                stream << "\\t";
                 break;
             case '[': case ']': case '{': case '}': case '(': case ')':
 				if (a->getKind() == V_Symbol)
-					putchar('\\');
-                putchar(c);
+					stream << '\\';
+                stream << c;
 				break;
             default:
                 if ((c < 32) || (c >= 127)) {
                     unsigned char uc = c;
-                    printf("\\x%02x", uc);
+                    stream << format("\\x%02x", uc);
                 } else {
-                    putchar(c);
+                    stream << c;
                 }
                 break;
 			}
 		}
-		if (a->getKind() == V_String) putchar('"');
+		if (a->getKind() == V_String) stream << '"';
         if (naked)
-            putchar('\n');
+            stream << '\n';
     } return;
     default:
         printf("invalid kind: %i\n", e->getKind());
         assert (false); break;
 	}
 }
+
+static std::string formatValue(ValueRef e, size_t depth, bool naked) {
+    std::stringstream ss;
+    streamValue(ss, e, depth, naked);
+    return ss.str();
+}
+
+static void printValue(ValueRef e, size_t depth, bool naked) {
+    streamValue(std::cout, e, depth, naked);
+}
+
 
 //------------------------------------------------------------------------------
 // TRANSLATION ENVIRONMENT
@@ -5077,6 +5096,17 @@ void bangra_print_value(ValueRef expr, int depth) {
     } else {
         bangra::printValue(expr, (size_t)depth, true);
     }
+}
+
+ValueRef bangra_format_value(ValueRef expr, int depth) {
+    std::string str;
+    if (depth < 0) {
+        str = bangra::formatValue(expr, 0, false);
+    } else {
+        str = bangra::formatValue(expr, (size_t)depth, true);
+    }
+    return new bangra::String(str.c_str(), str.size());
+
 }
 
 void bangra_set_preprocessor(const char *name, bangra_preprocessor f) {

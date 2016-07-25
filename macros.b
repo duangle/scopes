@@ -387,6 +387,15 @@ defvalue space
 defvalue newline
     &str "\n"
 
+define autoquote (value)
+    function Value Value
+    ret
+        ? (and? (call atom? value) (sub true (call symbol? value)))
+            qquote
+                quote
+                    unquote value
+            value
+
 define macro-print (env expr)
     preprocessor-func
     defvalue param
@@ -406,7 +415,8 @@ define macro-print (env expr)
             qquote
                 splice
                     call print-value
-                        unquote value
+                        unquote
+                            call autoquote value
                         -1
                     call printf
                         unquote
@@ -458,17 +468,9 @@ define macro-table (env expr)
                 call set-key!
                     unquote table-sym
                     unquote
-                        ? (and? (call atom? table-key) (sub true (call symbol? table-key)))
-                            qquote
-                                quote
-                                    unquote table-key
-                            table-key
+                        call autoquote table-key
                     unquote
-                        ? (and? (call atom? table-value) (sub true (call symbol? table-value)))
-                            qquote
-                                quote
-                                    unquote table-value
-                            table-value
+                        call autoquote table-value
 
         ? (icmp == (load tail) (null Value))
             splice

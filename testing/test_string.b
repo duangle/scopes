@@ -3,6 +3,17 @@ IR
 include "../macros.b"
 
 run
+    call printf
+        &str "%s\n"
+        call string-value
+            call format-value
+                quote
+                    print
+                        call string-concat
+                            quote "hel\x00lo "
+                            quote wo\x00rld
+                -1
+
     print
         call string-concat
             quote "hel\x00lo "
