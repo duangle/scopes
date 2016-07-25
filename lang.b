@@ -733,18 +733,3 @@ run
         &str "bangra"
         macro-bangra
 
-/// bangra
-
-    let printf
-        : printf (function i32 rawstring ...)
-
-    let testf2
-        function (arg1 arg2)
-            printf "%s %s\n" arg1 arg2
-
-    let testf
-        function (arg1 arg2)
-            testf2 arg1 arg2
-
-    printf "%i\n"
-        testf "hello" "world"

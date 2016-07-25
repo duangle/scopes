@@ -36,7 +36,7 @@ local function IR_symbols()
             .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
             .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor true false"
             -- macros
-            .. " ? if else run &str loop print and? or?"
+            .. " ? if else run &str loop print and? or? table"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_ir") or

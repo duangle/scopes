@@ -2493,6 +2493,11 @@ static LLVMModuleRef importCModule (ValueRef dest,
 // TRANSLATION
 //------------------------------------------------------------------------------
 
+static LLVMTypeRef _opaque = NULL;
+static LLVMTypeRef _t_Value = NULL;
+static LLVMTypeRef _t_Environment = NULL;
+
+
 static void dumpTraceback() {
 /*
     void *array[10];
@@ -4208,9 +4213,13 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     LLVMTypeRef functype = extractFunctionType(env, callee);
     if (!functype) return NULL;
 
-    if (LLVMGetReturnType(functype) != LLVMVoidType()) {
-        translateError(env, "function needs to have return type void.\n");
-        return NULL;
+    LLVMTypeRef rettype = LLVMGetReturnType(functype);
+    LLVMTypeRef valueptrtype = LLVMPointerType(_t_Value, 0);
+    if (rettype != LLVMVoidType()) {
+        if (rettype != valueptrtype) {
+            translateError(env, "function needs to have return type void or pointer to value.\n");
+            return NULL;
+        }
     }
 
     if (LLVMIsFunctionVarArg(functype)) {
@@ -4228,8 +4237,7 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     LLVMGetParamTypes(functype, paramtypes);
 
     if (paramcount >= 1) {
-        LLVMTypeKind kind = LLVMGetTypeKind(paramtypes[0]);
-        if (kind != LLVMPointerTypeKind) {
+        if (paramtypes[0] != LLVMPointerType(_t_Environment, 0)) {
             translateError(env, "first function parameter must be pointer to environment.\n");
             return NULL;
         }
@@ -4272,12 +4280,23 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
 
     env->globals->engine = engine;
 
-    if (paramcount == 0) {
-        typedef void (*signature)();
-        ((signature)f)();
+    ValueRef outvalue = NULL;
+    if (rettype == valueptrtype) {
+        if (paramcount == 0) {
+            typedef ValueRef (*signature)();
+            outvalue = ((signature)f)();
+        } else {
+            typedef ValueRef (*signature)(Environment *env);
+            outvalue = ((signature)f)(env);
+        }
     } else {
-        typedef void (*signature)(Environment *env);
-        ((signature)f)(env);
+        if (paramcount == 0) {
+            typedef void (*signature)();
+            ((signature)f)();
+        } else {
+            typedef void (*signature)(Environment *env);
+            ((signature)f)(env);
+        }
     }
 
     env->globals->engine = NULL;
@@ -4286,6 +4305,10 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     //LLVMRunStaticDestructors(engine);
 
     //printf("done.\n");
+
+    if (outvalue) {
+        return translateValue(env, outvalue);
+    }
 
     return NULL;
 }
@@ -4765,10 +4788,6 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 //------------------------------------------------------------------------------
 // INITIALIZATION
 //------------------------------------------------------------------------------
-
-static LLVMTypeRef _opaque = NULL;
-static LLVMTypeRef _t_Value = NULL;
-static LLVMTypeRef _t_Environment = NULL;
 
 static void init() {
     registerValueTranslators();

@@ -431,8 +431,70 @@ define macro-print (env expr)
                 unquote-splice
                     load head
 
+define macro-table (env expr)
+    preprocessor-func
+    defvalue param
+        call next expr
+    defvalue head
+        alloca Value
+    store (null Value) head
+    defvalue tail
+        alloca Value
+    store (null Value) tail
+    defvalue table-sym (call unique-symbol (&str "table"))
+    loop value
+        param
+        icmp != value(null Value)
+        call next value
+
+        defvalue table-value
+            call next
+                defvalue table-key
+                    call at value
+
+
+        defvalue xvalue
+            qquote
+                call set-key!
+                    unquote table-sym
+                    unquote
+                        ? (and? (call atom? table-key) (sub true (call symbol? table-key)))
+                            qquote
+                                quote
+                                    unquote table-key
+                            table-key
+                    unquote
+                        ? (and? (call atom? table-value) (sub true (call symbol? table-value)))
+                            qquote
+                                quote
+                                    unquote table-value
+                            table-value
+
+        ? (icmp == (load tail) (null Value))
+            splice
+                store xvalue head
+                false
+            splice
+                call set-next!
+                    load tail
+                    xvalue
+                false
+        store xvalue tail
+    ret
+        qquote
+            splice
+                defvalue
+                    unquote table-sym
+                    call new-table
+                unquote-splice
+                    load head
+                unquote table-sym
+
 run
     call set-macro env
         &str "print"
         macro-print
+    call set-macro env
+        &str "table"
+        macro-table
 
