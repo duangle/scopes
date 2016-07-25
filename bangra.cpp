@@ -4254,19 +4254,20 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     LLVMDisposeMessage(error);
 
     error = NULL;
-    LLVMExecutionEngineRef engine;
-    int result = LLVMCreateJITCompilerForModule(
-        &engine, env->getModule(), opt_level, &error);
+    LLVMExecutionEngineRef engine = NULL;
+
+    LLVMMCJITCompilerOptions options;
+    LLVMInitializeMCJITCompilerOptions(&options, sizeof(options));
+    options.OptLevel = opt_level;
+    //options.EnableFastISel = true;
+    //options.CodeModel = LLVMCodeModelLarge;
+    LLVMCreateMCJITCompilerForModule(&engine, env->getModule(),
+        &options, sizeof(options), &error);
 
     if (error) {
-        fprintf(stderr, "error: %s\n", error);
+        translateError(env, "%s", error);
         LLVMDisposeMessage(error);
-        exit(EXIT_FAILURE);
-    }
-
-    if (result != 0) {
-        fprintf(stderr, "failed to create execution engine\n");
-        abort();
+        return NULL;
     }
 
     for (auto it : env->globals->globalptrs) {

@@ -16,6 +16,11 @@ defvalue value-type-real 5
 defvalue value-type-handle 6
 defvalue value-type-table 7
 
+defvalue codegen-level-none 0
+defvalue codegen-level-less 1
+defvalue codegen-level-default 2
+defvalue codegen-level-aggressive 3
+
 defvalue argc
     declare "bang_argc" i32
 defvalue argv

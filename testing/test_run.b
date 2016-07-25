@@ -21,5 +21,4 @@ execute
         ret
             quote _Value
                 dump-module;
-    2
-
+    3
