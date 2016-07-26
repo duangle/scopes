@@ -3901,6 +3901,18 @@ static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
 
         translateValueList(&subenv, body_expr);
         if (env->hasErrors()) return NULL;
+
+        // verify all blocks have terminators
+        LLVMBasicBlockRef bb = LLVMGetFirstBasicBlock(func);
+        while (bb) {
+            if (!LLVMGetBasicBlockTerminator(bb)) {
+                translateError(env, "basic block '%s' is missing terminator.",
+                    LLVMGetValueName(LLVMBasicBlockAsValue(bb)));
+                return NULL;
+            }
+            bb = LLVMGetNextBasicBlock(bb);
+        }
+
     }
 
     if (env->block)

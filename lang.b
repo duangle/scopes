@@ -585,19 +585,62 @@ define macro-bangra (ir-env value)
 # TYPE CONSTRUCTORS
 #-------------------------------------------------------------------------------
 
-global int-type-cache
-    null Value
-global uint-type-cache
-    null Value
-global pointer-cache
+global type-cache
     null Value
 
-defvalue pointer-type
-    define "" (element-type)
+# all types
+defvalue KEY_REPR
+    quote "repr"
+defvalue KEY_IR_REPR
+    quote "IR-repr"
+
+# arrays and vectors
+defvalue KEY_ELEMENT_TYPE
+    quote "element-type"
+defvalue KEY_SIZE
+    quote "size"
+
+# integers
+defvalue KEY_WIDTH
+    quote "width"
+defvalue KEY_SIGNED
+    quote "signed"
+
+defvalue type-repr
+    define "" (value)
         function Value Value
+        defvalue result
+            get-key value KEY_REPR
+        ret
+            select (icmp == result (null Value))
+                value
+                result
+
+defvalue type-ir-repr
+    define "" (value)
+        function Value Value
+        defvalue result
+            get-key value KEY_IR_REPR
+        ret
+            select (icmp == result (null Value))
+                value
+                result
+
+defvalue array-vector-type
+    define "" (prefix element-type size)
+        function Value Value Value i64
         defvalue cache
-            load pointer-cache
-        defvalue key element-type
+            load type-cache
+        defvalue sizevalue
+            new-integer size
+        defvalue element-type-repr
+            type-repr element-type
+        defvalue array-repr
+            ref
+                set-next prefix
+                    set-next element-type-repr sizevalue
+        defvalue key
+            format-value array-repr -1
         defvalue cached
             get-key cache key
         ret
@@ -605,9 +648,68 @@ defvalue pointer-type
                 icmp != cached (null Value)
                 cached
                 splice
+                    defvalue ir-array-repr
+                        ref
+                            set-next prefix
+                                set-next
+                                    type-ir-repr element-type
+                                    sizevalue
+
                     defvalue newtype
                         table
-                            "element-type" element-type
+                            KEY_ELEMENT_TYPE element-type
+                            KEY_SIZE sizevalue
+                            KEY_REPR array-repr
+                            KEY_IR_REPR ir-array-repr
+
+                    set-key! cache key newtype
+                    newtype
+
+defvalue array-type
+    define "" (element-type size)
+        function Value Value i64
+        ret
+            array-vector-type
+                quote array
+                \ element-type size
+
+defvalue vector-type
+    define "" (element-type size)
+        function Value Value i64
+        ret
+            array-vector-type
+                quote vector
+                \ element-type size
+
+defvalue pointer-type
+    define "" (element-type)
+        function Value Value
+        defvalue cache
+            load type-cache
+        defvalue element-type-repr
+            type-repr element-type
+        defvalue pointer-repr
+            ref
+                set-next (quote &) element-type-repr
+        defvalue key
+            format-value pointer-repr -1
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue ir-pointer-repr
+                        ref
+                            set-next (quote pointer)
+                                type-ir-repr element-type
+
+                    defvalue newtype
+                        table
+                            KEY_ELEMENT_TYPE element-type
+                            KEY_REPR pointer-repr
+                            KEY_IR_REPR ir-pointer-repr
                     set-key! cache key newtype
                     newtype
 
@@ -615,13 +717,17 @@ defvalue int-type
     define "" (width signed)
         function Value i32 i1
         defvalue cache
-            load
-                ? signed
-                    int-type-cache
-                    uint-type-cache
-        defvalue key
+            load type-cache
+        defvalue width-value
             new-integer
                 zext width i64
+        defvalue int-repr
+            ? (icmp == width 1)
+                quote bool
+                string-concat
+                    select signed (quote int) (quote uint)
+                    format-value width-value -1
+        defvalue key int-repr
         defvalue cached
             get-key cache key
         ret
@@ -629,12 +735,20 @@ defvalue int-type
                 icmp != cached (null Value)
                 cached
                 splice
+                    defvalue ir-int-repr
+                        string-concat
+                            quote i
+                            format-value width-value -1
+
                     defvalue newtype
                         table
-                            "width" key
-                            "signed"
+                            KEY_WIDTH key
+                            KEY_SIGNED
                                 new-integer
                                     zext signed i64
+                            KEY_REPR int-repr
+                            KEY_IR_REPR ir-int-repr
+
                     set-key! cache key newtype
                     newtype
 
@@ -662,25 +776,34 @@ global uint64-type
 global rawstring-type
     null Value
 
+defvalue init-global-types
+    define "" ()
+        function void
+
+        store (new-table) type-cache
+
+        store (int-type 8 true) int8-type
+        store (int-type 16 true) int16-type
+        store (int-type 32 true) int32-type
+        store (int-type 64 true) int64-type
+
+        store (int-type 1 false) boolean-type
+
+        store (int-type 8 false) uint8-type
+        store (int-type 16 false) uint16-type
+        store (int-type 32 false) uint32-type
+        store (int-type 64 false) uint64-type
+
+        store (pointer-type (load int8-type)) rawstring-type
+
+        ret;
+
+# INITIALIZATION
+#-------------------------------------------------------------------------------
+
 # install bangra preprocessor
 run
-    store (new-table) int-type-cache
-    store (new-table) uint-type-cache
-    store (new-table) pointer-cache
-
-    store (int-type 8 true) int8-type
-    store (int-type 16 true) int16-type
-    store (int-type 32 true) int32-type
-    store (int-type 64 true) int64-type
-
-    store (int-type 1 false) boolean-type
-
-    store (int-type 8 false) uint8-type
-    store (int-type 16 false) uint16-type
-    store (int-type 32 false) uint32-type
-    store (int-type 64 false) uint64-type
-
-    store (pointer-type (load int8-type)) rawstring-type
+    init-global-types;
 
     store
         new-env
