@@ -334,3 +334,21 @@ define dump-value (value)
     call print-value value 0
     ret value
 
+define copy-anchor (to from)
+    function Value Value Value
+    ret
+        call set-anchor to
+            call anchor-path from
+            call anchor-lineno from
+            call anchor-column from
+            call anchor-offset from
+
+define copy-anchor! (to from)
+    function Value Value Value
+    ret
+        call set-anchor! to
+            call anchor-path from
+            call anchor-lineno from
+            call anchor-column from
+            call anchor-offset from
+

@@ -183,7 +183,8 @@ TODO:
 #include <stdlib.h>
 #include <libgen.h>
 
-//#include <execinfo.h>
+// for backtrace
+#include <execinfo.h>
 
 #include <map>
 #include <string>
@@ -1662,6 +1663,31 @@ struct Parser {
 // PRINTING
 //------------------------------------------------------------------------------
 
+#if 0
+template<typename T>
+static void streamTraceback(T &stream) {
+    void *array[10];
+    size_t size;
+    char **strings;
+    size_t i;
+
+    size = backtrace (array, 10);
+    strings = backtrace_symbols (array, size);
+
+    for (i = 0; i < size; i++) {
+        stream << format("%s\n", strings[i]);
+    }
+
+    free (strings);
+}
+
+static std::string formatTraceback() {
+    std::stringstream ss;
+    streamTraceback(ss);
+    return ss.str();
+}
+#endif
+
 static bool isNested(ValueRef e) {
     if (isAtom(e)) return false;
     e = at(e);
@@ -2564,39 +2590,23 @@ static LLVMTypeRef _opaque = NULL;
 static LLVMTypeRef _t_Value = NULL;
 static LLVMTypeRef _t_Environment = NULL;
 
-
-static void dumpTraceback() {
-/*
-    void *array[10];
-    size_t size;
-    char **strings;
-    size_t i;
-
-    size = backtrace (array, 10);
-    strings = backtrace_symbols (array, size);
-
-    for (i = 0; i < size; i++)
-        printf ("%s\n", strings[i]);
-
-    free (strings);
-*/
-}
-
 static void translateErrorV (Environment *env, const char *format, va_list args) {
     ++env->globals->compile_errors;
-    if (env->expr && env->expr->anchor.isValid()) {
-        Anchor anchor = env->expr->anchor;
-        printf("%s:%i:%i: error: ", anchor.path, anchor.lineno, anchor.column);
+    Anchor *anchor = NULL;
+    if (env->expr)
+        anchor = env->expr->findValidAnchor();
+    if (anchor) {
+        printf("%s:%i:%i: error: ", anchor->path, anchor->lineno, anchor->column);
     } else {
+        if (env->expr)
+            printValue(env->expr);
         printf("error: ");
     }
     vprintf (format, args);
     putchar('\n');
-    if (env->expr) {
-        Anchor anchor = env->expr->anchor;
-        dumpFileLine(anchor.path, anchor.offset);
+    if (anchor) {
+        dumpFileLine(anchor->path, anchor->offset);
     }
-    dumpTraceback();
 }
 
 static void translateError (Environment *env, const char *format, ...) {
@@ -3871,6 +3881,8 @@ static LLVMValueRef tr_value_splice (Environment *env, ValueRef expr) {
 
 static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
 
+    ValueRef base_expr = expr;
+
     UNPACK_ARG(expr, expr_name);
     UNPACK_ARG(expr, expr_params);
     UNPACK_ARG(expr, expr_type);
@@ -3889,9 +3901,20 @@ static LLVMValueRef tr_value_define (Environment *env, ValueRef expr) {
     auto _ = env->with_expr(expr_type);
 
     bool inlined = false;
+    std::string tmpfuncname;
     if (!strcmp(name, "")) {
         inlined = true;
-        name = "inlined";
+
+        Anchor *anchor = base_expr->findValidAnchor();
+        if (anchor) {
+            tmpfuncname =
+                format("%s:%i",
+                    anchor->path,
+                    anchor->lineno);
+            name = tmpfuncname.c_str();
+        } else {
+            name = "inlined";
+        }
     }
 
     bool isSymbol = isKindOf<Symbol>(expr_name);
@@ -4283,6 +4306,16 @@ static LLVMValueRef tr_value_nop (Environment *env, ValueRef expr) {
     return NULL;
 }
 
+static LLVMValueRef handleException(Environment *env, ValueRef expr) {
+    translateError(env, "an exception was raised");
+    ValueRef tb = expr->getNext();
+    if (tb && tb->getKind() == V_String) {
+        std::cerr << llvm::cast<String>(tb)->getValue();
+    }
+    streamValue(std::cerr, expr, 0, true);
+    return NULL;
+}
+
 static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     UNPACK_ARG(expr, expr_callee);
     UNPACK_ARG(expr, expr_opt_level);
@@ -4384,9 +4417,7 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
             }
         }
     } catch (ValueRef expr) {
-        translateError(env, "an exception was raised");
-        streamValue(std::cerr, expr, 0, true);
-        return NULL;
+        return handleException(env, expr);
     }
 
     env->globals->engine = NULL;
@@ -4578,7 +4609,8 @@ static LLVMValueRef translateValueFromList (Environment *env, ValueRef expr) {
         return NULL;
     } else {
         if (auto fallback_macro = env->resolveMacro("#list#")) {
-            ValueRef newexpr = fallback_macro(env, expr);
+            ValueRef newexpr = NULL;
+            newexpr = fallback_macro(env, expr);
             if (env->hasErrors())
                 return NULL;
             if (newexpr) {
@@ -4990,7 +5022,12 @@ static bool compileModule (Environment *env, ValueRef expr) {
                 head->getValue().c_str());
         }
         lastlang = head->getValue();
-        expr = preprocessor(env, new Pointer(expr));
+        try {
+            expr = preprocessor(env, new Pointer(expr));
+        } catch (ValueRef expr) {
+            handleException(env, expr);
+            return false;
+        }
         if (env->hasErrors())
             return false;
         if (!expr) {
@@ -5597,6 +5634,13 @@ void *bangra_xpcall (void *ctx,
 }
 
 void bangra_raise (ValueRef expr) {
+    /*
+    std::string tb = bangra::formatTraceback();
+    ValueRef annot_expr =
+        bangra::cons(expr,
+            new bangra::String(tb.c_str(), tb.size()));
+    throw annot_expr;
+    */
     throw expr;
 }
 

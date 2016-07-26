@@ -18,7 +18,8 @@ fi
 clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
 && clang++ \
     -o $DIR/bangra $DIR/bangra.cpp \
-    -pedantic -g \
+    -pedantic \
+    -g -rdynamic \
     -ferror-limit=1 \
     -Wno-vla-extension \
     -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \

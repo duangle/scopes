@@ -274,6 +274,32 @@ define macro-or? (env expr)
                     unquote tmp-a
                     unquote value-b
 
+define macro-not (env expr)
+    preprocessor-func
+    defvalue value
+        call next expr
+    ret
+        qquote
+            sub true
+                unquote value
+
+define macro-null? (env expr)
+    preprocessor-func
+    defvalue value
+        call next expr
+    defvalue tmp (call unique-symbol (&str "tmp"))
+    ret
+        qquote
+            splice
+                defvalue
+                    unquote tmp
+                    unquote value
+                icmp ==
+                    unquote tmp
+                    null
+                        typeof
+                            unquote tmp
+
 define macro-if (env expr)
     preprocessor-func
     defvalue second-block
@@ -375,6 +401,12 @@ run
     call set-macro env
         &str "or?"
         macro-or?
+    call set-macro env
+        &str "not"
+        macro-not
+    call set-macro env
+        &str "null?"
+        macro-null?
     call set-macro env
         &str "if"
         macro-if
@@ -492,6 +524,36 @@ define macro-table (env expr)
                     load head
                 unquote table-sym
 
+define macro-assert (env expr)
+    preprocessor-func
+    defvalue exception-msg
+        call next
+            defvalue condition
+                call next expr
+    ret
+        qquote
+            ?
+                unquote condition
+                true
+                splice
+                    call raise
+                        call ref
+                            set-next
+                                quote
+                                    unquote
+                                        call copy-anchor!
+                                            quote AssertionError
+                                            expr
+                                unquote
+                                    ? (icmp == exception-msg (null Value))
+                                        call ref
+                                            call set-next
+                                                quote quote
+                                                call set-next condition (null Value)
+                                        call autoquote
+                                            call set-next exception-msg (null Value)
+                    false
+
 define macro-list (env expr)
     preprocessor-func
     # transform unknown lists to calls
@@ -500,6 +562,7 @@ define macro-list (env expr)
             call
                 unquote-splice expr
 
+
 run
     call set-macro env
         &str "print"
@@ -507,6 +570,9 @@ run
     call set-macro env
         &str "table"
         macro-table
+    call set-macro env
+        &str "assert"
+        macro-assert
     call set-macro env
         &str "#list#"
         macro-list

@@ -112,6 +112,8 @@ Flow Control
 
 .. ir-macro:: (loop var-name init-expr condition-expr iterate-expr expression ...)
 
+.. ir-macro:: (assert condition-expr (? exception-expr))
+
 Binary Operators
 ----------------
 

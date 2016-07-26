@@ -17,6 +17,474 @@ include "api.b"
 include "macros.b"
 include "libc.b"
 
+# UTILITIES
+#-------------------------------------------------------------------------------
+
+define single (value)
+    function Value Value
+    ret
+        set-next value (null Value)
+
+define replace (fromvalue tovalue)
+    function Value Value Value
+    ret
+        set-next tovalue
+            next fromvalue
+
+deftype FoldFunction
+    function Value (pointer opaque) Value
+
+define fold (ctx value f)
+    function Value (pointer opaque) Value (pointer FoldFunction)
+    ret
+        ? (icmp == value (null Value))
+            null Value
+            set-next
+                f ctx value
+                fold ctx
+                    next value
+                    f
+
+# TYPE CONSTRUCTORS
+#-------------------------------------------------------------------------------
+
+global type-cache
+    null Value
+
+# all types
+defvalue KEY_REPR
+    quote "repr"
+defvalue KEY_IR_REPR
+    quote "IR-repr"
+
+defvalue KEY_CALL # for types that support call syntax
+    quote "call"
+
+# functions
+defvalue KEY_RETURN_TYPE
+    quote "return-type"
+defvalue KEY_PARAMETER_TYPES
+    quote "parameter-types"
+
+# templates
+defvalue KEY_PARAMETER_NAMES
+    quote "parameter-names"
+
+# tuples
+defvalue KEY_ELEMENT_TYPES
+    quote "element-types"
+
+# arrays and vectors
+defvalue KEY_ELEMENT_TYPE
+    quote "element-type"
+defvalue KEY_SIZE
+    quote "size"
+
+# integers
+defvalue KEY_WIDTH
+    quote "width"
+defvalue KEY_SIGNED
+    quote "signed"
+
+define type? (value)
+    function i1 Value
+    ret
+        table? value
+
+defvalue type-repr
+    define "" (value)
+        function Value Value
+        assert
+            type? value
+        defvalue result
+            get-key value KEY_REPR
+        ret
+            select (icmp == result (null Value))
+                value
+                result
+
+defvalue type-ir-repr
+    define "" (value)
+        function Value Value
+        assert
+            type? value
+        defvalue result
+            get-key value KEY_IR_REPR
+        ret
+            select (icmp == result (null Value))
+                value
+                result
+
+defvalue array-vector-type
+    define "" (prefix element-type size)
+        function Value Value Value i64
+        defvalue cache
+            load type-cache
+        defvalue sizevalue
+            new-integer size
+        defvalue element-type-repr
+            type-repr element-type
+        defvalue array-repr
+            ref
+                set-next prefix
+                    set-next element-type-repr sizevalue
+        defvalue key
+            format-value array-repr -1
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue ir-array-repr
+                        ref
+                            set-next prefix
+                                set-next
+                                    type-ir-repr element-type
+                                    sizevalue
+
+                    defvalue newtype
+                        table
+                            KEY_ELEMENT_TYPE element-type
+                            KEY_SIZE sizevalue
+                            KEY_REPR array-repr
+                            KEY_IR_REPR ir-array-repr
+
+                    set-key! cache key newtype
+                    newtype
+
+defvalue array-type
+    define "" (element-type size)
+        function Value Value i64
+        ret
+            array-vector-type
+                quote array
+                \ element-type size
+
+defvalue vector-type
+    define "" (element-type size)
+        function Value Value i64
+        ret
+            array-vector-type
+                quote vector
+                \ element-type size
+
+defvalue tuple-type
+    define "" (element-types)
+        function Value Value
+        defvalue cache
+            load type-cache
+        defvalue repr-element-types
+            fold
+                null (pointer opaque)
+                element-types
+                define "" (ctx value)
+                    FoldFunction
+                    ret
+                        type-repr value
+        defvalue tuple-repr
+            ref
+                set-next
+                    quote tuple
+                    repr-element-types
+        defvalue key
+            format-value tuple-repr -1
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue ir-repr-element-types
+                        fold
+                            null (pointer opaque)
+                            element-types
+                            define "" (ctx value)
+                                FoldFunction
+                                ret
+                                    type-ir-repr value
+                    defvalue ir-tuple-repr
+                        ref
+                            set-next
+                                quote struct
+                                set-next
+                                    quote ""
+                                    ir-repr-element-types
+                    defvalue newtype
+                        table
+                            KEY_ELEMENT_TYPES element-types
+                            KEY_REPR tuple-repr
+                            KEY_IR_REPR ir-tuple-repr
+                    set-key! cache key newtype
+                    newtype
+
+defvalue function-type
+    define "" (return-type parameter-types)
+        function Value Value Value
+        defvalue cache
+            load type-cache
+        defvalue repr-return-type
+            type-repr return-type
+        defvalue repr-parameter-types
+            fold
+                null (pointer opaque)
+                parameter-types
+                define "" (ctx value)
+                    FoldFunction
+                    ret
+                        type-repr value
+        defvalue function-repr
+            ref
+                set-next
+                    quote <-
+                    set-next
+                        repr-return-type
+                        ref repr-parameter-types
+        defvalue key
+            format-value function-repr -1
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue ir-repr-return-type
+                        type-ir-repr return-type
+                    defvalue ir-repr-parameter-types
+                        fold
+                            null (pointer opaque)
+                            parameter-types
+                            define "" (ctx value)
+                                FoldFunction
+                                ret
+                                    type-ir-repr value
+                    defvalue ir-function-repr
+                        ref
+                            set-next
+                                quote function
+                                set-next ir-repr-return-type
+                                    ir-repr-parameter-types
+                    defvalue newtype
+                        table
+                            KEY_RETURN_TYPE return-type
+                            KEY_PARAMETER_TYPES parameter-types
+                            KEY_REPR function-repr
+                            KEY_IR_REPR ir-function-repr
+                    set-key! cache key newtype
+                    newtype
+
+defvalue pointer-type
+    define "" (element-type)
+        function Value Value
+        defvalue cache
+            load type-cache
+        defvalue element-type-repr
+            type-repr element-type
+        defvalue pointer-repr
+            ref
+                set-next (quote &) element-type-repr
+        defvalue key
+            format-value pointer-repr -1
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue ir-pointer-repr
+                        ref
+                            set-next (quote pointer)
+                                type-ir-repr element-type
+
+                    defvalue newtype
+                        table
+                            KEY_ELEMENT_TYPE element-type
+                            KEY_REPR pointer-repr
+                            KEY_IR_REPR ir-pointer-repr
+                    set-key! cache key newtype
+                    newtype
+
+defvalue special-type
+    define "" (repr ir-repr)
+        function Value Value Value
+        ret
+            table
+                KEY_REPR repr
+                KEY_IR_REPR
+                    ? (icmp == ir-repr (null Value))
+                        repr
+                        ir-repr
+
+defvalue int-type
+    define "" (width signed)
+        function Value i32 i1
+        defvalue cache
+            load type-cache
+        defvalue width-value
+            new-integer
+                zext width i64
+        defvalue int-repr
+            ? (icmp == width 1)
+                quote bool
+                string-concat
+                    select signed (quote int) (quote uint)
+                    format-value width-value -1
+        defvalue key int-repr
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue ir-int-repr
+                        string-concat
+                            quote i
+                            format-value width-value -1
+
+                    defvalue newtype
+                        table
+                            KEY_WIDTH key
+                            KEY_SIGNED
+                                new-integer
+                                    zext signed i64
+                            KEY_REPR int-repr
+                            KEY_IR_REPR ir-int-repr
+
+                    set-key! cache key newtype
+                    newtype
+
+global null-type
+    null Value
+global error-type
+    null Value
+
+global void-type
+    null Value
+global opaque-type
+    null Value
+
+global half-type
+    null Value
+global float-type
+    null Value
+global double-type
+    null Value
+
+global bool-type
+    null Value
+
+global int8-type
+    null Value
+global int16-type
+    null Value
+global int32-type
+    null Value
+global int64-type
+    null Value
+
+global uint8-type
+    null Value
+global uint16-type
+    null Value
+global uint32-type
+    null Value
+global uint64-type
+    null Value
+
+global rawstring-type
+    null Value
+
+defvalue init-global-types
+    define "" ()
+        function void
+
+        store (new-table) type-cache
+
+        store
+            special-type (quote error) (null Value)
+            error-type
+        store
+            special-type (quote null) (null Value)
+            null-type
+        store
+            special-type (quote void) (null Value)
+            void-type
+        store
+            special-type (quote opaque) (null Value)
+            opaque-type
+        store
+            special-type (quote half) (null Value)
+            half-type
+        store
+            special-type (quote float) (null Value)
+            float-type
+        store
+            special-type (quote double) (null Value)
+            double-type
+
+        store (int-type 8 true) int8-type
+        store (int-type 16 true) int16-type
+        store (int-type 32 true) int32-type
+        store (int-type 64 true) int64-type
+
+        store (int-type 1 false) bool-type
+
+        store (int-type 8 false) uint8-type
+        store (int-type 16 false) uint16-type
+        store (int-type 32 false) uint32-type
+        store (int-type 64 false) uint64-type
+
+        store (pointer-type (load int8-type)) rawstring-type
+
+        ret;
+
+# TYPED EXPRESSIONS
+#-------------------------------------------------------------------------------
+
+define typed? (value)
+    function i1 Value
+    ret
+        type? (at value)
+
+define typed-type (value)
+    function Value Value
+    assert
+        typed? value
+    ret
+        at value
+
+define typed-expression (value)
+    function Value Value
+    assert
+        typed? value
+    ret
+        next
+            at value
+
+define typed-error? (value)
+    function i1 Value
+    ret
+        value==
+            typed-type value
+            load error-type
+
+define typed (type-expr value-expr)
+    function Value Value Value
+    assert
+        icmp != type-expr (null Value)
+    assert
+        icmp != value-expr (null Value)
+    assert
+        type? type-expr
+    ret
+        ref
+            set-next type-expr value-expr
+
 ################################################################################
 # build and install the preprocessor hook function.
 
@@ -91,110 +559,6 @@ define set-symbol (env name value)
         value
     ret;
 
-define single (value)
-    function Value Value
-    ret
-        set-next value (null Value)
-
-define typed? (value)
-    function i1 Value
-    ret
-        value== (at value) (quote :)
-
-define get-expr (value)
-    function Value Value
-    ret
-        next
-            at value
-
-define get-type (value)
-    function Value Value
-    ret
-        next
-            next
-                at value
-
-define error? (value)
-    function i1 Value
-    ret
-        value==
-            get-type value
-            quote error
-
-define typed (value-expr type-expr)
-    function Value Value Value
-    ret
-        ref
-            set-next (quote :)
-                set-next value-expr
-                    clear-next type-expr
-
-define type? (value)
-    function i1 Value
-    ret
-        value== value
-            quote type
-
-define typeclass? (value)
-    function i1 Value
-    ret
-        value==
-            at value
-            quote typeclass
-
-define typeclass-name (value)
-    function Value Value
-    ret
-        next
-            at value
-
-define typeclass-table (value)
-    function Value Value
-    ret
-        next
-            next
-                at value
-
-define function-type? (value)
-    function i1 Value
-    ret
-        value==
-            at value
-            quote function
-
-define pointer-type? (value)
-    function i1 Value
-    ret
-        value==
-            at value
-            quote pointer
-
-define element-type (value)
-    function Value Value
-    ret
-        next
-            at value
-
-define return-type (value)
-    function Value Value
-    ret
-        next
-            at value
-
-define param-types (value)
-    function Value Value
-    ret
-        next
-            next
-                at value
-
-define replace (fromvalue tovalue)
-    function Value Value Value
-    ret
-        set-next tovalue
-            next fromvalue
-
-
 declare expand-expression
     MacroFunction
 
@@ -202,36 +566,16 @@ declare expand-expression
 define map (value ctx f)
     function Value Value Value (pointer MacroFunction)
     ret
-        ?
-            icmp == value
-                null Value
+        ? (icmp == value (null Value))
             null Value
             splice
-                defvalue head-expr
-                    alloca Value
-                store (null Value) head-expr
-                defvalue prev-expr
-                    alloca Value
-                store (null Value) prev-expr
-                loop expr
-                    value
-                    icmp != expr (null Value)
-                    next expanded-expr
-                    defvalue expanded-expr
-                        f expr ctx
-                    defvalue @prev-expr
-                        load prev-expr
-                    ? (icmp == @prev-expr (null Value))
-                        splice
-                            store expanded-expr head-expr
-                            false
-                        splice
-                            set-next!
-                                @prev-expr
-                                expanded-expr
-                            false
-                    store expanded-expr prev-expr
-                load head-expr
+                defvalue expanded-value
+                    f value ctx
+                set-next
+                    expanded-value
+                    map
+                        next expanded-value
+                        \ ctx f
 
 defvalue key-result-type
     quote "result-type"
@@ -245,10 +589,10 @@ define expand-untype-expression (value env)
         ? (typed? expanded-value)
             splice
                 defvalue expanded-type
-                    get-type expanded-value
+                    typed-type expanded-value
                 set-key! env key-result-type expanded-type
                 replace value
-                    get-expr expanded-value
+                    typed-expression expanded-value
             expanded-value
     ret result
 
@@ -292,9 +636,9 @@ define cast-untype-parameter (value env)
             dest-type
             next dest-type
     defvalue src-value
-        get-expr src-tuple
+        typed-expression src-tuple
     defvalue src-type
-        get-type src-tuple
+        typed-type src-tuple
     defvalue casted-src-value
         ?
             type== src-type dest-type
@@ -315,7 +659,7 @@ define cast-untype-parameter (value env)
 define extract-type-map-parameters (value env)
     MacroFunction
     defvalue input-type
-        get-type
+        typed-type
             defvalue input-expr
                 next
                     defvalue input-names value
@@ -339,12 +683,32 @@ define extract-type-map-parameters (value env)
 define expand-call (resolved-head value env)
     function Value Value Value Value
     defvalue sym-type
-        get-type resolved-head
+        typed-type resolved-head
+    assert
+        type? sym-type
     ret
-        if
+        ?
+            null?
+                defvalue callf
+                    bitcast
+                        handle-value
+                            get-key sym-type KEY_CALL
+                        pointer MacroFunction
+            typed
+                load error-type
+                qquote
+                    error "expression is not a function or template"
+                        unquote value
+            splice
+                callf
+                    next
+                        at value
+                    env
+
+        /// if
             function-type? sym-type;
                 defvalue funcname
-                    get-expr resolved-head
+                    typed-expression resolved-head
                 defvalue funcparamtypes
                     param-types sym-type
                 # expand params to retrieve final types
@@ -373,7 +737,7 @@ define expand-call (resolved-head value env)
                         return-type sym-type
             type? sym-type;
                 defvalue typedef
-                    get-expr resolved-head
+                    typed-expression resolved-head
                 if
                     typeclass? typedef;
                         defvalue obj
@@ -582,222 +946,6 @@ define macro-bangra (ir-env value)
             run
                 unquote-splice result
 
-# TYPE CONSTRUCTORS
-#-------------------------------------------------------------------------------
-
-global type-cache
-    null Value
-
-# all types
-defvalue KEY_REPR
-    quote "repr"
-defvalue KEY_IR_REPR
-    quote "IR-repr"
-
-# arrays and vectors
-defvalue KEY_ELEMENT_TYPE
-    quote "element-type"
-defvalue KEY_SIZE
-    quote "size"
-
-# integers
-defvalue KEY_WIDTH
-    quote "width"
-defvalue KEY_SIGNED
-    quote "signed"
-
-defvalue type-repr
-    define "" (value)
-        function Value Value
-        defvalue result
-            get-key value KEY_REPR
-        ret
-            select (icmp == result (null Value))
-                value
-                result
-
-defvalue type-ir-repr
-    define "" (value)
-        function Value Value
-        defvalue result
-            get-key value KEY_IR_REPR
-        ret
-            select (icmp == result (null Value))
-                value
-                result
-
-defvalue array-vector-type
-    define "" (prefix element-type size)
-        function Value Value Value i64
-        defvalue cache
-            load type-cache
-        defvalue sizevalue
-            new-integer size
-        defvalue element-type-repr
-            type-repr element-type
-        defvalue array-repr
-            ref
-                set-next prefix
-                    set-next element-type-repr sizevalue
-        defvalue key
-            format-value array-repr -1
-        defvalue cached
-            get-key cache key
-        ret
-            ?
-                icmp != cached (null Value)
-                cached
-                splice
-                    defvalue ir-array-repr
-                        ref
-                            set-next prefix
-                                set-next
-                                    type-ir-repr element-type
-                                    sizevalue
-
-                    defvalue newtype
-                        table
-                            KEY_ELEMENT_TYPE element-type
-                            KEY_SIZE sizevalue
-                            KEY_REPR array-repr
-                            KEY_IR_REPR ir-array-repr
-
-                    set-key! cache key newtype
-                    newtype
-
-defvalue array-type
-    define "" (element-type size)
-        function Value Value i64
-        ret
-            array-vector-type
-                quote array
-                \ element-type size
-
-defvalue vector-type
-    define "" (element-type size)
-        function Value Value i64
-        ret
-            array-vector-type
-                quote vector
-                \ element-type size
-
-defvalue pointer-type
-    define "" (element-type)
-        function Value Value
-        defvalue cache
-            load type-cache
-        defvalue element-type-repr
-            type-repr element-type
-        defvalue pointer-repr
-            ref
-                set-next (quote &) element-type-repr
-        defvalue key
-            format-value pointer-repr -1
-        defvalue cached
-            get-key cache key
-        ret
-            ?
-                icmp != cached (null Value)
-                cached
-                splice
-                    defvalue ir-pointer-repr
-                        ref
-                            set-next (quote pointer)
-                                type-ir-repr element-type
-
-                    defvalue newtype
-                        table
-                            KEY_ELEMENT_TYPE element-type
-                            KEY_REPR pointer-repr
-                            KEY_IR_REPR ir-pointer-repr
-                    set-key! cache key newtype
-                    newtype
-
-defvalue int-type
-    define "" (width signed)
-        function Value i32 i1
-        defvalue cache
-            load type-cache
-        defvalue width-value
-            new-integer
-                zext width i64
-        defvalue int-repr
-            ? (icmp == width 1)
-                quote bool
-                string-concat
-                    select signed (quote int) (quote uint)
-                    format-value width-value -1
-        defvalue key int-repr
-        defvalue cached
-            get-key cache key
-        ret
-            ?
-                icmp != cached (null Value)
-                cached
-                splice
-                    defvalue ir-int-repr
-                        string-concat
-                            quote i
-                            format-value width-value -1
-
-                    defvalue newtype
-                        table
-                            KEY_WIDTH key
-                            KEY_SIGNED
-                                new-integer
-                                    zext signed i64
-                            KEY_REPR int-repr
-                            KEY_IR_REPR ir-int-repr
-
-                    set-key! cache key newtype
-                    newtype
-
-global boolean-type
-    null Value
-
-global int8-type
-    null Value
-global int16-type
-    null Value
-global int32-type
-    null Value
-global int64-type
-    null Value
-
-global uint8-type
-    null Value
-global uint16-type
-    null Value
-global uint32-type
-    null Value
-global uint64-type
-    null Value
-
-global rawstring-type
-    null Value
-
-defvalue init-global-types
-    define "" ()
-        function void
-
-        store (new-table) type-cache
-
-        store (int-type 8 true) int8-type
-        store (int-type 16 true) int16-type
-        store (int-type 32 true) int32-type
-        store (int-type 64 true) int64-type
-
-        store (int-type 1 false) boolean-type
-
-        store (int-type 8 false) uint8-type
-        store (int-type 16 false) uint16-type
-        store (int-type 32 false) uint32-type
-        store (int-type 64 false) uint64-type
-
-        store (pointer-type (load int8-type)) rawstring-type
-
-        ret;
-
 # INITIALIZATION
 #-------------------------------------------------------------------------------
 
@@ -858,7 +1006,7 @@ run
                         :
                             function
                                 unquote
-                                    get-expr rettype
+                                    typed-expression rettype
                                 unquote-splice params
                             type
 
@@ -894,7 +1042,7 @@ run
                     next namestr
                     env
             defvalue type-expr
-                get-expr type
+                typed-expression type
             ret
                 replace value
                     qquote
@@ -916,7 +1064,7 @@ run
                                 at value
                     env
             defvalue expr-type
-                get-type expr
+                typed-type expr
             ret
                 ?
                     type? expr-type
@@ -938,7 +1086,7 @@ run
                                     defvalue
                                         unquote name
                                         unquote
-                                            get-expr expr
+                                            typed-expression expr
                                 expr-type
 
     set-preprocessor
