@@ -1047,6 +1047,7 @@ static ValueRef strip(ValueRef expr) {
 //------------------------------------------------------------------------------
 
 typedef enum {
+    token_none = -1,
     token_eof = 0,
     token_open = '(',
     token_close = ')',
@@ -1139,13 +1140,25 @@ struct Lexer {
         token = token_eof;
     }
 
+    char next() {
+        return *next_cursor++;
+    }
+
+    bool verifyGoodTaste(char c) {
+        if (c == '\t') {
+            error("please use spaces instead of tabs.");
+            return false;
+        }
+        return true;
+    }
+
     void readSymbol () {
         bool escape = false;
         while (true) {
             if (next_cursor == eof) {
                 break;
             }
-            char c = *next_cursor++;
+            char c = next();
             if (escape) {
                 if (c == '\n') {
                     ++next_lineno;
@@ -1178,7 +1191,7 @@ struct Lexer {
                 error("unterminated sequence");
                 break;
             }
-            char c = *next_cursor++;
+            char c = next();
             if (c == '\n') {
                 ++next_lineno;
                 next_line = next_cursor;
@@ -1247,7 +1260,8 @@ struct Lexer {
                 token = token_eof;
                 break;
             }
-            char c = *next_cursor++;
+            char c = next();
+            if (!verifyGoodTaste(c)) break;
             if (c == '\n') {
                 ++next_lineno;
                 next_line = next_cursor;
@@ -1431,10 +1445,16 @@ struct Parser {
 
     ValueRef parseList(int end_token) {
         ListBuilder builder(lexer);
+        lexer.readToken();
         while (true) {
-            lexer.readToken();
             if (lexer.token == end_token) {
                 break;
+            } else if (lexer.token == token_escape) {
+                int column = lexer.column();
+                lexer.readToken();
+                auto elem = parseNaked(column, 1, end_token);
+                if (errors) return nullptr;
+                builder.append(elem);
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket");
                 // point to beginning of list
@@ -1445,10 +1465,12 @@ struct Parser {
                     error("empty expression");
                     return nullptr;
                 }
+                lexer.readToken();
             } else {
                 auto elem = parseAny();
                 if (errors) return nullptr;
                 builder.append(elem);
+                lexer.readToken();
             }
         }
         return builder.getResult();
@@ -1489,7 +1511,7 @@ struct Parser {
         return nullptr;
     }
 
-    ValueRef parseNaked (int column = 0, int depth = 0) {
+    ValueRef parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
         int lineno = lexer.lineno;
 
         bool escape = false;
@@ -1498,7 +1520,9 @@ struct Parser {
         ListBuilder builder(lexer);
 
         while (lexer.token != token_eof) {
-            if (lexer.token == token_escape) {
+            if (lexer.token == end_token) {
+                break;
+            } if (lexer.token == token_escape) {
                 escape = true;
                 lexer.readToken();
                 if (lexer.lineno <= lineno) {
@@ -1519,13 +1543,22 @@ struct Parser {
                 } else {
                     subcolumn = lexer.column();
                 }
+                if (column != subcolumn) {
+                    if ((column + 4) != subcolumn) {
+                        //printf("%i %i\n", column, subcolumn);
+                        error("indentations must nest by 4 spaces.");
+                        return nullptr;
+                    }
+                }
+
                 escape = false;
                 builder.resetStart();
                 lineno = lexer.lineno;
                 // keep adding elements while we're in the same line
                 while ((lexer.token != token_eof)
+                        && (lexer.token != end_token)
                         && (lexer.lineno == lineno)) {
-                    auto elem = parseNaked(subcolumn, depth + 1);
+                    auto elem = parseNaked(subcolumn, depth + 1, end_token);
                     if (errors) return nullptr;
                     builder.append(elem);
                 }
@@ -5486,7 +5519,9 @@ void *bangra_import_c_string(ValueRef dest,
     return bangra::importCModule(dest, path, args, argcount, str);
 }
 
-void *bangra_xpcall (void *ctx, void *(*try_func)(void *), void *(*except_func)(void *, ValueRef)) {
+void *bangra_xpcall (void *ctx,
+    void *(*try_func)(void *),
+    void *(*except_func)(void *, ValueRef)) {
     try {
         return try_func(ctx);
     } catch (ValueRef expr) {

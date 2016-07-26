@@ -14,6 +14,39 @@ global test-quotes
             ) a b c (
              ) d e f
                 g h i
+            (a b c
+q q q
+                # d starts new naked context
+                \ d e
+                    f g
+                # another naked context line
+                \ h i
+                    j k
+                        l m
+                # exiting naked context
+            h i
+                j k
+                    l m
+                # ending topmost list at end of naked content line
+                \ o p
+                    q r
+                        s)
+            {
+                ("key" : null)
+                \ "key" : null
+                \ "key" :
+                    function (x)
+                        if (x > 5)
+                            true
+                        else
+                            false
+                \ "key2" :
+                    function ()
+                        if (x > 5)
+                            true
+                        else
+                            false
+                }
             # compare
             do
                 if cond1:

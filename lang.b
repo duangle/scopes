@@ -126,8 +126,8 @@ define typed (value-expr type-expr)
     ret
         ref
             set-next (quote :)
-                    set-next value-expr
-                        clear-next type-expr
+                set-next value-expr
+                    clear-next type-expr
 
 define type? (value)
     function i1 Value
