@@ -20,6 +20,7 @@ run
         &str "testfile"
         macro-testfile
 
+testfile "test_xpcall.b"
 testfile "test_table.b"
 testfile "test_run.b"
 testfile "test_string.b"

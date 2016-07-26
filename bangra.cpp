@@ -112,6 +112,14 @@ ValueRef bangra_get_key(ValueRef expr, ValueRef key);
 ValueRef bangra_handle(void *ptr);
 void *bangra_handle_value(ValueRef expr);
 
+// exception handling
+//------------------------------------------------------------------------------
+
+void *bangra_xpcall (void *ctx,
+    void *(*try_func)(void *),
+    void *(*except_func)(void *, ValueRef));
+void bangra_raise (ValueRef expr);
+
 // metaprogramming
 //------------------------------------------------------------------------------
 
@@ -4317,22 +4325,28 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
     env->globals->engine = engine;
 
     ValueRef outvalue = NULL;
-    if (rettype == valueptrtype) {
-        if (paramcount == 0) {
-            typedef ValueRef (*signature)();
-            outvalue = ((signature)f)();
+    try {
+        if (rettype == valueptrtype) {
+            if (paramcount == 0) {
+                typedef ValueRef (*signature)();
+                outvalue = ((signature)f)();
+            } else {
+                typedef ValueRef (*signature)(Environment *env);
+                outvalue = ((signature)f)(env);
+            }
         } else {
-            typedef ValueRef (*signature)(Environment *env);
-            outvalue = ((signature)f)(env);
+            if (paramcount == 0) {
+                typedef void (*signature)();
+                ((signature)f)();
+            } else {
+                typedef void (*signature)(Environment *env);
+                ((signature)f)(env);
+            }
         }
-    } else {
-        if (paramcount == 0) {
-            typedef void (*signature)();
-            ((signature)f)();
-        } else {
-            typedef void (*signature)(Environment *env);
-            ((signature)f)(env);
-        }
+    } catch (ValueRef expr) {
+        translateError(env, "an exception was raised");
+        streamValue(std::cerr, expr, 0, true);
+        return NULL;
     }
 
     env->globals->engine = NULL;
@@ -5470,6 +5484,18 @@ void *bangra_import_c_module(ValueRef dest,
 void *bangra_import_c_string(ValueRef dest,
     const char *str, const char *path, const char **args, int argcount) {
     return bangra::importCModule(dest, path, args, argcount, str);
+}
+
+void *bangra_xpcall (void *ctx, void *(*try_func)(void *), void *(*except_func)(void *, ValueRef)) {
+    try {
+        return try_func(ctx);
+    } catch (ValueRef expr) {
+        return except_func(ctx, expr);
+    }
+}
+
+void bangra_raise (ValueRef expr) {
+    throw expr;
 }
 
 //------------------------------------------------------------------------------

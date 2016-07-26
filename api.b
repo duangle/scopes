@@ -151,6 +151,22 @@ defvalue new-handle
 defvalue handle-value
     declare "bangra_handle_value" (function (pointer opaque) Value)
 
+# exception handling
+#-------------------------------------------------------------------------------
+
+deftype xpcall-try-func
+    function (pointer opaque) (pointer opaque)
+deftype xpcall-except-func
+    function (pointer opaque) (pointer opaque) Value
+
+defvalue xpcall
+    declare "bangra_xpcall"
+        function (pointer opaque) (pointer opaque)
+            \ (pointer xpcall-try-func) (pointer xpcall-except-func)
+
+defvalue raise
+    declare "bangra_raise" (function void Value)
+
 # metaprogramming
 #-------------------------------------------------------------------------------
 
