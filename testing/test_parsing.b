@@ -10,6 +10,9 @@ global test-quotes
             yo""""hey
             hey" "ho"
             """test"""
+            print
+                (+ 1 2
+                    \ 3 * 4)
             print (
             ) a b c (
              ) d e f

@@ -9,6 +9,13 @@
 extern "C" {
 #endif
 
+enum {
+    // semver style versioning
+    BANGRA_VERSION_MAJOR = 0,
+    BANGRA_VERSION_MINOR = 3,
+    BANGRA_VERSION_PATCH = 0,
+};
+
 #ifdef BANGRA_CPP_IMPL
 namespace bangra {
 struct Value;
@@ -4316,7 +4323,7 @@ static LLVMValueRef tr_value_execute (Environment *env, ValueRef expr) {
         }
     }
 
-    long long opt_level = 2;
+    long long opt_level = 0;
 
     if (expr_opt_level && !translateConstInt(env, expr_opt_level, opt_level))
         return NULL;
@@ -5122,6 +5129,34 @@ char *bang_executable_path = NULL;
 int bang_argc = 0;
 char **bang_argv = NULL;
 
+void print_version() {
+    std::string versionstr = bangra::format("%i.%i",
+        BANGRA_VERSION_MAJOR, BANGRA_VERSION_MINOR);
+    if (BANGRA_VERSION_PATCH) {
+        versionstr += bangra::format(".%i", BANGRA_VERSION_PATCH);
+    }
+    printf(
+    "Bangra version %s\n"
+    "Executable path: %s\n"
+    , versionstr.c_str()
+    , bang_executable_path
+    );
+    exit(0);
+}
+
+void print_help(const char *exename) {
+    printf(
+    "usage: %s [option [...]] [filename]\n"
+    "Options:\n"
+    "   -h, --help                  print this text and exit.\n"
+    "   -v, --version               print program version and exit.\n"
+    "   --skip-startup              skip startup script.\n"
+    "   --                          terminate option list.\n"
+    , exename
+    );
+    exit(0);
+}
+
 int bangra_main(int argc, char ** argv) {
     bang_argc = argc;
     bang_argv = argv;
@@ -5140,15 +5175,47 @@ int bangra_main(int argc, char ** argv) {
         }
 
         if (!expr) {
-            if (bang_executable_path) {
+            // running in interpreter mode
+            char *sourcepath = NULL;
+            // skip startup script
+            bool skip_startup = false;
+
+            if (argv[1]) {
+                bool parse_options = true;
+
+                char ** arg = argv;
+                while (*(++arg)) {
+                    if (parse_options && (**arg == '-')) {
+                        if (!strcmp(*arg, "--help") || !strcmp(*arg, "-h")) {
+                            print_help(argv[0]);
+                        } else if (!strcmp(*arg, "--version") || !strcmp(*arg, "-v")) {
+                            print_version();
+                        } else if (!strcmp(*arg, "--skip-startup")) {
+                            skip_startup = true;
+                        } else if (!strcmp(*arg, "--")) {
+                            parse_options = false;
+                        } else {
+                            printf("unrecognized option: %s. Try --help for help.\n", *arg);
+                            exit(1);
+                        }
+                    } else if (!sourcepath) {
+                        sourcepath = *arg;
+                    } else {
+                        printf("unrecognized argument: %s. Try --help for help.\n", *arg);
+                        exit(1);
+                    }
+                }
+            }
+
+            if (!skip_startup && bang_executable_path) {
                 if (!bangra::compileStartupScript()) {
                     return 1;
                 }
             }
 
-            if (argv[1]) {
+            if (sourcepath) {
                 bangra::Parser parser;
-                expr = parser.parseFile(argv[1]);
+                expr = parser.parseFile(sourcepath);
             }
         }
     }

@@ -155,17 +155,23 @@ This source parses as the same list in the coated example::
     # nesting is implied by indentation.
     # a sub paragraph continues the list.
     print
+        # nested arguments must be indendent by four spaces.
+        # tabs are not permitted.
+
         # multiple elements on a single line without sub-paragraph are wrapped
         # in a list.
         .. "Hello World"
+
+        # single arguments are appended to the parent list
+        303
 
     null
 
 Mixing Modes
 ^^^^^^^^^^^^
 
-Naked lists can contain coated lists, but coated lists can
-only contain other coated lists::
+Naked lists can contain coated lists, and coated lists can
+contain naked lists::
 
     # compute the value of (1 + 2 + (3 * 4)) and print the result
     (print
@@ -182,19 +188,17 @@ only contain other coated lists::
     print
         + 1 2 (3 * 4)
 
-    # but a coated list can not contain naked parts
+    # and a coated list can contain naked parts.
+    # the escape character \ enters naked mode at its indentation level.
     print
         (+ 1 2
-            3 * 4) # parsed as (+ 1 2 3 * 4), a syntax error
-
-    # correct version:
-    print (+ 1 2 (3 * 4))
+            \ 3 * 4) # parsed as (+ 1 2 (3 * 4))
 
 Because it is more convenient for users without specialized editors to write
 in naked notation, and balancing parentheses can be challenging for beginners,
 the author suggests to use coated notation sparingly and in good taste.
-Purists and enthusiasts may however prefer to keep only the top level naked,
-as in most Lisp-like languages, and work exclusively with coated lists
+Purists and Scheme enthusiasts may however prefer to keep only the top level
+naked, as in most Lisp-like languages, and work exclusively with coated lists
 otherwise.
 
 Therefore Bangra's reference documentation describes all available symbols in
