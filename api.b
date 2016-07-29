@@ -142,6 +142,10 @@ defvalue set-key!
     declare "bangra_set_key" (function void Value Value Value)
 defvalue get-key
     declare "bangra_get_key" (function Value Value Value)
+defvalue set-meta!
+    declare "bangra_set_meta" (function void Value Value)
+defvalue get-meta
+    declare "bangra_get_meta" (function Value Value)
 
 # handle
 #-------------------------------------------------------------------------------

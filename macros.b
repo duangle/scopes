@@ -473,6 +473,16 @@ define macro-print (env expr)
                 unquote-splice
                     load head
 
+define macro-handle (env expr)
+    preprocessor-func
+    ret
+        qquote
+            call new-handle
+                bitcast
+                    unquote
+                        call next expr
+                    pointer opaque
+
 define macro-table (env expr)
     preprocessor-func
     defvalue param
@@ -567,6 +577,9 @@ run
     call set-macro env
         &str "print"
         macro-print
+    call set-macro env
+        &str "handle"
+        macro-handle
     call set-macro env
         &str "table"
         macro-table

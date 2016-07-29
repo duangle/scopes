@@ -112,6 +112,8 @@ signed long long int bangra_integer_value(ValueRef value);
 ValueRef bangra_table();
 void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value);
 ValueRef bangra_get_key(ValueRef expr, ValueRef key);
+void bangra_set_meta(ValueRef expr, ValueRef meta);
+ValueRef bangra_get_meta(ValueRef expr);
 
 // handle
 //------------------------------------------------------------------------------
@@ -844,9 +846,15 @@ protected:
     std::map< std::shared_ptr<TableBody> , ValueRef > table_map;
     std::map< ValueRef, ValueRef > value_map;
 
+    std::shared_ptr<TableBody> meta;
+
     void setKey(ValueRef key, ValueRef value);
 
+    ValueRef getLocalKey(ValueRef key);
+    ValueRef getLocalKey(const std::string &name);
+
     ValueRef getKey(ValueRef key);
+    ValueRef getKey(const std::string &name);
 
     void tag() {
         for (auto val : string_map) { assert(val.second); val.second->tag(); }
@@ -873,12 +881,37 @@ public:
         body(new TableBody())
         {}
 
+    Table(std::shared_ptr<TableBody> body_, ValueRef next_ = NULL) :
+        Value(V_Table, next_),
+        body(body_)
+        {}
+
+    void setMeta(ValueRef meta) {
+        if (meta) {
+            if (auto t = llvm::dyn_cast<Table>(meta)) {
+                body->meta = t->getValue();
+                return;
+            }
+        }
+        body->meta = nullptr;
+    }
+    ValueRef getMeta() {
+        if (body->meta)
+            return new Table(body->meta);
+        else
+            return NULL;
+    }
+
     void setKey(ValueRef key, ValueRef value) {
         body->setKey(key, value);
     }
 
     ValueRef getKey(ValueRef key) {
         return body->getKey(key);
+    }
+
+    ValueRef getKey(const std::string &name) {
+        return body->getKey(name);
     }
 
     std::shared_ptr<TableBody> getValue() {
@@ -930,7 +963,11 @@ void TableBody::setKey(ValueRef key, ValueRef value) {
     }
 }
 
-ValueRef TableBody::getKey(ValueRef key) {
+ValueRef TableBody::getLocalKey(const std::string &name) {
+    return string_map[name];
+}
+
+ValueRef TableBody::getLocalKey(ValueRef key) {
     switch(kindOf(key)) {
         case V_String:
         case V_Symbol:
@@ -946,6 +983,22 @@ ValueRef TableBody::getKey(ValueRef key) {
         default:
             return value_map[ key ];
     }
+}
+
+ValueRef TableBody::getKey(const std::string &name) {
+    ValueRef result = getLocalKey(name);
+    if (!result && meta)
+        return meta->getKey(name);
+    else
+        return result;
+}
+
+ValueRef TableBody::getKey(ValueRef key) {
+    ValueRef result = getLocalKey(key);
+    if (!result && meta)
+        return meta->getKey(key);
+    else
+        return result;
 }
 
 //------------------------------------------------------------------------------
@@ -1788,7 +1841,13 @@ static void streamValue(T &stream, ValueRef e, size_t depth=0, bool naked=true) 
     case V_Table: {
         Table *a = llvm::cast<Table>(e);
         void *ptr = (void *)a->getValue().get();
-        stream << format("<table@%p>", ptr);
+        stream << format("<table@%p", ptr);
+        ValueRef repr = a->getKey("repr");
+        if (repr) {
+            stream << ':';
+            streamValue(stream, repr, 0, false);
+        }
+        stream << '>';
         if (naked)
             stream << '\n';
     } return;
@@ -5482,6 +5541,23 @@ ValueRef bangra_get_key(ValueRef expr, ValueRef key) {
     if (expr && key) {
         if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
             return table->getKey(key);
+        }
+    }
+    return NULL;
+}
+
+void bangra_set_meta(ValueRef expr, ValueRef meta) {
+    if (expr) {
+        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
+            table->setMeta(meta);
+        }
+    }
+}
+
+ValueRef bangra_get_meta(ValueRef expr) {
+    if (expr) {
+        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
+            return table->getMeta();
         }
     }
     return NULL;

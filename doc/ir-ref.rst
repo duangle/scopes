@@ -114,6 +114,11 @@ Flow Control
 
 .. ir-macro:: (assert condition-expr (? exception-expr))
 
+Unary Operators
+---------------
+
+.. ir-macro:: (not pointer-expr)
+
 Binary Operators
 ----------------
 
@@ -173,6 +178,8 @@ Comparators
 .. ir-special:: (fcmp op lhs rhs)
 
 .. ir-special:: (select condition-expr then-value else-value)
+
+.. ir-macro:: (null? pointer-expr)
 
 Composition
 -----------
@@ -280,6 +287,10 @@ Metaprogramming
 .. ir-special:: (splice (? expression ...))
 
 .. ir-macro:: (print (? value ...))
+
+.. ir-macro:: (handle pointer-value)
+
+.. ir-macro:: (table (? (key value) ...))
 
 .. ir-special:: (error message-string expression)
 

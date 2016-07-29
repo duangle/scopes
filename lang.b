@@ -51,14 +51,64 @@ define fold (ctx value f)
 global type-cache
     null Value
 
+global type-type
+    null Value
+
+global null-type
+    null Value
+global error-type
+    null Value
+
+global ellipsis-type
+    null Value
+
+global void-type
+    null Value
+global opaque-type
+    null Value
+
+global half-type
+    null Value
+global float-type
+    null Value
+global double-type
+    null Value
+
+global bool-type
+    null Value
+
+global int8-type
+    null Value
+global int16-type
+    null Value
+global int32-type
+    null Value
+global int64-type
+    null Value
+
+global uint8-type
+    null Value
+global uint16-type
+    null Value
+global uint32-type
+    null Value
+global uint64-type
+    null Value
+
+global rawstring-type
+    null Value
+
+global function-typeclass
+    null Value
+
 # all types
 defvalue KEY_REPR
     quote "repr"
 defvalue KEY_IR_REPR
     quote "IR-repr"
 
-defvalue KEY_CALL # for types that support call syntax
-    quote "call"
+defvalue KEY_APPLY # for types that support apply syntax
+    quote "apply"
 
 # functions
 defvalue KEY_RETURN_TYPE
@@ -69,6 +119,8 @@ defvalue KEY_PARAMETER_TYPES
 # templates
 defvalue KEY_PARAMETER_NAMES
     quote "parameter-names"
+defvalue KEY_BODY
+    quote "body"
 
 # tuples
 defvalue KEY_ELEMENT_TYPES
@@ -108,6 +160,7 @@ defvalue type-ir-repr
         function Value Value
         assert
             type? value
+            value
         defvalue result
             get-key value KEY_IR_REPR
         ret
@@ -220,6 +273,22 @@ defvalue tuple-type
                     set-key! cache key newtype
                     newtype
 
+defvalue template-type
+    define "" (parameter-names body)
+        function Value Value Value
+        defvalue template-repr
+            ref
+                set-next
+                    quote template
+                    set-next parameter-names
+                        ref body
+        defvalue newtype
+            table
+                KEY_PARAMETER_NAMES parameter-names
+                KEY_BODY body
+                KEY_REPR template-repr
+        ret newtype
+
 defvalue function-type
     define "" (return-type parameter-types)
         function Value Value Value
@@ -273,6 +342,8 @@ defvalue function-type
                             KEY_PARAMETER_TYPES parameter-types
                             KEY_REPR function-repr
                             KEY_IR_REPR ir-function-repr
+                    set-meta! newtype
+                        load function-typeclass
                     set-key! cache key newtype
                     newtype
 
@@ -358,59 +429,28 @@ defvalue int-type
                     set-key! cache key newtype
                     newtype
 
-global null-type
-    null Value
-global error-type
-    null Value
-
-global void-type
-    null Value
-global opaque-type
-    null Value
-
-global half-type
-    null Value
-global float-type
-    null Value
-global double-type
-    null Value
-
-global bool-type
-    null Value
-
-global int8-type
-    null Value
-global int16-type
-    null Value
-global int32-type
-    null Value
-global int64-type
-    null Value
-
-global uint8-type
-    null Value
-global uint16-type
-    null Value
-global uint32-type
-    null Value
-global uint64-type
-    null Value
-
-global rawstring-type
-    null Value
-
 defvalue init-global-types
     define "" ()
         function void
 
         store (new-table) type-cache
 
+        store (new-table) function-typeclass
+
+        store
+            special-type (quote type) (null Value)
+            type-type
         store
             special-type (quote error) (null Value)
             error-type
         store
             special-type (quote null) (null Value)
             null-type
+
+        store
+            special-type (quote ...) (null Value)
+            ellipsis-type
+
         store
             special-type (quote void) (null Value)
             void-type
@@ -441,6 +481,7 @@ defvalue init-global-types
 
         store (pointer-type (load int8-type)) rawstring-type
 
+
         ret;
 
 # TYPED EXPRESSIONS
@@ -455,6 +496,7 @@ define typed-type (value)
     function Value Value
     assert
         typed? value
+        value
     ret
         at value
 
@@ -465,6 +507,11 @@ define typed-expression (value)
     ret
         next
             at value
+
+define typed-abstract? (value)
+    function i1 Value
+    ret
+        null? (typed-expression value)
 
 define typed-error? (value)
     function i1 Value
@@ -478,8 +525,6 @@ define typed (type-expr value-expr)
     assert
         icmp != type-expr (null Value)
     assert
-        icmp != value-expr (null Value)
-    assert
         type? type-expr
     ret
         ref
@@ -492,6 +537,10 @@ deftype &opaque (pointer opaque)
 
 deftype MacroFunction
     function Value Value Value
+
+deftype TypeMacroFunction
+    # result self value env
+    function Value Value Value Value
 
 defvalue key-symbols
     quote "symbols"
@@ -571,11 +620,17 @@ define map (value ctx f)
             splice
                 defvalue expanded-value
                     f value ctx
-                set-next
-                    expanded-value
+                ?
+                    null? expanded-value
+                    # skip
                     map
-                        next expanded-value
+                        next value
                         \ ctx f
+                    set-next
+                        expanded-value
+                        map
+                            next expanded-value
+                            \ ctx f
 
 defvalue key-result-type
     quote "result-type"
@@ -585,42 +640,26 @@ define expand-untype-expression (value env)
     MacroFunction
     defvalue expanded-value
         expand-expression value env
-    defvalue result
-        ? (typed? expanded-value)
-            splice
-                defvalue expanded-type
-                    typed-type expanded-value
-                set-key! env key-result-type expanded-type
-                replace value
-                    typed-expression expanded-value
-            expanded-value
-    ret result
+    defvalue expanded-type
+        typed-type expanded-value
+    set-key! env key-result-type expanded-type
+    ret
+        replace value
+            typed-expression expanded-value
+
+# only returns types
+define expand-type-expression (value env)
+    MacroFunction
+    defvalue expanded-value
+        expand-expression value env
+    assert
+        null? (typed-expression expanded-value)
+    ret
+        replace value
+            typed-type expanded-value
 
 defvalue ellipsis
     quote ...
-
-define type== (value1 value2)
-    function i1 Value Value
-    ret
-        if
-            value== value1 ellipsis;
-                true
-            value== value2 ellipsis;
-                true
-            or (pointer? value1) (pointer? value2);
-                type==
-                    at value1
-                    at value2
-            value== value1 value2;
-                ?
-                    and
-                        icmp == value1 (null Value)
-                        icmp == value2 (null Value)
-                    true
-                    type==
-                        next value1
-                        next value2
-            else false
 
 define cast-untype-parameter (value env)
     MacroFunction
@@ -629,10 +668,11 @@ define cast-untype-parameter (value env)
             defvalue dest-types value
     defvalue dest-type
         at dest-types
+    defvalue ellipsis?
+        value== dest-type (load ellipsis-type)
     # if ellipsis, keep, otherwise iterate to next type
     defvalue next-dest-type
-        select
-            value== dest-type (quote ...)
+        select ellipsis?
             dest-type
             next dest-type
     defvalue src-value
@@ -641,20 +681,25 @@ define cast-untype-parameter (value env)
         typed-type src-tuple
     defvalue casted-src-value
         ?
-            type== src-type dest-type
+            or?
+                value== src-type dest-type
+                ellipsis?
             src-value
             qquote
                 bitcast
                     unquote src-value
-                    unquote dest-type
+                    unquote
+                        type-ir-repr dest-type
+    defvalue next-src-tuple
+        next src-tuple
     ret
         set-next casted-src-value
             select
-                icmp == next-dest-type (null Value)
+                icmp == next-src-tuple (null Value)
                 null Value
                 set-next!
                     ref next-dest-type
-                    next src-tuple
+                    next-src-tuple
 
 define extract-type-map-parameters (value env)
     MacroFunction
@@ -666,7 +711,7 @@ define extract-type-map-parameters (value env)
     defvalue input-name
         at input-names
     set-symbol env input-name
-        typed input-name input-type
+        typed input-type input-name
     defvalue next-input-name
         next input-name
     #print input-name input-type
@@ -680,6 +725,35 @@ define extract-type-map-parameters (value env)
                     ref next-input-name
                     next input-expr
 
+defvalue function-apply
+    define "" (head params env)
+        TypeMacroFunction
+        defvalue head-type
+            typed-type head
+        defvalue funcname
+            typed-expression head
+        defvalue funcrettype
+            get-key head-type KEY_RETURN_TYPE
+        defvalue funcparamtypes
+            get-key head-type KEY_PARAMETER_TYPES
+        # casted params
+        defvalue castedparams
+            map
+                # prepend types to params so mapping
+                # function can read them
+                set-next
+                    ref funcparamtypes
+                    params
+                env
+                cast-untype-parameter
+        ret
+            typed
+                funcrettype
+                qquote
+                    call
+                        unquote funcname
+                        unquote-splice castedparams
+
 define expand-call (resolved-head value env)
     function Value Value Value Value
     defvalue sym-type
@@ -692,18 +766,23 @@ define expand-call (resolved-head value env)
                 defvalue callf
                     bitcast
                         handle-value
-                            get-key sym-type KEY_CALL
-                        pointer MacroFunction
+                            get-key sym-type KEY_APPLY
+                        pointer TypeMacroFunction
             typed
                 load error-type
                 qquote
-                    error "expression is not a function or template"
+                    error "can not apply first expression argument"
                         unquote value
             splice
-                callf
-                    next
-                        at value
-                    env
+                # expand params to retrieve final types
+                defvalue params
+                    map
+                        next
+                            at value
+                        env
+                        expand-expression
+                replace value
+                    callf resolved-head params env
 
         /// if
             function-type? sym-type;
@@ -730,11 +809,11 @@ define expand-call (resolved-head value env)
                         cast-untype-parameter
                 replace value
                     typed
+                        return-type sym-type
                         qquote
                             call
                                 unquote funcname
                                 unquote-splice castedparams
-                        return-type sym-type
             type? sym-type;
                 defvalue typedef
                     typed-expression resolved-head
@@ -783,24 +862,25 @@ define expand-call (resolved-head value env)
                                         splice
                                             unquote-splice expanded-body
                         replace value
-                            qquote
-                                :
+                            typed
+                                return-type
+                                qquote
                                     call
                                         unquote function-decl
                                         unquote-splice untyped-params
-                                    unquote return-type
+
                     else
-                        qquote
-                            :
+                        typed
+                            load error-type
+                            qquote
                                 error "can not instantiate type"
                                     unquote value
-                                error
             else
-                qquote
-                    :
+                typed
+                    load error-type
+                    qquote
                         error "symbol is not a function or macro"
                             unquote value
-                        error
 
 define expand-expression (value env)
     MacroFunction
@@ -814,41 +894,38 @@ define expand-expression (value env)
                             resolve-symbol env value
                         ?
                             icmp == resolved-sym (null Value)
-                            qquote
-                                :
+                            typed
+                                load error-type
+                                qquote
                                     error "unknown symbol"
                                         unquote value
-                                    error
                             replace value resolved-sym
                     string? value;
                         replace value
-                            qquote
-                                :
+                            typed
+                                pointer-type
+                                    array-type
+                                        load int8-type
+                                        string-size value
+                                qquote
                                     global ""
                                         unquote value
-                                    pointer
-                                        array i8
-                                            unquote
-                                                call new-integer
-                                                    call string-size value
                     integer? value;
                         replace value
-                            qquote
-                                :
-                                    unquote value
-                                    i32
+                            typed
+                                load int32-type
+                                value
                     real? value;
                         replace value
-                            qquote
-                                :
-                                    unquote value
-                                    float
+                            typed
+                                load float-type
+                                value
                     else
-                        qquote
-                            :
+                        typed
+                            load error-type
+                            qquote
                                 error "invalid atom"
                                     unquote value
-                                error
             splice
                 defvalue head
                     at value
@@ -876,8 +953,6 @@ define expand-expression (value env)
 
 global global-env
     null Value
-global type-type
-    null Value
 
 define set-global (key value)
     function void Value Value
@@ -891,10 +966,7 @@ define set-global-syntax (head handler)
     function void Value (pointer MacroFunction)
     set-global
         head
-        new-handle
-            bitcast
-                handler
-                pointer opaque
+        handle handler
     ret;
 
 # the top level expression goes through the preprocessor, which then descends
@@ -917,13 +989,14 @@ define global-preprocessor (ir-env value)
             expand-untype-expression
 
     ret
-        qquote
-            IR
-                define ::ret:: ()
-                    function void
-                    unquote-splice result
-                    ret;
-                execute ::ret::
+        call dump-value
+            qquote
+                IR
+                    define ::ret:: ()
+                        function void
+                        unquote-splice result
+                        ret;
+                    execute ::ret::
 
 define macro-bangra (ir-env value)
     preprocessor-func
@@ -953,36 +1026,39 @@ define macro-bangra (ir-env value)
 run
     init-global-types;
 
+    set-key!
+        load function-typeclass
+        KEY_APPLY
+        handle function-apply
+
     store
         new-env
             null Value
         global-env
 
-    store
-        new-table;
-        type-type
-
     set-global
         quote type
-        qquote
-            :
-                unquote
-                    load type-type
-                unquote
-                    load type-type
+        typed
+            load type-type
+            null Value
 
     set-global
         quote int
-        quote
-            : i32 type
+        typed
+            load int32-type
+            null Value
+
     set-global
         quote rawstring
-        quote
-            : rawstring type
+        typed
+            load rawstring-type
+            null Value
+
     set-global
         quote ...
-        quote
-            : ... type
+        typed
+            load ellipsis-type
+            null Value
 
     set-global-syntax
         quote <-
@@ -994,41 +1070,33 @@ run
                         next
                             at value
             defvalue rettype
-                expand-expression arg-rettype env
+                typed-type
+                    expand-expression arg-rettype env
             defvalue params
                 map
                     at arg-params
                     env
-                    expand-untype-expression
+                    expand-type-expression
             ret
                 replace value
-                    qquote
-                        :
-                            function
-                                unquote
-                                    typed-expression rettype
-                                unquote-splice params
-                            type
+                    typed
+                        function-type rettype params
+                        null Value
 
     set-global-syntax
         quote function
         define "" (value env)
             MacroFunction
-            defvalue params
+            defvalue body
                 next
-                    at value
-            defvalue template
-                new-table;
-            set-key! template
-                key-definition
-                params
+                    defvalue params
+                        next
+                            at value
             ret
                 replace value
-                    qquote
-                        :
-                            typeclass template
-                                unquote template
-                            type
+                    typed
+                        template-type params body
+                        null Value
 
     set-global-syntax
         quote extern-C
@@ -1037,20 +1105,27 @@ run
             defvalue namestr
                 next
                     at value
-            defvalue type
+            assert
+                string? namestr
+            defvalue expand-expr
                 expand-expression
                     next namestr
                     env
-            defvalue type-expr
-                typed-expression type
             ret
-                replace value
-                    qquote
-                        :
-                            declare
-                                unquote namestr
-                                unquote type-expr
-                            unquote type-expr
+                ?
+                    typed-error? expand-expr
+                    expand-expr
+                    splice
+                        defvalue type
+                            typed-type expand-expr
+                        replace value
+                            typed
+                                type
+                                qquote
+                                    declare
+                                        unquote namestr
+                                        unquote
+                                            type-ir-repr type
 
     set-global-syntax
         quote let
@@ -1063,31 +1138,27 @@ run
                             next
                                 at value
                     env
-            defvalue expr-type
-                typed-type expr
             ret
                 ?
-                    type? expr-type
+                    typed-abstract? expr
                     splice
                         set-symbol env name expr
-                        replace value
-                            qquote
-                                :
-                                    splice;
-                                    void
+                        replace value expr
                     splice
+                        defvalue expr-type
+                            typed-type expr
                         set-symbol env name
                             typed
-                                name
                                 expr-type
+                                name
                         replace value
                             typed
+                                expr-type
                                 qquote
                                     defvalue
                                         unquote name
                                         unquote
                                             typed-expression expr
-                                expr-type
 
     set-preprocessor
         &str "bangra"
