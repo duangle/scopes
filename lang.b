@@ -123,6 +123,10 @@ defvalue KEY_PARAMETER_NAMES
     quote "parameter-names"
 defvalue KEY_BODY
     quote "body"
+defvalue KEY_SITE # where new declarations are appended
+    quote "site"
+defvalue KEY_ENVIRONMENT # the original environment
+    quote "env"
 
 # tuples
 defvalue KEY_ELEMENT_TYPES
@@ -276,8 +280,8 @@ defvalue tuple-type
                     newtype
 
 defvalue template-type
-    define "" (parameter-names body)
-        function Value Value Value
+    define "" (parameter-names body site body-env)
+        function Value Value Value Value Value
         defvalue template-repr
             ref
                 set-next
@@ -289,6 +293,8 @@ defvalue template-type
                 KEY_PARAMETER_NAMES parameter-names
                 KEY_BODY body
                 KEY_REPR template-repr
+                KEY_SITE site
+                KEY_ENVIRONMENT body-env
         set-meta! newtype
             load template-typeclass
         ret newtype
@@ -533,7 +539,9 @@ define typed (type-expr value-expr)
         type? type-expr
     ret
         ref
-            set-next type-expr value-expr
+            set-next type-expr
+                set-next value-expr
+                    null Value
 
 ################################################################################
 
@@ -576,6 +584,15 @@ define new-env (meta-env)
         new-table;
     set-key! obj key-symbols symtable
     set-key! obj key-env-meta meta-env
+    ret obj
+
+define copy-env (env)
+    function Value Value
+    defvalue obj
+        deep-clone env
+    set-key! obj key-symbols
+        deep-clone
+            get-key env key-symbols
     ret obj
 
 define get-symbol (env name)
@@ -662,6 +679,12 @@ define expand-type-expression (value env)
         replace value
             typed-type expanded-value
 
+define map-typed-type (value env)
+    MacroFunction
+    ret
+        replace value
+            typed-type value
+
 defvalue ellipsis
     quote ...
 
@@ -672,62 +695,70 @@ define cast-untype-parameter (value env)
             defvalue dest-types value
     defvalue dest-type
         at dest-types
-    defvalue ellipsis?
-        value== dest-type (load ellipsis-type)
-    # if ellipsis, keep, otherwise iterate to next type
-    defvalue next-dest-type
-        select ellipsis?
-            dest-type
-            next dest-type
-    defvalue src-value
-        typed-expression src-tuple
-    defvalue src-type
-        typed-type src-tuple
-    defvalue casted-src-value
-        ?
-            or?
-                value== src-type dest-type
-                ellipsis?
-            src-value
-            qquote
-                bitcast
-                    unquote src-value
-                    unquote
-                        type-ir-repr dest-type
-    defvalue next-src-tuple
-        next src-tuple
     ret
-        set-next casted-src-value
-            select
-                icmp == next-src-tuple (null Value)
-                null Value
-                set-next!
-                    ref next-dest-type
-                    next-src-tuple
+        ?
+            null? dest-type
+            null Value
+            splice
+                defvalue ellipsis?
+                    value== dest-type (load ellipsis-type)
+                # if ellipsis, keep, otherwise iterate to next type
+                defvalue next-dest-type
+                    select ellipsis?
+                        dest-type
+                        next dest-type
+                defvalue src-value
+                    typed-expression src-tuple
+                defvalue src-type
+                    typed-type src-tuple
+                defvalue casted-src-value
+                    ?
+                        or?
+                            value== src-type dest-type
+                            ellipsis?
+                        src-value
+                        qquote
+                            bitcast
+                                unquote src-value
+                                unquote
+                                    type-ir-repr dest-type
+                defvalue next-src-tuple
+                    next src-tuple
 
-define extract-type-map-parameters (value env)
+                set-next casted-src-value
+                    select
+                        icmp == next-src-tuple (null Value)
+                        null Value
+                        set-next!
+                            ref next-dest-type
+                            next-src-tuple
+
+define type-map-parameters (value env)
     MacroFunction
     defvalue input-type
-        typed-type
-            defvalue input-expr
-                next
-                    defvalue input-names value
+        next
+            defvalue input-names value
     defvalue input-name
         at input-names
-    set-symbol env input-name
-        typed input-type input-name
-    defvalue next-input-name
-        next input-name
-    #print input-name input-type
     ret
-        set-next
-            input-type
-            select
-                icmp == next-input-name (null Value)
-                null Value
-                set-next!
-                    ref next-input-name
-                    next input-expr
+        ?
+            null? input-name
+            null Value
+            splice
+                set-symbol env input-name
+                    typed input-type input-name
+                defvalue next-input-name
+                    next input-name
+                #print input-name input-type
+
+                set-next
+                    input-type
+                    select
+                        icmp == next-input-name (null Value)
+                        null Value
+                        set-next!
+                            ref next-input-name
+                            next input-type
 
 defvalue function-apply
     define "" (head params env)
@@ -754,6 +785,67 @@ defvalue function-apply
                             typed-expression head
                         unquote-splice castedparams
 
+defvalue template-specialize
+    define "" (template-type paramtypes)
+        function Value Value Value
+        defvalue argtypes
+            tuple-type
+                paramtypes
+
+        ret
+            ?
+                null?
+                    defvalue tryfuncsym
+                        get-key template-type argtypes
+                splice
+                    defvalue param-names
+                        get-key template-type KEY_PARAMETER_NAMES
+                    defvalue body
+                        get-key template-type KEY_BODY
+                    defvalue funcenv
+                        get-key template-type KEY_ENVIRONMENT
+                    defvalue subenv
+                        new-env funcenv
+
+                    map
+                        set-next
+                            param-names
+                            paramtypes
+                        subenv
+                        type-map-parameters
+
+                    defvalue expanded-body
+                        map body subenv
+                            expand-untype-expression
+
+                    defvalue return-type
+                        get-key subenv key-result-type
+
+                    defvalue functype
+                        function-type return-type paramtypes
+
+                    defvalue fnameid
+                        unique-symbol (&str "template")
+                    defvalue function-decl
+                        qquote
+                            defvalue
+                                unquote fnameid
+                                define "" (unquote param-names)
+                                    unquote
+                                        type-ir-repr functype
+                                    ret
+                                        splice
+                                            unquote-splice expanded-body
+                    set-next!
+                        get-key template-type KEY_SITE
+                        function-decl
+                    set-key! template-type KEY_SITE function-decl
+                    defvalue symdef
+                        typed functype fnameid
+                    set-key! template-type argtypes symdef
+                    symdef
+                tryfuncsym
+
 defvalue template-apply
     define "" (head params env)
         MacroApplyFunction
@@ -764,43 +856,30 @@ defvalue template-apply
             get-key head-type KEY_PARAMETER_NAMES
         defvalue body
             get-key head-type KEY_BODY
-
+        defvalue funcenv
+            get-key head-type KEY_ENVIRONMENT
         defvalue subenv
-            new-env env
+            new-env funcenv
         defvalue paramtypes
             map
-                set-next
-                    param-names
-                    params
+                params
                 subenv
-                extract-type-map-parameters
+                map-typed-type
 
         defvalue untyped-params
             map params env
                 expand-untype-expression
-        defvalue expanded-body
-            map body subenv
-                expand-untype-expression
-        defvalue return-type
-            get-key subenv key-result-type
-        defvalue function-decl
-            qquote
-                define "" (unquote param-names)
-                    unquote
-                        type-ir-repr
-                            function-type
-                                return-type
-                                paramtypes
-                    ret
-                        splice
-                            unquote-splice expanded-body
+
         ret
-            typed
-                return-type
-                qquote
-                    call
-                        unquote function-decl
-                        unquote-splice untyped-params
+            splice
+                defvalue argtypes
+                    tuple-type
+                        paramtypes
+
+                defvalue funcsym
+                    template-specialize head-type paramtypes
+
+                function-apply funcsym params env
 
 define expand-call (resolved-head value env)
     function Value Value Value Value
@@ -897,6 +976,8 @@ define expand-expression (value env)
                                         value
                                         env
                                     env
+                            typed-error? resolved-head;
+                                resolved-head
                             # function call
                             else
                                 expand-call resolved-head value env
@@ -969,6 +1050,34 @@ define macro-bangra (ir-env value)
             run
                 unquote-splice result
 
+# IR quoting
+#-------------------------------------------------------------------------------
+
+define ir-quote-1 (value env)
+    function Value Value Value
+    ret
+        ?
+            null? value
+            null Value
+            set-next
+                ?
+                    atom? value
+                    value
+                    ?
+                        expression? value
+                            quote IR-unquote
+                        expand-untype-expression
+                            next
+                                at value
+                            env
+                        ref
+                            ir-quote-1
+                                at value
+                                env
+                ir-quote-1
+                    next value
+                    env
+
 # INITIALIZATION
 #-------------------------------------------------------------------------------
 
@@ -1015,6 +1124,40 @@ run
             null Value
 
     set-global-syntax
+        quote IR-qquote
+        define "" (value env)
+            MacroFunction
+            defvalue arg-expr
+                next
+                    defvalue arg-type
+                        next
+                            at value
+            defvalue rettype
+                typed-type
+                    expand-expression arg-type env
+            ret
+                replace value
+                    typed
+                        rettype
+                        ir-quote-1 arg-expr env
+
+    set-global-syntax
+        quote typeof
+        define "" (value env)
+            MacroFunction
+            defvalue arg-expr
+                next
+                    at value
+            defvalue rettype
+                typed-type
+                    expand-expression arg-expr env
+            ret
+                replace value
+                    typed
+                        rettype
+                        null Value
+
+    set-global-syntax
         quote <-
         define "" (value env)
             MacroFunction
@@ -1046,11 +1189,19 @@ run
                     defvalue params
                         next
                             at value
+            defvalue site
+                clone
+                    quote splice
             ret
                 replace value
                     typed
-                        template-type params body
-                        null Value
+                        template-type params body site
+                            copy-env env
+                        qquote
+                            splice
+                                unquote
+                                    ref site
+                                null Value
 
     set-global-syntax
         quote extern-C

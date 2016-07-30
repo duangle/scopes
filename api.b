@@ -66,6 +66,11 @@ defvalue kind-of
 defvalue value==
     declare "bangra_eq" (function i1 Value Value)
 
+defvalue clone
+    declare "bangra_clone" (function Value Value)
+defvalue deep-clone
+    declare "bangra_deep_clone" (function Value Value)
+
 defvalue next
     declare "bangra_next" (function Value Value)
 defvalue set-next

@@ -61,6 +61,9 @@ void *bangra_import_c_string(ValueRef dest,
 int bangra_get_kind(ValueRef expr);
 int bangra_eq(Value *a, Value *b);
 
+ValueRef bangra_clone(ValueRef expr);
+ValueRef bangra_deep_clone(ValueRef expr);
+
 ValueRef bangra_next(ValueRef expr);
 ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
 ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
@@ -856,6 +859,8 @@ protected:
     ValueRef getKey(ValueRef key);
     ValueRef getKey(const std::string &name);
 
+    std::shared_ptr<TableBody> clone();
+
     void tag() {
         for (auto val : string_map) { assert(val.second); val.second->tag(); }
         for (auto val : integer_map) { assert(val.second); val.second->tag(); }
@@ -925,6 +930,10 @@ public:
 
     static ValueKind kind() {
         return V_Table;
+    }
+
+    ValueRef deepClone() const {
+        return new Table(body->clone(), getNext());
     }
 
     virtual ValueRef clone() const {
@@ -999,6 +1008,10 @@ ValueRef TableBody::getKey(ValueRef key) {
         return meta->getKey(key);
     else
         return result;
+}
+
+std::shared_ptr<TableBody> TableBody::clone() {
+    return std::shared_ptr<TableBody>(new TableBody(*this));
 }
 
 //------------------------------------------------------------------------------
@@ -5366,13 +5379,34 @@ ValueRef bangra_at(ValueRef expr) {
     return NULL;
 }
 
+ValueRef bangra_clone(ValueRef expr) {
+    if (expr) {
+        return expr->clone();
+    }
+    return NULL;
+}
+
+ValueRef bangra_deep_clone(ValueRef expr) {
+    if (expr) {
+        if (auto tab = llvm::dyn_cast<bangra::Table>(expr)) {
+            return tab->deepClone();
+        }
+        return expr->clone();
+    }
+    return NULL;
+}
+
 ValueRef bangra_next(ValueRef expr) {
     return next(expr);
 }
 
 ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs) {
     if (lhs) {
-        return cons(lhs, rhs);
+        if (lhs->getNext() != rhs) {
+            return cons(lhs, rhs);
+        } else {
+            return lhs;
+        }
     }
     return NULL;
 }

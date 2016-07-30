@@ -551,7 +551,7 @@ define macro-assert (env expr)
                             set-next
                                 quote
                                     unquote
-                                        call copy-anchor!
+                                        call copy-anchor
                                             quote AssertionError
                                             expr
                                 unquote
