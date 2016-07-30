@@ -12,15 +12,5 @@ let testf
     function (arg1 arg2)
         testf2 arg1 arg2
 
-#testf2 "hello" "world"
+testf "hello" "world"
 
-printf "%s %s\n" "hello" "world"
-
-
-///
-    printf "%i\n"
-        testf "hello" "world"
-
-    :
-        dump-module;
-        void

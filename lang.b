@@ -100,6 +100,8 @@ global rawstring-type
 
 global function-typeclass
     null Value
+global template-typeclass
+    null Value
 
 # all types
 defvalue KEY_REPR
@@ -287,6 +289,8 @@ defvalue template-type
                 KEY_PARAMETER_NAMES parameter-names
                 KEY_BODY body
                 KEY_REPR template-repr
+        set-meta! newtype
+            load template-typeclass
         ret newtype
 
 defvalue function-type
@@ -436,6 +440,7 @@ defvalue init-global-types
         store (new-table) type-cache
 
         store (new-table) function-typeclass
+        store (new-table) template-typeclass
 
         store
             special-type (quote type) (null Value)
@@ -531,15 +536,14 @@ define typed (type-expr value-expr)
             set-next type-expr value-expr
 
 ################################################################################
-# build and install the preprocessor hook function.
 
 deftype &opaque (pointer opaque)
 
 deftype MacroFunction
     function Value Value Value
 
-deftype TypeMacroFunction
-    # result self value env
+deftype MacroApplyFunction
+    # result head params env
     function Value Value Value Value
 
 defvalue key-symbols
@@ -727,32 +731,76 @@ define extract-type-map-parameters (value env)
 
 defvalue function-apply
     define "" (head params env)
-        TypeMacroFunction
+        MacroApplyFunction
         defvalue head-type
             typed-type head
-        defvalue funcname
-            typed-expression head
-        defvalue funcrettype
-            get-key head-type KEY_RETURN_TYPE
-        defvalue funcparamtypes
-            get-key head-type KEY_PARAMETER_TYPES
         # casted params
         defvalue castedparams
             map
                 # prepend types to params so mapping
                 # function can read them
                 set-next
-                    ref funcparamtypes
+                    ref
+                        get-key head-type KEY_PARAMETER_TYPES
                     params
                 env
                 cast-untype-parameter
         ret
             typed
-                funcrettype
+                get-key head-type KEY_RETURN_TYPE
                 qquote
                     call
-                        unquote funcname
+                        unquote
+                            typed-expression head
                         unquote-splice castedparams
+
+defvalue template-apply
+    define "" (head params env)
+        MacroApplyFunction
+        defvalue head-type
+            typed-type head
+
+        defvalue param-names
+            get-key head-type KEY_PARAMETER_NAMES
+        defvalue body
+            get-key head-type KEY_BODY
+
+        defvalue subenv
+            new-env env
+        defvalue paramtypes
+            map
+                set-next
+                    param-names
+                    params
+                subenv
+                extract-type-map-parameters
+
+        defvalue untyped-params
+            map params env
+                expand-untype-expression
+        defvalue expanded-body
+            map body subenv
+                expand-untype-expression
+        defvalue return-type
+            get-key subenv key-result-type
+        defvalue function-decl
+            qquote
+                define "" (unquote param-names)
+                    unquote
+                        type-ir-repr
+                            function-type
+                                return-type
+                                paramtypes
+                    ret
+                        splice
+                            unquote-splice expanded-body
+        ret
+            typed
+                return-type
+                qquote
+                    call
+                        unquote function-decl
+                        unquote-splice untyped-params
 
 define expand-call (resolved-head value env)
     function Value Value Value Value
@@ -767,7 +815,7 @@ define expand-call (resolved-head value env)
                     bitcast
                         handle-value
                             get-key sym-type KEY_APPLY
-                        pointer TypeMacroFunction
+                        pointer MacroApplyFunction
             typed
                 load error-type
                 qquote
@@ -783,104 +831,6 @@ define expand-call (resolved-head value env)
                         expand-expression
                 replace value
                     callf resolved-head params env
-
-        /// if
-            function-type? sym-type;
-                defvalue funcname
-                    typed-expression resolved-head
-                defvalue funcparamtypes
-                    param-types sym-type
-                # expand params to retrieve final types
-                defvalue params
-                    map
-                        next
-                            at value
-                        env
-                        expand-expression
-                # casted params
-                defvalue castedparams
-                    map
-                        # prepend types to params so mapping
-                        # function can read them
-                        set-next
-                            ref funcparamtypes
-                            params
-                        env
-                        cast-untype-parameter
-                replace value
-                    typed
-                        return-type sym-type
-                        qquote
-                            call
-                                unquote funcname
-                                unquote-splice castedparams
-            type? sym-type;
-                defvalue typedef
-                    typed-expression resolved-head
-                if
-                    typeclass? typedef;
-                        defvalue obj
-                            typeclass-table typedef
-                        defvalue type-params
-                            get-key obj key-definition
-                        defvalue body
-                            next type-params
-                        # expand params to retrieve final types
-                        defvalue params
-                            map
-                                next
-                                    at value
-                                env
-                                expand-expression
-                        defvalue subenv
-                            new-env env
-                        defvalue paramtypes
-                            map
-                                set-next
-                                    type-params
-                                    params
-                                subenv
-                                extract-type-map-parameters
-                        defvalue untyped-params
-                            map params env
-                                expand-untype-expression
-                        defvalue expanded-body
-                            map body subenv
-                                expand-untype-expression
-                        defvalue return-type
-                            get-key subenv key-result-type
-                        defvalue function-type
-                            qquote
-                                function
-                                    unquote return-type
-                                    unquote-splice paramtypes
-                        defvalue function-decl
-                            qquote
-                                define "" (unquote type-params)
-                                    unquote function-type
-                                    ret
-                                        splice
-                                            unquote-splice expanded-body
-                        replace value
-                            typed
-                                return-type
-                                qquote
-                                    call
-                                        unquote function-decl
-                                        unquote-splice untyped-params
-
-                    else
-                        typed
-                            load error-type
-                            qquote
-                                error "can not instantiate type"
-                                    unquote value
-            else
-                typed
-                    load error-type
-                    qquote
-                        error "symbol is not a function or macro"
-                            unquote value
 
 define expand-expression (value env)
     MacroFunction
@@ -1030,6 +980,10 @@ run
         load function-typeclass
         KEY_APPLY
         handle function-apply
+    set-key!
+        load template-typeclass
+        KEY_APPLY
+        handle template-apply
 
     store
         new-env
