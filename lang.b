@@ -112,6 +112,10 @@ defvalue KEY_IR_REPR
 defvalue KEY_APPLY # for types that support apply syntax
     quote "apply"
 
+# constants
+defvalue KEY_VALUE
+    quote "value"
+
 # functions
 defvalue KEY_RETURN_TYPE
     quote "return-type"
@@ -436,6 +440,33 @@ defvalue int-type
                             KEY_REPR int-repr
                             KEY_IR_REPR ir-int-repr
 
+                    set-key! cache key newtype
+                    newtype
+
+defvalue constant-type
+    define "" (value-type value ir-repr)
+        function Value Value Value Value
+        defvalue cache
+            load type-cache
+        defvalue const-repr
+            string-concat
+                string-concat
+                    quote constant
+                    type-repr value-type
+                format-value value -1
+        defvalue key const-repr
+        defvalue cached
+            get-key cache key
+        ret
+            ?
+                icmp != cached (null Value)
+                cached
+                splice
+                    defvalue newtype
+                        table
+                            KEY_VALUE value
+                            KEY_REPR const-repr
+                            KEY_IR_REPR ir-repr
                     set-key! cache key newtype
                     newtype
 
