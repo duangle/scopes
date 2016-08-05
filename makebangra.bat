@@ -42,7 +42,8 @@ g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
     -lLLVMBitReader -lLLVMAnalysis -lLLVMCore -lLLVMSupport ^
     -Wl,--no-whole-archive ^
     -lLLVMInterpreter ^
-    -lole32 -luuid
+    -lole32 -luuid ^
+    -fexceptions
 if errorlevel 1 goto :fail
 %DIR%bangra.exe %DIR%testing\test_all.b
 if errorlevel 1 goto :fail

@@ -174,6 +174,8 @@ TODO:
 #include "mman.h"
 #include "stdlib_ex.h"
 #else
+// for backtrace
+#include <execinfo.h>
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
@@ -187,9 +189,6 @@ TODO:
 #include <stdarg.h>
 #include <stdlib.h>
 #include <libgen.h>
-
-// for backtrace
-#include <execinfo.h>
 
 #include <map>
 #include <string>
