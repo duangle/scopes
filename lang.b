@@ -3,7 +3,7 @@ IR
 "
 
 the typed bangra expression format is
-    (: expression type)
+    (type [expression])
 
 at this point it is assumed that all expressions nested in <expression> are
 typed.
@@ -11,6 +11,7 @@ typed.
 a root expression that is not a typed expression is expanded / resolved before
 expansion continues.
 
+when [expression] is missing, then the result is a pure type.
 "
 
 include "api.b"
@@ -522,6 +523,7 @@ defvalue init-global-types
         store (int-type 64 false) uint64-type
 
         store (pointer-type (load int8-type)) rawstring-type
+
 
 
         ret;
@@ -1131,6 +1133,18 @@ run
         global-env
 
     set-global
+        quote true
+        typed
+            load bool-type
+            quote true
+
+    set-global
+        quote false
+        typed
+            load bool-type
+            quote false
+
+    set-global
         quote type
         typed
             load type-type
@@ -1210,6 +1224,102 @@ run
                     typed
                         function-type rettype params
                         null Value
+
+    set-global-syntax
+        quote ?
+        define "" (value env)
+            MacroFunction
+            defvalue arg-else-expr
+                next
+                    defvalue arg-then-expr
+                        next
+                            defvalue arg-condition
+                                next
+                                    at value
+            defvalue condition
+                expand-expression arg-condition env
+            defvalue then-expr
+                expand-expression arg-then-expr env
+            defvalue label-then (unique-symbol (&str "then"))
+            defvalue label-else (unique-symbol (&str "else"))
+            defvalue label-finally (unique-symbol (&str "if-end"))
+            defvalue label-then-br (unique-symbol (&str "then-br"))
+            defvalue label-else-br (unique-symbol (&str "else-br"))
+            defvalue value-then (unique-symbol (&str "value"))
+            defvalue value-else (unique-symbol (&str "value"))
+            defvalue blockdefs # blockdef expr phi
+                ?
+                    null? arg-else-expr
+                    structof ""
+                        label-finally
+                        null Value
+                        null Value
+
+                    splice
+                        defvalue else-expr
+                            expand-expression arg-else-expr env
+                        structof ""
+                            qquote
+                                block
+                                    unquote label-else
+                            next
+                                at
+                                    qquote
+                                        splice
+                                            set-block
+                                                unquote label-else
+                                            defvalue
+                                                unquote value-else
+                                                unquote
+                                                    typed-expression else-expr
+                                            defvalue
+                                                unquote label-else-br
+                                                this-block
+                                            br
+                                                unquote label-finally
+                            qquote
+                                phi
+                                    typeof (unquote value-then)
+                                    unquote value-then;
+                                        unquote label-then-br
+                                    unquote value-else;
+                                        unquote label-else-br
+
+            defvalue opt-else-blockdef
+                extractvalue blockdefs 0
+            defvalue opt-else-expr
+                extractvalue blockdefs 1
+            defvalue opt-else-phi
+                extractvalue blockdefs 2
+            ret
+                replace value
+                    typed
+                        typed-type then-expr
+                        qquote
+                            splice
+                                block
+                                    unquote label-finally
+                                cond-br
+                                    unquote
+                                        typed-expression condition
+                                    block
+                                        unquote label-then
+                                    unquote opt-else-blockdef
+                                set-block
+                                    unquote label-then
+                                defvalue
+                                    unquote value-then
+                                    unquote
+                                        typed-expression then-expr
+                                defvalue
+                                    unquote label-then-br
+                                    this-block
+                                br
+                                    unquote label-finally
+                                unquote-splice opt-else-expr
+                                set-block
+                                    unquote label-finally
+                                unquote opt-else-phi
 
     set-global-syntax
         quote function

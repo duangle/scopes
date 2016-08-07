@@ -35,7 +35,9 @@ let sayhi
         printf "yo!\n"
         sayhi;
 
-sayhi;
+? true
+    sayhi;
+
 
 print
     IR-qquote rawstring

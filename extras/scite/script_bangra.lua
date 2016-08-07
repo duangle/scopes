@@ -56,7 +56,7 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "let function extern-C bangra IR-qquote IR-unquote typeof ..."
+        "let function extern-C bangra IR-qquote IR-unquote typeof ... ? true false"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
