@@ -38,6 +38,7 @@ extern char *bang_executable_path;
 //------------------------------------------------------------------------------
 
 int bangra_main(int argc, char ** argv);
+ValueRef bangra_parse_file(const char *path);
 
 // LLVM compatibility
 //------------------------------------------------------------------------------
@@ -5336,6 +5337,15 @@ int bangra_main(int argc, char ** argv) {
     }
 
     return 0;
+}
+
+ValueRef bangra_parse_file(const char *path) {
+    bangra::Parser parser;
+    ValueRef expr = parser.parseFile(path);
+    if (expr) {
+        bangra::gc_root = cons(expr, bangra::gc_root);
+    }
+    return expr;
 }
 
 void bangra_print_value(ValueRef expr, int depth) {

@@ -7,6 +7,7 @@ syntax: glob
 *.a
 *.def
 *.pyc
+*.orig
 
 syntax: regexp
 

@@ -28,6 +28,12 @@ defvalue argv
 defvalue executable-path
     declare "bang_executable_path" rawstring
 
+# high level
+#-------------------------------------------------------------------------------
+
+defvalue parse-file
+    declare "bangra_parse_file" (function Value rawstring)
+
 # LLVM compatibility
 #-------------------------------------------------------------------------------
 
