@@ -35,14 +35,14 @@ let sayhi
         printf "yo!\n"
         sayhi;
 
-? true
+? false
     sayhi;
-
+    sayhi;
 
 print
     IR-qquote rawstring
         bitcast
-            IR-unquote "hi"
+            IR-unquote "hi from IR"
             rawstring
 
 printf "%i\n"

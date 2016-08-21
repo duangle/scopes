@@ -104,6 +104,14 @@ global function-typeclass
 global template-typeclass
     null Value
 
+defvalue S_CONSTANT
+    quote constant
+
+defvalue CONST_TRUE
+    quote true
+defvalue CONST_FALSE
+    quote false
+
 # all types
 defvalue KEY_REPR
     quote "repr"
@@ -114,6 +122,8 @@ defvalue KEY_APPLY # for types that support apply syntax
     quote "apply"
 
 # constants
+defvalue KEY_TYPE
+    quote "type"
 defvalue KEY_VALUE
     quote "value"
 
@@ -445,17 +455,17 @@ defvalue int-type
                     newtype
 
 defvalue constant-type
-    define "" (value-type value ir-repr)
-        function Value Value Value Value
+    define "" (value-type value)
+        function Value Value Value
         defvalue cache
             load type-cache
         defvalue const-repr
-            string-concat
-                string-concat
-                    quote constant
-                    type-repr value-type
-                format-value value -1
-        defvalue key const-repr
+            ref
+                set-next S_CONSTANT
+                    set-next value-type
+                        value
+        defvalue key
+            format-value const-repr -1
         defvalue cached
             get-key cache key
         ret
@@ -465,9 +475,9 @@ defvalue constant-type
                 splice
                     defvalue newtype
                         table
+                            KEY_TYPE value-type
                             KEY_VALUE value
                             KEY_REPR const-repr
-                            KEY_IR_REPR ir-repr
                     set-key! cache key newtype
                     newtype
 
@@ -524,9 +534,18 @@ defvalue init-global-types
 
         store (pointer-type (load int8-type)) rawstring-type
 
-
-
         ret;
+
+# TYPE CHECKS
+#-------------------------------------------------------------------------------
+
+define constant? (value)
+    function i1 Value
+    ret
+        value==
+            at
+                get-key value KEY_REPR
+            S_CONSTANT
 
 # TYPED EXPRESSIONS
 #-------------------------------------------------------------------------------
@@ -946,74 +965,125 @@ define expand-call (resolved-head value env)
 
 define expand-expression (value env)
     MacroFunction
-    ret
-        ?
-            atom? value
-            splice
-                if
-                    symbol? value;
-                        defvalue resolved-sym
-                            resolve-symbol env value
-                        ?
-                            icmp == resolved-sym (null Value)
+    define expand-expression-body (value env)
+        MacroFunction
+        assert
+            not
+                null? value
+        ret
+            ?
+                atom? value
+                splice
+                    if
+                        symbol? value;
+                            defvalue resolved-sym
+                                resolve-symbol env value
+                            ?
+                                icmp == resolved-sym (null Value)
+                                typed
+                                    load error-type
+                                    qquote
+                                        error "unknown symbol"
+                                            unquote value
+                                replace value resolved-sym
+                        string? value;
+                            replace value
+                                typed
+                                    pointer-type
+                                        array-type
+                                            load int8-type
+                                            string-size value
+                                    qquote
+                                        global ""
+                                            unquote value
+                        integer? value;
+                            replace value
+                                typed
+                                    load int32-type
+                                    value
+                        real? value;
+                            replace value
+                                typed
+                                    load float-type
+                                    value
+                        else
                             typed
                                 load error-type
                                 qquote
-                                    error "unknown symbol"
+                                    error "invalid atom"
                                         unquote value
-                            replace value resolved-sym
-                    string? value;
-                        replace value
-                            typed
-                                pointer-type
-                                    array-type
-                                        load int8-type
-                                        string-size value
-                                qquote
-                                    global ""
-                                        unquote value
-                    integer? value;
-                        replace value
-                            typed
-                                load int32-type
-                                value
-                    real? value;
-                        replace value
-                            typed
-                                load float-type
-                                value
-                    else
-                        typed
-                            load error-type
-                            qquote
-                                error "invalid atom"
-                                    unquote value
-            splice
-                defvalue head
-                    at value
-                ?
-                    typed? value
-                    value
-                    splice
-                        # resolve first argument
-                        defvalue resolved-head
-                            expand-expression head env
-                        if
-                            # macro?
-                            handle? resolved-head;
-                                expand-expression
-                                    call
-                                        bitcast
-                                            handle-value resolved-head
-                                            pointer MacroFunction
-                                        value
+                splice
+                    defvalue head
+                        at value
+                    ?
+                        typed? value
+                        value
+                        splice
+                            # resolve first argument
+                            defvalue resolved-head
+                                expand-expression head env
+                            if
+                                # macro?
+                                handle? resolved-head;
+                                    expand-expression
+                                        call
+                                            bitcast
+                                                handle-value resolved-head
+                                                pointer MacroFunction
+                                            value
+                                            env
                                         env
-                                    env
-                            typed-error? resolved-head;
-                                resolved-head
-                            # function call
-                            else
-                                expand-call resolved-head value env
+                                typed-error? resolved-head;
+                                    resolved-head
+                                # function call
+                                else
+                                    expand-call resolved-head value env
+
+    defvalue params
+        alloca
+            array Value 2
+    store value
+        getelementptr params 0 0
+    store env
+        getelementptr params 0 1
+    ret
+        bitcast
+            xpcall
+                bitcast params
+                    getelementtype xpcall-try-func 1
+                define "" (ctx)
+                    xpcall-try-func
+                    defvalue localparams
+                        bitcast ctx
+                            typeof params
+                    defvalue value
+                        load
+                            getelementptr localparams 0 0
+                    defvalue env
+                        load
+                            getelementptr localparams 0 1
+                    ret
+                        bitcast
+                            expand-expression-body value env
+                            getelementtype xpcall-try-func 0
+
+                define "" (ctx e)
+                    xpcall-except-func
+                    defvalue localparams
+                        bitcast ctx
+                            typeof params
+                    defvalue value
+                        load
+                            getelementptr localparams 0 0
+                    defvalue env
+                        load
+                            getelementptr localparams 0 1
+                    printf
+                        &str "while processing:\n"
+                    dump-value value
+                    raise e
+                    unreachable;
+            Value
 
 global global-env
     null Value
@@ -1133,16 +1203,20 @@ run
         global-env
 
     set-global
-        quote true
+        CONST_TRUE
         typed
-            load bool-type
-            quote true
+            constant-type
+                load bool-type
+                CONST_TRUE
+            CONST_TRUE
 
     set-global
-        quote false
+        CONST_FALSE
         typed
-            load bool-type
-            quote false
+            constant-type
+                load bool-type
+                CONST_FALSE
+            CONST_FALSE
 
     set-global
         quote type
@@ -1240,86 +1314,107 @@ run
                 expand-expression arg-condition env
             defvalue then-expr
                 expand-expression arg-then-expr env
-            defvalue label-then (unique-symbol (&str "then"))
-            defvalue label-else (unique-symbol (&str "else"))
-            defvalue label-finally (unique-symbol (&str "if-end"))
-            defvalue label-then-br (unique-symbol (&str "then-br"))
-            defvalue label-else-br (unique-symbol (&str "else-br"))
-            defvalue value-then (unique-symbol (&str "value"))
-            defvalue value-else (unique-symbol (&str "value"))
-            defvalue blockdefs # blockdef expr phi
-                ?
-                    null? arg-else-expr
-                    structof ""
-                        label-finally
-                        null Value
-                        null Value
-
-                    splice
-                        defvalue else-expr
-                            expand-expression arg-else-expr env
-                        structof ""
-                            qquote
-                                block
-                                    unquote label-else
-                            next
-                                at
-                                    qquote
-                                        splice
-                                            set-block
-                                                unquote label-else
-                                            defvalue
-                                                unquote value-else
-                                                unquote
-                                                    typed-expression else-expr
-                                            defvalue
-                                                unquote label-else-br
-                                                this-block
-                                            br
-                                                unquote label-finally
-                            qquote
-                                phi
-                                    typeof (unquote value-then)
-                                    unquote value-then;
-                                        unquote label-then-br
-                                    unquote value-else;
-                                        unquote label-else-br
-
-            defvalue opt-else-blockdef
-                extractvalue blockdefs 0
-            defvalue opt-else-expr
-                extractvalue blockdefs 1
-            defvalue opt-else-phi
-                extractvalue blockdefs 2
+            defvalue condition-type
+                typed-type condition
             ret
-                replace value
-                    typed
-                        typed-type then-expr
-                        qquote
-                            splice
-                                block
-                                    unquote label-finally
-                                cond-br
-                                    unquote
-                                        typed-expression condition
-                                    block
-                                        unquote label-then
-                                    unquote opt-else-blockdef
-                                set-block
-                                    unquote label-then
-                                defvalue
-                                    unquote value-then
-                                    unquote
-                                        typed-expression then-expr
-                                defvalue
-                                    unquote label-then-br
-                                    this-block
-                                br
-                                    unquote label-finally
-                                unquote-splice opt-else-expr
-                                set-block
-                                    unquote label-finally
-                                unquote opt-else-phi
+                ?
+                    constant? condition-type
+                    splice
+                        assert
+                            value==
+                                get-key condition-type KEY_TYPE
+                                load bool-type
+                        defvalue const-value
+                            get-key condition-type KEY_VALUE
+                        ?
+                            value== const-value CONST_TRUE
+                            then-expr
+                            ?
+                                null? arg-else-expr
+                                typed
+                                    load void-type
+                                    null Value
+                                expand-expression arg-else-expr env
+                    splice
+                        defvalue label-then (unique-symbol (&str "then"))
+                        defvalue label-else (unique-symbol (&str "else"))
+                        defvalue label-finally (unique-symbol (&str "if-end"))
+                        defvalue label-then-br (unique-symbol (&str "then-br"))
+                        defvalue label-else-br (unique-symbol (&str "else-br"))
+                        defvalue value-then (unique-symbol (&str "value"))
+                        defvalue value-else (unique-symbol (&str "value"))
+                        defvalue blockdefs # blockdef expr phi
+                            ?
+                                null? arg-else-expr
+                                structof ""
+                                    label-finally
+                                    null Value
+                                    null Value
+
+                                splice
+                                    defvalue else-expr
+                                        expand-expression arg-else-expr env
+                                    structof ""
+                                        qquote
+                                            block
+                                                unquote label-else
+                                        next
+                                            at
+                                                qquote
+                                                    splice
+                                                        set-block
+                                                            unquote label-else
+                                                        defvalue
+                                                            unquote value-else
+                                                            unquote
+                                                                typed-expression else-expr
+                                                        defvalue
+                                                            unquote label-else-br
+                                                            this-block
+                                                        br
+                                                            unquote label-finally
+                                        qquote
+                                            phi
+                                                typeof (unquote value-then)
+                                                unquote value-then;
+                                                    unquote label-then-br
+                                                unquote value-else;
+                                                    unquote label-else-br
+
+                        defvalue opt-else-blockdef
+                            extractvalue blockdefs 0
+                        defvalue opt-else-expr
+                            extractvalue blockdefs 1
+                        defvalue opt-else-phi
+                            extractvalue blockdefs 2
+                        replace value
+                            typed
+                                typed-type then-expr
+                                qquote
+                                    splice
+                                        block
+                                            unquote label-finally
+                                        cond-br
+                                            unquote
+                                                typed-expression condition
+                                            block
+                                                unquote label-then
+                                            unquote opt-else-blockdef
+                                        set-block
+                                            unquote label-then
+                                        defvalue
+                                            unquote value-then
+                                            unquote
+                                                typed-expression then-expr
+                                        defvalue
+                                            unquote label-then-br
+                                            this-block
+                                        br
+                                            unquote label-finally
+                                        unquote-splice opt-else-expr
+                                        set-block
+                                            unquote label-finally
+                                        unquote opt-else-phi
 
     set-global-syntax
         quote function
