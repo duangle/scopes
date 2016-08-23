@@ -1946,17 +1946,18 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 //------------------------------------------------------------------------------
 
 enum TypeKind {
-    T_Void = 0,
-    T_Null = 1,
-    T_Integer = 2,
-    T_Real = 3,
-    T_Pointer = 4,
-    T_Array = 5,
-    T_Vector = 6,
-    T_Tuple = 7,
-    T_Struct = 8,
-    T_Function = 9,
-    T_Template = 10,
+    T_Void,
+    T_Null,
+    T_Integer,
+    T_Real,
+    T_Pointer,
+    T_Array,
+    T_Vector,
+    T_Tuple,
+    T_Struct,
+    T_CFunction,
+    T_Function,
+    T_Type,
 };
 
 static const char *typeKindName(int kind) {
@@ -1970,8 +1971,9 @@ static const char *typeKindName(int kind) {
     case T_Vector: return "vector";
     case T_Tuple: return "tuple";
     case T_Pointer: return "pointer";
+    case T_CFunction: return "cfunction";
     case T_Function: return "function";
-    case T_Template: return "template";
+    case T_Type: return "type";
     default: return "#illegal-type#";
     }
 }
@@ -1993,13 +1995,14 @@ private:
     static Type *newArrayType(Type *_element, unsigned _size);
     static Type *newVectorType(Type *_element, unsigned _size);
     static Type *newTupleType(NamedTypeArray _elements);
-    static Type *newFunctionType(Type *_returntype, TypeArray _parameters);
+    static Type *newCFunctionType(Type *_returntype, TypeArray _parameters);
 
 protected:
     Type(TypeKind kind_) :
         kind(kind_) {}
 
 public:
+    static Type *AType;
     static Type *Void;
     static Type *Null;
     static Type *Bool;
@@ -2031,10 +2034,11 @@ public:
     static std::function<Type * (Type *, unsigned)> Vector;
     static std::function<Type * (NamedTypeArray)> Tuple;
     static Type *Struct();
-    static std::function<Type * (Type *, TypeArray)> Function;
-    static Type *Template(NameArray _parameters);
+    static std::function<Type * (Type *, TypeArray)> CFunction;
+    static Type *Function(NameArray _parameters);
 };
 
+Type *Type::AType;
 Type *Type::Void;
 Type *Type::Null;
 Type *Type::Bool;
@@ -2055,7 +2059,7 @@ auto Type::Pointer = memo(Type::newPointerType);
 auto Type::Array = memo(Type::newArrayType);
 auto Type::Vector = memo(Type::newVectorType);
 auto Type::Tuple = memo(Type::newTupleType);
-auto Type::Function = memo(Type::newFunctionType);
+auto Type::CFunction = memo(Type::newCFunctionType);
 
 //------------------------------------------------------------------------------
 
@@ -2199,43 +2203,45 @@ Type *Type::Struct() {
 
 //------------------------------------------------------------------------------
 
-struct FunctionType : Type {
+struct CFunctionType : Type {
 protected:
     Type *returntype;
     TypeArray parameters;
 
 public:
-    FunctionType(Type *_returntype, TypeArray _parameters) :
-        Type(T_Function),
+    CFunctionType(Type *_returntype, TypeArray _parameters) :
+        Type(T_CFunction),
         returntype(_returntype),
         parameters(_parameters)
         {}
 };
 
-Type *Type::newFunctionType(Type *_returntype, TypeArray _parameters) {
-    return new FunctionType(_returntype, _parameters);
+Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters) {
+    return new CFunctionType(_returntype, _parameters);
 }
 
 //------------------------------------------------------------------------------
 
-struct TemplateType : Type {
+struct FunctionType : Type {
 protected:
     NameArray parameters;
 
 public:
-    TemplateType(NameArray _parameters) :
-        Type(T_Template),
+    FunctionType(NameArray _parameters) :
+        Type(T_Function),
         parameters(_parameters)
         {}
 };
 
-Type *Type::Template(NameArray _parameters) {
-    return new TemplateType(_parameters);
+Type *Type::Function(NameArray _parameters) {
+    return new FunctionType(_parameters);
 }
 
 //------------------------------------------------------------------------------
 
 void Type::initTypes() {
+    AType = new Type(T_Type);
+
     Void = new VoidType();
     Null = new NullType();
 
@@ -2261,7 +2267,79 @@ void Type::initTypes() {
 // ABSTRACT SYNTAX TREE
 //------------------------------------------------------------------------------
 
+/*
+special forms (15):
 
+__quote
+__if
+__while
+__break
+__var
+__var+
+__key
+__set
+__del
+__scope
+__function
+__nop
+__do
+__call
+__do-splice
+__pragma
+__global
+
+predefined macros (2):
+
+__escape (sort-of)
+*/
+
+enum ASTKind {
+    AST_ConstNull,
+    AST_ConstType,
+    AST_ConstInteger,
+    AST_ConstReal,
+    AST_ConstString,
+
+    AST_Symbol,
+
+    AST_ArrayOf,
+    AST_TupleOf,
+
+    AST_CFunction,
+    AST_Function,
+    AST_Call,
+
+    AST_Select,
+    AST_Label,
+    AST_Goto,
+
+    AST_Let,
+    AST_Var,
+    AST_Index,
+    AST_Set,
+    AST_Del,
+
+    AST_Do,
+    AST_Splice,
+
+    AST_Nop
+};
+
+//------------------------------------------------------------------------------
+
+struct ASTNode {
+private:
+    const ASTKind kind;
+
+protected:
+    ASTNode(ASTKind kind_) :
+        kind(kind_) {}
+
+public:
+    ASTKind getKind() const {
+        return kind;
+    }
+};
 
 //------------------------------------------------------------------------------
 // TRANSLATION ENVIRONMENT
@@ -5315,11 +5393,202 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 }
 
 //------------------------------------------------------------------------------
+// AST TRANSLATION
+//------------------------------------------------------------------------------
+
+struct ASTEnvironment;
+
+static void astErrorV (ValueRef expr, const char *format, va_list args) {
+    Anchor *anchor = NULL;
+    if (expr)
+        anchor = expr->findValidAnchor();
+    if (anchor) {
+        printf("%s:%i:%i: error: ", anchor->path, anchor->lineno, anchor->column);
+    } else {
+        if (expr)
+            printValue(expr);
+        printf("error: ");
+    }
+    vprintf (format, args);
+    putchar('\n');
+    if (anchor) {
+        dumpFileLine(anchor->path, anchor->offset);
+    }
+    exit(1);
+}
+
+static void astError (ValueRef expr, const char *format, ...) {
+    va_list args;
+    va_start (args, format);
+    astErrorV(expr, format, args);
+    va_end (args);
+}
+
+template <typename T>
+static T *astVerifyKind(ValueRef expr) {
+    T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
+    if (obj) {
+        return obj;
+    } else {
+        astError(expr, "%s expected, not %s",
+            valueKindName(T::kind()),
+            valueKindName(kindOf(expr)));
+    }
+    return nullptr;
+}
+
+//------------------------------------------------------------------------------
+
+struct ASTTranslateTable {
+    typedef ASTNode *(*TranslatorFunc)(ASTEnvironment *env, ValueRef expr);
+
+    struct Translator {
+        int mincount;
+        int maxcount;
+        unsigned flags;
+
+        TranslatorFunc translate;
+
+        Translator() :
+            mincount(-1),
+            maxcount(-1),
+            flags(0),
+            translate(NULL)
+            {}
+
+    };
+
+    std::unordered_map<std::string, Translator> translators;
+
+    void set(TranslatorFunc translate, const std::string &name,
+        int mincount, int maxcount, unsigned flags=0) {
+        Translator translator;
+        translator.mincount = mincount;
+        translator.maxcount = maxcount;
+        translator.translate = translate;
+        translator.flags = flags;
+        translators[name] = translator;
+    }
+
+    static bool verifyCount (ValueRef expr, int mincount, int maxcount) {
+        if ((mincount <= 0) && (maxcount == -1))
+            return true;
+
+        int argcount = 0;
+        while (expr) {
+            ++ argcount;
+            if (maxcount >= 0) {
+                if (argcount > maxcount) {
+                    astError(expr, "Excess argument. At most %i arguments expected.", maxcount);
+                    return false;
+                }
+            } else if (mincount >= 0) {
+                if (argcount >= mincount)
+                    break;
+            }
+            expr = next(expr);
+        }
+        if ((mincount >= 0) && (argcount < mincount)) {
+            astError(expr, "At least %i arguments expected.", mincount);
+            return false;
+        }
+        return true;
+    }
+
+    static bool verifyParameterCount (ValueRef expr, int mincount, int maxcount) {
+        return verifyCount(next(expr), mincount, maxcount);
+    }
+
+    TranslatorFunc match(ValueRef expr) {
+        Symbol *head = astVerifyKind<Symbol>(expr);
+        auto &t = translators[head->getValue()];
+        if (!t.translate) astError(expr, "Special form expected.");
+        verifyParameterCount(expr, t.mincount, t.maxcount);
+        return t.translate;
+    }
+
+};
+
+static ASTTranslateTable astTranslators;
+
+//------------------------------------------------------------------------------
+
+static ASTNode *tr_ast_call (ASTEnvironment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_rettype);
+
+    /*
+    LLVMTypeRef rettype = translateType(env, expr_rettype);
+    if (!rettype) return NULL;
+
+    bool vararg = false;
+    expr = next(expr);
+    int argcount = countOf(expr);
+    LLVMTypeRef paramtypes[argcount];
+    int i = 0;
+    while (expr) {
+        if (isSymbol(expr, "...")) {
+            vararg = true;
+            --argcount;
+            if (i != argcount) {
+                auto _ = env->with_expr(expr);
+                translateError(env, "... must be last parameter.");
+                return NULL;
+            }
+            break;
+        }
+        paramtypes[i] = translateType(env, expr);
+        if (!paramtypes[i]) {
+            return NULL;
+        }
+        expr = next(expr);
+        ++i;
+    }
+
+    return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
+    */
+
+    return NULL;
+}
+
+static void registerASTTranslators() {
+    auto &t = astTranslators;
+    t.set(tr_ast_call, "__call", 0, -1);
+}
+
+static ASTNode *translateASTFromList (ASTEnvironment *env, ValueRef expr) {
+    assert(expr);
+    Symbol *head = astVerifyKind<Symbol>(expr);
+    auto func = astTranslators.match(expr);
+    return func(env, expr);
+}
+
+static ASTNode *translateAST (ASTEnvironment *env, ValueRef expr) {
+    assert(expr);
+    if (!isAtom(expr)) {
+        return translateASTFromList(env, at(expr));
+    /*
+    } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
+        LLVMTypeRef result = env->resolveType(sym->getValue());
+        if (!result) {
+            translateError(env, "no such type: %s", sym->c_str());
+            return NULL;
+        }
+
+        return result;*/
+    } else {
+        astError(expr, "expected expression, not %s",
+            valueKindName(kindOf(expr)));
+    }
+    return NULL;
+}
+
+//------------------------------------------------------------------------------
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
 static void init() {
     Type::initTypes();
+    registerASTTranslators();
 
     registerValueTranslators();
     registerTypeTranslators();
