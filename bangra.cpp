@@ -1941,6 +1941,327 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
     streamValue(std::cout, e, depth, naked);
 }
 
+//------------------------------------------------------------------------------
+// TYPE SYSTEM
+//------------------------------------------------------------------------------
+
+enum TypeKind {
+    T_Void = 0,
+    T_Null = 1,
+    T_Integer = 2,
+    T_Real = 3,
+    T_Pointer = 4,
+    T_Array = 5,
+    T_Vector = 6,
+    T_Tuple = 7,
+    T_Struct = 8,
+    T_Function = 9,
+    T_Template = 10,
+};
+
+static const char *typeKindName(int kind) {
+    switch(kind) {
+    case T_Void: return "void";
+    case T_Null: return "nulltype";
+    case T_Integer: return "integer";
+    case T_Real: return "real";
+    case T_Struct: return "struct";
+    case T_Array: return "array";
+    case T_Vector: return "vector";
+    case T_Tuple: return "tuple";
+    case T_Pointer: return "pointer";
+    case T_Function: return "function";
+    case T_Template: return "template";
+    default: return "#illegal-type#";
+    }
+}
+
+//------------------------------------------------------------------------------
+
+struct Type;
+typedef std::vector< std::pair<std::string, Type *> > NamedTypeArray;
+typedef std::vector<Type *> TypeArray;
+typedef std::vector<std::string> NameArray;
+
+struct Type {
+private:
+    const TypeKind kind;
+
+    static Type *newIntegerType(int _width, bool _signed);
+    static Type *newRealType(int _width);
+    static Type *newPointerType(Type *_element);
+    static Type *newArrayType(Type *_element, unsigned _size);
+    static Type *newVectorType(Type *_element, unsigned _size);
+    static Type *newTupleType(NamedTypeArray _elements);
+    static Type *newFunctionType(Type *_returntype, TypeArray _parameters);
+
+protected:
+    Type(TypeKind kind_) :
+        kind(kind_) {}
+
+public:
+    static Type *Void;
+    static Type *Null;
+    static Type *Bool;
+
+    static Type *Int8;
+    static Type *Int16;
+    static Type *Int32;
+    static Type *Int64;
+
+    static Type *UInt8;
+    static Type *UInt16;
+    static Type *UInt32;
+    static Type *UInt64;
+
+    static Type *Half;
+    static Type *Float;
+    static Type *Double;
+
+    TypeKind getKind() const {
+        return kind;
+    }
+
+    static void initTypes();
+
+    static std::function<Type * (int, bool)> Integer;
+    static std::function<Type * (int)> Real;
+    static std::function<Type * (Type *)> Pointer;
+    static std::function<Type * (Type *, unsigned)> Array;
+    static std::function<Type * (Type *, unsigned)> Vector;
+    static std::function<Type * (NamedTypeArray)> Tuple;
+    static Type *Struct();
+    static std::function<Type * (Type *, TypeArray)> Function;
+    static Type *Template(NameArray _parameters);
+};
+
+Type *Type::Void;
+Type *Type::Null;
+Type *Type::Bool;
+Type *Type::Int8;
+Type *Type::Int16;
+Type *Type::Int32;
+Type *Type::Int64;
+Type *Type::UInt8;
+Type *Type::UInt16;
+Type *Type::UInt32;
+Type *Type::UInt64;
+Type *Type::Half;
+Type *Type::Float;
+Type *Type::Double;
+auto Type::Integer = memo(Type::newIntegerType);
+auto Type::Real = memo(Type::newRealType);
+auto Type::Pointer = memo(Type::newPointerType);
+auto Type::Array = memo(Type::newArrayType);
+auto Type::Vector = memo(Type::newVectorType);
+auto Type::Tuple = memo(Type::newTupleType);
+auto Type::Function = memo(Type::newFunctionType);
+
+//------------------------------------------------------------------------------
+
+struct VoidType : Type {
+    VoidType() :
+        Type(T_Void) {
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct NullType : Type {
+    NullType() :
+        Type(T_Null) {
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct IntegerType : Type {
+protected:
+    int width;
+    bool is_signed;
+
+public:
+    IntegerType(int _width, bool _signed) :
+        Type(T_Integer),
+        width(_width),
+        is_signed(_signed)
+        {}
+};
+
+Type *Type::newIntegerType(int _width, bool _signed) {
+    return new IntegerType(_width, _signed);
+}
+
+//------------------------------------------------------------------------------
+
+struct RealType : Type {
+protected:
+    int width;
+
+public:
+    RealType(int _width) :
+        Type(T_Real),
+        width(_width)
+        {}
+};
+
+Type *Type::newRealType(int _width) {
+    return new RealType(_width);
+}
+
+//------------------------------------------------------------------------------
+
+struct PointerType : Type {
+protected:
+    Type *element;
+
+public:
+    PointerType(Type *_element) :
+        Type(T_Pointer),
+        element(_element)
+        {}
+};
+
+Type *Type::newPointerType(Type *_element) {
+    return new PointerType(_element);
+}
+
+//------------------------------------------------------------------------------
+
+struct ArrayType : Type {
+protected:
+    Type *element;
+    unsigned size;
+
+public:
+    ArrayType(Type *_element, unsigned _size) :
+        Type(T_Array),
+        element(_element),
+        size(_size)
+        {}
+};
+
+Type *Type::newArrayType(Type *_element, unsigned _size) {
+    return new ArrayType(_element, _size);
+}
+
+//------------------------------------------------------------------------------
+
+struct VectorType : Type {
+protected:
+    Type *element;
+    unsigned size;
+
+public:
+    VectorType(Type *_element, unsigned _size) :
+        Type(T_Vector),
+        element(_element),
+        size(_size)
+        {}
+};
+
+Type *Type::newVectorType(Type *_element, unsigned _size) {
+    return new VectorType(_element, _size);
+}
+
+//------------------------------------------------------------------------------
+
+struct TupleType : Type {
+protected:
+    NamedTypeArray elements;
+
+public:
+    TupleType(NamedTypeArray _elements) :
+        Type(T_Tuple),
+        elements(_elements)
+        {}
+};
+
+Type *Type::newTupleType(NamedTypeArray _elements) {
+    return new TupleType(_elements);
+}
+
+//------------------------------------------------------------------------------
+
+struct StructType : Type {
+protected:
+    NamedTypeArray elements;
+
+public:
+    StructType() :
+        Type(T_Struct)
+        {}
+};
+
+Type *Type::Struct() {
+    return new StructType();
+}
+
+//------------------------------------------------------------------------------
+
+struct FunctionType : Type {
+protected:
+    Type *returntype;
+    TypeArray parameters;
+
+public:
+    FunctionType(Type *_returntype, TypeArray _parameters) :
+        Type(T_Function),
+        returntype(_returntype),
+        parameters(_parameters)
+        {}
+};
+
+Type *Type::newFunctionType(Type *_returntype, TypeArray _parameters) {
+    return new FunctionType(_returntype, _parameters);
+}
+
+//------------------------------------------------------------------------------
+
+struct TemplateType : Type {
+protected:
+    NameArray parameters;
+
+public:
+    TemplateType(NameArray _parameters) :
+        Type(T_Template),
+        parameters(_parameters)
+        {}
+};
+
+Type *Type::Template(NameArray _parameters) {
+    return new TemplateType(_parameters);
+}
+
+//------------------------------------------------------------------------------
+
+void Type::initTypes() {
+    Void = new VoidType();
+    Null = new NullType();
+
+    Bool = Integer(1, false);
+
+    Int8 = Integer(8, true);
+    Int16 = Integer(16, true);
+    Int32 = Integer(32, true);
+    Int64 = Integer(64, true);
+
+    UInt8 = Integer(8, false);
+    UInt16 = Integer(16, false);
+    UInt32 = Integer(32, false);
+    UInt64 = Integer(64, false);
+
+    Half = Real(16);
+    Float = Real(32);
+    Double = Real(64);
+
+}
+
+//------------------------------------------------------------------------------
+// ABSTRACT SYNTAX TREE
+//------------------------------------------------------------------------------
+
+
 
 //------------------------------------------------------------------------------
 // TRANSLATION ENVIRONMENT
@@ -2394,7 +2715,7 @@ public:
         case clang::Type::RValueReference:
             break;
         case clang::Type::Pointer: {
-            const PointerType *PTy = cast<PointerType>(Ty);
+            const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
             ValueRef pointee = TranslateType(ETy);
             if (pointee != NULL) {
@@ -2415,7 +2736,7 @@ public:
         } break;
         case clang::Type::ExtVector:
         case clang::Type::Vector: {
-                const VectorType *VT = cast<VectorType>(T);
+                const clang::VectorType *VT = cast<clang::VectorType>(T);
                 ValueRef at = TranslateType(VT->getElementType());
                 if(at) {
                     int n = VT->getNumElements();
@@ -2425,7 +2746,7 @@ public:
         } break;
         case clang::Type::FunctionNoProto:
         case clang::Type::FunctionProto: {
-            const FunctionType *FT = cast<FunctionType>(Ty);
+            const clang::FunctionType *FT = cast<clang::FunctionType>(Ty);
             if (FT) {
                 return TranslateFuncType(FT);
             }
@@ -4998,6 +5319,8 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 //------------------------------------------------------------------------------
 
 static void init() {
+    Type::initTypes();
+
     registerValueTranslators();
     registerTypeTranslators();
 
