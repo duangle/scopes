@@ -165,6 +165,8 @@ TODO:
         (passing function without pointer to constructor)
 */
 
+#define BANGRA_HEADER "bangra"
+
 //------------------------------------------------------------------------------
 // SHARED LIBRARY IMPLEMENTATION
 //------------------------------------------------------------------------------
@@ -1995,7 +1997,7 @@ private:
     static Type *newArrayType(Type *_element, unsigned _size);
     static Type *newVectorType(Type *_element, unsigned _size);
     static Type *newTupleType(NamedTypeArray _elements);
-    static Type *newCFunctionType(Type *_returntype, TypeArray _parameters);
+    static Type *newCFunctionType(Type *_returntype, TypeArray _parameters, bool vararg);
 
 protected:
     Type(TypeKind kind_) :
@@ -2021,6 +2023,8 @@ public:
     static Type *Float;
     static Type *Double;
 
+    static Type *Rawstring;
+
     TypeKind getKind() const {
         return kind;
     }
@@ -2034,7 +2038,7 @@ public:
     static std::function<Type * (Type *, unsigned)> Vector;
     static std::function<Type * (NamedTypeArray)> Tuple;
     static Type *Struct();
-    static std::function<Type * (Type *, TypeArray)> CFunction;
+    static std::function<Type * (Type *, TypeArray, bool)> CFunction;
     static Type *Function(NameArray _parameters);
 };
 
@@ -2053,6 +2057,7 @@ Type *Type::UInt64;
 Type *Type::Half;
 Type *Type::Float;
 Type *Type::Double;
+Type *Type::Rawstring;
 auto Type::Integer = memo(Type::newIntegerType);
 auto Type::Real = memo(Type::newRealType);
 auto Type::Pointer = memo(Type::newPointerType);
@@ -2207,17 +2212,19 @@ struct CFunctionType : Type {
 protected:
     Type *returntype;
     TypeArray parameters;
+    bool isvararg;
 
 public:
-    CFunctionType(Type *_returntype, TypeArray _parameters) :
+    CFunctionType(Type *_returntype, TypeArray _parameters, bool _isvararg) :
         Type(T_CFunction),
         returntype(_returntype),
-        parameters(_parameters)
+        parameters(_parameters),
+        isvararg(_isvararg)
         {}
 };
 
-Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters) {
-    return new CFunctionType(_returntype, _parameters);
+Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters, bool _isvararg) {
+    return new CFunctionType(_returntype, _parameters, _isvararg);
 }
 
 //------------------------------------------------------------------------------
@@ -2261,95 +2268,25 @@ void Type::initTypes() {
     Float = Real(32);
     Double = Real(64);
 
+    Rawstring = Pointer(Int8);
+
 }
 
-//------------------------------------------------------------------------------
-// ABSTRACT SYNTAX TREE
-//------------------------------------------------------------------------------
-
-/*
-special forms (15):
-
-__quote
-__if
-__while
-__break
-__var
-__var+
-__key
-__set
-__del
-__scope
-__function
-__nop
-__do
-__call
-__do-splice
-__pragma
-__global
-
-predefined macros (2):
-
-__escape (sort-of)
-*/
-
-enum ASTKind {
-    AST_ConstNull,
-    AST_ConstType,
-    AST_ConstInteger,
-    AST_ConstReal,
-    AST_ConstString,
-
-    AST_Symbol,
-
-    AST_ArrayOf,
-    AST_TupleOf,
-
-    AST_CFunction,
-    AST_Function,
-    AST_Call,
-
-    AST_Select,
-    AST_Label,
-    AST_Goto,
-
-    AST_Let,
-    AST_Var,
-    AST_Index,
-    AST_Set,
-    AST_Del,
-
-    AST_Do,
-    AST_Splice,
-
-    AST_Nop
-};
-
-//------------------------------------------------------------------------------
-
-struct ASTNode {
-private:
-    const ASTKind kind;
-
-protected:
-    ASTNode(ASTKind kind_) :
-        kind(kind_) {}
-
-public:
-    ASTKind getKind() const {
-        return kind;
-    }
-};
 
 //------------------------------------------------------------------------------
 // TRANSLATION ENVIRONMENT
 //------------------------------------------------------------------------------
+
+struct ASTNode;
+typedef std::shared_ptr<ASTNode> ASTNodeRef;
 
 typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
 typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
 typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
 typedef std::list< LLVMModuleRef > GlobalModuleList;
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
+typedef std::unordered_map<std::string, ASTNodeRef> NameASTNodeMap;
+typedef std::unordered_map<std::string, Type *> NameTypeMap;
 
 //------------------------------------------------------------------------------
 
@@ -2365,8 +2302,11 @@ struct Environment {
     ValueRef expr;
 
     NameLLVMValueMap values;
-    NameLLVMTypeMap types;
+    NameLLVMTypeMap llvmtypes;
     NameMacroMap macros;
+
+    NameASTNodeMap astnodes;
+    NameTypeMap types;
 
     // parent env
     Environment *parent;
@@ -2430,10 +2370,34 @@ struct Environment {
         return NULL;
     }
 
+    ASTNodeRef resolveASTNode(const std::string &name) {
+        Environment *penv = this;
+        while (penv) {
+            ASTNodeRef result = (*penv).astnodes[name];
+            if (result) {
+                return result;
+            }
+            penv = penv->parent;
+        }
+        return NULL;
+    }
+
     LLVMTypeRef resolveType(const std::string &name) {
         Environment *penv = this;
         while (penv) {
-            LLVMTypeRef result = (*penv).types[name];
+            LLVMTypeRef result = (*penv).llvmtypes[name];
+            if (result) {
+                return result;
+            }
+            penv = (penv->parent)?penv->parent:penv->getMeta();
+        }
+        return NULL;
+    }
+
+    Type *resolveASTType(const std::string &name) {
+        Environment *penv = this;
+        while (penv) {
+            Type *result = (*penv).types[name];
             if (result) {
                 return result;
             }
@@ -4277,7 +4241,7 @@ static LLVMValueRef tr_value_deftype (Environment *env, ValueRef expr) {
     if (!result) return NULL;
 
     const char *name = sym_name->c_str();
-    env->types[name] = result;
+    env->llvmtypes[name] = result;
 
     return NULL;
 }
@@ -5334,7 +5298,7 @@ static LLVMTypeRef tr_type_struct (Environment *env, ValueRef expr) {
         if (elemcount)
             LLVMStructSetBody(result, elemtypes, elemcount, packed);
         if (isKindOf<Symbol>(expr_name))
-            env->types[name] = result;
+            env->llvmtypes[name] = result;
     }
 
     return result;
@@ -5393,20 +5357,337 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 }
 
 //------------------------------------------------------------------------------
+// ABSTRACT SYNTAX TREE
+//------------------------------------------------------------------------------
+
+/*
+special forms (15):
+
+__quote
+__if
+__while
+__break
+__var
+__var+
+__key
+__set
+__del
+__scope
+__function
+__nop
+__do
+__call
+__do-splice
+__pragma
+__global
+
+predefined macros (2):
+
+__escape (sort-of)
+*/
+
+enum ASTKind {
+    AST_ConstNull,
+    AST_ConstType,
+    AST_ConstBool,
+    AST_ConstInteger,
+    AST_ConstReal,
+    AST_ConstString,
+
+    AST_Symbol,
+
+    AST_ArrayOf,
+    AST_TupleOf,
+
+    AST_ExternalDecl,
+    AST_FunctionDecl,
+    AST_Call,
+
+    AST_Select,
+    AST_Label,
+    AST_Goto,
+
+    AST_Let,
+    AST_Var,
+    AST_Index,
+    AST_Set,
+    AST_Del,
+
+    AST_Do,
+    AST_Splice,
+
+    AST_Nop
+};
+
+//------------------------------------------------------------------------------
+
+struct ASTNode {
+private:
+    const ASTKind kind;
+
+protected:
+    ASTNode(ASTKind kind_, Type *type_ = nullptr) :
+        kind(kind_),
+        type(type_)
+        {}
+
+public:
+    Type *type;
+    Anchor anchor;
+
+    void setAnchor(ValueRef expr) {
+        if (expr) {
+            Anchor *result = expr->findValidAnchor();
+            if (result) {
+                anchor = *result;
+            }
+        }
+    }
+
+    ASTKind getKind() const {
+        return kind;
+    }
+};
+
+struct ASTConstNull : ASTNode {
+    ASTConstNull() :
+        ASTNode(AST_ConstNull, Type::Null)
+        {}
+};
+
+struct ASTConstType : ASTNode {
+    Type *value;
+
+    ASTConstType(Type *value_) :
+        ASTNode(AST_ConstType, Type::AType),
+        value(value_)
+        {}
+
+    static bool classof(const ASTNode *node) {
+        return node->getKind() == AST_ConstType;
+    }
+};
+
+struct ASTConstBool : ASTNode {
+    bool value;
+
+    ASTConstBool(bool value_) :
+        ASTNode(AST_ConstBool, Type::Bool),
+        value(value_)
+        {}
+};
+
+struct ASTConstInteger : ASTNode {
+    int64_t value;
+
+    ASTConstInteger(int64_t value_) :
+        ASTNode(AST_ConstInteger, Type::Int64),
+        value(value_)
+        {}
+};
+
+struct ASTConstReal : ASTNode {
+    double value;
+
+    ASTConstReal(double value_) :
+        ASTNode(AST_ConstReal, Type::Double),
+        value(value_)
+        {}
+};
+
+struct ASTConstString : ASTNode {
+    std::string value;
+
+    ASTConstString(const std::string &value_) :
+        ASTNode(AST_ConstString, Type::Array(Type::Int8, value_.size() + 1)),
+        value(value_)
+        {}
+};
+
+struct ASTSymbol : ASTNode {
+    std::string name;
+    Type *type;
+
+    ASTSymbol(const std::string &name_, Type *type_ = nullptr) :
+        ASTNode(AST_Symbol),
+        name(name_),
+        type(type_)
+        {}
+};
+
+struct ASTArrayOf : ASTNode {
+    std::vector<ASTNodeRef> values;
+
+    ASTArrayOf(const std::vector<ASTNodeRef> &values_) :
+        ASTNode(AST_ArrayOf),
+        values(values_)
+        {}
+};
+
+struct ASTTupleOf : ASTNode {
+    std::vector<ASTNodeRef> values;
+
+    ASTTupleOf(const std::vector<ASTNodeRef> &values_) :
+        ASTNode(AST_TupleOf),
+        values(values_)
+        {}
+};
+
+struct ASTExternalDecl : ASTNode {
+    ASTNodeRef name;
+    ASTNodeRef functiontype;
+
+    ASTExternalDecl(const ASTNodeRef &name_, const ASTNodeRef &functiontype_) :
+        ASTNode(AST_ExternalDecl),
+        name(name_),
+        functiontype(functiontype_)
+        {}
+};
+
+struct ASTFunctionDecl : ASTNode {
+    std::vector<ASTNodeRef> parameters;
+    ASTNodeRef body;
+
+    ASTFunctionDecl(const std::vector<ASTNodeRef> &parameters_, const ASTNodeRef &body_) :
+        ASTNode(AST_FunctionDecl),
+        parameters(parameters_),
+        body(body_)
+        {}
+};
+
+struct ASTCall : ASTNode {
+    ASTNodeRef callable;
+    std::vector<ASTNodeRef> arguments;
+
+    ASTCall(const ASTNodeRef &callable,
+            const std::vector<ASTNodeRef> &arguments_) :
+        ASTNode(AST_Call),
+        arguments(arguments_)
+        {}
+};
+
+struct ASTSelect : ASTNode {
+    ASTNodeRef condition;
+    ASTNodeRef trueexpr;
+    ASTNodeRef falseexpr;
+
+    ASTSelect(const ASTNodeRef &condition_,
+                const ASTNodeRef &trueexpr_,
+                const ASTNodeRef &falseexpr_) :
+        ASTNode(AST_Select),
+        condition(condition_),
+        trueexpr(trueexpr_),
+        falseexpr(falseexpr_)
+        {}
+};
+
+struct ASTLabel : ASTNode {
+    std::string name;
+    ASTNodeRef body;
+
+    ASTLabel(const std::string &name_, const ASTNodeRef &body_) :
+        ASTNode(AST_Label),
+        name(name_),
+        body(body_)
+        {}
+};
+
+struct ASTGoto : ASTNode {
+    ASTNodeRef label;
+
+    ASTGoto(const ASTNodeRef &label_) :
+        ASTNode(AST_Goto),
+        label(label_)
+        {}
+};
+
+struct ASTLet : ASTNode {
+    ASTNodeRef symbol;
+    ASTNodeRef value;
+
+    ASTLet(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
+        ASTNode(AST_Let),
+        symbol(symbol_),
+        value(value_)
+        {}
+};
+
+struct ASTVar : ASTNode {
+    ASTNodeRef symbol;
+    ASTNodeRef value;
+
+    ASTVar(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
+        ASTNode(AST_Var),
+        symbol(symbol_),
+        value(value_)
+        {}
+};
+
+struct ASTIndex : ASTNode {
+    ASTNodeRef lvalue;
+    ASTNodeRef rvalue;
+
+    ASTIndex(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
+        ASTNode(AST_Index),
+        lvalue(lvalue_),
+        rvalue(rvalue_)
+        {}
+};
+
+struct ASTSet : ASTNode {
+    ASTNodeRef lvalue;
+    ASTNodeRef rvalue;
+
+    ASTSet(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
+        ASTNode(AST_Set),
+        lvalue(lvalue_),
+        rvalue(rvalue_)
+        {}
+};
+
+struct ASTDel : ASTNode {
+    ASTNodeRef symbol;
+
+    ASTDel(const ASTNodeRef &symbol_) :
+        ASTNode(AST_Del),
+        symbol(symbol_)
+        {}
+};
+
+struct ASTDo : ASTNode {
+    std::vector<ASTNodeRef> expressions;
+
+    ASTDo(const std::vector<ASTNodeRef> &expressions_) :
+        ASTNode(AST_Do),
+        expressions(expressions_)
+        {}
+};
+
+struct ASTSplice : ASTNode {
+    std::vector<ASTNodeRef> expressions;
+
+    ASTSplice(const std::vector<ASTNodeRef> &expressions_) :
+        ASTNode(AST_Splice),
+        expressions(expressions_)
+        {}
+};
+
+struct ASTNop : ASTNode {
+    ASTNop() :
+        ASTNode(AST_Nop, Type::Void)
+        {}
+};
+
+//------------------------------------------------------------------------------
 // AST TRANSLATION
 //------------------------------------------------------------------------------
 
-struct ASTEnvironment;
+typedef Environment ASTEnvironment;
 
-static void astErrorV (ValueRef expr, const char *format, va_list args) {
-    Anchor *anchor = NULL;
-    if (expr)
-        anchor = expr->findValidAnchor();
+static void astErrorV (Anchor *anchor, const char *format, va_list args) {
     if (anchor) {
         printf("%s:%i:%i: error: ", anchor->path, anchor->lineno, anchor->column);
     } else {
-        if (expr)
-            printValue(expr);
         printf("error: ");
     }
     vprintf (format, args);
@@ -5418,9 +5699,27 @@ static void astErrorV (ValueRef expr, const char *format, va_list args) {
 }
 
 static void astError (ValueRef expr, const char *format, ...) {
+    Anchor *anchor = NULL;
+    if (expr)
+        anchor = expr->findValidAnchor();
+    if (!anchor) {
+        if (expr)
+            printValue(expr);
+    }
     va_list args;
     va_start (args, format);
-    astErrorV(expr, format, args);
+    astErrorV(anchor, format, args);
+    va_end (args);
+}
+
+static void astError (const ASTNodeRef &node, const char *format, ...) {
+    Anchor *anchor = NULL;
+    if (node->anchor.isValid()) {
+        anchor = &node->anchor;
+    }
+    va_list args;
+    va_start (args, format);
+    astErrorV(anchor, format, args);
     va_end (args);
 }
 
@@ -5440,7 +5739,7 @@ static T *astVerifyKind(ValueRef expr) {
 //------------------------------------------------------------------------------
 
 struct ASTTranslateTable {
-    typedef ASTNode *(*TranslatorFunc)(ASTEnvironment *env, ValueRef expr);
+    typedef ASTNodeRef (*TranslatorFunc)(ASTEnvironment *env, ValueRef expr);
 
     struct Translator {
         int mincount;
@@ -5479,7 +5778,7 @@ struct ASTTranslateTable {
             ++ argcount;
             if (maxcount >= 0) {
                 if (argcount > maxcount) {
-                    astError(expr, "Excess argument. At most %i arguments expected.", maxcount);
+                    astError(expr, "excess argument. At most %i arguments expected", maxcount);
                     return false;
                 }
             } else if (mincount >= 0) {
@@ -5489,7 +5788,7 @@ struct ASTTranslateTable {
             expr = next(expr);
         }
         if ((mincount >= 0) && (argcount < mincount)) {
-            astError(expr, "At least %i arguments expected.", mincount);
+            astError(expr, "at least %i arguments expected", mincount);
             return false;
         }
         return true;
@@ -5502,7 +5801,7 @@ struct ASTTranslateTable {
     TranslatorFunc match(ValueRef expr) {
         Symbol *head = astVerifyKind<Symbol>(expr);
         auto &t = translators[head->getValue()];
-        if (!t.translate) astError(expr, "Special form expected.");
+        if (!t.translate) astError(expr, "special form expected");
         verifyParameterCount(expr, t.mincount, t.maxcount);
         return t.translate;
     }
@@ -5513,73 +5812,147 @@ static ASTTranslateTable astTranslators;
 
 //------------------------------------------------------------------------------
 
-static ASTNode *tr_ast_call (ASTEnvironment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_rettype);
+static Type *verifyAsType(const ASTNodeRef &node) {
+    switch(node->getKind()) {
+        case AST_ConstType: {
+            return llvm::cast<ASTConstType>(node.get())->value;
+        } break;
+        default: {
+            astError(node, "type expected");
+        } break;
+    }
+    return NULL;
+}
 
-    /*
-    LLVMTypeRef rettype = translateType(env, expr_rettype);
-    if (!rettype) return NULL;
+//------------------------------------------------------------------------------
 
-    bool vararg = false;
-    expr = next(expr);
-    int argcount = countOf(expr);
-    LLVMTypeRef paramtypes[argcount];
-    int i = 0;
-    while (expr) {
-        if (isSymbol(expr, "...")) {
-            vararg = true;
-            --argcount;
-            if (i != argcount) {
-                auto _ = env->with_expr(expr);
-                translateError(env, "... must be last parameter.");
-                return NULL;
-            }
-            break;
-        }
-        paramtypes[i] = translateType(env, expr);
-        if (!paramtypes[i]) {
-            return NULL;
-        }
-        expr = next(expr);
-        ++i;
+static ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr);
+
+static ASTNodeRef tr_ast_external (ASTEnvironment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_type);
+
+    ASTNodeRef name = translateAST(env, expr_name);
+    ASTNodeRef type = translateAST(env, expr_type);
+
+    return std::make_shared<ASTExternalDecl>(name, type);
+}
+
+static ASTNodeRef tr_ast_let (ASTEnvironment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_sym);
+    UNPACK_ARG(expr, expr_value);
+
+    Symbol *sym = astVerifyKind<Symbol>(expr_sym);
+    ASTNodeRef value = translateAST(env, expr_value);
+
+    auto symbol = std::make_shared<ASTSymbol>(sym->getValue());
+    env->astnodes[sym->getValue()] = symbol;
+
+    return std::make_shared<ASTLet>(
+        symbol,
+        value);
+}
+
+static ASTNodeRef tr_ast_call (ASTEnvironment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_callable);
+    UNPACK_ARG(expr, arg);
+
+    ASTNodeRef callable = translateAST(env, expr_callable);
+
+    std::vector<ASTNodeRef> args;
+
+    while (arg) {
+        args.push_back(translateAST(env, arg));
+
+        arg = next(arg);
     }
 
-    return LLVMFunctionType(rettype, paramtypes, argcount, vararg);
-    */
+    return std::make_shared<ASTCall>(callable, args);
+}
 
-    return NULL;
+static ASTNodeRef tr_ast_cdecl (ASTEnvironment *env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_returntype);
+    UNPACK_ARG(expr, expr_parameters);
+
+    Type *returntype = verifyAsType(translateAST(env, expr_returntype));
+    Pointer *params = astVerifyKind<Pointer>(expr_parameters);
+
+    std::vector<Type *> paramtypes;
+
+    ValueRef param = at(params);
+    bool vararg = false;
+    while (param) {
+        ValueRef nextparam = next(param);
+        if (!nextparam && isSymbol(param, "...")) {
+            vararg = true;
+        } else {
+            paramtypes.push_back(verifyAsType(translateAST(env, param)));
+        }
+
+        param = nextparam;
+    }
+
+    //return std::make_shared<ASTExternalDecl>(name, type);
+    return std::make_shared<ASTConstType>(Type::CFunction(returntype, paramtypes, vararg));
 }
 
 static void registerASTTranslators() {
     auto &t = astTranslators;
-    t.set(tr_ast_call, "__call", 0, -1);
+    t.set(tr_ast_external, "external", 2, 2);
+    t.set(tr_ast_let, "let", 2, 2);
+    t.set(tr_ast_call, "call", 1, -1);
+
+    t.set(tr_ast_cdecl, "cdecl", 2, 2);
 }
 
-static ASTNode *translateASTFromList (ASTEnvironment *env, ValueRef expr) {
+static ASTNodeRef translateASTFromList (ASTEnvironment *env, ValueRef expr) {
     assert(expr);
     Symbol *head = astVerifyKind<Symbol>(expr);
     auto func = astTranslators.match(expr);
     return func(env, expr);
 }
 
-static ASTNode *translateAST (ASTEnvironment *env, ValueRef expr) {
+ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
     assert(expr);
+    ASTNodeRef result;
     if (!isAtom(expr)) {
-        return translateASTFromList(env, at(expr));
-    /*
+        result = translateASTFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
+        std::string value = sym->getValue();
+        if (value == "true") {
+            result = std::make_shared<ASTConstBool>(true);
+        } else if (value == "false") {
+            result = std::make_shared<ASTConstBool>(false);
+        } else if (value == "null") {
+            result = std::make_shared<ASTConstNull>();
+        } else {
+            result = env->resolveASTNode(value);
+            if (!result) {
+                astError(expr, "unknown symbol '%s'",
+                    value.c_str());
+            }
+        }
+        /*
         LLVMTypeRef result = env->resolveType(sym->getValue());
         if (!result) {
             translateError(env, "no such type: %s", sym->c_str());
             return NULL;
         }
-
-        return result;*/
+        */
+    } else if (auto str = llvm::dyn_cast<String>(expr)) {
+        result = std::make_shared<ASTConstString>(str->getValue());
+    } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
+        result = std::make_shared<ASTConstInteger>(integer->getValue());
+    } else if (auto real = llvm::dyn_cast<Real>(expr)) {
+        result = std::make_shared<ASTConstReal>(real->getValue());
     } else {
         astError(expr, "expected expression, not %s",
             valueKindName(kindOf(expr)));
     }
-    return NULL;
+    if (result && !result->anchor.isValid()) {
+        result->setAnchor(expr);
+    }
+    return result;
 }
 
 //------------------------------------------------------------------------------
@@ -5625,23 +5998,42 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
     env->globals->module = module;
     env->globals->builder = builder;
 
-    env->types["void"] = LLVMVoidType();
-    env->types["half"] = LLVMHalfType();
-    env->types["float"] = LLVMFloatType();
-    env->types["double"] = LLVMDoubleType();
-    env->types["i1"] = LLVMInt1Type();
-    env->types["i8"] = LLVMInt8Type();
-    env->types["i16"] = LLVMInt16Type();
-    env->types["i32"] = LLVMInt32Type();
-    env->types["i64"] = LLVMInt64Type();
+    env->astnodes["void"] = std::make_shared<ASTConstType>(Type::Void);
+    env->astnodes["half"] = std::make_shared<ASTConstType>(Type::Half);
+    env->astnodes["float"] = std::make_shared<ASTConstType>(Type::Float);
+    env->astnodes["double"] = std::make_shared<ASTConstType>(Type::Double);
+    env->astnodes["bool"] = std::make_shared<ASTConstType>(Type::Bool);
 
-    env->types["rawstring"] = LLVMPointerType(LLVMInt8Type(), 0);
-    env->types["opaque"] = _opaque;
+    env->astnodes["int8"] = std::make_shared<ASTConstType>(Type::Int8);
+    env->astnodes["int16"] = std::make_shared<ASTConstType>(Type::Int16);
+    env->astnodes["int32"] = std::make_shared<ASTConstType>(Type::Int32);
+    env->astnodes["int64"] = std::make_shared<ASTConstType>(Type::Int64);
 
-    env->types["_Value"] = _t_Value;
-    env->types["Value"] = LLVMPointerType(_t_Value, 0);
-    env->types["_Environment"] = _t_Environment;
-    env->types["Environment"] = LLVMPointerType(_t_Environment, 0);
+    env->astnodes["uint8"] = std::make_shared<ASTConstType>(Type::UInt8);
+    env->astnodes["uint16"] = std::make_shared<ASTConstType>(Type::UInt16);
+    env->astnodes["uint32"] = std::make_shared<ASTConstType>(Type::UInt32);
+    env->astnodes["uint64"] = std::make_shared<ASTConstType>(Type::UInt64);
+
+    env->astnodes["int"] = env->astnodes["int32"];
+    env->astnodes["rawstring"] = std::make_shared<ASTConstType>(Type::Rawstring);
+
+    env->llvmtypes["void"] = LLVMVoidType();
+    env->llvmtypes["half"] = LLVMHalfType();
+    env->llvmtypes["float"] = LLVMFloatType();
+    env->llvmtypes["double"] = LLVMDoubleType();
+    env->llvmtypes["i1"] = LLVMInt1Type();
+    env->llvmtypes["i8"] = LLVMInt8Type();
+    env->llvmtypes["i16"] = LLVMInt16Type();
+    env->llvmtypes["i32"] = LLVMInt32Type();
+    env->llvmtypes["i64"] = LLVMInt64Type();
+
+    env->llvmtypes["rawstring"] = LLVMPointerType(LLVMInt8Type(), 0);
+    env->llvmtypes["opaque"] = _opaque;
+
+    env->llvmtypes["_Value"] = _t_Value;
+    env->llvmtypes["Value"] = LLVMPointerType(_t_Value, 0);
+    env->llvmtypes["_Environment"] = _t_Environment;
+    env->llvmtypes["Environment"] = LLVMPointerType(_t_Environment, 0);
 
     env->values["true"] = LLVMConstInt(LLVMInt1Type(), 1, 1);
     env->values["false"] = LLVMConstInt(LLVMInt1Type(), 0, 1);
@@ -5653,9 +6045,7 @@ static void teardownRootEnvironment (Environment *env) {
 
 static bool translateRootValueList (Environment *env, ValueRef expr) {
     while (expr) {
-        translateValue(env, expr);
-        if (env->hasErrors())
-            return false;
+        translateAST(env, expr);
         expr = next(expr);
     }
     return true;
@@ -5672,12 +6062,13 @@ static bool compileModule (Environment *env, ValueRef expr) {
     while (true) {
         Symbol *head = translateKind<Symbol>(env, expr);
         if (!head) return false;
-        if (head->getValue() == "IR")
+        if (head->getValue() == BANGRA_HEADER)
             break;
         auto preprocessor = preprocessors[head->getValue()];
         if (!preprocessor) {
-            translateError(env, "unrecognized header: '%s'; try 'IR' instead.",
-                head->getValue().c_str());
+            translateError(env, "unrecognized header: '%s'; try '%s' instead.",
+                head->getValue().c_str(),
+                BANGRA_HEADER);
             return false;
         }
         if (lastlang == head->getValue()) {
