@@ -2071,13 +2071,13 @@ Type *Type::Half;
 Type *Type::Float;
 Type *Type::Double;
 Type *Type::Rawstring;
-auto Type::Integer = memo(Type::newIntegerType);
-auto Type::Real = memo(Type::newRealType);
-auto Type::Pointer = memo(Type::newPointerType);
-auto Type::Array = memo(Type::newArrayType);
-auto Type::Vector = memo(Type::newVectorType);
-auto Type::Tuple = memo(Type::newTupleType);
-auto Type::CFunction = memo(Type::newCFunctionType);
+std::function<Type * (int, bool)> Type::Integer = memo(Type::newIntegerType);
+std::function<Type * (int)> Type::Real = memo(Type::newRealType);
+std::function<Type * (Type *)> Type::Pointer = memo(Type::newPointerType);
+std::function<Type * (Type *, unsigned)> Type::Array = memo(Type::newArrayType);
+std::function<Type * (Type *, unsigned)> Type::Vector = memo(Type::newVectorType);
+std::function<Type * (NamedTypeArray)> Type::Tuple = memo(Type::newTupleType);
+std::function<Type * (Type *, TypeArray, bool)> Type::CFunction = memo(Type::newCFunctionType);
 
 //------------------------------------------------------------------------------
 
