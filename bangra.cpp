@@ -1967,6 +1967,11 @@ enum TypeKind {
     T_CFunction,
     T_Function,
     T_Type,
+
+    T_IntegerLiteral,
+    T_RealLiteral,
+    T_StringLiteral,
+    T_TypeLiteral
 };
 
 static const char *typeKindName(int kind) {
@@ -1983,6 +1988,10 @@ static const char *typeKindName(int kind) {
     case T_CFunction: return "cfunction";
     case T_Function: return "function";
     case T_Type: return "type";
+    case T_IntegerLiteral: return "integer-literal";
+    case T_RealLiteral: return "real-literal";
+    case T_StringLiteral: return "string-literal";
+    case T_TypeLiteral: return "type-literal";
     default: return "#illegal-type#";
     }
 }
@@ -2005,6 +2014,10 @@ private:
     static Type *newVectorType(Type *_element, unsigned _size);
     static Type *newTupleType(NamedTypeArray _elements);
     static Type *newCFunctionType(Type *_returntype, TypeArray _parameters, bool vararg);
+    static Type *newIntegerLiteralType(Type *type_, int64_t value_);
+    static Type *newRealLiteralType(Type *type_, double value_);
+    static Type *newStringLiteralType(std::string value_);
+    static Type *newTypeLiteralType(Type *type_);
 
 protected:
     LLVMTypeRef llvmtype;
@@ -2051,6 +2064,10 @@ public:
     static Type *Struct(const std::string &name);
     static std::function<Type * (Type *, TypeArray, bool)> CFunction;
     static Type *Function(NameArray _parameters);
+    static std::function<Type * (Type *, int64_t)> IntegerLiteral;
+    static std::function<Type * (Type *, double)> RealLiteral;
+    static std::function<Type * (std::string)> StringLiteral;
+    static std::function<Type * (Type *)> TypeLiteral;
 
     LLVMTypeRef getLLVMType() { return llvmtype; }
 };
@@ -2078,6 +2095,10 @@ std::function<Type * (Type *, unsigned)> Type::Array = memo(Type::newArrayType);
 std::function<Type * (Type *, unsigned)> Type::Vector = memo(Type::newVectorType);
 std::function<Type * (NamedTypeArray)> Type::Tuple = memo(Type::newTupleType);
 std::function<Type * (Type *, TypeArray, bool)> Type::CFunction = memo(Type::newCFunctionType);
+std::function<Type * (Type *, int64_t)> Type::IntegerLiteral = memo(Type::newIntegerLiteralType);
+std::function<Type * (Type *, double)> Type::RealLiteral = memo(Type::newRealLiteralType);
+std::function<Type * (std::string)> Type::StringLiteral = memo(Type::newStringLiteralType);
+std::function<Type * (Type *)> Type::TypeLiteral = memo(Type::newTypeLiteralType);
 
 //------------------------------------------------------------------------------
 
@@ -2094,12 +2115,16 @@ LLVMTypeRef verifyLLVMType(Type *type) {
 
 //------------------------------------------------------------------------------
 
-template<class T, TypeKind KindT>
-struct TypeImpl : Type {
+template<class T, TypeKind KindT, class BaseT = Type>
+struct TypeImpl : BaseT {
     //typedef TypeImpl<T, KindT> Base;
 
+    TypeImpl(TypeKind kind_, LLVMTypeRef llvmtype_ = nullptr) :
+        BaseT(kind_, llvmtype_)
+        {}
+
     TypeImpl(LLVMTypeRef llvmtype_ = nullptr) :
-        Type(KindT, llvmtype_)
+        BaseT(KindT, llvmtype_)
         {}
 
     static bool classof(const Type *node) {
@@ -2128,6 +2153,9 @@ protected:
     bool is_signed;
 
 public:
+    int getWidth() const { return width; }
+    bool isSigned() const { return is_signed; }
+
     IntegerType(int _width, bool _signed) :
         TypeImpl(LLVMIntType(_width)),
         width(_width),
@@ -2137,6 +2165,42 @@ public:
 
 Type *Type::newIntegerType(int _width, bool _signed) {
     return new IntegerType(_width, _signed);
+}
+
+//------------------------------------------------------------------------------
+
+struct IntegerLiteralType : TypeImpl<IntegerLiteralType, T_IntegerLiteral> {
+protected:
+    IntegerType *type;
+    int64_t value;
+
+public:
+    IntegerLiteralType(Type *type_, int64_t value_) :
+        TypeImpl(verifyLLVMType(type_)),
+        type(llvm::cast<IntegerType>(type_)),
+        value(value_)
+        {}
+};
+
+Type *Type::newIntegerLiteralType(Type *type_, int64_t value_) {
+    return new IntegerLiteralType(type_, value_);
+}
+
+//------------------------------------------------------------------------------
+
+struct TypeLiteralType : TypeImpl<TypeLiteralType, T_TypeLiteral> {
+protected:
+    Type *type;
+
+public:
+    TypeLiteralType(Type *type_) :
+        TypeImpl(LLVMPointerType(verifyLLVMType(Type::AType), 0)),
+        type(type_)
+        {}
+};
+
+Type *Type::newTypeLiteralType(Type *type_) {
+    return new TypeLiteralType(type_);
 }
 
 //------------------------------------------------------------------------------
@@ -2164,6 +2228,25 @@ public:
 
 Type *Type::newRealType(int _width) {
     return new RealType(_width);
+}
+
+//------------------------------------------------------------------------------
+
+struct RealLiteralType : TypeImpl<RealLiteralType, T_RealLiteral> {
+protected:
+    RealType *type;
+    double value;
+
+public:
+    RealLiteralType(Type *type_, double value_) :
+        TypeImpl(verifyLLVMType(type_)),
+        type(llvm::cast<RealType>(type_)),
+        value(value_)
+        {}
+};
+
+Type *Type::newRealLiteralType(Type *type_, double value_) {
+    return new RealLiteralType(type_, value_);
 }
 
 //------------------------------------------------------------------------------
@@ -2210,6 +2293,29 @@ public:
 
 Type *Type::newArrayType(Type *_element, unsigned _size) {
     return new ArrayType(_element, _size);
+}
+
+//------------------------------------------------------------------------------
+
+struct StringLiteralType : TypeImpl<StringLiteralType, T_StringLiteral> {
+protected:
+    Type *type;
+    std::string value;
+
+    StringLiteralType(Type *type_, const std::string &value_) :
+        TypeImpl(type_->getLLVMType()),
+        type(type_),
+        value(value_)
+        {}
+
+public:
+    StringLiteralType(const std::string &value_) :
+        StringLiteralType(Type::Array(Type::Int8, value_.size() + 1), value)
+        {}
+};
+
+Type *Type::newStringLiteralType(std::string value_) {
+    return new StringLiteralType(value_);
 }
 
 //------------------------------------------------------------------------------
@@ -2331,7 +2437,7 @@ Type *Type::Function(NameArray _parameters) {
 //------------------------------------------------------------------------------
 
 void Type::initTypes() {
-    AType = new Type(T_Type);
+    AType = new Type(T_Type, LLVMStructCreateNamed(LLVMGetGlobalContext(), "type"));
 
     Void = new VoidType();
     Null = new NullType();
