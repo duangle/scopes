@@ -1955,8 +1955,6 @@ static void astError (const ASTNodeRef &node, const char *format, ...);
 
 
 enum TypeKind {
-    T_Void,
-    T_Null,
     T_Integer,
     T_Real,
     T_Pointer,
@@ -1966,8 +1964,8 @@ enum TypeKind {
     T_Struct,
     T_CFunction,
     T_Function,
-    T_Type,
 
+    T_SymbolicLiteral,
     T_IntegerLiteral,
     T_RealLiteral,
     T_StringLiteral,
@@ -1976,18 +1974,16 @@ enum TypeKind {
 
 static const char *typeKindName(int kind) {
     switch(kind) {
-    case T_Void: return "void";
-    case T_Null: return "nulltype";
     case T_Integer: return "integer";
     case T_Real: return "real";
-    case T_Struct: return "struct";
+    case T_Pointer: return "pointer";
     case T_Array: return "array";
     case T_Vector: return "vector";
     case T_Tuple: return "tuple";
-    case T_Pointer: return "pointer";
+    case T_Struct: return "struct";
     case T_CFunction: return "cfunction";
     case T_Function: return "function";
-    case T_Type: return "type";
+    case T_SymbolicLiteral: return "symbolic-literal";
     case T_IntegerLiteral: return "integer-literal";
     case T_RealLiteral: return "real-literal";
     case T_StringLiteral: return "string-literal";
@@ -2014,16 +2010,19 @@ private:
     static Type *newVectorType(Type *_element, unsigned _size);
     static Type *newTupleType(NamedTypeArray _elements);
     static Type *newCFunctionType(Type *_returntype, TypeArray _parameters, bool vararg);
-    static Type *newIntegerLiteralType(Type *type_, int64_t value_);
-    static Type *newRealLiteralType(Type *type_, double value_);
+    static Type *newIntegerLiteralType(int64_t value_);
+    static Type *newRealLiteralType(double value_);
     static Type *newStringLiteralType(std::string value_);
     static Type *newTypeLiteralType(Type *type_);
+    static Type *newSymbolicLiteralType(std::string value_);
 
 protected:
+    bool isliteral;
     LLVMTypeRef llvmtype;
 
-    Type(TypeKind kind_, LLVMTypeRef llvmtype_ = nullptr) :
+    Type(bool isliteral_, TypeKind kind_, LLVMTypeRef llvmtype_ = nullptr) :
         kind(kind_),
+        isliteral(isliteral_),
         llvmtype(llvmtype_)
         {}
 
@@ -2032,6 +2031,8 @@ public:
     static Type *Void;
     static Type *Null;
     static Type *Bool;
+    static Type *False;
+    static Type *True;
 
     static Type *Int8;
     static Type *Int16;
@@ -2064,18 +2065,22 @@ public:
     static Type *Struct(const std::string &name);
     static std::function<Type * (Type *, TypeArray, bool)> CFunction;
     static Type *Function(NameArray _parameters);
-    static std::function<Type * (Type *, int64_t)> IntegerLiteral;
-    static std::function<Type * (Type *, double)> RealLiteral;
+    static std::function<Type * (int64_t)> IntegerLiteral;
+    static std::function<Type * (double)> RealLiteral;
     static std::function<Type * (std::string)> StringLiteral;
     static std::function<Type * (Type *)> TypeLiteral;
+    static std::function<Type * (std::string)> SymbolicLiteral;
 
-    LLVMTypeRef getLLVMType() { return llvmtype; }
+    LLVMTypeRef getLLVMType() const { return llvmtype; }
+    bool isLiteral() const { return isliteral; }
 };
 
 Type *Type::AType;
 Type *Type::Void;
 Type *Type::Null;
 Type *Type::Bool;
+Type *Type::False;
+Type *Type::True;
 Type *Type::Int8;
 Type *Type::Int16;
 Type *Type::Int32;
@@ -2095,10 +2100,11 @@ std::function<Type * (Type *, unsigned)> Type::Array = memo(Type::newArrayType);
 std::function<Type * (Type *, unsigned)> Type::Vector = memo(Type::newVectorType);
 std::function<Type * (NamedTypeArray)> Type::Tuple = memo(Type::newTupleType);
 std::function<Type * (Type *, TypeArray, bool)> Type::CFunction = memo(Type::newCFunctionType);
-std::function<Type * (Type *, int64_t)> Type::IntegerLiteral = memo(Type::newIntegerLiteralType);
-std::function<Type * (Type *, double)> Type::RealLiteral = memo(Type::newRealLiteralType);
+std::function<Type * (int64_t)> Type::IntegerLiteral = memo(Type::newIntegerLiteralType);
+std::function<Type * (double)> Type::RealLiteral = memo(Type::newRealLiteralType);
 std::function<Type * (std::string)> Type::StringLiteral = memo(Type::newStringLiteralType);
 std::function<Type * (Type *)> Type::TypeLiteral = memo(Type::newTypeLiteralType);
+std::function<Type * (std::string)> Type::SymbolicLiteral = memo(Type::newSymbolicLiteralType);
 
 //------------------------------------------------------------------------------
 
@@ -2115,34 +2121,15 @@ LLVMTypeRef verifyLLVMType(Type *type) {
 
 //------------------------------------------------------------------------------
 
-template<class T, TypeKind KindT, class BaseT = Type>
-struct TypeImpl : BaseT {
-    //typedef TypeImpl<T, KindT> Base;
-
-    TypeImpl(TypeKind kind_, LLVMTypeRef llvmtype_ = nullptr) :
-        BaseT(kind_, llvmtype_)
-        {}
-
-    TypeImpl(LLVMTypeRef llvmtype_ = nullptr) :
-        BaseT(KindT, llvmtype_)
+template<class T, TypeKind KindT>
+struct TypeImpl : Type {
+    TypeImpl(bool isliteral_, LLVMTypeRef llvmtype_ = nullptr) :
+        Type(isliteral_, KindT, llvmtype_)
         {}
 
     static bool classof(const Type *node) {
         return node->getKind() == KindT;
     }
-};
-
-//------------------------------------------------------------------------------
-
-struct VoidType : TypeImpl<VoidType, T_Void> {
-    VoidType() :
-        TypeImpl(LLVMVoidType()) {
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct NullType : TypeImpl<NullType, T_Null> {
 };
 
 //------------------------------------------------------------------------------
@@ -2157,7 +2144,7 @@ public:
     bool isSigned() const { return is_signed; }
 
     IntegerType(int _width, bool _signed) :
-        TypeImpl(LLVMIntType(_width)),
+        TypeImpl(false, LLVMIntType(_width)),
         width(_width),
         is_signed(_signed)
         {}
@@ -2165,42 +2152,6 @@ public:
 
 Type *Type::newIntegerType(int _width, bool _signed) {
     return new IntegerType(_width, _signed);
-}
-
-//------------------------------------------------------------------------------
-
-struct IntegerLiteralType : TypeImpl<IntegerLiteralType, T_IntegerLiteral> {
-protected:
-    IntegerType *type;
-    int64_t value;
-
-public:
-    IntegerLiteralType(Type *type_, int64_t value_) :
-        TypeImpl(verifyLLVMType(type_)),
-        type(llvm::cast<IntegerType>(type_)),
-        value(value_)
-        {}
-};
-
-Type *Type::newIntegerLiteralType(Type *type_, int64_t value_) {
-    return new IntegerLiteralType(type_, value_);
-}
-
-//------------------------------------------------------------------------------
-
-struct TypeLiteralType : TypeImpl<TypeLiteralType, T_TypeLiteral> {
-protected:
-    Type *type;
-
-public:
-    TypeLiteralType(Type *type_) :
-        TypeImpl(LLVMPointerType(verifyLLVMType(Type::AType), 0)),
-        type(type_)
-        {}
-};
-
-Type *Type::newTypeLiteralType(Type *type_) {
-    return new TypeLiteralType(type_);
 }
 
 //------------------------------------------------------------------------------
@@ -2221,7 +2172,7 @@ public:
     }
 
     RealType(int _width) :
-        TypeImpl(getLLVMTypeForSpec(_width)),
+        TypeImpl(false, getLLVMTypeForSpec(_width)),
         width(_width)
         {}
 };
@@ -2232,42 +2183,13 @@ Type *Type::newRealType(int _width) {
 
 //------------------------------------------------------------------------------
 
-struct RealLiteralType : TypeImpl<RealLiteralType, T_RealLiteral> {
-protected:
-    RealType *type;
-    double value;
-
-public:
-    RealLiteralType(Type *type_, double value_) :
-        TypeImpl(verifyLLVMType(type_)),
-        type(llvm::cast<RealType>(type_)),
-        value(value_)
-        {}
-};
-
-Type *Type::newRealLiteralType(Type *type_, double value_) {
-    return new RealLiteralType(type_, value_);
-}
-
-//------------------------------------------------------------------------------
-
 struct PointerType : TypeImpl<PointerType, T_Pointer> {
 protected:
     Type *element;
 
 public:
-    static LLVMTypeRef getLLVMTypeForSpec(int width) {
-        switch(width) {
-            case 16: return LLVMHalfType();
-            case 32: return LLVMFloatType();
-            case 64: return LLVMDoubleType();
-            case 128: return LLVMFP128Type();
-            default: return nullptr;
-        }
-    }
-
     PointerType(Type *_element) :
-        TypeImpl(LLVMPointerType(verifyLLVMType(_element), 0)),
+        TypeImpl(_element->isLiteral(), LLVMPointerType(verifyLLVMType(_element), 0)),
         element(_element)
         {}
 };
@@ -2285,7 +2207,7 @@ protected:
 
 public:
     ArrayType(Type *_element, unsigned _size) :
-        TypeImpl(LLVMArrayType(verifyLLVMType(_element), _size)),
+        TypeImpl(_element->isLiteral(), LLVMArrayType(verifyLLVMType(_element), _size)),
         element(_element),
         size(_size)
         {}
@@ -2297,29 +2219,6 @@ Type *Type::newArrayType(Type *_element, unsigned _size) {
 
 //------------------------------------------------------------------------------
 
-struct StringLiteralType : TypeImpl<StringLiteralType, T_StringLiteral> {
-protected:
-    Type *type;
-    std::string value;
-
-    StringLiteralType(Type *type_, const std::string &value_) :
-        TypeImpl(type_->getLLVMType()),
-        type(type_),
-        value(value_)
-        {}
-
-public:
-    StringLiteralType(const std::string &value_) :
-        StringLiteralType(Type::Array(Type::Int8, value_.size() + 1), value)
-        {}
-};
-
-Type *Type::newStringLiteralType(std::string value_) {
-    return new StringLiteralType(value_);
-}
-
-//------------------------------------------------------------------------------
-
 struct VectorType : TypeImpl<VectorType, T_Vector> {
 protected:
     Type *element;
@@ -2327,7 +2226,7 @@ protected:
 
 public:
     VectorType(Type *_element, unsigned _size) :
-        TypeImpl(LLVMVectorType(verifyLLVMType(_element), _size)),
+        TypeImpl(_element->isLiteral(), LLVMVectorType(verifyLLVMType(_element), _size)),
         element(_element),
         size(_size)
         {}
@@ -2344,6 +2243,14 @@ protected:
     NamedTypeArray elements;
 
 public:
+    static bool isSpecLiteral(const NamedTypeArray &elements) {
+        for (size_t i = 0; i < elements.size(); ++i) {
+            if (!elements[i].second->isLiteral()) return false;
+        }
+
+        return true;
+    }
+
     static LLVMTypeRef getLLVMTypeForSpec(const NamedTypeArray &elements) {
 
         LLVMTypeRef types[elements.size()];
@@ -2355,7 +2262,7 @@ public:
     }
 
     TupleType(const NamedTypeArray &_elements) :
-        TypeImpl(getLLVMTypeForSpec(_elements)),
+        TypeImpl(isSpecLiteral(_elements), getLLVMTypeForSpec(_elements)),
         elements(_elements)
         {}
 };
@@ -2402,12 +2309,25 @@ public:
                              isvararg);
     }
 
-    Type *getReturnType() {
+    int getParameterCount() const {
+        return parameters.size();
+    }
+
+    Type *getParameterType(int index) const {
+        if (index >= (int)parameters.size())
+            return NULL;
+        else
+            return parameters[index];
+    }
+
+    Type *getReturnType() const {
         return returntype;
     }
 
+    bool isVarArg() const { return isvararg; }
+
     CFunctionType(Type *_returntype, const TypeArray &_parameters, bool _isvararg) :
-        TypeImpl(getLLVMTypeForSpec(_returntype, _parameters, _isvararg)),
+        TypeImpl(false, getLLVMTypeForSpec(_returntype, _parameters, _isvararg)),
         returntype(_returntype),
         parameters(_parameters),
         isvararg(_isvararg)
@@ -2426,6 +2346,7 @@ protected:
 
 public:
     FunctionType(NameArray _parameters) :
+        TypeImpl(false),
         parameters(_parameters)
         {}
 };
@@ -2436,11 +2357,109 @@ Type *Type::Function(NameArray _parameters) {
 
 //------------------------------------------------------------------------------
 
-void Type::initTypes() {
-    AType = new Type(T_Type, LLVMStructCreateNamed(LLVMGetGlobalContext(), "type"));
+struct IntegerLiteralType : TypeImpl<IntegerLiteralType, T_IntegerLiteral> {
+protected:
+    int64_t value;
 
-    Void = new VoidType();
-    Null = new NullType();
+public:
+    int64_t getValue() const { return value; }
+
+    IntegerLiteralType(int64_t value_) :
+        TypeImpl(true),
+        value(value_)
+        {}
+};
+
+Type *Type::newIntegerLiteralType(int64_t value_) {
+    return new IntegerLiteralType(value_);
+}
+
+//------------------------------------------------------------------------------
+
+struct TypeLiteralType : TypeImpl<TypeLiteralType, T_TypeLiteral> {
+protected:
+    Type *value;
+
+public:
+    Type *getValue() const { return value; }
+
+    TypeLiteralType(Type *value_) :
+        TypeImpl(true),
+        value(value_)
+        {}
+};
+
+Type *Type::newTypeLiteralType(Type *value_) {
+    return new TypeLiteralType(value_);
+}
+
+//------------------------------------------------------------------------------
+
+struct RealLiteralType : TypeImpl<RealLiteralType, T_RealLiteral> {
+protected:
+    double value;
+
+public:
+    double getValue() const { return value; }
+
+    RealLiteralType(double value_) :
+        TypeImpl(true),
+        value(value_)
+        {}
+};
+
+Type *Type::newRealLiteralType(double value_) {
+    return new RealLiteralType(value_);
+}
+
+//------------------------------------------------------------------------------
+
+struct SymbolicLiteralType : TypeImpl<SymbolicLiteralType, T_SymbolicLiteral> {
+protected:
+    std::string value;
+
+public:
+    const std::string &getName() const { return value; }
+
+    SymbolicLiteralType(const std::string &value_) :
+        TypeImpl(true),
+        value(value_)
+        {}
+};
+
+Type *Type::newSymbolicLiteralType(std::string value_) {
+    return new SymbolicLiteralType(value_);
+}
+
+//------------------------------------------------------------------------------
+
+struct StringLiteralType : TypeImpl<StringLiteralType, T_StringLiteral> {
+protected:
+    std::string value;
+
+public:
+    std::string getValue() const { return value; }
+
+    StringLiteralType(const std::string &value_) :
+        TypeImpl(true),
+        value(value_)
+        {}
+};
+
+Type *Type::newStringLiteralType(std::string value_) {
+    return new StringLiteralType(value_);
+}
+
+//------------------------------------------------------------------------------
+
+void Type::initTypes() {
+    AType = SymbolicLiteral("type");
+
+    Void = SymbolicLiteral("void");
+    Null = SymbolicLiteral("null");
+
+    True = SymbolicLiteral("true");
+    False = SymbolicLiteral("false");
 
     Bool = Integer(1, false);
 
@@ -5574,13 +5593,6 @@ __escape (sort-of)
 */
 
 enum ASTKind {
-    AST_ConstNull,
-    AST_ConstType,
-    AST_ConstBool,
-    AST_ConstInteger,
-    AST_ConstReal,
-    AST_ConstString,
-
     AST_Symbol,
 
     AST_ArrayOf,
@@ -5672,100 +5684,6 @@ struct ASTNodeImpl : ASTNode {
     }
 };
 
-struct ASTConstNull : ASTNodeImpl<ASTConstNull, AST_ConstNull> {
-
-    virtual Type *resolveType() {
-        return Type::Null;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        astError(shared_from_this(), "can not generate code for null constant");
-        return nullptr;
-    }
-};
-
-struct ASTConstType : ASTNodeImpl<ASTConstType, AST_ConstType> {
-    Type *value;
-
-    ASTConstType(Type *value_) :
-        value(value_)
-        {}
-
-    virtual Type *resolveType() {
-        return Type::AType;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        astError(shared_from_this(), "can not generate code for type constant");
-        return nullptr;
-    }
-};
-
-struct ASTConstBool : ASTNodeImpl<ASTConstBool, AST_ConstBool> {
-    bool value;
-
-    ASTConstBool(bool value_) :
-        value(value_)
-        {}
-
-    virtual Type *resolveType() {
-        return Type::Bool;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        return LLVMConstInt(verifyLLVMType(getType()), value, false);
-    }
-};
-
-struct ASTConstInteger : ASTNodeImpl<ASTConstInteger, AST_ConstInteger> {
-    int64_t value;
-
-    ASTConstInteger(int64_t value_) :
-        value(value_)
-        {}
-
-    virtual Type *resolveType() {
-        return Type::Int64;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        return LLVMConstInt(verifyLLVMType(getType()), value, true);
-    }
-};
-
-struct ASTConstReal : ASTNodeImpl<ASTConstReal, AST_ConstReal> {
-    double value;
-
-    ASTConstReal(double value_) :
-        value(value_)
-        {}
-
-    virtual Type *resolveType() {
-        return Type::Double;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        return LLVMConstReal(verifyLLVMType(getType()), value);
-    }
-};
-
-struct ASTConstString : ASTNodeImpl<ASTConstString, AST_ConstString> {
-    std::string value;
-
-    ASTConstString(const std::string &value_) :
-        value(value_)
-        {}
-
-    virtual Type *resolveType() {
-        return Type::Array(Type::Int8, value.size() + 1);
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        return LLVMConstString(value.c_str(), value.size(), false);
-    }
-
-};
-
 struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
     std::string name;
     Type *symboltype;
@@ -5828,8 +5746,8 @@ struct ASTTupleOf : ASTNodeImpl<ASTTupleOf, AST_TupleOf> {
 
 std::string astVerifyString(const ASTNodeRef &node) {
     assert(node);
-    if (auto str = llvm::dyn_cast<ASTConstString>(node.get())) {
-        return str->value;
+    if (auto str = llvm::dyn_cast<StringLiteralType>(node->getType())) {
+        return str->getValue();
     } else {
         astError(node, "string expected");
         return "";
@@ -5847,8 +5765,8 @@ struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
 
     virtual Type *resolveType() {
         assert(externaltype);
-        if (auto ty = llvm::dyn_cast<ASTConstType>(externaltype.get())) {
-            return ty->value;
+        if (auto ty = llvm::dyn_cast<TypeLiteralType>(externaltype->getType())) {
+            return ty->getValue();
         } else {
             astError(externaltype, "type expected");
             return nullptr;
@@ -5857,8 +5775,9 @@ struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
 
     virtual LLVMValueRef generate(GenerateContext &ctx) {
         Type *type = getType();
-        return LLVMAddGlobal(ctx.module,
-            verifyLLVMType(type), astVerifyString(name).c_str());
+        //return LLVMAddGlobal(ctx.module, verifyLLVMType(type), astVerifyString(name).c_str());
+        return LLVMAddFunction(ctx.module,
+            astVerifyString(name).c_str(), verifyLLVMType(type));
     }
 };
 
@@ -5872,6 +5791,46 @@ struct ASTFunctionDecl : ASTNodeImpl<ASTFunctionDecl, AST_FunctionDecl> {
         {}
 
 };
+
+static LLVMValueRef astGenerate(GenerateContext &ctx, ASTNodeRef node, Type *constraint = nullptr) {
+    assert(node);
+    Type *nodetype = node->getType();
+    if (nodetype->isLiteral()) {
+        switch(nodetype->getKind()) {
+            case T_StringLiteral: {
+                auto str = llvm::cast<StringLiteralType>(nodetype);
+                auto value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
+                if (constraint) {
+                    Type *contenttype = Type::Array(Type::Int8, str->getValue().size() + 1);
+                    if (constraint == Type::Rawstring) {
+                        auto globalvar = LLVMAddGlobal(ctx.module, LLVMTypeOf(value), "");
+                        LLVMSetInitializer(globalvar, value);
+                        LLVMSetGlobalConstant(globalvar, true);
+                        LLVMSetUnnamedAddr(globalvar, true);
+                        LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
+                        value = LLVMBuildBitCast(ctx.builder, globalvar, verifyLLVMType(constraint), "");
+                        constraint = contenttype;
+                    }
+                    if (contenttype != constraint) {
+                        astError(node, "cannot cast %s to %s",
+                            typeKindName(contenttype->getKind()),
+                            typeKindName(constraint->getKind()));
+                    }
+                }
+                return value;
+            } break;
+            default:
+                astError(node,
+                    "unable to generate value for %s",
+                    typeKindName(nodetype->getKind()));
+        }
+        return nullptr;
+    } else {
+
+
+        return node->generate(ctx);
+    }
+}
 
 struct ASTCall : ASTNodeImpl<ASTCall, AST_Call> {
     ASTNodeRef callable;
@@ -5904,7 +5863,7 @@ struct ASTCall : ASTNodeImpl<ASTCall, AST_Call> {
 
         LLVMValueRef args[arguments.size()];
         for (size_t i = 0; i < arguments.size(); ++i) {
-            args[i] = arguments[i]->generate(ctx);
+            args[i] = astGenerate(ctx, arguments[i], ftype->getParameterType(i));
         }
         LLVMValueRef callee = callable->generate(ctx);
 
@@ -6025,10 +5984,19 @@ struct ASTSplice : ASTNodeImpl<ASTSplice, AST_Splice> {
 };
 
 struct ASTNop : ASTNodeImpl<ASTNop, AST_Nop> {
-    ASTNop() {}
+    Type *resulttype;
+
+    ASTNop(Type *type_ = nullptr) :
+        resulttype(type_?type_:(Type::Void))
+        {}
 
     virtual Type *resolveType() {
-        return Type::Void;
+        return resulttype;
+    }
+
+    virtual LLVMValueRef generate(GenerateContext &ctx) {
+        astError(shared_from_this(), "can not generate value from nop");
+        return NULL;
     }
 };
 
@@ -6168,9 +6136,10 @@ static ASTTranslateTable astTranslators;
 
 static Type *verifyAsType(const ASTNodeRef &node) {
     assert(node);
-    switch(node->getKind()) {
-        case AST_ConstType: {
-            return llvm::cast<ASTConstType>(node.get())->value;
+    Type *nodetype = node->getType();
+    switch(nodetype->getKind()) {
+        case T_TypeLiteral: {
+            return llvm::cast<TypeLiteralType>(nodetype)->getValue();
         } break;
         default: {
             astError(node, "type expected");
@@ -6248,7 +6217,8 @@ static ASTNodeRef tr_ast_cdecl (ASTEnvironment *env, ValueRef expr) {
     }
 
     //return std::make_shared<ASTExternalDecl>(name, type);
-    return std::make_shared<ASTConstType>(Type::CFunction(returntype, paramtypes, vararg));
+    return std::make_shared<ASTNop>(
+        Type::TypeLiteral(Type::CFunction(returntype, paramtypes, vararg)));
 }
 
 static void registerASTTranslators() {
@@ -6275,11 +6245,11 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         std::string value = sym->getValue();
         if (value == "true") {
-            result = std::make_shared<ASTConstBool>(true);
+            result = std::make_shared<ASTNop>(Type::True);
         } else if (value == "false") {
-            result = std::make_shared<ASTConstBool>(false);
+            result = std::make_shared<ASTNop>(Type::False);
         } else if (value == "null") {
-            result = std::make_shared<ASTConstNull>();
+            result = std::make_shared<ASTNop>(Type::Null);
         } else {
             result = env->resolveASTNode(value);
             if (!result) {
@@ -6295,11 +6265,11 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
         }
         */
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
-        result = std::make_shared<ASTConstString>(str->getValue());
+        result = std::make_shared<ASTNop>(Type::StringLiteral(str->getValue()));
     } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
-        result = std::make_shared<ASTConstInteger>(integer->getValue());
+        result = std::make_shared<ASTNop>(Type::IntegerLiteral(integer->getValue()));
     } else if (auto real = llvm::dyn_cast<Real>(expr)) {
-        result = std::make_shared<ASTConstReal>(real->getValue());
+        result = std::make_shared<ASTNop>(Type::RealLiteral(real->getValue()));
     } else {
         astError(expr, "expected expression, not %s",
             valueKindName(kindOf(expr)));
@@ -6345,6 +6315,10 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
+static ASTNodeRef astNewTypeReference(Type *type) {
+    return std::make_shared<ASTNop>(Type::TypeLiteral(type));
+}
+
 static void setupRootEnvironment (Environment *env, const char *modulename) {
     LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
 
@@ -6353,24 +6327,24 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
     env->globals->module = module;
     env->globals->builder = builder;
 
-    env->astnodes["void"] = std::make_shared<ASTConstType>(Type::Void);
-    env->astnodes["half"] = std::make_shared<ASTConstType>(Type::Half);
-    env->astnodes["float"] = std::make_shared<ASTConstType>(Type::Float);
-    env->astnodes["double"] = std::make_shared<ASTConstType>(Type::Double);
-    env->astnodes["bool"] = std::make_shared<ASTConstType>(Type::Bool);
+    env->astnodes["void"] = astNewTypeReference(Type::Void);
+    env->astnodes["half"] = astNewTypeReference(Type::Half);
+    env->astnodes["float"] = astNewTypeReference(Type::Float);
+    env->astnodes["double"] = astNewTypeReference(Type::Double);
+    env->astnodes["bool"] = astNewTypeReference(Type::Bool);
 
-    env->astnodes["int8"] = std::make_shared<ASTConstType>(Type::Int8);
-    env->astnodes["int16"] = std::make_shared<ASTConstType>(Type::Int16);
-    env->astnodes["int32"] = std::make_shared<ASTConstType>(Type::Int32);
-    env->astnodes["int64"] = std::make_shared<ASTConstType>(Type::Int64);
+    env->astnodes["int8"] = astNewTypeReference(Type::Int8);
+    env->astnodes["int16"] = astNewTypeReference(Type::Int16);
+    env->astnodes["int32"] = astNewTypeReference(Type::Int32);
+    env->astnodes["int64"] = astNewTypeReference(Type::Int64);
 
-    env->astnodes["uint8"] = std::make_shared<ASTConstType>(Type::UInt8);
-    env->astnodes["uint16"] = std::make_shared<ASTConstType>(Type::UInt16);
-    env->astnodes["uint32"] = std::make_shared<ASTConstType>(Type::UInt32);
-    env->astnodes["uint64"] = std::make_shared<ASTConstType>(Type::UInt64);
+    env->astnodes["uint8"] = astNewTypeReference(Type::UInt8);
+    env->astnodes["uint16"] = astNewTypeReference(Type::UInt16);
+    env->astnodes["uint32"] = astNewTypeReference(Type::UInt32);
+    env->astnodes["uint64"] = astNewTypeReference(Type::UInt64);
 
     env->astnodes["int"] = env->astnodes["int32"];
-    env->astnodes["rawstring"] = std::make_shared<ASTConstType>(Type::Rawstring);
+    env->astnodes["rawstring"] = astNewTypeReference(Type::Rawstring);
 
     env->llvmtypes["void"] = LLVMVoidType();
     env->llvmtypes["half"] = LLVMHalfType();
@@ -6411,7 +6385,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
 
     LLVMTypeRef mainfunctype = LLVMFunctionType(LLVMVoidType(), NULL, 0, false);
 
-    LLVMValueRef func = LLVMAddFunction(ctx.module, "", mainfunctype);
+    LLVMValueRef func = LLVMAddFunction(ctx.module, "main", mainfunctype);
     ctx.function = func;
 
     LLVMPositionBuilderAtEnd(ctx.builder, LLVMAppendBasicBlock(func, ""));
@@ -6421,6 +6395,8 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     }
 
     LLVMBuildRetVoid(ctx.builder);
+
+    LLVMDumpModule(ctx.module);
 
     char *error = NULL;
     LLVMVerifyModule(ctx.module, LLVMAbortProcessAction, &error);

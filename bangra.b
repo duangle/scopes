@@ -3,11 +3,11 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
-let printf
-    external "printf"
-        cdecl int (rawstring ...)
+let puts
+    external "puts"
+        cdecl int (rawstring)
 
-call printf "%s %s!\n" "hello" "world"
+call puts "hello world\n"
 
 
 ///
