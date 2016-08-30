@@ -7,7 +7,11 @@ let puts
     external "puts"
         cdecl int (rawstring)
 
-call puts "hello world\n"
+let printf
+    external "printf"
+        cdecl int (rawstring ...)
+
+call printf "hello %s %i %f\n" "world" 0xff 2.5
 
 
 ///

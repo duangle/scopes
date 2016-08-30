@@ -5796,35 +5796,64 @@ static LLVMValueRef astGenerate(GenerateContext &ctx, ASTNodeRef node, Type *con
     assert(node);
     Type *nodetype = node->getType();
     if (nodetype->isLiteral()) {
+        LLVMValueRef value = nullptr;
+        Type *contenttype = nullptr;
         switch(nodetype->getKind()) {
+            case T_IntegerLiteral: {
+                auto integer = llvm::cast<IntegerLiteralType>(nodetype);
+                if (constraint) {
+                    if (constraint->getKind() == T_Integer) {
+                        contenttype = constraint;
+                        value = LLVMConstInt(verifyLLVMType(constraint), integer->getValue(), true);
+                    } else if (constraint->getKind() == T_Real) {
+                        contenttype = constraint;
+                        value = LLVMConstReal(verifyLLVMType(constraint), double(integer->getValue()));
+                    }
+                } else {
+                    value = LLVMConstInt(LLVMInt32Type(), integer->getValue(), true);
+                }
+            } break;
+            case T_RealLiteral: {
+                auto real = llvm::cast<RealLiteralType>(nodetype);
+                if (constraint) {
+                    if (constraint->getKind() == T_Integer) {
+                        contenttype = constraint;
+                        value = LLVMConstInt(verifyLLVMType(constraint), int64_t(real->getValue()), true);
+                    } else if (constraint->getKind() == T_Real) {
+                        contenttype = constraint;
+                        value = LLVMConstReal(verifyLLVMType(constraint), real->getValue());
+                    }
+                } else {
+                    value = LLVMConstReal(LLVMDoubleType(), real->getValue());
+                }
+            } break;
             case T_StringLiteral: {
                 auto str = llvm::cast<StringLiteralType>(nodetype);
-                auto value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
-                if (constraint) {
-                    Type *contenttype = Type::Array(Type::Int8, str->getValue().size() + 1);
-                    if (constraint == Type::Rawstring) {
-                        auto globalvar = LLVMAddGlobal(ctx.module, LLVMTypeOf(value), "");
-                        LLVMSetInitializer(globalvar, value);
-                        LLVMSetGlobalConstant(globalvar, true);
-                        LLVMSetUnnamedAddr(globalvar, true);
-                        LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
-                        value = LLVMBuildBitCast(ctx.builder, globalvar, verifyLLVMType(constraint), "");
-                        constraint = contenttype;
-                    }
-                    if (contenttype != constraint) {
-                        astError(node, "cannot cast %s to %s",
-                            typeKindName(contenttype->getKind()),
-                            typeKindName(constraint->getKind()));
-                    }
+                value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
+                contenttype = Type::Array(Type::Int8, str->getValue().size() + 1);
+                if (!constraint || (constraint == Type::Rawstring)) {
+                    auto globalvar = LLVMAddGlobal(ctx.module, LLVMTypeOf(value), "");
+                    LLVMSetInitializer(globalvar, value);
+                    LLVMSetGlobalConstant(globalvar, true);
+                    LLVMSetUnnamedAddr(globalvar, true);
+                    LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
+                    contenttype = Type::Rawstring;
+                    value = LLVMBuildBitCast(ctx.builder, globalvar, verifyLLVMType(contenttype), "");
                 }
-                return value;
             } break;
-            default:
-                astError(node,
-                    "unable to generate value for %s",
-                    typeKindName(nodetype->getKind()));
+            default: break;
         }
-        return nullptr;
+        if (constraint && contenttype && (contenttype != constraint)) {
+            astError(node, "cannot cast %s to %s",
+                typeKindName(contenttype->getKind()),
+                typeKindName(constraint->getKind()));
+        }
+        if (!value) {
+            astError(node,
+                "unable to generate value for %s",
+                typeKindName(nodetype->getKind()));
+        }
+        return value;
     } else {
 
 
