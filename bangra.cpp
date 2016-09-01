@@ -318,6 +318,40 @@ static size_t inplace_unescape(char *buf) {
     return dst - buf;
 }
 
+template<typename T>
+static void streamString(T &stream, const std::string &a, const char *quote_chars = nullptr) {
+    for (size_t i = 0; i < a.size(); i++) {
+        char c = a[i];
+        switch(c) {
+        case '\n':
+            stream << "\\n";
+            break;
+        case '\r':
+            stream << "\\r";
+            break;
+        case '\t':
+            stream << "\\t";
+            break;
+        default:
+            if ((c < 32) || (c >= 127)) {
+                unsigned char uc = c;
+                stream << format("\\x%02x", uc);
+            } else {
+                if ((c == '\\') || (quote_chars && strchr(quote_chars, c)))
+                    stream << '\\';
+                stream << c;
+            }
+            break;
+        }
+    }
+}
+
+static std::string quoteString(const std::string &a, const char *quote_chars = nullptr) {
+    std::stringstream ss;
+    streamString(ss, a, quote_chars);
+    return ss.str();
+}
+
 //------------------------------------------------------------------------------
 // FILE I/O
 //------------------------------------------------------------------------------
@@ -1892,37 +1926,7 @@ static void streamValue(T &stream, ValueRef e, size_t depth=0, bool naked=true) 
 	case V_String: {
         const String *a = llvm::cast<String>(e);
 		if (a->getKind() == V_String) stream << '"';
-		for (size_t i = 0; i < a->size(); i++) {
-            char c = (*a)[i];
-			switch(c) {
-			case '"': case '\\':
-				stream << '\\';
-                stream << c;
-				break;
-            case '\n':
-                stream << "\\n";
-                break;
-            case '\r':
-                stream << "\\r";
-                break;
-            case '\t':
-                stream << "\\t";
-                break;
-            case '[': case ']': case '{': case '}': case '(': case ')':
-				if (a->getKind() == V_Symbol)
-					stream << '\\';
-                stream << c;
-				break;
-            default:
-                if ((c < 32) || (c >= 127)) {
-                    unsigned char uc = c;
-                    stream << format("\\x%02x", uc);
-                } else {
-                    stream << c;
-                }
-                break;
-			}
-		}
+        streamString(stream, a->getValue(), (a->getKind() == V_Symbol)?"[]{}()\"":"\"");
 		if (a->getKind() == V_String) stream << '"';
         if (naked)
             stream << '\n';
@@ -1944,7 +1948,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 }
 
 //------------------------------------------------------------------------------
-// TYPE SYSTEM
+// CONSTRAINT SYSTEM
 //------------------------------------------------------------------------------
 
 struct ASTNode;
@@ -1954,166 +1958,162 @@ static void astError (ValueRef expr, const char *format, ...);
 static void astError (const ASTNodeRef &node, const char *format, ...);
 
 
-enum TypeKind {
-    T_Integer,
-    T_Real,
-    T_Pointer,
-    T_Array,
-    T_Vector,
-    T_Tuple,
-    T_Struct,
-    T_CFunction,
-    T_Function,
+enum ConstraintKind {
+    C_Void,
+    C_IntegerFormat,
+    C_RealFormat,
+    C_Pointer,
+    C_Array,
+    C_Vector,
+    C_Tuple,
+    C_Struct,
+    C_CFunction,
+    C_Function,
 
-    T_SymbolicLiteral,
-    T_IntegerLiteral,
-    T_RealLiteral,
-    T_StringLiteral,
-    T_TypeLiteral
+    C_Tag,
+    C_FixedInteger,
+    C_FixedReal,
+    C_FixedString,
+    C_FixedConstraint
 };
-
-static const char *typeKindName(int kind) {
-    switch(kind) {
-    case T_Integer: return "integer";
-    case T_Real: return "real";
-    case T_Pointer: return "pointer";
-    case T_Array: return "array";
-    case T_Vector: return "vector";
-    case T_Tuple: return "tuple";
-    case T_Struct: return "struct";
-    case T_CFunction: return "cfunction";
-    case T_Function: return "function";
-    case T_SymbolicLiteral: return "symbolic-literal";
-    case T_IntegerLiteral: return "integer-literal";
-    case T_RealLiteral: return "real-literal";
-    case T_StringLiteral: return "string-literal";
-    case T_TypeLiteral: return "type-literal";
-    default: return "#illegal-type#";
-    }
-}
 
 //------------------------------------------------------------------------------
 
-struct Type;
-typedef std::vector< std::pair<std::string, Type *> > NamedTypeArray;
-typedef std::vector<Type *> TypeArray;
+struct Constraint;
+typedef std::vector< std::pair<std::string, Constraint *> > NamedConstraintArray;
+typedef std::vector<Constraint *> ConstraintArray;
 typedef std::vector<std::string> NameArray;
 
-struct Type {
+struct Constraint {
 private:
-    const TypeKind kind;
+    const ConstraintKind kind;
 
-    static Type *newIntegerType(int _width, bool _signed);
-    static Type *newRealType(int _width);
-    static Type *newPointerType(Type *_element);
-    static Type *newArrayType(Type *_element, unsigned _size);
-    static Type *newVectorType(Type *_element, unsigned _size);
-    static Type *newTupleType(NamedTypeArray _elements);
-    static Type *newCFunctionType(Type *_returntype, TypeArray _parameters, bool vararg);
-    static Type *newIntegerLiteralType(int64_t value_);
-    static Type *newRealLiteralType(double value_);
-    static Type *newStringLiteralType(std::string value_);
-    static Type *newTypeLiteralType(Type *type_);
-    static Type *newSymbolicLiteralType(std::string value_);
+    static Constraint *newIntegerFormatConstraint(int _width, bool _signed);
+    static Constraint *newRealFormatConstraint(int _width);
+    static Constraint *newPointerConstraint(Constraint *_element);
+    static Constraint *newArrayConstraint(Constraint *_element, unsigned _size);
+    static Constraint *newVectorConstraint(Constraint *_element, unsigned _size);
+    static Constraint *newTupleConstraint(NamedConstraintArray _elements);
+    static Constraint *newCFunctionConstraint(Constraint *_returntype, ConstraintArray _parameters, bool vararg);
+    static Constraint *newFixedIntegerConstraint(int64_t value_);
+    static Constraint *newFixedRealConstraint(double value_);
+    static Constraint *newFixedStringConstraint(std::string value_);
+    static Constraint *newFixedConstraint(Constraint *type_);
+    static Constraint *newTagConstraint(std::string value_);
 
 protected:
-    bool isliteral;
+    bool isfixed;
     LLVMTypeRef llvmtype;
+    std::string repr;
 
-    Type(bool isliteral_, TypeKind kind_, LLVMTypeRef llvmtype_ = nullptr) :
+    Constraint(
+        const std::string &repr_,
+        bool isfixed_,
+        ConstraintKind kind_,
+        LLVMTypeRef llvmtype_ = nullptr) :
+
         kind(kind_),
-        isliteral(isliteral_),
-        llvmtype(llvmtype_)
+        isfixed(isfixed_),
+        llvmtype(llvmtype_),
+        repr(repr_)
         {}
 
 public:
-    static Type *AType;
-    static Type *Void;
-    static Type *Null;
-    static Type *Bool;
-    static Type *False;
-    static Type *True;
+    static Constraint *AConstraint;
+    static Constraint *Void;
+    static Constraint *Null;
+    static Constraint *Bool;
+    static Constraint *False;
+    static Constraint *True;
 
-    static Type *Int8;
-    static Type *Int16;
-    static Type *Int32;
-    static Type *Int64;
+    static Constraint *Empty;
+    static Constraint *Opaque;
+    static Constraint *OpaquePointer;
 
-    static Type *UInt8;
-    static Type *UInt16;
-    static Type *UInt32;
-    static Type *UInt64;
+    static Constraint *Int8;
+    static Constraint *Int16;
+    static Constraint *Int32;
+    static Constraint *Int64;
 
-    static Type *Half;
-    static Type *Float;
-    static Type *Double;
+    static Constraint *UInt8;
+    static Constraint *UInt16;
+    static Constraint *UInt32;
+    static Constraint *UInt64;
 
-    static Type *Rawstring;
+    static Constraint *Half;
+    static Constraint *Float;
+    static Constraint *Double;
 
-    TypeKind getKind() const {
+    static Constraint *Rawstring;
+
+    ConstraintKind getKind() const {
         return kind;
     }
 
     static void initTypes();
 
-    static std::function<Type * (int, bool)> Integer;
-    static std::function<Type * (int)> Real;
-    static std::function<Type * (Type *)> Pointer;
-    static std::function<Type * (Type *, unsigned)> Array;
-    static std::function<Type * (Type *, unsigned)> Vector;
-    static std::function<Type * (NamedTypeArray)> Tuple;
-    static Type *Struct(const std::string &name);
-    static std::function<Type * (Type *, TypeArray, bool)> CFunction;
-    static Type *Function(NameArray _parameters);
-    static std::function<Type * (int64_t)> IntegerLiteral;
-    static std::function<Type * (double)> RealLiteral;
-    static std::function<Type * (std::string)> StringLiteral;
-    static std::function<Type * (Type *)> TypeLiteral;
-    static std::function<Type * (std::string)> SymbolicLiteral;
+    static std::function<Constraint * (int, bool)> IntegerFormat;
+    static std::function<Constraint * (int)> RealFormat;
+    static std::function<Constraint * (Constraint *)> Pointer;
+    static std::function<Constraint * (Constraint *, unsigned)> Array;
+    static std::function<Constraint * (Constraint *, unsigned)> Vector;
+    static std::function<Constraint * (NamedConstraintArray)> Tuple;
+    static Constraint *Struct(const std::string &name);
+    static std::function<Constraint * (Constraint *, ConstraintArray, bool)> CFunction;
+    static Constraint *Function(NameArray _parameters);
+    static std::function<Constraint * (int64_t)> FixedInteger;
+    static std::function<Constraint * (double)> FixedReal;
+    static std::function<Constraint * (std::string)> FixedString;
+    static std::function<Constraint * (Constraint *)> FixedConstraint;
+    static std::function<Constraint * (std::string)> Tag;
 
     LLVMTypeRef getLLVMType() const { return llvmtype; }
-    bool isLiteral() const { return isliteral; }
+    bool isFixed() const { return isfixed; }
+    const std::string &getRepr() const { return repr; }
 };
 
-Type *Type::AType;
-Type *Type::Void;
-Type *Type::Null;
-Type *Type::Bool;
-Type *Type::False;
-Type *Type::True;
-Type *Type::Int8;
-Type *Type::Int16;
-Type *Type::Int32;
-Type *Type::Int64;
-Type *Type::UInt8;
-Type *Type::UInt16;
-Type *Type::UInt32;
-Type *Type::UInt64;
-Type *Type::Half;
-Type *Type::Float;
-Type *Type::Double;
-Type *Type::Rawstring;
-std::function<Type * (int, bool)> Type::Integer = memo(Type::newIntegerType);
-std::function<Type * (int)> Type::Real = memo(Type::newRealType);
-std::function<Type * (Type *)> Type::Pointer = memo(Type::newPointerType);
-std::function<Type * (Type *, unsigned)> Type::Array = memo(Type::newArrayType);
-std::function<Type * (Type *, unsigned)> Type::Vector = memo(Type::newVectorType);
-std::function<Type * (NamedTypeArray)> Type::Tuple = memo(Type::newTupleType);
-std::function<Type * (Type *, TypeArray, bool)> Type::CFunction = memo(Type::newCFunctionType);
-std::function<Type * (int64_t)> Type::IntegerLiteral = memo(Type::newIntegerLiteralType);
-std::function<Type * (double)> Type::RealLiteral = memo(Type::newRealLiteralType);
-std::function<Type * (std::string)> Type::StringLiteral = memo(Type::newStringLiteralType);
-std::function<Type * (Type *)> Type::TypeLiteral = memo(Type::newTypeLiteralType);
-std::function<Type * (std::string)> Type::SymbolicLiteral = memo(Type::newSymbolicLiteralType);
+Constraint *Constraint::AConstraint;
+Constraint *Constraint::Void;
+Constraint *Constraint::Null;
+Constraint *Constraint::Bool;
+Constraint *Constraint::False;
+Constraint *Constraint::True;
+Constraint *Constraint::Int8;
+Constraint *Constraint::Int16;
+Constraint *Constraint::Int32;
+Constraint *Constraint::Int64;
+Constraint *Constraint::UInt8;
+Constraint *Constraint::UInt16;
+Constraint *Constraint::UInt32;
+Constraint *Constraint::UInt64;
+Constraint *Constraint::Half;
+Constraint *Constraint::Float;
+Constraint *Constraint::Double;
+Constraint *Constraint::Rawstring;
+Constraint *Constraint::Empty;
+Constraint *Constraint::Opaque;
+Constraint *Constraint::OpaquePointer;
+std::function<Constraint * (int, bool)> Constraint::IntegerFormat = memo(Constraint::newIntegerFormatConstraint);
+std::function<Constraint * (int)> Constraint::RealFormat = memo(Constraint::newRealFormatConstraint);
+std::function<Constraint * (Constraint *)> Constraint::Pointer = memo(Constraint::newPointerConstraint);
+std::function<Constraint * (Constraint *, unsigned)> Constraint::Array = memo(Constraint::newArrayConstraint);
+std::function<Constraint * (Constraint *, unsigned)> Constraint::Vector = memo(Constraint::newVectorConstraint);
+std::function<Constraint * (NamedConstraintArray)> Constraint::Tuple = memo(Constraint::newTupleConstraint);
+std::function<Constraint * (Constraint *, ConstraintArray, bool)> Constraint::CFunction = memo(Constraint::newCFunctionConstraint);
+std::function<Constraint * (int64_t)> Constraint::FixedInteger = memo(Constraint::newFixedIntegerConstraint);
+std::function<Constraint * (double)> Constraint::FixedReal = memo(Constraint::newFixedRealConstraint);
+std::function<Constraint * (std::string)> Constraint::FixedString = memo(Constraint::newFixedStringConstraint);
+std::function<Constraint * (Constraint *)> Constraint::FixedConstraint = memo(Constraint::newFixedConstraint);
+std::function<Constraint * (std::string)> Constraint::Tag = memo(Constraint::newTagConstraint);
 
 //------------------------------------------------------------------------------
 
-LLVMTypeRef verifyLLVMType(Type *type) {
+LLVMTypeRef verifyLLVMType(Constraint *type) {
     assert(type);
     LLVMTypeRef result = type->getLLVMType();
     if (!result) {
         astError((ValueRef)nullptr, "%s type has no LLVM type",
-            typeKindName(type->getKind()));
+            type->getRepr().c_str());
     }
     assert(result);
     return result;
@@ -2121,20 +2121,28 @@ LLVMTypeRef verifyLLVMType(Type *type) {
 
 //------------------------------------------------------------------------------
 
-template<class T, TypeKind KindT>
-struct TypeImpl : Type {
-    TypeImpl(bool isliteral_, LLVMTypeRef llvmtype_ = nullptr) :
-        Type(isliteral_, KindT, llvmtype_)
+template<class T, ConstraintKind KindT>
+struct ConstraintImpl : Constraint {
+    ConstraintImpl(const std::string &repr_, bool isliteral_, LLVMTypeRef llvmtype_ = nullptr) :
+        Constraint(repr_, isliteral_, KindT, llvmtype_)
         {}
 
-    static bool classof(const Type *node) {
+    static bool classof(const Constraint *node) {
         return node->getKind() == KindT;
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct IntegerType : TypeImpl<IntegerType, T_Integer> {
+struct VoidConstraint : ConstraintImpl<VoidConstraint, C_Void> {
+    VoidConstraint() :
+        ConstraintImpl("void", false, LLVMVoidType())
+        {}
+};
+
+//------------------------------------------------------------------------------
+
+struct IntegerFormatConstraint : ConstraintImpl<IntegerFormatConstraint, C_IntegerFormat> {
 protected:
     int width;
     bool is_signed;
@@ -2143,20 +2151,23 @@ public:
     int getWidth() const { return width; }
     bool isSigned() const { return is_signed; }
 
-    IntegerType(int _width, bool _signed) :
-        TypeImpl(false, LLVMIntType(_width)),
+    IntegerFormatConstraint(int _width, bool _signed) :
+        ConstraintImpl(
+            format("%sint%i", _signed?"":"u", _width),
+            false,
+            LLVMIntType(_width)),
         width(_width),
         is_signed(_signed)
         {}
 };
 
-Type *Type::newIntegerType(int _width, bool _signed) {
-    return new IntegerType(_width, _signed);
+Constraint *Constraint::newIntegerFormatConstraint(int _width, bool _signed) {
+    return new IntegerFormatConstraint(_width, _signed);
 }
 
 //------------------------------------------------------------------------------
 
-struct RealType : TypeImpl<RealType, T_Real> {
+struct RealFormatConstraint : ConstraintImpl<RealFormatConstraint, C_RealFormat> {
 protected:
     int width;
 
@@ -2171,87 +2182,111 @@ public:
         }
     }
 
-    RealType(int _width) :
-        TypeImpl(false, getLLVMTypeForSpec(_width)),
+    RealFormatConstraint(int _width) :
+        ConstraintImpl(
+            format("real%i", _width),
+            false,
+            getLLVMTypeForSpec(_width)),
         width(_width)
         {}
 };
 
-Type *Type::newRealType(int _width) {
-    return new RealType(_width);
+Constraint *Constraint::newRealFormatConstraint(int _width) {
+    return new RealFormatConstraint(_width);
 }
 
 //------------------------------------------------------------------------------
 
-struct PointerType : TypeImpl<PointerType, T_Pointer> {
+struct PointerConstraint : ConstraintImpl<PointerConstraint, C_Pointer> {
 protected:
-    Type *element;
+    Constraint *element;
 
 public:
-    PointerType(Type *_element) :
-        TypeImpl(_element->isLiteral(), LLVMPointerType(verifyLLVMType(_element), 0)),
+    PointerConstraint(Constraint *_element) :
+        ConstraintImpl(
+            format("(pointer %s)", _element->getRepr().c_str()),
+            _element->isFixed(),
+            LLVMPointerType(verifyLLVMType(_element), 0)),
         element(_element)
         {}
 };
 
-Type *Type::newPointerType(Type *_element) {
-    return new PointerType(_element);
+Constraint *Constraint::newPointerConstraint(Constraint *_element) {
+    return new PointerConstraint(_element);
 }
 
 //------------------------------------------------------------------------------
 
-struct ArrayType : TypeImpl<ArrayType, T_Array> {
+struct ArrayConstraint : ConstraintImpl<ArrayConstraint, C_Array> {
 protected:
-    Type *element;
+    Constraint *element;
     unsigned size;
 
 public:
-    ArrayType(Type *_element, unsigned _size) :
-        TypeImpl(_element->isLiteral(), LLVMArrayType(verifyLLVMType(_element), _size)),
+    ArrayConstraint(Constraint *_element, unsigned _size) :
+        ConstraintImpl(
+            format("(array %s %i)", _element->getRepr().c_str(), _size),
+            _element->isFixed(),
+            LLVMArrayType(verifyLLVMType(_element), _size)),
         element(_element),
         size(_size)
         {}
 };
 
-Type *Type::newArrayType(Type *_element, unsigned _size) {
-    return new ArrayType(_element, _size);
+Constraint *Constraint::newArrayConstraint(Constraint *_element, unsigned _size) {
+    return new ArrayConstraint(_element, _size);
 }
 
 //------------------------------------------------------------------------------
 
-struct VectorType : TypeImpl<VectorType, T_Vector> {
+struct VectorConstraint : ConstraintImpl<VectorConstraint, C_Vector> {
 protected:
-    Type *element;
+    Constraint *element;
     unsigned size;
 
 public:
-    VectorType(Type *_element, unsigned _size) :
-        TypeImpl(_element->isLiteral(), LLVMVectorType(verifyLLVMType(_element), _size)),
+    VectorConstraint(Constraint *_element, unsigned _size) :
+        ConstraintImpl(
+            format("(vector %s %i)", _element->getRepr().c_str(), _size),
+            _element->isFixed(),
+            LLVMVectorType(verifyLLVMType(_element), _size)),
         element(_element),
         size(_size)
         {}
 };
 
-Type *Type::newVectorType(Type *_element, unsigned _size) {
-    return new VectorType(_element, _size);
+Constraint *Constraint::newVectorConstraint(Constraint *_element, unsigned _size) {
+    return new VectorConstraint(_element, _size);
 }
 
 //------------------------------------------------------------------------------
 
-struct TupleType : TypeImpl<TupleType, T_Tuple> {
+struct TupleConstraint : ConstraintImpl<TupleConstraint, C_Tuple> {
 protected:
-    NamedTypeArray elements;
+    NamedConstraintArray elements;
 
 public:
-    static bool isSpecLiteral(const NamedTypeArray &elements) {
+    static std::string getSpecRepr(const NamedConstraintArray &elements) {
+        std::stringstream ss;
+        ss << "(tuple ";
         for (size_t i = 0; i < elements.size(); ++i) {
-            if (!elements[i].second->isLiteral()) return false;
+            if (i != 0)
+                ss << " ";
+            ss << elements[i].second->getRepr();
+        }
+        ss << ")";
+        return ss.str();
+    }
+
+    static bool isSpecFixed(const NamedConstraintArray &elements) {
+        for (size_t i = 0; i < elements.size(); ++i) {
+            if (!elements[i].second->isFixed()) return false;
         }
 
         return true;
     }
 
-    static LLVMTypeRef getLLVMTypeForSpec(const NamedTypeArray &elements) {
+    static LLVMTypeRef getLLVMTypeForSpec(const NamedConstraintArray &elements) {
 
         LLVMTypeRef types[elements.size()];
         for (size_t i = 0; i < elements.size(); ++i) {
@@ -2261,50 +2296,76 @@ public:
         return LLVMStructType(types, elements.size(), false);
     }
 
-    TupleType(const NamedTypeArray &_elements) :
-        TypeImpl(isSpecLiteral(_elements), getLLVMTypeForSpec(_elements)),
+    TupleConstraint(const NamedConstraintArray &_elements) :
+        ConstraintImpl(
+            getSpecRepr(_elements),
+            isSpecFixed(_elements),
+            getLLVMTypeForSpec(_elements)),
         elements(_elements)
         {}
 };
 
-Type *Type::newTupleType(NamedTypeArray _elements) {
-    return new TupleType(_elements);
+Constraint *Constraint::newTupleConstraint(NamedConstraintArray _elements) {
+    return new TupleConstraint(_elements);
 }
 
 //------------------------------------------------------------------------------
 
-struct StructType : TypeImpl<StructType, T_Struct> {
+struct StructConstraint : ConstraintImpl<StructConstraint, C_Struct> {
 protected:
-    NamedTypeArray elements;
+    NamedConstraintArray elements;
 
 public:
-    StructType(const std::string &name) :
-        TypeImpl(LLVMStructCreateNamed(LLVMGetGlobalContext(), name.c_str()))
+    StructConstraint(const std::string &name) :
+        ConstraintImpl(
+            format("(struct<%p> %s)", this, name.c_str()),
+            false,
+            LLVMStructCreateNamed(LLVMGetGlobalContext(), name.c_str()))
         {}
 };
 
-Type *Type::Struct(const std::string &name) {
-    return new StructType(name);
+Constraint *Constraint::Struct(const std::string &name) {
+    return new StructConstraint(name);
 }
 
 //------------------------------------------------------------------------------
 
-struct CFunctionType : TypeImpl<CFunctionType, T_CFunction> {
+struct CFunctionConstraint : ConstraintImpl<CFunctionConstraint, C_CFunction> {
 protected:
-    Type *returntype;
-    TypeArray parameters;
+    Constraint *result;
+    ConstraintArray parameters;
     bool isvararg;
 
 public:
-    static LLVMTypeRef getLLVMTypeForSpec(Type *returntype,
-        const TypeArray &parameters, bool isvararg) {
+    static std::string getSpecRepr(Constraint *result,
+        const ConstraintArray &parameters, bool isvararg) {
+        std::stringstream ss;
+        ss << "(cdecl ";
+        ss << result->getRepr();
+        ss << " (";
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0)
+                ss << " ";
+            ss << parameters[i]->getRepr();
+        }
+        if (isvararg) {
+            if (parameters.size())
+                ss << " ";
+            ss << "...";
+        }
+        ss << "))";
+        return ss.str();
+    }
+
+    static LLVMTypeRef getLLVMTypeForSpec(Constraint *result,
+        const ConstraintArray &parameters, bool isvararg) {
 
         LLVMTypeRef types[parameters.size()];
         for (size_t i = 0; i < parameters.size(); ++i) {
             types[i] = verifyLLVMType(parameters[i]);
         }
 
-        return LLVMFunctionType(verifyLLVMType(returntype),
+        return LLVMFunctionType(verifyLLVMType(result),
                              types, parameters.size(),
                              isvararg);
     }
@@ -2313,169 +2374,177 @@ public:
         return parameters.size();
     }
 
-    Type *getParameterType(int index) const {
+    Constraint *getParameter(int index) const {
         if (index >= (int)parameters.size())
             return NULL;
         else
             return parameters[index];
     }
 
-    Type *getReturnType() const {
-        return returntype;
+    Constraint *getResult() const {
+        return result;
     }
 
     bool isVarArg() const { return isvararg; }
 
-    CFunctionType(Type *_returntype, const TypeArray &_parameters, bool _isvararg) :
-        TypeImpl(false, getLLVMTypeForSpec(_returntype, _parameters, _isvararg)),
-        returntype(_returntype),
+    CFunctionConstraint(Constraint *result_, const ConstraintArray &_parameters, bool _isvararg) :
+        ConstraintImpl(
+            getSpecRepr(result_, _parameters, _isvararg),
+            false,
+            getLLVMTypeForSpec(result_, _parameters, _isvararg)),
+        result(result_),
         parameters(_parameters),
         isvararg(_isvararg)
         {}
 };
 
-Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters, bool _isvararg) {
-    return new CFunctionType(_returntype, _parameters, _isvararg);
+Constraint *Constraint::newCFunctionConstraint(Constraint *_returntype, ConstraintArray _parameters, bool _isvararg) {
+    return new CFunctionConstraint(_returntype, _parameters, _isvararg);
 }
 
 //------------------------------------------------------------------------------
 
-struct FunctionType : TypeImpl<FunctionType, T_Function> {
+struct FunctionType : ConstraintImpl<FunctionType, C_Function> {
 protected:
     NameArray parameters;
 
 public:
     FunctionType(NameArray _parameters) :
-        TypeImpl(false),
+        ConstraintImpl("(function ...)", false),
         parameters(_parameters)
         {}
 };
 
-Type *Type::Function(NameArray _parameters) {
+Constraint *Constraint::Function(NameArray _parameters) {
     return new FunctionType(_parameters);
 }
 
 //------------------------------------------------------------------------------
 
-struct IntegerLiteralType : TypeImpl<IntegerLiteralType, T_IntegerLiteral> {
+struct FixedIntegerConstraint : ConstraintImpl<FixedIntegerConstraint, C_FixedInteger> {
 protected:
     int64_t value;
 
 public:
     int64_t getValue() const { return value; }
 
-    IntegerLiteralType(int64_t value_) :
-        TypeImpl(true),
+    FixedIntegerConstraint(int64_t value_) :
+        ConstraintImpl(format("%" PRIi64, value_), true),
         value(value_)
         {}
 };
 
-Type *Type::newIntegerLiteralType(int64_t value_) {
-    return new IntegerLiteralType(value_);
+Constraint *Constraint::newFixedIntegerConstraint(int64_t value_) {
+    return new FixedIntegerConstraint(value_);
 }
 
 //------------------------------------------------------------------------------
 
-struct TypeLiteralType : TypeImpl<TypeLiteralType, T_TypeLiteral> {
-protected:
-    Type *value;
-
-public:
-    Type *getValue() const { return value; }
-
-    TypeLiteralType(Type *value_) :
-        TypeImpl(true),
-        value(value_)
-        {}
-};
-
-Type *Type::newTypeLiteralType(Type *value_) {
-    return new TypeLiteralType(value_);
-}
-
-//------------------------------------------------------------------------------
-
-struct RealLiteralType : TypeImpl<RealLiteralType, T_RealLiteral> {
+struct FixedRealConstraint : ConstraintImpl<FixedRealConstraint, C_FixedReal> {
 protected:
     double value;
 
 public:
     double getValue() const { return value; }
 
-    RealLiteralType(double value_) :
-        TypeImpl(true),
+    FixedRealConstraint(double value_) :
+        ConstraintImpl(format("%g", value_), true),
         value(value_)
         {}
 };
 
-Type *Type::newRealLiteralType(double value_) {
-    return new RealLiteralType(value_);
+Constraint *Constraint::newFixedRealConstraint(double value_) {
+    return new FixedRealConstraint(value_);
 }
 
 //------------------------------------------------------------------------------
 
-struct SymbolicLiteralType : TypeImpl<SymbolicLiteralType, T_SymbolicLiteral> {
+struct FixedConstraint : ConstraintImpl<FixedConstraint, C_FixedConstraint> {
+protected:
+    Constraint *value;
+
+public:
+    Constraint *getValue() const { return value; }
+
+    FixedConstraint(Constraint *value_) :
+        ConstraintImpl(format("(constraint %s)", value_->getRepr().c_str()), true),
+        value(value_)
+        {}
+};
+
+Constraint *Constraint::newFixedConstraint(Constraint *value_) {
+    return new struct FixedConstraint(value_);
+}
+
+//------------------------------------------------------------------------------
+
+struct TagConstraint : ConstraintImpl<TagConstraint, C_Tag> {
 protected:
     std::string value;
 
 public:
     const std::string &getName() const { return value; }
 
-    SymbolicLiteralType(const std::string &value_) :
-        TypeImpl(true),
+    TagConstraint(const std::string &value_) :
+        ConstraintImpl(format("(tag %s)", value_.c_str()), true),
         value(value_)
         {}
 };
 
-Type *Type::newSymbolicLiteralType(std::string value_) {
-    return new SymbolicLiteralType(value_);
+Constraint *Constraint::newTagConstraint(std::string value_) {
+    return new TagConstraint(value_);
 }
 
 //------------------------------------------------------------------------------
 
-struct StringLiteralType : TypeImpl<StringLiteralType, T_StringLiteral> {
+struct FixedStringConstraint : ConstraintImpl<FixedStringConstraint, C_FixedString> {
 protected:
     std::string value;
 
 public:
     std::string getValue() const { return value; }
 
-    StringLiteralType(const std::string &value_) :
-        TypeImpl(true),
+    FixedStringConstraint(const std::string &value_) :
+        ConstraintImpl(format("\"%s\"", quoteString(value_, "\"").c_str()), true),
         value(value_)
         {}
 };
 
-Type *Type::newStringLiteralType(std::string value_) {
-    return new StringLiteralType(value_);
+Constraint *Constraint::newFixedStringConstraint(std::string value_) {
+    return new FixedStringConstraint(value_);
 }
 
 //------------------------------------------------------------------------------
 
-void Type::initTypes() {
-    AType = SymbolicLiteral("type");
+void Constraint::initTypes() {
+    AConstraint = Tag("type");
 
-    Void = SymbolicLiteral("void");
-    Null = SymbolicLiteral("null");
+    Empty = Tuple({});
 
-    True = SymbolicLiteral("true");
-    False = SymbolicLiteral("false");
+    Void = new VoidConstraint();
+    Null = Tag("null");
 
-    Bool = Integer(1, false);
+    True = Tag("true");
+    False = Tag("false");
 
-    Int8 = Integer(8, true);
-    Int16 = Integer(16, true);
-    Int32 = Integer(32, true);
-    Int64 = Integer(64, true);
+    Opaque = Struct("opaque");
+    OpaquePointer = Pointer(Opaque);
 
-    UInt8 = Integer(8, false);
-    UInt16 = Integer(16, false);
-    UInt32 = Integer(32, false);
-    UInt64 = Integer(64, false);
+    Bool = IntegerFormat(1, false);
 
-    Half = Real(16);
-    Float = Real(32);
-    Double = Real(64);
+    Int8 = IntegerFormat(8, true);
+    Int16 = IntegerFormat(16, true);
+    Int32 = IntegerFormat(32, true);
+    Int64 = IntegerFormat(64, true);
+
+    UInt8 = IntegerFormat(8, false);
+    UInt16 = IntegerFormat(16, false);
+    UInt32 = IntegerFormat(32, false);
+    UInt64 = IntegerFormat(64, false);
+
+    Half = RealFormat(16);
+    Float = RealFormat(32);
+    Double = RealFormat(64);
 
     Rawstring = Pointer(Int8);
 
@@ -2492,7 +2561,7 @@ typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
 typedef std::list< LLVMModuleRef > GlobalModuleList;
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 typedef std::unordered_map<std::string, ASTNodeRef> NameASTNodeMap;
-typedef std::unordered_map<std::string, Type *> NameTypeMap;
+typedef std::unordered_map<std::string, Constraint *> NameTypeMap;
 
 //------------------------------------------------------------------------------
 
@@ -2600,10 +2669,10 @@ struct Environment {
         return NULL;
     }
 
-    Type *resolveASTType(const std::string &name) {
+    Constraint *resolveASTType(const std::string &name) {
         Environment *penv = this;
         while (penv) {
-            Type *result = (*penv).types[name];
+            Constraint *result = (*penv).types[name];
             if (result) {
                 return result;
             }
@@ -5615,29 +5684,45 @@ enum ASTKind {
     AST_Do,
     AST_Splice,
 
-    AST_Nop
+    AST_Nop,
+    AST_CDecl
 };
 
 //------------------------------------------------------------------------------
+
+struct ASTResult {
+    Constraint *constraint;
+    LLVMValueRef value;
+
+    ASTResult() :
+        constraint(nullptr),
+        value(nullptr) {
+    }
+
+    ASTResult(Constraint *constraint_, LLVMValueRef value_ = nullptr) :
+        constraint(constraint_),
+        value(value_) {
+        assert(constraint);
+        assert(constraint->isFixed() || value);
+    }
+};
 
 struct GenerateContext {
     LLVMModuleRef module;
     LLVMBuilderRef builder;
     LLVMValueRef function;
+
+    std::unordered_map<Constraint*, ASTResult> constants;
 };
 
 struct ASTNode : std::enable_shared_from_this<ASTNode> {
 private:
     const ASTKind kind;
-    Type *type;
 
 protected:
     ASTNode(ASTKind kind_) :
-        kind(kind_),
-        type(nullptr)
+        kind(kind_)
         {}
-
-    virtual Type *resolveType() = 0;
 
 public:
     Anchor anchor;
@@ -5657,383 +5742,135 @@ public:
         return kind;
     }
 
-    Type *getType() {
-        if (!type) {
-            type = resolveType();
-            if (!type) {
-                astError(shared_from_this(), "can not resolve type");
-            }
-        }
-        return type;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) = 0;
-
+    virtual ASTResult generate(GenerateContext &ctx) = 0;
 };
 
-template<class T, ASTKind KindT>
-struct ASTNodeImpl : ASTNode {
-    typedef ASTNodeImpl<T, KindT> BaseImpl;
+//------------------------------------------------------------------------------
 
-    ASTNodeImpl() :
-        ASTNode(KindT)
-        {}
-
-    static bool classof(const ASTNode *node) {
-        return node->getKind() == KindT;
-    }
-};
-
-struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
-    std::string name;
-    Type *symboltype;
-    LLVMValueRef llvmvalue;
-
-    ASTSymbol(const std::string &name_, Type *symboltype_ = nullptr) :
-        name(name_),
-        symboltype(symboltype_),
-        llvmvalue(nullptr)
-        {}
-
-    virtual Type *resolveType() {
-        return symboltype;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        if (!llvmvalue) {
-            astError(shared_from_this(), "not associated with any value");
-        }
-        return llvmvalue;
-    }
-};
-
-struct ASTArrayOf : ASTNodeImpl<ASTArrayOf, AST_ArrayOf> {
-    std::vector<ASTNodeRef> values;
-
-    ASTArrayOf(const std::vector<ASTNodeRef> &values_) :
-        values(values_)
-        {}
-
-    virtual Type *resolveType() {
-        Type *result = nullptr;
-        if (values.size() > 0) {
-            result = values[0]->getType();
-            for (size_t i = 1; i < values.size(); ++i) {
-                if (values[i]->getType() != result) {
-                    astError(values[i], "array arguments must all have same type");
-                }
-            }
-        }
-        return Type::Array(result, values.size());
-    }
-};
-
-struct ASTTupleOf : ASTNodeImpl<ASTTupleOf, AST_TupleOf> {
-    std::vector<ASTNodeRef> values;
-
-    ASTTupleOf(const std::vector<ASTNodeRef> &values_) :
-        values(values_)
-        {}
-
-    virtual Type *resolveType() {
-        NamedTypeArray types;
-        for (size_t i = 0; i < values.size(); ++i) {
-            types.push_back(std::pair<std::string,Type*>("", values[i]->getType()));
-        }
-        return Type::Tuple(types);
-    }
-};
-
-std::string astVerifyString(const ASTNodeRef &node) {
-    assert(node);
-    if (auto str = llvm::dyn_cast<StringLiteralType>(node->getType())) {
-        return str->getValue();
-    } else {
-        astError(node, "string expected");
-        return "";
-    }
-}
-
-struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
-    ASTNodeRef name;
-    ASTNodeRef externaltype;
-
-    ASTExternalDecl(const ASTNodeRef &name_, const ASTNodeRef &externaltype_) :
-        name(name_),
-        externaltype(externaltype_)
-        {}
-
-    virtual Type *resolveType() {
-        assert(externaltype);
-        if (auto ty = llvm::dyn_cast<TypeLiteralType>(externaltype->getType())) {
-            return ty->getValue();
-        } else {
-            astError(externaltype, "type expected");
-            return nullptr;
-        }
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        Type *type = getType();
-        //return LLVMAddGlobal(ctx.module, verifyLLVMType(type), astVerifyString(name).c_str());
-        return LLVMAddFunction(ctx.module,
-            astVerifyString(name).c_str(), verifyLLVMType(type));
-    }
-};
-
-struct ASTFunctionDecl : ASTNodeImpl<ASTFunctionDecl, AST_FunctionDecl> {
-    std::vector<ASTNodeRef> parameters;
-    ASTNodeRef body;
-
-    ASTFunctionDecl(const std::vector<ASTNodeRef> &parameters_, const ASTNodeRef &body_) :
-        parameters(parameters_),
-        body(body_)
-        {}
-
-};
-
-static LLVMValueRef astGenerate(GenerateContext &ctx, ASTNodeRef node, Type *constraint = nullptr) {
-    assert(node);
-    Type *nodetype = node->getType();
-    if (nodetype->isLiteral()) {
-        LLVMValueRef value = nullptr;
-        Type *contenttype = nullptr;
-        switch(nodetype->getKind()) {
-            case T_IntegerLiteral: {
-                auto integer = llvm::cast<IntegerLiteralType>(nodetype);
-                if (constraint) {
-                    if (constraint->getKind() == T_Integer) {
-                        contenttype = constraint;
-                        value = LLVMConstInt(verifyLLVMType(constraint), integer->getValue(), true);
-                    } else if (constraint->getKind() == T_Real) {
-                        contenttype = constraint;
-                        value = LLVMConstReal(verifyLLVMType(constraint), double(integer->getValue()));
-                    }
-                } else {
-                    value = LLVMConstInt(LLVMInt32Type(), integer->getValue(), true);
-                }
+static Constraint *variableConstraint(Constraint *c) {
+    if (c->isFixed()) {
+        switch(c->getKind()) {
+            case C_Tag: {
+                if (c == Constraint::True) return Constraint::Bool;
+                else if (c == Constraint::False) return Constraint::Bool;
+                else if (c == Constraint::Null) return Constraint::OpaquePointer;
             } break;
-            case T_RealLiteral: {
-                auto real = llvm::cast<RealLiteralType>(nodetype);
-                if (constraint) {
-                    if (constraint->getKind() == T_Integer) {
-                        contenttype = constraint;
-                        value = LLVMConstInt(verifyLLVMType(constraint), int64_t(real->getValue()), true);
-                    } else if (constraint->getKind() == T_Real) {
-                        contenttype = constraint;
-                        value = LLVMConstReal(verifyLLVMType(constraint), real->getValue());
-                    }
-                } else {
-                    value = LLVMConstReal(LLVMDoubleType(), real->getValue());
-                }
+            case C_FixedInteger: {
+                auto integer = llvm::cast<FixedIntegerConstraint>(c);
+                if (integer->getValue() > INT_MAX)
+                    return Constraint::Int64;
+                else
+                    return Constraint::Int32;
             } break;
-            case T_StringLiteral: {
-                auto str = llvm::cast<StringLiteralType>(nodetype);
-                value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
-                contenttype = Type::Array(Type::Int8, str->getValue().size() + 1);
-                if (!constraint || (constraint == Type::Rawstring)) {
-                    auto globalvar = LLVMAddGlobal(ctx.module, LLVMTypeOf(value), "");
-                    LLVMSetInitializer(globalvar, value);
-                    LLVMSetGlobalConstant(globalvar, true);
-                    LLVMSetUnnamedAddr(globalvar, true);
-                    LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
-                    contenttype = Type::Rawstring;
-                    value = LLVMBuildBitCast(ctx.builder, globalvar, verifyLLVMType(contenttype), "");
-                }
+            case C_FixedReal: {
+                return Constraint::Double;
+            } break;
+            case C_FixedString: {
+                auto str = llvm::cast<FixedStringConstraint>(c);
+                return Constraint::Array(Constraint::Int8, str->getValue().size() + 1);
             } break;
             default: break;
         }
-        if (constraint && contenttype && (contenttype != constraint)) {
-            astError(node, "cannot cast %s to %s",
-                typeKindName(contenttype->getKind()),
-                typeKindName(constraint->getKind()));
-        }
-        if (!value) {
-            astError(node,
-                "unable to generate value for %s",
-                typeKindName(nodetype->getKind()));
-        }
-        return value;
     } else {
+        return c;
+    }
+    astError(nullptr, "can not derive variable constraint from %s",
+        c->getRepr().c_str());
+    return nullptr;
+}
 
-
-        return node->generate(ctx);
+static ASTResult astEmitValue(
+    GenerateContext &ctx, ASTNodeRef node, Constraint *constraint = nullptr) {
+    assert(node);
+    ASTResult nodevals = node->generate(ctx);
+    Constraint *nodetype = nodevals.constraint;
+    assert(nodetype);
+    if (nodetype->isFixed()) {
+        ASTResult result = ctx.constants[nodetype];
+        if (!result.constraint) {
+            Constraint *contenttype = nullptr;
+            LLVMValueRef value = nullptr;
+            switch(nodetype->getKind()) {
+                case C_Tag: {
+                    if (nodetype == Constraint::True) {
+                        contenttype = Constraint::Bool;
+                        value = LLVMConstInt(verifyLLVMType(contenttype), 1, false);
+                    } else if (nodetype == Constraint::False) {
+                        contenttype = Constraint::Bool;
+                        value = LLVMConstInt(verifyLLVMType(contenttype), 0, false);
+                    }
+                } break;
+                case C_FixedInteger: {
+                    auto integer = llvm::cast<FixedIntegerConstraint>(nodetype);
+                    contenttype = Constraint::Int32;
+                    if (constraint) {
+                        if (constraint->getKind() == C_IntegerFormat) {
+                            contenttype = constraint;
+                            value = LLVMConstInt(verifyLLVMType(constraint), integer->getValue(), true);
+                        } else if (constraint->getKind() == C_RealFormat) {
+                            contenttype = constraint;
+                            value = LLVMConstReal(verifyLLVMType(constraint), double(integer->getValue()));
+                        }
+                    } else {
+                        value = LLVMConstInt(verifyLLVMType(contenttype), integer->getValue(), true);
+                    }
+                } break;
+                case C_FixedReal: {
+                    auto real = llvm::cast<FixedRealConstraint>(nodetype);
+                    contenttype = Constraint::Double;
+                    if (constraint) {
+                        if (constraint->getKind() == C_IntegerFormat) {
+                            contenttype = constraint;
+                            value = LLVMConstInt(verifyLLVMType(constraint), int64_t(real->getValue()), true);
+                        } else if (constraint->getKind() == C_RealFormat) {
+                            contenttype = constraint;
+                            value = LLVMConstReal(verifyLLVMType(constraint), real->getValue());
+                        }
+                    } else {
+                        value = LLVMConstReal(verifyLLVMType(contenttype), real->getValue());
+                    }
+                } break;
+                case C_FixedString: {
+                    auto str = llvm::cast<FixedStringConstraint>(nodetype);
+                    value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
+                    contenttype = Constraint::Array(Constraint::Int8, str->getValue().size() + 1);
+                    if (!constraint || (constraint == Constraint::Rawstring)) {
+                        auto globalvar = LLVMAddGlobal(ctx.module, LLVMTypeOf(value), "");
+                        LLVMSetInitializer(globalvar, value);
+                        LLVMSetGlobalConstant(globalvar, true);
+                        LLVMSetUnnamedAddr(globalvar, true);
+                        LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
+                        contenttype = Constraint::Rawstring;
+                        value = LLVMConstBitCast(globalvar, verifyLLVMType(contenttype));
+                    }
+                } break;
+                default: break;
+            }
+            if (constraint && contenttype && (contenttype != constraint)) {
+                astError(node, "%s does not match constraint %s",
+                    contenttype->getRepr().c_str(),
+                    constraint->getRepr().c_str());
+            }
+            if (!value) {
+                astError(node,
+                    "unable to generate value for %s",
+                    nodetype->getRepr().c_str());
+            }
+            if (!contenttype) {
+                contenttype = constraint;
+                assert(contenttype);
+            }
+            result.constraint = contenttype;
+            result.value = value;
+            ctx.constants[nodetype] = result;
+        }
+        return result;
+    } else {
+        return nodevals;
     }
 }
 
-struct ASTCall : ASTNodeImpl<ASTCall, AST_Call> {
-    ASTNodeRef callable;
-    std::vector<ASTNodeRef> arguments;
-
-    ASTCall(const ASTNodeRef &callable_,
-            const std::vector<ASTNodeRef> &arguments_) :
-        callable(callable_),
-        arguments(arguments_)
-        {
-            assert(callable_);
-        }
-
-    CFunctionType *getFunctionType() {
-        assert(callable);
-        CFunctionType *ftype = llvm::dyn_cast<CFunctionType>(callable->getType());
-        if (!ftype) {
-            astError(callable, "cdecl expected");
-        }
-        return ftype;
-    }
-
-    virtual Type *resolveType() {
-        return getFunctionType()->getReturnType();
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        assert(callable);
-        CFunctionType *ftype = getFunctionType();
-
-        LLVMValueRef args[arguments.size()];
-        for (size_t i = 0; i < arguments.size(); ++i) {
-            args[i] = astGenerate(ctx, arguments[i], ftype->getParameterType(i));
-        }
-        LLVMValueRef callee = callable->generate(ctx);
-
-        return LLVMBuildCall(ctx.builder, callee, args, arguments.size(), "");
-    }
-};
-
-struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
-    ASTNodeRef condition;
-    ASTNodeRef trueexpr;
-    ASTNodeRef falseexpr;
-
-    ASTSelect(const ASTNodeRef &condition_,
-                const ASTNodeRef &trueexpr_,
-                const ASTNodeRef &falseexpr_) :
-        condition(condition_),
-        trueexpr(trueexpr_),
-        falseexpr(falseexpr_)
-        {}
-};
-
-struct ASTLabel : ASTNodeImpl<ASTLabel, AST_Label> {
-    std::string name;
-    ASTNodeRef body;
-
-    ASTLabel(const std::string &name_, const ASTNodeRef &body_) :
-        name(name_),
-        body(body_)
-        {}
-};
-
-struct ASTGoto : ASTNodeImpl<ASTGoto, AST_Goto> {
-    ASTNodeRef label;
-
-    ASTGoto(const ASTNodeRef &label_) :
-        label(label_)
-        {}
-};
-
-struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
-    ASTNodeRef symbol;
-    ASTNodeRef value;
-
-    ASTLet(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
-        symbol(symbol_),
-        value(value_)
-        {}
-
-    virtual Type *resolveType() {
-        return value->getType();
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        Type *type = getType();
-        assert(symbol);
-        ASTSymbol *sym = llvm::dyn_cast<ASTSymbol>(symbol.get());
-        if (!sym) {
-            astError(symbol, "symbol expected");
-        }
-        sym->llvmvalue = value->generate(ctx);
-        sym->symboltype = type;
-        return symbol->generate(ctx);
-    }
-};
-
-struct ASTVar : ASTNodeImpl<ASTVar, AST_Var> {
-    ASTNodeRef symbol;
-    ASTNodeRef value;
-
-    ASTVar(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
-        symbol(symbol_),
-        value(value_)
-        {}
-};
-
-struct ASTIndex : ASTNodeImpl<ASTIndex, AST_Index> {
-    ASTNodeRef lvalue;
-    ASTNodeRef rvalue;
-
-    ASTIndex(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
-        lvalue(lvalue_),
-        rvalue(rvalue_)
-        {}
-};
-
-struct ASTSet : ASTNodeImpl<ASTSet, AST_Set> {
-    ASTNodeRef lvalue;
-    ASTNodeRef rvalue;
-
-    ASTSet(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
-        lvalue(lvalue_),
-        rvalue(rvalue_)
-        {}
-};
-
-struct ASTDel : ASTNodeImpl<ASTDel, AST_Del> {
-    ASTNodeRef symbol;
-
-    ASTDel(const ASTNodeRef &symbol_) :
-        symbol(symbol_)
-        {}
-};
-
-struct ASTDo : ASTNodeImpl<ASTDo, AST_Do> {
-    std::vector<ASTNodeRef> expressions;
-
-    ASTDo(const std::vector<ASTNodeRef> &expressions_) :
-        expressions(expressions_)
-        {}
-};
-
-struct ASTSplice : ASTNodeImpl<ASTSplice, AST_Splice> {
-    std::vector<ASTNodeRef> expressions;
-
-    ASTSplice(const std::vector<ASTNodeRef> &expressions_) :
-        expressions(expressions_)
-        {}
-};
-
-struct ASTNop : ASTNodeImpl<ASTNop, AST_Nop> {
-    Type *resulttype;
-
-    ASTNop(Type *type_ = nullptr) :
-        resulttype(type_?type_:(Type::Void))
-        {}
-
-    virtual Type *resolveType() {
-        return resulttype;
-    }
-
-    virtual LLVMValueRef generate(GenerateContext &ctx) {
-        astError(shared_from_this(), "can not generate value from nop");
-        return NULL;
-    }
-};
-
 //------------------------------------------------------------------------------
-// AST TRANSLATION
-//------------------------------------------------------------------------------
-
-typedef Environment ASTEnvironment;
 
 static void astErrorV (Anchor *anchor, const char *format, va_list args) {
     if (anchor) {
@@ -6087,6 +5924,462 @@ static T *astVerifyKind(ValueRef expr) {
     return nullptr;
 }
 
+static std::string astVerifyString(ASTNodeRef node, Constraint *c) {
+    assert(node);
+    assert(c);
+    if (auto str = llvm::dyn_cast<FixedStringConstraint>(c)) {
+        return str->getValue();
+    } else {
+        astError(node, "expected string, not %s", c->getRepr().c_str());
+        return "";
+    }
+}
+
+static Constraint *astVerifyFixedConstraint(ASTNodeRef node, Constraint *c) {
+    assert(node);
+    assert(c);
+    if (auto fc = llvm::dyn_cast<FixedConstraint>(c)) {
+        return fc->getValue();
+    } else {
+        astError(node, "expected constraint, not %s", c->getRepr().c_str());
+        return nullptr;
+    }
+}
+
+typedef Environment ASTEnvironment;
+
+static ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr);
+
+template<class T, ASTKind KindT>
+struct ASTNodeImpl : ASTNode {
+    typedef ASTNodeImpl<T, KindT> BaseImpl;
+
+    ASTNodeImpl() :
+        ASTNode(KindT)
+        {}
+
+    static bool classof(const ASTNode *node) {
+        return node->getKind() == KindT;
+    }
+
+};
+
+struct ASTNop : ASTNodeImpl<ASTNop, AST_Nop> {
+    Constraint *resulttype;
+
+    ASTNop(Constraint *type_ = nullptr) :
+        resulttype(type_?type_:(Constraint::Empty))
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        return ASTResult(resulttype);
+    }
+
+    static ASTNodeRef fixedConstraint(Constraint *constraint) {
+        return std::make_shared<ASTNop>(Constraint::FixedConstraint(constraint));
+    }
+};
+
+struct ASTCDecl : ASTNodeImpl<ASTCDecl, AST_CDecl> {
+    const ASTNodeRef &result;
+    const std::vector<ASTNodeRef> &parameters;
+    bool isvararg;
+
+    ASTCDecl(
+        const ASTNodeRef &result_,
+        const std::vector<ASTNodeRef> &parameters_,
+        bool isvararg_) :
+            result(result_),
+            parameters(parameters_),
+            isvararg(isvararg_)
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        Constraint *returntype =
+            astVerifyFixedConstraint(result, result->generate(ctx).constraint);
+        std::vector<Constraint *> paramtypes;
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            paramtypes.push_back(
+                astVerifyFixedConstraint(parameters[i],
+                    parameters[i]->generate(ctx).constraint));
+        }
+
+        return ASTResult(
+            Constraint::FixedConstraint(
+                Constraint::CFunction(
+                    returntype, paramtypes, isvararg)));
+    }
+
+    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_returntype);
+        UNPACK_ARG(expr, expr_parameters);
+
+        ASTNodeRef returntype = translateAST(env, expr_returntype);
+
+        Pointer *params = astVerifyKind<Pointer>(expr_parameters);
+
+        std::vector<ASTNodeRef> paramtypes;
+
+        ValueRef param = at(params);
+        bool vararg = false;
+        while (param) {
+            ValueRef nextparam = next(param);
+            if (!nextparam && isSymbol(param, "...")) {
+                vararg = true;
+            } else {
+                paramtypes.push_back(translateAST(env, param));
+            }
+
+            param = nextparam;
+        }
+
+        return std::make_shared<ASTCDecl>(returntype, paramtypes, vararg);
+    }
+};
+
+struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
+    std::string name;
+    Constraint *symboltype;
+    LLVMValueRef llvmvalue;
+
+    ASTSymbol(const std::string &name_, Constraint *symboltype_ = nullptr) :
+        name(name_),
+        symboltype(symboltype_),
+        llvmvalue(nullptr)
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        return ASTResult(symboltype, llvmvalue);
+    }
+};
+
+/*
+struct ASTArrayOf : ASTNodeImpl<ASTArrayOf, AST_ArrayOf> {
+    std::vector<ASTNodeRef> values;
+
+    ASTArrayOf(const std::vector<ASTNodeRef> &values_) :
+        values(values_)
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        Constraint *result = nullptr;
+        if (values.size() > 0) {
+            result = values[0]->getConstraint();
+            for (size_t i = 1; i < values.size(); ++i) {
+                if (values[i]->getConstraint() != result) {
+                    astError(values[i], "array arguments must all have same type");
+                }
+            }
+        }
+        return Constraint::Array(result, values.size());
+    }
+};
+*/
+
+/*
+struct ASTTupleOf : ASTNodeImpl<ASTTupleOf, AST_TupleOf> {
+    std::vector<ASTNodeRef> values;
+
+    ASTTupleOf(const std::vector<ASTNodeRef> &values_) :
+        values(values_)
+        {}
+
+    virtual Constraint *resolveConstraint() {
+        NamedConstraintArray types;
+        for (size_t i = 0; i < values.size(); ++i) {
+            types.push_back(std::pair<std::string,Constraint*>("", values[i]->getConstraint()));
+        }
+        return Constraint::Tuple(types);
+    }
+};
+*/
+
+struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
+    ASTNodeRef name;
+    ASTNodeRef externaltype;
+
+    ASTExternalDecl(const ASTNodeRef &name_, const ASTNodeRef &externaltype_) :
+        name(name_),
+        externaltype(externaltype_)
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        std::string namestr = astVerifyString(name, name->generate(ctx).constraint);
+        Constraint *type = astVerifyFixedConstraint(externaltype,
+            externaltype->generate(ctx).constraint);
+
+        //return LLVMAddGlobal(ctx.module, verifyLLVMType(type), astVerifyString(name).c_str());
+        return ASTResult(type,
+            LLVMAddFunction(ctx.module, namestr.c_str(), verifyLLVMType(type)));
+    }
+
+    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_name);
+        UNPACK_ARG(expr, expr_type);
+
+        ASTNodeRef name = translateAST(env, expr_name);
+        ASTNodeRef type = translateAST(env, expr_type);
+
+        return std::make_shared<ASTExternalDecl>(name, type);
+    }
+
+};
+
+struct ASTFunctionDecl : ASTNodeImpl<ASTFunctionDecl, AST_FunctionDecl> {
+    std::vector<ASTNodeRef> parameters;
+    ASTNodeRef body;
+
+    ASTFunctionDecl(const std::vector<ASTNodeRef> &parameters_, const ASTNodeRef &body_) :
+        parameters(parameters_),
+        body(body_)
+        {}
+
+};
+
+struct ASTCall : ASTNodeImpl<ASTCall, AST_Call> {
+    ASTNodeRef callable;
+    std::vector<ASTNodeRef> arguments;
+
+    ASTCall(const ASTNodeRef &callable_,
+            const std::vector<ASTNodeRef> &arguments_) :
+        callable(callable_),
+        arguments(arguments_)
+        {
+            assert(callable_);
+        }
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        assert(callable);
+        auto fc =astVerifyFixedConstraint(callable, callable->generate(ctx).constraint);
+        auto ftype = llvm::dyn_cast<CFunctionConstraint>(fc);
+        if (!ftype) {
+            astError(callable, "cdecl expected, not %s",
+                fc->getRepr().c_str());
+        }
+
+        LLVMValueRef callee = astEmitValue(ctx, callable).value;
+        LLVMValueRef args[arguments.size()];
+        for (size_t i = 0; i < arguments.size(); ++i) {
+            args[i] = astEmitValue(ctx, arguments[i], ftype->getParameter(i)).value;
+        }
+
+        return ASTResult(ftype->getResult(),
+            LLVMBuildCall(ctx.builder, callee, args, arguments.size(), ""));
+    }
+
+    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_callable);
+        UNPACK_ARG(expr, arg);
+
+        ASTNodeRef callable = translateAST(env, expr_callable);
+
+        std::vector<ASTNodeRef> args;
+
+        while (arg) {
+            args.push_back(translateAST(env, arg));
+
+            arg = next(arg);
+        }
+
+        return std::make_shared<ASTCall>(callable, args);
+    }
+
+
+};
+
+struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
+    ASTNodeRef condition;
+    ASTNodeRef trueexpr;
+    ASTNodeRef falseexpr;
+
+    ASTSelect(const ASTNodeRef &condition_,
+                const ASTNodeRef &trueexpr_,
+                const ASTNodeRef &falseexpr_) :
+        condition(condition_),
+        trueexpr(trueexpr_),
+        falseexpr(falseexpr_)
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+        ASTResult rcond = condition->generate(ctx);
+
+        if (rcond.constraint == Constraint::True) {
+            return trueexpr->generate(ctx);
+        } else if (rcond.constraint == Constraint::False) {
+            if (falseexpr)
+                return falseexpr->generate(ctx);
+            else
+                return ASTResult(Constraint::Empty);
+        } else if (rcond.constraint == Constraint::Bool) {
+            astError(shared_from_this(), "no support for branching yet");
+        } else {
+            astError(condition, "boolean constraint expected, got %s",
+                rcond.constraint->getRepr().c_str());
+        }
+
+        return nullptr;
+    }
+
+    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_condition);
+        UNPACK_ARG(expr, expr_true);
+        UNPACK_ARG(expr, expr_false);
+
+        ASTNodeRef condition = translateAST(env, expr_condition);
+        ASTNodeRef trueexpr = translateAST(env, expr_true);
+        ASTNodeRef falseexpr;
+        if (expr_false)
+            falseexpr = translateAST(env, expr_false);
+
+        return std::make_shared<ASTSelect>(condition, trueexpr, falseexpr);
+    }
+};
+
+struct ASTLabel : ASTNodeImpl<ASTLabel, AST_Label> {
+    std::string name;
+    ASTNodeRef body;
+
+    ASTLabel(const std::string &name_, const ASTNodeRef &body_) :
+        name(name_),
+        body(body_)
+        {}
+};
+
+struct ASTGoto : ASTNodeImpl<ASTGoto, AST_Goto> {
+    ASTNodeRef label;
+
+    ASTGoto(const ASTNodeRef &label_) :
+        label(label_)
+        {}
+};
+
+struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
+    ASTNodeRef symbol;
+    ASTNodeRef value;
+
+    ASTLet(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
+        symbol(symbol_),
+        value(value_)
+        {}
+
+    ASTSymbol *getASTSymbol() {
+        assert(symbol);
+        ASTSymbol *sym = llvm::dyn_cast<ASTSymbol>(symbol.get());
+        if (!sym) {
+            astError(symbol, "symbol expected");
+        }
+        return sym;
+    }
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+
+        ASTResult rvalue = value->generate(ctx);
+        auto sym = getASTSymbol();
+        sym->symboltype = rvalue.constraint;
+        sym->llvmvalue = rvalue.value;
+
+        return rvalue;
+    }
+
+    static ASTNodeRef parse(ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_sym);
+        UNPACK_ARG(expr, expr_value);
+
+        Symbol *sym = astVerifyKind<Symbol>(expr_sym);
+        ASTNodeRef value = translateAST(env, expr_value);
+
+        auto symbol = std::make_shared<ASTSymbol>(sym->getValue());
+        env->astnodes[sym->getValue()] = symbol;
+
+        return std::make_shared<ASTLet>(
+            symbol,
+            value);
+    }
+
+};
+
+struct ASTVar : ASTNodeImpl<ASTVar, AST_Var> {
+    ASTNodeRef symbol;
+    ASTNodeRef value;
+
+    ASTVar(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
+        symbol(symbol_),
+        value(value_)
+        {}
+};
+
+struct ASTIndex : ASTNodeImpl<ASTIndex, AST_Index> {
+    ASTNodeRef lvalue;
+    ASTNodeRef rvalue;
+
+    ASTIndex(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
+        lvalue(lvalue_),
+        rvalue(rvalue_)
+        {}
+};
+
+struct ASTSet : ASTNodeImpl<ASTSet, AST_Set> {
+    ASTNodeRef lvalue;
+    ASTNodeRef rvalue;
+
+    ASTSet(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
+        lvalue(lvalue_),
+        rvalue(rvalue_)
+        {}
+};
+
+struct ASTDel : ASTNodeImpl<ASTDel, AST_Del> {
+    ASTNodeRef symbol;
+
+    ASTDel(const ASTNodeRef &symbol_) :
+        symbol(symbol_)
+        {}
+};
+
+struct ASTDo : ASTNodeImpl<ASTDo, AST_Do> {
+    std::vector<ASTNodeRef> expressions;
+
+    ASTDo(const std::vector<ASTNodeRef> &expressions_) :
+        expressions(expressions_)
+        {}
+
+    virtual ASTResult generate(GenerateContext &ctx) {
+
+        ASTResult lastvalue = ASTResult(Constraint::Empty);
+        for (size_t i = 0; i < expressions.size(); ++i) {
+            lastvalue = expressions[i]->generate(ctx);
+        }
+
+        return lastvalue;
+    }
+
+    static ASTNodeRef parse(ASTEnvironment *env, ValueRef expr) {
+        expr = next(expr);
+
+        std::vector<ASTNodeRef> stmts;
+
+        Environment subenv(env);
+
+        while (expr) {
+            stmts.push_back(translateAST(&subenv, expr));
+            expr = next(expr);
+        }
+
+        return std::make_shared<ASTDo>(stmts);
+    }
+
+};
+
+struct ASTSplice : ASTNodeImpl<ASTSplice, AST_Splice> {
+    std::vector<ASTNodeRef> expressions;
+
+    ASTSplice(const std::vector<ASTNodeRef> &expressions_) :
+        expressions(expressions_)
+        {}
+};
+
+//------------------------------------------------------------------------------
+// AST TRANSLATION
 //------------------------------------------------------------------------------
 
 struct ASTTranslateTable {
@@ -6163,105 +6456,20 @@ static ASTTranslateTable astTranslators;
 
 //------------------------------------------------------------------------------
 
-static Type *verifyAsType(const ASTNodeRef &node) {
-    assert(node);
-    Type *nodetype = node->getType();
-    switch(nodetype->getKind()) {
-        case T_TypeLiteral: {
-            return llvm::cast<TypeLiteralType>(nodetype)->getValue();
-        } break;
-        default: {
-            astError(node, "type expected");
-        } break;
-    }
-    return NULL;
-}
-
-//------------------------------------------------------------------------------
-
-static ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr);
-
-static ASTNodeRef tr_ast_external (ASTEnvironment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_name);
-    UNPACK_ARG(expr, expr_type);
-
-    ASTNodeRef name = translateAST(env, expr_name);
-    ASTNodeRef type = translateAST(env, expr_type);
-
-    return std::make_shared<ASTExternalDecl>(name, type);
-}
-
-static ASTNodeRef tr_ast_let (ASTEnvironment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_sym);
-    UNPACK_ARG(expr, expr_value);
-
-    Symbol *sym = astVerifyKind<Symbol>(expr_sym);
-    ASTNodeRef value = translateAST(env, expr_value);
-
-    auto symbol = std::make_shared<ASTSymbol>(sym->getValue());
-    env->astnodes[sym->getValue()] = symbol;
-
-    return std::make_shared<ASTLet>(
-        symbol,
-        value);
-}
-
-static ASTNodeRef tr_ast_call (ASTEnvironment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_callable);
-    UNPACK_ARG(expr, arg);
-
-    ASTNodeRef callable = translateAST(env, expr_callable);
-
-    std::vector<ASTNodeRef> args;
-
-    while (arg) {
-        args.push_back(translateAST(env, arg));
-
-        arg = next(arg);
-    }
-
-    return std::make_shared<ASTCall>(callable, args);
-}
-
-static ASTNodeRef tr_ast_cdecl (ASTEnvironment *env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_returntype);
-    UNPACK_ARG(expr, expr_parameters);
-
-    Type *returntype = verifyAsType(translateAST(env, expr_returntype));
-    Pointer *params = astVerifyKind<Pointer>(expr_parameters);
-
-    std::vector<Type *> paramtypes;
-
-    ValueRef param = at(params);
-    bool vararg = false;
-    while (param) {
-        ValueRef nextparam = next(param);
-        if (!nextparam && isSymbol(param, "...")) {
-            vararg = true;
-        } else {
-            paramtypes.push_back(verifyAsType(translateAST(env, param)));
-        }
-
-        param = nextparam;
-    }
-
-    //return std::make_shared<ASTExternalDecl>(name, type);
-    return std::make_shared<ASTNop>(
-        Type::TypeLiteral(Type::CFunction(returntype, paramtypes, vararg)));
-}
-
 static void registerASTTranslators() {
     auto &t = astTranslators;
-    t.set(tr_ast_external, "external", 2, 2);
-    t.set(tr_ast_let, "let", 2, 2);
-    t.set(tr_ast_call, "call", 1, -1);
+    t.set(ASTExternalDecl::parse, "external", 2, 2);
+    t.set(ASTLet::parse, "let", 2, 2);
+    t.set(ASTCall::parse, "call", 1, -1);
+    t.set(ASTDo::parse, "do", 0, -1);
+    t.set(ASTSelect::parse, "select", 2, 3);
 
-    t.set(tr_ast_cdecl, "cdecl", 2, 2);
+    t.set(ASTCDecl::parse, "cdecl", 2, 2);
 }
 
 static ASTNodeRef translateASTFromList (ASTEnvironment *env, ValueRef expr) {
     assert(expr);
-    Symbol *head = astVerifyKind<Symbol>(expr);
+    astVerifyKind<Symbol>(expr);
     auto func = astTranslators.match(expr);
     return func(env, expr);
 }
@@ -6274,11 +6482,11 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         std::string value = sym->getValue();
         if (value == "true") {
-            result = std::make_shared<ASTNop>(Type::True);
+            result = std::make_shared<ASTNop>(Constraint::True);
         } else if (value == "false") {
-            result = std::make_shared<ASTNop>(Type::False);
+            result = std::make_shared<ASTNop>(Constraint::False);
         } else if (value == "null") {
-            result = std::make_shared<ASTNop>(Type::Null);
+            result = std::make_shared<ASTNop>(Constraint::Null);
         } else {
             result = env->resolveASTNode(value);
             if (!result) {
@@ -6294,11 +6502,11 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
         }
         */
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
-        result = std::make_shared<ASTNop>(Type::StringLiteral(str->getValue()));
+        result = std::make_shared<ASTNop>(Constraint::FixedString(str->getValue()));
     } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
-        result = std::make_shared<ASTNop>(Type::IntegerLiteral(integer->getValue()));
+        result = std::make_shared<ASTNop>(Constraint::FixedInteger(integer->getValue()));
     } else if (auto real = llvm::dyn_cast<Real>(expr)) {
-        result = std::make_shared<ASTNop>(Type::RealLiteral(real->getValue()));
+        result = std::make_shared<ASTNop>(Constraint::FixedReal(real->getValue()));
     } else {
         astError(expr, "expected expression, not %s",
             valueKindName(kindOf(expr)));
@@ -6314,7 +6522,7 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
 //------------------------------------------------------------------------------
 
 static void init() {
-    Type::initTypes();
+    Constraint::initTypes();
     registerASTTranslators();
 
     registerValueTranslators();
@@ -6344,10 +6552,6 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
-static ASTNodeRef astNewTypeReference(Type *type) {
-    return std::make_shared<ASTNop>(Type::TypeLiteral(type));
-}
-
 static void setupRootEnvironment (Environment *env, const char *modulename) {
     LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
 
@@ -6356,24 +6560,24 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
     env->globals->module = module;
     env->globals->builder = builder;
 
-    env->astnodes["void"] = astNewTypeReference(Type::Void);
-    env->astnodes["half"] = astNewTypeReference(Type::Half);
-    env->astnodes["float"] = astNewTypeReference(Type::Float);
-    env->astnodes["double"] = astNewTypeReference(Type::Double);
-    env->astnodes["bool"] = astNewTypeReference(Type::Bool);
+    env->astnodes["void"] = ASTNop::fixedConstraint(Constraint::Void);
+    env->astnodes["half"] = ASTNop::fixedConstraint(Constraint::Half);
+    env->astnodes["float"] = ASTNop::fixedConstraint(Constraint::Float);
+    env->astnodes["double"] = ASTNop::fixedConstraint(Constraint::Double);
+    env->astnodes["bool"] = ASTNop::fixedConstraint(Constraint::Bool);
 
-    env->astnodes["int8"] = astNewTypeReference(Type::Int8);
-    env->astnodes["int16"] = astNewTypeReference(Type::Int16);
-    env->astnodes["int32"] = astNewTypeReference(Type::Int32);
-    env->astnodes["int64"] = astNewTypeReference(Type::Int64);
+    env->astnodes["int8"] = ASTNop::fixedConstraint(Constraint::Int8);
+    env->astnodes["int16"] = ASTNop::fixedConstraint(Constraint::Int16);
+    env->astnodes["int32"] = ASTNop::fixedConstraint(Constraint::Int32);
+    env->astnodes["int64"] = ASTNop::fixedConstraint(Constraint::Int64);
 
-    env->astnodes["uint8"] = astNewTypeReference(Type::UInt8);
-    env->astnodes["uint16"] = astNewTypeReference(Type::UInt16);
-    env->astnodes["uint32"] = astNewTypeReference(Type::UInt32);
-    env->astnodes["uint64"] = astNewTypeReference(Type::UInt64);
+    env->astnodes["uint8"] = ASTNop::fixedConstraint(Constraint::UInt8);
+    env->astnodes["uint16"] = ASTNop::fixedConstraint(Constraint::UInt16);
+    env->astnodes["uint32"] = ASTNop::fixedConstraint(Constraint::UInt32);
+    env->astnodes["uint64"] = ASTNop::fixedConstraint(Constraint::UInt64);
 
     env->astnodes["int"] = env->astnodes["int32"];
-    env->astnodes["rawstring"] = astNewTypeReference(Type::Rawstring);
+    env->astnodes["rawstring"] = ASTNop::fixedConstraint(Constraint::Rawstring);
 
     env->llvmtypes["void"] = LLVMVoidType();
     env->llvmtypes["half"] = LLVMHalfType();
@@ -6402,11 +6606,8 @@ static void teardownRootEnvironment (Environment *env) {
 }
 
 static bool translateRootValueList (Environment *env, ValueRef expr) {
-    std::vector<ASTNodeRef> stmts;
-    while (expr) {
-        stmts.push_back(translateAST(env, expr));
-        expr = next(expr);
-    }
+    ASTNodeRef stmts = ASTDo::parse(env, expr);
+    assert(stmts);
 
     GenerateContext ctx;
     ctx.module = env->getModule();
@@ -6419,9 +6620,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
 
     LLVMPositionBuilderAtEnd(ctx.builder, LLVMAppendBasicBlock(func, ""));
 
-    for (size_t i = 0; i < stmts.size(); ++i) {
-        stmts[i]->generate(ctx);
-    }
+    stmts->generate(ctx);
 
     LLVMBuildRetVoid(ctx.builder);
 
@@ -6515,8 +6714,6 @@ static bool compileModule (Environment *env, ValueRef expr) {
         }
         expr = at(expr);
     }
-
-    expr = next(expr);
 
     return translateRootValueList (env, expr);
 }

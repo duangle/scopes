@@ -3,16 +3,28 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
+# types are first-class values
+let printf-cdecl
+    cdecl int (rawstring ...)
+
 let puts
-    external "puts"
-        cdecl int (rawstring)
+    cdecl int (rawstring)
+
+let use-printf false
 
 let printf
-    external "printf"
-        cdecl int (rawstring ...)
+    external "printf" printf-cdecl
 
-call printf "hello %s %i %f\n" "world" 0xff 2.5
+let text
+    "hello %s %i %f\n"
 
+select use-printf
+    do
+        call printf "yes it's true!\n"
+    do
+        let count
+            call printf text "world" 0xff 2.5
+        call printf "%i %i\n" count false
 
 ///
     include "libc.b"
