@@ -10,21 +10,30 @@ let printf-cdecl
 let puts
     cdecl int (rawstring)
 
-let use-printf false
-
 let printf
     external "printf" printf-cdecl
 
-let text
-    "hello %s %i %f\n"
+let generate-a-function
+    function (use-printf)
+        let text
+            "hello %s %i %f\n"
 
-select use-printf
-    do
-        call printf "yes it's true!\n"
-    do
-        let count
-            call printf text "world" 0xff 2.5
-        call printf "%i %i\n" count false
+        function ()
+            select use-printf
+                do
+                    apply printf "yes it's true!\n"
+                do
+                    let count
+                        apply printf text "world" 0xff 2.5
+                    apply printf "%i %i\n" count false
+
+let call-a-function
+    function (f use-printf)
+        apply
+            apply f use-printf
+
+apply call-a-function generate-a-function false
+apply call-a-function generate-a-function true
 
 ///
     include "libc.b"
@@ -34,4 +43,3 @@ select use-printf
     run
         call printf
             &str "startup script loaded.\n"
-
