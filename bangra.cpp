@@ -5700,21 +5700,23 @@ struct RootGenerateContext {
     std::unordered_map<Constraint*, ASTResult> constants;
 };
 
-struct GenerateContext {
+struct GenerateContext;
+typedef std::shared_ptr<GenerateContext> GenerateContextRef;
+
+struct GenerateContext : std::enable_shared_from_this<GenerateContext> {
     RootGenerateContext &root;
-    GenerateContext *parent;
+    GenerateContextRef parent;
     LLVMValueRef function;
 
     std::unordered_map<ASTNodeRef, ASTResult> bindings;
 
     GenerateContext(RootGenerateContext &root_) :
-        root(root_),
-        parent(nullptr)
+        root(root_)
         {}
 
-    GenerateContext(GenerateContext &parent_) :
-        root(parent_.root),
-        parent(&parent_)
+    GenerateContext(const GenerateContextRef &parent_) :
+        root(parent_->root),
+        parent(parent_)
         {}
 
     void bind(ASTNodeRef node, const ASTResult& value) {
@@ -5724,14 +5726,27 @@ struct GenerateContext {
         bindings.insert(bindings_.begin(), bindings_.end());
     }
 
+    void set(ASTNodeRef node, const ASTResult& value) {
+        GenerateContextRef ctx = shared_from_this();
+        while (ctx) {
+            ASTResult result = ctx->bindings[node];
+            if (result.constraint) {
+                ctx->bindings[node] = value;
+                return;
+            }
+            ctx = ctx->parent;
+        }
+        astError(node, "cannot assign to unbound symbol");
+    }
+
     ASTResult resolve(ASTNodeRef node) {
-        GenerateContext *ctx = this;
+        GenerateContextRef ctx = shared_from_this();
         while (ctx) {
             ASTResult result = ctx->bindings[node];
             if (result.constraint) return result;
             ctx = ctx->parent;
         }
-        astError(node, "unbound symbol");
+        astError(node, "cannot resolve unbound symbol");
         return nullptr;
     }
 
@@ -5772,7 +5787,7 @@ public:
     virtual void referenced(ASTEnvironment *env) {};
     virtual void capture(ASTNodeRef symbol) {};
 
-    virtual ASTResult generate(GenerateContext &ctx) = 0;
+    virtual ASTResult generate(const GenerateContextRef &ctx) = 0;
 };
 
 //------------------------------------------------------------------------------
@@ -5829,13 +5844,13 @@ static Constraint *variableConstraint(Constraint *c) {
 }
 
 static ASTResult astEmitValue(
-    GenerateContext &ctx, ASTNodeRef node, Constraint *constraint = nullptr) {
+    const GenerateContextRef &ctx, ASTNodeRef node, Constraint *constraint = nullptr) {
     assert(node);
     ASTResult nodevals = node->generate(ctx);
     Constraint *nodetype = nodevals.constraint;
     assert(nodetype);
     if (nodetype->isFixed()) {
-        ASTResult result = ctx.root.constants[nodetype];
+        ASTResult result = ctx->root.constants[nodetype];
         if (!result.constraint) {
             Constraint *contenttype = nullptr;
             LLVMValueRef value = nullptr;
@@ -5884,7 +5899,7 @@ static ASTResult astEmitValue(
                     value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
                     contenttype = Constraint::Array(Constraint::Int8, str->getValue().size() + 1);
                     if (!constraint || (constraint == Constraint::Rawstring)) {
-                        auto globalvar = LLVMAddGlobal(ctx.root.module, LLVMTypeOf(value), "");
+                        auto globalvar = LLVMAddGlobal(ctx->root.module, LLVMTypeOf(value), "");
                         LLVMSetInitializer(globalvar, value);
                         LLVMSetGlobalConstant(globalvar, true);
                         LLVMSetUnnamedAddr(globalvar, true);
@@ -5911,7 +5926,7 @@ static ASTResult astEmitValue(
             }
             result.constraint = contenttype;
             result.value = value;
-            ctx.root.constants[nodetype] = result;
+            ctx->root.constants[nodetype] = result;
         }
         return result;
     } else {
@@ -6018,7 +6033,7 @@ struct ASTNop : ASTNodeImpl<ASTNop, AST_Nop> {
         resulttype(type_?type_:(Constraint::Empty))
         {}
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
         return ASTResult(resulttype);
     }
 
@@ -6041,7 +6056,7 @@ struct ASTCDecl : ASTNodeImpl<ASTCDecl, AST_CDecl> {
             isvararg(isvararg_)
         {}
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
         assert(result);
         Constraint *returntype =
             astVerifyFixedConstraint(result, result->generate(ctx).constraint);
@@ -6094,8 +6109,8 @@ struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
         name(name_)
         {}
 
-    virtual ASTResult generate(GenerateContext &ctx) {
-        return ctx.resolve(shared_from_this());
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
+        return ctx->resolve(shared_from_this());
     }
 
     virtual void referenced(ASTEnvironment *env) {
@@ -6108,6 +6123,9 @@ struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
     static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
         Symbol *sym = astVerifyKind<Symbol>(expr);
         auto symbol = std::make_shared<ASTSymbol>(sym->getValue(), env->closure);
+        if (env->astnodes.count(sym->getValue())) {
+            astError(expr, "name already exists in scope");
+        }
         env->astnodes[sym->getValue()] = symbol;
         return symbol;
     }
@@ -6163,14 +6181,14 @@ struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
         externaltype(externaltype_)
         {}
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
         std::string namestr = astVerifyString(name, name->generate(ctx).constraint);
         Constraint *type = astVerifyFixedConstraint(externaltype,
             externaltype->generate(ctx).constraint);
 
         //return LLVMAddGlobal(ctx.module, verifyLLVMType(type), astVerifyString(name).c_str());
         return ASTResult(type,
-            LLVMAddFunction(ctx.root.module, namestr.c_str(), verifyLLVMType(type)));
+            LLVMAddFunction(ctx->root.module, namestr.c_str(), verifyLLVMType(type)));
     }
 
     static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
@@ -6192,7 +6210,7 @@ struct ASTDo : ASTNodeImpl<ASTDo, AST_Do> {
         expressions(expressions_)
         {}
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
 
         ASTResult lastvalue = ASTResult(Constraint::Empty);
         for (size_t i = 0; i < expressions.size(); ++i) {
@@ -6221,9 +6239,13 @@ struct ASTDo : ASTNodeImpl<ASTDo, AST_Do> {
 
 struct ASTClosure : ASTNodeImpl<ASTClosure, AST_Closure> {
     ASTNodeRef node;
-    std::unordered_map<ASTNodeRef, ASTResult> bindings;
+    GenerateContextRef ctx;
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    ASTClosure(const GenerateContextRef &ctx_) :
+        ctx(ctx_)
+    {}
+
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
         return ASTResult(Constraint::FixedASTNode(shared_from_this()));
     }
 };
@@ -6234,16 +6256,18 @@ struct ASTFunctionDecl : ASTNodeImpl<ASTFunctionDecl, AST_FunctionDecl> {
     ASTNodeRef body;
     std::unordered_set<ASTNodeRef> captured;
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
 
-        auto result = std::make_shared<ASTClosure>();
+        auto result = std::make_shared<ASTClosure>(ctx);
         result->node = shared_from_this();
+        /*
         for (auto key : captured) {
             if (auto sym = llvm::dyn_cast<ASTSymbol>(key.get())) {
                 //printf("%p: capturing %s\n", this, sym->name.c_str());
-                result->bindings[key] = key->generate(ctx);
+                result->ctx.bind(key, key->generate(ctx));
             }
         }
+        */
 
         return result->generate(ctx);
     }
@@ -6295,7 +6319,7 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
             assert(callable_);
         }
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
         assert(callable);
         auto rcallable = callable->generate(ctx);
         auto fc = rcallable.constraint;
@@ -6303,7 +6327,7 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
             case C_CFunction: {
                 auto ftype = llvm::dyn_cast<CFunctionConstraint>(fc);
                 if (!ftype) {
-                    astError(callable, "cdecl expected, not %s",
+                    astError(shared_from_this(), "cdecl expected, not %s",
                         fc->getRepr().c_str());
                 }
 
@@ -6314,17 +6338,17 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
                 }
 
                 return ASTResult(ftype->getResult(),
-                    LLVMBuildCall(ctx.root.builder, callee, args, arguments.size(), ""));
+                    LLVMBuildCall(ctx->root.builder, callee, args, arguments.size(), ""));
             } break;
             case C_FixedASTNode: {
                 auto castnode = llvm::dyn_cast<FixedASTNodeConstraint>(fc);
                 if (!castnode) {
-                    astError(callable, "fixed AST constraint expected, not %s",
+                    astError(shared_from_this(), "fixed AST constraint expected, not %s",
                         castnode->getRepr().c_str());
                 }
                 ASTClosure *closure = llvm::dyn_cast<ASTClosure>(castnode->getValue().get());
                 if (!closure) {
-                    astError(callable, "closure expected, not %s",
+                    astError(shared_from_this(), "closure expected, not %s",
                         castnode->getRepr().c_str());
                 }
 
@@ -6337,25 +6361,23 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
                         arguments.size(), ftype->parameters.size());
                 }
 
-                GenerateContext subctx(ctx);
-
-                subctx.bind(closure->bindings);
+                auto subctx = std::make_shared<GenerateContext>(closure->ctx);
 
                 for (size_t i = 0; i < arguments.size(); ++i) {
-                    subctx.bind(ftype->parameters[i], arguments[i]->generate(ctx));
+                    subctx->bind(ftype->parameters[i], arguments[i]->generate(ctx));
                 }
                 return ftype->body->generate(subctx);
             } break;
             default: {
-                astError(callable, "don't know how to apply %s",
+                astError(shared_from_this(), "don't know how to apply %s",
                     fc->getRepr().c_str());
                 return nullptr;
             } break;
         }
     }
 
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        UNPACK_ARG(expr, expr_callable);
+    static ASTNodeRef parseImplicit (ASTEnvironment *env, ValueRef expr) {
+        ValueRef expr_callable = expr;
         UNPACK_ARG(expr, arg);
 
         ASTNodeRef callable = translateAST(env, expr_callable);
@@ -6371,6 +6393,10 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
         return std::make_shared<ASTApply>(callable, args);
     }
 
+    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+        expr = next(expr);
+        return parseImplicit(env, expr);
+    }
 
 };
 
@@ -6387,7 +6413,7 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
         falseexpr(falseexpr_)
         {}
 
-    virtual ASTResult generate(GenerateContext &ctx) {
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
         ASTResult rcond = condition->generate(ctx);
 
         if (rcond.constraint == Constraint::True) {
@@ -6458,10 +6484,14 @@ struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
         return sym;
     }
 
-    virtual ASTResult generate(GenerateContext &ctx) {
-        assert(value);
-        ASTResult rvalue = value->generate(ctx);
-        ctx.bind(symbol, rvalue);
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
+        ASTResult rvalue;
+        if (value) {
+            rvalue = value->generate(ctx);
+        } else {
+            rvalue = ASTResult(Constraint::Null);
+        }
+        ctx->bind(symbol, rvalue);
         return rvalue;
     }
 
@@ -6470,13 +6500,51 @@ struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
         UNPACK_ARG(expr, expr_value);
 
         auto symbol = ASTSymbol::parse(env, expr_sym);
-        ASTNodeRef value = translateAST(env, expr_value);
+        ASTNodeRef value;
+        if (expr_value)
+            value = translateAST(env, expr_value);
 
         return std::make_shared<ASTLet>(
             symbol,
             value);
     }
 
+};
+
+struct ASTSet : ASTNodeImpl<ASTSet, AST_Set> {
+    ASTNodeRef lvalue;
+    ASTNodeRef rvalue;
+
+    ASTSet(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
+        lvalue(lvalue_),
+        rvalue(rvalue_)
+        {}
+
+    ASTSymbol *getASTSymbol() {
+        assert(lvalue);
+        ASTSymbol *sym = llvm::dyn_cast<ASTSymbol>(lvalue.get());
+        if (!sym) {
+            astError(lvalue, "symbol expected");
+        }
+        return sym;
+    }
+
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
+        getASTSymbol();
+        ASTResult rrvalue = rvalue->generate(ctx);
+        ctx->set(lvalue, rrvalue);
+        return rrvalue;
+    }
+
+    static ASTNodeRef parse(ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_lvalue);
+        UNPACK_ARG(expr, expr_rvalue);
+
+        auto lvalue = translateAST(env, expr_lvalue);
+        auto rvalue = translateAST(env, expr_rvalue);
+
+        return std::make_shared<ASTSet>(lvalue, rvalue);
+    }
 };
 
 struct ASTVar : ASTNodeImpl<ASTVar, AST_Var> {
@@ -6494,16 +6562,6 @@ struct ASTIndex : ASTNodeImpl<ASTIndex, AST_Index> {
     ASTNodeRef rvalue;
 
     ASTIndex(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
-        lvalue(lvalue_),
-        rvalue(rvalue_)
-        {}
-};
-
-struct ASTSet : ASTNodeImpl<ASTSet, AST_Set> {
-    ASTNodeRef lvalue;
-    ASTNodeRef rvalue;
-
-    ASTSet(const ASTNodeRef &lvalue_, const ASTNodeRef &rvalue_) :
         lvalue(lvalue_),
         rvalue(rvalue_)
         {}
@@ -6560,9 +6618,12 @@ struct ASTTranslateTable {
         translators[name] = translator;
     }
 
-    static bool verifyCount (ValueRef expr, int mincount, int maxcount) {
+    static bool verifyParameterCount (ValueRef expr, int mincount, int maxcount) {
         if ((mincount <= 0) && (maxcount == -1))
             return true;
+
+        ValueRef head = expr;
+        expr = next(expr);
 
         int argcount = 0;
         while (expr) {
@@ -6579,20 +6640,16 @@ struct ASTTranslateTable {
             expr = next(expr);
         }
         if ((mincount >= 0) && (argcount < mincount)) {
-            astError(expr, "at least %i arguments expected", mincount);
+            astError(head, "at least %i arguments expected", mincount);
             return false;
         }
         return true;
     }
 
-    static bool verifyParameterCount (ValueRef expr, int mincount, int maxcount) {
-        return verifyCount(next(expr), mincount, maxcount);
-    }
-
     TranslatorFunc match(ValueRef expr) {
         Symbol *head = astVerifyKind<Symbol>(expr);
         auto &t = translators[head->getValue()];
-        if (!t.translate) astError(expr, "special form expected");
+        if (!t.translate) return nullptr;
         verifyParameterCount(expr, t.mincount, t.maxcount);
         return t.translate;
     }
@@ -6606,7 +6663,8 @@ static ASTTranslateTable astTranslators;
 static void registerASTTranslators() {
     auto &t = astTranslators;
     t.set(ASTExternalDecl::parse, "external", 2, 2);
-    t.set(ASTLet::parse, "let", 2, 2);
+    t.set(ASTLet::parse, "let", 1, 2);
+    t.set(ASTSet::parse, "set", 2, 2);
     t.set(ASTApply::parse, "apply", 1, -1);
     t.set(ASTDo::parse, "do", 0, -1);
     t.set(ASTSelect::parse, "select", 2, 3);
@@ -6619,7 +6677,11 @@ static ASTNodeRef translateASTFromList (ASTEnvironment *env, ValueRef expr) {
     assert(expr);
     astVerifyKind<Symbol>(expr);
     auto func = astTranslators.match(expr);
-    return func(env, expr);
+    if (func) {
+        return func(env, expr);
+    } else {
+        return ASTApply::parseImplicit(env, expr);
+    }
 }
 
 ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
@@ -6762,23 +6824,23 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     RootGenerateContext rootctx;
     rootctx.module = env->getModule();
     rootctx.builder = env->getBuilder();
-    GenerateContext ctx(rootctx);
+    auto ctx = std::make_shared<GenerateContext>(rootctx);
 
     LLVMTypeRef mainfunctype = LLVMFunctionType(LLVMVoidType(), NULL, 0, false);
 
-    LLVMValueRef func = LLVMAddFunction(ctx.root.module, "main", mainfunctype);
-    ctx.function = func;
+    LLVMValueRef func = LLVMAddFunction(ctx->root.module, "main", mainfunctype);
+    ctx->function = func;
 
-    LLVMPositionBuilderAtEnd(ctx.root.builder, LLVMAppendBasicBlock(func, ""));
+    LLVMPositionBuilderAtEnd(ctx->root.builder, LLVMAppendBasicBlock(func, ""));
 
     stmts->generate(ctx);
 
-    LLVMBuildRetVoid(ctx.root.builder);
+    LLVMBuildRetVoid(ctx->root.builder);
 
-    LLVMDumpModule(ctx.root.module);
+    LLVMDumpModule(ctx->root.module);
 
     char *error = NULL;
-    LLVMVerifyModule(ctx.root.module, LLVMAbortProcessAction, &error);
+    LLVMVerifyModule(ctx->root.module, LLVMAbortProcessAction, &error);
     LLVMDisposeMessage(error);
 
     error = NULL;
@@ -6790,7 +6852,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     //options.EnableFastISel = true;
     //options.CodeModel = LLVMCodeModelLarge;
 
-    LLVMCreateMCJITCompilerForModule(&engine, ctx.root.module,
+    LLVMCreateMCJITCompilerForModule(&engine, ctx->root.module,
         &options, sizeof(options), &error);
 
     if (error) {
