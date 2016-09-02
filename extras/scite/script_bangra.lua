@@ -56,7 +56,7 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let var set external cdecl apply do select function null true false ..."
+        "bangra let var set external cdecl apply do select function null true false label ..."
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

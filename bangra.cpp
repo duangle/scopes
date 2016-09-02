@@ -6448,22 +6448,41 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
     }
 };
 
+const int AST_LOOP_MAX_DEPTH = 256;
+
 struct ASTLabel : ASTNodeImpl<ASTLabel, AST_Label> {
     std::string name;
     ASTNodeRef body;
+    int loopcount;
 
-    ASTLabel(const std::string &name_, const ASTNodeRef &body_) :
+    ASTLabel(const std::string &name_) :
         name(name_),
-        body(body_)
+        loopcount(0)
         {}
-};
 
-struct ASTGoto : ASTNodeImpl<ASTGoto, AST_Goto> {
-    ASTNodeRef label;
+    virtual ASTResult generate(const GenerateContextRef &ctx) {
+        loopcount++;
+        if (loopcount > AST_LOOP_MAX_DEPTH) {
+            astError(shared_from_this(), "stack overflow");
+        }
+        auto result = body->generate(ctx);
+        loopcount--;
+        return result;
+    }
 
-    ASTGoto(const ASTNodeRef &label_) :
-        label(label_)
-        {}
+    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+        UNPACK_ARG(expr, expr_name);
+
+        Symbol *sym = astVerifyKind<Symbol>(expr_name);
+
+        auto label = std::make_shared<ASTLabel>(sym->getValue());
+
+        Environment subenv(env);
+        subenv.astnodes[sym->getValue()] = label;
+        label->body = ASTDo::parse(&subenv, expr_name);
+
+        return label;
+    }
 };
 
 struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
@@ -6671,6 +6690,8 @@ static void registerASTTranslators() {
 
     t.set(ASTCDecl::parse, "cdecl", 2, 2);
     t.set(ASTFunctionDecl::parse, "function", 1, -1);
+
+    t.set(ASTLabel::parse, "label", 1, -1);
 }
 
 static ASTNodeRef translateASTFromList (ASTEnvironment *env, ValueRef expr) {

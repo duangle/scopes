@@ -53,10 +53,35 @@ set recurse
 
 recurse true
 
+let b2 true
+printf
+    label recurse-label2
+        printf "bang 2\n"
+        let b1 true
+        label recurse-label1
+            printf "bang 1\n"
+            let b0 true
+            label recurse-label0
+                printf "bang 0\n"
+                select b0
+                    do
+                        set b0 false
+                        recurse-label0
+                    select b1
+                        do
+                            set b1 false
+                            recurse-label1
+                        select b2
+                            do
+                                set b2 false
+                                recurse-label2
+                            "done\n"
+
 let store-state
-    function ()
+    function (name)
         let defvar false
         function (newvar)
+            printf "%s: " name
             select defvar
                 puts "was true"
                 puts "was false"
@@ -65,12 +90,18 @@ let store-state
                 puts "setting to false"
             set defvar newvar
 let state
-    store-state;
+    store-state "A"
+let state2
+    store-state "B"
 
 state true
+state2 true
 state false
+state2 false
 state true
+state2 true
 state true
+state2 true
 
 ///
     include "libc.b"
