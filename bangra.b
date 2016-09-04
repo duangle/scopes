@@ -53,30 +53,6 @@ set recurse
 
 recurse true
 
-let b2 true
-printf
-    label recurse-label2
-        printf "bang 2\n"
-        let b1 true
-        label recurse-label1
-            printf "bang 1\n"
-            let b0 true
-            label recurse-label0
-                printf "bang 0\n"
-                select b0
-                    do
-                        set b0 false
-                        recurse-label0
-                    select b1
-                        do
-                            set b1 false
-                            recurse-label1
-                        select b2
-                            do
-                                set b2 false
-                                recurse-label2
-                            "done\n"
-
 let store-state
     function (name)
         let defvar false

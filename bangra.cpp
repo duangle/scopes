@@ -5616,6 +5616,133 @@ static LLVMTypeRef translateType (Environment *env, ValueRef expr) {
 }
 
 //------------------------------------------------------------------------------
+// MID-LEVEL IR
+//------------------------------------------------------------------------------
+
+struct IRValue;
+struct IRBasicBlock;
+struct IRModule;
+struct IRBuilder;
+
+typedef std::shared_ptr<IRValue> IRValueRef;
+typedef std::weak_ptr<IRValue> IRValueWeakRef;
+typedef std::shared_ptr<IRBasicBlock> IRBasicBlockRef;
+typedef std::weak_ptr<IRBasicBlock> IRBasicBlockWeakRef;
+typedef std::shared_ptr<IRModule> IRModuleRef;
+typedef std::weak_ptr<IRModule> IRModuleWeakRef;
+typedef std::shared_ptr<IRBuilder> IRBuilderRef;
+typedef std::weak_ptr<IRBuilder> IRBuilderWeakRef;
+
+//------------------------------------------------------------------------------
+
+struct IRValue : std::enable_shared_from_this<IRValue> {
+    enum Kind {
+        Fixed,
+        CFuncDecl,
+        Call,
+    };
+
+    const Kind kind;
+    Constraint *constraint;
+
+    IRValue(Kind kind_, Constraint *constraint_ = nullptr) :
+        kind(kind_),
+        constraint(constraint_)
+        {}
+
+    virtual ~IRValue() {}
+
+    virtual std::string getRepr () const {
+        return "(irvalue)";
+    }
+};
+
+//------------------------------------------------------------------------------
+
+template<IRValue::Kind KindT>
+struct IRValueImpl : IRValue {
+    IRValueImpl() :
+        IRValue(KindT)
+    {}
+
+    static bool classof(const IRValue *value) {
+        return value->kind == KindT;
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct IRBasicBlock : std::enable_shared_from_this<IRBasicBlock> {
+    std::list<IRValueRef> values;
+};
+
+//------------------------------------------------------------------------------
+
+struct IRModule : std::enable_shared_from_this<IRModule> {
+    std::list<IRBasicBlockRef> blocks;
+    std::list<IRValueRef> cfuncdecls;
+};
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+struct IRFixed : IRValueImpl<IRValue::Fixed> {
+};
+
+//------------------------------------------------------------------------------
+
+struct IRCFuncDecl : IRValueImpl<IRValue::CFuncDecl> {
+    std::string name;
+};
+
+//------------------------------------------------------------------------------
+
+struct IRCall : IRValueImpl<IRValue::Call> {
+    IRValueRef callee;
+    std::vector<IRValueRef> arguments;
+};
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+struct IRBuilder : std::enable_shared_from_this<IRBuilder> {
+    IRModuleRef module;
+    IRBasicBlockRef block;
+
+    IRBuilder(const IRModuleRef &module_) :
+        module(module_) {
+    }
+
+    IRValueRef fixed(Constraint *constraint) {
+        assert(constraint);
+        auto result = std::make_shared<IRFixed>();
+        result->constraint = constraint;
+        return result;
+    }
+
+    IRValueRef cfuncdecl(const std::string &name, Constraint *constraint) {
+        assert(constraint);
+        auto result = std::make_shared<IRCFuncDecl>();
+        result->constraint = constraint;
+        result->name = name;
+        module->cfuncdecls.push_back(result);
+        return result;
+    }
+
+    IRValueRef call(const IRValueRef& callee, const std::vector<IRValueRef> &arguments) {
+        assert(callee);
+        auto result = std::make_shared<IRCall>();
+        auto ftype = llvm::dyn_cast<CFunctionConstraint>(callee->constraint);
+        assert(ftype);
+        result->constraint = ftype->getResult();
+        result->callee = callee;
+        result->arguments = arguments;
+        return result;
+    }
+
+};
+
+//------------------------------------------------------------------------------
 // ABSTRACT SYNTAX TREE
 //------------------------------------------------------------------------------
 
@@ -5676,28 +5803,9 @@ enum ASTKind {
 
 //------------------------------------------------------------------------------
 
-struct ASTResult {
-    Constraint *constraint;
-    LLVMValueRef value;
-
-    ASTResult() :
-        constraint(nullptr),
-        value(nullptr) {
-    }
-
-    ASTResult(Constraint *constraint_, LLVMValueRef value_ = nullptr) :
-        constraint(constraint_),
-        value(value_) {
-        assert(constraint);
-        assert(constraint->isFixed() || value);
-    }
-};
-
 struct RootGenerateContext {
-    LLVMModuleRef module;
-    LLVMBuilderRef builder;
-
-    std::unordered_map<Constraint*, ASTResult> constants;
+    IRModuleRef module;
+    IRBuilderRef builder;
 };
 
 struct GenerateContext;
@@ -5706,9 +5814,8 @@ typedef std::shared_ptr<GenerateContext> GenerateContextRef;
 struct GenerateContext : std::enable_shared_from_this<GenerateContext> {
     RootGenerateContext &root;
     GenerateContextRef parent;
-    LLVMValueRef function;
 
-    std::unordered_map<ASTNodeRef, ASTResult> bindings;
+    std::unordered_map<ASTNodeRef, IRValueRef> bindings;
 
     GenerateContext(RootGenerateContext &root_) :
         root(root_)
@@ -5719,18 +5826,18 @@ struct GenerateContext : std::enable_shared_from_this<GenerateContext> {
         parent(parent_)
         {}
 
-    void bind(ASTNodeRef node, const ASTResult& value) {
+    void bind(ASTNodeRef node, const IRValueRef& value) {
         bindings[node] = value;
     }
-    void bind(const std::unordered_map<ASTNodeRef, ASTResult>& bindings_) {
+    void bind(const std::unordered_map<ASTNodeRef, IRValueRef>& bindings_) {
         bindings.insert(bindings_.begin(), bindings_.end());
     }
 
-    void set(ASTNodeRef node, const ASTResult& value) {
+    void set(ASTNodeRef node, const IRValueRef& value) {
         GenerateContextRef ctx = shared_from_this();
         while (ctx) {
-            ASTResult result = ctx->bindings[node];
-            if (result.constraint) {
+            IRValueRef result = ctx->bindings[node];
+            if (result) {
                 ctx->bindings[node] = value;
                 return;
             }
@@ -5739,11 +5846,11 @@ struct GenerateContext : std::enable_shared_from_this<GenerateContext> {
         astError(node, "cannot assign to unbound symbol");
     }
 
-    ASTResult resolve(ASTNodeRef node) {
+    IRValueRef resolve(ASTNodeRef node) {
         GenerateContextRef ctx = shared_from_this();
         while (ctx) {
-            ASTResult result = ctx->bindings[node];
-            if (result.constraint) return result;
+            IRValueRef result = ctx->bindings[node];
+            if (result) return result;
             ctx = ctx->parent;
         }
         astError(node, "cannot resolve unbound symbol");
@@ -5787,7 +5894,7 @@ public:
     virtual void referenced(ASTEnvironment *env) {};
     virtual void capture(ASTNodeRef symbol) {};
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) = 0;
+    virtual IRValueRef generate(const GenerateContextRef &ctx) = 0;
 };
 
 //------------------------------------------------------------------------------
@@ -5841,97 +5948,6 @@ static Constraint *variableConstraint(Constraint *c) {
     astError(nullptr, "can not derive variable constraint from %s",
         c->getRepr().c_str());
     return nullptr;
-}
-
-static ASTResult astEmitValue(
-    const GenerateContextRef &ctx, ASTNodeRef node, Constraint *constraint = nullptr) {
-    assert(node);
-    ASTResult nodevals = node->generate(ctx);
-    Constraint *nodetype = nodevals.constraint;
-    assert(nodetype);
-    if (nodetype->isFixed()) {
-        ASTResult result = ctx->root.constants[nodetype];
-        if (!result.constraint) {
-            Constraint *contenttype = nullptr;
-            LLVMValueRef value = nullptr;
-            switch(nodetype->getKind()) {
-                case C_Tag: {
-                    if (nodetype == Constraint::True) {
-                        contenttype = Constraint::Bool;
-                        value = LLVMConstInt(verifyLLVMType(contenttype), 1, false);
-                    } else if (nodetype == Constraint::False) {
-                        contenttype = Constraint::Bool;
-                        value = LLVMConstInt(verifyLLVMType(contenttype), 0, false);
-                    }
-                } break;
-                case C_FixedInteger: {
-                    auto integer = llvm::cast<FixedIntegerConstraint>(nodetype);
-                    contenttype = Constraint::Int32;
-                    if (constraint) {
-                        if (constraint->getKind() == C_IntegerFormat) {
-                            contenttype = constraint;
-                            value = LLVMConstInt(verifyLLVMType(constraint), integer->getValue(), true);
-                        } else if (constraint->getKind() == C_RealFormat) {
-                            contenttype = constraint;
-                            value = LLVMConstReal(verifyLLVMType(constraint), double(integer->getValue()));
-                        }
-                    } else {
-                        value = LLVMConstInt(verifyLLVMType(contenttype), integer->getValue(), true);
-                    }
-                } break;
-                case C_FixedReal: {
-                    auto real = llvm::cast<FixedRealConstraint>(nodetype);
-                    contenttype = Constraint::Double;
-                    if (constraint) {
-                        if (constraint->getKind() == C_IntegerFormat) {
-                            contenttype = constraint;
-                            value = LLVMConstInt(verifyLLVMType(constraint), int64_t(real->getValue()), true);
-                        } else if (constraint->getKind() == C_RealFormat) {
-                            contenttype = constraint;
-                            value = LLVMConstReal(verifyLLVMType(constraint), real->getValue());
-                        }
-                    } else {
-                        value = LLVMConstReal(verifyLLVMType(contenttype), real->getValue());
-                    }
-                } break;
-                case C_FixedString: {
-                    auto str = llvm::cast<FixedStringConstraint>(nodetype);
-                    value = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
-                    contenttype = Constraint::Array(Constraint::Int8, str->getValue().size() + 1);
-                    if (!constraint || (constraint == Constraint::Rawstring)) {
-                        auto globalvar = LLVMAddGlobal(ctx->root.module, LLVMTypeOf(value), "");
-                        LLVMSetInitializer(globalvar, value);
-                        LLVMSetGlobalConstant(globalvar, true);
-                        LLVMSetUnnamedAddr(globalvar, true);
-                        LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
-                        contenttype = Constraint::Rawstring;
-                        value = LLVMConstBitCast(globalvar, verifyLLVMType(contenttype));
-                    }
-                } break;
-                default: break;
-            }
-            if (constraint && contenttype && (contenttype != constraint)) {
-                astError(node, "%s does not match constraint %s",
-                    contenttype->getRepr().c_str(),
-                    constraint->getRepr().c_str());
-            }
-            if (!value) {
-                astError(node,
-                    "unable to generate value for %s",
-                    nodetype->getRepr().c_str());
-            }
-            if (!contenttype) {
-                contenttype = constraint;
-                assert(contenttype);
-            }
-            result.constraint = contenttype;
-            result.value = value;
-            ctx->root.constants[nodetype] = result;
-        }
-        return result;
-    } else {
-        return nodevals;
-    }
 }
 
 //------------------------------------------------------------------------------
@@ -5999,6 +6015,16 @@ static std::string astVerifyString(ASTNodeRef node, Constraint *c) {
     }
 }
 
+static std::string astVerifyString(ASTNodeRef node, const IRValueRef &value) {
+    assert(value);
+    if (auto fixed = llvm::dyn_cast<IRFixed>(value.get())) {
+        return astVerifyString(node, fixed->constraint);
+    } else {
+        astError(node, "expected fixed constraint, not %s", value->getRepr().c_str());
+        return "";
+    }
+}
+
 static Constraint *astVerifyFixedConstraint(ASTNodeRef node, Constraint *c) {
     assert(node);
     assert(c);
@@ -6006,6 +6032,16 @@ static Constraint *astVerifyFixedConstraint(ASTNodeRef node, Constraint *c) {
         return fc->getValue();
     } else {
         astError(node, "expected constraint, not %s", c->getRepr().c_str());
+        return nullptr;
+    }
+}
+
+static Constraint *astVerifyFixedConstraint(ASTNodeRef node, const IRValueRef &value) {
+    assert(value);
+    if (auto fixed = llvm::dyn_cast<IRFixed>(value.get())) {
+        return astVerifyFixedConstraint(node, fixed->constraint);
+    } else {
+        astError(node, "expected fixed constraint, not %s", value->getRepr().c_str());
         return nullptr;
     }
 }
@@ -6033,8 +6069,8 @@ struct ASTNop : ASTNodeImpl<ASTNop, AST_Nop> {
         resulttype(type_?type_:(Constraint::Empty))
         {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-        return ASTResult(resulttype);
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
+        return ctx->root.builder->fixed(resulttype);
     }
 
     static ASTNodeRef fixedConstraint(Constraint *constraint) {
@@ -6056,18 +6092,18 @@ struct ASTCDecl : ASTNodeImpl<ASTCDecl, AST_CDecl> {
             isvararg(isvararg_)
         {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
         assert(result);
         Constraint *returntype =
-            astVerifyFixedConstraint(result, result->generate(ctx).constraint);
+            astVerifyFixedConstraint(result, result->generate(ctx));
         std::vector<Constraint *> paramtypes;
         for (size_t i = 0; i < parameters.size(); ++i) {
             paramtypes.push_back(
                 astVerifyFixedConstraint(parameters[i],
-                    parameters[i]->generate(ctx).constraint));
+                    parameters[i]->generate(ctx)));
         }
 
-        return ASTResult(
+        return ctx->root.builder->fixed(
             Constraint::FixedConstraint(
                 Constraint::CFunction(
                     returntype, paramtypes, isvararg)));
@@ -6109,7 +6145,7 @@ struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
         name(name_)
         {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
         return ctx->resolve(shared_from_this());
     }
 
@@ -6181,14 +6217,11 @@ struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
         externaltype(externaltype_)
         {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-        std::string namestr = astVerifyString(name, name->generate(ctx).constraint);
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
+        std::string namestr = astVerifyString(name, name->generate(ctx));
         Constraint *type = astVerifyFixedConstraint(externaltype,
-            externaltype->generate(ctx).constraint);
-
-        //return LLVMAddGlobal(ctx.module, verifyLLVMType(type), astVerifyString(name).c_str());
-        return ASTResult(type,
-            LLVMAddFunction(ctx->root.module, namestr.c_str(), verifyLLVMType(type)));
+            externaltype->generate(ctx));
+        return ctx->root.builder->cfuncdecl(namestr, type);
     }
 
     static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
@@ -6210,14 +6243,16 @@ struct ASTDo : ASTNodeImpl<ASTDo, AST_Do> {
         expressions(expressions_)
         {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-
-        ASTResult lastvalue = ASTResult(Constraint::Empty);
-        for (size_t i = 0; i < expressions.size(); ++i) {
-            lastvalue = expressions[i]->generate(ctx);
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
+        if (expressions.size() == 0) {
+            return ctx->root.builder->fixed(Constraint::Empty);
+        } else {
+            IRValueRef lastvalue;
+            for (size_t i = 0; i < expressions.size(); ++i) {
+                lastvalue = expressions[i]->generate(ctx);
+            }
+            return lastvalue;
         }
-
-        return lastvalue;
     }
 
     static ASTNodeRef parse(ASTEnvironment *env, ValueRef expr) {
@@ -6245,8 +6280,9 @@ struct ASTClosure : ASTNodeImpl<ASTClosure, AST_Closure> {
         ctx(ctx_)
     {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-        return ASTResult(Constraint::FixedASTNode(shared_from_this()));
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
+        return ctx->root.builder->fixed(
+            Constraint::FixedASTNode(shared_from_this()));
     }
 };
 
@@ -6256,7 +6292,7 @@ struct ASTFunctionDecl : ASTNodeImpl<ASTFunctionDecl, AST_FunctionDecl> {
     ASTNodeRef body;
     std::unordered_set<ASTNodeRef> captured;
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
 
         auto result = std::make_shared<ASTClosure>(ctx);
         result->node = shared_from_this();
@@ -6319,10 +6355,10 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
             assert(callable_);
         }
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
         assert(callable);
         auto rcallable = callable->generate(ctx);
-        auto fc = rcallable.constraint;
+        auto fc = rcallable->constraint;
         switch(fc->getKind()) {
             case C_CFunction: {
                 auto ftype = llvm::dyn_cast<CFunctionConstraint>(fc);
@@ -6331,14 +6367,12 @@ struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
                         fc->getRepr().c_str());
                 }
 
-                LLVMValueRef callee = rcallable.value;
-                LLVMValueRef args[arguments.size()];
+                std::vector<IRValueRef> args;
                 for (size_t i = 0; i < arguments.size(); ++i) {
-                    args[i] = astEmitValue(ctx, arguments[i], ftype->getParameter(i)).value;
+                    args.push_back(arguments[i]->generate(ctx));
                 }
 
-                return ASTResult(ftype->getResult(),
-                    LLVMBuildCall(ctx->root.builder, callee, args, arguments.size(), ""));
+                return ctx->root.builder->call(rcallable, args);
             } break;
             case C_FixedASTNode: {
                 auto castnode = llvm::dyn_cast<FixedASTNodeConstraint>(fc);
@@ -6413,23 +6447,22 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
         falseexpr(falseexpr_)
         {}
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-        ASTResult rcond = condition->generate(ctx);
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
+        IRValueRef rcond = condition->generate(ctx);
 
-        if (rcond.constraint == Constraint::True) {
+        if (rcond->constraint == Constraint::True) {
             return trueexpr->generate(ctx);
-        } else if (rcond.constraint == Constraint::False) {
+        } else if (rcond->constraint == Constraint::False) {
             if (falseexpr)
                 return falseexpr->generate(ctx);
             else
-                return ASTResult(Constraint::Empty);
-        } else if (rcond.constraint == Constraint::Bool) {
+                return ctx->root.builder->fixed(Constraint::Empty);
+        } else if (rcond->constraint == Constraint::Bool) {
             astError(shared_from_this(), "no support for branching yet");
         } else {
             astError(condition, "boolean constraint expected, got %s",
-                rcond.constraint->getRepr().c_str());
+                rcond->constraint->getRepr().c_str());
         }
-
         return nullptr;
     }
 
@@ -6445,43 +6478,6 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
             falseexpr = translateAST(env, expr_false);
 
         return std::make_shared<ASTSelect>(condition, trueexpr, falseexpr);
-    }
-};
-
-const int AST_LOOP_MAX_DEPTH = 256;
-
-struct ASTLabel : ASTNodeImpl<ASTLabel, AST_Label> {
-    std::string name;
-    ASTNodeRef body;
-    int loopcount;
-
-    ASTLabel(const std::string &name_) :
-        name(name_),
-        loopcount(0)
-        {}
-
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-        loopcount++;
-        if (loopcount > AST_LOOP_MAX_DEPTH) {
-            astError(shared_from_this(), "stack overflow");
-        }
-        auto result = body->generate(ctx);
-        loopcount--;
-        return result;
-    }
-
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        UNPACK_ARG(expr, expr_name);
-
-        Symbol *sym = astVerifyKind<Symbol>(expr_name);
-
-        auto label = std::make_shared<ASTLabel>(sym->getValue());
-
-        Environment subenv(env);
-        subenv.astnodes[sym->getValue()] = label;
-        label->body = ASTDo::parse(&subenv, expr_name);
-
-        return label;
     }
 };
 
@@ -6503,12 +6499,12 @@ struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
         return sym;
     }
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
-        ASTResult rvalue;
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
+        IRValueRef rvalue;
         if (value) {
             rvalue = value->generate(ctx);
         } else {
-            rvalue = ASTResult(Constraint::Null);
+            rvalue = ctx->root.builder->fixed(Constraint::Null);
         }
         ctx->bind(symbol, rvalue);
         return rvalue;
@@ -6548,9 +6544,9 @@ struct ASTSet : ASTNodeImpl<ASTSet, AST_Set> {
         return sym;
     }
 
-    virtual ASTResult generate(const GenerateContextRef &ctx) {
+    virtual IRValueRef generate(const GenerateContextRef &ctx) {
         getASTSymbol();
-        ASTResult rrvalue = rvalue->generate(ctx);
+        IRValueRef rrvalue = rvalue->generate(ctx);
         ctx->set(lvalue, rrvalue);
         return rrvalue;
     }
@@ -6691,7 +6687,6 @@ static void registerASTTranslators() {
     t.set(ASTCDecl::parse, "cdecl", 2, 2);
     t.set(ASTFunctionDecl::parse, "function", 1, -1);
 
-    t.set(ASTLabel::parse, "label", 1, -1);
 }
 
 static ASTNodeRef translateASTFromList (ASTEnvironment *env, ValueRef expr) {
@@ -6843,25 +6838,28 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     assert(stmts);
 
     RootGenerateContext rootctx;
-    rootctx.module = env->getModule();
-    rootctx.builder = env->getBuilder();
+    rootctx.module = std::make_shared<IRModule>();
+    rootctx.builder = std::make_shared<IRBuilder>(rootctx.module);
     auto ctx = std::make_shared<GenerateContext>(rootctx);
 
     LLVMTypeRef mainfunctype = LLVMFunctionType(LLVMVoidType(), NULL, 0, false);
 
-    LLVMValueRef func = LLVMAddFunction(ctx->root.module, "main", mainfunctype);
-    ctx->function = func;
+    LLVMModuleRef module = env->getModule();
+    LLVMBuilderRef builder = env->getBuilder();
 
-    LLVMPositionBuilderAtEnd(ctx->root.builder, LLVMAppendBasicBlock(func, ""));
+    LLVMValueRef func = LLVMAddFunction(module, "main", mainfunctype);
+    //ctx->function = func;
+
+    LLVMPositionBuilderAtEnd(builder, LLVMAppendBasicBlock(func, ""));
 
     stmts->generate(ctx);
 
-    LLVMBuildRetVoid(ctx->root.builder);
+    LLVMBuildRetVoid(builder);
 
-    LLVMDumpModule(ctx->root.module);
+    LLVMDumpModule(module);
 
     char *error = NULL;
-    LLVMVerifyModule(ctx->root.module, LLVMAbortProcessAction, &error);
+    LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
     LLVMDisposeMessage(error);
 
     error = NULL;
@@ -6873,7 +6871,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     //options.EnableFastISel = true;
     //options.CodeModel = LLVMCodeModelLarge;
 
-    LLVMCreateMCJITCompilerForModule(&engine, ctx->root.module,
+    LLVMCreateMCJITCompilerForModule(&engine, module,
         &options, sizeof(options), &error);
 
     if (error) {
