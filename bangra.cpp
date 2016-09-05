@@ -45,11 +45,6 @@ ValueRef bangra_parse_file(const char *path);
 
 Environment *bangra_parent_env(Environment *env);
 Environment *bangra_meta_env(Environment *env);
-void *bangra_llvm_module(Environment *env);
-void *bangra_llvm_value(Environment *env, const char *name);
-void *bangra_llvm_type(Environment *env, const char *name);
-void *bangra_llvm_engine(Environment *env);
-void bangra_link_llvm_module(Environment *env, void *module);
 void *bangra_import_c_module(ValueRef dest,
     const char *path, const char **args, int argcount);
 void *bangra_import_c_string(ValueRef dest,
@@ -142,8 +137,6 @@ void bangra_error_message(
     Environment *env, ValueRef context, const char *format, ...);
 void bangra_set_preprocessor(const char *name, bangra_preprocessor f);
 bangra_preprocessor bangra_get_preprocessor(const char *name);
-void bangra_set_macro(Environment *env, const char *name, bangra_preprocessor f);
-bangra_preprocessor bangra_get_macro(Environment *env, const char *name);
 ValueRef bangra_unique_symbol(const char *name);
 
 #if defined __cplusplus
@@ -2655,13 +2648,9 @@ void Constraint::initTypes() {
 // TRANSLATION ENVIRONMENT
 //------------------------------------------------------------------------------
 
-typedef std::map<std::string, LLVMValueRef> NameLLVMValueMap;
-typedef std::map<std::string, LLVMTypeRef> NameLLVMTypeMap;
-typedef std::list< std::tuple<LLVMValueRef, void *> > GlobalPtrList;
-typedef std::list< LLVMModuleRef > GlobalModuleList;
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 typedef std::unordered_map<std::string, ASTNodeRef> NameASTNodeMap;
-typedef std::unordered_map<std::string, Constraint *> NameTypeMap;
+typedef std::unordered_map<std::string, Constraint *> NameConstraintMap;
 
 //------------------------------------------------------------------------------
 
@@ -2669,25 +2658,14 @@ struct TranslationGlobals;
 
 struct Environment {
     TranslationGlobals *globals;
-    // currently active function
-    LLVMValueRef function;
-    // currently active block
-    LLVMValueRef block;
     // currently evaluated value
     ValueRef expr;
 
-    NameLLVMValueMap values;
-    NameLLVMTypeMap llvmtypes;
-    NameMacroMap macros;
-
     ASTNodeRef closure;
     NameASTNodeMap astnodes;
-    NameTypeMap types;
 
     // parent env
     Environment *parent;
-
-    bangra_preprocessor preprocessor;
 
     struct WithValue {
         ValueRef prevexpr;
@@ -2706,21 +2684,15 @@ struct Environment {
 
     Environment() :
         globals(NULL),
-        function(NULL),
-        block(NULL),
         expr(NULL),
-        parent(NULL),
-        preprocessor(NULL)
+        parent(NULL)
         {}
 
     Environment(Environment *parent_) :
         globals(parent_->globals),
-        function(parent_->function),
-        block(parent_->block),
         expr(parent_->expr),
         closure(parent_->closure),
-        parent(parent_),
-        preprocessor(parent_->preprocessor)
+        parent(parent_)
         {}
 
     WithValue with_expr(ValueRef expr) {
@@ -2729,64 +2701,11 @@ struct Environment {
 
     Environment *getMeta() const;
     bool hasErrors() const;
-    LLVMBuilderRef getBuilder() const;
-    LLVMModuleRef getModule() const;
-    LLVMExecutionEngineRef getEngine() const;
-    void addQuote(LLVMValueRef value, ValueRef expr);
-    void addGlobal(LLVMValueRef value, void *ptr);
 
-    LLVMValueRef resolveValue(const std::string &name) {
-        Environment *penv = this;
-        while (penv) {
-            LLVMValueRef result = (*penv).values[name];
-            if (result) {
-                return result;
-            }
-            penv = penv->parent;
-        }
-        return NULL;
-    }
-
-    ASTNodeRef resolveASTNode(const std::string &name) {
+    ASTNodeRef resolve(const std::string &name) {
         Environment *penv = this;
         while (penv) {
             ASTNodeRef result = (*penv).astnodes[name];
-            if (result) {
-                return result;
-            }
-            penv = penv->parent;
-        }
-        return NULL;
-    }
-
-    LLVMTypeRef resolveType(const std::string &name) {
-        Environment *penv = this;
-        while (penv) {
-            LLVMTypeRef result = (*penv).llvmtypes[name];
-            if (result) {
-                return result;
-            }
-            penv = (penv->parent)?penv->parent:penv->getMeta();
-        }
-        return NULL;
-    }
-
-    Constraint *resolveASTType(const std::string &name) {
-        Environment *penv = this;
-        while (penv) {
-            Constraint *result = (*penv).types[name];
-            if (result) {
-                return result;
-            }
-            penv = (penv->parent)?penv->parent:penv->getMeta();
-        }
-        return NULL;
-    }
-
-    bangra_preprocessor resolveMacro(const std::string &name) {
-        Environment *penv = this;
-        while (penv) {
-            bangra_preprocessor result = (*penv).macros[name];
             if (result) {
                 return result;
             }
@@ -2802,49 +2721,22 @@ static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 struct TranslationGlobals {
     int compile_errors;
-    // module for this translation
-    LLVMModuleRef module;
-    // builder for this translation
-    LLVMBuilderRef builder;
-    // execution engine if available
-    LLVMExecutionEngineRef engine;
     // meta env; only valid for proto environments
     Environment *meta;
-    // global pointers
-    GlobalPtrList globalptrs;
-    // global modules
-    GlobalModuleList globalmodules;
     // root environment
     Environment rootenv;
 
-    std::unordered_map<std::string, bool> includes;
-
     TranslationGlobals() :
         compile_errors(0),
-        module(NULL),
-        builder(NULL),
-        engine(NULL),
         meta(NULL) {
         rootenv.globals = this;
     }
 
     TranslationGlobals(Environment *env) :
         compile_errors(0),
-        module(NULL),
-        builder(NULL),
-        engine(NULL),
         meta(env) {
         rootenv.globals = this;
     }
-
-    bool hasInclude(const std::string &path) {
-        return includes[path];
-    }
-
-    void addInclude(const std::string &path) {
-        includes[path] = true;
-    }
-
 };
 
 //------------------------------------------------------------------------------
@@ -2855,27 +2747,6 @@ Environment *Environment::getMeta() const {
 
 bool Environment::hasErrors() const {
     return globals->compile_errors != 0;
-}
-
-LLVMBuilderRef Environment::getBuilder() const {
-    return globals->builder;
-}
-
-LLVMModuleRef Environment::getModule() const {
-    return globals->module;
-}
-
-LLVMExecutionEngineRef Environment::getEngine() const {
-    return globals->engine;
-}
-
-void Environment::addQuote(LLVMValueRef value, ValueRef expr) {
-    addGlobal(value, (void *)expr);
-    gc_root = cons(expr, gc_root);
-}
-
-void Environment::addGlobal(LLVMValueRef value, void *ptr) {
-    globals->globalptrs.push_back(std::make_tuple(value, ptr));
 }
 
 //------------------------------------------------------------------------------
@@ -3438,7 +3309,7 @@ static bool isSymbol (const Value *expr, const char *sym) {
 
 //------------------------------------------------------------------------------
 
-static void setupRootEnvironment (Environment *env, const char *modulename);
+static void setupRootEnvironment (Environment *env);
 static void teardownRootEnvironment (Environment *env);
 static bool compileModule (Environment *env, ValueRef expr);
 
@@ -4897,7 +4768,7 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
         } else if (value == "null") {
             result = std::make_shared<ASTNop>(Constraint::Null);
         } else {
-            result = env->resolveASTNode(value);
+            result = env->resolve(value);
             if (!result) {
                 astError(expr, "unknown symbol '%s'",
                     value.c_str());
@@ -4962,14 +4833,7 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
-static void setupRootEnvironment (Environment *env, const char *modulename) {
-    LLVMModuleRef module = LLVMModuleCreateWithName(modulename);
-
-    LLVMBuilderRef builder = LLVMCreateBuilder();
-
-    env->globals->module = module;
-    env->globals->builder = builder;
-
+static void setupRootEnvironment (Environment *env) {
     env->astnodes["void"] = ASTNop::fixedConstraint(Constraint::Void);
     env->astnodes["half"] = ASTNop::fixedConstraint(Constraint::Half);
     env->astnodes["float"] = ASTNop::fixedConstraint(Constraint::Float);
@@ -4988,31 +4852,9 @@ static void setupRootEnvironment (Environment *env, const char *modulename) {
 
     env->astnodes["int"] = env->astnodes["int32"];
     env->astnodes["rawstring"] = ASTNop::fixedConstraint(Constraint::Rawstring);
-
-    env->llvmtypes["void"] = LLVMVoidType();
-    env->llvmtypes["half"] = LLVMHalfType();
-    env->llvmtypes["float"] = LLVMFloatType();
-    env->llvmtypes["double"] = LLVMDoubleType();
-    env->llvmtypes["i1"] = LLVMInt1Type();
-    env->llvmtypes["i8"] = LLVMInt8Type();
-    env->llvmtypes["i16"] = LLVMInt16Type();
-    env->llvmtypes["i32"] = LLVMInt32Type();
-    env->llvmtypes["i64"] = LLVMInt64Type();
-
-    env->llvmtypes["rawstring"] = LLVMPointerType(LLVMInt8Type(), 0);
-    env->llvmtypes["opaque"] = _opaque;
-
-    env->llvmtypes["_Value"] = _t_Value;
-    env->llvmtypes["Value"] = LLVMPointerType(_t_Value, 0);
-    env->llvmtypes["_Environment"] = _t_Environment;
-    env->llvmtypes["Environment"] = LLVMPointerType(_t_Environment, 0);
-
-    env->values["true"] = LLVMConstInt(LLVMInt1Type(), 1, 1);
-    env->values["false"] = LLVMConstInt(LLVMInt1Type(), 0, 1);
 }
 
 static void teardownRootEnvironment (Environment *env) {
-    LLVMDisposeBuilder(env->getBuilder());
 }
 
 static LLVMValueRef handleException(Environment *env, ValueRef expr) {
@@ -5040,7 +4882,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
     rootctx.module->verify();
     fflush(stdout);
 
-    LLVMModuleRef module = env->getModule();
+    LLVMModuleRef module = LLVMModuleCreateWithName("main");
 
     LLVMValueRef func;
     {
@@ -5112,8 +4954,6 @@ static T *translateKind(Environment *env, ValueRef expr) {
 
 static bool compileModule (Environment *env, ValueRef expr) {
     assert(expr);
-    assert(env->getBuilder());
-    assert(env->getModule());
 
     auto _ = env->with_expr(expr);
 
@@ -5159,7 +4999,7 @@ static bool compileModule (Environment *env, ValueRef expr) {
 static bool compileMain (ValueRef expr) {
     TranslationGlobals globals;
 
-    setupRootEnvironment(&globals.rootenv, "main");
+    setupRootEnvironment(&globals.rootenv);
 
     bool result = compileModule(&globals.rootenv, at(expr));
 
@@ -5739,40 +5579,12 @@ Environment *bangra_meta_env(Environment *env) {
     return env->getMeta();
 }
 
-void bangra_set_macro(Environment *env, const char *name, bangra_preprocessor f) {
-    env->macros[name] = f;
-}
-
-bangra_preprocessor bangra_get_macro(Environment *env, const char *name) {
-    return env->macros[name];
-}
-
-void *bangra_llvm_module(Environment *env) {
-    return env->getModule();
-}
-
-void *bangra_llvm_engine(Environment *env) {
-    return env->getEngine();
-}
-
-void *bangra_llvm_value(Environment *env, const char *name) {
-    return env->resolveValue(name);
-}
-
-void *bangra_llvm_type(Environment *env, const char *name) {
-    return env->resolveType(name);
-}
-
 static int unique_symbol_counter = 0;
 ValueRef bangra_unique_symbol(const char *name) {
     if (!name)
         name = "";
     auto symname = bangra::format("#%s%i", name, unique_symbol_counter++);
     return new bangra::Symbol(symname.c_str());
-}
-
-void bangra_link_llvm_module(Environment *env, void *module) {
-    env->globals->globalmodules.push_back((LLVMModuleRef)module);
 }
 
 void *bangra_import_c_module(ValueRef dest,
