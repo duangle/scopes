@@ -44,7 +44,6 @@ ValueRef bangra_parse_file(const char *path);
 //------------------------------------------------------------------------------
 
 Environment *bangra_parent_env(Environment *env);
-Environment *bangra_meta_env(Environment *env);
 void *bangra_import_c_module(ValueRef dest,
     const char *path, const char **args, int argcount);
 void *bangra_import_c_string(ValueRef dest,
@@ -371,7 +370,8 @@ static std::string quoteString(const std::string &a, const char *quote_chars = n
 #define ANSI_STYLE_INSTRUCTION ANSI_COLOR_YELLOW
 #define ANSI_STYLE_TYPE ANSI_COLOR_XYELLOW
 #define ANSI_STYLE_COMMENT ANSI_COLOR_GRAY30
-#define ANSI_STYLE_ERROR ANSI_COLOR_RED
+#define ANSI_STYLE_ERROR ANSI_COLOR_XRED
+#define ANSI_STYLE_LOCATION ANSI_COLOR_XCYAN
 
 static bool support_ansi = false;
 static std::string ansi(const std::string &code, const std::string &content) {
@@ -449,7 +449,7 @@ public:
         for (size_t i = 0; i < column; ++i) {
             putchar(' ');
         }
-        printf("^\n");
+        puts(ansi(ANSI_STYLE_OPERATOR, "^").c_str());
     }
 };
 
@@ -521,7 +521,8 @@ struct Anchor {
 
     static void printErrorV (Anchor *anchor, const char *fmt, va_list args) {
         if (anchor) {
-            std::cout << anchor->path
+            std::cout
+                << ansi(ANSI_STYLE_LOCATION, anchor->path)
                 << ansi(ANSI_STYLE_OPERATOR, ":")
                 << ansi(ANSI_STYLE_NUMBER, format("%i", anchor->lineno))
                 << ansi(ANSI_STYLE_OPERATOR, ":")
@@ -1990,196 +1991,135 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 }
 
 //------------------------------------------------------------------------------
-// CONSTRAINT SYSTEM
+// TYPE SYSTEM
 //------------------------------------------------------------------------------
 
-struct ASTNode;
-typedef std::shared_ptr<ASTNode> ASTNodeRef;
-
-static void astError (ValueRef expr, const char *format, ...);
-static void astError (const ASTNodeRef &node, const char *format, ...);
-
-
-enum ConstraintKind {
-    C_Void,
-    C_IntegerFormat,
-    C_RealFormat,
-    C_Pointer,
-    C_Array,
-    C_Vector,
-    C_Tuple,
-    C_Struct,
-    C_CFunction,
-
-    C_Tag,
-    C_FixedInteger,
-    C_FixedReal,
-    C_FixedString,
-    C_FixedConstraint,
-    C_FixedASTNode
+enum TypeKind {
+    T_Any,
+    T_Void,
+    T_Integer,
+    T_Real,
+    T_Pointer,
+    T_Array,
+    T_Vector,
+    T_Tuple,
+    T_Struct,
+    T_CFunction,
 };
 
 //------------------------------------------------------------------------------
 
-struct Constraint;
-typedef std::vector< std::pair<std::string, Constraint *> > NamedConstraintArray;
-typedef std::vector<Constraint *> ConstraintArray;
+struct Type;
+typedef std::vector< std::pair<std::string, Type *> > NamedTypeArray;
+typedef std::vector<Type *> TypeArray;
 typedef std::vector<std::string> NameArray;
 
-struct Constraint {
+struct Type {
 private:
-    const ConstraintKind kind;
+    const TypeKind kind;
 
-    static Constraint *newIntegerFormatConstraint(int _width, bool _signed);
-    static Constraint *newRealFormatConstraint(int _width);
-    static Constraint *newPointerConstraint(Constraint *_element);
-    static Constraint *newArrayConstraint(Constraint *_element, unsigned _size);
-    static Constraint *newVectorConstraint(Constraint *_element, unsigned _size);
-    static Constraint *newTupleConstraint(NamedConstraintArray _elements);
-    static Constraint *newCFunctionConstraint(Constraint *_returntype, ConstraintArray _parameters, bool vararg);
-    static Constraint *newFixedIntegerConstraint(int64_t value_);
-    static Constraint *newFixedRealConstraint(double value_);
-    static Constraint *newFixedStringConstraint(std::string value_);
-    static Constraint *newFixedConstraint(Constraint *type_);
-    static Constraint *newTagConstraint(std::string value_);
+    static Type *newIntegerType(int _width, bool _signed);
+    static Type *newRealType(int _width);
+    static Type *newPointerType(Type *_element);
+    static Type *newArrayType(Type *_element, unsigned _size);
+    static Type *newVectorType(Type *_element, unsigned _size);
+    static Type *newTupleType(NamedTypeArray _elements);
+    static Type *newCFunctionType(Type *_returntype, TypeArray _parameters, bool vararg);
 
 protected:
-    bool isfixed;
-    LLVMTypeRef llvmtype;
-
-    Constraint(
-        bool isfixed_,
-        ConstraintKind kind_,
-        LLVMTypeRef llvmtype_ = nullptr) :
-
-        kind(kind_),
-        isfixed(isfixed_),
-        llvmtype(llvmtype_)
+    Type(TypeKind kind_) :
+        kind(kind_)
         {}
 
-    virtual ~Constraint () {};
+    virtual ~Type () {};
 
 public:
-    static Constraint *AConstraint;
-    static Constraint *Void;
-    static Constraint *Null;
-    static Constraint *Bool;
-    static Constraint *False;
-    static Constraint *True;
+    static Type *TypePointer;
+    static Type *Void;
+    static Type *Bool;
+    static Type *Empty;
+    static Type *Any;
 
-    static Constraint *Empty;
-    static Constraint *Opaque;
-    static Constraint *OpaquePointer;
+    static Type *Opaque;
+    static Type *OpaquePointer;
 
-    static Constraint *Int8;
-    static Constraint *Int16;
-    static Constraint *Int32;
-    static Constraint *Int64;
+    static Type *Int8;
+    static Type *Int16;
+    static Type *Int32;
+    static Type *Int64;
 
-    static Constraint *UInt8;
-    static Constraint *UInt16;
-    static Constraint *UInt32;
-    static Constraint *UInt64;
+    static Type *UInt8;
+    static Type *UInt16;
+    static Type *UInt32;
+    static Type *UInt64;
 
-    static Constraint *Half;
-    static Constraint *Float;
-    static Constraint *Double;
+    static Type *Half;
+    static Type *Float;
+    static Type *Double;
 
-    static Constraint *Rawstring;
+    static Type *Rawstring;
 
-    ConstraintKind getKind() const {
+    TypeKind getKind() const {
         return kind;
     }
 
     static void initTypes();
 
-    static std::function<Constraint * (int, bool)> IntegerFormat;
-    static std::function<Constraint * (int)> RealFormat;
-    static std::function<Constraint * (Constraint *)> Pointer;
-    static std::function<Constraint * (Constraint *, unsigned)> Array;
-    static std::function<Constraint * (Constraint *, unsigned)> Vector;
-    static std::function<Constraint * (NamedConstraintArray)> Tuple;
-    static Constraint *Struct(const std::string &name);
-    static std::function<Constraint * (Constraint *, ConstraintArray, bool)> CFunction;
-    static Constraint *FixedASTNode(const ASTNodeRef &node);
-    static std::function<Constraint * (int64_t)> FixedInteger;
-    static std::function<Constraint * (double)> FixedReal;
-    static std::function<Constraint * (std::string)> FixedString;
-    static std::function<Constraint * (Constraint *)> FixedConstraint;
-    static std::function<Constraint * (std::string)> Tag;
+    static std::function<Type * (int, bool)> Integer;
+    static std::function<Type * (int)> Real;
+    static std::function<Type * (Type *)> Pointer;
+    static std::function<Type * (Type *, unsigned)> Array;
+    static std::function<Type * (Type *, unsigned)> Vector;
+    static std::function<Type * (NamedTypeArray)> Tuple;
+    static Type *Struct(const std::string &name);
+    static std::function<Type * (Type *, TypeArray, bool)> CFunction;
 
-    LLVMTypeRef getLLVMType() const { return llvmtype; }
-    bool isFixed() const { return isfixed; }
     virtual std::string getRepr() = 0;
 };
 
-Constraint *Constraint::AConstraint;
-Constraint *Constraint::Void;
-Constraint *Constraint::Null;
-Constraint *Constraint::Bool;
-Constraint *Constraint::False;
-Constraint *Constraint::True;
-Constraint *Constraint::Int8;
-Constraint *Constraint::Int16;
-Constraint *Constraint::Int32;
-Constraint *Constraint::Int64;
-Constraint *Constraint::UInt8;
-Constraint *Constraint::UInt16;
-Constraint *Constraint::UInt32;
-Constraint *Constraint::UInt64;
-Constraint *Constraint::Half;
-Constraint *Constraint::Float;
-Constraint *Constraint::Double;
-Constraint *Constraint::Rawstring;
-Constraint *Constraint::Empty;
-Constraint *Constraint::Opaque;
-Constraint *Constraint::OpaquePointer;
-std::function<Constraint * (int, bool)> Constraint::IntegerFormat = memo(Constraint::newIntegerFormatConstraint);
-std::function<Constraint * (int)> Constraint::RealFormat = memo(Constraint::newRealFormatConstraint);
-std::function<Constraint * (Constraint *)> Constraint::Pointer = memo(Constraint::newPointerConstraint);
-std::function<Constraint * (Constraint *, unsigned)> Constraint::Array = memo(Constraint::newArrayConstraint);
-std::function<Constraint * (Constraint *, unsigned)> Constraint::Vector = memo(Constraint::newVectorConstraint);
-std::function<Constraint * (NamedConstraintArray)> Constraint::Tuple = memo(Constraint::newTupleConstraint);
-std::function<Constraint * (Constraint *, ConstraintArray, bool)> Constraint::CFunction = memo(Constraint::newCFunctionConstraint);
-std::function<Constraint * (int64_t)> Constraint::FixedInteger = memo(Constraint::newFixedIntegerConstraint);
-std::function<Constraint * (double)> Constraint::FixedReal = memo(Constraint::newFixedRealConstraint);
-std::function<Constraint * (std::string)> Constraint::FixedString = memo(Constraint::newFixedStringConstraint);
-std::function<Constraint * (Constraint *)> Constraint::FixedConstraint = memo(Constraint::newFixedConstraint);
-std::function<Constraint * (std::string)> Constraint::Tag = memo(Constraint::newTagConstraint);
+Type *Type::TypePointer;
+Type *Type::Void;
+Type *Type::Bool;
+Type *Type::Int8;
+Type *Type::Int16;
+Type *Type::Int32;
+Type *Type::Int64;
+Type *Type::UInt8;
+Type *Type::UInt16;
+Type *Type::UInt32;
+Type *Type::UInt64;
+Type *Type::Half;
+Type *Type::Float;
+Type *Type::Double;
+Type *Type::Rawstring;
+Type *Type::Empty;
+Type *Type::Any;
+Type *Type::Opaque;
+Type *Type::OpaquePointer;
+std::function<Type * (int, bool)> Type::Integer = memo(Type::newIntegerType);
+std::function<Type * (int)> Type::Real = memo(Type::newRealType);
+std::function<Type * (Type *)> Type::Pointer = memo(Type::newPointerType);
+std::function<Type * (Type *, unsigned)> Type::Array = memo(Type::newArrayType);
+std::function<Type * (Type *, unsigned)> Type::Vector = memo(Type::newVectorType);
+std::function<Type * (NamedTypeArray)> Type::Tuple = memo(Type::newTupleType);
+std::function<Type * (Type *, TypeArray, bool)> Type::CFunction = memo(Type::newCFunctionType);
 
 //------------------------------------------------------------------------------
 
-LLVMTypeRef verifyLLVMType(Constraint *type) {
-    assert(type);
-    LLVMTypeRef result = type->getLLVMType();
-    if (!result) {
-        astError((ValueRef)nullptr, "%s type has no LLVM type",
-            type->getRepr().c_str());
-    }
-    assert(result);
-    return result;
-}
-
-//------------------------------------------------------------------------------
-
-template<class T, ConstraintKind KindT>
-struct ConstraintImpl : Constraint {
-    ConstraintImpl(bool isliteral_, LLVMTypeRef llvmtype_ = nullptr) :
-        Constraint(isliteral_, KindT, llvmtype_)
+template<class T, TypeKind KindT>
+struct TypeImpl : Type {
+    TypeImpl() :
+        Type(KindT)
         {}
 
-    static bool classof(const Constraint *node) {
+    static bool classof(const Type *node) {
         return node->getKind() == KindT;
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct VoidConstraint : ConstraintImpl<VoidConstraint, C_Void> {
-    VoidConstraint() :
-        ConstraintImpl(false, LLVMVoidType())
-        {}
-
+struct VoidType : TypeImpl<VoidType, T_Void> {
     virtual std::string getRepr() {
         return ansi(ANSI_STYLE_TYPE, "void");
     }
@@ -2187,7 +2127,15 @@ struct VoidConstraint : ConstraintImpl<VoidConstraint, C_Void> {
 
 //------------------------------------------------------------------------------
 
-struct IntegerFormatConstraint : ConstraintImpl<IntegerFormatConstraint, C_IntegerFormat> {
+struct AnyType : TypeImpl<AnyType, T_Any> {
+    virtual std::string getRepr() {
+        return ansi(ANSI_STYLE_TYPE, "any");
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct IntegerType : TypeImpl<IntegerType, T_Integer> {
 protected:
     int width;
     bool is_signed;
@@ -2196,9 +2144,7 @@ public:
     int getWidth() const { return width; }
     bool isSigned() const { return is_signed; }
 
-    IntegerFormatConstraint(int _width, bool _signed) :
-        ConstraintImpl(false,
-            LLVMIntType(_width)),
+    IntegerType(int _width, bool _signed) :
         width(_width),
         is_signed(_signed)
         {}
@@ -2209,30 +2155,18 @@ public:
 
 };
 
-Constraint *Constraint::newIntegerFormatConstraint(int _width, bool _signed) {
-    return new IntegerFormatConstraint(_width, _signed);
+Type *Type::newIntegerType(int _width, bool _signed) {
+    return new IntegerType(_width, _signed);
 }
 
 //------------------------------------------------------------------------------
 
-struct RealFormatConstraint : ConstraintImpl<RealFormatConstraint, C_RealFormat> {
+struct RealType : TypeImpl<RealType, T_Real> {
 protected:
     int width;
 
 public:
-    static LLVMTypeRef getLLVMTypeForSpec(int width) {
-        switch(width) {
-            case 16: return LLVMHalfType();
-            case 32: return LLVMFloatType();
-            case 64: return LLVMDoubleType();
-            case 128: return LLVMFP128Type();
-            default: return nullptr;
-        }
-    }
-
-    RealFormatConstraint(int _width) :
-        ConstraintImpl(false,
-            getLLVMTypeForSpec(_width)),
+    RealType(int _width) :
         width(_width)
         {}
 
@@ -2241,21 +2175,18 @@ public:
     }
 };
 
-Constraint *Constraint::newRealFormatConstraint(int _width) {
-    return new RealFormatConstraint(_width);
+Type *Type::newRealType(int _width) {
+    return new RealType(_width);
 }
 
 //------------------------------------------------------------------------------
 
-struct PointerConstraint : ConstraintImpl<PointerConstraint, C_Pointer> {
+struct PointerType : TypeImpl<PointerType, T_Pointer> {
 protected:
-    Constraint *element;
+    Type *element;
 
 public:
-    PointerConstraint(Constraint *_element) :
-        ConstraintImpl(
-            _element->isFixed(),
-            LLVMPointerType(verifyLLVMType(_element), 0)),
+    PointerType(Type *_element) :
         element(_element)
         {}
 
@@ -2267,22 +2198,19 @@ public:
 
 };
 
-Constraint *Constraint::newPointerConstraint(Constraint *_element) {
-    return new PointerConstraint(_element);
+Type *Type::newPointerType(Type *_element) {
+    return new PointerType(_element);
 }
 
 //------------------------------------------------------------------------------
 
-struct ArrayConstraint : ConstraintImpl<ArrayConstraint, C_Array> {
+struct ArrayType : TypeImpl<ArrayType, T_Array> {
 protected:
-    Constraint *element;
+    Type *element;
     unsigned size;
 
 public:
-    ArrayConstraint(Constraint *_element, unsigned _size) :
-        ConstraintImpl(
-            _element->isFixed(),
-            LLVMArrayType(verifyLLVMType(_element), _size)),
+    ArrayType(Type *_element, unsigned _size) :
         element(_element),
         size(_size)
         {}
@@ -2296,22 +2224,19 @@ public:
 
 };
 
-Constraint *Constraint::newArrayConstraint(Constraint *_element, unsigned _size) {
-    return new ArrayConstraint(_element, _size);
+Type *Type::newArrayType(Type *_element, unsigned _size) {
+    return new ArrayType(_element, _size);
 }
 
 //------------------------------------------------------------------------------
 
-struct VectorConstraint : ConstraintImpl<VectorConstraint, C_Vector> {
+struct VectorType : TypeImpl<VectorType, T_Vector> {
 protected:
-    Constraint *element;
+    Type *element;
     unsigned size;
 
 public:
-    VectorConstraint(Constraint *_element, unsigned _size) :
-        ConstraintImpl(
-            _element->isFixed(),
-            LLVMVectorType(verifyLLVMType(_element), _size)),
+    VectorType(Type *_element, unsigned _size) :
         element(_element),
         size(_size)
         {}
@@ -2325,18 +2250,18 @@ public:
 
 };
 
-Constraint *Constraint::newVectorConstraint(Constraint *_element, unsigned _size) {
-    return new VectorConstraint(_element, _size);
+Type *Type::newVectorType(Type *_element, unsigned _size) {
+    return new VectorType(_element, _size);
 }
 
 //------------------------------------------------------------------------------
 
-struct TupleConstraint : ConstraintImpl<TupleConstraint, C_Tuple> {
+struct TupleType : TypeImpl<TupleType, T_Tuple> {
 protected:
-    NamedConstraintArray elements;
+    NamedTypeArray elements;
 
 public:
-    static std::string getSpecRepr(const NamedConstraintArray &elements) {
+    static std::string getSpecRepr(const NamedTypeArray &elements) {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "tuple");
         for (size_t i = 0; i < elements.size(); ++i) {
@@ -2347,28 +2272,7 @@ public:
         return ss.str();
     }
 
-    static bool isSpecFixed(const NamedConstraintArray &elements) {
-        for (size_t i = 0; i < elements.size(); ++i) {
-            if (!elements[i].second->isFixed()) return false;
-        }
-
-        return true;
-    }
-
-    static LLVMTypeRef getLLVMTypeForSpec(const NamedConstraintArray &elements) {
-
-        LLVMTypeRef types[elements.size()];
-        for (size_t i = 0; i < elements.size(); ++i) {
-            types[i] = verifyLLVMType(elements[i].second);
-        }
-
-        return LLVMStructType(types, elements.size(), false);
-    }
-
-    TupleConstraint(const NamedConstraintArray &_elements) :
-        ConstraintImpl(
-            isSpecFixed(_elements),
-            getLLVMTypeForSpec(_elements)),
+    TupleType(const NamedTypeArray &_elements) :
         elements(_elements)
         {}
 
@@ -2378,22 +2282,19 @@ public:
 
 };
 
-Constraint *Constraint::newTupleConstraint(NamedConstraintArray _elements) {
-    return new TupleConstraint(_elements);
+Type *Type::newTupleType(NamedTypeArray _elements) {
+    return new TupleType(_elements);
 }
 
 //------------------------------------------------------------------------------
 
-struct StructConstraint : ConstraintImpl<StructConstraint, C_Struct> {
+struct StructType : TypeImpl<StructType, T_Struct> {
 protected:
     std::string name;
-    NamedConstraintArray elements;
+    NamedTypeArray elements;
 
 public:
-    StructConstraint(const std::string &name_) :
-        ConstraintImpl(
-            false,
-            LLVMStructCreateNamed(LLVMGetGlobalContext(), name_.c_str())),
+    StructType(const std::string &name_) :
         name(name_)
         {}
 
@@ -2406,21 +2307,21 @@ public:
 
 };
 
-Constraint *Constraint::Struct(const std::string &name) {
-    return new StructConstraint(name);
+Type *Type::Struct(const std::string &name) {
+    return new StructType(name);
 }
 
 //------------------------------------------------------------------------------
 
-struct CFunctionConstraint : ConstraintImpl<CFunctionConstraint, C_CFunction> {
+struct CFunctionType : TypeImpl<CFunctionType, T_CFunction> {
 protected:
-    Constraint *result;
-    ConstraintArray parameters;
+    Type *result;
+    TypeArray parameters;
     bool isvararg;
 
 public:
-    static std::string getSpecRepr(Constraint *result,
-        const ConstraintArray &parameters, bool isvararg) {
+    static std::string getSpecRepr(Type *result,
+        const TypeArray &parameters, bool isvararg) {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "cdecl") << " ";
         ss << result->getRepr();
@@ -2439,40 +2340,24 @@ public:
         return ss.str();
     }
 
-    static LLVMTypeRef getLLVMTypeForSpec(Constraint *result,
-        const ConstraintArray &parameters, bool isvararg) {
-
-        LLVMTypeRef types[parameters.size()];
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            types[i] = verifyLLVMType(parameters[i]);
-        }
-
-        return LLVMFunctionType(verifyLLVMType(result),
-                             types, parameters.size(),
-                             isvararg);
-    }
-
     size_t getParameterCount() const {
         return parameters.size();
     }
 
-    Constraint *getParameter(int index) const {
+    Type *getParameter(int index) const {
         if (index >= (int)parameters.size())
             return NULL;
         else
             return parameters[index];
     }
 
-    Constraint *getResult() const {
+    Type *getResult() const {
         return result;
     }
 
     bool isVarArg() const { return isvararg; }
 
-    CFunctionConstraint(Constraint *result_, const ConstraintArray &_parameters, bool _isvararg) :
-        ConstraintImpl(
-            false,
-            getLLVMTypeForSpec(result_, _parameters, _isvararg)),
+    CFunctionType(Type *result_, const TypeArray &_parameters, bool _isvararg) :
         result(result_),
         parameters(_parameters),
         isvararg(_isvararg)
@@ -2484,269 +2369,43 @@ public:
 
 };
 
-Constraint *Constraint::newCFunctionConstraint(Constraint *_returntype, ConstraintArray _parameters, bool _isvararg) {
-    return new CFunctionConstraint(_returntype, _parameters, _isvararg);
+Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters, bool _isvararg) {
+    return new CFunctionType(_returntype, _parameters, _isvararg);
 }
+
+// return ansi(ANSI_STYLE_STRING, format("\"%s\"", quoteString(value, "\"").c_str()));
 
 //------------------------------------------------------------------------------
 
-struct FixedIntegerConstraint : ConstraintImpl<FixedIntegerConstraint, C_FixedInteger> {
-protected:
-    int64_t value;
-
-public:
-    int64_t getValue() const { return value; }
-
-    FixedIntegerConstraint(int64_t value_) :
-        ConstraintImpl(true),
-        value(value_)
-        {}
-
-    virtual std::string getRepr() {
-        return ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value));
-    }
-};
-
-Constraint *Constraint::newFixedIntegerConstraint(int64_t value_) {
-    return new FixedIntegerConstraint(value_);
-}
-
-//------------------------------------------------------------------------------
-
-struct FixedRealConstraint : ConstraintImpl<FixedRealConstraint, C_FixedReal> {
-protected:
-    double value;
-
-public:
-    double getValue() const { return value; }
-
-    FixedRealConstraint(double value_) :
-        ConstraintImpl(true),
-        value(value_)
-        {}
-
-    virtual std::string getRepr() {
-        return ansi(ANSI_STYLE_NUMBER, format("%g", value));
-    }
-};
-
-Constraint *Constraint::newFixedRealConstraint(double value_) {
-    return new FixedRealConstraint(value_);
-}
-
-//------------------------------------------------------------------------------
-
-struct FixedConstraint : ConstraintImpl<FixedConstraint, C_FixedConstraint> {
-protected:
-    Constraint *value;
-
-public:
-    Constraint *getValue() const { return value; }
-
-    FixedConstraint(Constraint *value_) :
-        ConstraintImpl(true),
-        value(value_)
-        {}
-
-    virtual std::string getRepr() {
-        return format("(%s %s)",
-            ansi(ANSI_STYLE_KEYWORD, "constraint").c_str(),
-            value->getRepr().c_str());
-    }
-};
-
-Constraint *Constraint::newFixedConstraint(Constraint *value_) {
-    return new struct FixedConstraint(value_);
-}
-
-//------------------------------------------------------------------------------
-
-struct TagConstraint : ConstraintImpl<TagConstraint, C_Tag> {
-protected:
-    std::string value;
-
-public:
-    const std::string &getName() const { return value; }
-
-    TagConstraint(const std::string &value_) :
-        ConstraintImpl(true),
-        value(value_)
-        {}
-
-    virtual std::string getRepr() {
-        return format("(%s %s)",
-            ansi(ANSI_STYLE_KEYWORD, "tag").c_str(),
-            ansi(ANSI_STYLE_TYPE, value).c_str());
-    }
-};
-
-Constraint *Constraint::newTagConstraint(std::string value_) {
-    return new TagConstraint(value_);
-}
-
-//------------------------------------------------------------------------------
-
-struct FixedStringConstraint : ConstraintImpl<FixedStringConstraint, C_FixedString> {
-protected:
-    std::string value;
-
-public:
-    std::string getValue() const { return value; }
-
-    FixedStringConstraint(const std::string &value_) :
-        ConstraintImpl(true),
-        value(value_)
-        {}
-
-    virtual std::string getRepr() {
-        return ansi(ANSI_STYLE_STRING, format("\"%s\"", quoteString(value, "\"").c_str()));
-    }
-};
-
-Constraint *Constraint::newFixedStringConstraint(std::string value_) {
-    return new FixedStringConstraint(value_);
-}
-
-//------------------------------------------------------------------------------
-
-void Constraint::initTypes() {
-    AConstraint = Tag("type");
+void Type::initTypes() {
+    TypePointer = Pointer(Struct("Type"));
 
     Empty = Tuple({});
 
-    Void = new VoidConstraint();
-    Null = Tag("null");
-
-    True = Tag("true");
-    False = Tag("false");
+    Any = new AnyType();
+    Void = new VoidType();
 
     Opaque = Struct("opaque");
     OpaquePointer = Pointer(Opaque);
 
-    Bool = IntegerFormat(1, false);
+    Bool = Integer(1, false);
 
-    Int8 = IntegerFormat(8, true);
-    Int16 = IntegerFormat(16, true);
-    Int32 = IntegerFormat(32, true);
-    Int64 = IntegerFormat(64, true);
+    Int8 = Integer(8, true);
+    Int16 = Integer(16, true);
+    Int32 = Integer(32, true);
+    Int64 = Integer(64, true);
 
-    UInt8 = IntegerFormat(8, false);
-    UInt16 = IntegerFormat(16, false);
-    UInt32 = IntegerFormat(32, false);
-    UInt64 = IntegerFormat(64, false);
+    UInt8 = Integer(8, false);
+    UInt16 = Integer(16, false);
+    UInt32 = Integer(32, false);
+    UInt64 = Integer(64, false);
 
-    Half = RealFormat(16);
-    Float = RealFormat(32);
-    Double = RealFormat(64);
+    Half = Real(16);
+    Float = Real(32);
+    Double = Real(64);
 
     Rawstring = Pointer(Int8);
 
-}
-
-
-//------------------------------------------------------------------------------
-// TRANSLATION ENVIRONMENT
-//------------------------------------------------------------------------------
-
-typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
-typedef std::unordered_map<std::string, ASTNodeRef> NameASTNodeMap;
-typedef std::unordered_map<std::string, Constraint *> NameConstraintMap;
-
-//------------------------------------------------------------------------------
-
-struct TranslationGlobals;
-
-struct Environment {
-    TranslationGlobals *globals;
-    // currently evaluated value
-    ValueRef expr;
-
-    ASTNodeRef closure;
-    NameASTNodeMap astnodes;
-
-    // parent env
-    Environment *parent;
-
-    struct WithValue {
-        ValueRef prevexpr;
-        Environment *env;
-
-        WithValue(Environment *env_, ValueRef expr_) :
-            prevexpr(env_->expr),
-            env(env_) {
-            if (expr_)
-                env_->expr = expr_;
-        }
-        ~WithValue() {
-            env->expr = prevexpr;
-        }
-    };
-
-    Environment() :
-        globals(NULL),
-        expr(NULL),
-        parent(NULL)
-        {}
-
-    Environment(Environment *parent_) :
-        globals(parent_->globals),
-        expr(parent_->expr),
-        closure(parent_->closure),
-        parent(parent_)
-        {}
-
-    WithValue with_expr(ValueRef expr) {
-        return WithValue(this, expr);
-    }
-
-    Environment *getMeta() const;
-    bool hasErrors() const;
-
-    ASTNodeRef resolve(const std::string &name) {
-        Environment *penv = this;
-        while (penv) {
-            ASTNodeRef result = (*penv).astnodes[name];
-            if (result) {
-                return result;
-            }
-            penv = penv->parent;
-        }
-        return NULL;
-    }
-};
-
-static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
-
-//------------------------------------------------------------------------------
-
-struct TranslationGlobals {
-    int compile_errors;
-    // meta env; only valid for proto environments
-    Environment *meta;
-    // root environment
-    Environment rootenv;
-
-    TranslationGlobals() :
-        compile_errors(0),
-        meta(NULL) {
-        rootenv.globals = this;
-    }
-
-    TranslationGlobals(Environment *env) :
-        compile_errors(0),
-        meta(env) {
-        rootenv.globals = this;
-    }
-};
-
-//------------------------------------------------------------------------------
-
-Environment *Environment::getMeta() const {
-    return globals->meta;
-}
-
-bool Environment::hasErrors() const {
-    return globals->compile_errors != 0;
 }
 
 //------------------------------------------------------------------------------
@@ -3266,62 +2925,12 @@ static LLVMModuleRef importCModule (ValueRef dest,
 }
 
 //------------------------------------------------------------------------------
-// TRANSLATION
-//------------------------------------------------------------------------------
-
-static LLVMTypeRef _opaque = NULL;
-static LLVMTypeRef _t_Value = NULL;
-static LLVMTypeRef _t_Environment = NULL;
-
-static void translateErrorV (Environment *env, const char *format, va_list args) {
-    ++env->globals->compile_errors;
-    Anchor *anchor = NULL;
-    if (env->expr)
-        anchor = env->expr->findValidAnchor();
-    if (anchor) {
-        printf("%s:%i:%i: error: ", anchor->path, anchor->lineno, anchor->column);
-    } else {
-        if (env->expr)
-            printValue(env->expr);
-        printf("error: ");
-    }
-    vprintf (format, args);
-    putchar('\n');
-    if (anchor) {
-        dumpFileLine(anchor->path, anchor->offset);
-    }
-}
-
-static void translateError (Environment *env, const char *format, ...) {
-    va_list args;
-    va_start (args, format);
-    translateErrorV(env, format, args);
-    va_end (args);
-}
-
-static bool isSymbol (const Value *expr, const char *sym) {
-    if (expr) {
-        if (auto symexpr = llvm::dyn_cast<Symbol>(expr))
-            return (symexpr->getValue() == sym);
-    }
-    return false;
-}
-
-//------------------------------------------------------------------------------
-
-static void setupRootEnvironment (Environment *env);
-static void teardownRootEnvironment (Environment *env);
-static bool compileModule (Environment *env, ValueRef expr);
-
-#define UNPACK_ARG(expr, name) \
-    expr = next(expr); ValueRef name = expr
-
-//------------------------------------------------------------------------------
 // MID-LEVEL IL
 //------------------------------------------------------------------------------
 
 struct ILValue;
 struct ILBasicBlock;
+struct ILBasicBlockParameter;
 struct ILModule;
 struct ILBuilder;
 
@@ -3329,6 +2938,7 @@ typedef std::shared_ptr<ILValue> ILValueRef;
 typedef std::shared_ptr<ILBasicBlock> ILBasicBlockRef;
 typedef std::shared_ptr<ILModule> ILModuleRef;
 typedef std::shared_ptr<ILBuilder> ILBuilderRef;
+typedef std::shared_ptr<ILBasicBlockParameter> ILBasicBlockParameterRef;
 
 //------------------------------------------------------------------------------
 
@@ -3336,21 +2946,30 @@ struct ILValue : std::enable_shared_from_this<ILValue> {
     enum Kind {
         BasicBlock,
 
+        BasicBlockParameter,
+
         Fixed,
-            CFuncDecl,
+            ConstString,
+            ConstInteger,
+            ConstReal,
+            TypeRef,
             FixedEnd,
 
         Instruction,
+            CFuncDecl,
+            FunctionTypeDecl,
             Call,
+            AddressOf,
             InstructionEnd,
     };
 
     const Kind kind;
-    Constraint *constraint;
+    Type *type;
+    Anchor anchor;
 
-    ILValue(Kind kind_, Constraint *constraint_ = nullptr) :
+    ILValue(Kind kind_, Type *type_ = nullptr) :
         kind(kind_),
-        constraint(constraint_)
+        type(type_)
         {}
 
     virtual ~ILValue() {}
@@ -3377,24 +2996,72 @@ struct ILValueImpl : BaseT {
 
 struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock>,
     std::enable_shared_from_this<ILBasicBlock> {
+
     std::vector<ILValueRef> values;
     std::string name;
+    std::vector<ILBasicBlockParameterRef> parameters;
 
     void append(const ILValueRef &value);
+    void appendParameter(const ILBasicBlockParameterRef &value);
 
-    virtual std::string getRepr () {
-        std::stringstream ss;
-        ss << name << ansi(ANSI_STYLE_OPERATOR,":") << "\n";
-        for (auto value : values) {
-            ss << value->getRepr();
-        }
-        return ss.str();
-    }
+    virtual std::string getRepr ();
     virtual std::string getRefRepr (bool sameblock) {
         return name;
     }
 
 };
+
+struct ILBasicBlockParameter : ILValueImpl<ILValue::BasicBlockParameter>,
+    std::enable_shared_from_this<ILBasicBlockParameter> {
+    ILBasicBlockRef block;
+
+    std::string name;
+
+    std::string getDeclRepr() {
+        return format("%s %s %s",
+            name.c_str(),
+            ansi(ANSI_STYLE_OPERATOR,":").c_str(),
+            type->getRepr().c_str());
+    }
+
+    virtual std::string getRepr() {
+        return getDeclRepr() + "\n";
+    }
+
+    virtual std::string getRefRepr (bool sameblock) {
+        if (!sameblock && block) {
+            return format("%s@%s",
+                block->name.c_str(),
+                name.c_str());
+        } else {
+            return name;
+        }
+    }
+};
+
+void ILBasicBlock::appendParameter(const ILBasicBlockParameterRef &value) {
+    parameters.push_back(value);
+}
+
+std::string ILBasicBlock::getRepr () {
+    std::stringstream ss;
+    ss << name;
+    if (parameters.size()) {
+        ss << ansi(ANSI_STYLE_OPERATOR,"(");
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0) {
+                ss << ", ";
+            }
+            ss << parameters[i]->getDeclRepr();
+        }
+        ss << ansi(ANSI_STYLE_OPERATOR,")");
+    }
+    ss << ansi(ANSI_STYLE_OPERATOR,":") << "\n";
+    for (auto value : values) {
+        ss << value->getRepr();
+    }
+    return ss.str();
+}
 
 //------------------------------------------------------------------------------
 
@@ -3440,8 +3107,8 @@ struct ILModule : std::enable_shared_from_this<ILModule> {
 struct ILInstruction : ILValue {
     ILBasicBlockRef block;
 
-    ILInstruction(Kind kind_, Constraint *constraint_ = nullptr) :
-        ILValue(kind_, constraint_)
+    ILInstruction(Kind kind_, Type *type_ = nullptr) :
+        ILValue(kind_, type_)
         {}
 
     static bool classof(const ILValue *value) {
@@ -3515,12 +3182,12 @@ void ILBasicBlock::append(const ILValueRef &value) {
 //------------------------------------------------------------------------------
 
 struct ILFixed : ILValue {
-    ILFixed(Kind kind_, Constraint *constraint_ = nullptr) :
-        ILValue(kind_, constraint_)
+    ILFixed(Kind kind_, Type *type_ = nullptr) :
+        ILValue(kind_, type_)
         {}
 
-    ILFixed(Constraint *constraint_ = nullptr) :
-        ILValue(ILValue::Fixed, constraint_)
+    ILFixed(Type *type_ = nullptr) :
+        ILValue(ILValue::Fixed, type_)
         {}
 
     static bool classof(const ILValue *value) {
@@ -3531,26 +3198,113 @@ struct ILFixed : ILValue {
         return getRefRepr(true) + "\n";
     }
     virtual std::string getRefRepr (bool sameblock) {
-        if (constraint) {
-            return format("%s", constraint->getRepr().c_str());
+        if (type) {
+            return format("%s", type->getRepr().c_str());
         } else {
-            return ansi(ANSI_STYLE_ERROR, "<missing constraint>");
+            return ansi(ANSI_STYLE_ERROR, "<missing type>");
         }
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct ILCFuncDecl : ILValueImpl<ILValue::CFuncDecl, ILFixed> {
-    std::string name;
+struct ILConstString : ILValueImpl<ILValue::ConstString, ILFixed> {
+    String *value;
 
     virtual std::string getRefRepr (bool sameblock) {
-        return format("@%s %s %s",
-            name.c_str(),
+        return format("(%s %s %s %s)",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_string").c_str(),
+            ansi(ANSI_STYLE_STRING,
+                format("\"%s\"",
+                    quoteString(value->getValue(), "\"").c_str())).c_str(),
             ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
-            constraint?
-                constraint->getRepr().c_str()
-                : ansi(ANSI_STYLE_ERROR, "<missing constraint>").c_str());
+            type->getRepr().c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstInteger : ILValueImpl<ILValue::ConstInteger, ILFixed> {
+    Integer *value;
+
+    virtual std::string getRefRepr (bool sameblock) {
+        return format("(%s %s %s %s)",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_integer").c_str(),
+            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value->getValue())).c_str(),
+            ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
+            type->getRepr().c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstReal : ILValueImpl<ILValue::ConstReal, ILFixed> {
+    Real *value;
+
+    virtual std::string getRefRepr (bool sameblock) {
+        return format("(%s %s %s %s)",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_real").c_str(),
+            ansi(ANSI_STYLE_NUMBER, format("%g", value->getValue())).c_str(),
+            ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
+            type->getRepr().c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILTypeRef : ILValueImpl<ILValue::TypeRef, ILFixed> {
+    Type *value;
+
+    virtual std::string getRefRepr (bool sameblock) {
+        return format("(%s %s)",
+            ansi(ANSI_STYLE_INSTRUCTION, "type_ref").c_str(),
+            value->getRepr().c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+struct ILCFuncDecl : ILValueImpl<ILValue::CFuncDecl, ILInstruction> {
+    ILValueRef name;
+    ILValueRef type;
+
+    virtual std::string getRHSRepr() {
+        assert(name);
+        assert(type);
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "cfuncdecl") << " "
+            << name->getRefRepr(isSameBlock(name))
+            << ansi(ANSI_STYLE_OPERATOR, ":")
+            << type->getRefRepr(isSameBlock(type));
+        return ss.str();
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILFunctionTypeDecl : ILValueImpl<ILValue::FunctionTypeDecl, ILInstruction> {
+    ILValueRef result;
+    std::vector<ILValueRef> parameters;
+    bool vararg;
+
+    virtual std::string getRHSRepr() {
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_KEYWORD, "function_type_decl") << " ";
+        ss << result->getRefRepr(isSameBlock(result));
+        ss << " (";
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0)
+                ss << " ";
+            ss << parameters[i]->getRefRepr(isSameBlock(parameters[i]));
+        }
+        if (vararg) {
+            if (parameters.size())
+                ss << " ";
+            ss << ansi(ANSI_STYLE_KEYWORD, "...");
+        }
+        ss << ")";
+        return ss.str();
     }
 };
 
@@ -3562,12 +3316,24 @@ struct ILCall : ILValueImpl<ILValue::Call, ILInstruction> {
 
     virtual std::string getRHSRepr() {
         std::stringstream ss;
-        ss << ansi(ANSI_COLOR_YELLOW, "call") << " "
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "call") << " "
             << callee->getRefRepr(isSameBlock(callee));
         for (auto& arg : arguments) {
             ss << " " << arg->getRefRepr(isSameBlock(arg));
         }
         return ss.str();
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILAddressOf : ILValueImpl<ILValue::AddressOf, ILInstruction> {
+    ILValueRef value;
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "address_of").c_str(),
+            value->getRefRepr(isSameBlock(value)).c_str());
     }
 };
 
@@ -3590,34 +3356,33 @@ static void ilError (const ILValueRef &value, const char *format, ...) {
 void ILModule::verify() {
     for (auto& block : blocks) {
         for (auto& value : block->values) {
+
             switch(value->kind) {
+                /*
                 case ILValue::Call: {
                     auto instr = llvm::cast<ILCall>(value.get());
                     // check if argument types and count matches
-                    auto constraint = llvm::dyn_cast<CFunctionConstraint>(instr->callee->constraint);
-                    if (!constraint->isVarArg() && (constraint->getParameterCount() < instr->arguments.size())) {
+                    auto type = llvm::dyn_cast<CFunctionType>(instr->callee->type);
+                    if (!type->isVarArg() && (type->getParameterCount() < instr->arguments.size())) {
                         ilError(value, "too many arguments");
-                    } else if (constraint->getParameterCount() > instr->arguments.size()) {
+                    } else if (type->getParameterCount() > instr->arguments.size()) {
                         ilError(value, "too few arguments");
                     }
                     for (size_t i = 0; i < instr->arguments.size(); ++i) {
-                        auto rtype = instr->arguments[i]->constraint;
-                        if (i >= constraint->getParameterCount()) {
+                        auto rtype = instr->arguments[i]->type;
+                        if (i >= type->getParameterCount()) {
                             // vararg
-                            // make sure parameter is correct
-                            if (rtype->isFixed()) {
-                                ilError(value, "variable argument constraint must not be fixed");
-                            }
                         } else {
-                            auto ltype = constraint->getParameter(i);
+                            auto ltype = type->getParameter(i);
                             if (ltype != rtype) {
-                                ilError(value, "argument constraint mismatch (%s != %s)",
+                                ilError(value, "argument type mismatch (%s != %s)",
                                     ltype->getRepr().c_str(),
                                     rtype->getRepr().c_str());
                             }
                         }
                     }
                 } break;
+                */
                 default: break;
             }
         }
@@ -3647,6 +3412,10 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         }
     }
 
+    void valueCreated(const ILBasicBlockParameterRef &value) {
+        block->appendParameter(value);
+    }
+
     ILBasicBlockRef basicblock(const std::string &name) {
         auto result = std::make_shared<ILBasicBlock>();
         result->name = module->uniqueBlockName(name);
@@ -3654,19 +3423,49 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef fixed(Constraint *constraint) {
-        assert(constraint);
-        auto result = std::make_shared<ILFixed>();
-        result->constraint = constraint;
+    ILValueRef basicblockparameter(
+        const ILBasicBlockRef &block,
+        const std::string &name,
+        Type *type = nullptr) {
+        assert(block);
+        if (!type) {
+            type = Type::Any;
+        }
+        auto result = std::make_shared<ILBasicBlockParameter>();
+        result->name = module->uniqueBlockName(name);
+        result->type = type;
+        result->block = block;
         valueCreated(result);
         return result;
     }
 
-    ILValueRef cfuncdecl(const std::string &name, Constraint *constraint) {
-        assert(constraint);
+    ILValueRef empty() {
+        auto result = std::make_shared<ILFixed>();
+        result->type = Type::Empty;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef cfuncdecl(const ILValueRef &name, const ILValueRef &type) {
+        assert(type);
+        assert(name);
         auto result = std::make_shared<ILCFuncDecl>();
-        result->constraint = constraint;
+        result->type = type;
         result->name = name;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef functiontypedecl(
+        const ILValueRef &resulttype,
+        const std::vector<ILValueRef> &parametertypes,
+        bool isvararg) {
+        assert(resulttype);
+        auto result = std::make_shared<ILFunctionTypeDecl>();
+        result->type = Type::TypePointer;
+        result->result = resulttype;
+        result->parameters = parametertypes;
+        result->vararg = isvararg;
         valueCreated(result);
         return result;
     }
@@ -3674,11 +3473,56 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
     ILValueRef call(const ILValueRef& callee, const std::vector<ILValueRef> &arguments) {
         assert(callee);
         auto result = std::make_shared<ILCall>();
-        auto ftype = llvm::dyn_cast<CFunctionConstraint>(callee->constraint);
-        assert(ftype);
-        result->constraint = ftype->getResult();
+        result->type = Type::Any;
         result->callee = callee;
         result->arguments = arguments;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef addressof(const ILValueRef& value) {
+        assert(value);
+        auto result = std::make_shared<ILAddressOf>();
+        result->type = Type::Pointer(value->type);
+        result->value = value;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef typeref(Type *t) {
+        assert(t);
+        auto result = std::make_shared<ILTypeRef>();
+        result->type = Type::TypePointer;
+        result->value = t;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef conststring(String *c) {
+        assert(c);
+        auto result = std::make_shared<ILConstString>();
+        result->type = Type::Array(Type::Int8, c->getValue().size() + 1);
+        result->value = c;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef constinteger(IntegerType *cdest, Integer *c) {
+        assert(c);
+        assert(cdest);
+        auto result = std::make_shared<ILConstInteger>();
+        result->type = cdest;
+        result->value = c;
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef constreal(RealType *cdest, Real *c) {
+        assert(c);
+        assert(cdest);
+        auto result = std::make_shared<ILConstReal>();
+        result->type = cdest;
+        result->value = c;
         valueCreated(result);
         return result;
     }
@@ -3696,7 +3540,7 @@ struct CodeGenerator {
     ILModuleRef il_module;
 
     std::unordered_map<ILValueRef, LLVMValueRef> valuemap;
-    std::unordered_map<Constraint *, LLVMValueRef> constraintmap;
+    std::unordered_map<Type *, LLVMTypeRef> typemap;
 
     CodeGenerator(ILModuleRef il_module_, LLVMModuleRef llvm_module_) :
         builder(nullptr),
@@ -3705,59 +3549,19 @@ struct CodeGenerator {
     {
     }
 
-    LLVMTypeRef resolveType(const ILValueRef &reference, Constraint *constraint = nullptr) {
-        if (!constraint) {
-            constraint = reference->constraint;
+    LLVMTypeRef resolveType(const ILValueRef &reference, Type *il_type = nullptr) {
+        if (!il_type) {
+            il_type = reference->type;
         }
-        if (!constraint) {
-            ilError(reference, "missing constraint");
-        }
-        LLVMTypeRef type = constraint->getLLVMType();
-        if (!type) {
-            ilError(reference, "type is abstract");
-        }
-        return type;
-    }
-
-    LLVMValueRef resolveConstant(const ILValueRef &il_value) {
-        auto decl = llvm::cast<ILFixed>(il_value.get());
-        Constraint *constraint = decl->constraint;
-        if (!constraint->isFixed()) {
-            ilError(il_value, "fixed constraint expected");
-        }
-        LLVMValueRef result = constraintmap[constraint];
+        LLVMTypeRef result = typemap[il_type];
         if (!result) {
-            switch(constraint->getKind()) {
-                case C_Tag: {
-                    if (constraint == Constraint::True) {
-                        result = LLVMConstInt(LLVMInt1Type(), 1, false);
-                    } else if (constraint == Constraint::False) {
-                        result = LLVMConstInt(LLVMInt1Type(), 0, false);
-                    }
-                } break;
-                case C_FixedInteger: {
-                    auto integer = llvm::cast<FixedIntegerConstraint>(constraint);
-                    result = LLVMConstInt(LLVMInt32Type(), integer->getValue(), true);
-                } break;
-                case C_FixedReal: {
-                    auto real = llvm::cast<FixedRealConstraint>(constraint);
-                    result = LLVMConstReal(LLVMDoubleType(), real->getValue());
-                } break;
-                case C_FixedString: {
-                    auto str = llvm::cast<FixedStringConstraint>(constraint);
-                    auto strvalue = LLVMConstString(str->getValue().c_str(), str->getValue().size(), false);
-                    result = LLVMAddGlobal(llvm_module, LLVMTypeOf(strvalue), "");
-                    LLVMSetInitializer(result, strvalue);
-                    LLVMSetGlobalConstant(result, true);
-                    LLVMSetUnnamedAddr(result, true);
-                    LLVMSetLinkage(result, LLVMPrivateLinkage);
-                } break;
+            switch(il_type->getKind()) {
                 default: {
-                    ilError(il_value, "can not convert constraint to constant");
+                    ilError(reference, "can not translate type");
                 } break;
             }
             assert(result);
-            constraintmap[constraint] = result;
+            typemap[il_type] = result;
         }
         return result;
     }
@@ -3766,15 +3570,14 @@ struct CodeGenerator {
         LLVMValueRef result = valuemap[il_value];
         if (!result) {
             switch(il_value->kind) {
+                /*
                 case ILValue::CFuncDecl: {
                     auto decl = llvm::cast<ILCFuncDecl>(il_value.get());
                     result = LLVMAddFunction(llvm_module,
                         decl->name.c_str(),
                         resolveType(il_value));
                 } break;
-                case ILValue::Fixed: {
-                    result = resolveConstant(il_value);
-                } break;
+                */
                 default: {
                     ilError(il_value, "does not dominate all uses");
                 } break;
@@ -3838,189 +3641,74 @@ struct CodeGenerator {
     }
 };
 
-
-
 //------------------------------------------------------------------------------
-// ABSTRACT SYNTAX TREE
+// TRANSLATION
 //------------------------------------------------------------------------------
 
-/*
-special forms (15):
-
-__quote
-__if
-__while
-__break
-__var
-__var+
-__key
-__set
-__del
-__scope
-__function
-__nop
-__do
-__call
-__do-splice
-__pragma
-__global
-
-predefined macros (2):
-
-__escape (sort-of)
-*/
-
-enum ASTKind {
-    AST_Symbol,
-
-    AST_ArrayOf,
-    AST_TupleOf,
-
-    AST_ExternalDecl,
-    AST_FunctionDecl,
-    AST_Apply,
-
-    AST_Select,
-    AST_Label,
-    AST_Goto,
-
-    AST_Let,
-    AST_Var,
-    AST_Index,
-    AST_Set,
-    AST_Del,
-
-    AST_Do,
-    AST_Splice,
-
-    AST_Nop,
-    AST_CDecl,
-
-    AST_Closure
-};
+typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
+typedef std::unordered_map<std::string, Type *> NameTypeMap;
+typedef std::unordered_map<std::string, ILValueRef> NameValueMap;
 
 //------------------------------------------------------------------------------
 
-struct RootGenerateContext {
+struct GlobalEnvironment {
     ILModuleRef module;
     ILBuilderRef builder;
 };
 
-struct GenerateContext;
-typedef std::shared_ptr<GenerateContext> GenerateContextRef;
+struct Environment;
+typedef std::shared_ptr<Environment> EnvironmentRef;
 
-struct GenerateContext : std::enable_shared_from_this<GenerateContext> {
-    RootGenerateContext &root;
-    GenerateContextRef parent;
+struct Environment : std::enable_shared_from_this<Environment> {
+    GlobalEnvironment &global;
+    EnvironmentRef parent;
 
-    std::unordered_map<ASTNodeRef, ILValueRef> bindings;
+    NameValueMap values;
 
-    GenerateContext(RootGenerateContext &root_) :
-        root(root_)
+    Environment(GlobalEnvironment &global_) :
+        global(global_)
         {}
 
-    GenerateContext(const GenerateContextRef &parent_) :
-        root(parent_->root),
+    Environment(const EnvironmentRef &parent_) :
+        global(parent_->global),
         parent(parent_)
         {}
 
-    void bind(ASTNodeRef node, const ILValueRef& value) {
-        bindings[node] = value;
-    }
-    void bind(const std::unordered_map<ASTNodeRef, ILValueRef>& bindings_) {
-        bindings.insert(bindings_.begin(), bindings_.end());
-    }
-
-    void set(ASTNodeRef node, const ILValueRef& value) {
-        GenerateContextRef ctx = shared_from_this();
-        while (ctx) {
-            ILValueRef result = ctx->bindings[node];
+    ILValueRef resolve(const std::string &name) {
+        Environment *penv = this;
+        while (penv) {
+            ILValueRef result = (*penv).values[name];
             if (result) {
-                ctx->bindings[node] = value;
-                return;
+                return result;
             }
-            ctx = ctx->parent;
+            penv = penv->parent.get();
         }
-        astError(node, "cannot assign to unbound symbol");
-    }
-
-    ILValueRef resolve(ASTNodeRef node) {
-        GenerateContextRef ctx = shared_from_this();
-        while (ctx) {
-            ILValueRef result = ctx->bindings[node];
-            if (result) return result;
-            ctx = ctx->parent;
-        }
-        astError(node, "cannot resolve unbound symbol");
         return nullptr;
     }
-
 };
+
+static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 //------------------------------------------------------------------------------
 
-typedef Environment ASTEnvironment;
-
-struct ASTNode : std::enable_shared_from_this<ASTNode> {
-private:
-    const ASTKind kind;
-
-protected:
-    ASTNode(ASTKind kind_) :
-        kind(kind_)
-        {}
-
-public:
-    Anchor anchor;
-
-    virtual ~ASTNode() {}
-
-    void setAnchor(ValueRef expr) {
-        if (expr) {
-            Anchor *result = expr->findValidAnchor();
-            if (result) {
-                anchor = *result;
-            }
-        }
+static bool isSymbol (const Value *expr, const char *sym) {
+    if (expr) {
+        if (auto symexpr = llvm::dyn_cast<Symbol>(expr))
+            return (symexpr->getValue() == sym);
     }
-
-    ASTKind getKind() const {
-        return kind;
-    }
-
-    virtual std::string getRepr() { return format("(astnode %i)", kind); };
-    virtual void referenced(ASTEnvironment *env) {};
-    virtual void capture(ASTNodeRef symbol) {};
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) = 0;
-};
-
-//------------------------------------------------------------------------------
-
-struct FixedASTNodeConstraint : ConstraintImpl<FixedASTNodeConstraint, C_FixedASTNode> {
-protected:
-    ASTNodeRef value;
-
-public:
-    ASTNodeRef getValue() const { return value; }
-
-    FixedASTNodeConstraint(const ASTNodeRef& _value) :
-        ConstraintImpl(true),
-        value(_value)
-        {}
-
-    virtual std::string getRepr() {
-        return value->getRepr();
-    }
-};
-
-Constraint *Constraint::FixedASTNode(const ASTNodeRef &node) {
-    return new FixedASTNodeConstraint(node);
+    return false;
 }
 
 //------------------------------------------------------------------------------
 
-void astError (ValueRef expr, const char *format, ...) {
+#define UNPACK_ARG(expr, name) \
+    expr = next(expr); ValueRef name = expr
+
+//------------------------------------------------------------------------------
+
+ILValueRef translate(const EnvironmentRef &env, ValueRef expr);
+
+void valueError (ValueRef expr, const char *format, ...) {
     Anchor *anchor = NULL;
     if (expr)
         anchor = expr->findValidAnchor();
@@ -4034,15 +3722,15 @@ void astError (ValueRef expr, const char *format, ...) {
     va_end (args);
 }
 
-void astError (const ASTNodeRef &node, const char *format, ...) {
+void valueErrorV (ValueRef expr, const char *fmt, va_list args) {
     Anchor *anchor = NULL;
-    if (node->anchor.isValid()) {
-        anchor = &node->anchor;
+    if (expr)
+        anchor = expr->findValidAnchor();
+    if (!anchor) {
+        if (expr)
+            printValue(expr);
     }
-    va_list args;
-    va_start (args, format);
-    Anchor::printErrorV(anchor, format, args);
-    va_end (args);
+    Anchor::printErrorV(anchor, fmt, args);
 }
 
 template <typename T>
@@ -4051,443 +3739,114 @@ static T *astVerifyKind(ValueRef expr) {
     if (obj) {
         return obj;
     } else {
-        astError(expr, "%s expected, not %s",
+        valueError(expr, "%s expected, not %s",
             valueKindName(T::kind()),
             valueKindName(kindOf(expr)));
     }
     return nullptr;
 }
 
-static std::string astVerifyString(ASTNodeRef node, Constraint *c) {
-    assert(node);
-    assert(c);
-    if (auto str = llvm::dyn_cast<FixedStringConstraint>(c)) {
-        return str->getValue();
-    } else {
-        astError(node, "expected string, not %s", c->getRepr().c_str());
-        return "";
-    }
-}
+static ILValueRef parse_cdecl (const EnvironmentRef &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_returntype);
+    UNPACK_ARG(expr, expr_parameters);
 
-static std::string astVerifyString(ASTNodeRef node, const ILValueRef &value) {
-    assert(value);
-    if (auto fixed = llvm::dyn_cast<ILFixed>(value.get())) {
-        return astVerifyString(node, fixed->constraint);
-    } else {
-        astError(node, "expected fixed constraint, not %s", value->getRepr().c_str());
-        return "";
-    }
-}
+    ILValueRef returntype = translate(env, expr_returntype);
 
-static Constraint *astVerifyFixedConstraint(ASTNodeRef node, Constraint *c) {
-    assert(node);
-    assert(c);
-    if (auto fc = llvm::dyn_cast<FixedConstraint>(c)) {
-        return fc->getValue();
-    } else {
-        astError(node, "expected constraint, not %s", c->getRepr().c_str());
-        return nullptr;
-    }
-}
+    Pointer *params = astVerifyKind<Pointer>(expr_parameters);
 
-static Constraint *astVerifyFixedConstraint(ASTNodeRef node, const ILValueRef &value) {
-    assert(value);
-    if (auto fixed = llvm::dyn_cast<ILFixed>(value.get())) {
-        return astVerifyFixedConstraint(node, fixed->constraint);
-    } else {
-        astError(node, "expected fixed constraint, not %s", value->getRepr().c_str());
-        return nullptr;
-    }
-}
+    std::vector<ILValueRef> paramtypes;
 
-static ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr);
-
-template<class T, ASTKind KindT>
-struct ASTNodeImpl : ASTNode {
-    typedef ASTNodeImpl<T, KindT> BaseImpl;
-
-    ASTNodeImpl() :
-        ASTNode(KindT)
-        {}
-
-    static bool classof(const ASTNode *node) {
-        return node->getKind() == KindT;
-    }
-
-};
-
-struct ASTNop : ASTNodeImpl<ASTNop, AST_Nop> {
-    Constraint *resulttype;
-
-    ASTNop(Constraint *type_ = nullptr) :
-        resulttype(type_?type_:(Constraint::Empty))
-        {}
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        return ctx->root.builder->fixed(resulttype);
-    }
-
-    static ASTNodeRef fixedConstraint(Constraint *constraint) {
-        return std::make_shared<ASTNop>(Constraint::FixedConstraint(constraint));
-    }
-};
-
-struct ASTCDecl : ASTNodeImpl<ASTCDecl, AST_CDecl> {
-    ASTNodeRef result;
-    std::vector<ASTNodeRef> parameters;
-    bool isvararg;
-
-    ASTCDecl(
-        const ASTNodeRef &result_,
-        const std::vector<ASTNodeRef> &parameters_,
-        bool isvararg_) :
-            result(result_),
-            parameters(parameters_),
-            isvararg(isvararg_)
-        {}
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        assert(result);
-        Constraint *returntype =
-            astVerifyFixedConstraint(result, result->generate(ctx));
-        std::vector<Constraint *> paramtypes;
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            paramtypes.push_back(
-                astVerifyFixedConstraint(parameters[i],
-                    parameters[i]->generate(ctx)));
-        }
-
-        return ctx->root.builder->fixed(
-            Constraint::FixedConstraint(
-                Constraint::CFunction(
-                    returntype, paramtypes, isvararg)));
-    }
-
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        UNPACK_ARG(expr, expr_returntype);
-        UNPACK_ARG(expr, expr_parameters);
-
-        ASTNodeRef returntype = translateAST(env, expr_returntype);
-
-        Pointer *params = astVerifyKind<Pointer>(expr_parameters);
-
-        std::vector<ASTNodeRef> paramtypes;
-
-        ValueRef param = at(params);
-        bool vararg = false;
-        while (param) {
-            ValueRef nextparam = next(param);
-            if (!nextparam && isSymbol(param, "...")) {
-                vararg = true;
-            } else {
-                paramtypes.push_back(translateAST(env, param));
-            }
-
-            param = nextparam;
-        }
-
-        return std::make_shared<ASTCDecl>(returntype, paramtypes, vararg);
-    }
-};
-
-struct ASTSymbol : ASTNodeImpl<ASTSymbol, AST_Symbol> {
-    ASTNodeRef closure;
-    std::string name;
-
-    ASTSymbol(const std::string &name_, const ASTNodeRef &closure_) :
-        closure(closure_),
-        name(name_)
-        {}
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        return ctx->resolve(shared_from_this());
-    }
-
-    virtual void referenced(ASTEnvironment *env) {
-        ASTNodeRef user = env->closure;
-        if (user && (user != closure)) {
-            user->capture(shared_from_this());
-        }
-    }
-
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        Symbol *sym = astVerifyKind<Symbol>(expr);
-        auto symbol = std::make_shared<ASTSymbol>(sym->getValue(), env->closure);
-        if (env->astnodes.count(sym->getValue())) {
-            astError(expr, "name already exists in scope");
-        }
-        env->astnodes[sym->getValue()] = symbol;
-        return symbol;
-    }
-};
-
-/*
-struct ASTArrayOf : ASTNodeImpl<ASTArrayOf, AST_ArrayOf> {
-    std::vector<ASTNodeRef> values;
-
-    ASTArrayOf(const std::vector<ASTNodeRef> &values_) :
-        values(values_)
-        {}
-
-    virtual ASTResult generate(GenerateContext &ctx) {
-        Constraint *result = nullptr;
-        if (values.size() > 0) {
-            result = values[0]->getConstraint();
-            for (size_t i = 1; i < values.size(); ++i) {
-                if (values[i]->getConstraint() != result) {
-                    astError(values[i], "array arguments must all have same type");
-                }
-            }
-        }
-        return Constraint::Array(result, values.size());
-    }
-};
-*/
-
-/*
-struct ASTTupleOf : ASTNodeImpl<ASTTupleOf, AST_TupleOf> {
-    std::vector<ASTNodeRef> values;
-
-    ASTTupleOf(const std::vector<ASTNodeRef> &values_) :
-        values(values_)
-        {}
-
-    virtual Constraint *resolveConstraint() {
-        NamedConstraintArray types;
-        for (size_t i = 0; i < values.size(); ++i) {
-            types.push_back(std::pair<std::string,Constraint*>("", values[i]->getConstraint()));
-        }
-        return Constraint::Tuple(types);
-    }
-};
-*/
-
-struct ASTExternalDecl : ASTNodeImpl<ASTExternalDecl, AST_ExternalDecl> {
-    ASTNodeRef name;
-    ASTNodeRef externaltype;
-
-    ASTExternalDecl(const ASTNodeRef &name_, const ASTNodeRef &externaltype_) :
-        name(name_),
-        externaltype(externaltype_)
-        {}
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        std::string namestr = astVerifyString(name, name->generate(ctx));
-        Constraint *type = astVerifyFixedConstraint(externaltype,
-            externaltype->generate(ctx));
-        return ctx->root.builder->cfuncdecl(namestr, type);
-    }
-
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        UNPACK_ARG(expr, expr_name);
-        UNPACK_ARG(expr, expr_type);
-
-        ASTNodeRef name = translateAST(env, expr_name);
-        ASTNodeRef type = translateAST(env, expr_type);
-
-        return std::make_shared<ASTExternalDecl>(name, type);
-    }
-
-};
-
-struct ASTDo : ASTNodeImpl<ASTDo, AST_Do> {
-    std::vector<ASTNodeRef> expressions;
-
-    ASTDo(const std::vector<ASTNodeRef> &expressions_) :
-        expressions(expressions_)
-        {}
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        if (expressions.size() == 0) {
-            return ctx->root.builder->fixed(Constraint::Empty);
+    ValueRef param = at(params);
+    bool vararg = false;
+    while (param) {
+        ValueRef nextparam = next(param);
+        if (!nextparam && isSymbol(param, "...")) {
+            vararg = true;
         } else {
-            ILValueRef lastvalue;
-            for (size_t i = 0; i < expressions.size(); ++i) {
-                lastvalue = expressions[i]->generate(ctx);
-            }
-            return lastvalue;
+            paramtypes.push_back(translate(env, param));
         }
+
+        param = nextparam;
     }
 
-    static ASTNodeRef parse(ASTEnvironment *env, ValueRef expr) {
+    return env->global.builder->functiontypedecl(returntype, paramtypes, vararg);
+}
+
+static ILValueRef parse_external (const EnvironmentRef &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_name);
+    UNPACK_ARG(expr, expr_type);
+
+    ILValueRef name = translate(env, expr_name);
+    ILValueRef type = translate(env, expr_type);
+
+    return env->global.builder->cfuncdecl(name, type);
+}
+
+static ILValueRef parse_do (const EnvironmentRef &env, ValueRef expr) {
+    expr = next(expr);
+
+    auto subenv = std::make_shared<Environment>(env);
+
+    ILValueRef value;
+    while (expr) {
+        value = translate(subenv, expr);
         expr = next(expr);
-
-        std::vector<ASTNodeRef> stmts;
-
-        Environment subenv(env);
-
-        while (expr) {
-            stmts.push_back(translateAST(&subenv, expr));
-            expr = next(expr);
-        }
-
-        return std::make_shared<ASTDo>(stmts);
     }
 
-};
+    if (value)
+        return value;
+    else
+        return env->global.builder->empty();
 
-struct ASTClosure : ASTNodeImpl<ASTClosure, AST_Closure> {
-    ASTNodeRef node;
-    GenerateContextRef ctx;
+}
 
-    ASTClosure(const GenerateContextRef &ctx_) :
-        ctx(ctx_)
-    {}
+static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_parameters);
 
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        return ctx->root.builder->fixed(
-            Constraint::FixedASTNode(shared_from_this()));
-    }
-};
+    auto currentblock = env->global.builder->block;
 
-struct ASTFunctionDecl : ASTNodeImpl<ASTFunctionDecl, AST_FunctionDecl> {
-    ASTNodeRef closure;
-    std::vector<ASTNodeRef> parameters;
-    ASTNodeRef body;
-    std::unordered_set<ASTNodeRef> captured;
+    auto bb = env->global.builder->basicblock("entry");
+    env->global.builder->appendTo(bb);
 
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
+    auto subenv = std::make_shared<Environment>(env);
 
-        auto result = std::make_shared<ASTClosure>(ctx);
-        result->node = shared_from_this();
-        /*
-        for (auto key : captured) {
-            if (auto sym = llvm::dyn_cast<ASTSymbol>(key.get())) {
-                //printf("%p: capturing %s\n", this, sym->name.c_str());
-                result->ctx.bind(key, key->generate(ctx));
-            }
-        }
-        */
-
-        return result->generate(ctx);
+    Pointer *params = astVerifyKind<Pointer>(expr_parameters);
+    ValueRef param = at(params);
+    while (param) {
+        Symbol *symname = astVerifyKind<Symbol>(param);
+        env->global.builder->basicblockparameter(bb, symname->getValue());
+        param = next(param);
     }
 
-    virtual void capture(ASTNodeRef symbol) {
-        if (auto sym = llvm::dyn_cast<ASTSymbol>(symbol.get())) {
-            captured.insert(symbol);
-            if (closure && (sym->closure != closure)) {
-                closure->capture(symbol);
-            }
-        }
+    parse_do(subenv, expr_parameters);
+    env->global.builder->appendTo(currentblock);
+
+    return bb;
+}
+
+static ILValueRef parse_implicit_apply (const EnvironmentRef &env, ValueRef expr) {
+    ValueRef expr_callable = expr;
+    UNPACK_ARG(expr, arg);
+
+    ILValueRef callable = translate(env, expr_callable);
+
+    std::vector<ILValueRef> args;
+
+    while (arg) {
+        args.push_back(translate(env, arg));
+
+        arg = next(arg);
     }
 
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
+    return env->global.builder->call(callable, args);
+}
 
-        UNPACK_ARG(expr, expr_parameters);
+static ILValueRef parse_apply (const EnvironmentRef &env, ValueRef expr) {
+    expr = next(expr);
+    return parse_implicit_apply(env, expr);
+}
 
-        ASTNodeRef result = std::make_shared<ASTFunctionDecl>();
-        ASTFunctionDecl *fdecl = llvm::cast<ASTFunctionDecl>(result.get());
-        fdecl->closure = env->closure;
-
-        Environment subenv(env);
-        subenv.closure = result;
-
-        Pointer *params = astVerifyKind<Pointer>(expr_parameters);
-        std::vector<ASTNodeRef> parameters;
-        ValueRef param = at(params);
-        while (param) {
-            parameters.push_back(ASTSymbol::parse(&subenv, param));
-            param = next(param);
-        }
-
-        fdecl->parameters = parameters;
-        fdecl->body = ASTDo::parse(&subenv, expr_parameters);
-
-        return result;
-    }
-};
-
-struct ASTApply : ASTNodeImpl<ASTApply, AST_Apply> {
-    ASTNodeRef callable;
-    std::vector<ASTNodeRef> arguments;
-
-    ASTApply(const ASTNodeRef &callable_,
-            const std::vector<ASTNodeRef> &arguments_) :
-        callable(callable_),
-        arguments(arguments_)
-        {
-            assert(callable_);
-        }
-
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        assert(callable);
-        auto rcallable = callable->generate(ctx);
-        auto fc = rcallable->constraint;
-        switch(fc->getKind()) {
-            case C_CFunction: {
-                auto ftype = llvm::dyn_cast<CFunctionConstraint>(fc);
-                if (!ftype) {
-                    astError(shared_from_this(), "cdecl expected, not %s",
-                        fc->getRepr().c_str());
-                }
-
-                std::vector<ILValueRef> args;
-                for (size_t i = 0; i < arguments.size(); ++i) {
-                    args.push_back(arguments[i]->generate(ctx));
-                }
-
-                return ctx->root.builder->call(rcallable, args);
-            } break;
-            case C_FixedASTNode: {
-                auto castnode = llvm::dyn_cast<FixedASTNodeConstraint>(fc);
-                if (!castnode) {
-                    astError(shared_from_this(), "fixed AST constraint expected, not %s",
-                        castnode->getRepr().c_str());
-                }
-                ASTClosure *closure = llvm::dyn_cast<ASTClosure>(castnode->getValue().get());
-                if (!closure) {
-                    astError(shared_from_this(), "closure expected, not %s",
-                        castnode->getRepr().c_str());
-                }
-
-                ASTFunctionDecl *ftype = llvm::dyn_cast<ASTFunctionDecl>(closure->node.get());
-                assert(ftype);
-
-                if (arguments.size() != ftype->parameters.size()) {
-                    astError(shared_from_this(),
-                        "%i arguments passed to function expecting %i parameters",
-                        arguments.size(), ftype->parameters.size());
-                }
-
-                auto subctx = std::make_shared<GenerateContext>(closure->ctx);
-
-                for (size_t i = 0; i < arguments.size(); ++i) {
-                    subctx->bind(ftype->parameters[i], arguments[i]->generate(ctx));
-                }
-                return ftype->body->generate(subctx);
-            } break;
-            default: {
-                astError(shared_from_this(), "don't know how to apply %s",
-                    fc->getRepr().c_str());
-                return nullptr;
-            } break;
-        }
-    }
-
-    static ASTNodeRef parseImplicit (ASTEnvironment *env, ValueRef expr) {
-        ValueRef expr_callable = expr;
-        UNPACK_ARG(expr, arg);
-
-        ASTNodeRef callable = translateAST(env, expr_callable);
-
-        std::vector<ASTNodeRef> args;
-
-        while (arg) {
-            args.push_back(translateAST(env, arg));
-
-            arg = next(arg);
-        }
-
-        return std::make_shared<ASTApply>(callable, args);
-    }
-
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        expr = next(expr);
-        return parseImplicit(env, expr);
-    }
-
-};
-
+/*
 struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
     ASTNodeRef condition;
     ASTNodeRef trueexpr;
@@ -4504,18 +3863,18 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
     virtual ILValueRef generate(const GenerateContextRef &ctx) {
         ILValueRef rcond = condition->generate(ctx);
 
-        if (rcond->constraint == Constraint::True) {
+        if (rcond->type == Type::True) {
             return trueexpr->generate(ctx);
-        } else if (rcond->constraint == Constraint::False) {
+        } else if (rcond->type == Type::False) {
             if (falseexpr)
                 return falseexpr->generate(ctx);
             else
-                return ctx->root.builder->fixed(Constraint::Empty);
-        } else if (rcond->constraint == Constraint::Bool) {
+                return ctx->root.builder->fixed(Type::Empty);
+        } else if (rcond->type == Type::Bool) {
             astError(shared_from_this(), "no support for branching yet");
         } else {
-            astError(condition, "boolean constraint expected, got %s",
-                rcond->constraint->getRepr().c_str());
+            astError(condition, "boolean type expected, got %s",
+                rcond->type->getRepr().c_str());
         }
         return nullptr;
     }
@@ -4534,52 +3893,25 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
         return std::make_shared<ASTSelect>(condition, trueexpr, falseexpr);
     }
 };
+*/
 
-struct ASTLet : ASTNodeImpl<ASTLet, AST_Let> {
-    ASTNodeRef symbol;
-    ASTNodeRef value;
+static ILValueRef parse_let(const EnvironmentRef &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_sym);
+    UNPACK_ARG(expr, expr_value);
 
-    ASTLet(const ASTNodeRef &symbol_, const ASTNodeRef &value_) :
-        symbol(symbol_),
-        value(value_)
-        {}
+    Symbol *symname = astVerifyKind<Symbol>(expr_sym);
+    ILValueRef value;
+    if (expr_value)
+        value = translate(env, expr_value);
+    else
+        value = env->global.builder->empty();
 
-    ASTSymbol *getASTSymbol() {
-        assert(symbol);
-        ASTSymbol *sym = llvm::dyn_cast<ASTSymbol>(symbol.get());
-        if (!sym) {
-            astError(symbol, "symbol expected");
-        }
-        return sym;
-    }
+    env->values[symname->getValue()] = value;
 
-    virtual ILValueRef generate(const GenerateContextRef &ctx) {
-        ILValueRef rvalue;
-        if (value) {
-            rvalue = value->generate(ctx);
-        } else {
-            rvalue = ctx->root.builder->fixed(Constraint::Null);
-        }
-        ctx->bind(symbol, rvalue);
-        return rvalue;
-    }
+    return value;
+}
 
-    static ASTNodeRef parse(ASTEnvironment *env, ValueRef expr) {
-        UNPACK_ARG(expr, expr_sym);
-        UNPACK_ARG(expr, expr_value);
-
-        auto symbol = ASTSymbol::parse(env, expr_sym);
-        ASTNodeRef value;
-        if (expr_value)
-            value = translateAST(env, expr_value);
-
-        return std::make_shared<ASTLet>(
-            symbol,
-            value);
-    }
-
-};
-
+/*
 struct ASTSet : ASTNodeImpl<ASTSet, AST_Set> {
     ASTNodeRef lvalue;
     ASTNodeRef rvalue;
@@ -4651,13 +3983,10 @@ struct ASTSplice : ASTNodeImpl<ASTSplice, AST_Splice> {
         expressions(expressions_)
         {}
 };
+*/
 
-//------------------------------------------------------------------------------
-// AST TRANSLATION
-//------------------------------------------------------------------------------
-
-struct ASTTranslateTable {
-    typedef ASTNodeRef (*TranslatorFunc)(ASTEnvironment *env, ValueRef expr);
+struct TranslateTable {
+    typedef ILValueRef (*TranslatorFunc)(const EnvironmentRef &env, ValueRef expr);
 
     struct Translator {
         int mincount;
@@ -4699,7 +4028,7 @@ struct ASTTranslateTable {
             ++ argcount;
             if (maxcount >= 0) {
                 if (argcount > maxcount) {
-                    astError(expr, "excess argument. At most %i arguments expected", maxcount);
+                    valueError(expr, "excess argument. At most %i arguments expected", maxcount);
                     return false;
                 }
             } else if (mincount >= 0) {
@@ -4709,7 +4038,7 @@ struct ASTTranslateTable {
             expr = next(expr);
         }
         if ((mincount >= 0) && (argcount < mincount)) {
-            astError(head, "at least %i arguments expected", mincount);
+            valueError(head, "at least %i arguments expected", mincount);
             return false;
         }
         return true;
@@ -4725,77 +4054,66 @@ struct ASTTranslateTable {
 
 };
 
-static ASTTranslateTable astTranslators;
+static TranslateTable translators;
 
 //------------------------------------------------------------------------------
 
-static void registerASTTranslators() {
-    auto &t = astTranslators;
-    t.set(ASTExternalDecl::parse, "external", 2, 2);
-    t.set(ASTLet::parse, "let", 1, 2);
-    t.set(ASTSet::parse, "set", 2, 2);
-    t.set(ASTApply::parse, "apply", 1, -1);
-    t.set(ASTDo::parse, "do", 0, -1);
-    t.set(ASTSelect::parse, "select", 2, 3);
+static void registerTranslators() {
+    auto &t = translators;
+    t.set(parse_external, "external", 2, 2);
+    t.set(parse_let, "let", 1, 2);
+    //t.set(parse_set, "set", 2, 2);
+    t.set(parse_apply, "apply", 1, -1);
+    t.set(parse_do, "do", 0, -1);
+    //t.set(parse_select, "select", 2, 3);
 
-    t.set(ASTCDecl::parse, "cdecl", 2, 2);
-    t.set(ASTFunctionDecl::parse, "function", 1, -1);
+    t.set(parse_cdecl, "cdecl", 2, 2);
+    t.set(parse_function, "function", 1, -1);
 
 }
 
-static ASTNodeRef translateASTFromList (ASTEnvironment *env, ValueRef expr) {
+static ILValueRef translateFromList (const EnvironmentRef &env, ValueRef expr) {
     assert(expr);
     astVerifyKind<Symbol>(expr);
-    auto func = astTranslators.match(expr);
+    auto func = translators.match(expr);
     if (func) {
         return func(env, expr);
     } else {
-        return ASTApply::parseImplicit(env, expr);
+        return parse_implicit_apply(env, expr);
     }
 }
 
-ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
+ILValueRef translate (const EnvironmentRef &env, ValueRef expr) {
     assert(expr);
-    ASTNodeRef result;
+    ILValueRef result;
     if (!isAtom(expr)) {
-        result = translateASTFromList(env, at(expr));
+        result = translateFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         std::string value = sym->getValue();
-        if (value == "true") {
-            result = std::make_shared<ASTNop>(Constraint::True);
-        } else if (value == "false") {
-            result = std::make_shared<ASTNop>(Constraint::False);
-        } else if (value == "null") {
-            result = std::make_shared<ASTNop>(Constraint::Null);
-        } else {
-            result = env->resolve(value);
-            if (!result) {
-                astError(expr, "unknown symbol '%s'",
-                    value.c_str());
-            }
-
-            result->referenced(env);
-        }
-        /*
-        LLVMTypeRef result = env->resolveType(sym->getValue());
+        result = env->resolve(value);
         if (!result) {
-            translateError(env, "no such type: %s", sym->c_str());
-            return NULL;
+            valueError(expr, "unknown symbol '%s'",
+                value.c_str());
         }
-        */
     } else if (auto str = llvm::dyn_cast<String>(expr)) {
-        result = std::make_shared<ASTNop>(Constraint::FixedString(str->getValue()));
+        result = env->global.builder->conststring(str);
     } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
-        result = std::make_shared<ASTNop>(Constraint::FixedInteger(integer->getValue()));
+        result = env->global.builder->constinteger(
+            llvm::cast<IntegerType>(Type::Int32), integer);
     } else if (auto real = llvm::dyn_cast<Real>(expr)) {
-        result = std::make_shared<ASTNop>(Constraint::FixedReal(real->getValue()));
+        result = env->global.builder->constreal(
+            llvm::cast<RealType>(Type::Double), real);
     } else {
-        astError(expr, "expected expression, not %s",
+        valueError(expr, "expected expression, not %s",
             valueKindName(kindOf(expr)));
     }
     if (result && !result->anchor.isValid()) {
-        result->setAnchor(expr);
+        Anchor *anchor = expr->findValidAnchor();
+        if (anchor) {
+            result->anchor = *anchor;
+        }
     }
+    assert(result);
     return result;
 }
 
@@ -4806,20 +4124,11 @@ ASTNodeRef translateAST (ASTEnvironment *env, ValueRef expr) {
 static void init() {
     bangra::support_ansi = isatty(fileno(stdout));
 
-    Constraint::initTypes();
-    registerASTTranslators();
+    Type::initTypes();
+    registerTranslators();
 
     if (!gc_root)
         gc_root = new Pointer();
-
-    if (!_opaque) {
-        _opaque = LLVMStructCreateNamed(
-            LLVMGetGlobalContext(), "opaque");
-        _t_Value = LLVMStructCreateNamed(
-            LLVMGetGlobalContext(), "_Value");
-        _t_Environment = LLVMStructCreateNamed(
-            LLVMGetGlobalContext(), "_Environment");
-    }
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -4833,60 +4142,58 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
-static void setupRootEnvironment (Environment *env) {
-    env->astnodes["void"] = ASTNop::fixedConstraint(Constraint::Void);
-    env->astnodes["half"] = ASTNop::fixedConstraint(Constraint::Half);
-    env->astnodes["float"] = ASTNop::fixedConstraint(Constraint::Float);
-    env->astnodes["double"] = ASTNop::fixedConstraint(Constraint::Double);
-    env->astnodes["bool"] = ASTNop::fixedConstraint(Constraint::Bool);
+static void setupRootEnvironment (const EnvironmentRef &env) {
+    auto builder = env->global.builder;
+    env->values["void"] = builder->typeref(Type::Void);
+    env->values["half"] = builder->typeref(Type::Half);
+    env->values["float"] = builder->typeref(Type::Float);
+    env->values["double"] = builder->typeref(Type::Double);
+    env->values["bool"] = builder->typeref(Type::Bool);
 
-    env->astnodes["int8"] = ASTNop::fixedConstraint(Constraint::Int8);
-    env->astnodes["int16"] = ASTNop::fixedConstraint(Constraint::Int16);
-    env->astnodes["int32"] = ASTNop::fixedConstraint(Constraint::Int32);
-    env->astnodes["int64"] = ASTNop::fixedConstraint(Constraint::Int64);
+    env->values["int8"] = builder->typeref(Type::Int8);
+    env->values["int16"] = builder->typeref(Type::Int16);
+    env->values["int32"] = builder->typeref(Type::Int32);
+    env->values["int64"] = builder->typeref(Type::Int64);
 
-    env->astnodes["uint8"] = ASTNop::fixedConstraint(Constraint::UInt8);
-    env->astnodes["uint16"] = ASTNop::fixedConstraint(Constraint::UInt16);
-    env->astnodes["uint32"] = ASTNop::fixedConstraint(Constraint::UInt32);
-    env->astnodes["uint64"] = ASTNop::fixedConstraint(Constraint::UInt64);
+    env->values["uint8"] = builder->typeref(Type::UInt8);
+    env->values["uint16"] = builder->typeref(Type::UInt16);
+    env->values["uint32"] = builder->typeref(Type::UInt32);
+    env->values["uint64"] = builder->typeref(Type::UInt64);
 
-    env->astnodes["int"] = env->astnodes["int32"];
-    env->astnodes["rawstring"] = ASTNop::fixedConstraint(Constraint::Rawstring);
+    env->values["rawstring"] = builder->typeref(Type::Rawstring);
+
+    env->values["int"] = env->values["int32"];
+
+    auto booltype = llvm::cast<IntegerType>(Type::Bool);
+    env->values["true"] = builder->constinteger(booltype, new Integer(0));
+    env->values["false"] = builder->constinteger(booltype, new Integer(1));
 }
 
-static void teardownRootEnvironment (Environment *env) {
+static void teardownRootEnvironment (const EnvironmentRef &env) {
 }
 
-static LLVMValueRef handleException(Environment *env, ValueRef expr) {
-    translateError(env, "an exception was raised");
+static void handleException(const EnvironmentRef &env, ValueRef expr) {
     ValueRef tb = expr->getNext();
     if (tb && tb->getKind() == V_String) {
         std::cerr << llvm::cast<String>(tb)->getValue();
     }
     streamValue(std::cerr, expr, 0, true);
-    return NULL;
+    valueError(expr, "an exception was raised");
 }
 
-static bool translateRootValueList (Environment *env, ValueRef expr) {
-    ASTNodeRef stmts = ASTDo::parse(env, expr);
-    assert(stmts);
+static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 
-    RootGenerateContext rootctx;
-    rootctx.module = std::make_shared<ILModule>();
-    rootctx.builder = std::make_shared<ILBuilder>(rootctx.module);
-    auto ctx = std::make_shared<GenerateContext>(rootctx);
-
-    rootctx.builder->appendTo(rootctx.builder->basicblock("entry"));
-    stmts->generate(ctx);
-    std::cout << rootctx.module->getRepr();
-    rootctx.module->verify();
+    env->global.builder->appendTo(env->global.builder->basicblock("entry"));
+    parse_do(env, expr);
+    std::cout << env->global.module->getRepr();
+    env->global.module->verify();
     fflush(stdout);
 
     LLVMModuleRef module = LLVMModuleCreateWithName("main");
 
     LLVMValueRef func;
     {
-        CodeGenerator cg(rootctx.module, module);
+        CodeGenerator cg(env->global.module, module);
         func = cg.generate();
     }
 
@@ -4909,7 +4216,7 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
         &options, sizeof(options), &error);
 
     if (error) {
-        astError(expr, "%s", error);
+        valueError(expr, "%s", error);
         LLVMDisposeMessage(error);
         return false;
     }
@@ -4932,30 +4239,28 @@ static bool translateRootValueList (Environment *env, ValueRef expr) {
         typedef void (*signature)();
         ((signature)f)();
     } catch (ValueRef expr) {
-        return handleException(env, expr);
+        handleException(env, expr);
+        return false;
     }
 
     return true;
 }
 
 template <typename T>
-static T *translateKind(Environment *env, ValueRef expr) {
-    auto _ = env->with_expr(expr);
+static T *translateKind(const EnvironmentRef &env, ValueRef expr) {
     T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
     if (obj) {
         return obj;
     } else {
-        translateError(env, "%s expected, not %s",
+        valueError(expr, "%s expected, not %s",
             valueKindName(T::kind()),
             valueKindName(kindOf(expr)));
     }
     return nullptr;
 }
 
-static bool compileModule (Environment *env, ValueRef expr) {
+static bool compileModule (const EnvironmentRef &env, ValueRef expr) {
     assert(expr);
-
-    auto _ = env->with_expr(expr);
 
     std::string lastlang = "";
     while (true) {
@@ -4965,27 +4270,26 @@ static bool compileModule (Environment *env, ValueRef expr) {
             break;
         auto preprocessor = preprocessors[head->getValue()];
         if (!preprocessor) {
-            translateError(env, "unrecognized header: '%s'; try '%s' instead.",
+            valueError(expr, "unrecognized header: '%s'; try '%s' instead.",
                 head->getValue().c_str(),
                 BANGRA_HEADER);
             return false;
         }
         if (lastlang == head->getValue()) {
-            translateError(env,
+            valueError(expr,
                 "header has not changed after preprocessing; is still '%s'.",
                 head->getValue().c_str());
         }
         lastlang = head->getValue();
+        ValueRef orig_expr = expr;
         try {
-            expr = preprocessor(env, new Pointer(expr));
+            expr = preprocessor(env.get(), new Pointer(expr));
         } catch (ValueRef expr) {
             handleException(env, expr);
             return false;
         }
-        if (env->hasErrors())
-            return false;
         if (!expr) {
-            translateError(env,
+            valueError(orig_expr,
                 "preprocessor returned null.",
                 head->getValue().c_str());
             return false;
@@ -4997,13 +4301,16 @@ static bool compileModule (Environment *env, ValueRef expr) {
 }
 
 static bool compileMain (ValueRef expr) {
-    TranslationGlobals globals;
+    GlobalEnvironment global;
+    global.module = std::make_shared<ILModule>();
+    global.builder = std::make_shared<ILBuilder>(global.module);
+    auto env = std::make_shared<Environment>(global);
 
-    setupRootEnvironment(&globals.rootenv);
+    setupRootEnvironment(env);
 
-    bool result = compileModule(&globals.rootenv, at(expr));
+    bool result = compileModule(env, at(expr));
 
-    teardownRootEnvironment(&globals.rootenv);
+    teardownRootEnvironment(env);
 
     return result;
 }
@@ -5399,11 +4706,10 @@ ValueRef bangra_handle(void *ptr) {
     return handle;
 }
 
-void bangra_error_message(Environment *env, ValueRef context, const char *format, ...) {
-    auto _ = env->with_expr(context);
+void bangra_error_message(ValueRef context, const char *format, ...) {
     va_list args;
     va_start (args, format);
-    bangra::translateErrorV(env, format, args);
+    bangra::valueErrorV(context, format, args);
     va_end (args);
 }
 
@@ -5572,11 +4878,7 @@ int bangra_anchor_offset(ValueRef expr) {
 }
 
 Environment *bangra_parent_env(Environment *env) {
-    return env->parent;
-}
-
-Environment *bangra_meta_env(Environment *env) {
-    return env->getMeta();
+    return env->parent.get();
 }
 
 static int unique_symbol_counter = 0;
