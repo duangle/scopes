@@ -2948,16 +2948,16 @@ struct ILValue : std::enable_shared_from_this<ILValue> {
 
         BasicBlockParameter,
 
-        Fixed,
-            ConstString,
-            ConstInteger,
-            ConstReal,
-            TypeRef,
-            FixedEnd,
-
         Instruction,
-            CFuncDecl,
-            FunctionTypeDecl,
+            Fixed,
+                Nop,
+                ConstString,
+                ConstInteger,
+                ConstReal,
+                ConstTypeRef,
+                FixedEnd,
+            External,
+            CDecl,
             Call,
             AddressOf,
             InstructionEnd,
@@ -3141,10 +3141,12 @@ struct ILInstruction : ILValue {
     }
 
     std::string formatAssignment(const std::string &content) {
-        return format("    %s %s %s\n",
+        return format("    %s %s %s %s %s\n",
             formatIndex().c_str(),
             ansi(ANSI_STYLE_OPERATOR, "=").c_str(),
-            content.c_str());
+            content.c_str(),
+            ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
+            type?type->getRepr().c_str():ansi(ANSI_STYLE_ERROR, "<type missing>").c_str());
     }
 
     bool isSameBlock(const ILValueRef &value) {
@@ -3181,28 +3183,21 @@ void ILBasicBlock::append(const ILValueRef &value) {
 
 //------------------------------------------------------------------------------
 
-struct ILFixed : ILValue {
+struct ILFixed : ILInstruction {
     ILFixed(Kind kind_, Type *type_ = nullptr) :
-        ILValue(kind_, type_)
-        {}
-
-    ILFixed(Type *type_ = nullptr) :
-        ILValue(ILValue::Fixed, type_)
+        ILInstruction(kind_, type_)
         {}
 
     static bool classof(const ILValue *value) {
         return (value->kind >= Fixed) && (value->kind < FixedEnd);
     }
+};
 
-    virtual std::string getRepr () {
-        return getRefRepr(true) + "\n";
-    }
-    virtual std::string getRefRepr (bool sameblock) {
-        if (type) {
-            return format("%s", type->getRepr().c_str());
-        } else {
-            return ansi(ANSI_STYLE_ERROR, "<missing type>");
-        }
+//------------------------------------------------------------------------------
+
+struct ILNop : ILValueImpl<ILValue::Nop, ILFixed> {
+    virtual std::string getRHSRepr() {
+        return ansi(ANSI_STYLE_INSTRUCTION, "nop").c_str();
     }
 };
 
@@ -3211,14 +3206,12 @@ struct ILFixed : ILValue {
 struct ILConstString : ILValueImpl<ILValue::ConstString, ILFixed> {
     String *value;
 
-    virtual std::string getRefRepr (bool sameblock) {
-        return format("(%s %s %s %s)",
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
             ansi(ANSI_STYLE_INSTRUCTION, "const_string").c_str(),
             ansi(ANSI_STYLE_STRING,
                 format("\"%s\"",
-                    quoteString(value->getValue(), "\"").c_str())).c_str(),
-            ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
-            type->getRepr().c_str());
+                    quoteString(value->getValue(), "\"").c_str())).c_str());
     }
 };
 
@@ -3227,12 +3220,10 @@ struct ILConstString : ILValueImpl<ILValue::ConstString, ILFixed> {
 struct ILConstInteger : ILValueImpl<ILValue::ConstInteger, ILFixed> {
     Integer *value;
 
-    virtual std::string getRefRepr (bool sameblock) {
-        return format("(%s %s %s %s)",
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
             ansi(ANSI_STYLE_INSTRUCTION, "const_integer").c_str(),
-            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value->getValue())).c_str(),
-            ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
-            type->getRepr().c_str());
+            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value->getValue())).c_str());
     }
 };
 
@@ -3241,23 +3232,21 @@ struct ILConstInteger : ILValueImpl<ILValue::ConstInteger, ILFixed> {
 struct ILConstReal : ILValueImpl<ILValue::ConstReal, ILFixed> {
     Real *value;
 
-    virtual std::string getRefRepr (bool sameblock) {
-        return format("(%s %s %s %s)",
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
             ansi(ANSI_STYLE_INSTRUCTION, "const_real").c_str(),
-            ansi(ANSI_STYLE_NUMBER, format("%g", value->getValue())).c_str(),
-            ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
-            type->getRepr().c_str());
+            ansi(ANSI_STYLE_NUMBER, format("%g", value->getValue())).c_str());
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct ILTypeRef : ILValueImpl<ILValue::TypeRef, ILFixed> {
+struct ILConstTypeRef : ILValueImpl<ILValue::ConstTypeRef, ILFixed> {
     Type *value;
 
-    virtual std::string getRefRepr (bool sameblock) {
-        return format("(%s %s)",
-            ansi(ANSI_STYLE_INSTRUCTION, "type_ref").c_str(),
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_type_ref").c_str(),
             value->getRepr().c_str());
     }
 };
@@ -3265,32 +3254,32 @@ struct ILTypeRef : ILValueImpl<ILValue::TypeRef, ILFixed> {
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
-struct ILCFuncDecl : ILValueImpl<ILValue::CFuncDecl, ILInstruction> {
+struct ILExternal : ILValueImpl<ILValue::External, ILInstruction> {
     ILValueRef name;
-    ILValueRef type;
+    ILValueRef external_type;
 
     virtual std::string getRHSRepr() {
         assert(name);
         assert(type);
         std::stringstream ss;
-        ss << ansi(ANSI_STYLE_INSTRUCTION, "cfuncdecl") << " "
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "external") << " "
             << name->getRefRepr(isSameBlock(name))
-            << ansi(ANSI_STYLE_OPERATOR, ":")
-            << type->getRefRepr(isSameBlock(type));
+            << " " << ansi(ANSI_STYLE_OPERATOR, "->") << " "
+            << external_type->getRefRepr(isSameBlock(external_type));
         return ss.str();
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct ILFunctionTypeDecl : ILValueImpl<ILValue::FunctionTypeDecl, ILInstruction> {
+struct ILCDecl : ILValueImpl<ILValue::CDecl, ILInstruction> {
     ILValueRef result;
     std::vector<ILValueRef> parameters;
     bool vararg;
 
     virtual std::string getRHSRepr() {
         std::stringstream ss;
-        ss << ansi(ANSI_STYLE_KEYWORD, "function_type_decl") << " ";
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "cdecl") << " ";
         ss << result->getRefRepr(isSameBlock(result));
         ss << " (";
         for (size_t i = 0; i < parameters.size(); ++i) {
@@ -3440,28 +3429,29 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
     }
 
     ILValueRef empty() {
-        auto result = std::make_shared<ILFixed>();
+        auto result = std::make_shared<ILNop>();
         result->type = Type::Empty;
         valueCreated(result);
         return result;
     }
 
-    ILValueRef cfuncdecl(const ILValueRef &name, const ILValueRef &type) {
+    ILValueRef external(const ILValueRef &name, const ILValueRef &type) {
         assert(type);
         assert(name);
-        auto result = std::make_shared<ILCFuncDecl>();
-        result->type = type;
+        auto result = std::make_shared<ILExternal>();
+        result->type = Type::Any;
+        result->external_type = type;
         result->name = name;
         valueCreated(result);
         return result;
     }
 
-    ILValueRef functiontypedecl(
+    ILValueRef cdecl(
         const ILValueRef &resulttype,
         const std::vector<ILValueRef> &parametertypes,
         bool isvararg) {
         assert(resulttype);
-        auto result = std::make_shared<ILFunctionTypeDecl>();
+        auto result = std::make_shared<ILCDecl>();
         result->type = Type::TypePointer;
         result->result = resulttype;
         result->parameters = parametertypes;
@@ -3489,9 +3479,9 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef typeref(Type *t) {
+    ILValueRef consttyperef(Type *t) {
         assert(t);
-        auto result = std::make_shared<ILTypeRef>();
+        auto result = std::make_shared<ILConstTypeRef>();
         result->type = Type::TypePointer;
         result->value = t;
         valueCreated(result);
@@ -3571,8 +3561,8 @@ struct CodeGenerator {
         if (!result) {
             switch(il_value->kind) {
                 /*
-                case ILValue::CFuncDecl: {
-                    auto decl = llvm::cast<ILCFuncDecl>(il_value.get());
+                case ILValue::External: {
+                    auto decl = llvm::cast<ILExternal>(il_value.get());
                     result = LLVMAddFunction(llvm_module,
                         decl->name.c_str(),
                         resolveType(il_value));
@@ -3769,7 +3759,7 @@ static ILValueRef parse_cdecl (const EnvironmentRef &env, ValueRef expr) {
         param = nextparam;
     }
 
-    return env->global.builder->functiontypedecl(returntype, paramtypes, vararg);
+    return env->global.builder->cdecl(returntype, paramtypes, vararg);
 }
 
 static ILValueRef parse_external (const EnvironmentRef &env, ValueRef expr) {
@@ -3779,7 +3769,7 @@ static ILValueRef parse_external (const EnvironmentRef &env, ValueRef expr) {
     ILValueRef name = translate(env, expr_name);
     ILValueRef type = translate(env, expr_type);
 
-    return env->global.builder->cfuncdecl(name, type);
+    return env->global.builder->external(name, type);
 }
 
 static ILValueRef parse_do (const EnvironmentRef &env, ValueRef expr) {
@@ -4144,23 +4134,23 @@ static void init() {
 
 static void setupRootEnvironment (const EnvironmentRef &env) {
     auto builder = env->global.builder;
-    env->values["void"] = builder->typeref(Type::Void);
-    env->values["half"] = builder->typeref(Type::Half);
-    env->values["float"] = builder->typeref(Type::Float);
-    env->values["double"] = builder->typeref(Type::Double);
-    env->values["bool"] = builder->typeref(Type::Bool);
+    env->values["void"] = builder->consttyperef(Type::Void);
+    env->values["half"] = builder->consttyperef(Type::Half);
+    env->values["float"] = builder->consttyperef(Type::Float);
+    env->values["double"] = builder->consttyperef(Type::Double);
+    env->values["bool"] = builder->consttyperef(Type::Bool);
 
-    env->values["int8"] = builder->typeref(Type::Int8);
-    env->values["int16"] = builder->typeref(Type::Int16);
-    env->values["int32"] = builder->typeref(Type::Int32);
-    env->values["int64"] = builder->typeref(Type::Int64);
+    env->values["int8"] = builder->consttyperef(Type::Int8);
+    env->values["int16"] = builder->consttyperef(Type::Int16);
+    env->values["int32"] = builder->consttyperef(Type::Int32);
+    env->values["int64"] = builder->consttyperef(Type::Int64);
 
-    env->values["uint8"] = builder->typeref(Type::UInt8);
-    env->values["uint16"] = builder->typeref(Type::UInt16);
-    env->values["uint32"] = builder->typeref(Type::UInt32);
-    env->values["uint64"] = builder->typeref(Type::UInt64);
+    env->values["uint8"] = builder->consttyperef(Type::UInt8);
+    env->values["uint16"] = builder->consttyperef(Type::UInt16);
+    env->values["uint32"] = builder->consttyperef(Type::UInt32);
+    env->values["uint64"] = builder->consttyperef(Type::UInt64);
 
-    env->values["rawstring"] = builder->typeref(Type::Rawstring);
+    env->values["rawstring"] = builder->consttyperef(Type::Rawstring);
 
     env->values["int"] = env->values["int32"];
 
@@ -4183,7 +4173,6 @@ static void handleException(const EnvironmentRef &env, ValueRef expr) {
 
 static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 
-    env->global.builder->appendTo(env->global.builder->basicblock("entry"));
     parse_do(env, expr);
     std::cout << env->global.module->getRepr();
     env->global.module->verify();
@@ -4304,6 +4293,7 @@ static bool compileMain (ValueRef expr) {
     GlobalEnvironment global;
     global.module = std::make_shared<ILModule>();
     global.builder = std::make_shared<ILBuilder>(global.module);
+    global.builder->appendTo(global.builder->basicblock("main_entry"));
     auto env = std::make_shared<Environment>(global);
 
     setupRootEnvironment(env);
