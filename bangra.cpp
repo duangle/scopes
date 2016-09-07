@@ -383,6 +383,193 @@ static std::string ansi(const std::string &code, const std::string &content) {
 }
 
 //------------------------------------------------------------------------------
+
+template<typename T>
+class shared_back_ptr;
+
+template<typename T>
+class enable_shared_back_from_this :
+    public std::enable_shared_from_this<T> {
+public:
+private:
+    friend class shared_back_ptr<T>;
+
+    shared_back_ptr<T> *_first_shared_back_ptr;
+
+    T *_shared_back_ptr_upcast() const {
+        return static_cast<T*>(this);
+    }
+
+    enable_shared_back_from_this(const enable_shared_back_from_this<T> &) = delete;
+
+public:
+
+    enable_shared_back_from_this() :
+        _first_shared_back_ptr(nullptr)
+    {
+    }
+
+    template<typename PointerT>
+    struct iteratorT {
+        PointerT *_p;
+        PointerT *_next;
+
+        iteratorT(PointerT *p) :
+            _p(p),
+            _next(p?p->_next:nullptr)
+        {}
+
+        bool operator !=(const iteratorT &other) const {
+            return _p != other._p;
+        }
+
+        void operator ++() {
+            if (_p) {
+                _p = _next;
+                _next = _p?_p->_next:nullptr;
+            }
+        }
+
+        PointerT *operator *() const {
+            return _p;
+        }
+    };
+
+    struct back_ptr_iterable {
+        std::shared_ptr<T> _ref;
+        typedef iteratorT<shared_back_ptr<T> > iterator;
+        typedef iteratorT<const shared_back_ptr<T> > const_iterator;
+
+        back_ptr_iterable(const std::shared_ptr<T> &ref) :
+            _ref(ref) {}
+
+        iterator begin() { return _ref->_first_shared_back_ptr; }
+        const_iterator begin() const { return _ref->_first_shared_back_ptr; }
+        iterator end() { return nullptr; }
+        const_iterator end() const { return nullptr; }
+    };
+
+    back_ptr_iterable back_ptrs() {
+        return back_ptr_iterable(
+            std::enable_shared_from_this<T>::shared_from_this());
+    }
+
+};
+
+template<typename T>
+class shared_back_ptr {
+    friend struct std::hash< bangra::shared_back_ptr<T> >;
+    friend struct bangra::enable_shared_back_from_this<T>::iteratorT<shared_back_ptr<T> >;
+    friend struct bangra::enable_shared_back_from_this<T>::iteratorT<const shared_back_ptr<T> >;
+private:
+    std::shared_ptr<T> _ref;
+    shared_back_ptr *_prev;
+    shared_back_ptr *_next;
+
+    void _link_shared_back_ptr() {
+        if (_ref) {
+            _prev = nullptr;
+            _next = _ref->_first_shared_back_ptr;
+            if (_next) {
+                assert(_next->_prev == nullptr);
+                _next->_prev = this;
+            }
+            _ref->_first_shared_back_ptr = this;
+        }
+    }
+
+    void _unlink_shared_back_ptr() {
+        if (_ref) {
+            if (_next) {
+                _next->_prev = _prev;
+            }
+            if (_prev) {
+                _prev->_next = _next;
+            } else {
+                assert(_ref->_first_shared_back_ptr == this);
+                _ref->_first_shared_back_ptr = _next;
+            }
+            _prev = _next = nullptr;
+            _ref = nullptr;
+        }
+    }
+
+public:
+    shared_back_ptr() :
+        _ref(nullptr),
+        _prev(nullptr),
+        _next(nullptr)
+    {}
+
+    shared_back_ptr(const std::nullptr_t &) :
+        _ref(nullptr),
+        _prev(nullptr),
+        _next(nullptr)
+    {}
+
+    template<typename AnyT>
+    shared_back_ptr(const std::shared_ptr<AnyT> &ref) :
+        _ref(ref)
+    {
+        _link_shared_back_ptr();
+    }
+
+    shared_back_ptr(const shared_back_ptr &O) :
+        _ref(O._ref) {
+        _link_shared_back_ptr();
+    }
+
+    ~shared_back_ptr() {
+        _unlink_shared_back_ptr();
+    }
+
+    T *get() const {
+        return _ref.get();
+    }
+
+    T *operator ->() const {
+        return _ref.get();
+    }
+
+    operator bool() const {
+        return (bool)_ref;
+    }
+
+    operator const std::shared_ptr<T> &() const {
+        return _ref;
+    }
+
+    void operator =(const std::nullptr_t &) {
+        _unlink_shared_back_ptr();
+    }
+
+    template<typename AnyT>
+    void operator =(const std::shared_ptr<AnyT> &ref) {
+        if (_ref == ref) return;
+        _unlink_shared_back_ptr();
+        _ref = ref;
+        _link_shared_back_ptr();
+    }
+
+};
+
+} // namespace bangra
+
+namespace std {
+    template<typename T>
+    struct hash< bangra::shared_back_ptr<T> >
+    {
+        typedef bangra::shared_back_ptr<T> argument_type;
+        typedef std::size_t result_type;
+        result_type operator()(argument_type const& s) const {
+            return std::hash<std::shared_ptr<T> >{}(s._ref);
+        }
+    };
+}
+
+namespace bangra {
+
+//------------------------------------------------------------------------------
 // FILE I/O
 //------------------------------------------------------------------------------
 
@@ -1997,6 +2184,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
 enum TypeKind {
     T_Any,
     T_Void,
+    T_Null,
     T_Integer,
     T_Real,
     T_Pointer,
@@ -2036,6 +2224,7 @@ protected:
 public:
     static Type *TypePointer;
     static Type *Void;
+    static Type *Null;
     static Type *Bool;
     static Type *Empty;
     static Type *Any;
@@ -2071,7 +2260,7 @@ public:
     static std::function<Type * (Type *, unsigned)> Array;
     static std::function<Type * (Type *, unsigned)> Vector;
     static std::function<Type * (NamedTypeArray)> Tuple;
-    static Type *Struct(const std::string &name);
+    static Type *Struct(const std::string &name, bool builtin);
     static std::function<Type * (Type *, TypeArray, bool)> CFunction;
 
     virtual std::string getRepr() = 0;
@@ -2079,6 +2268,7 @@ public:
 
 Type *Type::TypePointer;
 Type *Type::Void;
+Type *Type::Null;
 Type *Type::Bool;
 Type *Type::Int8;
 Type *Type::Int16;
@@ -2122,6 +2312,14 @@ struct TypeImpl : Type {
 struct VoidType : TypeImpl<VoidType, T_Void> {
     virtual std::string getRepr() {
         return ansi(ANSI_STYLE_TYPE, "void");
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct NullType : TypeImpl<NullType, T_Null> {
+    virtual std::string getRepr() {
+        return ansi(ANSI_STYLE_TYPE, "null");
     }
 };
 
@@ -2292,23 +2490,29 @@ struct StructType : TypeImpl<StructType, T_Struct> {
 protected:
     std::string name;
     NamedTypeArray elements;
+    bool builtin;
 
 public:
-    StructType(const std::string &name_) :
-        name(name_)
+    StructType(const std::string &name_, bool builtin_) :
+        name(name_),
+        builtin(builtin_)
         {}
 
     virtual std::string getRepr() {
-        return format("(%s<%p> %s)",
-                ansi(ANSI_STYLE_KEYWORD, "struct").c_str(),
-                this,
-                name.c_str());
+        if (builtin) {
+            return ansi(ANSI_STYLE_TYPE, name).c_str();
+        } else {
+            return format("(%s<%p> %s)",
+                    ansi(ANSI_STYLE_KEYWORD, "struct").c_str(),
+                    this,
+                    name.c_str());
+        }
     }
 
 };
 
-Type *Type::Struct(const std::string &name) {
-    return new StructType(name);
+Type *Type::Struct(const std::string &name, bool builtin) {
+    return new StructType(name, builtin);
 }
 
 //------------------------------------------------------------------------------
@@ -2378,14 +2582,15 @@ Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters, bool _isv
 //------------------------------------------------------------------------------
 
 void Type::initTypes() {
-    TypePointer = Pointer(Struct("Type"));
+    TypePointer = Pointer(Struct("Type", true));
 
     Empty = Tuple({});
 
     Any = new AnyType();
     Void = new VoidType();
+    Null = new NullType();
 
-    Opaque = Struct("opaque");
+    Opaque = Struct("opaque", true);
     OpaquePointer = Pointer(Opaque);
 
     Bool = Integer(1, false);
@@ -2935,6 +3140,7 @@ struct ILModule;
 struct ILBuilder;
 
 typedef std::shared_ptr<ILValue> ILValueRef;
+typedef shared_back_ptr<ILValue> ILValueBackRef;
 typedef std::shared_ptr<ILBasicBlock> ILBasicBlockRef;
 typedef std::shared_ptr<ILModule> ILModuleRef;
 typedef std::shared_ptr<ILBuilder> ILBuilderRef;
@@ -2942,7 +3148,7 @@ typedef std::shared_ptr<ILBasicBlockParameter> ILBasicBlockParameterRef;
 
 //------------------------------------------------------------------------------
 
-struct ILValue : std::enable_shared_from_this<ILValue> {
+struct ILValue : enable_shared_back_from_this<ILValue> {
     enum Kind {
         BasicBlock,
 
@@ -2997,7 +3203,7 @@ struct ILValueImpl : BaseT {
 struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock>,
     std::enable_shared_from_this<ILBasicBlock> {
 
-    std::vector<ILValueRef> values;
+    std::vector<ILValueBackRef> values;
     std::string name;
     std::vector<ILBasicBlockParameterRef> parameters;
 
@@ -3057,7 +3263,7 @@ std::string ILBasicBlock::getRepr () {
         ss << ansi(ANSI_STYLE_OPERATOR,")");
     }
     ss << ansi(ANSI_STYLE_OPERATOR,":") << "\n";
-    for (auto value : values) {
+    for (auto &value : values) {
         ss << value->getRepr();
     }
     return ss.str();
@@ -3255,8 +3461,8 @@ struct ILConstTypeRef : ILValueImpl<ILValue::ConstTypeRef, ILFixed> {
 //------------------------------------------------------------------------------
 
 struct ILExternal : ILValueImpl<ILValue::External, ILInstruction> {
-    ILValueRef name;
-    ILValueRef external_type;
+    ILValueBackRef name;
+    ILValueBackRef external_type;
 
     virtual std::string getRHSRepr() {
         assert(name);
@@ -3273,8 +3479,8 @@ struct ILExternal : ILValueImpl<ILValue::External, ILInstruction> {
 //------------------------------------------------------------------------------
 
 struct ILCDecl : ILValueImpl<ILValue::CDecl, ILInstruction> {
-    ILValueRef result;
-    std::vector<ILValueRef> parameters;
+    ILValueBackRef result;
+    std::vector<ILValueBackRef> parameters;
     bool vararg;
 
     virtual std::string getRHSRepr() {
@@ -3300,8 +3506,8 @@ struct ILCDecl : ILValueImpl<ILValue::CDecl, ILInstruction> {
 //------------------------------------------------------------------------------
 
 struct ILCall : ILValueImpl<ILValue::Call, ILInstruction> {
-    ILValueRef callee;
-    std::vector<ILValueRef> arguments;
+    ILValueBackRef callee;
+    std::vector<ILValueBackRef> arguments;
 
     virtual std::string getRHSRepr() {
         std::stringstream ss;
@@ -3317,7 +3523,7 @@ struct ILCall : ILValueImpl<ILValue::Call, ILInstruction> {
 //------------------------------------------------------------------------------
 
 struct ILAddressOf : ILValueImpl<ILValue::AddressOf, ILInstruction> {
-    ILValueRef value;
+    ILValueBackRef value;
 
     virtual std::string getRHSRepr() {
         return format("%s %s",
@@ -3330,10 +3536,10 @@ struct ILAddressOf : ILValueImpl<ILValue::AddressOf, ILInstruction> {
 
 static void ilError (const ILValueRef &value, const char *format, ...) {
     Anchor *anchor = NULL;
-    // TODO: resolve anchor
-    if (!anchor) {
-        if (value) {
-            std::cout << value->getRepr();
+    if (value) {
+        std::cout << "at instruction\n" << value->getRepr();
+        if (value->anchor.isValid()) {
+            anchor = &value->anchor;
         }
     }
     va_list args;
@@ -3345,6 +3551,11 @@ static void ilError (const ILValueRef &value, const char *format, ...) {
 void ILModule::verify() {
     for (auto& block : blocks) {
         for (auto& value : block->values) {
+
+            if (!value->type)
+                ilError(value, "type missing");
+            else if (value->type == Type::Any)
+                ilError(value, "type not specialized");
 
             switch(value->kind) {
                 /*
@@ -3394,15 +3605,15 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         this->block = block;
     }
 
+    void valueCreated(const ILBasicBlockParameterRef &value) {
+        block->appendParameter(value);
+    }
+
     void valueCreated(const ILValueRef &value) {
         if (llvm::isa<ILInstruction>(value.get())) {
             assert(block);
             block->append(value);
         }
-    }
-
-    void valueCreated(const ILBasicBlockParameterRef &value) {
-        block->appendParameter(value);
     }
 
     ILBasicBlockRef basicblock(const std::string &name) {
@@ -3454,7 +3665,10 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         auto result = std::make_shared<ILCDecl>();
         result->type = Type::TypePointer;
         result->result = resulttype;
-        result->parameters = parametertypes;
+        std::copy(
+            parametertypes.begin(),
+            parametertypes.end(),
+            std::back_inserter(result->parameters));
         result->vararg = isvararg;
         valueCreated(result);
         return result;
@@ -3465,7 +3679,10 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         auto result = std::make_shared<ILCall>();
         result->type = Type::Any;
         result->callee = callee;
-        result->arguments = arguments;
+        std::copy(
+            arguments.begin(),
+            arguments.end(),
+            std::back_inserter(result->arguments));
         valueCreated(result);
         return result;
     }
@@ -3607,7 +3824,7 @@ struct CodeGenerator {
         LLVMBasicBlockRef llvm_block = LLVMAppendBasicBlock(llvm_function, "");
         LLVMPositionBuilderAtEnd(builder, llvm_block);
 
-        for (auto value : il_block->values) {
+        for (auto &value : il_block->values) {
             generateValue(value);
         }
     }
@@ -4135,6 +4352,7 @@ static void init() {
 static void setupRootEnvironment (const EnvironmentRef &env) {
     auto builder = env->global.builder;
     env->values["void"] = builder->consttyperef(Type::Void);
+    env->values["null"] = builder->consttyperef(Type::Null);
     env->values["half"] = builder->consttyperef(Type::Half);
     env->values["float"] = builder->consttyperef(Type::Float);
     env->values["double"] = builder->consttyperef(Type::Double);
@@ -4150,6 +4368,8 @@ static void setupRootEnvironment (const EnvironmentRef &env) {
     env->values["uint32"] = builder->consttyperef(Type::UInt32);
     env->values["uint64"] = builder->consttyperef(Type::UInt64);
 
+    env->values["usize_t"] = builder->consttyperef(Type::Integer(sizeof(size_t)*8,false));
+
     env->values["rawstring"] = builder->consttyperef(Type::Rawstring);
 
     env->values["int"] = env->values["int32"];
@@ -4157,6 +4377,8 @@ static void setupRootEnvironment (const EnvironmentRef &env) {
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
     env->values["true"] = builder->constinteger(booltype, new Integer(0));
     env->values["false"] = builder->constinteger(booltype, new Integer(1));
+
+
 }
 
 static void teardownRootEnvironment (const EnvironmentRef &env) {
@@ -4174,8 +4396,8 @@ static void handleException(const EnvironmentRef &env, ValueRef expr) {
 static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 
     parse_do(env, expr);
-    std::cout << env->global.module->getRepr();
     env->global.module->verify();
+    std::cout << env->global.module->getRepr();
     fflush(stdout);
 
     LLVMModuleRef module = LLVMModuleCreateWithName("main");
