@@ -2414,6 +2414,14 @@ protected:
     unsigned size;
 
 public:
+    Type *getElement() {
+        return element;
+    }
+
+    unsigned getSize() {
+        return size;
+    }
+
     ArrayType(Type *_element, unsigned _size) :
         element(_element),
         size(_size)
@@ -2440,6 +2448,14 @@ protected:
     unsigned size;
 
 public:
+    Type *getElement() {
+        return element;
+    }
+
+    unsigned getSize() {
+        return size;
+    }
+
     VectorType(Type *_element, unsigned _size) :
         element(_element),
         size(_size)
@@ -3172,6 +3188,7 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
             CDecl,
             Call,
             AddressOf,
+            CastTo,
             InstructionEnd,
     };
 
@@ -3540,6 +3557,21 @@ struct ILAddressOf : ILValueImpl<ILValue::AddressOf, ILInstruction> {
 
 //------------------------------------------------------------------------------
 
+struct ILCastTo : ILValueImpl<ILValue::CastTo, ILInstruction> {
+    ILValueBackRef value;
+    ILValueBackRef cast_type;
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s %s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "cast").c_str(),
+            value->getRefRepr(isSameBlock(value)).c_str(),
+            ansi(ANSI_STYLE_INSTRUCTION, "to").c_str(),
+            cast_type->getRefRepr(isSameBlock(cast_type)).c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+
 static void ilError (const ILValueRef &value, const char *format, ...) {
     Anchor *anchor = NULL;
     if (value) {
@@ -3564,31 +3596,36 @@ void ILModule::verify() {
                 ilError(value, "type not specialized");
 
             switch(value->kind) {
-                /*
                 case ILValue::Call: {
                     auto instr = llvm::cast<ILCall>(value.get());
-                    // check if argument types and count matches
-                    auto type = llvm::dyn_cast<CFunctionType>(instr->callee->type);
-                    if (!type->isVarArg() && (type->getParameterCount() < instr->arguments.size())) {
-                        ilError(value, "too many arguments");
-                    } else if (type->getParameterCount() > instr->arguments.size()) {
-                        ilError(value, "too few arguments");
-                    }
-                    for (size_t i = 0; i < instr->arguments.size(); ++i) {
-                        auto rtype = instr->arguments[i]->type;
-                        if (i >= type->getParameterCount()) {
-                            // vararg
-                        } else {
-                            auto ltype = type->getParameter(i);
-                            if (ltype != rtype) {
-                                ilError(value, "argument type mismatch (%s != %s)",
-                                    ltype->getRepr().c_str(),
-                                    rtype->getRepr().c_str());
+                    auto type = instr->callee->type;
+                    if (auto ptr = llvm::dyn_cast<PointerType>(type))
+                        type = ptr->getElement();
+                    if (auto ftype = llvm::dyn_cast<CFunctionType>(type)) {
+                        if (!ftype->isVarArg()
+                            && (ftype->getParameterCount() < instr->arguments.size())) {
+                            ilError(value, "too many arguments");
+                        } else if (ftype->getParameterCount() > instr->arguments.size()) {
+                            ilError(value, "too few arguments");
+                        }
+                        for (size_t i = 0; i < instr->arguments.size(); ++i) {
+                            auto rtype = instr->arguments[i]->type;
+                            if (i >= ftype->getParameterCount()) {
+                                // vararg
+                            } else {
+                                auto ltype = ftype->getParameter(i);
+                                if (ltype != rtype) {
+                                    ilError(value, "argument type mismatch (%s != %s)",
+                                        ltype->getRepr().c_str(),
+                                        rtype->getRepr().c_str());
+                                }
                             }
                         }
+                    } else {
+                        ilError(value, "don't know how to apply object of type %s",
+                            type->getRepr().c_str());
                     }
                 } break;
-                */
                 default: break;
             }
         }
@@ -3709,10 +3746,20 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
+    ILValueRef castto(const ILValueRef& value, const ILValueRef& type) {
+        assert(value);
+        assert(type);
+        auto result = std::make_shared<ILCastTo>();
+        result->value = value;
+        result->cast_type = type;
+        valueCreated(result);
+        return result;
+    }
+
     ILValueRef addressof(const ILValueRef& value) {
         assert(value);
         auto result = std::make_shared<ILAddressOf>();
-        result->type = Type::Pointer(value->type);
+        result->type = Type::Any;
         result->value = value;
         valueCreated(result);
         return result;
@@ -3784,9 +3831,13 @@ struct ILSolver {
     // after generation, the IL is not directly translatable because many types
     // have not been evaluated, types that depend on constant conditions.
 
-    // the solver "runs" constant instructions in the IL, resolves them
-    // to constants and ensures that all types and templates have been
-    // specialized.
+    // the solver "runs" instructions in the IL
+    // - resolves instructions with constant inputs to constants
+    // - ensures that all types and templates have been specialized
+    // - generates implicit casts
+    // - removes unreachable blocks due to constant conditions,
+    //   and removes single basic block arguments from blocks that are always
+    //   reached.
 
     ILModuleRef module;
     ILBuilderRef builder;
@@ -3797,19 +3848,87 @@ struct ILSolver {
         builder = std::make_shared<ILBuilder>(module);
     }
 
+    void replace_instruction_links(
+        const ILValueRef &oldvalue,
+        const ILValueRef &newvalue) {
+        for (auto link : oldvalue->back_ptrs()) {
+            *link = newvalue;
+        }
+    }
+
     void replace_instruction(
         const ILBasicBlockRef &block, size_t idx,
         const ILValueRef &oldvalue,
         const ILValueRef &newvalue) {
         newvalue->anchor = oldvalue->anchor;
-        for (auto link : oldvalue->back_ptrs()) {
-            *link = newvalue;
-        }
+        replace_instruction_links(oldvalue, newvalue);
         block->values[idx] = newvalue;
     }
 
-    size_t eval_instruction(const ILBasicBlockRef &block, size_t idx, const ILValueRef &value) {
+    void insert_instruction(
+        const ILBasicBlockRef &block, size_t &idx, const ILValueRef &value) {
+        block->values.insert(block->values.begin() + idx, value);
+        eval_instruction(block, idx);
+        idx++;
+    }
+
+    void generate_cast(
+        const ILBasicBlockRef &block, size_t &idx,
+        const ILValueRef &value, Type *desttype) {
+        auto srctype = value->type;
+        if (srctype == desttype) return;
+        if (desttype->getKind() == T_Pointer) {
+            if (srctype->getKind() == T_Pointer) {
+                auto srcelem = llvm::cast<PointerType>(srctype)->getElement();
+                auto destelem = llvm::cast<PointerType>(desttype)->getElement();
+                // we can cast from an array pointer to a single element
+                if (srcelem->getKind() == T_Array
+                    && (llvm::cast<ArrayType>(srcelem)->getElement() == destelem)) {
+                    // create bitcast between pointers
+
+                    // keep local reference of value because our const reference
+                    // will change
+                    ILValueRef oldvalue = value;
+                    // create const type
+                    ILValueBackRef ctp = builder->consttypepointer(desttype);
+                    insert_instruction(block, idx, ctp);
+                    // create reference to value
+                    auto newvalue = builder->castto(oldvalue, ctp);
+                    replace_instruction_links(oldvalue, newvalue);
+                    // replacing links created circular argument, fix it
+                    auto castto = llvm::cast<ILCastTo>(newvalue.get());
+                    castto->value = oldvalue;
+                    insert_instruction(block, idx, newvalue);
+                }
+            } else {
+                // create reference to value
+
+                // keep local reference of value because our const reference
+                // will change
+                ILValueRef oldvalue = value;
+                // create reference to value
+                auto newvalue = builder->addressof(oldvalue);
+                replace_instruction_links(oldvalue, newvalue);
+                // replacing links created circular addressof argument,
+                // so fix it manually
+                auto addressof = llvm::cast<ILAddressOf>(newvalue.get());
+                addressof->value = oldvalue;
+                insert_instruction(block, idx, newvalue);
+                // and apply subsequently required casts
+                generate_cast(block, idx, newvalue, desttype);
+            }
+        }
+    }
+
+    void eval_instruction(const ILBasicBlockRef &block, size_t &idx) {
+        auto value = block->values[idx];
         switch(value->kind) {
+            case ILValue::AddressOf: {
+                auto addressof = llvm::cast<ILAddressOf>(value.get());
+                if (addressof->value->type != Type::Any) {
+                    value->type = Type::Pointer(addressof->value->type);
+                }
+            } break;
             case ILValue::CDecl: {
                 auto cdecl = llvm::cast<ILCDecl>(value.get());
 
@@ -3830,19 +3949,37 @@ struct ILSolver {
                 external->type = Type::Pointer(extract_type(external->external_type));
 
             } break;
+            case ILValue::CastTo: {
+                auto castto = llvm::cast<ILCastTo>(value.get());
+                castto->type = extract_type(castto->cast_type);
+            } break;
             case ILValue::Call: {
                 auto call = llvm::cast<ILCall>(value.get());
                 auto type = call->callee->type;
                 if (auto ptr = llvm::dyn_cast<PointerType>(type))
                     type = ptr->getElement();
                 if (auto ftype = llvm::dyn_cast<CFunctionType>(type)) {
+                    // update result type
                     value->type = ftype->getResult();
+                    if (!ftype->isVarArg()
+                        && (ftype->getParameterCount() < call->arguments.size())) {
+                        ilError(value, "too many arguments");
+                    } else if (ftype->getParameterCount() > call->arguments.size()) {
+                        ilError(value, "too few arguments");
+                    }
+                    for (size_t i = 0; i < call->arguments.size(); ++i) {
+                        if (i >= ftype->getParameterCount()) {
+                            // vararg
+                        } else {
+                            auto ltype = ftype->getParameter(i);
+                            generate_cast(block, idx, call->arguments[i], ltype);
+                        }
+                    }
                 }
             } break;
             default:
                 break;
         }
-        return idx + 1;
     }
 
     void run() {
@@ -3850,7 +3987,8 @@ struct ILSolver {
         builder->parentTo(block);
         size_t i = 0;
         while (i < block->values.size()) {
-            i = eval_instruction(block, i, block->values[i]);
+            eval_instruction(block, i);
+            ++i;
         }
     }
 };
@@ -3867,6 +4005,7 @@ struct CodeGenerator {
 
     std::unordered_map<ILValueRef, LLVMValueRef> valuemap;
     std::unordered_map<Type *, LLVMTypeRef> typemap;
+    std::unordered_map<LLVMValueRef, LLVMValueRef> globals;
 
     CodeGenerator(ILModuleRef il_module_, LLVMModuleRef llvm_module_) :
         builder(nullptr),
@@ -3960,6 +4099,10 @@ struct CodeGenerator {
         return result;
     }
 
+    LLVMValueRef const_int(int value) {
+        return LLVMConstInt(LLVMInt32Type(), value, true);
+    }
+
     void generateValue(const ILValueRef &il_value) {
         LLVMValueRef result = valuemap[il_value];
         assert(!result);
@@ -3992,6 +4135,40 @@ struct CodeGenerator {
 
                 result = LLVMAddFunction(llvm_module, name.c_str(), ftype);
 
+            } break;
+            case ILValue::CastTo: {
+                auto castto = llvm::cast<ILCastTo>(il_value.get());
+                auto llvm_value = resolveValue(castto->value);
+                auto casttype = resolveType(il_value,
+                    extract_type(castto->cast_type));
+
+                if (LLVMIsConstant(llvm_value)) {
+                    result = LLVMConstBitCast(llvm_value, casttype);
+                } else {
+                    result = LLVMBuildBitCast(builder, llvm_value, casttype, "");
+                }
+
+            } break;
+            case ILValue::AddressOf: {
+                auto addressof = llvm::cast<ILAddressOf>(il_value.get());
+                auto llvm_value = resolveValue(addressof->value);
+
+                if (LLVMIsConstant(llvm_value)) {
+                    auto globalvar = globals[llvm_value];
+                    if (!globalvar) {
+                        globalvar = LLVMAddGlobal(llvm_module,
+                            LLVMTypeOf(llvm_value), "");
+                        LLVMSetInitializer(globalvar, llvm_value);
+                        LLVMSetGlobalConstant(globalvar, true);
+                        LLVMSetUnnamedAddr(globalvar, true);
+                        LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
+                        globals[llvm_value] = globalvar;
+                    }
+
+                    result = globalvar;
+                } else {
+                    ilError(il_value, "TODO: copy value to stack");
+                }
             } break;
             case ILValue::Call: {
                 auto instr = llvm::cast<ILCall>(il_value.get());

@@ -8,6 +8,7 @@ let puts
         cdecl int (rawstring)
 
 puts "hello world!\n"
+puts "hello world!\n"
 
 ///
     let printf-cdecl
