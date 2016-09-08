@@ -3184,6 +3184,10 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
                 ConstReal,
                 ConstTypePointer,
                 FixedEnd,
+            Terminator,
+                Br,
+                CondBr,
+                TerminatorEnd,
             External,
             CDecl,
             Call,
@@ -3412,6 +3416,22 @@ void ILBasicBlock::append(const ILValueRef &value) {
 
 //------------------------------------------------------------------------------
 
+template<typename T>
+static std::string format_valuelist(ILInstruction *self,
+    const std::vector<T> &values) {
+    std::stringstream ss;
+    ss << "(";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0)
+            ss << " ";
+        ss << values[i]->getRefRepr(self->isSameBlock(values[i]));
+    }
+    ss << ")";
+    return ss.str();
+}
+
+//------------------------------------------------------------------------------
+
 struct ILFixed : ILInstruction {
     ILFixed(Kind kind_, Type *type_ = nullptr) :
         ILInstruction(kind_, type_)
@@ -3536,9 +3556,7 @@ struct ILCall : ILValueImpl<ILValue::Call, ILInstruction> {
         std::stringstream ss;
         ss << ansi(ANSI_STYLE_INSTRUCTION, "call") << " "
             << callee->getRefRepr(isSameBlock(callee));
-        for (auto& arg : arguments) {
-            ss << " " << arg->getRefRepr(isSameBlock(arg));
-        }
+        ss << format_valuelist(this, arguments);
         return ss.str();
     }
 };
@@ -3567,6 +3585,60 @@ struct ILCastTo : ILValueImpl<ILValue::CastTo, ILInstruction> {
             value->getRefRepr(isSameBlock(value)).c_str(),
             ansi(ANSI_STYLE_INSTRUCTION, "to").c_str(),
             cast_type->getRefRepr(isSameBlock(cast_type)).c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILTerminator : ILInstruction {
+    ILTerminator(Kind kind_, Type *type_ = nullptr) :
+        ILInstruction(kind_, type_)
+        {}
+
+    static bool classof(const ILValue *value) {
+        return (value->kind >= Terminator) && (value->kind < TerminatorEnd);
+    }
+
+    virtual std::string getRepr () {
+        return "    " + getRHSRepr() + "\n";
+    }
+
+    virtual std::string getRefRepr (bool sameblock) {
+        return ansi(ANSI_STYLE_ERROR, "<illegal terminator reference>");
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILBr : ILValueImpl<ILValue::Br, ILTerminator> {
+    ILBasicBlockRef label;
+    std::vector<ILValueBackRef> arguments;
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s%s",
+            ansi(ANSI_STYLE_INSTRUCTION, "br").c_str(),
+            label->getRefRepr(isSameBlock(label)).c_str(),
+            format_valuelist(this, arguments).c_str());
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILCondBr : ILValueImpl<ILValue::CondBr, ILTerminator> {
+    ILValueBackRef condition;
+    ILBasicBlockRef thenlabel;
+    std::vector<ILValueBackRef> thenarguments;
+    ILBasicBlockRef elselabel;
+    std::vector<ILValueBackRef> elsearguments;
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s %s%s %s%s",
+            ansi(ANSI_STYLE_INSTRUCTION, "condbr").c_str(),
+            condition->getRefRepr(isSameBlock(condition)).c_str(),
+            thenlabel->getRefRepr(isSameBlock(thenlabel)).c_str(),
+            format_valuelist(this, thenarguments).c_str(),
+            elselabel->getRefRepr(isSameBlock(elselabel)).c_str(),
+            format_valuelist(this, elsearguments).c_str());
     }
 };
 
@@ -3742,6 +3814,42 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
             arguments.begin(),
             arguments.end(),
             std::back_inserter(result->arguments));
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef br(const ILBasicBlockRef& bb, const std::vector<ILValueRef> &arguments) {
+        assert(bb);
+        auto result = std::make_shared<ILBr>();
+        result->type = Type::Any;
+        result->label = bb;
+        std::copy(
+            arguments.begin(),
+            arguments.end(),
+            std::back_inserter(result->arguments));
+        valueCreated(result);
+        return result;
+    }
+
+    ILValueRef condbr(const ILValueRef& condition,
+        const ILBasicBlockRef& thenbb, const std::vector<ILValueRef> &thenarguments,
+        const ILBasicBlockRef& elsebb, const std::vector<ILValueRef> &elsearguments) {
+        assert(condition);
+        assert(thenbb);
+        assert(elsebb);
+        auto result = std::make_shared<ILCondBr>();
+        result->type = Type::Any;
+        result->condition = condition;
+        result->thenlabel = thenbb;
+        std::copy(
+            thenarguments.begin(),
+            thenarguments.end(),
+            std::back_inserter(result->thenarguments));
+        result->elselabel = elsebb;
+        std::copy(
+            elsearguments.begin(),
+            elsearguments.end(),
+            std::back_inserter(result->elsearguments));
         valueCreated(result);
         return result;
     }
@@ -4121,6 +4229,13 @@ struct CodeGenerator {
 
                 result = LLVMConstInt(llvm_inttype, ci->value, il_type->isSigned());
             } break;
+            case ILValue::ConstReal: {
+                auto cr = llvm::cast<ILConstReal>(il_value.get());
+
+                auto llvm_realtype = resolveType(il_value, cr->type);
+
+                result = LLVMConstReal(llvm_realtype, cr->value);
+            } break;
             case ILValue::ConstString: {
                 auto cs = llvm::cast<ILConstString>(il_value.get());
 
@@ -4456,21 +4571,51 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
         return nullptr;
     }
 
-    static ASTNodeRef parse (ASTEnvironment *env, ValueRef expr) {
-        UNPACK_ARG(expr, expr_condition);
-        UNPACK_ARG(expr, expr_true);
-        UNPACK_ARG(expr, expr_false);
-
-        ASTNodeRef condition = translateAST(env, expr_condition);
-        ASTNodeRef trueexpr = translateAST(env, expr_true);
-        ASTNodeRef falseexpr;
-        if (expr_false)
-            falseexpr = translateAST(env, expr_false);
-
-        return std::make_shared<ASTSelect>(condition, trueexpr, falseexpr);
-    }
 };
 */
+
+static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_condition);
+    UNPACK_ARG(expr, expr_true);
+    UNPACK_ARG(expr, expr_false);
+
+    ILValueRef condition = translate(env, expr_condition);
+    ILBasicBlockRef bbstart = env->global.builder->block;
+
+    ILBasicBlockRef bbtrue = env->global.builder->basicblock("then");
+    env->global.builder->appendTo(bbtrue);
+    ILValueRef trueexpr = translate(env, expr_true);
+    bbtrue = env->global.builder->block;
+
+    ILBasicBlockRef bbfalse;
+    ILValueRef falseexpr;
+    if (expr_false) {
+        bbfalse = env->global.builder->basicblock("else");
+        env->global.builder->appendTo(bbfalse);
+        falseexpr = translate(env, expr_false);
+        bbfalse = env->global.builder->block;
+    }
+
+    ILBasicBlockRef bbdone = env->global.builder->basicblock("endif");
+    env->global.builder->appendTo(bbdone);
+    ILValueRef result = env->global.builder->basicblockparameter(bbdone, "ifexpr");
+
+    env->global.builder->appendTo(bbtrue);
+    env->global.builder->br(bbdone, {trueexpr});
+
+    if (bbfalse) {
+        env->global.builder->appendTo(bbfalse);
+        env->global.builder->br(bbdone, {falseexpr});
+    } else {
+        bbfalse = bbdone;
+    }
+
+    env->global.builder->appendTo(bbstart);
+    env->global.builder->condbr(condition, bbtrue, {}, bbfalse, {});
+
+    env->global.builder->appendTo(bbdone);
+    return result;
+}
 
 static ILValueRef parse_let(const EnvironmentRef &env, ValueRef expr) {
     UNPACK_ARG(expr, expr_sym);
@@ -4642,7 +4787,7 @@ static void registerTranslators() {
     //t.set(parse_set, "set", 2, 2);
     t.set(parse_apply, "apply", 1, -1);
     t.set(parse_do, "do", 0, -1);
-    //t.set(parse_select, "select", 2, 3);
+    t.set(parse_select, "select", 2, 3);
 
     t.set(parse_cdecl, "cdecl", 2, 2);
     t.set(parse_function, "function", 1, -1);
@@ -4745,8 +4890,8 @@ static void setupRootEnvironment (const EnvironmentRef &env) {
     env->values["int"] = env->values["int32"];
 
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
-    env->values["true"] = builder->constinteger(booltype, new Integer(0));
-    env->values["false"] = builder->constinteger(booltype, new Integer(1));
+    env->values["true"] = builder->constinteger(booltype, new Integer(1));
+    env->values["false"] = builder->constinteger(booltype, new Integer(0));
 
 
 }

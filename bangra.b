@@ -7,15 +7,20 @@ let puts
     external "puts"
         cdecl int (rawstring)
 
-puts "hello world!\n"
-puts "hello world!\n"
+let printf-cdecl
+    cdecl int (rawstring ...)
+let printf
+    external "printf" printf-cdecl
+
+printf "hello world! %i %f %i\n" 10 2.5 false
+
+select true
+    puts "true branch"
+    puts "false branch"
+
 
 ///
-    let printf-cdecl
-        cdecl int (rawstring ...)
 
-    let printf
-        external "printf" printf-cdecl
 
     let generate-a-function
         function (use-printf)
