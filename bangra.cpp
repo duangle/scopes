@@ -2364,6 +2364,8 @@ protected:
     int width;
 
 public:
+    int getWidth() const { return width; }
+
     RealType(int _width) :
         width(_width)
         {}
@@ -2387,6 +2389,10 @@ public:
     PointerType(Type *_element) :
         element(_element)
         {}
+
+    Type *getElement() {
+        return element;
+    }
 
     virtual std::string getRepr() {
         return format("(%s %s)",
@@ -3160,7 +3166,7 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
                 ConstString,
                 ConstInteger,
                 ConstReal,
-                ConstTypeRef,
+                ConstTypePointer,
                 FixedEnd,
             External,
             CDecl,
@@ -3203,7 +3209,7 @@ struct ILValueImpl : BaseT {
 struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock>,
     std::enable_shared_from_this<ILBasicBlock> {
 
-    std::vector<ILValueBackRef> values;
+    std::vector<ILValueRef> values;
     std::string name;
     std::vector<ILBasicBlockParameterRef> parameters;
 
@@ -3410,49 +3416,49 @@ struct ILNop : ILValueImpl<ILValue::Nop, ILFixed> {
 //------------------------------------------------------------------------------
 
 struct ILConstString : ILValueImpl<ILValue::ConstString, ILFixed> {
-    String *value;
+    std::string value;
 
     virtual std::string getRHSRepr() {
         return format("%s %s",
             ansi(ANSI_STYLE_INSTRUCTION, "const_string").c_str(),
             ansi(ANSI_STYLE_STRING,
                 format("\"%s\"",
-                    quoteString(value->getValue(), "\"").c_str())).c_str());
+                    quoteString(value, "\"").c_str())).c_str());
     }
 };
 
 //------------------------------------------------------------------------------
 
 struct ILConstInteger : ILValueImpl<ILValue::ConstInteger, ILFixed> {
-    Integer *value;
+    int64_t value;
 
     virtual std::string getRHSRepr() {
         return format("%s %s",
             ansi(ANSI_STYLE_INSTRUCTION, "const_integer").c_str(),
-            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value->getValue())).c_str());
+            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value)).c_str());
     }
 };
 
 //------------------------------------------------------------------------------
 
 struct ILConstReal : ILValueImpl<ILValue::ConstReal, ILFixed> {
-    Real *value;
+    double value;
 
     virtual std::string getRHSRepr() {
         return format("%s %s",
             ansi(ANSI_STYLE_INSTRUCTION, "const_real").c_str(),
-            ansi(ANSI_STYLE_NUMBER, format("%g", value->getValue())).c_str());
+            ansi(ANSI_STYLE_NUMBER, format("%g", value)).c_str());
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct ILConstTypeRef : ILValueImpl<ILValue::ConstTypeRef, ILFixed> {
+struct ILConstTypePointer : ILValueImpl<ILValue::ConstTypePointer, ILFixed> {
     Type *value;
 
     virtual std::string getRHSRepr() {
         return format("%s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "const_type_ref").c_str(),
+            ansi(ANSI_STYLE_INSTRUCTION, "const_type_pointer").c_str(),
             value->getRepr().c_str());
     }
 };
@@ -3593,26 +3599,42 @@ void ILModule::verify() {
 //------------------------------------------------------------------------------
 
 struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
+
     ILModuleRef module;
     ILBasicBlockRef block;
+    bool append;
 
     ILBuilder(const ILModuleRef &module_) :
-        module(module_) {
+        module(module_),
+        append(false) {
         assert(module);
+    }
+
+    void parentTo(const ILBasicBlockRef &block) {
+        this->block = block;
+        append = false;
     }
 
     void appendTo(const ILBasicBlockRef &block) {
         this->block = block;
+        append = true;
     }
 
     void valueCreated(const ILBasicBlockParameterRef &value) {
+        if (!block) return;
+        if (!append) return;
         block->appendParameter(value);
     }
 
     void valueCreated(const ILValueRef &value) {
+        if (!block) return;
         if (llvm::isa<ILInstruction>(value.get())) {
-            assert(block);
-            block->append(value);
+            if (append) {
+                assert(block);
+                block->append(value);
+            } else {
+                llvm::cast<ILInstruction>(value.get())->block = block;
+            }
         }
     }
 
@@ -3696,9 +3718,9 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef consttyperef(Type *t) {
+    ILValueRef consttypepointer(Type *t) {
         assert(t);
-        auto result = std::make_shared<ILConstTypeRef>();
+        auto result = std::make_shared<ILConstTypePointer>();
         result->type = Type::TypePointer;
         result->value = t;
         valueCreated(result);
@@ -3709,7 +3731,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         assert(c);
         auto result = std::make_shared<ILConstString>();
         result->type = Type::Array(Type::Int8, c->getValue().size() + 1);
-        result->value = c;
+        result->value = c->getValue();
         valueCreated(result);
         return result;
     }
@@ -3719,7 +3741,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         assert(cdest);
         auto result = std::make_shared<ILConstInteger>();
         result->type = cdest;
-        result->value = c;
+        result->value = c->getValue();
         valueCreated(result);
         return result;
     }
@@ -3729,11 +3751,108 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         assert(cdest);
         auto result = std::make_shared<ILConstReal>();
         result->type = cdest;
-        result->value = c;
+        result->value = c->getValue();
         valueCreated(result);
         return result;
     }
 
+};
+
+//------------------------------------------------------------------------------
+
+std::string extract_string(const ILValueRef &value) {
+    auto resulttype = llvm::dyn_cast<ILConstString>(value.get());
+    if (!resulttype) {
+        ilError(value, "can not extract string");
+    }
+    return resulttype->value;
+}
+
+Type *extract_type(const ILValueRef &value) {
+    auto resulttype = llvm::dyn_cast<ILConstTypePointer>(value.get());
+    if (!resulttype) {
+        ilError(value, "can not extract type");
+    }
+    return resulttype->value;
+}
+
+//------------------------------------------------------------------------------
+// IL SOLVER
+//------------------------------------------------------------------------------
+
+struct ILSolver {
+    // after generation, the IL is not directly translatable because many types
+    // have not been evaluated, types that depend on constant conditions.
+
+    // the solver "runs" constant instructions in the IL, resolves them
+    // to constants and ensures that all types and templates have been
+    // specialized.
+
+    ILModuleRef module;
+    ILBuilderRef builder;
+
+    ILSolver(const ILModuleRef &module_) :
+        module(module_)
+    {
+        builder = std::make_shared<ILBuilder>(module);
+    }
+
+    void replace_instruction(
+        const ILBasicBlockRef &block, size_t idx,
+        const ILValueRef &oldvalue,
+        const ILValueRef &newvalue) {
+        newvalue->anchor = oldvalue->anchor;
+        for (auto link : oldvalue->back_ptrs()) {
+            *link = newvalue;
+        }
+        block->values[idx] = newvalue;
+    }
+
+    size_t eval_instruction(const ILBasicBlockRef &block, size_t idx, const ILValueRef &value) {
+        switch(value->kind) {
+            case ILValue::CDecl: {
+                auto cdecl = llvm::cast<ILCDecl>(value.get());
+
+                auto resulttype = extract_type(cdecl->result);
+                std::vector<Type *> parameters;
+                for (size_t i = 0; i < cdecl->parameters.size(); ++i) {
+                    parameters.push_back(extract_type(cdecl->parameters[i]));
+                }
+                replace_instruction(block, idx, value,
+                    builder->consttypepointer(
+                        Type::CFunction(resulttype, parameters, cdecl->vararg)));
+
+            } break;
+            case ILValue::External: {
+                auto external = llvm::cast<ILExternal>(value.get());
+                // make sure inputs are correct
+                extract_string(external->name);
+                external->type = Type::Pointer(extract_type(external->external_type));
+
+            } break;
+            case ILValue::Call: {
+                auto call = llvm::cast<ILCall>(value.get());
+                auto type = call->callee->type;
+                if (auto ptr = llvm::dyn_cast<PointerType>(type))
+                    type = ptr->getElement();
+                if (auto ftype = llvm::dyn_cast<CFunctionType>(type)) {
+                    value->type = ftype->getResult();
+                }
+            } break;
+            default:
+                break;
+        }
+        return idx + 1;
+    }
+
+    void run() {
+        ILBasicBlockRef block = module->blocks.front();
+        builder->parentTo(block);
+        size_t i = 0;
+        while (i < block->values.size()) {
+            i = eval_instruction(block, i, block->values[i]);
+        }
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -3763,6 +3882,52 @@ struct CodeGenerator {
         LLVMTypeRef result = typemap[il_type];
         if (!result) {
             switch(il_type->getKind()) {
+                case T_Void: {
+                    result = LLVMVoidType();
+                } break;
+                case T_Null: {
+                    result = LLVMVoidType();
+                } break;
+                case T_Integer: {
+                    auto integer = llvm::cast<IntegerType>(il_type);
+                    result = LLVMIntType(integer->getWidth());
+                } break;
+                case T_Real: {
+                    auto real = llvm::cast<RealType>(il_type);
+                    switch(real->getWidth()) {
+                        case 16: {
+                            result = LLVMHalfType();
+                        } break;
+                        case 32: {
+                            result = LLVMFloatType();
+                        } break;
+                        case 64: {
+                            result = LLVMDoubleType();
+                        } break;
+                        default: {
+                            ilError(reference, "illegal real type");
+                        } break;
+                    }
+                } break;
+                case T_Pointer: {
+                    result = LLVMPointerType(
+                        resolveType(
+                            reference,
+                            llvm::cast<PointerType>(il_type)->getElement()),
+                        0);
+                } break;
+                case T_CFunction: {
+                    auto ftype = llvm::cast<CFunctionType>(il_type);
+
+                    LLVMTypeRef parameters[ftype->getParameterCount()];
+                    for (size_t i = 0; i < ftype->getParameterCount(); ++i) {
+                        parameters[i] = resolveType(reference, ftype->getParameter(i));
+                    }
+                    result = LLVMFunctionType(
+                        resolveType(reference, ftype->getResult()),
+                        parameters, ftype->getParameterCount(),
+                        ftype->isVarArg());
+                } break;
                 default: {
                     ilError(reference, "can not translate type");
                 } break;
@@ -3795,10 +3960,39 @@ struct CodeGenerator {
         return result;
     }
 
-    LLVMValueRef generateValue(const ILValueRef &il_value) {
+    void generateValue(const ILValueRef &il_value) {
         LLVMValueRef result = valuemap[il_value];
         assert(!result);
         switch(il_value->kind) {
+            case ILValue::ConstTypePointer: {
+                //auto ctp = llvm::cast<ILConstTypePointer>(il_value.get());
+                //typeconstmap[il_value] = resolveType(il_value, ctp->value);
+                // no result available
+                return;
+            } break;
+            case ILValue::ConstInteger: {
+                auto ci = llvm::cast<ILConstInteger>(il_value.get());
+
+                auto il_type = llvm::cast<IntegerType>(ci->type);
+                auto llvm_inttype = resolveType(il_value, ci->type);
+
+                result = LLVMConstInt(llvm_inttype, ci->value, il_type->isSigned());
+            } break;
+            case ILValue::ConstString: {
+                auto cs = llvm::cast<ILConstString>(il_value.get());
+
+                result = LLVMConstString(cs->value.c_str(), cs->value.size(), false);
+            } break;
+            case ILValue::External: {
+                auto external = llvm::cast<ILExternal>(il_value.get());
+
+                auto name = extract_string(external->name);
+                auto ftype = resolveType(il_value,
+                    extract_type(external->external_type));
+
+                result = LLVMAddFunction(llvm_module, name.c_str(), ftype);
+
+            } break;
             case ILValue::Call: {
                 auto instr = llvm::cast<ILCall>(il_value.get());
                 LLVMValueRef llvm_args[instr->arguments.size()];
@@ -3817,7 +4011,6 @@ struct CodeGenerator {
         }
         assert(result);
         valuemap[il_value] = result;
-        return result;
     }
 
     void generateBlock(const ILBasicBlockRef &il_block) {
@@ -4351,26 +4544,26 @@ static void init() {
 
 static void setupRootEnvironment (const EnvironmentRef &env) {
     auto builder = env->global.builder;
-    env->values["void"] = builder->consttyperef(Type::Void);
-    env->values["null"] = builder->consttyperef(Type::Null);
-    env->values["half"] = builder->consttyperef(Type::Half);
-    env->values["float"] = builder->consttyperef(Type::Float);
-    env->values["double"] = builder->consttyperef(Type::Double);
-    env->values["bool"] = builder->consttyperef(Type::Bool);
+    env->values["void"] = builder->consttypepointer(Type::Void);
+    env->values["null"] = builder->consttypepointer(Type::Null);
+    env->values["half"] = builder->consttypepointer(Type::Half);
+    env->values["float"] = builder->consttypepointer(Type::Float);
+    env->values["double"] = builder->consttypepointer(Type::Double);
+    env->values["bool"] = builder->consttypepointer(Type::Bool);
 
-    env->values["int8"] = builder->consttyperef(Type::Int8);
-    env->values["int16"] = builder->consttyperef(Type::Int16);
-    env->values["int32"] = builder->consttyperef(Type::Int32);
-    env->values["int64"] = builder->consttyperef(Type::Int64);
+    env->values["int8"] = builder->consttypepointer(Type::Int8);
+    env->values["int16"] = builder->consttypepointer(Type::Int16);
+    env->values["int32"] = builder->consttypepointer(Type::Int32);
+    env->values["int64"] = builder->consttypepointer(Type::Int64);
 
-    env->values["uint8"] = builder->consttyperef(Type::UInt8);
-    env->values["uint16"] = builder->consttyperef(Type::UInt16);
-    env->values["uint32"] = builder->consttyperef(Type::UInt32);
-    env->values["uint64"] = builder->consttyperef(Type::UInt64);
+    env->values["uint8"] = builder->consttypepointer(Type::UInt8);
+    env->values["uint16"] = builder->consttypepointer(Type::UInt16);
+    env->values["uint32"] = builder->consttypepointer(Type::UInt32);
+    env->values["uint64"] = builder->consttypepointer(Type::UInt64);
 
-    env->values["usize_t"] = builder->consttyperef(Type::Integer(sizeof(size_t)*8,false));
+    env->values["usize_t"] = builder->consttypepointer(Type::Integer(sizeof(size_t)*8,false));
 
-    env->values["rawstring"] = builder->consttyperef(Type::Rawstring);
+    env->values["rawstring"] = builder->consttypepointer(Type::Rawstring);
 
     env->values["int"] = env->values["int32"];
 
@@ -4396,8 +4589,13 @@ static void handleException(const EnvironmentRef &env, ValueRef expr) {
 static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 
     parse_do(env, expr);
-    env->global.module->verify();
     std::cout << env->global.module->getRepr();
+    {
+        ILSolver solver(env->global.module);
+        solver.run();
+    }
+    std::cout << env->global.module->getRepr();
+    env->global.module->verify();
     fflush(stdout);
 
     LLVMModuleRef module = LLVMModuleCreateWithName("main");
