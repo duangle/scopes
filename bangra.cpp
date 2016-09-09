@@ -3163,12 +3163,17 @@ struct ILBasicBlock;
 struct ILBasicBlockParameter;
 struct ILModule;
 struct ILBuilder;
+struct ILInstruction;
 
 typedef std::shared_ptr<ILValue> ILValueRef;
+typedef std::weak_ptr<ILValue> ILValueWeakRef;
 typedef shared_back_ptr<ILValue> ILValueBackRef;
 typedef std::shared_ptr<ILBasicBlock> ILBasicBlockRef;
+typedef std::weak_ptr<ILBasicBlock> ILBasicBlockWeakRef;
 typedef std::shared_ptr<ILModule> ILModuleRef;
 typedef std::shared_ptr<ILBuilder> ILBuilderRef;
+typedef std::shared_ptr<ILInstruction> ILInstructionRef;
+typedef std::weak_ptr<ILInstruction> ILInstructionWeakRef;
 
 //------------------------------------------------------------------------------
 
@@ -3234,13 +3239,21 @@ struct ILValueImpl : BaseT {
 
 struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock> {
 
-    std::vector<ILValueRef> values;
+    ILInstructionRef firstvalue;
+    ILInstructionWeakRef lastvalue;
     std::string name;
     std::vector<ILValueRef> parameters;
     ILValueRef terminator;
 
-    void append(const ILValueRef &value);
+    void replace(ILInstructionRef oldvalue, ILInstructionRef newvalue);
+    void remove(ILInstructionRef value);
+    void insert(ILInstructionRef value, ILInstructionRef beforevalue);
+    void append(const ILInstructionRef &value) {
+        insert(value, nullptr);
+    }
     void appendParameter(const ILValueRef &value);
+    void clearTerminator();
+    void setTerminator(const ILValueRef &value);
 
     virtual Type *inferType() {
         return Type::BasicBlock;
@@ -3253,10 +3266,14 @@ struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock> {
 };
 
 struct ILBasicBlockParameter : ILValueImpl<ILValue::BasicBlockParameter> {
-    ILBasicBlockRef block;
+    ILBasicBlockWeakRef block;
     Type *parameter_type;
 
     std::string name;
+
+    ILBasicBlockRef getBlock() {
+        return block.lock();
+    }
 
     virtual Type *inferType() {
         if (parameter_type)
@@ -3277,6 +3294,7 @@ struct ILBasicBlockParameter : ILValueImpl<ILValue::BasicBlockParameter> {
     }
 
     virtual std::string getRefRepr (bool sameblock) {
+        auto block = getBlock();
         if (!sameblock && block) {
             return format("%s@%s",
                 block->name.c_str(),
@@ -3290,31 +3308,6 @@ struct ILBasicBlockParameter : ILValueImpl<ILValue::BasicBlockParameter> {
 void ILBasicBlock::appendParameter(const ILValueRef &value) {
     assert(value->kind == ILValue::BasicBlockParameter);
     parameters.push_back(value);
-}
-
-std::string ILBasicBlock::getRepr () {
-    std::stringstream ss;
-    ss << name;
-    if (parameters.size()) {
-        ss << ansi(ANSI_STYLE_OPERATOR,"(");
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            if (i != 0) {
-                ss << ", ";
-            }
-            ss << llvm::cast<ILBasicBlockParameter>(parameters[i].get())->getDeclRepr();
-        }
-        ss << ansi(ANSI_STYLE_OPERATOR,")");
-    }
-    ss << ansi(ANSI_STYLE_OPERATOR,":") << "\n";
-    for (auto &value : values) {
-        ss << value->getRepr();
-    }
-    if (terminator) {
-        ss << terminator->getRepr();
-    } else {
-        ss << "    " << ansi(ANSI_STYLE_ERROR, "<terminator missing>") << "\n";
-    }
-    return ss.str();
 }
 
 //------------------------------------------------------------------------------
@@ -3359,33 +3352,35 @@ struct ILModule : std::enable_shared_from_this<ILModule> {
 //------------------------------------------------------------------------------
 
 struct ILInstruction : ILValue {
-    ILBasicBlockRef block;
+    friend struct ILBasicBlock;
+protected:
+    ILBasicBlockWeakRef block;
+public:
+    static int64_t unique_id_counter;
+    ILInstructionWeakRef prevvalue;
+    ILInstructionRef nextvalue;
+    int64_t uid;
 
     ILInstruction(Kind kind_) :
-        ILValue(kind_)
+        ILValue(kind_),
+        uid(unique_id_counter++)
         {}
+
+    ILBasicBlockRef getBlock() {
+        return block.lock();
+    }
 
     static bool classof(const ILValue *value) {
         return (value->kind >= Instruction) && (value->kind < InstructionEnd);
     }
 
-    int findIndex() const {
-        if (block) {
-            int i = 0;
-            for (auto& value : block->values) {
-                if (value.get() == this)
-                    return i;
-                i++;
-            }
-        }
-        return -1;
-    }
-
     std::string formatIndex() {
-        int idx = findIndex();
+        int idx = uid;
         if (idx < 0) {
+            auto block = getBlock();
             if (block) {
-                return ansi(ANSI_STYLE_ERROR, format("%<not in '%s'>", block->name.c_str()));
+                return ansi(ANSI_STYLE_ERROR, format("%<not in '%s'>",
+                    block->name.c_str()));
             } else {
                 return ansi(ANSI_STYLE_ERROR, format("%%%p", this));
             }
@@ -3404,8 +3399,9 @@ struct ILInstruction : ILValue {
     }
 
     bool isSameBlock(const ILValueRef &value) {
+        auto block = getBlock();
         if (auto instr = llvm::dyn_cast<ILInstruction>(value.get())) {
-            return block == instr->block;
+            return block == instr->getBlock();
         }
         return true;
     }
@@ -3417,6 +3413,7 @@ struct ILInstruction : ILValue {
     }
 
     virtual std::string getRefRepr (bool sameblock) {
+        auto block = getBlock();
         if (!sameblock && block) {
             return format("%s@%s",
                 block->name.c_str(),
@@ -3427,12 +3424,100 @@ struct ILInstruction : ILValue {
     }
 };
 
-void ILBasicBlock::append(const ILValueRef &value) {
-    auto instr = llvm::dyn_cast<ILInstruction>(value.get());
+int64_t ILInstruction::unique_id_counter = 1;
+
+//------------------------------------------------------------------------------
+
+void ILBasicBlock::replace(
+    ILInstructionRef oldinstr,
+    ILInstructionRef newinstr) {
+    assert(oldinstr->getBlock().get() == this);
+    if (firstvalue == oldinstr)
+        firstvalue = newinstr;
+    if (lastvalue.lock() == oldinstr)
+        lastvalue = newinstr;
+    newinstr->prevvalue = oldinstr->prevvalue;
+    newinstr->nextvalue = oldinstr->nextvalue;
+    if (!newinstr->prevvalue.expired())
+        newinstr->prevvalue.lock()->nextvalue = newinstr;
+    if (newinstr->nextvalue)
+        newinstr->nextvalue->prevvalue = newinstr;
+    newinstr->block = std::static_pointer_cast<ILBasicBlock>(shared_from_this());
+    oldinstr->block.reset();
+}
+
+void ILBasicBlock::remove(ILInstructionRef instr) {
+    assert(instr->getBlock().get() == this);
+    if (firstvalue == instr) {
+        assert(instr->prevvalue.expired());
+        firstvalue = instr->nextvalue;
+    }
+    if (lastvalue.lock() == instr) {
+        assert(!instr->nextvalue);
+        lastvalue = instr->prevvalue;
+    }
+    instr->prevvalue.lock()->nextvalue = instr->nextvalue;
+    instr->nextvalue->prevvalue = instr->prevvalue;
+    instr->block.reset();
+}
+
+void ILBasicBlock::insert(ILInstructionRef instr, ILInstructionRef beforevalue) {
     assert(instr);
+    assert(!instr->getBlock());
     instr->block = std::static_pointer_cast<ILBasicBlock>(shared_from_this());
-    assert(instr->block);
-    values.push_back(value);
+    if (beforevalue) {
+        if (beforevalue == firstvalue) {
+            // insert at head
+            assert(beforevalue->prevvalue.expired());
+            instr->prevvalue.reset();
+            firstvalue = instr;
+        } else {
+            // insert at middle
+            assert(!beforevalue->prevvalue.expired());
+            instr->prevvalue = beforevalue->prevvalue;
+            beforevalue->prevvalue.lock()->nextvalue = instr;
+        }
+        instr->nextvalue = beforevalue;
+        beforevalue->prevvalue = instr;
+    } else {
+        // insert at tail
+        if (!lastvalue.expired()) {
+            assert(!lastvalue.lock()->nextvalue);
+            lastvalue.lock()->nextvalue = instr;
+        } else {
+            // first insert
+            assert(!firstvalue);
+            firstvalue = instr;
+        }
+        instr->prevvalue = lastvalue;
+        instr->nextvalue = nullptr;
+        lastvalue = instr;
+    }
+}
+
+std::string ILBasicBlock::getRepr () {
+    std::stringstream ss;
+    ss << name;
+    if (parameters.size()) {
+        ss << ansi(ANSI_STYLE_OPERATOR,"(");
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0) {
+                ss << ", ";
+            }
+            ss << llvm::cast<ILBasicBlockParameter>(parameters[i].get())->getDeclRepr();
+        }
+        ss << ansi(ANSI_STYLE_OPERATOR,")");
+    }
+    ss << ansi(ANSI_STYLE_OPERATOR,":") << "\n";
+    for (auto value = firstvalue; value; value = value->nextvalue) {
+        ss << value->getRepr();
+    }
+    if (terminator) {
+        ss << terminator->getRepr();
+    } else {
+        ss << "    " << ansi(ANSI_STYLE_ERROR, "<terminator missing>") << "\n";
+    }
+    return ss.str();
 }
 
 //------------------------------------------------------------------------------
@@ -3700,6 +3785,25 @@ struct ILTerminator : ILInstruction {
 
 //------------------------------------------------------------------------------
 
+void ILBasicBlock::clearTerminator() {
+    if (terminator) {
+        auto term = llvm::cast<ILTerminator>(terminator.get());
+        term->block.reset();
+    }
+    terminator = nullptr;
+}
+
+void ILBasicBlock::setTerminator(const ILValueRef &value) {
+    assert(!terminator);
+    auto term = llvm::cast<ILTerminator>(value.get());
+    assert(term->block.expired());
+    term->block = std::static_pointer_cast<ILBasicBlock>(shared_from_this());
+    terminator = value;
+}
+
+
+//------------------------------------------------------------------------------
+
 struct ILBr : ILValueImpl<ILValue::Br, ILTerminator> {
     ILBasicBlockRef label;
     std::vector<ILValueBackRef> arguments;
@@ -3750,7 +3854,7 @@ static void ilError (const ILValueRef &value, const char *format, ...) {
 
 void ILModule::verify() {
     for (auto& block : blocks) {
-        for (auto& value : block->values) {
+        for (auto value = block->firstvalue; value; value = value->nextvalue) {
 
             Type *valuetype = value->getType();
             if (!valuetype)
@@ -3802,44 +3906,36 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
 
     ILModuleRef module;
     ILBasicBlockRef block;
-    bool append;
+    ILInstructionWeakRef prepend;
 
     ILBuilder(const ILModuleRef &module_) :
-        module(module_),
-        append(false) {
+        module(module_) {
         assert(module);
     }
 
-    void parentTo(const ILBasicBlockRef &block) {
-        this->block = block;
-        append = false;
+    void prependTo(const ILInstructionRef &value) {
+        if (value) {
+            this->block = value->getBlock();
+            prepend = value;
+        } else {
+            block = nullptr;
+            prepend.reset();
+        }
     }
 
     void appendTo(const ILBasicBlockRef &block) {
         this->block = block;
-        append = true;
+        prepend.reset();
     }
 
     void valueCreated(const ILValueRef &value) {
         if (!block) return;
         if (llvm::isa<ILBasicBlockParameter>(value.get())) {
-            if (!append) return;
             block->appendParameter(value);
         } if (llvm::isa<ILTerminator>(value.get())) {
-            llvm::cast<ILTerminator>(value.get())->block = block;
-            if (append) {
-                if (block->terminator) {
-                    ilError(value, "block is already terminated");
-                }
-                block->terminator = value;
-            }
+            block->setTerminator(value);
         } else if (llvm::isa<ILInstruction>(value.get())) {
-            if (append) {
-                assert(block);
-                block->append(value);
-            } else {
-                llvm::cast<ILInstruction>(value.get())->block = block;
-            }
+            block->insert(std::static_pointer_cast<ILInstruction>(value), prepend.lock());
         }
     }
 
@@ -3944,7 +4040,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef castto(const ILValueRef& value, const ILValueRef& type) {
+    ILInstructionRef castto(const ILValueRef& value, const ILValueRef& type) {
         assert(value);
         assert(type);
         auto result = std::make_shared<ILCastTo>();
@@ -3954,7 +4050,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef addressof(const ILValueRef& value) {
+    ILInstructionRef addressof(const ILValueRef& value) {
         assert(value);
         auto result = std::make_shared<ILAddressOf>();
         result->value = value;
@@ -3962,7 +4058,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef consttypepointer(Type *t) {
+    ILInstructionRef consttypepointer(Type *t) {
         assert(t);
         auto result = std::make_shared<ILConstTypePointer>();
         result->value = t;
@@ -4005,7 +4101,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
 std::string extract_string(const ILValueRef &value) {
     auto resulttype = llvm::dyn_cast<ILConstString>(value.get());
     if (!resulttype) {
-        ilError(value, "can not extract string");
+        ilError(value, "string constant expected");
     }
     return resulttype->value;
 }
@@ -4013,7 +4109,7 @@ std::string extract_string(const ILValueRef &value) {
 Type *extract_type(const ILValueRef &value) {
     auto resulttype = llvm::dyn_cast<ILConstTypePointer>(value.get());
     if (!resulttype) {
-        ilError(value, "can not extract type");
+        ilError(value, "type constant expected");
     }
     return resulttype->value;
 }
@@ -4057,22 +4153,16 @@ struct ILSolver {
     }
 
     void replace_instruction(
-        const ILBasicBlockRef &block, size_t idx,
-        const ILValueRef &oldvalue,
-        const ILValueRef &newvalue) {
+        const ILBasicBlockRef &block,
+        const ILInstructionRef &oldvalue,
+        const ILInstructionRef &newvalue) {
         newvalue->anchor = oldvalue->anchor;
         replace_instruction_links(oldvalue, newvalue);
-        block->values[idx] = newvalue;
-    }
-
-    void insert_instruction(
-        const ILBasicBlockRef &block, size_t &idx, const ILValueRef &value) {
-        block->values.insert(block->values.begin() + idx, value);
-        idx++;
+        block->replace(oldvalue, newvalue);
     }
 
     void generate_cast(
-        const ILBasicBlockRef &block, size_t &idx,
+        const ILBasicBlockRef &block, const ILInstructionRef &prepend,
         const ILValueRef &value, Type *desttype) {
         auto srctype = value->getType();
         if (srctype == desttype) return;
@@ -4090,15 +4180,15 @@ struct ILSolver {
                     // will change
                     ILValueRef oldvalue = value;
                     // create const type
-                    ILValueBackRef ctp = builder->consttypepointer(desttype);
-                    insert_instruction(block, idx, ctp);
+                    auto ctp = builder->consttypepointer(desttype);
+                    block->insert(ctp, prepend);
                     // create reference to value
                     auto newvalue = builder->castto(oldvalue, ctp);
                     replace_instruction_links(oldvalue, newvalue);
                     // replacing links created circular argument, fix it
                     auto castto = llvm::cast<ILCastTo>(newvalue.get());
                     castto->value = oldvalue;
-                    insert_instruction(block, idx, newvalue);
+                    block->insert(newvalue, prepend);
                 }
             } else {
                 // create reference to value
@@ -4113,9 +4203,9 @@ struct ILSolver {
                 // so fix it manually
                 auto addressof = llvm::cast<ILAddressOf>(newvalue.get());
                 addressof->value = oldvalue;
-                insert_instruction(block, idx, newvalue);
+                block->insert(newvalue, prepend);
                 // and apply subsequently required casts
-                generate_cast(block, idx, newvalue, desttype);
+                generate_cast(block, prepend, newvalue, desttype);
             }
         }
     }
@@ -4130,8 +4220,33 @@ struct ILSolver {
         switch(value->kind) {
             case ILValue::CondBr: {
                 auto condbr = llvm::cast<ILCondBr>(value.get());
-                processBlock(condbr->thenlabel);
-                processBlock(condbr->elselabel);
+                if (condbr->condition->getType() != Type::Bool) {
+                    ilError(value, "condition must be of type bool");
+                }
+                if (auto ci = llvm::dyn_cast<ILConstInteger>(condbr->condition.get())) {
+                    ILBasicBlockRef label;
+                    std::vector<ILValueRef> arguments;
+                    if (ci->value) {
+                        label = condbr->thenlabel;
+                        std::copy(
+                            condbr->thenarguments.begin(),
+                            condbr->thenarguments.end(),
+                            std::back_inserter(arguments));
+                    } else {
+                        label = condbr->elselabel;
+                        std::copy(
+                            condbr->elsearguments.begin(),
+                            condbr->elsearguments.end(),
+                            std::back_inserter(arguments));
+                    }
+                    block->clearTerminator();
+                    auto newterm = builder->br(label, arguments);
+                    block->setTerminator(newterm);
+                    processBlock(label);
+                } else {
+                    processBlock(condbr->thenlabel);
+                    processBlock(condbr->elselabel);
+                }
             } break;
             case ILValue::Br: {
                 auto br = llvm::cast<ILBr>(value.get());
@@ -4142,8 +4257,7 @@ struct ILSolver {
         }
     }
 
-    void eval_instruction(const ILBasicBlockRef &block, size_t &idx) {
-        auto value = block->values[idx];
+    void eval_instruction(const ILBasicBlockRef &block, ILInstructionRef value) {
         switch(value->kind) {
             case ILValue::CDecl: {
                 auto cdecl = llvm::cast<ILCDecl>(value.get());
@@ -4153,7 +4267,7 @@ struct ILSolver {
                 for (size_t i = 0; i < cdecl->parameters.size(); ++i) {
                     parameters.push_back(extract_type(cdecl->parameters[i]));
                 }
-                replace_instruction(block, idx, value,
+                replace_instruction(block, value,
                     builder->consttypepointer(
                         Type::CFunction(resulttype, parameters, cdecl->vararg)));
 
@@ -4175,7 +4289,7 @@ struct ILSolver {
                             // vararg
                         } else {
                             auto ltype = ftype->getParameter(i);
-                            generate_cast(block, idx, call->arguments[i], ltype);
+                            generate_cast(block, value, call->arguments[i], ltype);
                         }
                     }
                 }
@@ -4190,17 +4304,28 @@ struct ILSolver {
             ILBasicBlockRef block = stack.back();
             stack.pop_back();
             if (!visited.count(block)) {
-                std::cout << block->name << "\n";
                 visited.insert(block);
-                builder->parentTo(block);
-                size_t i = 0;
-                while (i < block->values.size()) {
-                    eval_instruction(block, i);
-                    ++i;
+                ILInstructionRef value = block->firstvalue;
+                while (value) {
+                    eval_instruction(block, value);
+                    value = value->nextvalue;
                 }
                 eval_terminator(block);
             }
         }
+
+        // delete blocks that were never visited
+        std::list< std::list<ILBasicBlockRef>::iterator > todelete;
+        for (auto iter = module->blocks.begin(); iter != module->blocks.end(); ++iter) {
+            if (!visited.count(*iter)) {
+                todelete.push_back(iter);
+            }
+        }
+
+        for (auto iter : todelete) {
+            module->blocks.erase(iter);
+        }
+
     }
 };
 
@@ -4447,8 +4572,10 @@ struct CodeGenerator {
         assert(llvm_block);
         LLVMPositionBuilderAtEnd(builder, llvm_block);
 
-        for (auto &value : il_block->values) {
+        ILInstructionRef value = il_block->firstvalue;
+        while (value) {
             generateValue(value);
+            value = value->nextvalue;
         }
         if (il_block->terminator) {
             generateTerminator(il_block->terminator);

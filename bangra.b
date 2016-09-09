@@ -14,7 +14,7 @@ let printf
 
 printf "hello world! %i %f %i\n" 10 2.5 false
 
-select true
+select false
     puts "true branch"
     puts "false branch"
 
