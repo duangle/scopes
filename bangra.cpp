@@ -454,6 +454,16 @@ public:
             std::enable_shared_from_this<T>::shared_from_this());
     }
 
+    size_t back_refcount() {
+        size_t count = 0;
+        for (auto link : back_ptrs()) {
+            if (link) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
 };
 
 template<typename T>
@@ -3390,12 +3400,13 @@ public:
     }
 
     std::string formatAssignment(const std::string &content) {
-        return format("    %s %s %s %s %s\n",
+        return format("    %s %s %s %s %s [%i uses]\n",
             formatIndex().c_str(),
             ansi(ANSI_STYLE_OPERATOR, "=").c_str(),
             content.c_str(),
             ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
-            getType()->getRepr().c_str());
+            getType()->getRepr().c_str(),
+            (int)back_refcount());
     }
 
     bool isSameBlock(const ILValueRef &value) {
@@ -4307,8 +4318,10 @@ struct ILSolver {
                 visited.insert(block);
                 ILInstructionRef value = block->firstvalue;
                 while (value) {
+                    // retrieve before any operation takes place
+                    auto nextvalue = value->nextvalue;
                     eval_instruction(block, value);
-                    value = value->nextvalue;
+                    value = nextvalue;
                 }
                 eval_terminator(block);
             }
