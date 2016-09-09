@@ -400,11 +400,14 @@ private:
         return static_cast<T*>(this);
     }
 
-    enable_shared_back_from_this(const enable_shared_back_from_this<T> &) = delete;
-
 public:
 
     enable_shared_back_from_this() :
+        _first_shared_back_ptr(nullptr)
+    {
+    }
+
+    enable_shared_back_from_this(const enable_shared_back_from_this<T> &other) :
         _first_shared_back_ptr(nullptr)
     {
     }
@@ -3174,6 +3177,7 @@ struct ILBasicBlockParameter;
 struct ILModule;
 struct ILBuilder;
 struct ILInstruction;
+struct ILTerminator;
 
 typedef std::shared_ptr<ILValue> ILValueRef;
 typedef std::weak_ptr<ILValue> ILValueWeakRef;
@@ -3181,9 +3185,12 @@ typedef shared_back_ptr<ILValue> ILValueBackRef;
 typedef std::shared_ptr<ILBasicBlock> ILBasicBlockRef;
 typedef std::weak_ptr<ILBasicBlock> ILBasicBlockWeakRef;
 typedef std::shared_ptr<ILModule> ILModuleRef;
+typedef std::weak_ptr<ILModule> ILModuleWeakRef;
 typedef std::shared_ptr<ILBuilder> ILBuilderRef;
 typedef std::shared_ptr<ILInstruction> ILInstructionRef;
 typedef std::weak_ptr<ILInstruction> ILInstructionWeakRef;
+typedef std::shared_ptr<ILBasicBlockParameter> ILBasicBlockParameterRef;
+typedef std::shared_ptr<ILTerminator> ILTerminatorRef;
 
 //------------------------------------------------------------------------------
 
@@ -3191,33 +3198,44 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
     enum Kind {
         BasicBlock,
 
-        BasicBlockParameter,
+        Parented,
+            BasicBlockParameter,
 
-        Instruction,
-            Fixed,
-                Nop,
-                ConstString,
-                ConstInteger,
-                ConstReal,
-                ConstTypePointer,
-                FixedEnd,
             Terminator,
                 Br,
                 CondBr,
                 TerminatorEnd,
-            External,
-            CDecl,
-            Call,
-            AddressOf,
-            CastTo,
-            InstructionEnd,
+
+            Instruction,
+                Fixed,
+                    Nop,
+                    ConstString,
+                    ConstInteger,
+                    ConstReal,
+                    ConstTypePointer,
+                    FixedEnd,
+                External,
+                CDecl,
+                Call,
+                AddressOf,
+                CastTo,
+                InstructionEnd,
+
+            ParentedEnd,
     };
 
     const Kind kind;
     Anchor anchor;
+    // used during cloning
+    ILValueWeakRef paired;
 
     ILValue(Kind kind_) :
         kind(kind_)
+        {}
+
+    ILValue(const ILValue &other) :
+        kind(other.kind),
+        anchor(other.anchor)
         {}
 
     virtual ~ILValue() {}
@@ -3225,35 +3243,105 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
     virtual std::string getRepr () = 0;
     virtual std::string getRefRepr (bool sameblock) = 0;
     virtual Type *inferType() = 0;
+    virtual void finalizeClone() {}
 
     Type *getType() {
         return inferType();
     }
 
+    void setPaired(const ILValueRef &value) {
+        paired = value;
+    }
+
+    void clearPaired() {
+        paired.reset();
+    }
+
+    template<typename T = ILValue>
+    std::shared_ptr<T> getPaired() {
+        if (paired.expired())
+            return std::shared_ptr<T>();
+        else {
+            ILValueRef value = paired.lock();
+            assert(llvm::isa<T>(value.get()));
+            return std::static_pointer_cast<T>(value);
+        }
+    }
+
+    template<typename T = ILValue>
+    std::shared_ptr<T> getSharedPtr() {
+        ILValueRef value = shared_from_this();
+        assert(llvm::isa<T>(value.get()));
+        return std::static_pointer_cast<T>(value);
+    }
+
+    virtual void relocateRefs() = 0;
 };
 
 //------------------------------------------------------------------------------
 
-template<ILValue::Kind KindT, class BaseT = ILValue>
+template<typename SelfT, ILValue::Kind KindT, typename BaseT, typename CloneT>
 struct ILValueImpl : BaseT {
+    typedef ILValueImpl<SelfT, KindT, BaseT, CloneT> ValueImplType;
+
     ILValueImpl() :
         BaseT(KindT)
     {}
 
+    ILValueImpl(const ValueImplType &other) :
+        BaseT(other)
+    {}
+
+    virtual ~ILValueImpl() {}
+
     static bool classof(const ILValue *value) {
         return value->kind == KindT;
+    }
+
+    std::shared_ptr<SelfT> sharedFromThis() {
+        return BaseT::template getSharedPtr<SelfT>();
+    }
+
+    virtual void clone(std::shared_ptr<CloneT> &dest) {
+        dest = cloneImpl();
+        dest->finalizeClone();
+    }
+
+    std::shared_ptr<SelfT> cloneImpl() {
+        return std::make_shared<SelfT>(
+            *static_cast<SelfT *>(this));
+    }
+
+    void relocateRef(ILValueBackRef &attr) {
+        if (attr) {
+            auto paired = attr->getPaired();
+            if (paired) {
+                attr = paired;
+            }
+        }
+    }
+    void relocateRef(std::vector<ILValueBackRef> &attrs) {
+        for (size_t i = 0; i < attrs.size(); ++i) {
+            relocateRef(attrs[i]);
+        }
     }
 };
 
 //------------------------------------------------------------------------------
 
-struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock> {
-
+struct ILBasicBlock : ILValueImpl<ILBasicBlock, ILValue::BasicBlock, ILValue, ILBasicBlock> {
+    ILModuleWeakRef module;
     ILInstructionRef firstvalue;
     ILInstructionWeakRef lastvalue;
     std::string name;
-    std::vector<ILValueRef> parameters;
-    ILValueRef terminator;
+    std::vector<ILBasicBlockParameterRef> parameters;
+    ILTerminatorRef terminator;
+
+    ILBasicBlock()
+    {}
+
+    ILBasicBlock(const ILBasicBlock &other);
+    virtual void finalizeClone();
 
     void replace(ILInstructionRef oldvalue, ILInstructionRef newvalue);
     void remove(ILInstructionRef value);
@@ -3261,9 +3349,9 @@ struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock> {
     void append(const ILInstructionRef &value) {
         insert(value, nullptr);
     }
-    void appendParameter(const ILValueRef &value);
+    void appendParameter(const ILBasicBlockParameterRef &value);
     void clearTerminator();
-    void setTerminator(const ILValueRef &value);
+    void setTerminator(const ILTerminatorRef &value);
 
     virtual Type *inferType() {
         return Type::BasicBlock;
@@ -3273,13 +3361,64 @@ struct ILBasicBlock : ILValueImpl<ILValue::BasicBlock> {
         return name;
     }
 
+    virtual void relocateRefs() {}
 };
 
-struct ILBasicBlockParameter : ILValueImpl<ILValue::BasicBlockParameter> {
+//------------------------------------------------------------------------------
+
+struct ILParented : ILValue {
+    friend struct ILBasicBlock;
+protected:
+    ILBasicBlockWeakRef block;
+public:
+    ILParented(Kind kind_) :
+        ILValue(kind_)
+        {}
+
+    ILParented(const ILParented &other) :
+        ILValue(other)
+    {}
+
+    static bool classof(const ILValue *value) {
+        return (value->kind >= Parented) && (value->kind < ParentedEnd);
+    }
+
+    bool hasBlock() {
+        return !block.expired();
+    }
+
+    ILBasicBlockRef getBlock() {
+        return block.lock();
+    }
+
+    void clearBlock() {
+        block.reset();
+    }
+
+    bool isSameBlock(const ILValueRef &value) {
+        auto block = getBlock();
+        if (auto instr = llvm::dyn_cast<ILParented>(value.get())) {
+            return block == instr->getBlock();
+        }
+        return true;
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILBasicBlockParameter :
+    ILValueImpl<ILBasicBlockParameter, ILValue::BasicBlockParameter, ILParented, ILBasicBlockParameter> {
     ILBasicBlockWeakRef block;
     Type *parameter_type;
 
     std::string name;
+
+    ILBasicBlockParameter()
+    {}
+
+    ILBasicBlockParameter(const ILBasicBlockParameter &other) :
+        parameter_type(other.parameter_type)
+    {}
 
     ILBasicBlockRef getBlock() {
         return block.lock();
@@ -3313,10 +3452,12 @@ struct ILBasicBlockParameter : ILValueImpl<ILValue::BasicBlockParameter> {
             return name;
         }
     }
+
+    virtual void relocateRefs() {}
 };
 
-void ILBasicBlock::appendParameter(const ILValueRef &value) {
-    assert(value->kind == ILValue::BasicBlockParameter);
+void ILBasicBlock::appendParameter(const ILBasicBlockParameterRef &value) {
+    assert(value);
     parameters.push_back(value);
 }
 
@@ -3335,6 +3476,8 @@ struct ILModule : std::enable_shared_from_this<ILModule> {
     }
 
     void append(const ILBasicBlockRef &block) {
+        block->module = shared_from_this();
+        block->name = uniqueBlockName(block->name);
         blocks.push_back(block);
     }
 
@@ -3361,28 +3504,27 @@ struct ILModule : std::enable_shared_from_this<ILModule> {
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
-struct ILInstruction : ILValue {
-    friend struct ILBasicBlock;
-protected:
-    ILBasicBlockWeakRef block;
-public:
+struct ILInstruction : ILParented {
     static int64_t unique_id_counter;
     ILInstructionWeakRef prevvalue;
     ILInstructionRef nextvalue;
     int64_t uid;
 
     ILInstruction(Kind kind_) :
-        ILValue(kind_),
+        ILParented(kind_),
         uid(unique_id_counter++)
         {}
 
-    ILBasicBlockRef getBlock() {
-        return block.lock();
-    }
+    ILInstruction(const ILInstruction &other) :
+        ILParented(other),
+        uid(unique_id_counter++)
+    {}
 
     static bool classof(const ILValue *value) {
         return (value->kind >= Instruction) && (value->kind < InstructionEnd);
     }
+
+    virtual void clone(std::shared_ptr<ILInstruction> &dest) = 0;
 
     std::string formatIndex() {
         int idx = uid;
@@ -3407,14 +3549,6 @@ public:
             ansi(ANSI_STYLE_OPERATOR, ":").c_str(),
             getType()->getRepr().c_str(),
             (int)back_refcount());
-    }
-
-    bool isSameBlock(const ILValueRef &value) {
-        auto block = getBlock();
-        if (auto instr = llvm::dyn_cast<ILInstruction>(value.get())) {
-            return block == instr->getBlock();
-        }
-        return true;
     }
 
     virtual std::string getRHSRepr() = 0;
@@ -3506,6 +3640,420 @@ void ILBasicBlock::insert(ILInstructionRef instr, ILInstructionRef beforevalue) 
     }
 }
 
+//------------------------------------------------------------------------------
+
+template<typename T>
+static std::string format_valuelist(ILParented *self,
+    const std::vector<T> &values) {
+    std::stringstream ss;
+    ss << "(";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0)
+            ss << " ";
+        ss << values[i]->getRefRepr(self->isSameBlock(values[i]));
+    }
+    ss << ")";
+    return ss.str();
+}
+
+//------------------------------------------------------------------------------
+
+struct ILFixed : ILInstruction {
+    ILFixed(Kind kind_) :
+        ILInstruction(kind_)
+        {}
+
+    ILFixed(const ILInstruction &other) :
+        ILInstruction(other)
+    {}
+
+    static bool classof(const ILValue *value) {
+        return (value->kind >= Fixed) && (value->kind < FixedEnd);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILNop : ILValueImpl<ILNop, ILValue::Nop, ILFixed, ILInstruction> {
+    ILNop() {}
+    ILNop(const ILNop& other) {}
+
+    virtual Type *inferType() {
+        return Type::Empty;
+    }
+
+    virtual std::string getRHSRepr() {
+        return ansi(ANSI_STYLE_INSTRUCTION, "nop").c_str();
+    }
+
+    virtual void relocateRefs() {}
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstString : ILValueImpl<ILConstString, ILValue::ConstString, ILFixed, ILInstruction> {
+    std::string value;
+
+    ILConstString() {}
+    ILConstString(const ILConstString& other) :
+        value(other.value)
+    {}
+
+    virtual Type *inferType() {
+        return Type::Array(Type::Int8, value.size() + 1);
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_string").c_str(),
+            ansi(ANSI_STYLE_STRING,
+                format("\"%s\"",
+                    quoteString(value, "\"").c_str())).c_str());
+    }
+
+    virtual void relocateRefs() {}
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstInteger : ILValueImpl<ILConstInteger, ILValue::ConstInteger, ILFixed, ILInstruction> {
+    int64_t value;
+    Type *value_type;
+
+    ILConstInteger() {}
+    ILConstInteger(const ILConstInteger& other) :
+        value(other.value),
+        value_type(other.value_type)
+    {}
+
+    virtual Type *inferType() {
+        return value_type;
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_integer").c_str(),
+            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value)).c_str());
+    }
+
+    virtual void relocateRefs() {}
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstReal : ILValueImpl<ILConstReal, ILValue::ConstReal, ILFixed, ILInstruction> {
+    double value;
+    Type *value_type;
+
+    ILConstReal() {}
+    ILConstReal(const ILConstReal& other) :
+        value(other.value),
+        value_type(other.value_type)
+    {}
+
+    virtual Type *inferType() {
+        return value_type;
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_real").c_str(),
+            ansi(ANSI_STYLE_NUMBER, format("%g", value)).c_str());
+    }
+
+    virtual void relocateRefs() {}
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstTypePointer :
+    ILValueImpl<ILConstTypePointer, ILValue::ConstTypePointer, ILFixed, ILInstruction> {
+    Type *value;
+
+    ILConstTypePointer() {}
+    ILConstTypePointer(const ILConstTypePointer& other) :
+        value(other.value)
+    {}
+
+    virtual Type *inferType() {
+        return Type::TypePointer;
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "const_type_pointer").c_str(),
+            value->getRepr().c_str());
+    }
+
+    virtual void relocateRefs() {}
+};
+
+static Type *extract_consttype(const ILValueRef &value) {
+    if (auto resulttype = llvm::dyn_cast<ILConstTypePointer>(value.get())) {
+        return resulttype->value;
+    }
+    return Type::Any;
+}
+
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+struct ILExternal : ILValueImpl<ILExternal, ILValue::External, ILInstruction, ILInstruction> {
+    ILValueBackRef name;
+    ILValueBackRef external_type;
+
+    ILExternal() {}
+    ILExternal(const ILExternal& other) :
+        name(other.name),
+        external_type(other.external_type)
+    {}
+
+    virtual Type *inferType() {
+        Type *type = extract_consttype(external_type);
+        if (type == Type::Any) {
+            return Type::Any;
+        }
+        return Type::Pointer(type);
+    }
+
+    virtual std::string getRHSRepr() {
+        assert(name);
+        assert(external_type);
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "external") << " "
+            << name->getRefRepr(isSameBlock(name))
+            << " " << ansi(ANSI_STYLE_OPERATOR, "->") << " "
+            << external_type->getRefRepr(isSameBlock(external_type));
+        return ss.str();
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(name);
+        relocateRef(external_type);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILCDecl : ILValueImpl<ILCDecl, ILValue::CDecl, ILInstruction, ILInstruction> {
+    ILValueBackRef result;
+    std::vector<ILValueBackRef> parameters;
+    bool vararg;
+
+    ILCDecl() :
+        vararg(false)
+    {}
+    ILCDecl(const ILCDecl& other) :
+        result(other.result),
+        parameters(other.parameters),
+        vararg(other.vararg)
+    {}
+
+    virtual Type *inferType() {
+        return Type::TypePointer;
+    }
+
+    virtual std::string getRHSRepr() {
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "cdecl") << " ";
+        ss << result->getRefRepr(isSameBlock(result));
+        ss << " (";
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0)
+                ss << " ";
+            ss << parameters[i]->getRefRepr(isSameBlock(parameters[i]));
+        }
+        if (vararg) {
+            if (parameters.size())
+                ss << " ";
+            ss << ansi(ANSI_STYLE_KEYWORD, "...");
+        }
+        ss << ")";
+        return ss.str();
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(result);
+        relocateRef(parameters);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILCall : ILValueImpl<ILCall, ILValue::Call, ILInstruction, ILInstruction> {
+    ILValueBackRef callee;
+    std::vector<ILValueBackRef> arguments;
+
+    ILCall() {}
+    ILCall(const ILCall& other) :
+        callee(other.callee),
+        arguments(other.arguments)
+    {}
+
+    virtual Type *inferType() {
+        auto type = callee->getType();
+        if (auto ptr = llvm::dyn_cast<PointerType>(type))
+            type = ptr->getElement();
+        if (auto ftype = llvm::dyn_cast<CFunctionType>(type)) {
+            return ftype->getResult();
+        }
+        return Type::Any;
+    }
+
+    virtual std::string getRHSRepr() {
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "call") << " "
+            << callee->getRefRepr(isSameBlock(callee));
+        ss << format_valuelist(this, arguments);
+        return ss.str();
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(callee);
+        relocateRef(arguments);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILAddressOf : ILValueImpl<ILAddressOf, ILValue::AddressOf, ILInstruction, ILInstruction> {
+    ILValueBackRef value;
+
+    ILAddressOf() {}
+    ILAddressOf(const ILAddressOf& other) :
+        value(other.value)
+    {}
+
+    virtual Type *inferType() {
+        Type *valuetype = value->getType();
+        if (valuetype != Type::Any) {
+            return Type::Pointer(valuetype);
+        } else {
+            return Type::Any;
+        }
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "address_of").c_str(),
+            value->getRefRepr(isSameBlock(value)).c_str());
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(value);
+    }
+
+};
+
+//------------------------------------------------------------------------------
+
+struct ILCastTo : ILValueImpl<ILCastTo, ILValue::CastTo, ILInstruction, ILInstruction> {
+    ILValueBackRef value;
+    ILValueBackRef cast_type;
+
+    ILCastTo() {}
+    ILCastTo(const ILCastTo& other) :
+        value(other.value),
+        cast_type(other.cast_type)
+    {}
+
+    virtual Type *inferType() {
+        return extract_consttype(cast_type);
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s %s %s",
+            ansi(ANSI_STYLE_INSTRUCTION, "cast").c_str(),
+            value->getRefRepr(isSameBlock(value)).c_str(),
+            ansi(ANSI_STYLE_INSTRUCTION, "to").c_str(),
+            cast_type->getRefRepr(isSameBlock(cast_type)).c_str());
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(value);
+        relocateRef(cast_type);
+    }
+
+};
+
+//------------------------------------------------------------------------------
+
+struct ILTerminator : ILParented {
+    ILTerminator(Kind kind_) :
+        ILParented(kind_)
+        {}
+    ILTerminator(const ILTerminator& other) :
+        ILParented(other)
+    {}
+
+    virtual void clone(ILTerminatorRef &dest) = 0;
+
+    virtual Type *inferType() {
+        return Type::Void;
+    }
+
+    static bool classof(const ILValue *value) {
+        return (value->kind >= Terminator) && (value->kind < TerminatorEnd);
+    }
+
+    virtual std::string getRHSRepr() = 0;
+
+    virtual std::string getRepr () {
+        return "    " + getRHSRepr() + "\n";
+    }
+
+    virtual std::string getRefRepr (bool sameblock) {
+        return ansi(ANSI_STYLE_ERROR, "<illegal terminator reference>");
+    }
+};
+
+ILBasicBlock::ILBasicBlock(const ILBasicBlock &other) :
+    name(other.name)
+{
+
+    setPaired(
+        const_cast<ILBasicBlock &>(other).shared_from_this());
+}
+
+void ILBasicBlock::finalizeClone() {
+    ILBasicBlockRef other = std::static_pointer_cast<ILBasicBlock>(getPaired());
+    clearPaired();
+
+    for (auto param : parameters) {
+        ILBasicBlockParameterRef newparam;
+        param->clone(newparam);
+        appendParameter(newparam);
+    }
+
+    ILInstructionRef value = other->firstvalue;
+    while (value) {
+        ILInstructionRef newvalue;
+        value->clone(newvalue);
+        value->setPaired(newvalue);
+        append(newvalue);
+        value = value->nextvalue;
+    }
+
+    value = firstvalue;
+    while (value) {
+        value->relocateRefs();
+        value = value->nextvalue;
+    }
+
+    if (other->terminator) {
+        ILTerminatorRef term;
+        other->terminator->clone(term);
+        setTerminator(term);
+        term->relocateRefs();
+    }
+
+    value = other->firstvalue;
+    while (value) {
+        value->clearPaired();
+        value = value->nextvalue;
+    }
+}
+
 std::string ILBasicBlock::getRepr () {
     std::stringstream ss;
     ss << name;
@@ -3533,269 +4081,6 @@ std::string ILBasicBlock::getRepr () {
 
 //------------------------------------------------------------------------------
 
-template<typename T>
-static std::string format_valuelist(ILInstruction *self,
-    const std::vector<T> &values) {
-    std::stringstream ss;
-    ss << "(";
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i != 0)
-            ss << " ";
-        ss << values[i]->getRefRepr(self->isSameBlock(values[i]));
-    }
-    ss << ")";
-    return ss.str();
-}
-
-//------------------------------------------------------------------------------
-
-struct ILFixed : ILInstruction {
-    ILFixed(Kind kind_) :
-        ILInstruction(kind_)
-        {}
-
-    static bool classof(const ILValue *value) {
-        return (value->kind >= Fixed) && (value->kind < FixedEnd);
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILNop : ILValueImpl<ILValue::Nop, ILFixed> {
-    virtual Type *inferType() {
-        return Type::Empty;
-    }
-
-    virtual std::string getRHSRepr() {
-        return ansi(ANSI_STYLE_INSTRUCTION, "nop").c_str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILConstString : ILValueImpl<ILValue::ConstString, ILFixed> {
-    std::string value;
-
-    virtual Type *inferType() {
-        return Type::Array(Type::Int8, value.size() + 1);
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "const_string").c_str(),
-            ansi(ANSI_STYLE_STRING,
-                format("\"%s\"",
-                    quoteString(value, "\"").c_str())).c_str());
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILConstInteger : ILValueImpl<ILValue::ConstInteger, ILFixed> {
-    int64_t value;
-    Type *value_type;
-
-    virtual Type *inferType() {
-        return value_type;
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "const_integer").c_str(),
-            ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value)).c_str());
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILConstReal : ILValueImpl<ILValue::ConstReal, ILFixed> {
-    double value;
-    Type *value_type;
-
-    virtual Type *inferType() {
-        return value_type;
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "const_real").c_str(),
-            ansi(ANSI_STYLE_NUMBER, format("%g", value)).c_str());
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILConstTypePointer : ILValueImpl<ILValue::ConstTypePointer, ILFixed> {
-    Type *value;
-
-    virtual Type *inferType() {
-        return Type::TypePointer;
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "const_type_pointer").c_str(),
-            value->getRepr().c_str());
-    }
-
-};
-
-static Type *extract_consttype(const ILValueRef &value) {
-    if (auto resulttype = llvm::dyn_cast<ILConstTypePointer>(value.get())) {
-        return resulttype->value;
-    }
-    return Type::Any;
-}
-
-//------------------------------------------------------------------------------
-//------------------------------------------------------------------------------
-
-struct ILExternal : ILValueImpl<ILValue::External, ILInstruction> {
-    ILValueBackRef name;
-    ILValueBackRef external_type;
-
-    virtual Type *inferType() {
-        Type *type = extract_consttype(external_type);
-        if (type == Type::Any) {
-            return Type::Any;
-        }
-        return Type::Pointer(type);
-    }
-
-    virtual std::string getRHSRepr() {
-        assert(name);
-        assert(external_type);
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_INSTRUCTION, "external") << " "
-            << name->getRefRepr(isSameBlock(name))
-            << " " << ansi(ANSI_STYLE_OPERATOR, "->") << " "
-            << external_type->getRefRepr(isSameBlock(external_type));
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILCDecl : ILValueImpl<ILValue::CDecl, ILInstruction> {
-    ILValueBackRef result;
-    std::vector<ILValueBackRef> parameters;
-    bool vararg;
-
-    virtual Type *inferType() {
-        return Type::TypePointer;
-    }
-
-    virtual std::string getRHSRepr() {
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_INSTRUCTION, "cdecl") << " ";
-        ss << result->getRefRepr(isSameBlock(result));
-        ss << " (";
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            if (i != 0)
-                ss << " ";
-            ss << parameters[i]->getRefRepr(isSameBlock(parameters[i]));
-        }
-        if (vararg) {
-            if (parameters.size())
-                ss << " ";
-            ss << ansi(ANSI_STYLE_KEYWORD, "...");
-        }
-        ss << ")";
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILCall : ILValueImpl<ILValue::Call, ILInstruction> {
-    ILValueBackRef callee;
-    std::vector<ILValueBackRef> arguments;
-
-    virtual Type *inferType() {
-        auto type = callee->getType();
-        if (auto ptr = llvm::dyn_cast<PointerType>(type))
-            type = ptr->getElement();
-        if (auto ftype = llvm::dyn_cast<CFunctionType>(type)) {
-            return ftype->getResult();
-        }
-        return Type::Any;
-    }
-
-    virtual std::string getRHSRepr() {
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_INSTRUCTION, "call") << " "
-            << callee->getRefRepr(isSameBlock(callee));
-        ss << format_valuelist(this, arguments);
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILAddressOf : ILValueImpl<ILValue::AddressOf, ILInstruction> {
-    ILValueBackRef value;
-
-    virtual Type *inferType() {
-        Type *valuetype = value->getType();
-        if (valuetype != Type::Any) {
-            return Type::Pointer(valuetype);
-        } else {
-            return Type::Any;
-        }
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "address_of").c_str(),
-            value->getRefRepr(isSameBlock(value)).c_str());
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILCastTo : ILValueImpl<ILValue::CastTo, ILInstruction> {
-    ILValueBackRef value;
-    ILValueBackRef cast_type;
-
-    virtual Type *inferType() {
-        return extract_consttype(cast_type);
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s %s %s",
-            ansi(ANSI_STYLE_INSTRUCTION, "cast").c_str(),
-            value->getRefRepr(isSameBlock(value)).c_str(),
-            ansi(ANSI_STYLE_INSTRUCTION, "to").c_str(),
-            cast_type->getRefRepr(isSameBlock(cast_type)).c_str());
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ILTerminator : ILInstruction {
-    ILTerminator(Kind kind_) :
-        ILInstruction(kind_)
-        {}
-
-    virtual Type *inferType() {
-        return Type::Void;
-    }
-
-    static bool classof(const ILValue *value) {
-        return (value->kind >= Terminator) && (value->kind < TerminatorEnd);
-    }
-
-    virtual std::string getRepr () {
-        return "    " + getRHSRepr() + "\n";
-    }
-
-    virtual std::string getRefRepr (bool sameblock) {
-        return ansi(ANSI_STYLE_ERROR, "<illegal terminator reference>");
-    }
-};
-
-//------------------------------------------------------------------------------
-
 void ILBasicBlock::clearTerminator() {
     if (terminator) {
         auto term = llvm::cast<ILTerminator>(terminator.get());
@@ -3804,20 +4089,25 @@ void ILBasicBlock::clearTerminator() {
     terminator = nullptr;
 }
 
-void ILBasicBlock::setTerminator(const ILValueRef &value) {
+void ILBasicBlock::setTerminator(const ILTerminatorRef &value) {
     assert(!terminator);
-    auto term = llvm::cast<ILTerminator>(value.get());
-    assert(term->block.expired());
-    term->block = std::static_pointer_cast<ILBasicBlock>(shared_from_this());
+    assert(value->block.expired());
+    value->block = std::static_pointer_cast<ILBasicBlock>(shared_from_this());
     terminator = value;
 }
 
 
 //------------------------------------------------------------------------------
 
-struct ILBr : ILValueImpl<ILValue::Br, ILTerminator> {
+struct ILBr : ILValueImpl<ILBr, ILValue::Br, ILTerminator, ILTerminator> {
     ILBasicBlockRef label;
     std::vector<ILValueBackRef> arguments;
+
+    ILBr() {}
+    ILBr(const ILBr& other) :
+        label(other.label),
+        arguments(other.arguments)
+    {}
 
     virtual std::string getRHSRepr() {
         return format("%s %s%s",
@@ -3825,16 +4115,29 @@ struct ILBr : ILValueImpl<ILValue::Br, ILTerminator> {
             label->getRefRepr(isSameBlock(label)).c_str(),
             format_valuelist(this, arguments).c_str());
     }
+
+    virtual void relocateRefs() {
+        relocateRef(arguments);
+    }
 };
 
 //------------------------------------------------------------------------------
 
-struct ILCondBr : ILValueImpl<ILValue::CondBr, ILTerminator> {
+struct ILCondBr : ILValueImpl<ILCondBr, ILValue::CondBr, ILTerminator, ILTerminator> {
     ILValueBackRef condition;
     ILBasicBlockRef thenlabel;
     std::vector<ILValueBackRef> thenarguments;
     ILBasicBlockRef elselabel;
     std::vector<ILValueBackRef> elsearguments;
+
+    ILCondBr() {}
+    ILCondBr(const ILCondBr& other) :
+        condition(other.condition),
+        thenlabel(other.thenlabel),
+        thenarguments(other.thenarguments),
+        elselabel(other.elselabel),
+        elsearguments(other.elsearguments)
+    {}
 
     virtual std::string getRHSRepr() {
         return format("%s %s %s%s %s%s",
@@ -3844,6 +4147,12 @@ struct ILCondBr : ILValueImpl<ILValue::CondBr, ILTerminator> {
             format_valuelist(this, thenarguments).c_str(),
             elselabel->getRefRepr(isSameBlock(elselabel)).c_str(),
             format_valuelist(this, elsearguments).c_str());
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(condition);
+        relocateRef(thenarguments);
+        relocateRef(elsearguments);
     }
 };
 
@@ -3939,25 +4248,30 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         prepend.reset();
     }
 
-    void valueCreated(const ILValueRef &value) {
+
+    void valueCreated(const ILBasicBlockParameterRef &value) {
         if (!block) return;
-        if (llvm::isa<ILBasicBlockParameter>(value.get())) {
-            block->appendParameter(value);
-        } if (llvm::isa<ILTerminator>(value.get())) {
-            block->setTerminator(value);
-        } else if (llvm::isa<ILInstruction>(value.get())) {
-            block->insert(std::static_pointer_cast<ILInstruction>(value), prepend.lock());
-        }
+        block->appendParameter(value);
+    }
+
+    void valueCreated(const ILTerminatorRef &value) {
+        if (!block) return;
+        block->setTerminator(value);
+    }
+
+    void valueCreated(const ILInstructionRef &value) {
+        if (!block) return;
+        block->insert(value, prepend.lock());
     }
 
     ILBasicBlockRef basicblock(const std::string &name) {
         auto result = std::make_shared<ILBasicBlock>();
-        result->name = module->uniqueBlockName(name);
+        result->name = name;
         module->append(result);
         return result;
     }
 
-    ILValueRef basicblockparameter(
+    ILBasicBlockParameterRef basicblockparameter(
         const ILBasicBlockRef &block,
         const std::string &name,
         Type *type = nullptr) {
@@ -3973,13 +4287,13 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef empty() {
+    ILInstructionRef empty() {
         auto result = std::make_shared<ILNop>();
         valueCreated(result);
         return result;
     }
 
-    ILValueRef external(const ILValueRef &name, const ILValueRef &type) {
+    ILInstructionRef external(const ILValueRef &name, const ILValueRef &type) {
         assert(type);
         assert(name);
         auto result = std::make_shared<ILExternal>();
@@ -3989,7 +4303,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef cdecl(
+    ILInstructionRef cdecl(
         const ILValueRef &resulttype,
         const std::vector<ILValueRef> &parametertypes,
         bool isvararg) {
@@ -4005,7 +4319,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef call(const ILValueRef& callee, const std::vector<ILValueRef> &arguments) {
+    ILInstructionRef call(const ILValueRef& callee, const std::vector<ILValueRef> &arguments) {
         assert(callee);
         auto result = std::make_shared<ILCall>();
         result->callee = callee;
@@ -4017,7 +4331,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef br(const ILBasicBlockRef& bb, const std::vector<ILValueRef> &arguments) {
+    ILTerminatorRef br(const ILBasicBlockRef& bb, const std::vector<ILValueRef> &arguments) {
         assert(bb);
         auto result = std::make_shared<ILBr>();
         result->label = bb;
@@ -4029,7 +4343,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef condbr(const ILValueRef& condition,
+    ILTerminatorRef condbr(const ILValueRef& condition,
         const ILBasicBlockRef& thenbb, const std::vector<ILValueRef> &thenarguments,
         const ILBasicBlockRef& elsebb, const std::vector<ILValueRef> &elsearguments) {
         assert(condition);
@@ -4077,7 +4391,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef conststring(String *c) {
+    ILInstructionRef conststring(String *c) {
         assert(c);
         auto result = std::make_shared<ILConstString>();
         result->value = c->getValue();
@@ -4085,7 +4399,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef constinteger(IntegerType *cdest, Integer *c) {
+    ILInstructionRef constinteger(IntegerType *cdest, Integer *c) {
         assert(c);
         assert(cdest);
         auto result = std::make_shared<ILConstInteger>();
@@ -4095,7 +4409,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         return result;
     }
 
-    ILValueRef constreal(RealType *cdest, Real *c) {
+    ILInstructionRef constreal(RealType *cdest, Real *c) {
         assert(c);
         assert(cdest);
         auto result = std::make_shared<ILConstReal>();
@@ -4254,6 +4568,12 @@ struct ILSolver {
                     auto newterm = builder->br(label, arguments);
                     block->setTerminator(newterm);
                     processBlock(label);
+
+                    ILBasicBlockRef newblock;
+                    label->clone(newblock);
+                    module->append(newblock);
+                    std::cout << newblock->getRepr();
+
                 } else {
                     processBlock(condbr->thenlabel);
                     processBlock(condbr->elselabel);
