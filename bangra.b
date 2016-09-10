@@ -14,10 +14,10 @@ let printf
 
 printf "hello world! %i %f %i\n" 10 2.5 false
 
-printf "%i\n"
+puts
     select true
-        puts "true branch"
-        puts "false branch"
+        "true branch"
+        "false branch"
 
 
 ///

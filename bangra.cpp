@@ -719,7 +719,7 @@ struct Anchor {
         dumpFileLine(path, offset);
     }
 
-    static void printErrorV (Anchor *anchor, const char *fmt, va_list args) {
+    static void printMessageV (Anchor *anchor, const char *fmt, va_list args) {
         if (anchor) {
             std::cout
                 << ansi(ANSI_STYLE_LOCATION, anchor->path)
@@ -738,6 +738,10 @@ struct Anchor {
         if (anchor) {
             dumpFileLine(anchor->path, anchor->offset);
         }
+    }
+
+    static void printErrorV (Anchor *anchor, const char *fmt, va_list args) {
+        printMessageV(anchor, fmt, args);
         exit(1);
     }
 
@@ -3290,6 +3294,34 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
     virtual void relocateRefs() = 0;
 };
 
+static void ilMessage (const ILValueRef &value, const char *format, ...) {
+    Anchor *anchor = NULL;
+    if (value) {
+        std::cout << "at\n" << value->getRepr();
+        if (value->anchor.isValid()) {
+            anchor = &value->anchor;
+        }
+    }
+    va_list args;
+    va_start (args, format);
+    Anchor::printMessageV(anchor, format, args);
+    va_end (args);
+}
+
+static void ilError (const ILValueRef &value, const char *format, ...) {
+    Anchor *anchor = NULL;
+    if (value) {
+        std::cout << "at\n" << value->getRepr();
+        if (value->anchor.isValid()) {
+            anchor = &value->anchor;
+        }
+    }
+    va_list args;
+    va_start (args, format);
+    Anchor::printErrorV(anchor, format, args);
+    va_end (args);
+}
+
 //------------------------------------------------------------------------------
 
 template<typename SelfT, ILValue::Kind KindT, typename BaseT, typename CloneT>
@@ -3387,6 +3419,8 @@ struct ILBasicBlock :
     void discardPredicate(const ILLabelRef &label) {
         predicates.erase(predicates.find(label));
     }
+
+    void clear();
 };
 
 //------------------------------------------------------------------------------
@@ -3598,6 +3632,95 @@ int64_t ILInstruction::unique_id_counter = 1;
 
 //------------------------------------------------------------------------------
 
+template<typename T>
+static std::string format_valuelist(ILParented *self,
+    const std::vector<T> &values) {
+    std::stringstream ss;
+    ss << "(";
+    for (size_t i = 0; i < values.size(); ++i) {
+        if (i != 0)
+            ss << " ";
+        ss << values[i]->getRefRepr(self->isSameBlock(values[i]));
+    }
+    ss << ")";
+    return ss.str();
+}
+
+//------------------------------------------------------------------------------
+
+template<typename A, typename B>
+static void copy_arguments(const A& a, B &b) {
+    std::copy(
+        a.begin(),
+        a.end(),
+        std::back_inserter(b));
+}
+
+//------------------------------------------------------------------------------
+
+struct ILFixed : ILInstruction {
+    ILFixed(Kind kind_) :
+        ILInstruction(kind_)
+        {}
+
+    ILFixed(const ILInstruction &other) :
+        ILInstruction(other)
+    {}
+
+    static bool classof(const ILValue *value) {
+        return (value->kind >= Fixed) && (value->kind < FixedEnd);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILLabel : ILValueImpl<ILLabel, ILValue::Label, ILFixed, ILInstruction> {
+protected:
+    ILValueBackRef label_block;
+public:
+    std::vector<ILValueBackRef> arguments;
+
+    ILLabel() {}
+
+    ILLabel(const ILLabel &other) :
+        ValueImplType(other),
+        label_block(other.label_block),
+        arguments(other.arguments) {
+    }
+
+    ILLabel(const ILBasicBlockRef &block_,
+            const std::vector<ILValueRef> &arguments_) :
+        label_block(block_) {
+        copy_arguments(arguments_, arguments);
+    }
+    ILLabel(const ILBasicBlockRef &block_,
+            const std::vector<ILValueBackRef> &arguments_) :
+        label_block(block_),
+        arguments(arguments_) {
+    }
+
+    ILBasicBlockRef getLabelBlock() {
+        ILValueRef block = label_block;
+        return std::static_pointer_cast<ILBasicBlock>(block);
+    }
+
+    virtual Type *inferType() {
+        return Type::BasicBlock;
+    }
+
+    virtual std::string getRHSRepr() {
+        return format("%s %s%s",
+            ansi(ANSI_STYLE_INSTRUCTION, "label").c_str(),
+            label_block->getRefRepr(isSameBlock(label_block)).c_str(),
+            format_valuelist(this, arguments).c_str());
+    }
+
+    virtual void relocateRefs() {
+        relocateRef(arguments);
+    }
+};
+//------------------------------------------------------------------------------
+
 void ILBasicBlock::replace(
     ILInstructionRef oldinstr,
     ILInstructionRef newinstr) {
@@ -3617,6 +3740,10 @@ void ILBasicBlock::replace(
 }
 
 void ILBasicBlock::remove(ILInstructionRef instr) {
+    if (llvm::isa<ILLabel>(instr.get())) {
+        auto label = std::static_pointer_cast<ILLabel>(instr);
+        label->getLabelBlock()->discardPredicate(label);
+    }
     assert(instr->getBlock().get() == this);
     if (firstvalue == instr) {
         assert(instr->prevvalue.expired());
@@ -3626,8 +3753,11 @@ void ILBasicBlock::remove(ILInstructionRef instr) {
         assert(!instr->nextvalue);
         lastvalue = instr->prevvalue;
     }
-    instr->prevvalue.lock()->nextvalue = instr->nextvalue;
-    instr->nextvalue->prevvalue = instr->prevvalue;
+    auto prevvalue = instr->prevvalue.lock();
+    if (prevvalue)
+        prevvalue->nextvalue = instr->nextvalue;
+    if (instr->nextvalue)
+        instr->nextvalue->prevvalue = prevvalue;
     instr->block.reset();
 }
 
@@ -3663,39 +3793,19 @@ void ILBasicBlock::insert(ILInstructionRef instr, ILInstructionRef beforevalue) 
         instr->nextvalue = nullptr;
         lastvalue = instr;
     }
+    if (llvm::isa<ILLabel>(instr.get())) {
+        auto label = std::static_pointer_cast<ILLabel>(instr);
+        label->getLabelBlock()->addPredicate(label);
+    }
+
 }
 
-//------------------------------------------------------------------------------
-
-template<typename T>
-static std::string format_valuelist(ILParented *self,
-    const std::vector<T> &values) {
-    std::stringstream ss;
-    ss << "(";
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (i != 0)
-            ss << " ";
-        ss << values[i]->getRefRepr(self->isSameBlock(values[i]));
+void ILBasicBlock::clear() {
+    while (firstvalue) {
+        remove(firstvalue);
     }
-    ss << ")";
-    return ss.str();
+    clearTerminator();
 }
-
-//------------------------------------------------------------------------------
-
-struct ILFixed : ILInstruction {
-    ILFixed(Kind kind_) :
-        ILInstruction(kind_)
-        {}
-
-    ILFixed(const ILInstruction &other) :
-        ILInstruction(other)
-    {}
-
-    static bool classof(const ILValue *value) {
-        return (value->kind >= Fixed) && (value->kind < FixedEnd);
-    }
-};
 
 //------------------------------------------------------------------------------
 
@@ -4003,64 +4113,6 @@ struct ILCastTo : ILValueImpl<ILCastTo, ILValue::CastTo, ILInstruction, ILInstru
 
 //------------------------------------------------------------------------------
 
-template<typename A, typename B>
-static void copy_arguments(const A& a, B &b) {
-    std::copy(
-        a.begin(),
-        a.end(),
-        std::back_inserter(b));
-}
-
-//------------------------------------------------------------------------------
-
-struct ILLabel : ILValueImpl<ILLabel, ILValue::Label, ILFixed, ILInstruction> {
-protected:
-    ILValueBackRef label_block;
-public:
-    std::vector<ILValueBackRef> arguments;
-
-    ILLabel() {}
-
-    ILLabel(const ILLabel &other) :
-        ValueImplType(other),
-        label_block(other.label_block),
-        arguments(other.arguments) {
-    }
-
-    ILLabel(const ILBasicBlockRef &block_,
-            const std::vector<ILValueRef> &arguments_) :
-        label_block(block_) {
-        copy_arguments(arguments_, arguments);
-    }
-    ILLabel(const ILBasicBlockRef &block_,
-            const std::vector<ILValueBackRef> &arguments_) :
-        label_block(block_),
-        arguments(arguments_) {
-    }
-
-    ILBasicBlockRef getLabelBlock() {
-        ILValueRef block = label_block;
-        return std::static_pointer_cast<ILBasicBlock>(block);
-    }
-
-    virtual Type *inferType() {
-        return Type::BasicBlock;
-    }
-
-    virtual std::string getRHSRepr() {
-        return format("%s %s%s",
-            ansi(ANSI_STYLE_INSTRUCTION, "label").c_str(),
-            label_block->getRefRepr(isSameBlock(label_block)).c_str(),
-            format_valuelist(this, arguments).c_str());
-    }
-
-    virtual void relocateRefs() {
-        relocateRef(arguments);
-    }
-};
-
-//------------------------------------------------------------------------------
-
 struct ILTerminator : ILParented {
 protected:
     std::vector<ILValueBackRef> labels;
@@ -4088,7 +4140,6 @@ public:
 
     void appendLabel(const ILLabelRef &label) {
         labels.push_back(label);
-        label->getLabelBlock()->addPredicate(label);
     }
 
     static bool classof(const ILValue *value) {
@@ -4098,7 +4149,15 @@ public:
     virtual std::string getRHSRepr() = 0;
 
     virtual std::string getRepr () {
-        return "  " + getRHSRepr() + "\n";
+        std::stringstream ss;
+        ss << "  " << getRHSRepr();
+        Type *type = getType();
+        if (type != Type::Void) {
+            ss << " " << ansi(ANSI_STYLE_OPERATOR, ":") << " "
+                << getType()->getRepr();
+        }
+        ss << "\n";
+        return ss.str();
     }
 
     virtual std::string getRefRepr (bool sameblock) {
@@ -4301,20 +4360,6 @@ struct ILRet : ILValueImpl<ILRet, ILValue::Ret, ILTerminator, ILTerminator> {
 };
 
 //------------------------------------------------------------------------------
-
-static void ilError (const ILValueRef &value, const char *format, ...) {
-    Anchor *anchor = NULL;
-    if (value) {
-        std::cout << "at instruction\n" << value->getRepr();
-        if (value->anchor.isValid()) {
-            anchor = &value->anchor;
-        }
-    }
-    va_list args;
-    va_start (args, format);
-    Anchor::printErrorV(anchor, format, args);
-    va_end (args);
-}
 
 void ILModule::verify() {
     for (auto& block : blocks) {
@@ -4601,10 +4646,11 @@ struct ILSolver {
     // have not been evaluated, types that depend on constant conditions.
 
     // the solver "runs" instructions in the IL
-    // - resolves instructions with constant inputs to constants
-    // - ensures that all types and templates have been specialized
-    // - generates implicit casts
-    // - removes unreachable blocks due to constant conditions,
+    // * resolves instructions with constant inputs to constants
+    // * ensures that all types and templates have been specialized
+    // * generates implicit casts
+    // ? removes instructions and values that don't contribute to anything
+    // ? removes unreachable blocks due to constant conditions,
     //   and removes single basic block arguments from blocks that are always
     //   reached.
 
@@ -4701,27 +4747,24 @@ struct ILSolver {
                 if (condbr->condition->getType() != Type::Bool) {
                     ilError(value, "condition must be of type bool");
                 }
-                /*if (auto ci = llvm::dyn_cast<ILConstInteger>(condbr->condition.get())) {
-                    ILBasicBlockRef label;
+                if (auto ci = llvm::dyn_cast<ILConstInteger>(
+                        condbr->condition.get())) {
+                    ILLabelRef label;
                     std::vector<ILValueRef> arguments;
                     if (ci->value) {
-                        label = condbr->thenlabel;
-                        std::copy(
-                            condbr->thenarguments.begin(),
-                            condbr->thenarguments.end(),
-                            std::back_inserter(arguments));
+                        label = condbr->getThenLabel();
+                        copy_arguments(label->arguments, arguments);
+                        block->remove(condbr->getElseLabel());
                     } else {
-                        label = condbr->elselabel;
-                        std::copy(
-                            condbr->elsearguments.begin(),
-                            condbr->elsearguments.end(),
-                            std::back_inserter(arguments));
+                        label = condbr->getElseLabel();
+                        copy_arguments(label->arguments, arguments);
+                        block->remove(condbr->getThenLabel());
                     }
                     block->clearTerminator();
-                    auto newterm = builder->br(label, arguments);
+                    auto newterm = builder->br(label);
                     block->setTerminator(newterm);
-                    processBlock(label);
-                } else*/ {
+                    processLabel(label);
+                } else {
                     processLabel(condbr->getThenLabel());
                     processLabel(condbr->getElseLabel());
                 }
@@ -4777,6 +4820,19 @@ struct ILSolver {
         }
     }
 
+    Type *merge_type(Type *a, Type *b) {
+        if (!a) return b;
+        if (a == b) return a;
+        if ((a->getKind() == T_Array) && (b->getKind() == T_Array)) {
+            auto arra = llvm::dyn_cast<ArrayType>(a);
+            auto arrb = llvm::dyn_cast<ArrayType>(b);
+            if (arra->getElement() == arrb->getElement()) {
+                return Type::Pointer(arra->getElement());
+            }
+        }
+        return nullptr;
+    }
+
     void run() {
         while (!stack.empty()) {
             ILBasicBlockRef block = stack.back();
@@ -4786,22 +4842,35 @@ struct ILSolver {
                 for (size_t i = 0; i < block->parameters.size(); ++i) {
                     auto &param = block->parameters[i];
                     Type *common_type = nullptr;
+                    bool failed = false;
                     for (auto &pred : block->predicates) {
                         auto &arg = pred->arguments[i];
                         Type *type = arg->getType();
                         if (type == Type::Any) {
                             ilError(arg, "missing specialization");
                         }
+                        common_type = merge_type(common_type, type);
                         if (!common_type) {
-                            common_type = type;
-                        } else if (common_type != type) {
-                            ilError(arg,
-                                "unable to merge conflicting types %s and %s",
-                                type->getRepr().c_str(),
-                                common_type->getRepr().c_str());
+                            failed = true;
+                            break;
                         }
                     }
+                    if (failed) {
+                        for (auto &pred : block->predicates) {
+                            auto &arg = pred->arguments[i];
+                            ilMessage(arg, "conflicting type here");
+                        }
+                        ilError(param, "unable to merge conflicting types");
+                    }
+                    if (!common_type) {
+                        ilError(param, "unable to type parameter");
+                    }
                     param->parameter_type = common_type;
+                    // cast predicates where necessary
+                    for (auto &pred : block->predicates) {
+                        auto &arg = pred->arguments[i];
+                        generate_cast(pred->getBlock(), pred, arg, common_type);
+                    }
                 }
 
                 ILInstructionRef value = block->firstvalue;
@@ -4819,6 +4888,7 @@ struct ILSolver {
         std::list< std::list<ILBasicBlockRef>::iterator > todelete;
         for (auto iter = module->blocks.begin(); iter != module->blocks.end(); ++iter) {
             if (!visited.count(*iter)) {
+                (*iter)->clear();
                 todelete.push_back(iter);
             }
         }
