@@ -23,15 +23,13 @@ do
     puts testx
 puts testx
 
-///
-    let selection
-        "true branch"
-    select false
-        do
-            set selection "false branch"
-        ""
+let selection
+    "you will never see this"
+select false
+    do
+        set selection "false branch"
 
-    puts selection
+puts selection
 
 
 ///

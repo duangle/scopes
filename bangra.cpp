@@ -3412,6 +3412,7 @@ struct ILBasicBlock :
         insert(value, nullptr);
     }
     void appendParameter(const ILBasicBlockParameterRef &value);
+    void clearParameters();
     void clearTerminator();
     void setTerminator(const ILTerminatorRef &value);
 
@@ -3531,6 +3532,10 @@ struct ILBasicBlockParameter :
 void ILBasicBlock::appendParameter(const ILBasicBlockParameterRef &value) {
     assert(value);
     parameters.push_back(value);
+}
+
+void ILBasicBlock::clearParameters() {
+    parameters.clear();
 }
 
 //------------------------------------------------------------------------------
@@ -3690,10 +3695,28 @@ struct ILFixed : ILInstruction {
 struct ILLabel : ILValueImpl<ILLabel, ILValue::Label, ILFixed, ILInstruction> {
 protected:
     ILValueBackRef label_block;
-public:
     std::vector<ILValueBackRef> arguments;
+public:
 
     ILLabel() {}
+
+    const std::vector<ILValueBackRef> &getArguments() const {
+        return arguments;
+    }
+
+    ILValueBackRef &getArgument(size_t i) {
+        assert(i < arguments.size());
+        return arguments[i];
+    }
+
+    void clearArguments() {
+        arguments.clear();
+    }
+
+    void appendArgument(const ILValueRef &value) {
+        assert(value);
+        arguments.push_back(value);
+    }
 
     ILLabel(const ILLabel &other) :
         ValueImplType(other),
@@ -4661,6 +4684,7 @@ struct ILSolver {
     // * resolves instructions with constant inputs to constants
     // * ensures that all types and templates have been specialized
     // * generates implicit casts
+    // ? lowers block arguments that only have one predicate
     // ? removes instructions and values that don't contribute to anything
     // ? removes unreachable blocks due to constant conditions,
     //   and removes single basic block arguments from blocks that are always
@@ -4765,11 +4789,11 @@ struct ILSolver {
                     std::vector<ILValueRef> arguments;
                     if (ci->value) {
                         label = condbr->getThenLabel();
-                        copy_arguments(label->arguments, arguments);
+                        copy_arguments(label->getArguments(), arguments);
                         block->remove(condbr->getElseLabel());
                     } else {
                         label = condbr->getElseLabel();
-                        copy_arguments(label->arguments, arguments);
+                        copy_arguments(label->getArguments(), arguments);
                         block->remove(condbr->getThenLabel());
                     }
                     block->clearTerminator();
@@ -4835,14 +4859,87 @@ struct ILSolver {
     Type *merge_type(Type *a, Type *b) {
         if (!a) return b;
         if (a == b) return a;
-        if ((a->getKind() == T_Array) && (b->getKind() == T_Array)) {
-            auto arra = llvm::dyn_cast<ArrayType>(a);
-            auto arrb = llvm::dyn_cast<ArrayType>(b);
-            if (arra->getElement() == arrb->getElement()) {
-                return Type::Pointer(arra->getElement());
-            }
+        switch(a->getKind()) {
+            case T_Array: {
+                auto arra = llvm::dyn_cast<ArrayType>(a);
+                switch(b->getKind()) {
+                    case T_Array: {
+                        auto arrb = llvm::dyn_cast<ArrayType>(b);
+                        if (arra->getElement() == arrb->getElement()) {
+                            return Type::Pointer(arra->getElement());
+                        }
+                    } break;
+                    case T_Pointer: {
+                        auto ptrb = llvm::dyn_cast<PointerType>(b);
+                        if (arra->getElement() == ptrb->getElement()) {
+                            return ptrb;
+                        }
+                    } break;
+                    default: break;
+                }
+            } break;
+            case T_Pointer: {
+                switch(b->getKind()) {
+                    case T_Array: {
+                        return merge_type(b, a);
+                    } break;
+                    default: break;
+                }
+            } break;
+            default: break;
         }
         return nullptr;
+    }
+
+
+
+    void eval_parameters(const ILBasicBlockRef &block) {
+        if (block->predicates.size() == 1) {
+            auto &pred = *block->predicates.begin();
+            // all parameters can be inlined
+            for (size_t i = 0; i < block->parameters.size(); ++i) {
+                auto &param = block->parameters[i];
+                auto &arg = pred->getArgument(i);
+                replace_instruction_links(param, arg);
+            }
+            pred->clearArguments();
+            block->clearParameters();
+        } else {
+
+            for (size_t i = 0; i < block->parameters.size(); ++i) {
+                auto &param = block->parameters[i];
+                Type *common_type = nullptr;
+                bool failed = false;
+                for (auto &pred : block->predicates) {
+                    auto &arg = pred->getArgument(i);
+                    Type *type = arg->getType();
+                    if (type == Type::Any) {
+                        ilError(arg, "missing specialization");
+                    }
+                    common_type = merge_type(common_type, type);
+                    if (!common_type) {
+                        failed = true;
+                        break;
+                    }
+                }
+                if (failed) {
+                    for (auto &pred : block->predicates) {
+                        auto &arg = pred->getArgument(i);
+                        ilMessage(arg, "conflicting type here");
+                    }
+                    ilError(param, "unable to merge conflicting types");
+                }
+                if (!common_type) {
+                    ilError(param, "unable to type parameter");
+                }
+                param->parameter_type = common_type;
+                // cast predicates where necessary
+                for (auto &pred : block->predicates) {
+                    auto &arg = pred->getArgument(i);
+                    generate_cast(pred->getBlock(), pred, arg, common_type);
+                }
+            }
+        }
     }
 
     void run() {
@@ -4851,39 +4948,7 @@ struct ILSolver {
             stack.pop_back();
             if (!visited.count(block)) {
                 visited.insert(block);
-                for (size_t i = 0; i < block->parameters.size(); ++i) {
-                    auto &param = block->parameters[i];
-                    Type *common_type = nullptr;
-                    bool failed = false;
-                    for (auto &pred : block->predicates) {
-                        auto &arg = pred->arguments[i];
-                        Type *type = arg->getType();
-                        if (type == Type::Any) {
-                            ilError(arg, "missing specialization");
-                        }
-                        common_type = merge_type(common_type, type);
-                        if (!common_type) {
-                            failed = true;
-                            break;
-                        }
-                    }
-                    if (failed) {
-                        for (auto &pred : block->predicates) {
-                            auto &arg = pred->arguments[i];
-                            ilMessage(arg, "conflicting type here");
-                        }
-                        ilError(param, "unable to merge conflicting types");
-                    }
-                    if (!common_type) {
-                        ilError(param, "unable to type parameter");
-                    }
-                    param->parameter_type = common_type;
-                    // cast predicates where necessary
-                    for (auto &pred : block->predicates) {
-                        auto &arg = pred->arguments[i];
-                        generate_cast(pred->getBlock(), pred, arg, common_type);
-                    }
-                }
+                eval_parameters(block);
 
                 ILInstructionRef value = block->firstvalue;
                 while (value) {
@@ -4967,6 +5032,14 @@ struct CodeGenerator {
                             ilError(reference, "illegal real type");
                         } break;
                     }
+                } break;
+                case T_Array: {
+                    auto array = llvm::cast<ArrayType>(il_type);
+                    result = LLVMArrayType(
+                        resolveType(
+                            reference,
+                            array->getElement()),
+                        array->getSize());
                 } break;
                 case T_Pointer: {
                     result = LLVMPointerType(
@@ -5071,6 +5144,9 @@ struct CodeGenerator {
         LLVMValueRef result = valuemap[il_value];
         assert(!result);
         switch(il_value->kind) {
+            case ILValue::Nop: {
+                return;
+            } break;
             case ILValue::Label: {
                 return;
             } break;
@@ -5184,7 +5260,7 @@ struct CodeGenerator {
             LLVMBasicBlockRef incoming_blocks[predcount];
             size_t k = 0;
             for (auto &pred : il_block->predicates) {
-                auto &arg = pred->arguments[i];
+                auto &arg = pred->getArgument(i);
                 incoming_values[k] = resolveValue(arg);
                 incoming_blocks[k] = resolveBlock(pred->getBlock());
                 ++k;
@@ -5199,14 +5275,9 @@ struct CodeGenerator {
         assert(llvm_block);
         LLVMPositionBuilderAtEnd(builder, llvm_block);
 
-
         for (auto &param : il_block->parameters) {
             generateValue(param);
         }
-
-        /*
-        */
-        //LLVMValueRef LLVMBuildPhi(LLVMBuilderRef, LLVMTypeRef Ty, const char *Name);
 
         ILInstructionRef value = il_block->firstvalue;
         while (value) {
@@ -5299,20 +5370,12 @@ public:
         }
     }
 
-    void mergeup(const ILLabelRef &truelabel, const ILLabelRef &falselabel) {
-        assert(parent);
+    const NameValueMap &getLocals() {
+        return values;
+    }
 
-        for (auto entry : mergevalues) {
-            ILValueRef origvalue = parent->resolve(entry.first);
-            ILValueRef param = global.builder->basicblockparameter(entry.first);
-            truelabel->arguments.push_back(entry.second);
-            falselabel->arguments.push_back(origvalue);
-            if (parent->values.count(entry.first)) {
-                parent->values[entry.first] = entry.second;
-            } else {
-                parent->mergevalues[entry.first] = entry.second;
-            }
-        }
+    const NameValueMap &getMergeLocals() {
+        return mergevalues;
     }
 
     void dump() {
@@ -5334,6 +5397,10 @@ public:
         return values.count(name);
     }
 
+    bool isMergeLocal(const std::string &name) {
+        return mergevalues.count(name);
+    }
+
     ILValueRef getLocal(const std::string &name) {
         if (values.count(name)) {
             return values.at(name);
@@ -5346,6 +5413,19 @@ public:
             return mergevalues.at(name);
         }
         return nullptr;
+    }
+
+    bool set(const std::string &name, const ILValueRef &value) {
+        if (isLocal(name)) {
+            replaceLocal(name, value);
+        } else {
+            if (resolve(name)) {
+                replaceScoped(name, value);
+            } else {
+                return false;
+            }
+        }
+        return true;
     }
 
     void setLocal(const std::string &name, const ILValueRef &value) {
@@ -5581,6 +5661,13 @@ struct ASTSelect : ASTNodeImpl<ASTSelect, AST_Select> {
 };
 */
 
+bool hasTypeValue(Type *type) {
+    assert(type);
+    if ((type == Type::Void) || (type == Type::Empty))
+        return false;
+    return true;
+}
+
 static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     UNPACK_ARG(expr, expr_condition);
     UNPACK_ARG(expr, expr_true);
@@ -5595,6 +5682,8 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     ILValueRef trueexpr = translate(subenv_true, expr_true);
     bbtrue = env->global.builder->block;
 
+    bool returnValue = hasTypeValue(trueexpr->getType());
+
     ILBasicBlockRef bbfalse;
     ILValueRef falseexpr;
     EnvironmentRef subenv_false;
@@ -5604,20 +5693,33 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
         env->global.builder->appendTo(bbfalse);
         falseexpr = translate(subenv_false, expr_false);
         bbfalse = env->global.builder->block;
+        returnValue = returnValue && hasTypeValue(falseexpr->getType());
+    } else {
+        returnValue = false;
     }
 
     ILBasicBlockRef bbdone = env->global.builder->basicblock("endif");
     env->global.builder->appendTo(bbdone);
-    ILValueRef result = env->global.builder->basicblockparameter("ifexpr");
+    ILValueRef result;
+    std::vector<ILValueRef> trueexprs;
+    if (returnValue) {
+        result = env->global.builder->basicblockparameter("ifexpr");
+        trueexprs.push_back(trueexpr);
+    } else {
+        result = env->global.builder->empty();
+    }
 
     env->global.builder->appendTo(bbtrue);
-    auto truelabel = env->global.builder->label(bbdone, {trueexpr});
+    auto truelabel = env->global.builder->label(bbdone, trueexprs);
     env->global.builder->br(truelabel);
 
     ILLabelRef falselabel;
     if (bbfalse) {
         env->global.builder->appendTo(bbfalse);
-        falselabel = env->global.builder->label(bbdone, {falseexpr});
+        std::vector<ILValueRef> falsexprs;
+        if (returnValue)
+            falsexprs.push_back(falseexpr);
+        falselabel = env->global.builder->label(bbdone, falsexprs);
         env->global.builder->br(falselabel);
     } else {
         bbfalse = bbdone;
@@ -5630,11 +5732,53 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
         donelabel);
 
     env->global.builder->appendTo(bbdone);
-    if (falselabel) {
-        subenv_true->mergeup(truelabel, falselabel);
-    } else {
-        subenv_true->mergeup(truelabel, donelabel);
+
+    // merge variables
+
+    // if true/false env have entry with same name:
+    // forward value from either branch to bbdone
+    // for each name unique to each env:
+    // forward this name or default
+
+    for (auto entry : subenv_true->getMergeLocals()) {
+        ILValueRef param = env->global.builder->basicblockparameter(entry.first);
+        ILValueRef fvalue =
+            subenv_false?subenv_false->getMergeLocal(entry.first):nullptr;
+        if (fvalue) {
+            truelabel->appendArgument(entry.second);
+            falselabel->appendArgument(fvalue);
+        } else {
+            ILValueRef origvalue = env->resolve(entry.first);
+            assert(origvalue);
+            truelabel->appendArgument(entry.second);
+            if (subenv_false)
+                falselabel->appendArgument(origvalue);
+            else
+                donelabel->appendArgument(origvalue);
+        }
+        if (!env->set(entry.first, param)) {
+            assert(false);
+        }
     }
+
+    if (subenv_false) {
+        for (auto entry : subenv_false->getMergeLocals()) {
+            if (subenv_true->getMergeLocal(entry.first)) {
+                // we already processed that one
+            } else {
+                ILValueRef param = env->global.builder->basicblockparameter(
+                    entry.first);
+                ILValueRef origvalue = env->resolve(entry.first);
+                assert(origvalue);
+                truelabel->appendArgument(origvalue);
+                falselabel->appendArgument(entry.second);
+                if (!env->set(entry.first, param)) {
+                    assert(false);
+                }
+            }
+        }
+    }
+
     return result;
 }
 
@@ -5667,14 +5811,8 @@ static ILValueRef parse_set(const EnvironmentRef &env, ValueRef expr) {
     Symbol *symname = astVerifyKind<Symbol>(expr_sym);
     std::string name = symname->getValue();
 
-    if (env->isLocal(name)) {
-        env->replaceLocal(name, value);
-    } else {
-        if (env->resolve(name)) {
-            env->replaceScoped(name, value);
-        } else {
-            valueError(symname, "unknown symbol");
-        }
+    if (!env->set(name, value)) {
+        valueError(symname, "unknown symbol");
     }
 
     return value;
