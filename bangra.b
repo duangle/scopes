@@ -14,10 +14,24 @@ let printf
 
 printf "hello world! %i %f %i\n" 10 2.5 false
 
-puts
-    select true
+let testx "hi!"
+puts testx
+do
+    do
+        set testx "ho!"
+        puts testx
+    puts testx
+puts testx
+
+///
+    let selection
         "true branch"
-        "false branch"
+    select false
+        do
+            set selection "false branch"
+        ""
+
+    puts selection
 
 
 ///

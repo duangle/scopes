@@ -727,6 +727,23 @@ struct Anchor {
                 << ansi(ANSI_STYLE_NUMBER, format("%i", anchor->lineno))
                 << ansi(ANSI_STYLE_OPERATOR, ":")
                 << ansi(ANSI_STYLE_NUMBER, format("%i", anchor->column))
+                << " ";
+        }
+        vprintf (fmt, args);
+        putchar('\n');
+        if (anchor) {
+            dumpFileLine(anchor->path, anchor->offset);
+        }
+    }
+
+    static void printErrorV (Anchor *anchor, const char *fmt, va_list args) {
+        if (anchor) {
+            std::cout
+                << ansi(ANSI_STYLE_LOCATION, anchor->path)
+                << ansi(ANSI_STYLE_OPERATOR, ":")
+                << ansi(ANSI_STYLE_NUMBER, format("%i", anchor->lineno))
+                << ansi(ANSI_STYLE_OPERATOR, ":")
+                << ansi(ANSI_STYLE_NUMBER, format("%i", anchor->column))
                 << " "
                 << ansi(ANSI_STYLE_ERROR, "error:")
                 << " ";
@@ -738,10 +755,6 @@ struct Anchor {
         if (anchor) {
             dumpFileLine(anchor->path, anchor->offset);
         }
-    }
-
-    static void printErrorV (Anchor *anchor, const char *fmt, va_list args) {
-        printMessageV(anchor, fmt, args);
         exit(1);
     }
 
@@ -4465,7 +4478,6 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
     }
 
     ILBasicBlockParameterRef basicblockparameter(
-        const ILBasicBlockRef &block,
         const std::string &name,
         Type *type = nullptr) {
         assert(block);
@@ -5249,24 +5261,119 @@ struct Environment;
 typedef std::shared_ptr<Environment> EnvironmentRef;
 
 struct Environment : std::enable_shared_from_this<Environment> {
+protected:
+    NameValueMap values;
+    NameValueMap mergevalues;
+public:
     GlobalEnvironment &global;
     EnvironmentRef parent;
 
-    NameValueMap values;
-
     Environment(GlobalEnvironment &global_) :
+        std::enable_shared_from_this<Environment>(),
         global(global_)
-        {}
+    {
+        assert(!values.size());
+        assert(!mergevalues.size());
+    }
 
     Environment(const EnvironmentRef &parent_) :
+        std::enable_shared_from_this<Environment>(),
         global(parent_->global),
         parent(parent_)
-        {}
+    {
+        assert(!values.size());
+        assert(!mergevalues.size());
+    }
+
+    void mergeup() {
+        if (!parent) return;
+
+        //dump();
+
+        for (auto entry : mergevalues) {
+            if (parent->values.count(entry.first)) {
+                parent->values[entry.first] = entry.second;
+            } else {
+                parent->mergevalues[entry.first] = entry.second;
+            }
+        }
+    }
+
+    void mergeup(const ILLabelRef &truelabel, const ILLabelRef &falselabel) {
+        assert(parent);
+
+        for (auto entry : mergevalues) {
+            ILValueRef origvalue = parent->resolve(entry.first);
+            ILValueRef param = global.builder->basicblockparameter(entry.first);
+            truelabel->arguments.push_back(entry.second);
+            falselabel->arguments.push_back(origvalue);
+            if (parent->values.count(entry.first)) {
+                parent->values[entry.first] = entry.second;
+            } else {
+                parent->mergevalues[entry.first] = entry.second;
+            }
+        }
+    }
+
+    void dump() {
+        printf("%i values, %i mergevalues\n",
+            (int)values.size(), (int)mergevalues.size());
+        for (auto entry : values) {
+            ilMessage(entry.second, "%p.%s\n",
+                (void *)this, entry.first.c_str());
+            assert(entry.second);
+        }
+        for (auto entry : mergevalues) {
+            ilMessage(entry.second, "%p.%s\n",
+                (void *)this, entry.first.c_str());
+            assert(entry.second);
+        }
+    }
+
+    bool isLocal(const std::string &name) {
+        return values.count(name);
+    }
+
+    ILValueRef getLocal(const std::string &name) {
+        if (values.count(name)) {
+            return values.at(name);
+        }
+        return nullptr;
+    }
+
+    ILValueRef getMergeLocal(const std::string &name) {
+        if (mergevalues.count(name)) {
+            return mergevalues.at(name);
+        }
+        return nullptr;
+    }
+
+    void setLocal(const std::string &name, const ILValueRef &value) {
+        assert(!isLocal(name));
+        assert(value);
+        values[name] = value;
+    }
+
+    void replaceLocal(const std::string &name, const ILValueRef &value) {
+        assert(isLocal(name));
+        assert(value);
+        values[name] = value;
+    }
+
+    void replaceScoped(const std::string &name, const ILValueRef &value) {
+        assert(!isLocal(name));
+        assert(value);
+        mergevalues[name] = value;
+    }
 
     ILValueRef resolve(const std::string &name) {
         Environment *penv = this;
         while (penv) {
-            ILValueRef result = (*penv).values[name];
+            ILValueRef result = (*penv).getMergeLocal(name);
+            if (result) {
+                return result;
+            }
+            result = (*penv).getLocal(name);
             if (result) {
                 return result;
             }
@@ -5274,6 +5381,7 @@ struct Environment : std::enable_shared_from_this<Environment> {
         }
         return nullptr;
     }
+
 };
 
 static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
@@ -5382,6 +5490,8 @@ static ILValueRef parse_do (const EnvironmentRef &env, ValueRef expr) {
         expr = next(expr);
     }
 
+    subenv->mergeup();
+
     if (value)
         return value;
     else
@@ -5403,7 +5513,7 @@ static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
     ValueRef param = at(params);
     while (param) {
         Symbol *symname = astVerifyKind<Symbol>(param);
-        env->global.builder->basicblockparameter(bb, symname->getValue());
+        env->global.builder->basicblockparameter(symname->getValue());
         param = next(param);
     }
 
@@ -5481,40 +5591,50 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
 
     ILBasicBlockRef bbtrue = env->global.builder->basicblock("then");
     env->global.builder->appendTo(bbtrue);
-    ILValueRef trueexpr = translate(env, expr_true);
+    EnvironmentRef subenv_true = std::make_shared<Environment>(env);
+    ILValueRef trueexpr = translate(subenv_true, expr_true);
     bbtrue = env->global.builder->block;
 
     ILBasicBlockRef bbfalse;
     ILValueRef falseexpr;
+    EnvironmentRef subenv_false;
     if (expr_false) {
+        subenv_false = std::make_shared<Environment>(env);
         bbfalse = env->global.builder->basicblock("else");
         env->global.builder->appendTo(bbfalse);
-        falseexpr = translate(env, expr_false);
+        falseexpr = translate(subenv_false, expr_false);
         bbfalse = env->global.builder->block;
     }
 
     ILBasicBlockRef bbdone = env->global.builder->basicblock("endif");
     env->global.builder->appendTo(bbdone);
-    ILValueRef result = env->global.builder->basicblockparameter(bbdone, "ifexpr");
+    ILValueRef result = env->global.builder->basicblockparameter("ifexpr");
 
     env->global.builder->appendTo(bbtrue);
-    env->global.builder->br(
-        env->global.builder->label(bbdone, {trueexpr}));
+    auto truelabel = env->global.builder->label(bbdone, {trueexpr});
+    env->global.builder->br(truelabel);
 
+    ILLabelRef falselabel;
     if (bbfalse) {
         env->global.builder->appendTo(bbfalse);
-        env->global.builder->br(
-            env->global.builder->label(bbdone, {falseexpr}));
+        falselabel = env->global.builder->label(bbdone, {falseexpr});
+        env->global.builder->br(falselabel);
     } else {
         bbfalse = bbdone;
     }
 
     env->global.builder->appendTo(bbstart);
+    ILLabelRef donelabel = env->global.builder->label(bbfalse, {});
     env->global.builder->condbr(condition,
         env->global.builder->label(bbtrue, {}),
-        env->global.builder->label(bbfalse, {}));
+        donelabel);
 
     env->global.builder->appendTo(bbdone);
+    if (falselabel) {
+        subenv_true->mergeup(truelabel, falselabel);
+    } else {
+        subenv_true->mergeup(truelabel, donelabel);
+    }
     return result;
 }
 
@@ -5524,12 +5644,38 @@ static ILValueRef parse_let(const EnvironmentRef &env, ValueRef expr) {
 
     Symbol *symname = astVerifyKind<Symbol>(expr_sym);
     ILValueRef value;
+
     if (expr_value)
         value = translate(env, expr_value);
     else
         value = env->global.builder->empty();
 
-    env->values[symname->getValue()] = value;
+    if (env->isLocal(symname->getValue())) {
+        valueError(symname, "already defined");
+    }
+    env->setLocal(symname->getValue(), value);
+
+    return value;
+}
+
+static ILValueRef parse_set(const EnvironmentRef &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_sym);
+    UNPACK_ARG(expr, expr_value);
+
+    auto value = translate(env, expr_value);
+
+    Symbol *symname = astVerifyKind<Symbol>(expr_sym);
+    std::string name = symname->getValue();
+
+    if (env->isLocal(name)) {
+        env->replaceLocal(name, value);
+    } else {
+        if (env->resolve(name)) {
+            env->replaceScoped(name, value);
+        } else {
+            valueError(symname, "unknown symbol");
+        }
+    }
 
     return value;
 }
@@ -5685,7 +5831,7 @@ static void registerTranslators() {
     auto &t = translators;
     t.set(parse_external, "external", 2, 2);
     t.set(parse_let, "let", 1, 2);
-    //t.set(parse_set, "set", 2, 2);
+    t.set(parse_set, "set", 2, 2);
     t.set(parse_apply, "apply", 1, -1);
     t.set(parse_do, "do", 0, -1);
     t.set(parse_select, "select", 2, 3);
@@ -5767,32 +5913,33 @@ static void init() {
 
 static void setupRootEnvironment (const EnvironmentRef &env) {
     auto builder = env->global.builder;
-    env->values["void"] = builder->consttypepointer(Type::Void);
-    env->values["null"] = builder->consttypepointer(Type::Null);
-    env->values["half"] = builder->consttypepointer(Type::Half);
-    env->values["float"] = builder->consttypepointer(Type::Float);
-    env->values["double"] = builder->consttypepointer(Type::Double);
-    env->values["bool"] = builder->consttypepointer(Type::Bool);
+    env->setLocal("void", builder->consttypepointer(Type::Void));
+    env->setLocal("null", builder->consttypepointer(Type::Null));
+    env->setLocal("half", builder->consttypepointer(Type::Half));
+    env->setLocal("float", builder->consttypepointer(Type::Float));
+    env->setLocal("double", builder->consttypepointer(Type::Double));
+    env->setLocal("bool", builder->consttypepointer(Type::Bool));
 
-    env->values["int8"] = builder->consttypepointer(Type::Int8);
-    env->values["int16"] = builder->consttypepointer(Type::Int16);
-    env->values["int32"] = builder->consttypepointer(Type::Int32);
-    env->values["int64"] = builder->consttypepointer(Type::Int64);
+    env->setLocal("int8", builder->consttypepointer(Type::Int8));
+    env->setLocal("int16", builder->consttypepointer(Type::Int16));
+    env->setLocal("int32", builder->consttypepointer(Type::Int32));
+    env->setLocal("int64", builder->consttypepointer(Type::Int64));
 
-    env->values["uint8"] = builder->consttypepointer(Type::UInt8);
-    env->values["uint16"] = builder->consttypepointer(Type::UInt16);
-    env->values["uint32"] = builder->consttypepointer(Type::UInt32);
-    env->values["uint64"] = builder->consttypepointer(Type::UInt64);
+    env->setLocal("uint8", builder->consttypepointer(Type::UInt8));
+    env->setLocal("uint16", builder->consttypepointer(Type::UInt16));
+    env->setLocal("uint32", builder->consttypepointer(Type::UInt32));
+    env->setLocal("uint64", builder->consttypepointer(Type::UInt64));
 
-    env->values["usize_t"] = builder->consttypepointer(Type::Integer(sizeof(size_t)*8,false));
+    env->setLocal("usize_t",
+        builder->consttypepointer(Type::Integer(sizeof(size_t)*8,false)));
 
-    env->values["rawstring"] = builder->consttypepointer(Type::Rawstring);
+    env->setLocal("rawstring", builder->consttypepointer(Type::Rawstring));
 
-    env->values["int"] = env->values["int32"];
+    env->setLocal("int", env->resolve("int32"));
 
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
-    env->values["true"] = builder->constinteger(booltype, new Integer(1));
-    env->values["false"] = builder->constinteger(booltype, new Integer(0));
+    env->setLocal("true", builder->constinteger(booltype, new Integer(1)));
+    env->setLocal("false", builder->constinteger(booltype, new Integer(0)));
 
 
 }
