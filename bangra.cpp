@@ -3196,6 +3196,7 @@ struct ILBuilder;
 struct ILInstruction;
 struct ILTerminator;
 struct ILLabel;
+struct ILFunction;
 
 typedef std::shared_ptr<ILValue> ILValueRef;
 typedef std::weak_ptr<ILValue> ILValueWeakRef;
@@ -3219,11 +3220,16 @@ typedef std::shared_ptr<ILTerminator> ILTerminatorRef;
 typedef std::shared_ptr<ILLabel> ILLabelRef;
 typedef std::weak_ptr<ILLabel> ILLabelWeakRef;
 
+typedef std::shared_ptr<ILFunction> ILFunctionRef;
+typedef std::weak_ptr<ILFunction> ILFunctionWeakRef;
+
 //------------------------------------------------------------------------------
 
 struct ILValue : enable_shared_back_from_this<ILValue> {
     enum Kind {
         BasicBlock,
+
+        Function,
 
         Parented,
             BasicBlockParameter,
@@ -3253,16 +3259,24 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
             ParentedEnd,
     };
 
+private:
+    static int64_t unique_id_counter;
+protected:
+    int64_t uid;
+public:
+
     const Kind kind;
     Anchor anchor;
     // used during cloning
     ILValueWeakRef paired;
 
     ILValue(Kind kind_) :
+        uid(unique_id_counter++),
         kind(kind_)
         {}
 
     ILValue(const ILValue &other) :
+        uid(unique_id_counter++),
         kind(other.kind),
         anchor(other.anchor)
         {}
@@ -3306,6 +3320,8 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
 
     virtual void relocateRefs() = 0;
 };
+
+int64_t ILValue::unique_id_counter = 1;
 
 static void ilMessage (const ILValueRef &value, const char *format, ...) {
     Anchor *anchor = NULL;
@@ -3390,7 +3406,7 @@ static void relocateRef(std::vector<T> &attrs) {
 
 struct ILBasicBlock :
     ILValueImpl<ILBasicBlock, ILValue::BasicBlock, ILValue, ILBasicBlock> {
-    ILModuleWeakRef module;
+    ILFunctionWeakRef function;
     ILInstructionRef firstvalue;
     ILInstructionWeakRef lastvalue;
     std::string name;
@@ -3541,39 +3557,11 @@ void ILBasicBlock::clearParameters() {
 //------------------------------------------------------------------------------
 
 struct ILModule : std::enable_shared_from_this<ILModule> {
-    std::list<ILBasicBlockRef> blocks;
+    std::list<ILFunctionRef> functions;
 
-    std::string getRepr () {
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_COMMENT, "# module\n");
-        for (auto block : blocks) {
-            ss << block->getRepr();
-        }
-        return ss.str();
-    }
+    std::string getRepr ();
+    void append(const ILFunctionRef &function);
 
-    void append(const ILBasicBlockRef &block) {
-        block->module = shared_from_this();
-        block->name = uniqueBlockName(block->name);
-        blocks.push_back(block);
-    }
-
-    ILBasicBlockRef getBlock(const std::string &name) {
-        for (auto& block : blocks) {
-            if (block->name == name) return block;
-        }
-        return nullptr;
-    }
-
-    std::string uniqueBlockName(const std::string &base) {
-        std::string name = base;
-        int counter = 1;
-        while (getBlock(name)) {
-            counter++;
-            name = base + format("%i", counter);
-        }
-        return name;
-    }
 
     void verify();
 };
@@ -3582,19 +3570,15 @@ struct ILModule : std::enable_shared_from_this<ILModule> {
 //------------------------------------------------------------------------------
 
 struct ILInstruction : ILParented {
-    static int64_t unique_id_counter;
     ILInstructionWeakRef prevvalue;
     ILInstructionRef nextvalue;
-    int64_t uid;
 
     ILInstruction(Kind kind_) :
-        ILParented(kind_),
-        uid(unique_id_counter++)
+        ILParented(kind_)
         {}
 
     ILInstruction(const ILInstruction &other) :
-        ILParented(other),
-        uid(unique_id_counter++)
+        ILParented(other)
     {}
 
     static bool classof(const ILValue *value) {
@@ -3646,7 +3630,90 @@ struct ILInstruction : ILParented {
     }
 };
 
-int64_t ILInstruction::unique_id_counter = 1;
+//------------------------------------------------------------------------------
+
+struct ILFunction :
+    ILValueImpl<ILFunction, ILValue::Function, ILValue, ILFunction> {
+
+    ILModuleWeakRef module;
+    std::list<ILBasicBlockRef> blocks;
+    std::string name;
+
+    ILFunction()
+    {}
+
+    ILBasicBlockRef entryBlock() {
+        assert(!blocks.empty());
+        return blocks.front();
+    }
+
+    ILFunction(const ILFunction &other) {
+        assert(false && "TODO: clone blocks");
+    }
+
+    virtual void relocateRefs() {
+    }
+
+    virtual Type *inferType();
+
+    std::string getRepr() {
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "function");
+        ss << " " << getRefRepr(true) << " ";
+        ss << ansi(ANSI_STYLE_OPERATOR, ":") << " ";
+        ss << getType()->getRepr() << " ";
+        ss << ansi(ANSI_STYLE_OPERATOR, "{\n");
+        for (auto block : blocks) {
+            ss << block->getRepr();
+        }
+        ss << ansi(ANSI_STYLE_OPERATOR, "}\n");
+        return ss.str();
+    }
+
+    virtual std::string getRefRepr (bool sameblock) {
+        return format("%%%i\"%s\"", uid, name.c_str());
+    }
+
+    void append(const ILBasicBlockRef &block) {
+        block->function = getSharedPtr<ILFunction>();
+        block->name = uniqueBlockName(block->name);
+        blocks.push_back(block);
+    }
+
+    ILBasicBlockRef getBlock(const std::string &name) {
+        for (auto& block : blocks) {
+            if (block->name == name) return block;
+        }
+        return nullptr;
+    }
+
+    std::string uniqueBlockName(const std::string &base) {
+        std::string name = base;
+        int counter = 1;
+        while (getBlock(name)) {
+            counter++;
+            name = base + format("%i", counter);
+        }
+        return name;
+    }
+
+    void verify();
+
+};
+
+std::string ILModule::getRepr () {
+    std::stringstream ss;
+    ss << ansi(ANSI_STYLE_COMMENT, "# module\n");
+    for (auto &function : functions) {
+        ss << function->getRepr();
+    }
+    return ss.str();
+}
+
+void ILModule::append(const ILFunctionRef &function) {
+    function->module = shared_from_this();
+    functions.push_back(function);
+}
 
 //------------------------------------------------------------------------------
 
@@ -4395,9 +4462,34 @@ struct ILRet : ILValueImpl<ILRet, ILValue::Ret, ILTerminator, ILTerminator> {
     }
 };
 
+Type *ILFunction::inferType() {
+    if (blocks.empty())
+        return Type::Any;
+    // try to find a ret node
+    Type *rettype = nullptr;
+    for (auto &block : blocks) {
+        auto term = block->terminator;
+        if (term && (term->kind == ILValue::Ret)) {
+            auto ret = llvm::cast<ILRet>(term.get());
+            auto rt = ret->getType();
+            if (!rettype) {
+                rettype = rt;
+            } else if (rt != rettype) {
+                rettype = Type::Any;
+            }
+        }
+    }
+
+    std::vector<Type *> argtypes;
+    for (auto param : entryBlock()->parameters) {
+        argtypes.push_back(param->getType());
+    }
+    return Type::CFunction(rettype, argtypes, false);
+}
+
 //------------------------------------------------------------------------------
 
-void ILModule::verify() {
+void ILFunction::verify() {
     for (auto& block : blocks) {
         if (!block->terminator) {
             ilError(block, "terminator missing");
@@ -4448,6 +4540,12 @@ void ILModule::verify() {
     }
 }
 
+void ILModule::verify() {
+    for (auto& function : functions) {
+        function->verify();
+    }
+}
+
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
@@ -4478,11 +4576,6 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
     }
 
 
-    void valueCreated(const ILBasicBlockParameterRef &value) {
-        if (!block) return;
-        block->appendParameter(value);
-    }
-
     void valueCreated(const ILTerminatorRef &value) {
         if (!block) return;
         block->setTerminator(value);
@@ -4493,25 +4586,43 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         block->insert(value, prepend.lock());
     }
 
-    ILBasicBlockRef basicblock(const std::string &name) {
+    void valueCreated(const ILFunctionRef &value) {
+        module->append(value);
+    }
+
+    ILFunctionRef function(const std::string &name) {
+        auto result = std::make_shared<ILFunction>();
+        result->name = name;
+        valueCreated(result);
+        return result;
+    }
+
+    ILBasicBlockRef basicblock(
+        const ILFunctionRef &function,
+        const std::string &name) {
+        assert(function);
         auto result = std::make_shared<ILBasicBlock>();
         result->name = name;
-        module->append(result);
+        assert(function);
+        function->append(result);
         return result;
     }
 
     ILBasicBlockParameterRef basicblockparameter(
+        const ILBasicBlockRef &block,
         const std::string &name,
         Type *type = nullptr) {
         assert(block);
+        auto function = block->function.lock();
+        assert(function);
         if (!type) {
             type = Type::Any;
         }
         auto result = std::make_shared<ILBasicBlockParameter>();
-        result->name = module->uniqueBlockName(name);
+        result->name = function->uniqueBlockName(name);
         result->parameter_type = type;
         result->block = block;
-        valueCreated(result);
+        block->appendParameter(result);
         return result;
     }
 
@@ -4676,6 +4787,60 @@ Type *extract_type(const ILValueRef &value) {
 // IL SOLVER
 //------------------------------------------------------------------------------
 
+struct ILVisitor {
+    std::unordered_set<ILBasicBlockRef> visited;
+    std::list<ILBasicBlockRef> queue;
+
+    void start(const ILBasicBlockRef &block) {
+        visited.clear();
+        queue.clear();
+        queue.push_front(block);
+    }
+
+    bool hasVisited(const ILBasicBlockRef &block) const {
+        return visited.count(block);
+    }
+
+    ILBasicBlockRef next() {
+        while (!queue.empty()) {
+            ILBasicBlockRef block = queue.back();
+            if (!hasVisited(block)) {
+                visited.insert(block);
+                return block;
+            } else {
+                queue.pop_back();
+                followTerminator(block);
+            }
+        }
+        return nullptr;
+    }
+
+    void processLabel(const ILLabelRef &label) {
+        auto block = label->getLabelBlock();
+        if (!hasVisited(block)) {
+            queue.push_front(block);
+        }
+    }
+
+    void followTerminator(const ILBasicBlockRef &block) {
+        auto value = block->terminator;
+        if (!value) return;
+        switch(value->kind) {
+            case ILValue::CondBr: {
+                auto condbr = llvm::cast<ILCondBr>(value.get());
+                processLabel(condbr->getThenLabel());
+                processLabel(condbr->getElseLabel());
+            } break;
+            case ILValue::Br: {
+                auto br = llvm::cast<ILBr>(value.get());
+                processLabel(br->getLabel());
+            } break;
+            default:
+                break;
+        }
+    }
+};
+
 struct ILSolver {
     // after generation, the IL is not directly translatable because many types
     // have not been evaluated, types that depend on constant conditions.
@@ -4693,14 +4858,11 @@ struct ILSolver {
     ILModuleRef module;
     ILBuilderRef builder;
 
-    std::unordered_set<ILBasicBlockRef> visited;
-    std::list<ILBasicBlockRef> stack;
+    ILVisitor visitor;
 
     ILSolver(const ILModuleRef &module_) :
-        module(module_)
-    {
+        module(module_) {
         builder = std::make_shared<ILBuilder>(module);
-        stack.push_front(module->blocks.front());
     }
 
     void replace_instruction_links(
@@ -4770,10 +4932,6 @@ struct ILSolver {
         }
     }
 
-    void processLabel(const ILLabelRef &label) {
-        stack.push_front(label->getLabelBlock());
-    }
-
     void eval_terminator(const ILBasicBlockRef &block) {
         auto value = block->terminator;
         if (!value) return;
@@ -4799,15 +4957,7 @@ struct ILSolver {
                     block->clearTerminator();
                     auto newterm = builder->br(label);
                     block->setTerminator(newterm);
-                    processLabel(label);
-                } else {
-                    processLabel(condbr->getThenLabel());
-                    processLabel(condbr->getElseLabel());
                 }
-            } break;
-            case ILValue::Br: {
-                auto br = llvm::cast<ILBr>(value.get());
-                processLabel(br->getLabel());
             } break;
             default:
                 break;
@@ -4942,38 +5092,41 @@ struct ILSolver {
         }
     }
 
-    void run() {
-        while (!stack.empty()) {
-            ILBasicBlockRef block = stack.back();
-            stack.pop_back();
-            if (!visited.count(block)) {
-                visited.insert(block);
-                eval_parameters(block);
+    void eval_function(ILFunctionRef function) {
+        visitor.start(function->entryBlock());
 
-                ILInstructionRef value = block->firstvalue;
-                while (value) {
-                    // retrieve before any operation takes place
-                    auto nextvalue = value->nextvalue;
-                    eval_instruction(block, value);
-                    value = nextvalue;
-                }
-                eval_terminator(block);
+        while (ILBasicBlockRef block = visitor.next()) {
+            eval_parameters(block);
+
+            ILInstructionRef value = block->firstvalue;
+            while (value) {
+                // retrieve before any operation takes place
+                auto nextvalue = value->nextvalue;
+                eval_instruction(block, value);
+                value = nextvalue;
             }
+            eval_terminator(block);
         }
 
         // delete blocks that were never visited
         std::list< std::list<ILBasicBlockRef>::iterator > todelete;
-        for (auto iter = module->blocks.begin(); iter != module->blocks.end(); ++iter) {
-            if (!visited.count(*iter)) {
+        for (auto iter = function->blocks.begin();
+            iter != function->blocks.end(); ++iter) {
+            if (!visitor.hasVisited(*iter)) {
                 (*iter)->clear();
                 todelete.push_back(iter);
             }
         }
 
         for (auto iter : todelete) {
-            module->blocks.erase(iter);
+            function->blocks.erase(iter);
         }
+    }
 
+    void run() {
+        for (auto function : module->functions) {
+            eval_function(function);
+        }
     }
 };
 
@@ -4984,7 +5137,6 @@ struct ILSolver {
 struct CodeGenerator {
     LLVMBuilderRef builder;
     LLVMModuleRef llvm_module;
-    LLVMValueRef llvm_function;
     ILModuleRef il_module;
 
     std::unordered_map<ILBasicBlockRef, LLVMBasicBlockRef> blockmap;
@@ -5245,7 +5397,8 @@ struct CodeGenerator {
         valuemap[il_value] = result;
     }
 
-    void createBlock(const ILBasicBlockRef &il_block) {
+    void createBlock(LLVMValueRef llvm_function,
+        const ILBasicBlockRef &il_block) {
         LLVMBasicBlockRef llvm_block = LLVMAppendBasicBlock(
             llvm_function, il_block->name.c_str());
         blockmap[il_block] = llvm_block;
@@ -5290,26 +5443,27 @@ struct CodeGenerator {
 
     }
 
-    LLVMValueRef generate() {
+    void generate() {
         builder = LLVMCreateBuilder();
 
-        LLVMTypeRef mainfunctype = LLVMFunctionType(LLVMVoidType(), NULL, 0, false);
+        for (auto il_function : il_module->functions) {
+            auto llvm_functype = resolveType(il_function, il_function->getType());
+            auto llvm_function = LLVMAddFunction(llvm_module,
+                il_function->name.c_str(), llvm_functype);
 
-        llvm_function = LLVMAddFunction(llvm_module, "main", mainfunctype);
-
-        for (auto block : il_module->blocks) {
-            createBlock(block);
-        }
-        for (auto block : il_module->blocks) {
-            generateBlock(block);
-        }
-        for (auto block : il_module->blocks) {
-            linkBlock(block);
+            for (auto block : il_function->blocks) {
+                createBlock(llvm_function, block);
+            }
+            for (auto block : il_function->blocks) {
+                generateBlock(block);
+            }
+            for (auto block : il_function->blocks) {
+                linkBlock(block);
+            }
         }
 
         LLVMDisposeBuilder(builder);
         builder = nullptr;
-        return llvm_function;
     }
 };
 
@@ -5338,6 +5492,7 @@ protected:
 public:
     GlobalEnvironment &global;
     EnvironmentRef parent;
+    ILFunctionRef function;
 
     Environment(GlobalEnvironment &global_) :
         std::enable_shared_from_this<Environment>(),
@@ -5350,7 +5505,8 @@ public:
     Environment(const EnvironmentRef &parent_) :
         std::enable_shared_from_this<Environment>(),
         global(parent_->global),
-        parent(parent_)
+        parent(parent_),
+        function(parent_->function)
     {
         assert(!values.size());
         assert(!mergevalues.size());
@@ -5584,7 +5740,7 @@ static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
 
     auto currentblock = env->global.builder->block;
 
-    auto bb = env->global.builder->basicblock("entry");
+    auto bb = env->global.builder->basicblock(env->function, "entry");
     env->global.builder->appendTo(bb);
 
     auto subenv = std::make_shared<Environment>(env);
@@ -5593,7 +5749,7 @@ static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
     ValueRef param = at(params);
     while (param) {
         Symbol *symname = astVerifyKind<Symbol>(param);
-        env->global.builder->basicblockparameter(symname->getValue());
+        env->global.builder->basicblockparameter(bb, symname->getValue());
         param = next(param);
     }
 
@@ -5676,7 +5832,8 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     ILValueRef condition = translate(env, expr_condition);
     ILBasicBlockRef bbstart = env->global.builder->block;
 
-    ILBasicBlockRef bbtrue = env->global.builder->basicblock("then");
+    ILBasicBlockRef bbtrue = env->global.builder->basicblock(
+        env->function, "then");
     env->global.builder->appendTo(bbtrue);
     EnvironmentRef subenv_true = std::make_shared<Environment>(env);
     ILValueRef trueexpr = translate(subenv_true, expr_true);
@@ -5689,7 +5846,7 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     EnvironmentRef subenv_false;
     if (expr_false) {
         subenv_false = std::make_shared<Environment>(env);
-        bbfalse = env->global.builder->basicblock("else");
+        bbfalse = env->global.builder->basicblock(env->function, "else");
         env->global.builder->appendTo(bbfalse);
         falseexpr = translate(subenv_false, expr_false);
         bbfalse = env->global.builder->block;
@@ -5698,12 +5855,13 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
         returnValue = false;
     }
 
-    ILBasicBlockRef bbdone = env->global.builder->basicblock("endif");
+    ILBasicBlockRef bbdone = env->global.builder->basicblock(
+        env->function, "endif");
     env->global.builder->appendTo(bbdone);
     ILValueRef result;
     std::vector<ILValueRef> trueexprs;
     if (returnValue) {
-        result = env->global.builder->basicblockparameter("ifexpr");
+        result = env->global.builder->basicblockparameter(bbdone, "ifexpr");
         trueexprs.push_back(trueexpr);
     } else {
         result = env->global.builder->empty();
@@ -5741,7 +5899,8 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     // forward this name or default
 
     for (auto entry : subenv_true->getMergeLocals()) {
-        ILValueRef param = env->global.builder->basicblockparameter(entry.first);
+        ILValueRef param = env->global.builder->basicblockparameter(
+            bbdone, entry.first);
         ILValueRef fvalue =
             subenv_false?subenv_false->getMergeLocal(entry.first):nullptr;
         if (fvalue) {
@@ -5767,7 +5926,7 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
                 // we already processed that one
             } else {
                 ILValueRef param = env->global.builder->basicblockparameter(
-                    entry.first);
+                    bbdone, entry.first);
                 ILValueRef origvalue = env->resolve(entry.first);
                 assert(origvalue);
                 truelabel->appendArgument(origvalue);
@@ -6109,14 +6268,14 @@ static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
     fflush(stdout);
 
     LLVMModuleRef module = LLVMModuleCreateWithName("main");
-
-    LLVMValueRef func;
     {
         CodeGenerator cg(env->global.module, module);
-        func = cg.generate();
+        cg.generate();
     }
-
     LLVMDumpModule(module);
+
+    LLVMValueRef func = LLVMGetNamedFunction(module, "main");
+    assert(func);
 
     char *error = NULL;
     LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
@@ -6223,8 +6382,10 @@ static bool compileMain (ValueRef expr) {
     GlobalEnvironment global;
     global.module = std::make_shared<ILModule>();
     global.builder = std::make_shared<ILBuilder>(global.module);
-    global.builder->appendTo(global.builder->basicblock("main_entry"));
     auto env = std::make_shared<Environment>(global);
+    env->function = global.builder->function("main");
+    global.builder->appendTo(global.builder->basicblock(
+        env->function, "main_entry"));
 
     setupRootEnvironment(env);
 
