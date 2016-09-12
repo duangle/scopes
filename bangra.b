@@ -23,6 +23,10 @@ do
     puts testx
 puts testx
 
+///let testfunc
+    function (x)
+        x
+
 let selection
     "you will never see this"
 select false

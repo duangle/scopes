@@ -4448,12 +4448,12 @@ struct ILRet : ILValueImpl<ILRet, ILValue::Ret, ILTerminator, ILTerminator> {
     }
 
     virtual std::string getRHSRepr() {
-        std::string result = ansi(ANSI_STYLE_INSTRUCTION, "ret");
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_INSTRUCTION, "ret");
         if (value) {
-            return result + value->getRefRepr(isSameBlock(value));
-        } else {
-            return result;
+            ss << " " << value->getRefRepr(isSameBlock(value));
         }
+        return ss.str();
     }
 
     virtual void relocateRefs() {
@@ -4479,6 +4479,8 @@ Type *ILFunction::inferType() {
             }
         }
     }
+    if (!rettype)
+        rettype = Type::Any;
 
     std::vector<Type *> argtypes;
     for (auto param : entryBlock()->parameters) {
@@ -5740,23 +5742,30 @@ static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
 
     auto currentblock = env->global.builder->block;
 
-    auto bb = env->global.builder->basicblock(env->function, "entry");
+    auto function = env->global.builder->function("");
+
+    auto bb = env->global.builder->basicblock(function, "entry");
     env->global.builder->appendTo(bb);
 
     auto subenv = std::make_shared<Environment>(env);
+    subenv->function = function;
 
     Pointer *params = astVerifyKind<Pointer>(expr_parameters);
     ValueRef param = at(params);
     while (param) {
         Symbol *symname = astVerifyKind<Symbol>(param);
-        env->global.builder->basicblockparameter(bb, symname->getValue());
+        auto bp = env->global.builder->basicblockparameter(
+            bb, symname->getValue());
+        subenv->setLocal(symname->getValue(), bp);
         param = next(param);
     }
 
-    parse_do(subenv, expr_parameters);
+    auto result = parse_do(subenv, expr_parameters);
+    env->global.builder->ret(result);
+
     env->global.builder->appendTo(currentblock);
 
-    return bb;
+    return function;
 }
 
 static ILValueRef parse_implicit_apply (const EnvironmentRef &env, ValueRef expr) {
