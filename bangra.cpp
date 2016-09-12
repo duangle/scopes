@@ -3412,7 +3412,7 @@ struct ILBasicBlock :
     std::string name;
     std::vector<ILBasicBlockParameterRef> parameters;
     ILTerminatorRef terminator;
-    std::unordered_set<ILLabelRef> predicates;
+    std::unordered_set<ILLabelRef> predecessors;
 
     ILBasicBlock()
     {}
@@ -3442,12 +3442,12 @@ struct ILBasicBlock :
 
     virtual void relocateRefs() {}
 
-    void addPredicate(const ILLabelRef &label) {
-        predicates.insert(label);
+    void addPredecessor(const ILLabelRef &label) {
+        predecessors.insert(label);
     }
 
-    void discardPredicate(const ILLabelRef &label) {
-        predicates.erase(predicates.find(label));
+    void discardPredecessor(const ILLabelRef &label) {
+        predecessors.erase(predecessors.find(label));
     }
 
     void clear();
@@ -3845,7 +3845,7 @@ void ILBasicBlock::replace(
 void ILBasicBlock::remove(ILInstructionRef instr) {
     if (llvm::isa<ILLabel>(instr.get())) {
         auto label = std::static_pointer_cast<ILLabel>(instr);
-        label->getLabelBlock()->discardPredicate(label);
+        label->getLabelBlock()->discardPredecessor(label);
     }
     assert(instr->getBlock().get() == this);
     if (firstvalue == instr) {
@@ -3898,7 +3898,7 @@ void ILBasicBlock::insert(ILInstructionRef instr, ILInstructionRef beforevalue) 
     }
     if (llvm::isa<ILLabel>(instr.get())) {
         auto label = std::static_pointer_cast<ILLabel>(instr);
-        label->getLabelBlock()->addPredicate(label);
+        label->getLabelBlock()->addPredecessor(label);
     }
 
 }
@@ -4335,7 +4335,7 @@ std::string ILBasicBlock::getRepr () {
         ss << ansi(ANSI_STYLE_OPERATOR,")");
     }
     ss << ansi(ANSI_STYLE_OPERATOR,":") << "\n";
-    for (auto &label : predicates) {
+    for (auto &label : predecessors) {
         ss << "  # <- " << label->getRefRepr(false) << "\n";
     }
     for (auto value = firstvalue; value; value = value->nextvalue) {
@@ -4851,7 +4851,7 @@ struct ILSolver {
     // * resolves instructions with constant inputs to constants
     // * ensures that all types and templates have been specialized
     // * generates implicit casts
-    // ? lowers block arguments that only have one predicate
+    // ? lowers block arguments that only have one predecessor
     // ? removes instructions and values that don't contribute to anything
     // ? removes unreachable blocks due to constant conditions,
     //   and removes single basic block arguments from blocks that are always
@@ -5046,8 +5046,8 @@ struct ILSolver {
 
 
     void eval_parameters(const ILBasicBlockRef &block) {
-        if (block->predicates.size() == 1) {
-            auto &pred = *block->predicates.begin();
+        if (block->predecessors.size() == 1) {
+            auto &pred = *block->predecessors.begin();
             // all parameters can be inlined
             for (size_t i = 0; i < block->parameters.size(); ++i) {
                 auto &param = block->parameters[i];
@@ -5062,7 +5062,7 @@ struct ILSolver {
                 auto &param = block->parameters[i];
                 Type *common_type = nullptr;
                 bool failed = false;
-                for (auto &pred : block->predicates) {
+                for (auto &pred : block->predecessors) {
                     auto &arg = pred->getArgument(i);
                     Type *type = arg->getType();
                     if (type == Type::Any) {
@@ -5075,7 +5075,7 @@ struct ILSolver {
                     }
                 }
                 if (failed) {
-                    for (auto &pred : block->predicates) {
+                    for (auto &pred : block->predecessors) {
                         auto &arg = pred->getArgument(i);
                         ilMessage(arg, "conflicting type here");
                     }
@@ -5085,8 +5085,8 @@ struct ILSolver {
                     ilError(param, "unable to type parameter");
                 }
                 param->parameter_type = common_type;
-                // cast predicates where necessary
-                for (auto &pred : block->predicates) {
+                // cast predecessors where necessary
+                for (auto &pred : block->predecessors) {
                     auto &arg = pred->getArgument(i);
                     generate_cast(pred->getBlock(), pred, arg, common_type);
                 }
@@ -5410,11 +5410,11 @@ struct CodeGenerator {
         for (size_t i = 0; i < il_block->parameters.size(); ++i) {
             auto &param = il_block->parameters[i];
             LLVMValueRef llvm_phi = resolveValue(param);
-            size_t predcount = il_block->predicates.size();
+            size_t predcount = il_block->predecessors.size();
             LLVMValueRef incoming_values[predcount];
             LLVMBasicBlockRef incoming_blocks[predcount];
             size_t k = 0;
-            for (auto &pred : il_block->predicates) {
+            for (auto &pred : il_block->predecessors) {
                 auto &arg = pred->getArgument(i);
                 incoming_values[k] = resolveValue(arg);
                 incoming_blocks[k] = resolveBlock(pred->getBlock());
