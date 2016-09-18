@@ -3242,7 +3242,6 @@ static LLVMModuleRef importCModule (ValueRef dest,
 
 struct ILValue;
 struct ILContinuation;
-struct ILTerm;
 struct ILParameter;
 struct ILPrimitive;
 struct ILModule;
@@ -3255,8 +3254,6 @@ typedef shared_back_ptr<ILValue> ILValueBackRef;
 
 typedef std::shared_ptr<ILContinuation> ILContinuationRef;
 typedef std::weak_ptr<ILContinuation> ILContinuationWeakRef;
-
-typedef std::shared_ptr<ILTerm> ILTermRef;
 
 typedef std::shared_ptr<ILModule> ILModuleRef;
 typedef std::weak_ptr<ILModule> ILModuleWeakRef;
@@ -3506,34 +3503,6 @@ struct ILOpLessEqual : ILBinaryOpImpl<ILOpLessEqual, ILValue::OpLessEqual> {
 
 //------------------------------------------------------------------------------
 
-// not a value
-struct ILTerm {
-    ILValueRef continuation;
-    std::vector<ILValueRef> arguments;
-
-    std::string getRepr () {
-        std::stringstream ss;
-        ss << continuation->getRefRepr();
-        for (size_t i = 0; i < arguments.size(); ++i) {
-            ss << " ";
-            ss << arguments[i]->getRefRepr();
-        }
-        return ss.str();
-    }
-
-    static ILTermRef create(
-        const ILValueRef &continuation,
-        const std::vector<ILValueRef> &arguments) {
-        assert(continuation);
-        auto result = std::make_shared<ILTerm>();
-        result->continuation = continuation;
-        result->arguments = arguments;
-        return result;
-    }
-};
-
-//------------------------------------------------------------------------------
-
 struct ILParameter :
     ILValueImpl<ILParameter, ILValue::Parameter, ILPrimitive> {
     ILContinuationWeakRef parent;
@@ -3624,7 +3593,7 @@ protected:
 public:
     ILModuleWeakRef module;
     std::vector<ILParameterRef> parameters;
-    ILTermRef term;
+    std::vector<ILValueRef> values;
 
     ILContinuation() :
         uid(unique_id_counter++)
@@ -3632,7 +3601,7 @@ public:
 
     void clear() {
         parameters.clear();
-        term = nullptr;
+        values.clear();
     }
 
     virtual std::string getRepr () {
@@ -3645,9 +3614,12 @@ public:
             }
             ss << parameters[i]->getRepr();
         }
-        ss << ansi(ANSI_STYLE_OPERATOR, ")") << " ";
-        if (term) {
-            ss << term->getRepr();
+        ss << ansi(ANSI_STYLE_OPERATOR, ")");
+        if (values.size()) {
+            for (size_t i = 0; i < values.size(); ++i) {
+                ss << " ";
+                ss << values[i]->getRefRepr();
+            }
         } else {
             ss << ansi(ANSI_STYLE_ERROR, "<missing term>");
         }
@@ -3898,22 +3870,20 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
 
     void continueAt(const ILContinuationRef &cont) {
         this->continuation = cont;
-        assert(!cont->term);
+        assert(!cont->values.size());
     }
 
-    void insertAndAdvance(const ILTermRef &value,
+    void insertAndAdvance(
+        const std::vector<ILValueRef> &values,
         const ILContinuationRef &next) {
         assert(continuation);
-        assert(!continuation->term);
-        continuation->term = value;
+        assert(!continuation->values.size());
+        continuation->values = values;
         continuation = next;
     }
 
-    ILTermRef br(const ILValueRef &target,
-        const std::vector<ILValueRef> &arguments) {
-        auto result = ILTerm::create(target, arguments);
-        insertAndAdvance(result, nullptr);
-        return result;
+    void br(const std::vector<ILValueRef> &arguments) {
+        insertAndAdvance(arguments, nullptr);
     }
 
     ILParameterRef toparam(const ILValueRef &value) {
@@ -3921,18 +3891,15 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
             return value->getSharedPtr<ILParameter>();
         } else {
             auto next = ILContinuation::create(module, 1);
-            auto term = ILTerm::create(next, { value });
-            insertAndAdvance(term, next);
+            insertAndAdvance( { next, value } , next);
             return next->parameters[0];
         }
     }
 
-    ILParameterRef call(const ILValueRef &target,
-        const std::vector<ILValueRef> &arguments) {
+    ILParameterRef call(std::vector<ILValueRef> values) {
         auto next = ILContinuation::create(module, 1);
-        auto term = ILTerm::create(target, arguments);
-        term->arguments.push_back(next);
-        insertAndAdvance(term, next);
+        values.push_back(next);
+        insertAndAdvance(values, next);
         return next->parameters[0];
     }
 
@@ -3989,8 +3956,6 @@ struct ILVisitor {
     }
 
     void followTerm(const ILContinuationRef &cont) {
-        auto value = cont->term;
-        if (!value) return;
     }
 };
 
@@ -4054,8 +4019,6 @@ struct ILSolver {
     }
 
     void eval_term(const ILContinuationRef &cont) {
-        auto value = cont->term;
-        if (!value) return;
     }
 
     void eval_parameters(const ILContinuationRef &cont) {
@@ -4757,7 +4720,7 @@ static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
 
     auto result = parse_do(subenv, expr_parameters);
 
-    env->global.builder->br(ret, {result});
+    env->global.builder->br({ret, result});
 
     env->global.builder->continueAt(currentblock);
 
@@ -4771,6 +4734,7 @@ static ILValueRef parse_implicit_apply (const EnvironmentRef &env, ValueRef expr
     ILValueRef callable = translate(env, expr_callable);
 
     std::vector<ILValueRef> args;
+    args.push_back(callable);
 
     while (arg) {
         args.push_back(translate(env, arg));
@@ -4778,7 +4742,7 @@ static ILValueRef parse_implicit_apply (const EnvironmentRef &env, ValueRef expr
         arg = next(arg);
     }
 
-    return env->global.builder->call(callable, args);
+    return env->global.builder->call(args);
 }
 
 static ILValueRef parse_apply (const EnvironmentRef &env, ValueRef expr) {
@@ -4828,6 +4792,7 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     auto bbdone = ILContinuation::create(env->global.module);
     ILValueRef result;
     std::vector<ILValueRef> trueexprs;
+    trueexprs.push_back(bbdone);
     if (returnValue) {
         auto result_param = ILParameter::create();
         bbdone->appendParameter(result_param);
@@ -4838,22 +4803,22 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
     }
 
     env->global.builder->continueAt(bbtrue_end);
-    auto brtrue = env->global.builder->br(bbdone, trueexprs);
+    env->global.builder->br(trueexprs);
 
-    ILTermRef brfalse;
     if (bbfalse) {
         env->global.builder->continueAt(bbfalse_end);
         std::vector<ILValueRef> falsexprs;
+        falsexprs.push_back(bbdone);
         if (returnValue)
             falsexprs.push_back(falseexpr);
-        brfalse = env->global.builder->br(bbdone, falsexprs);
+        env->global.builder->br(falsexprs);
     } else {
         bbfalse = bbdone;
     }
 
     env->global.builder->continueAt(bbstart);
     env->global.builder->br(
-        ILIntrinsic::Branch, { condition, bbtrue, bbfalse });
+        { ILIntrinsic::Branch, condition, bbtrue, bbfalse });
 
     env->global.builder->continueAt(bbdone);
 
@@ -5131,7 +5096,7 @@ static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
     env->global.builder->continueAt(mainfunc);
 
     parse_do(env, expr);
-    env->global.builder->br(ret, {});
+    env->global.builder->br({ ret });
 
     std::cout << env->global.module->getRepr();
     /*
