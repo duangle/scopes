@@ -3560,7 +3560,7 @@ struct ILIntrinsic :
     }
 
     virtual std::string getRefRepr () {
-        return ansi(ANSI_STYLE_KEYWORD, name);
+        return ansi(ANSI_STYLE_INSTRUCTION, name);
     }
 
     static ILIntrinsicRef create(
@@ -3596,8 +3596,10 @@ public:
     std::vector<ILValueRef> values;
 
     ILContinuation() :
-        uid(unique_id_counter++)
-    {}
+        uid(unique_id_counter++) {
+        // index 0 is nothing
+        parameters.push_back(nullptr);
+    }
 
     void clear() {
         parameters.clear();
@@ -3608,8 +3610,8 @@ public:
         std::stringstream ss;
         ss << getRefRepr();
         ss << " " << ansi(ANSI_STYLE_OPERATOR, "(");
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            if (i != 0) {
+        for (size_t i = 1; i < parameters.size(); ++i) {
+            if (i != 1) {
                 ss << ansi(ANSI_STYLE_OPERATOR, ", ");
             }
             ss << parameters[i]->getRepr();
@@ -3634,8 +3636,8 @@ public:
 
     Type *inferType() {
         std::vector<Type *> params;
-        for (auto &param : parameters) {
-            params.push_back(param->getType());
+        for (size_t i = 1; i < parameters.size(); ++i) {
+            params.push_back(parameters[i]->getType());
         }
         return Type::Continuation(params);
     }
@@ -3763,8 +3765,13 @@ struct ILConstInteger :
     }
 
     virtual std::string getRefRepr() {
-        return ansi(ANSI_STYLE_NUMBER,
-            format("%" PRIi64, value));
+        if (value_type == Type::Bool) {
+            return ansi(ANSI_STYLE_KEYWORD,
+                value?"true":"false");
+        } else {
+            return ansi(ANSI_STYLE_NUMBER,
+                format("%" PRIi64, value));
+        }
     }
 };
 
@@ -3892,7 +3899,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         } else {
             auto next = ILContinuation::create(module, 1);
             insertAndAdvance( { next, value } , next);
-            return next->parameters[0];
+            return next->parameters[1];
         }
     }
 
@@ -3900,7 +3907,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         auto next = ILContinuation::create(module, 1);
         values.push_back(next);
         insertAndAdvance(values, next);
-        return next->parameters[0];
+        return next->parameters[1];
     }
 
 };
