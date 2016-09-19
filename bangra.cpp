@@ -3240,6 +3240,12 @@ static LLVMModuleRef importCModule (ValueRef dest,
 // some parts of the paper use hindley-milner notation
 // https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
 
+// more reading material:
+// Simple and Effective Type Check Removal through Lazy Basic Block Versioning
+// https://arxiv.org/pdf/1411.0352v2.pdf
+// Julia: A Fast Dynamic Language for Technical Computing
+// http://arxiv.org/pdf/1209.5145v1.pdf
+
 struct ILValue;
 struct ILContinuation;
 struct ILParameter;
@@ -3247,6 +3253,7 @@ struct ILPrimitive;
 struct ILModule;
 struct ILBuilder;
 struct ILIntrinsic;
+struct ILConstant;
 
 typedef std::shared_ptr<ILValue> ILValueRef;
 typedef std::weak_ptr<ILValue> ILValueWeakRef;
@@ -3254,6 +3261,8 @@ typedef shared_back_ptr<ILValue> ILValueBackRef;
 
 typedef std::shared_ptr<ILContinuation> ILContinuationRef;
 typedef std::weak_ptr<ILContinuation> ILContinuationWeakRef;
+
+typedef std::shared_ptr<ILConstant> ILConstantRef;
 
 typedef std::shared_ptr<ILModule> ILModuleRef;
 typedef std::weak_ptr<ILModule> ILModuleWeakRef;
@@ -3278,30 +3287,31 @@ struct ILValue : enable_shared_back_from_this<ILValue> {
                 ConstReal,
                 ConstTypePointer,
                 ConstTuple,
+                ConstClosure,
                 ConstantEnd,
+
+            Op,
+                OpAdd,
+                OpSub,
+                OpMul,
+                OpDiv,
+                OpMod,
+                OpAnd,
+                OpOr,
+                OpXor,
+                OpShiftLeft,
+                OpShiftRight,
+                OpEqual,
+                OpNotEqual,
+                OpGreaterThan,
+                OpGreaterEqual,
+                OpLessThan,
+                OpLessEqual,
+                OpEnd,
 
             Parameter,
 
             PrimitiveEnd,
-
-        Op,
-            OpAdd,
-            OpSub,
-            OpMul,
-            OpDiv,
-            OpMod,
-            OpAnd,
-            OpOr,
-            OpXor,
-            OpShiftLeft,
-            OpShiftRight,
-            OpEqual,
-            OpNotEqual,
-            OpGreaterThan,
-            OpGreaterEqual,
-            OpLessThan,
-            OpLessEqual,
-            OpEnd,
 
         Continuation,
     };
@@ -3336,7 +3346,7 @@ public:
 static void ilMessage (const ILValueRef &value, const char *format, ...) {
     Anchor *anchor = NULL;
     if (value) {
-        std::cout << "at\n" << value->getRepr();
+        std::cout << "at\n  " << value->getRepr() << "\n";
         if (value->anchor.isValid()) {
             anchor = &value->anchor;
         }
@@ -3350,7 +3360,7 @@ static void ilMessage (const ILValueRef &value, const char *format, ...) {
 static void ilError (const ILValueRef &value, const char *format, ...) {
     Anchor *anchor = NULL;
     if (value) {
-        std::cout << "at\n" << value->getRepr();
+        std::cout << "at\n  " << value->getRepr() << "\n";
         if (value->anchor.isValid()) {
             anchor = &value->anchor;
         }
@@ -3412,97 +3422,6 @@ struct ILConstant : ILPrimitive {
 
 //------------------------------------------------------------------------------
 
-struct ILOp : ILValue {
-    ILValueRef lvalue;
-    ILValueRef rvalue;
-
-    ILOp(Kind kind_) :
-        ILValue(kind_)
-        {}
-
-    virtual Type *inferType() {
-        Type *A = lvalue->getType();
-        Type *B = rvalue->getType();
-        if (A != B)
-            return Type::Any;
-        return A;
-    }
-
-    virtual std::string getRefRepr () {
-        return getRepr();
-    }
-
-    static bool classof(const ILValue *value) {
-        return (value->kind >= Op) && (value->kind < OpEnd);
-    }
-};
-
-typedef ILOp ILBinaryOp;
-
-template<typename SelfT, ILValue::Kind KindT>
-struct ILBinaryOpImpl :
-    ILValueImpl<SelfT, KindT, ILBinaryOp> {
-
-    virtual ~ILBinaryOpImpl() {}
-
-    virtual std::string getRepr () {
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_OPERATOR, "(");
-        ss << ILBinaryOp::lvalue->getRefRepr();
-        ss << " " << ansi(
-            (ILBinaryOp::getType() == Type::Any)?
-                ANSI_STYLE_ERROR
-                :ANSI_STYLE_OPERATOR,
-            SelfT::OpName());
-        ss << " " << ILBinaryOp::rvalue->getRefRepr();
-        ss << ansi(ANSI_STYLE_OPERATOR, ")");
-        return ss.str();
-    }
-
-    static std::shared_ptr<SelfT> create(
-        const ILValueRef &lvalue,
-        const ILValueRef &rvalue) {
-        auto result = std::make_shared<SelfT>();
-        result->lvalue = lvalue;
-        result->rvalue = rvalue;
-        return result;
-    }
-
-};
-
-struct ILOpAdd : ILBinaryOpImpl<ILOpAdd, ILValue::OpAdd> {
-    static std::string OpName() { return "+"; }
-};
-struct ILOpSub : ILBinaryOpImpl<ILOpSub, ILValue::OpSub> {
-    static std::string OpName() { return "-"; }
-};
-struct ILOpMul : ILBinaryOpImpl<ILOpMul, ILValue::OpMul> {
-    static std::string OpName() { return "*"; }
-};
-struct ILOpDiv : ILBinaryOpImpl<ILOpDiv, ILValue::OpDiv> {
-    static std::string OpName() { return "/"; }
-};
-struct ILOpEqual : ILBinaryOpImpl<ILOpEqual, ILValue::OpEqual> {
-    static std::string OpName() { return "=="; }
-};
-struct ILOpNotEqual : ILBinaryOpImpl<ILOpNotEqual, ILValue::OpNotEqual> {
-    static std::string OpName() { return "!="; }
-};
-struct ILOpGreaterThan : ILBinaryOpImpl<ILOpGreaterThan, ILValue::OpGreaterThan> {
-    static std::string OpName() { return ">"; }
-};
-struct ILOpGreaterEqual : ILBinaryOpImpl<ILOpGreaterEqual, ILValue::OpGreaterEqual> {
-    static std::string OpName() { return ">="; }
-};
-struct ILOpLessThan : ILBinaryOpImpl<ILOpLessThan, ILValue::OpLessThan> {
-    static std::string OpName() { return "<"; }
-};
-struct ILOpLessEqual : ILBinaryOpImpl<ILOpLessEqual, ILValue::OpLessEqual> {
-    static std::string OpName() { return "<="; }
-};
-
-//------------------------------------------------------------------------------
-
 struct ILParameter :
     ILValueImpl<ILParameter, ILValue::Parameter, ILPrimitive> {
     ILContinuationWeakRef parent;
@@ -3530,10 +3449,10 @@ struct ILParameter :
 
     virtual std::string getRefRepr ();
 
-    static ILParameterRef create() {
+    static ILParameterRef create(Type *type = nullptr) {
         auto value = std::make_shared<ILParameter>();
         value->index = (size_t)-1;
-        value->parameter_type = nullptr;
+        value->parameter_type = type;
         return value;
     }
 };
@@ -3543,6 +3462,8 @@ struct ILParameter :
 struct ILIntrinsic :
     ILValueImpl<ILIntrinsic, ILValue::Intrinsic, ILValue> {
     static ILIntrinsicRef Branch;
+    static ILIntrinsicRef Inspect;
+    static ILIntrinsicRef Return;
 
     std::string name;
     Type *intrinsic_type;
@@ -3577,10 +3498,17 @@ struct ILIntrinsic :
             Type::Continuation({ Type::Bool,
                 Type::Continuation({}),
                 Type::Continuation({}) }));
+        Inspect = create("inspect",
+            Type::Continuation({ Type::Any,
+                Type::Continuation({}) }));
+        Return = create("return",
+            Type::Continuation({}));
     }
 };
 
 ILIntrinsicRef ILIntrinsic::Branch;
+ILIntrinsicRef ILIntrinsic::Inspect;
+ILIntrinsicRef ILIntrinsic::Return;
 
 //------------------------------------------------------------------------------
 
@@ -3590,28 +3518,51 @@ private:
     static int64_t unique_id_counter;
 protected:
     int64_t uid;
+
 public:
+    ILContinuation() :
+        uid(unique_id_counter++) {
+    }
+
     ILModuleWeakRef module;
     std::vector<ILParameterRef> parameters;
     std::vector<ILValueRef> values;
-
-    ILContinuation() :
-        uid(unique_id_counter++) {
-        // index 0 is nothing
-        parameters.push_back(nullptr);
-    }
 
     void clear() {
         parameters.clear();
         values.clear();
     }
 
+    size_t getParameterCount() {
+        return parameters.size();
+    }
+
+    ILParameterRef getParameter(size_t i) {
+        return parameters[i];
+    }
+
+    size_t getValueCount() {
+        return values.size();
+    }
+
+    ILValueRef getValue(size_t i) {
+        return values[i];
+    }
+
+    size_t getArgumentCount() {
+        return values.size() - 1;
+    }
+
+    ILValueRef getArgument(size_t i) {
+        return values[i + 1];
+    }
+
     virtual std::string getRepr () {
         std::stringstream ss;
         ss << getRefRepr();
         ss << " " << ansi(ANSI_STYLE_OPERATOR, "(");
-        for (size_t i = 1; i < parameters.size(); ++i) {
-            if (i != 1) {
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0) {
                 ss << ansi(ANSI_STYLE_OPERATOR, ", ");
             }
             ss << parameters[i]->getRepr();
@@ -3628,6 +3579,23 @@ public:
         return ss.str();
     }
 
+    /*
+    void setValues(const std::vector<ILValueRef> &values_) {
+        auto self = sharedFromThis();
+        for (size_t i = 0; i < values.size(); ++i) {
+            values[i]->unlink(self, i);
+        }
+        values = values_;
+        for (size_t i = 0; i < values.size(); ++i) {
+            values[i]->link(self, i);
+        }
+    }
+
+    void appendValue(const ILValueRef &value) {
+
+    }
+    */
+
     virtual std::string getRefRepr () {
         return format("%s%" PRId64,
             ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
@@ -3636,7 +3604,7 @@ public:
 
     Type *inferType() {
         std::vector<Type *> params;
-        for (size_t i = 1; i < parameters.size(); ++i) {
+        for (size_t i = 0; i < parameters.size(); ++i) {
             params.push_back(parameters[i]->getType());
         }
         return Type::Continuation(params);
@@ -3751,13 +3719,17 @@ struct ILConstInteger :
     int64_t value;
     Type *value_type;
 
-    static std::shared_ptr<ILConstInteger> create(Integer *c, IntegerType *cdest) {
-        assert(c);
+    static std::shared_ptr<ILConstInteger> create(int64_t value, IntegerType *cdest) {
         assert(cdest);
         auto result = std::make_shared<ILConstInteger>();
         result->value_type = cdest;
-        result->value = c->getValue();
+        result->value = value;
         return result;
+    }
+
+    static std::shared_ptr<ILConstInteger> create(Integer *c, IntegerType *cdest) {
+        assert(c);
+        return create(c->getValue(), cdest);
     }
 
     virtual Type *inferType() {
@@ -3782,13 +3754,17 @@ struct ILConstReal :
     double value;
     Type *value_type;
 
-    static std::shared_ptr<ILConstReal> create(Real *c, RealType *cdest) {
-        assert(c);
+    static std::shared_ptr<ILConstReal> create(double value, RealType *cdest) {
         assert(cdest);
         auto result = std::make_shared<ILConstReal>();
         result->value_type = cdest;
-        result->value = c->getValue();
+        result->value = value;
         return result;
+    }
+
+    static std::shared_ptr<ILConstReal> create(Real *c, RealType *cdest) {
+        assert(c);
+        return create(c->getValue(), cdest);
     }
 
     virtual Type *inferType() {
@@ -3864,6 +3840,173 @@ static Type *extract_consttype(const ILValueRef &value) {
 }
 
 //------------------------------------------------------------------------------
+
+struct ILOp : ILPrimitive {
+    ILValueRef lvalue;
+    ILValueRef rvalue;
+
+    ILOp(Kind kind_) :
+        ILPrimitive(kind_)
+        {}
+
+    virtual Type *inferType() {
+        Type *A = lvalue->getType();
+        Type *B = rvalue->getType();
+        if (A != B)
+            return Type::Any;
+        return A;
+    }
+
+    virtual std::string getRefRepr () {
+        return getRepr();
+    }
+
+    static bool classof(const ILValue *value) {
+        return (value->kind >= Op) && (value->kind < OpEnd);
+    }
+
+    virtual ILConstantRef evaluate(
+        const ILConstantRef &a, const ILConstantRef &b) = 0;
+};
+
+typedef ILOp ILBinaryOp;
+
+template<typename SelfT, ILValue::Kind KindT>
+struct ILBinaryOpImpl :
+    ILValueImpl<SelfT, KindT, ILBinaryOp> {
+
+    virtual ~ILBinaryOpImpl() {}
+
+    virtual std::string getRepr () {
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_OPERATOR, "(");
+        ss << ILBinaryOp::lvalue->getRefRepr();
+        ss << " " << ansi(
+            (ILBinaryOp::getType() == Type::Any)?
+                ANSI_STYLE_ERROR
+                :ANSI_STYLE_OPERATOR,
+            SelfT::OpName());
+        ss << " " << ILBinaryOp::rvalue->getRefRepr();
+        ss << ansi(ANSI_STYLE_OPERATOR, ")");
+        return ss.str();
+    }
+
+    static std::shared_ptr<SelfT> create(
+        const ILValueRef &lvalue,
+        const ILValueRef &rvalue) {
+        auto result = std::make_shared<SelfT>();
+        result->lvalue = lvalue;
+        result->rvalue = rvalue;
+        return result;
+    }
+
+    static ILConstantRef wrapConstant(int64_t value, IntegerType *type) {
+        return ILConstInteger::create(value, type);
+    }
+
+    static ILConstantRef wrapConstant(double value, RealType *type) {
+        return ILConstReal::create(value, type);
+    }
+
+    static ILConstantRef wrapConstant(bool value, IntegerType *type) {
+        return ILConstInteger::create((int64_t)value,
+            static_cast<IntegerType *>(Type::Bool));
+    }
+
+    virtual ILConstantRef evaluate(
+        const ILConstantRef &a, const ILConstantRef &b) {
+        if (a->kind == b->kind) {
+            switch(a->kind) {
+                case ILValue::ConstInteger: {
+                    IntegerType *type_a = static_cast<IntegerType *>(a->getType());
+                    return wrapConstant(SelfT::evaluateOp(
+                        type_a,
+                        llvm::cast<ILConstInteger>(a.get())->value,
+                        llvm::cast<ILConstInteger>(b.get())->value),
+                        type_a);
+                } break;
+                case ILValue::ConstReal: {
+                    RealType *type_a = static_cast<RealType *>(a->getType());
+                    return wrapConstant(SelfT::evaluateOp(
+                        type_a,
+                        llvm::cast<ILConstReal>(a.get())->value,
+                        llvm::cast<ILConstReal>(b.get())->value),
+                        type_a);
+                } break;
+                default: {
+                } break;
+            }
+        }
+        ilError(ILValue::shared_from_this(),
+            "cannot perform operation %s on %s and %s",
+            SelfT::OpName().c_str(),
+            a->getRefRepr().c_str(), b->getRefRepr().c_str());
+        return nullptr;
+    }
+};
+
+struct ILOpAdd : ILBinaryOpImpl<ILOpAdd, ILValue::OpAdd> {
+    static std::string OpName() { return "+"; }
+    template<typename T>
+    static T evaluateOp(Type *type, T a, T b) {
+        return a + b; }
+};
+struct ILOpSub : ILBinaryOpImpl<ILOpSub, ILValue::OpSub> {
+    static std::string OpName() { return "-"; }
+    template<typename T>
+    static T evaluateOp(Type *type, T a, T b) {
+        return a - b; }
+};
+struct ILOpMul : ILBinaryOpImpl<ILOpMul, ILValue::OpMul> {
+    static std::string OpName() { return "*"; }
+    template<typename T>
+    static T evaluateOp(Type *type, T a, T b) {
+        return a * b; }
+};
+struct ILOpDiv : ILBinaryOpImpl<ILOpDiv, ILValue::OpDiv> {
+    static std::string OpName() { return "/"; }
+    template<typename T>
+    static T evaluateOp(Type *type, T a, T b) {
+        return a / b; }
+};
+struct ILOpEqual : ILBinaryOpImpl<ILOpEqual, ILValue::OpEqual> {
+    static std::string OpName() { return "=="; }
+    template<typename T>
+    static bool evaluateOp(Type *type, T a, T b) {
+        return a == b; }
+};
+struct ILOpNotEqual : ILBinaryOpImpl<ILOpNotEqual, ILValue::OpNotEqual> {
+    static std::string OpName() { return "!="; }
+    template<typename T>
+    static bool evaluateOp(Type *type, T a, T b) {
+        return a != b; }
+};
+struct ILOpGreaterThan : ILBinaryOpImpl<ILOpGreaterThan, ILValue::OpGreaterThan> {
+    static std::string OpName() { return ">"; }
+    template<typename T>
+    static bool evaluateOp(Type *type, T a, T b) {
+        return a > b; }
+};
+struct ILOpGreaterEqual : ILBinaryOpImpl<ILOpGreaterEqual, ILValue::OpGreaterEqual> {
+    static std::string OpName() { return ">="; }
+    template<typename T>
+    static bool evaluateOp(Type *type, T a, T b) {
+        return a >= b; }
+};
+struct ILOpLessThan : ILBinaryOpImpl<ILOpLessThan, ILValue::OpLessThan> {
+    static std::string OpName() { return "<"; }
+    template<typename T>
+    static bool evaluateOp(Type *type, T a, T b) {
+        return a < b; }
+};
+struct ILOpLessEqual : ILBinaryOpImpl<ILOpLessEqual, ILValue::OpLessEqual> {
+    static std::string OpName() { return "<="; }
+    template<typename T>
+    static bool evaluateOp(Type *type, T a, T b) {
+        return a <= b; }
+};
+
+//------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
 struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
@@ -3893,26 +4036,38 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
         insertAndAdvance(arguments, nullptr);
     }
 
+    /*
     ILParameterRef toparam(const ILValueRef &value) {
         if (llvm::isa<ILParameter>(value.get())) {
             return value->getSharedPtr<ILParameter>();
         } else {
             auto next = ILContinuation::create(module, 1);
             insertAndAdvance( { next, value } , next);
-            return next->parameters[1];
+            return next->parameters[0];
         }
     }
+    */
 
     ILParameterRef call(std::vector<ILValueRef> values) {
         auto next = ILContinuation::create(module, 1);
         values.push_back(next);
         insertAndAdvance(values, next);
-        return next->parameters[1];
+        return next->parameters[0];
     }
 
 };
 
 //------------------------------------------------------------------------------
+
+bool extract_bool(const ILValueRef &value, const ILValueRef &ctxvalue) {
+    if (auto resulttype = llvm::dyn_cast<ILConstInteger>(value.get())) {
+        if (resulttype->getType() == Type::Bool) {
+            return (bool)resulttype->value;
+        }
+    }
+    ilError(ctxvalue, "boolean expected");
+    return false;
+}
 
 std::string extract_string(const ILValueRef &value) {
     auto resulttype = llvm::dyn_cast<ILConstString>(value.get());
@@ -3931,40 +4086,8 @@ Type *extract_type(const ILValueRef &value) {
 }
 
 //------------------------------------------------------------------------------
-// IL SOLVER
+// INTERPRETER
 //------------------------------------------------------------------------------
-
-struct ILVisitor {
-    std::unordered_set<ILContinuationRef> visited;
-    std::list<ILContinuationRef> queue;
-
-    void start(const ILContinuationRef &cont) {
-        visited.clear();
-        queue.clear();
-        queue.push_front(cont);
-    }
-
-    bool hasVisited(const ILContinuationRef &cont) const {
-        return visited.count(cont);
-    }
-
-    ILContinuationRef next() {
-        while (!queue.empty()) {
-            ILContinuationRef cont = queue.back();
-            if (!hasVisited(cont)) {
-                visited.insert(cont);
-                return cont;
-            } else {
-                queue.pop_back();
-                followTerm(cont);
-            }
-        }
-        return nullptr;
-    }
-
-    void followTerm(const ILContinuationRef &cont) {
-    }
-};
 
 static Type *merge_type(Type *a, Type *b) {
     if (!a) return b;
@@ -4001,437 +4124,291 @@ static Type *merge_type(Type *a, Type *b) {
     return nullptr;
 }
 
-struct ILSolver {
-    // after generation, the IL is not directly translatable because many types
-    // have not been evaluated, types that depend on constant conditions.
+typedef std::unordered_map<ILContinuationRef, std::vector<ILConstantRef> >
+    Cont2ValuesMap;
 
-    // the solver "runs" instructions in the IL
-    // * resolves instructions with constant inputs to constants
-    // * ensures that all types and templates have been specialized
-    // * generates implicit casts
-    // ? lowers block arguments that only have one predecessor
-    // ? removes instructions and values that don't contribute to anything
-    // ? removes unreachable blocks due to constant conditions,
-    //   and removes single basic block arguments from blocks that are always
-    //   reached.
+struct ILFrame;
+typedef std::shared_ptr<ILFrame> ILFrameRef;
 
-    ILModuleRef module;
-    ILBuilderRef builder;
+struct ILFrame {
+    size_t idx;
+    ILFrameRef parent;
+    Cont2ValuesMap map;
 
-    ILVisitor visitor;
-
-    ILSolver(const ILModuleRef &module_) :
-        module(module_) {
-        builder = std::make_shared<ILBuilder>(module);
+    std::string getRefRepr() {
+        std::stringstream ss;
+        ss << "#" << idx << ":" << this;
+        return ss.str();
     }
 
-    void eval_term(const ILContinuationRef &cont) {
-    }
-
-    void eval_parameters(const ILContinuationRef &cont) {
-        /*
-        if (cont->predecessors.size() == 1) {
-            auto &pred = *cont->predecessors.begin();
-            // all parameters can be inlined
-            for (size_t i = 0; i < cont->parameters.size(); ++i) {
-                auto &param = cont->parameters[i];
-                auto &arg = pred->getArgument(i);
-                replace_instruction_links(param, arg);
+    std::string getRepr() {
+        std::stringstream ss;
+        ss << "#" << idx << ":" << this << ":\n";
+        bool any_entries = false;
+        for (auto &entry : map) {
+            any_entries = true;
+            ss << "  " << entry.first->getRefRepr();
+            auto &value = entry.second;
+            for (size_t i = 0; i < value.size(); ++i) {
+                ss << " " << value[i]->getRefRepr();
             }
-            pred->clearArguments();
-            cont->clearParameters();
-        } else {
-
-            for (size_t i = 0; i < cont->parameters.size(); ++i) {
-                auto &param = cont->parameters[i];
-                Type *common_type = nullptr;
-                bool failed = false;
-                for (auto &pred : cont->predecessors) {
-                    auto &arg = pred->getArgument(i);
-                    Type *type = arg->getType();
-                    if (type == Type::Any) {
-                        ilError(arg, "missing specialization");
-                    }
-                    common_type = merge_type(common_type, type);
-                    if (!common_type) {
-                        failed = true;
-                        break;
-                    }
-                }
-                if (failed) {
-                    for (auto &pred : cont->predecessors) {
-                        auto &arg = pred->getArgument(i);
-                        ilMessage(arg, "conflicting type here");
-                    }
-                    ilError(param, "unable to merge conflicting types");
-                }
-                if (!common_type) {
-                    ilError(param, "unable to type parameter");
-                }
-                param->parameter_type = common_type;
-                // cast predecessors where necessary
-                for (auto &pred : cont->predecessors) {
-                    auto &arg = pred->getArgument(i);
-                    generate_cast(pred->getBlock(), pred, arg, common_type);
-                }
-            }
+            ss << "\n";
         }
-        */
-    }
-
-    void run() {
-        visitor.start(module->getEntryContinuation());
-
-        while (ILContinuationRef cont = visitor.next()) {
-            eval_parameters(cont);
-            eval_term(cont);
-        }
-
-        // delete blocks that were never visited
-        std::list< std::list<ILContinuationRef>::iterator > todelete;
-        for (auto iter = module->continuations.begin();
-            iter != module->continuations.end(); ++iter) {
-            if (!visitor.hasVisited(*iter)) {
-                (*iter)->clear();
-                todelete.push_back(iter);
-            }
-        }
-
-        for (auto iter : todelete) {
-            module->continuations.erase(iter);
-        }
+        return ss.str();
     }
 };
 
-//------------------------------------------------------------------------------
-// IL -> IR CODE GENERATOR
-//------------------------------------------------------------------------------
+struct ILConstClosure :
+    ILValueImpl<ILConstClosure, ILValue::ConstClosure, ILConstant> {
+    ILContinuationRef cont;
+    ILFrameRef frame;
 
-/*
-struct CodeGenerator {
-    LLVMBuilderRef builder;
-    LLVMModuleRef llvm_module;
-    ILModuleRef il_module;
-
-    std::unordered_map<ILContinuationRef, LLVMBasicBlockRef> blockmap;
-    std::unordered_map<ILValueRef, LLVMValueRef> valuemap;
-    std::unordered_map<Type *, LLVMTypeRef> typemap;
-    std::unordered_map<LLVMValueRef, LLVMValueRef> globals;
-
-    CodeGenerator(ILModuleRef il_module_, LLVMModuleRef llvm_module_) :
-        builder(nullptr),
-        llvm_module(llvm_module_),
-        il_module(il_module_)
-    {
+    static std::shared_ptr<ILConstClosure> create(
+        const ILContinuationRef &cont,
+        const ILFrameRef &frame) {
+        auto result = std::make_shared<ILConstClosure>();
+        result->cont = cont;
+        result->frame = frame;
+        return result;
     }
 
-    LLVMTypeRef resolveType(const ILValueRef &reference, Type *il_type = nullptr) {
-        if (!il_type) {
-            il_type = reference->getType();
+    virtual Type *inferType() {
+        return Type::Any;
+    }
+
+    virtual std::string getRefRepr() {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "closure");
+        ss << " " << cont->getRefRepr();
+        ss << " " << frame->getRefRepr();
+        ss << ")";
+        return ss.str();
+    }
+};
+
+struct ILInterpreter {
+
+    ILInterpreter() {}
+
+    ILFrameRef new_frame(const ILFrameRef &frame) {
+        // create closure
+        ILFrameRef newframe = std::make_shared<ILFrame>();
+        newframe->parent = frame;
+        newframe->idx = frame->idx + 1;
+        return newframe;
+    }
+
+    ILConstantRef evaluate(const ILFrameRef &frame, const ILValueRef &value) {
+        if (llvm::isa<ILConstant>(value.get())) {
+            return value->getSharedPtr<ILConstant>();
         }
-        LLVMTypeRef result = typemap[il_type];
-        if (!result) {
-            switch(il_type->getKind()) {
-                case T_Void: {
-                    result = LLVMVoidType();
-                } break;
-                case T_Null: {
-                    result = LLVMVoidType();
-                } break;
-                case T_Integer: {
-                    auto integer = llvm::cast<IntegerType>(il_type);
-                    result = LLVMIntType(integer->getWidth());
-                } break;
-                case T_Real: {
-                    auto real = llvm::cast<RealType>(il_type);
-                    switch(real->getWidth()) {
-                        case 16: {
-                            result = LLVMHalfType();
-                        } break;
-                        case 32: {
-                            result = LLVMFloatType();
-                        } break;
-                        case 64: {
-                            result = LLVMDoubleType();
-                        } break;
-                        default: {
-                            ilError(reference, "illegal real type");
-                        } break;
+        if (auto op = llvm::dyn_cast<ILOp>(value.get())) {
+            auto lvalue = evaluate(frame, op->lvalue);
+            auto rvalue = evaluate(frame, op->rvalue);
+            return op->evaluate(lvalue, rvalue);
+        }
+        switch(value->kind) {
+            case ILValue::Parameter: {
+                auto param = llvm::cast<ILParameter>(value.get());
+                ILFrame *ptr = frame.get();
+                while (ptr) {
+                    auto cont = param->parent.lock();
+                    assert(cont && "parameter has no parent");
+                    if (ptr->map.count(cont)) {
+                        auto &values = ptr->map[cont];
+                        assert(param->index < values.size());
+                        return values[param->index];
                     }
-                } break;
-                case T_Array: {
-                    auto array = llvm::cast<ArrayType>(il_type);
-                    result = LLVMArrayType(
-                        resolveType(
-                            reference,
-                            array->getElement()),
-                        array->getSize());
-                } break;
-                case T_Pointer: {
-                    result = LLVMPointerType(
-                        resolveType(
-                            reference,
-                            llvm::cast<PointerType>(il_type)->getElement()),
-                        0);
-                } break;
-                case T_CFunction: {
-                    auto ftype = llvm::cast<CFunctionType>(il_type);
-
-                    LLVMTypeRef parameters[ftype->getParameterCount()];
-                    for (size_t i = 0; i < ftype->getParameterCount(); ++i) {
-                        parameters[i] = resolveType(reference, ftype->getParameter(i));
-                    }
-                    result = LLVMFunctionType(
-                        resolveType(reference, ftype->getResult()),
-                        parameters, ftype->getParameterCount(),
-                        ftype->isVarArg());
-                } break;
-                default: {
-                    ilError(reference, "can not translate type");
-                } break;
-            }
-            assert(result);
-            typemap[il_type] = result;
-        }
-        return result;
-    }
-
-    LLVMValueRef resolveValue(const ILValueRef &il_value) {
-        LLVMValueRef result = valuemap[il_value];
-        if (!result) {
-            switch(il_value->kind) {
-                default: {
-                    ilError(il_value, "does not dominate all uses");
-                } break;
-            }
-            assert(result);
-            valuemap[il_value] = result;
-        }
-        return result;
-    }
-
-    LLVMValueRef const_int(int value) {
-        return LLVMConstInt(LLVMInt32Type(), value, true);
-    }
-
-    ILContinuationRef resolveBlock(const ILContinuationRef &block) {
-        LLVMBasicBlockRef result = blockmap[block];
-        assert(result);
-        return result;
-    }
-
-    LLVMBasicBlockRef resolveLabel(const ILLabelRef &label) {
-        return resolveBlock(label->getLabelBlock());
-    }
-
-    void generateTerminator(const ILValueRef &il_value) {
-        switch(il_value->kind) {
-            case ILValue::CondBr: {
-                auto condbr = llvm::cast<ILCondBr>(il_value.get());
-                auto llvm_value = resolveValue(condbr->condition);
-                auto llvm_thenlabel = resolveLabel(
-                    condbr->getThenLabel());
-                auto llvm_elselabel = resolveLabel(
-                    condbr->getElseLabel());
-
-                LLVMBuildCondBr(builder, llvm_value,
-                    llvm_thenlabel, llvm_elselabel);
-            } break;
-            case ILValue::Br: {
-                auto br = llvm::cast<ILBr>(il_value.get());
-                auto llvm_label = resolveLabel(
-                    br->getLabel());
-                LLVMBuildBr(builder, llvm_label);
-            } break;
-            case ILValue::Ret: {
-                auto br = llvm::cast<ILRet>(il_value.get());
-                if (br->value) {
-                    LLVMBuildRet(builder, resolveValue(br->value));
-                } else {
-                    LLVMBuildRetVoid(builder);
+                    ptr = ptr->parent.get();
                 }
+                assert(false && "parameter not bound in any frame");
+                return nullptr;
+            } break;
+            case ILValue::Continuation: {
+                // create closure
+                //ILFrameRef newframe = new_frame(frame);
+                return ILConstClosure::create(
+                    value->getSharedPtr<ILContinuation>(),
+                    frame);
             } break;
             default:
-                {
-                    ilError(il_value, "illegal terminator");
-                } break;
+                ilError(value, "value can not be evaluated");
+                break;
+        }
+        return nullptr;
+    }
+
+    void evaluate_values(
+        const ILContinuationRef &cont,
+        const ILFrameRef &frame,
+        std::vector<ILConstantRef> &values) {
+        size_t argcount = cont->getArgumentCount();
+        for (size_t i = 0; i < argcount; ++i) {
+            auto value = evaluate(frame, cont->getArgument(i));
+            assert(value);
+            values.push_back(value);
         }
     }
 
-    void generateValue(const ILValueRef &il_value) {
-        LLVMValueRef result = valuemap[il_value];
-        assert(!result);
-        switch(il_value->kind) {
-            case ILValue::Nop: {
-                return;
-            } break;
-            case ILValue::Label: {
-                return;
-            } break;
-            case ILValue::ConstTypePointer: {
-                return;
-            } break;
-            case ILValue::ConstInteger: {
-                auto ci = llvm::cast<ILConstInteger>(il_value.get());
+    void map_continuation_arguments(
+        const ILContinuationRef &cont,
+        const ILContinuationRef &nextcont,
+        const ILFrameRef &frame,
+        const ILFrameRef &nextframe) {
+        std::vector<ILConstantRef> values;
+        evaluate_values(cont, frame, values);
+        size_t argcount = values.size();
+        size_t paramcount = nextcont->getParameterCount();
+        if (argcount != paramcount) {
+            ilError(cont, "argument count mismatch (%zu != %zu)",
+                argcount, paramcount);
+        }
+        nextframe->map[nextcont] = values;
+    }
 
-                auto il_type = llvm::cast<IntegerType>(ci->value_type);
-                auto llvm_inttype = resolveType(il_value, ci->value_type);
+    void execute(const ILContinuationRef &entry) {
+        assert(entry->getParameterCount() == 0);
 
-                result = LLVMConstInt(llvm_inttype, ci->value, il_type->isSigned());
-            } break;
-            case ILValue::ConstReal: {
-                auto cr = llvm::cast<ILConstReal>(il_value.get());
+        ILContinuationRef cont = entry;
+        ILFrameRef frame = std::make_shared<ILFrame>();
+        frame->idx = 0;
 
-                auto llvm_realtype = resolveType(il_value, cr->value_type);
-
-                result = LLVMConstReal(llvm_realtype, cr->value);
-            } break;
-            case ILValue::ConstString: {
-                auto cs = llvm::cast<ILConstString>(il_value.get());
-
-                result = LLVMConstString(cs->value.c_str(), cs->value.size(), false);
-            } break;
-            case ILValue::BasicBlockParameter: {
-                auto bbp = llvm::cast<ILBasicBlockParameter>(il_value.get());
-
-                auto llvm_type = resolveType(il_value, bbp->parameter_type);
-
-                result = LLVMBuildPhi(builder, llvm_type, "");
-
-            } break;
-            case ILValue::External: {
-                auto external = llvm::cast<ILExternal>(il_value.get());
-
-                auto name = extract_string(external->name);
-                auto ftype = resolveType(il_value,
-                    extract_type(external->external_type));
-
-                result = LLVMAddFunction(llvm_module, name.c_str(), ftype);
-
-            } break;
-            case ILValue::CastTo: {
-                auto castto = llvm::cast<ILCastTo>(il_value.get());
-                auto llvm_value = resolveValue(castto->value);
-                auto casttype = resolveType(il_value,
-                    extract_type(castto->cast_type));
-
-                if (LLVMIsConstant(llvm_value)) {
-                    result = LLVMConstBitCast(llvm_value, casttype);
-                } else {
-                    result = LLVMBuildBitCast(builder, llvm_value, casttype, "");
-                }
-
-            } break;
-            case ILValue::AddressOf: {
-                auto addressof = llvm::cast<ILAddressOf>(il_value.get());
-                auto llvm_value = resolveValue(addressof->value);
-
-                if (LLVMIsConstant(llvm_value)) {
-                    auto globalvar = globals[llvm_value];
-                    if (!globalvar) {
-                        globalvar = LLVMAddGlobal(llvm_module,
-                            LLVMTypeOf(llvm_value), "");
-                        LLVMSetInitializer(globalvar, llvm_value);
-                        LLVMSetGlobalConstant(globalvar, true);
-                        LLVMSetUnnamedAddr(globalvar, true);
-                        LLVMSetLinkage(globalvar, LLVMPrivateLinkage);
-                        globals[llvm_value] = globalvar;
+        while (true) {
+            std::cout << frame->getRepr() << "\n";
+            std::cout << cont->getRepr() << "\n";
+            fflush(stdout);
+            auto callee = cont->getValue(0);
+            switch(callee->kind) {
+                case ILValue::Parameter: {
+                    auto evalcallee = evaluate(frame, callee);
+                    if (evalcallee->kind == ILValue::ConstClosure) {
+                        auto closure = evalcallee->getSharedPtr<ILConstClosure>();
+                        map_continuation_arguments(
+                            cont, closure->cont, frame, closure->frame);
+                        frame = closure->frame;
+                        cont = closure->cont;
+                    } else {
+                        ilError(callee, "argument not callable");
                     }
-
-                    result = globalvar;
-                } else {
-                    ilError(il_value, "TODO: copy value to stack");
-                }
-            } break;
-            case ILValue::Call: {
-                auto instr = llvm::cast<ILCall>(il_value.get());
-                LLVMValueRef llvm_args[instr->arguments.size()];
-                for (size_t i = 0; i < instr->arguments.size(); ++i) {
-                    llvm_args[i] = resolveValue(instr->arguments[i]);
-                }
-                result = LLVMBuildCall(builder,
-                    resolveValue(instr->callee),
-                    llvm_args,
-                    instr->arguments.size(),
-                    "");
-            } break;
-            default: {
-                ilError(il_value, "illegal instruction");
-            } break;
-        }
-        assert(result);
-        valuemap[il_value] = result;
-    }
-
-    void createBlock(LLVMValueRef llvm_function,
-        const ILBasicBlockRef &il_block) {
-        LLVMBasicBlockRef llvm_block = LLVMAppendBasicBlock(
-            llvm_function, il_block->name.c_str());
-        blockmap[il_block] = llvm_block;
-    }
-
-    void linkBlock(const ILBasicBlockRef &il_block) {
-        for (size_t i = 0; i < il_block->parameters.size(); ++i) {
-            auto &param = il_block->parameters[i];
-            LLVMValueRef llvm_phi = resolveValue(param);
-            size_t predcount = il_block->predecessors.size();
-            LLVMValueRef incoming_values[predcount];
-            LLVMBasicBlockRef incoming_blocks[predcount];
-            size_t k = 0;
-            for (auto &pred : il_block->predecessors) {
-                auto &arg = pred->getArgument(i);
-                incoming_values[k] = resolveValue(arg);
-                incoming_blocks[k] = resolveBlock(pred->getBlock());
-                ++k;
-            }
-            LLVMAddIncoming(llvm_phi,
-                incoming_values, incoming_blocks, predcount);
-        }
-    }
-
-    void generateBlock(const ILBasicBlockRef &il_block) {
-        LLVMBasicBlockRef llvm_block = blockmap[il_block];
-        assert(llvm_block);
-        LLVMPositionBuilderAtEnd(builder, llvm_block);
-
-        for (auto &param : il_block->parameters) {
-            generateValue(param);
-        }
-
-        ILInstructionRef value = il_block->firstvalue;
-        while (value) {
-            generateValue(value);
-            value = value->nextvalue;
-        }
-        if (il_block->terminator) {
-            generateTerminator(il_block->terminator);
-        }
-
-    }
-
-    void generate() {
-        builder = LLVMCreateBuilder();
-
-        for (auto il_function : il_module->functions) {
-            auto llvm_functype = resolveType(il_function, il_function->getType());
-            auto llvm_function = LLVMAddFunction(llvm_module,
-                il_function->name.c_str(), llvm_functype);
-
-            for (auto block : il_function->blocks) {
-                createBlock(llvm_function, block);
-            }
-            for (auto block : il_function->blocks) {
-                generateBlock(block);
-            }
-            for (auto block : il_function->blocks) {
-                linkBlock(block);
+                } break;
+                case ILValue::Continuation: {
+                    auto nextcont = callee->getSharedPtr<ILContinuation>();
+                    ILFrameRef nextframe = frame;
+                    nextframe = new_frame(frame);
+                    map_continuation_arguments(cont, nextcont, frame, nextframe);
+                    cont = nextcont;
+                    frame = nextframe;
+                } break;
+                case ILValue::Intrinsic: {
+                    if (callee == ILIntrinsic::Return) {
+                        return;
+                    } else if (callee == ILIntrinsic::Branch) {
+                        auto condarg = cont->getArgument(0);
+                        bool condvalue = extract_bool(
+                            evaluate(frame, condarg),
+                            cont);
+                        auto thenarg = cont->getArgument(1);
+                        auto elsearg = cont->getArgument(2);
+                        assert(thenarg->kind == ILValue::Continuation);
+                        assert(elsearg->kind == ILValue::Continuation);
+                        if (condvalue) {
+                            cont = thenarg->getSharedPtr<ILContinuation>();
+                        } else {
+                            cont = elsearg->getSharedPtr<ILContinuation>();
+                        }
+                    } else if (callee == ILIntrinsic::Inspect) {
+                        auto condarg = evaluate(frame, cont->getArgument(0));
+                        std::cout << condarg->getRepr() << "\n";
+                        fflush(stdout);
+                        auto nextcont = cont->getArgument(1);
+                        assert(nextcont->kind == ILValue::Continuation);
+                        cont = nextcont->getSharedPtr<ILContinuation>();
+                    } else {
+                        ilError(callee, "unhandled intrinsic");
+                    }
+                } break;
+                default: {
+                    ilError(callee, "illegal operation");
+                } break;
             }
         }
 
-        LLVMDisposeBuilder(builder);
-        builder = nullptr;
     }
 };
+
+
+/*
+
+function invoke (func ...)
+    var args
+        $ ...
+    function evaluate (env k)
+        cond
+            (instance? k PrimOp)
+                k.func
+                    __unpack
+                        table-each arg k.args
+                            evaluate env arg
+            (instance? k Param)
+                assert k.parent
+                var result
+                    env # k.parent # k
+                assert (not (null? result)) (tostring k)
+                result
+            else k
+
+    var env ($)
+    var call
+        Call func args
+    label := "<?>"
+    while call
+        var nextfunc
+            evaluate env call.func
+        var nextargs
+            table-each arg call.args
+                evaluate env arg
+        cond
+            (function? nextfunc)
+                nextfunc
+                    __unpack nextargs
+                break ;
+            (nextfunc == branch)
+                var result
+                    if (nextargs # 1)
+                        (nextargs # 2)
+                        (nextargs # 3)
+                call =
+                    Call result ($)
+            else
+                do-if (instance? nextfunc Closure)
+                    env = nextfunc.env
+                    nextfunc = nextfunc.func
+
+                funcmap := ($)
+                argrepr := ($)
+                foreach (k v)
+                    zip nextfunc.params nextargs
+                    do-if (instance? v Function)
+                        v =
+                            Closure env v
+                    assert (k.parent == nextfunc)
+                    funcmap # k = v
+                    $.insert argrepr
+                        ..
+                            \ "%" (tostring k.index)
+                            " = "
+                            tostring v
+
+                print
+                    ..
+                        label
+                        ": "
+                        \ nextfunc.name "("
+                        $.concat argrepr ", "
+                        ")"
+                env # nextfunc = funcmap
+                call = nextfunc.body
+                label = nextfunc.name
 */
 
 //------------------------------------------------------------------------------
@@ -5072,6 +5049,8 @@ static void setupRootEnvironment (const EnvironmentRef &env) {
     env->setLocal("uint32", ILConstTypePointer::create(Type::UInt32));
     env->setLocal("uint64", ILConstTypePointer::create(Type::UInt64));
 
+    env->setLocal("inspect", ILIntrinsic::Inspect);
+
     env->setLocal("usize_t",
         ILConstTypePointer::create(Type::Integer(sizeof(size_t)*8,false)));
 
@@ -5099,23 +5078,16 @@ static void handleException(const EnvironmentRef &env, ValueRef expr) {
 static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 
     auto mainfunc = ILContinuation::create(env->global.module);
-    auto ret = mainfunc->appendParameter(ILParameter::create());
     env->global.builder->continueAt(mainfunc);
 
     parse_do(env, expr);
-    env->global.builder->br({ ret });
+    env->global.builder->br({ ILIntrinsic::Return });
 
     std::cout << env->global.module->getRepr();
-    /*
-    {
-        ILSolver solver(env->global.module);
-        solver.run();
-        std::cout << env->global.module->getRepr();
-    }
-    */
-
-
     fflush(stdout);
+
+    ILInterpreter ip;
+    ip.execute(mainfunc);
 
     /*
     LLVMModuleRef module = LLVMModuleCreateWithName("main");
