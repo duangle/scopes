@@ -104,21 +104,6 @@ double bangra_real_value(ValueRef value);
 ValueRef bangra_integer(signed long long int value);
 signed long long int bangra_integer_value(ValueRef value);
 
-// table
-//------------------------------------------------------------------------------
-
-ValueRef bangra_table();
-void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value);
-ValueRef bangra_get_key(ValueRef expr, ValueRef key);
-void bangra_set_meta(ValueRef expr, ValueRef meta);
-ValueRef bangra_get_meta(ValueRef expr);
-
-// handle
-//------------------------------------------------------------------------------
-
-ValueRef bangra_handle(void *ptr);
-void *bangra_handle_value(ValueRef expr);
-
 // exception handling
 //------------------------------------------------------------------------------
 
@@ -472,8 +457,6 @@ enum ValueKind {
     V_Symbol = 3,
     V_Integer = 4,
     V_Real = 5,
-    V_Handle = 6,
-    V_Table = 7
 };
 
 static const char *valueKindName(int kind) {
@@ -484,8 +467,6 @@ static const char *valueKindName(int kind) {
     case V_Symbol: return "symbol";
     case V_Integer: return "integer";
     case V_Real: return "real";
-    case V_Handle: return "handle";
-    case V_Table: return "table";
     default: return "#corrupted#";
     }
 }
@@ -903,213 +884,6 @@ struct Symbol : String {
         return new Symbol(*this);
     }
 };
-
-//------------------------------------------------------------------------------
-
-struct Handle : Value {
-protected:
-    void *value;
-
-public:
-    Handle(void *ptr, ValueRef next_ = NULL) :
-        Value(V_Handle, next_),
-        value(ptr)
-        {}
-
-    void *getValue() const {
-        return value;
-    }
-
-    static bool classof(const Value *expr) {
-        auto kind = expr->getKind();
-        return (kind == V_Handle);
-    }
-
-    static ValueKind kind() {
-        return V_Handle;
-    }
-
-    virtual ValueRef clone() const {
-        return new Handle(*this);
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct TableBody {
-    friend struct Table;
-protected:
-    std::map< std::string, ValueRef > string_map;
-    std::map< int64_t, ValueRef > integer_map;
-    std::map< double, ValueRef > real_map;
-    std::map< void *, ValueRef > handle_map;
-    std::map< std::shared_ptr<TableBody> , ValueRef > table_map;
-    std::map< ValueRef, ValueRef > value_map;
-
-    std::shared_ptr<TableBody> meta;
-
-    void setKey(ValueRef key, ValueRef value);
-
-    ValueRef getLocalKey(ValueRef key);
-    ValueRef getLocalKey(const std::string &name);
-
-    ValueRef getKey(ValueRef key);
-    ValueRef getKey(const std::string &name);
-
-    std::shared_ptr<TableBody> clone();
-
-    void tag() {
-        for (auto val : string_map) { assert(val.second); val.second->tag(); }
-        for (auto val : integer_map) { assert(val.second); val.second->tag(); }
-        for (auto val : real_map) { assert(val.second); val.second->tag(); }
-        for (auto val : handle_map) { assert(val.second); val.second->tag(); }
-        for (auto val : value_map) {
-            if (val.first) val.first->tag();
-            assert(val.second);
-            val.second->tag();
-        }
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct Table : Value {
-protected:
-    std::shared_ptr<TableBody> body;
-
-public:
-    Table(ValueRef next_ = NULL) :
-        Value(V_Table, next_),
-        body(new TableBody())
-        {}
-
-    Table(std::shared_ptr<TableBody> body_, ValueRef next_ = NULL) :
-        Value(V_Table, next_),
-        body(body_)
-        {}
-
-    void setMeta(ValueRef meta) {
-        if (meta) {
-            if (auto t = llvm::dyn_cast<Table>(meta)) {
-                body->meta = t->getValue();
-                return;
-            }
-        }
-        body->meta = nullptr;
-    }
-    ValueRef getMeta() {
-        if (body->meta)
-            return new Table(body->meta);
-        else
-            return NULL;
-    }
-
-    void setKey(ValueRef key, ValueRef value) {
-        body->setKey(key, value);
-    }
-
-    ValueRef getKey(ValueRef key) {
-        return body->getKey(key);
-    }
-
-    ValueRef getKey(const std::string &name) {
-        return body->getKey(name);
-    }
-
-    std::shared_ptr<TableBody> getValue() {
-        return body;
-    }
-
-    static bool classof(const Value *expr) {
-        auto kind = expr->getKind();
-        return (kind == V_Table);
-    }
-
-    static ValueKind kind() {
-        return V_Table;
-    }
-
-    ValueRef deepClone() const {
-        return new Table(body->clone(), getNext());
-    }
-
-    virtual ValueRef clone() const {
-        return new Table(*this);
-    }
-
-    virtual void tag() {
-        if (tagged()) return;
-        Value::tag();
-
-        body->tag();
-    }
-};
-
-void TableBody::setKey(ValueRef key, ValueRef value) {
-    switch(kindOf(key)) {
-        case V_String:
-        case V_Symbol:
-            string_map[ llvm::cast<String>(key)->getValue() ] = value;
-            break;
-        case V_Integer:
-            integer_map[ llvm::cast<Integer>(key)->getValue() ] = value;
-            break;
-        case V_Real:
-            real_map[ llvm::cast<Real>(key)->getValue() ] = value;
-            break;
-        case V_Handle:
-            handle_map[ llvm::cast<Handle>(key)->getValue() ] = value;
-            break;
-        case V_Table:
-            table_map[ llvm::cast<Table>(key)->getValue() ] = value;
-            break;
-        default:
-            value_map[ key ] = value;
-            break;
-    }
-}
-
-ValueRef TableBody::getLocalKey(const std::string &name) {
-    return string_map[name];
-}
-
-ValueRef TableBody::getLocalKey(ValueRef key) {
-    switch(kindOf(key)) {
-        case V_String:
-        case V_Symbol:
-            return string_map[ llvm::cast<String>(key)->getValue() ];
-        case V_Integer:
-            return integer_map[ llvm::cast<Integer>(key)->getValue() ];
-        case V_Real:
-            return real_map[ llvm::cast<Real>(key)->getValue() ];
-        case V_Handle:
-            return handle_map[ llvm::cast<Handle>(key)->getValue() ];
-        case V_Table:
-            return table_map[ llvm::cast<Table>(key)->getValue() ];
-        default:
-            return value_map[ key ];
-    }
-}
-
-ValueRef TableBody::getKey(const std::string &name) {
-    ValueRef result = getLocalKey(name);
-    if (!result && meta)
-        return meta->getKey(name);
-    else
-        return result;
-}
-
-ValueRef TableBody::getKey(ValueRef key) {
-    ValueRef result = getLocalKey(key);
-    if (!result && meta)
-        return meta->getKey(key);
-    else
-        return result;
-}
-
-std::shared_ptr<TableBody> TableBody::clone() {
-    return std::shared_ptr<TableBody>(new TableBody(*this));
-}
 
 //------------------------------------------------------------------------------
 
@@ -1948,19 +1722,6 @@ static void streamValue(T &stream, ValueRef e, size_t depth=0, bool naked=true) 
                 stream << '\n';
         }
     } return;
-    case V_Table: {
-        Table *a = llvm::cast<Table>(e);
-        void *ptr = (void *)a->getValue().get();
-        stream << format("<table@%p", ptr);
-        ValueRef repr = a->getKey("repr");
-        if (repr) {
-            stream << ':';
-            streamValue(stream, repr, 0, false);
-        }
-        stream << '>';
-        if (naked)
-            stream << '\n';
-    } return;
     case V_Integer: {
         const Integer *a = llvm::cast<Integer>(e);
 
@@ -1974,12 +1735,6 @@ static void streamValue(T &stream, ValueRef e, size_t depth=0, bool naked=true) 
     case V_Real: {
         const Real *a = llvm::cast<Real>(e);
         stream << format("%g", a->getValue());
-        if (naked)
-            stream << '\n';
-    } return;
-    case V_Handle: {
-        const Handle *h = llvm::cast<Handle>(e);
-        stream << format("<handle@%p>", h->getValue());
         if (naked)
             stream << '\n';
     } return;
@@ -3588,7 +3343,12 @@ struct ILConstPointer :
 
     virtual std::string getRefRepr() {
         std::stringstream ss;
-        ss << "(" << pointer_type->getRepr() << " " << value << ")";
+        if (pointer_type == Type::TypePointer) {
+            ss << "(" << pointer_type->getRepr() << " "
+                << ((Type *)value)->getRepr() << ")";
+        } else {
+            ss << "(" << pointer_type->getRepr() << " " << value << ")";
+        }
         return ss.str();
     }
 };
@@ -5670,9 +5430,6 @@ ValueRef bangra_clone(ValueRef expr) {
 
 ValueRef bangra_deep_clone(ValueRef expr) {
     if (expr) {
-        if (auto tab = llvm::dyn_cast<bangra::Table>(expr)) {
-            return tab->deepClone();
-        }
         return expr->clone();
     }
     return NULL;
@@ -5774,21 +5531,6 @@ ValueRef bangra_string_slice(ValueRef expr, int start, int end) {
     return NULL;
 }
 
-void *bangra_handle_value(ValueRef expr) {
-    if (expr) {
-        if (auto handle = llvm::dyn_cast<bangra::Handle>(expr)) {
-            return handle->getValue();
-        }
-    }
-    return NULL;
-}
-
-ValueRef bangra_handle(void *ptr) {
-    auto handle = new bangra::Handle(ptr);
-    bangra::gc_root = new bangra::Pointer(handle, bangra::gc_root);
-    return handle;
-}
-
 void bangra_error_message(ValueRef context, const char *format, ...) {
     va_list args;
     va_start (args, format);
@@ -5824,58 +5566,10 @@ int bangra_eq(Value *a, Value *b) {
                 bangra::Pointer *sb = llvm::cast<bangra::Pointer>(b);
                 return sa->getAt() == sb->getAt();
             } break;
-            case bangra::V_Handle: {
-                bangra::Handle *sa = llvm::cast<bangra::Handle>(a);
-                bangra::Handle *sb = llvm::cast<bangra::Handle>(b);
-                return sa->getValue() == sb->getValue();
-            } break;
-            case bangra::V_Table: {
-                bangra::Table *sa = llvm::cast<bangra::Table>(a);
-                bangra::Table *sb = llvm::cast<bangra::Table>(b);
-                return sa->getValue() == sb->getValue();
-            } break;
             default: break;
         };
     }
     return false;
-}
-
-ValueRef bangra_table() {
-    return new bangra::Table();
-}
-
-void bangra_set_key(ValueRef expr, ValueRef key, ValueRef value) {
-    if (expr && key) {
-        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
-            table->setKey(key, value);
-        }
-    }
-}
-
-ValueRef bangra_get_key(ValueRef expr, ValueRef key) {
-    if (expr && key) {
-        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
-            return table->getKey(key);
-        }
-    }
-    return NULL;
-}
-
-void bangra_set_meta(ValueRef expr, ValueRef meta) {
-    if (expr) {
-        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
-            table->setMeta(meta);
-        }
-    }
-}
-
-ValueRef bangra_get_meta(ValueRef expr) {
-    if (expr) {
-        if (auto table = llvm::dyn_cast<bangra::Table>(expr)) {
-            return table->getMeta();
-        }
-    }
-    return NULL;
 }
 
 ValueRef bangra_set_anchor(
