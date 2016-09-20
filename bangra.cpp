@@ -2996,7 +2996,6 @@ struct ILParameter :
 struct ILIntrinsic :
     ILValueImpl<ILIntrinsic, ILValue::Intrinsic, ILValue> {
     static ILIntrinsicRef Branch;
-    static ILIntrinsicRef Inspect;
     static ILIntrinsicRef Return;
 
     std::string name;
@@ -3032,16 +3031,12 @@ struct ILIntrinsic :
             Type::Continuation({ Type::Bool,
                 Type::Continuation({}),
                 Type::Continuation({}) }));
-        Inspect = create("inspect",
-            Type::Continuation({ Type::Any,
-                Type::Continuation({}) }));
         Return = create("return",
             Type::Continuation({}));
     }
 };
 
 ILIntrinsicRef ILIntrinsic::Branch;
-ILIntrinsicRef ILIntrinsic::Inspect;
 ILIntrinsicRef ILIntrinsic::Return;
 
 //------------------------------------------------------------------------------
@@ -3285,7 +3280,7 @@ struct ILConstReal :
 
     virtual std::string getRefRepr() {
         return ansi(ANSI_STYLE_NUMBER,
-            format("%g", value));
+            format("%f", value));
     }
 };
 
@@ -3293,10 +3288,10 @@ struct ILConstReal :
 
 struct ILConstTuple :
     ILValueImpl<ILConstTuple, ILValue::ConstTuple, ILConstant> {
-    std::vector<ILPrimitiveRef> values;
+    std::vector<ILConstantRef> values;
 
     static std::shared_ptr<ILConstTuple> create(
-        const std::vector<ILPrimitiveRef> &values_) {
+        const std::vector<ILConstantRef> &values_) {
         auto result = std::make_shared<ILConstTuple>();
         result->values = values_;
         return result;
@@ -3477,9 +3472,18 @@ struct FFI {
     std::unordered_map<Type *, LLVMTypeRef> typecache;
     std::unordered_map<std::string, TypeLLVMValuePair > functions;
 
+    LLVMTypeRef thunkfunctype;
+
     FFI() :
         engine(nullptr) {
         module = LLVMModuleCreateWithName("ffi");
+
+        LLVMTypeRef paramtypes[] = {
+            LLVMPointerType(LLVMInt8Type(), 0),
+            LLVMPointerType(LLVMPointerType(LLVMInt8Type(), 0), 0)
+        };
+        thunkfunctype = LLVMFunctionType(
+                    LLVMVoidType(), paramtypes, 2, false);
     }
 
     ~FFI() {
@@ -3489,19 +3493,27 @@ struct FFI {
 
     void destroyEngine() {
         if (!engine) return;
-        LLVMRunStaticDestructors(engine);
-        LLVMDisposeExecutionEngine(engine);
+        // leak the EE for now so we can reuse the module
+        //LLVMDisposeExecutionEngine(engine);
         engine = nullptr;
+    }
+
+    void verifyModule() {
+        char *error = NULL;
+        LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
+        LLVMDisposeMessage(error);
     }
 
     void createEngine() {
         if (engine) return;
 
         char *error = NULL;
-        LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
-        LLVMDisposeMessage(error);
 
-        error = NULL;
+        #if 0
+        LLVMCreateExecutionEngineForModule(&engine,
+                                        module,
+                                        &error);
+        #else
         LLVMMCJITCompilerOptions options;
         LLVMInitializeMCJITCompilerOptions(&options, sizeof(options));
         //options.OptLevel = 0;
@@ -3510,17 +3522,16 @@ struct FFI {
 
         LLVMCreateMCJITCompilerForModule(&engine, module,
             &options, sizeof(options), &error);
+        #endif
 
         if (error) {
             LLVMDisposeMessage(error);
             engine = nullptr;
             return;
         }
-
-        LLVMRunStaticConstructors(engine);
     }
 
-    LLVMTypeRef convertType(Type *il_type = nullptr) {
+    LLVMTypeRef convertType(Type *il_type) {
         LLVMTypeRef result = typecache[il_type];
         if (!result) {
             switch(il_type->getKind()) {
@@ -3586,52 +3597,83 @@ struct FFI {
         return result;
     }
 
-    LLVMGenericValueRef runFunction(
-        LLVMValueRef F, unsigned NumArgs, LLVMGenericValueRef *Args) {
-        createEngine();
-        return LLVMRunFunction(engine, F, NumArgs, Args);
-    }
-
     Type *varArgType(Type *type) {
         // todo: expand float to double
         return type;
     }
 
-    ILConstantRef makeConstant(Type *il_type, LLVMGenericValueRef value) {
+    struct Variant {
+        union {
+            int8_t int8val;
+            int16_t int16val;
+            int32_t int32val;
+            int64_t int64val;
+            float floatval;
+            double doubleval;
+            void *ptrval;
+        };
+
+        void set_integer(Type *il_type, int64_t value) {
+            auto integer = llvm::cast<IntegerType>(il_type);
+            switch(integer->getWidth()) {
+                case 8: { int8val = value; } break;
+                case 16: { int16val = value; } break;
+                case 32: { int32val = value; } break;
+                case 64: { int64val = value; } break;
+                default: {
+                    ilError(nullptr, "can't convert constant");
+                } break;
+            }
+        }
+
+        void set_real(Type *il_type, double value) {
+            auto real = llvm::cast<RealType>(il_type);
+            switch(real->getWidth()) {
+                case 32: { floatval = value; } break;
+                case 64: { doubleval = value; } break;
+                default: {
+                    ilError(nullptr, "can't convert constant");
+                } break;
+            }
+        }
+
+    };
+
+    ILConstantRef makeConstant(Type *il_type, const Variant &value) {
         switch(il_type->getKind()) {
             case T_Void: {
                 return ILConstTuple::create({});
             } break;
             case T_Integer: {
                 auto integer = llvm::cast<IntegerType>(il_type);
-                return ILConstInteger::create(
-                    LLVMGenericValueToInt(value, integer->isSigned()),
+                int64_t ivalue = 0;
+                switch(integer->getWidth()) {
+                    case 8: { ivalue = value.int8val; } break;
+                    case 16: { ivalue = value.int16val; } break;
+                    case 32: { ivalue = value.int32val; } break;
+                    case 64: { ivalue = value.int64val; } break;
+                    default: {
+                        ilError(nullptr, "cannot make integer constant");
+                    } break;
+                }
+                return ILConstInteger::create(ivalue,
                     static_cast<IntegerType *>(il_type));
             } break;
             case T_Real: {
                 auto real = llvm::cast<RealType>(il_type);
-                double flvalue;
+                double flvalue = 0.0;
                 switch(real->getWidth()) {
-                    case 16: {
-                        flvalue = LLVMGenericValueToFloat(LLVMHalfType(), value);
-                    } break;
-                    case 32: {
-                        flvalue = LLVMGenericValueToFloat(LLVMFloatType(), value);
-                    } break;
-                    case 64: {
-                        flvalue = LLVMGenericValueToFloat(LLVMDoubleType(), value);
-                    } break;
+                    case 32: { flvalue = value.floatval; } break;
+                    case 64: { flvalue = value.doubleval; } break;
                     default: {
-                        ilError(nullptr, "illegal real type");
-                        flvalue = 0.0;
+                        ilError(nullptr, "cannot make real constant");
                     } break;
                 }
                 return ILConstReal::create(flvalue,
                     static_cast<RealType *>(il_type));
             } break;
             case T_Pointer: {
-                return ILConstPointer::create(
-                    LLVMGenericValueToPointer(value), il_type);
+                return ILConstPointer::create(value.ptrval, il_type);
             } break;
             default: {
                 ilError(nullptr, "can not make constant for type");
@@ -3640,93 +3682,71 @@ struct FFI {
         }
     }
 
-    LLVMGenericValueRef convertConstant(
+    Variant convertConstant(
         Type *il_type, const ILConstantRef &c) {
+        Variant result;
         switch(il_type->getKind()) {
             case T_Integer: {
-                int64_t value = 0;
-                bool issigned = true;
                 switch(c->kind) {
                     case ILValue::ConstInteger: {
                         auto ci = llvm::cast<ILConstInteger>(c.get());
-                        value = ci->value;
-                        issigned = static_cast<IntegerType *>(
-                            ci->value_type)->isSigned();
+                        result.set_integer(il_type, ci->value);
                     } break;
                     case ILValue::ConstReal: {
                         auto cr = llvm::cast<ILConstReal>(c.get());
-                        value = (int64_t)cr->value;
-                        issigned = true;
+                        result.set_integer(il_type, (int64_t)cr->value);
                     } break;
                     default: {
-                        ilError(nullptr, "can't convert constant to integer");
+                        ilError(nullptr, "can't convert %s to integer",
+                            c->getType()->getRepr().c_str());
                     } break;
                 }
-                return LLVMCreateGenericValueOfInt(convertType(il_type),
-                                                    value,
-                                                    issigned);
             } break;
             case T_Real: {
-                double value = 0;
                 switch(c->kind) {
                     case ILValue::ConstInteger: {
                         auto ci = llvm::cast<ILConstInteger>(c.get());
-                        value = (double)ci->value;
+                        result.set_real(il_type, (double)ci->value);
                     } break;
                     case ILValue::ConstReal: {
                         auto cr = llvm::cast<ILConstReal>(c.get());
-                        value = cr->value;
+                        result.set_real(il_type, cr->value);
                     } break;
                     default: {
-                        ilError(nullptr, "can't convert constant to real");
+                        ilError(nullptr, "can't convert %s to real",
+                            c->getType()->getRepr().c_str());
                     } break;
                 }
-                return LLVMCreateGenericValueOfFloat(convertType(il_type), value);
             } break;
             case T_Pointer: {
-                void *value = nullptr;
                 switch(c->kind) {
                     case ILValue::ConstPointer: {
                         auto cp = llvm::cast<ILConstPointer>(c.get());
-                        value = cp->value;
+                        result.ptrval = cp->value;
                     } break;
                     case ILValue::ConstString: {
                         auto cs = llvm::cast<ILConstString>(c.get());
-                        value = (void *)cs->value.c_str();
+                        result.ptrval = (void *)cs->value.c_str();
                     } break;
                     default: {
-                        ilError(nullptr, "can't convert constant to pointer");
+                        ilError(nullptr, "can't convert %s to pointer",
+                            c->getType()->getRepr().c_str());
                     } break;
                 }
-                return LLVMCreateGenericValueOfPointer(value);
             } break;
             default: {
                 ilError(nullptr, "can not convert constant");
             } break;
         }
-        return nullptr;
+        return result;
     }
 
-    /*
-    LLVMGenericValueRef LLVMCreateGenericValueOfInt(LLVMTypeRef Ty,
-                                                    unsigned long long N,
-                                                    LLVMBool IsSigned);
-
-    LLVMGenericValueRef LLVMCreateGenericValueOfPointer(void *P);
-
-    LLVMGenericValueRef LLVMCreateGenericValueOfFloat(LLVMTypeRef Ty, double N);
-
-    unsigned LLVMGenericValueIntWidth(LLVMGenericValueRef GenValRef);
-
-    unsigned long long LLVMGenericValueToInt(LLVMGenericValueRef GenVal,
-                                             LLVMBool IsSigned);
-
-    void *LLVMGenericValueToPointer(LLVMGenericValueRef GenVal);
-
-    double LLVMGenericValueToFloat(LLVMTypeRef TyRef, LLVMGenericValueRef GenVal);
-
-    void LLVMDisposeGenericValue(LLVMGenericValueRef GenVal);
-    */
+    Type *pointerifyType(Type *il_type) {
+        if (il_type->getKind() == T_Pointer)
+            return il_type;
+        else
+            return Type::Pointer(il_type);
+    }
 
     TypeLLVMValuePair convertFunction(
         const ILConstantRef &value) {
@@ -3736,17 +3756,62 @@ struct FFI {
         }
         auto &result = functions[ilfunc->name];
         if (!result.second) {
-            destroyEngine();
-
-            LLVMTypeRef functype = convertType(ilfunc->function_type);
-            if (LLVMGetTypeKind(functype) != LLVMFunctionTypeKind) {
+            if (ilfunc->function_type->getKind() != T_CFunction) {
                 ilError(nullptr, "not a function type");
             }
+            auto ilfunctype = static_cast<CFunctionType *>(ilfunc->function_type);
 
-            result.second = LLVMAddFunction(
-                module, ilfunc->name.c_str(), functype);
-            assert(result.second);
-            result.first = static_cast<CFunctionType *>(ilfunc->function_type);
+            LLVMTypeRef ofunctype = convertType(ilfunctype);
+            LLVMValueRef ofunc = LLVMAddFunction(
+                module, ilfunc->name.c_str(), ofunctype);
+
+            LLVMValueRef thunkfunc = LLVMAddFunction(
+                module, ("bangra_" + ilfunc->name + "_thunk").c_str(),
+                thunkfunctype);
+
+            LLVMBuilderRef builder = LLVMCreateBuilder();
+            LLVMPositionBuilderAtEnd(builder, LLVMAppendBasicBlock(thunkfunc, ""));
+
+            size_t paramcount = ilfunctype->getParameterCount();
+            LLVMValueRef args[paramcount];
+            LLVMValueRef argparam = LLVMGetParam(thunkfunc, 1);
+            for (size_t i = 0; i < paramcount; ++i) {
+                Type *paramtype = ilfunctype->getParameter(i);
+
+                LLVMValueRef indices[] = {
+                    LLVMConstInt(LLVMInt32Type(), i, false) };
+
+                LLVMValueRef arg = LLVMBuildGEP(
+                    builder, argparam, indices, 1, "");
+
+                arg = LLVMBuildBitCast(builder, arg,
+                    convertType(Type::Pointer(Type::Pointer(paramtype))), "");
+
+                arg = LLVMBuildLoad(builder, arg, "");
+
+                args[i] = LLVMBuildLoad(builder, arg, "");
+            }
+            LLVMValueRef cr = LLVMBuildCall(builder, ofunc, args, paramcount, "");
+            if (ilfunctype->getResult() != Type::Void) {
+                Type *rettype = ilfunctype->getResult();
+                LLVMValueRef retparam = LLVMGetParam(thunkfunc, 0);
+
+                retparam = LLVMBuildBitCast(builder, retparam,
+                      convertType(Type::Pointer(rettype)), "");
+
+                LLVMBuildStore(builder, cr, retparam);
+            }
+
+            LLVMBuildRetVoid(builder);
+            LLVMDisposeBuilder(builder);
+
+            //LLVMDumpModule(module);
+            //verifyModule();
+
+            result.first = ilfunctype;
+            result.second = thunkfunc;
+
+            destroyEngine();
         }
         return result;
     }
@@ -3766,33 +3831,29 @@ struct FFI {
             ilError(nullptr, "too many arguments");
         }
 
-        LLVMGenericValueRef genericvalues[args.size()];
-        for (size_t i = 0; i < args.size(); ++i) {
-            if (i >= paramcount) {
-                // vararg
-                genericvalues[i] = convertConstant(
-                    varArgType(args[i]->getType()), args[i]);
-            } else {
-                genericvalues[i] = convertConstant(
-                    ilfunctype->getParameter(i), args[i]);
-            }
+        Variant variants[paramcount];
+        void *ptrs[paramcount];
+        for (size_t i = 0; i < paramcount; ++i) {
+            variants[i] = convertConstant(
+                ilfunctype->getParameter(i), args[i]);
+            ptrs[i] = &variants[i];
         }
 
-        LLVMGenericValueRef result = runFunction(F.second,
-            args.size(), genericvalues);
-        for (size_t i = 0; i < args.size(); ++i) {
-            LLVMDisposeGenericValue(genericvalues[i]);
-        }
-        ILConstantRef constresult = makeConstant(
-            ilfunctype->getResult(), result);
-        if (result)
-            LLVMDisposeGenericValue(result);
-        return constresult;
+        verifyModule();
+        createEngine();
+        typedef void (*FuncType)(void *, void **);
+
+        FuncType f = (FuncType)LLVMGetPointerToGlobal(engine, F.second);
+
+        Variant result;
+        f(&result, ptrs);
+
+        return makeConstant(ilfunctype->getResult(), result);
     }
 
 };
 
-static FFI ffi;
+static FFI *ffi;
 
 //------------------------------------------------------------------------------
 // INTERPRETER
@@ -3868,6 +3929,7 @@ struct ILConstClosure :
     }
 };
 
+typedef std::vector<ILValueRef> ILValueArray;
 
 ILConstantRef evaluate(const ILFrameRef &frame, const ILValueRef &value) {
     if (llvm::isa<ILConstant>(value.get())) {
@@ -3904,102 +3966,91 @@ ILConstantRef evaluate(const ILFrameRef &frame, const ILValueRef &value) {
 }
 
 void evaluate_values(
-    const ILContinuationRef &cont,
+    const ILValueArray &arguments,
     const ILFrameRef &frame,
     std::vector<ILConstantRef> &values) {
-    size_t argcount = cont->getArgumentCount();
-    for (size_t i = 0; i < argcount; ++i) {
-        auto value = evaluate(frame, cont->getArgument(i));
+    size_t argcount = arguments.size();
+    for (size_t i = 1; i < argcount; ++i) {
+        auto value = evaluate(frame, arguments[i]);
         assert(value);
         values.push_back(value);
     }
 }
 
 void map_continuation_arguments(
-    const ILContinuationRef &cont,
+    const ILValueArray &arguments,
     const ILContinuationRef &nextcont,
     const ILFrameRef &frame,
     const ILFrameRef &nextframe) {
     std::vector<ILConstantRef> values;
-    evaluate_values(cont, frame, values);
-    size_t argcount = values.size();
+    evaluate_values(arguments, frame, values);
+    size_t argcount = arguments.size() - 1;
     size_t paramcount = nextcont->getParameterCount();
     if (argcount != paramcount) {
-        ilError(cont, "argument count mismatch (%zu != %zu)",
+        ilError(nullptr, "argument count mismatch (%zu != %zu)",
             argcount, paramcount);
     }
     nextframe->map[nextcont] = values;
 }
 
-void map_closure(const ILConstantRef &evalcallee,
-    ILContinuationRef &cont,
+void map_closure(const std::shared_ptr<ILConstClosure> &closure,
+    ILValueArray &arguments,
     ILFrameRef &frame) {
-    if (evalcallee->kind == ILValue::ConstClosure) {
-        auto closure = evalcallee->getSharedPtr<ILConstClosure>();
-        map_continuation_arguments(
-            cont, closure->cont, frame, closure->frame);
-        frame = closure->frame;
-        cont = closure->cont;
-    } else {
-        ilError(evalcallee, "argument not callable");
-    }
+    map_continuation_arguments(
+        arguments, closure->cont, frame, closure->frame);
+    frame = closure->frame;
+    arguments = closure->cont->values;
 }
 
 static bool extract_bool(const ILConstantRef &value);
 void execute(const ILContinuationRef &entry) {
     assert(entry->getParameterCount() == 0);
 
-    ILContinuationRef cont = entry;
+    //ILContinuationRef cont = entry;
+    std::vector<ILValueRef> arguments = entry->values;
     ILFrameRef frame = std::make_shared<ILFrame>();
     frame->idx = 0;
 
     while (true) {
 #ifdef BANGRA_DEBUG_IL
         std::cout << frame->getRepr() << "\n";
-        std::cout << cont->getRepr() << "\n";
+        //std::cout << cont->getRepr() << "\n";
         fflush(stdout);
 #endif
-        auto callee = cont->getValue(0);
+        assert(arguments.size() >= 1);
+        ILValueRef callee = arguments[0];
+        if (callee->kind == ILValue::Parameter) {
+            callee = evaluate(frame, callee);
+        }
         switch(callee->kind) {
-            case ILValue::Parameter: {
-                auto evalcallee = evaluate(frame, callee);
-                map_closure(evalcallee, cont, frame);
-            } break;
             case ILValue::ConstClosure: {
                 map_closure(
-                    callee->getSharedPtr<ILConstClosure>(), cont, frame);
+                    callee->getSharedPtr<ILConstClosure>(), arguments, frame);
             } break;
             case ILValue::Continuation: {
                 auto nextcont = callee->getSharedPtr<ILContinuation>();
                 ILFrameRef nextframe = frame;
                 nextframe = ILFrame::create(frame);
-                map_continuation_arguments(cont, nextcont, frame, nextframe);
-                cont = nextcont;
+                map_continuation_arguments(arguments, nextcont, frame, nextframe);
+                arguments = nextcont->values;
                 frame = nextframe;
             } break;
             case ILValue::Intrinsic: {
                 if (callee == ILIntrinsic::Return) {
                     return;
                 } else if (callee == ILIntrinsic::Branch) {
-                    auto condarg = cont->getArgument(0);
+                    auto condarg = arguments[1];
                     bool condvalue = extract_bool(
                         evaluate(frame, condarg));
-                    auto thenarg = cont->getArgument(1);
-                    auto elsearg = cont->getArgument(2);
+                    auto thenarg = arguments[2];
+                    auto elsearg = arguments[3];
                     assert(thenarg->kind == ILValue::Continuation);
                     assert(elsearg->kind == ILValue::Continuation);
                     if (condvalue) {
-                        cont = thenarg->getSharedPtr<ILContinuation>();
+                        arguments = thenarg->getSharedPtr<ILContinuation>()->values;
                     } else {
-                        cont = elsearg->getSharedPtr<ILContinuation>();
+                        arguments = elsearg->getSharedPtr<ILContinuation>()->values;
                     }
-                } else if (callee == ILIntrinsic::Inspect) {
-                    auto condarg = evaluate(frame, cont->getArgument(0));
-                    std::cout << condarg->getRepr() << "\n";
-                    fflush(stdout);
-                    auto nextcont = cont->getArgument(1);
-                    assert(nextcont->kind == ILValue::Continuation);
-                    cont = nextcont->getSharedPtr<ILContinuation>();
                 } else {
                     ilError(callee, "unhandled intrinsic");
                 }
@@ -4007,17 +4058,28 @@ void execute(const ILContinuationRef &entry) {
             case ILValue::ConstBuiltin: {
                 auto cb = callee->getSharedPtr<ILConstBuiltin>();
                 std::vector<ILConstantRef> values;
-                evaluate_values(cont, frame, values);
+                evaluate_values(arguments, frame, values);
                 assert(values.size() >= 1);
                 ILConstantRef closure = values.back();
                 values.pop_back();
                 ILConstantRef result = cb->handler(values);
-                // generate fitting continuation and resume
-                // TODO: don't use cont
-                auto nextcont = ILContinuation::create(0, "bret");
-                nextcont->values.push_back(closure);
-                nextcont->values.push_back(result);
-                cont = nextcont;
+                // generate fitting resume
+                arguments.clear();
+                arguments.push_back(closure);
+                arguments.push_back(result);
+            } break;
+            case ILValue::ConstCFunction: {
+                auto cb = callee->getSharedPtr<ILConstCFunction>();
+                std::vector<ILConstantRef> values;
+                evaluate_values(arguments, frame, values);
+                assert(values.size() >= 1);
+                ILConstantRef closure = values.back();
+                values.pop_back();
+                ILConstantRef result = ffi->runFunction(cb, values);
+                // generate fitting resume
+                arguments.clear();
+                arguments.push_back(closure);
+                arguments.push_back(result);
             } break;
             default: {
                 ilError(callee, "can not apply expression");
@@ -4031,6 +4093,25 @@ void execute(const ILContinuationRef &entry) {
 // BUILTINS
 //------------------------------------------------------------------------------
 
+static bool builtin_checkparams (const std::vector<ILConstantRef> &args,
+    int mincount, int maxcount) {
+    if ((mincount <= 0) && (maxcount == -1))
+        return true;
+
+    int argcount = (int)args.size();
+
+    if ((maxcount >= 0) && (argcount > maxcount)) {
+        ilError(nullptr,
+            "excess argument. At most %i arguments expected", maxcount);
+        return false;
+    }
+    if ((mincount >= 0) && (argcount < mincount)) {
+        ilError(nullptr, "at least %i arguments expected", mincount);
+        return false;
+    }
+    return true;
+}
+
 static bool extract_bool(const ILConstantRef &value) {
     if (auto resulttype = llvm::dyn_cast<ILConstInteger>(value.get())) {
         if (resulttype->getType() == Type::Bool) {
@@ -4041,7 +4122,6 @@ static bool extract_bool(const ILConstantRef &value) {
     return false;
 }
 
-/*
 static std::string extract_string(const ILConstantRef &value) {
     auto resulttype = llvm::dyn_cast<ILConstString>(value.get());
     if (!resulttype) {
@@ -4060,7 +4140,15 @@ static Type *extract_type(const ILConstantRef &value) {
     }
     return (Type *)resulttype->value;
 }
-*/
+
+static const std::vector<ILConstantRef> &extract_tuple(
+    const ILConstantRef &value) {
+    auto resulttype = llvm::dyn_cast<ILConstTuple>(value.get());
+    if (!resulttype) {
+        ilError(value, "tuple expected");
+    }
+    return resulttype->values;
+}
 
 /*
 static ILConstantRef wrap(const ILConstantRef &value) {
@@ -4080,6 +4168,11 @@ static std::shared_ptr<ILConstInteger> wrap(bool value) {
 static std::shared_ptr<ILConstInteger> wrap(int64_t value) {
     return ILConstInteger::create(value,
         static_cast<IntegerType *>(Type::Int64));
+}
+
+static std::shared_ptr<ILConstTuple> wrap(
+    const std::vector<ILConstantRef> &args) {
+    return ILConstTuple::create(args);
 }
 
 /*
@@ -4107,6 +4200,7 @@ static std::shared_ptr<ILConstString> wrap(const std::string &s) {
 }
 
 static ILConstantRef builtin_print(const std::vector<ILConstantRef> &args) {
+    builtin_checkparams(args, 0, -1);
     for (size_t i = 0; i < args.size(); ++i) {
         if (i != 0)
             std::cout << " ";
@@ -4126,8 +4220,34 @@ static ILConstantRef builtin_print(const std::vector<ILConstantRef> &args) {
 }
 
 static ILConstantRef builtin_repr(const std::vector<ILConstantRef> &args) {
-    assert(args.size() == 1);
+    builtin_checkparams(args, 1, 1);
     return wrap(args[0]->getRepr());
+}
+
+static ILConstantRef builtin_tupleof(const std::vector<ILConstantRef> &args) {
+    builtin_checkparams(args, 0, -1);
+    return wrap(args);
+}
+
+static ILConstantRef builtin_cdecl(const std::vector<ILConstantRef> &args) {
+    builtin_checkparams(args, 3, 3);
+    Type *rettype = extract_type(args[0]);
+    const std::vector<ILConstantRef> &params = extract_tuple(args[1]);
+    bool vararg = extract_bool(args[2]);
+
+    std::vector<Type *> paramtypes;
+    size_t paramcount = params.size();
+    for (size_t i = 0; i < paramcount; ++i) {
+        paramtypes.push_back(extract_type(params[i]));
+    }
+    return wrap(Type::CFunction(rettype, paramtypes, vararg));
+}
+
+static ILConstantRef builtin_external(const std::vector<ILConstantRef> &args) {
+    builtin_checkparams(args, 2, 2);
+    std::string name = extract_string(args[0]);
+    Type *rettype = extract_type(args[1]);
+    return ILConstCFunction::create(name, rettype);
 }
 
 template<typename A, typename B>
@@ -4866,13 +4986,10 @@ static TranslateTable translators;
 
 static void registerTranslators() {
     auto &t = translators;
-    // t.set(parse_external, "external", 2, 2);
     t.set(parse_let, "let", 1, 2);
     t.set(parse_apply, "apply", 1, -1);
     t.set(parse_do, "do", 0, -1);
     t.set(parse_select, "select", 2, 3);
-
-    // t.set(parse_cdecl, "cdecl", 2, 2);
     t.set(parse_function, "function", 1, -1);
 }
 
@@ -4943,6 +5060,8 @@ static void init() {
     LLVMInitializeNativeAsmPrinter();
     LLVMInitializeNativeDisassembler();
 
+    ffi = new FFI();
+
 }
 
 //------------------------------------------------------------------------------
@@ -4966,8 +5085,6 @@ static void setupRootEnvironment (const EnvironmentRef &env) {
     env->setLocal("uint32", wrap(Type::UInt32));
     env->setLocal("uint64", wrap(Type::UInt64));
 
-    env->setLocal("inspect", ILIntrinsic::Inspect);
-
     env->setLocal("usize_t",
         wrap(Type::Integer(sizeof(size_t)*8,false)));
 
@@ -4981,26 +5098,46 @@ static void setupRootEnvironment (const EnvironmentRef &env) {
 
     env->setLocal("print", wrap(builtin_print));
     env->setLocal("repr", wrap(builtin_repr));
+    env->setLocal("cdecl", wrap(builtin_cdecl));
+    env->setLocal("tupleof", wrap(builtin_tupleof));
+    env->setLocal("external", wrap(builtin_external));
 
-    env->setLocal("+", wrap(builtin_binary_op<dispatch_arith_string_types, builtin_add_op>));
-    env->setLocal("-", wrap(builtin_binary_op<dispatch_arith_types, builtin_sub_op>));
-    env->setLocal("*", wrap(builtin_binary_op<dispatch_arith_types, builtin_mul_op>));
-    env->setLocal("/", wrap(builtin_binary_op<dispatch_arith_types, builtin_div_op>));
-    env->setLocal("%", wrap(builtin_binary_op<dispatch_arith_types, builtin_mod_op>));
+    env->setLocal("+",
+        wrap(builtin_binary_op<dispatch_arith_string_types, builtin_add_op>));
+    env->setLocal("-",
+        wrap(builtin_binary_op<dispatch_arith_types, builtin_sub_op>));
+    env->setLocal("*",
+        wrap(builtin_binary_op<dispatch_arith_types, builtin_mul_op>));
+    env->setLocal("/",
+        wrap(builtin_binary_op<dispatch_arith_types, builtin_div_op>));
+    env->setLocal("%",
+        wrap(builtin_binary_op<dispatch_arith_types, builtin_mod_op>));
 
-    env->setLocal("&", wrap(builtin_binary_op<dispatch_bit_types, builtin_bitand_op>));
-    env->setLocal("|", wrap(builtin_binary_op<dispatch_bit_types, builtin_bitor_op>));
-    env->setLocal("^", wrap(builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>));
-    env->setLocal("~", wrap(builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>));
+    env->setLocal("&",
+        wrap(builtin_binary_op<dispatch_bit_types, builtin_bitand_op>));
+    env->setLocal("|",
+        wrap(builtin_binary_op<dispatch_bit_types, builtin_bitor_op>));
+    env->setLocal("^",
+        wrap(builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>));
+    env->setLocal("~",
+        wrap(builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>));
 
-    env->setLocal("not", wrap(builtin_unary_op<dispatch_boolean_types, builtin_not_op>));
+    env->setLocal("not",
+        wrap(builtin_unary_op<dispatch_boolean_types, builtin_not_op>));
 
-    env->setLocal("==", wrap(builtin_binary_op<dispatch_cmp_types, builtin_eq_op>));
-    env->setLocal("!=", wrap(builtin_binary_op<dispatch_cmp_types, builtin_ne_op>));
-    env->setLocal(">", wrap(builtin_binary_op<dispatch_cmp_types, builtin_gt_op>));
-    env->setLocal(">=", wrap(builtin_binary_op<dispatch_cmp_types, builtin_ge_op>));
-    env->setLocal("<", wrap(builtin_binary_op<dispatch_cmp_types, builtin_lt_op>));
-    env->setLocal("<=", wrap(builtin_binary_op<dispatch_cmp_types, builtin_le_op>));
+    env->setLocal("==",
+        wrap(builtin_binary_op<dispatch_cmp_types, builtin_eq_op>));
+    env->setLocal("!=",
+        wrap(builtin_binary_op<dispatch_cmp_types, builtin_ne_op>));
+    env->setLocal(">",
+        wrap(builtin_binary_op<dispatch_cmp_types, builtin_gt_op>));
+    env->setLocal(">=",
+        wrap(builtin_binary_op<dispatch_cmp_types, builtin_ge_op>));
+    env->setLocal("<",
+        wrap(builtin_binary_op<dispatch_cmp_types, builtin_lt_op>));
+    env->setLocal("<=",
+        wrap(builtin_binary_op<dispatch_cmp_types, builtin_le_op>));
+
 }
 
 static void teardownRootEnvironment (const EnvironmentRef &env) {
@@ -5031,61 +5168,6 @@ static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 */
 
     execute(mainfunc);
-
-    /*
-    LLVMModuleRef module = LLVMModuleCreateWithName("main");
-    LLVMValueRef func = nullptr;
-    {
-        CodeGenerator cg(env->global.module, module);
-        cg.generate();
-        //func = cg.resolveValue(mainfunc);
-    }
-    LLVMDumpModule(module);
-    assert(func);
-
-    char *error = NULL;
-    LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
-    LLVMDisposeMessage(error);
-
-    error = NULL;
-    LLVMExecutionEngineRef engine = NULL;
-
-    LLVMMCJITCompilerOptions options;
-    LLVMInitializeMCJITCompilerOptions(&options, sizeof(options));
-    //options.OptLevel = 0;
-    //options.EnableFastISel = true;
-    //options.CodeModel = LLVMCodeModelLarge;
-
-    LLVMCreateMCJITCompilerForModule(&engine, module,
-        &options, sizeof(options), &error);
-
-    if (error) {
-        valueError(expr, "%s", error);
-        LLVMDisposeMessage(error);
-        return false;
-    }
-
-    //~ for (auto it : env->globals->globalptrs) {
-        //~ LLVMAddGlobalMapping(engine, std::get<0>(it), std::get<1>(it));
-    //~ }
-
-    //~ for (auto m : env->globals->globalmodules) {
-        //~ LLVMAddModule(engine, m);
-    //~ }
-
-    LLVMRunStaticConstructors(engine);
-
-    void *f = LLVMGetPointerToGlobal(engine, func);
-
-    try {
-        typedef void (*signature)();
-        ((signature)f)();
-    } catch (ValueRef expr) {
-        handleException(env, expr);
-        return false;
-    }
-
-    */
 
     return true;
 }
@@ -5706,7 +5788,82 @@ void bangra_raise (ValueRef expr) {
 // MAIN EXECUTABLE IMPLEMENTATION
 //------------------------------------------------------------------------------
 
+//#define BANGRA_TEST_ENV
+#ifdef BANGRA_TEST_ENV
+
+static void test_ffi() {
+    LLVMEnablePrettyStackTrace();
+    LLVMLinkInMCJIT();
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    LLVMInitializeNativeDisassembler();
+
+    LLVMModuleRef module = LLVMModuleCreateWithName("ffi");
+
+    LLVMTypeRef params[] = { LLVMDoubleType() };
+
+    LLVMValueRef func =
+        LLVMAddFunction(module, "sin",
+            LLVMFunctionType(LLVMDoubleType(), params, 1, false));
+
+    LLVMDumpModule(module);
+
+    char *error = NULL;
+    LLVMVerifyModule(module, LLVMAbortProcessAction, &error);
+    LLVMDisposeMessage(error);
+
+    error = NULL;
+
+    LLVMExecutionEngineRef engine;
+    LLVMCreateExecutionEngineForModule(&engine,
+                                    module,
+                                    &error);
+
+    if (error) {
+        LLVMDisposeMessage(error);
+        engine = nullptr;
+        return;
+    }
+
+    LLVMRunStaticConstructors(engine);
+
+    // direct invocation
+    typedef double (*FuncType)(double);
+
+    FuncType f = (FuncType)LLVMGetPointerToGlobal(engine, func);
+    assert(f);
+
+    // 0.479...
+    printf("direct: %f\n", f(0.5));
+
+    // indirect invocation
+
+    LLVMGenericValueRef args[] = {
+        LLVMCreateGenericValueOfFloat(LLVMDoubleType(), 0.5)
+    };
+    LLVMGenericValueRef result = LLVMRunFunction(engine, func, 1, args);
+
+    // fails, returns 0
+    printf("indirect: %f\n",
+        LLVMGenericValueToFloat(LLVMDoubleType(), result));
+
+    LLVMRunStaticDestructors(engine);
+    LLVMDisposeExecutionEngine(engine);
+    //LLVMDisposeModule(module);
+}
+
+int main(int argc, char ** argv) {
+    test_ffi();
+    return 0;
+}
+
+#else // BANGRA_TEST_ENV
+
 int main(int argc, char ** argv) {
     return bangra_main(argc, argv);
 }
+
+#endif // BANGRA_TEST_ENV
+
 #endif

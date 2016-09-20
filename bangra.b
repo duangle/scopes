@@ -16,7 +16,52 @@ bangra
                     this-function (- n 1) (* acc n)
         fac-times n 1
 
+let repeat
+    function (m init f)
+        select (<= m 0)
+            null
+            apply
+                function (n x)
+                    let nx
+                        f n x
+                    let nn (+ n 1)
+                    select (== nn m)
+                        x
+                        this-function nn nx
+                \ 0 init
+
+repeat 10 1
+    function (n x)
+        print n x
+        * x 2
+
+let sin
+    external "sin"
+        cdecl double (tupleof double) false
+
+print
+    sin 0.5
+
+print
+    0.1
+    sin 0
+    sin 0.1
+    sin 0.5
+    sin 1.2
+print "done"
+
+let puts
+    external "puts"
+        cdecl int (tupleof rawstring) false
+
+let testtext
+    "yo yo yo"
+print
+    puts testtext
+    sin 5
+
 print "hello world"
+    rawstring
 
 print
     repr "hi"

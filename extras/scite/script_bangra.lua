@@ -56,8 +56,8 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let var set external cdecl apply do select function null true false label ..."
-            .. " inspect"
+        "bangra let external cdecl apply do select function null true false label ..."
+            .. " print repr tupleof"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
@@ -67,7 +67,7 @@ local function bangra_symbols()
 
 
     TYPES = splitstr(getprop("types.bangra_lang") or
-        "int void rawstring opaque"
+        "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void rawstring opaque half float double"
         )
     }
 end
