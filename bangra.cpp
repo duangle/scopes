@@ -501,7 +501,7 @@ struct Anchor {
         dumpFileLine(path, offset);
     }
 
-    static void printMessageV (Anchor *anchor, const char *fmt, va_list args) {
+    static void printMessageV (const Anchor *anchor, const char *fmt, va_list args) {
         if (anchor) {
             std::cout
                 << ansi(ANSI_STYLE_LOCATION, anchor->path)
@@ -518,7 +518,7 @@ struct Anchor {
         }
     }
 
-    static void printErrorV (Anchor *anchor, const char *fmt, va_list args) {
+    static void printErrorV (const Anchor *anchor, const char *fmt, va_list args) {
         if (anchor) {
             std::cout
                 << ansi(ANSI_STYLE_LOCATION, anchor->path)
@@ -551,22 +551,15 @@ static ValueRef next(ValueRef expr);
 struct Value {
 private:
     const ValueKind kind;
-    int age;
     // NULL = end of list
     ValueRef next;
 protected:
     Value(ValueKind kind_, ValueRef next_ = nullptr) :
         kind(kind_),
-        age(0),
         next(next_) {
-        collection.push_back(this);
     }
 
 public:
-    typedef std::list<ValueRef> CollectionType;
-
-    static CollectionType collection;
-
     Anchor anchor;
 
     virtual ~Value() {}
@@ -596,15 +589,8 @@ public:
 
     std::string getHeader() const;
 
-    virtual void tag();
-
-    static int collect(ValueRef gcroot);
     virtual ValueRef clone() const = 0;
-
-    bool tagged() { return age == 0; }
 };
-
-Value::CollectionType Value::collection;
 
 //------------------------------------------------------------------------------
 
@@ -637,20 +623,10 @@ public:
         return V_Pointer;
     }
 
-    virtual void tag() {
-        if (tagged()) return;
-        Value::tag();
-
-        if (_at)
-            _at->tag();
-    }
-
     virtual ValueRef clone() const {
         return new Pointer(*this);
     }
 };
-
-static ValueRef gc_root = NULL;
 
 static ValueRef at(ValueRef expr) {
     assert(expr && (expr->getKind() == V_Pointer));
@@ -911,42 +887,6 @@ std::string Value::getHeader() const {
         }
     }
     return "";
-}
-
-void Value::tag() {
-    if (tagged()) return;
-    // reset age
-    age = 0;
-    if (next)
-        next->tag();
-}
-
-int Value::collect(ValueRef gcroot) {
-    assert(gcroot);
-
-    CollectionType::iterator iter = collection.begin();
-    while (iter != collection.end()) {
-        ValueRef value = *iter++;
-        value->age++;
-    }
-
-    // walk gcroot, reset age of values we find
-    gcroot->tag();
-    assert(gcroot->age == 0);
-
-    int collected = 0;
-    iter = collection.begin();
-    while (iter != collection.end()) {
-        ValueRef value = *iter;
-        auto this_iter = iter++;
-        if (value->age) {
-            // wasn't reached in this cycle; can be deleted
-            collection.erase(this_iter);
-            delete value;
-            collected++;
-        }
-    }
-    return collected;
 }
 
 //------------------------------------------------------------------------------
@@ -2810,24 +2750,9 @@ struct ILBuilder;
 struct ILIntrinsic;
 struct ILConstant;
 
-typedef std::shared_ptr<ILValue> ILValueRef;
-typedef std::weak_ptr<ILValue> ILValueWeakRef;
-
-typedef std::shared_ptr<ILContinuation> ILContinuationRef;
-typedef std::weak_ptr<ILContinuation> ILContinuationWeakRef;
-
-typedef std::shared_ptr<ILConstant> ILConstantRef;
-
-typedef std::shared_ptr<ILBuilder> ILBuilderRef;
-
-typedef std::shared_ptr<ILParameter> ILParameterRef;
-typedef std::shared_ptr<ILPrimitive> ILPrimitiveRef;
-
-typedef std::shared_ptr<ILIntrinsic> ILIntrinsicRef;
-
 //------------------------------------------------------------------------------
 
-struct ILValue : std::enable_shared_from_this<ILValue> {
+struct ILValue {
     enum Kind {
         Intrinsic,
 
@@ -2861,24 +2786,22 @@ public:
 
     virtual ~ILValue() {}
 
-    virtual std::string getRepr () = 0;
-    virtual std::string getRefRepr () = 0;
-    virtual Type *inferType() = 0;
+    virtual std::string getRepr () const = 0;
+    virtual std::string getRefRepr () const = 0;
+    virtual Type *inferType() const = 0;
 
-    Type *getType() {
+    Type *getType() const {
         return inferType();
     }
 
     template<typename T = ILValue>
-    std::shared_ptr<T> getSharedPtr() {
-        ILValueRef value = shared_from_this();
-        assert(llvm::isa<T>(value.get()));
-        return std::static_pointer_cast<T>(value);
+    T *downcast() {
+        return llvm::cast<T>(this);
     }
 };
 
-static void ilMessage (const ILValueRef &value, const char *format, ...) {
-    Anchor *anchor = NULL;
+static void ilMessage (const ILValue *value, const char *format, ...) {
+    const Anchor *anchor = NULL;
     if (value) {
         std::cout << "at\n  " << value->getRepr() << "\n";
         if (value->anchor.isValid()) {
@@ -2891,8 +2814,8 @@ static void ilMessage (const ILValueRef &value, const char *format, ...) {
     va_end (args);
 }
 
-static void ilError (const ILValueRef &value, const char *format, ...) {
-    Anchor *anchor = NULL;
+static void ilError (const ILValue *value, const char *format, ...) {
+    const Anchor *anchor = NULL;
     if (value) {
         std::cout << "at\n  " << value->getRepr() << "\n";
         if (value->anchor.isValid()) {
@@ -2920,10 +2843,6 @@ struct ILValueImpl : BaseT {
     static bool classof(const ILValue *value) {
         return value->kind == KindT;
     }
-
-    std::shared_ptr<SelfT> sharedFromThis() {
-        return BaseT::template getSharedPtr<SelfT>();
-    }
 };
 
 //------------------------------------------------------------------------------
@@ -2933,7 +2852,7 @@ struct ILPrimitive : ILValue {
         ILValue(kind_)
         {}
 
-    virtual std::string getRepr () {
+    virtual std::string getRepr () const {
         return getRefRepr();
     }
 
@@ -2958,22 +2877,28 @@ struct ILConstant : ILPrimitive {
 
 struct ILParameter :
     ILValueImpl<ILParameter, ILValue::Parameter, ILPrimitive> {
-    ILContinuationWeakRef parent;
+    ILContinuation *parent;
     size_t index;
     Type *parameter_type;
 
-    ILContinuationRef getParent() {
-        return parent.lock();
+    ILParameter() :
+        parent(nullptr),
+        index(-1),
+        parameter_type(nullptr) {
     }
 
-    virtual Type *inferType() {
+    ILContinuation *getParent() const {
+        return parent;
+    }
+
+    virtual Type *inferType() const {
         if (parameter_type)
             return parameter_type;
         else
             return Type::Any;
     }
 
-    virtual std::string getRepr() {
+    virtual std::string getRepr() const {
         return format("%s%zu %s %s",
             ansi(ANSI_STYLE_OPERATOR,"@").c_str(),
             index,
@@ -2981,10 +2906,10 @@ struct ILParameter :
             getType()->getRepr().c_str());
     }
 
-    virtual std::string getRefRepr ();
+    virtual std::string getRefRepr () const;
 
-    static ILParameterRef create(Type *type = nullptr) {
-        auto value = std::make_shared<ILParameter>();
+    static ILParameter *create(Type *type = nullptr) {
+        auto value = new ILParameter();
         value->index = (size_t)-1;
         value->parameter_type = type;
         return value;
@@ -2995,17 +2920,17 @@ struct ILParameter :
 
 struct ILIntrinsic :
     ILValueImpl<ILIntrinsic, ILValue::Intrinsic, ILValue> {
-    static ILIntrinsicRef Branch;
-    static ILIntrinsicRef Return;
+    static ILIntrinsic *Branch;
+    static ILIntrinsic *Return;
 
     std::string name;
     Type *intrinsic_type;
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return intrinsic_type;
     }
 
-    virtual std::string getRepr () {
+    virtual std::string getRepr () const {
         std::stringstream ss;
         ss << ansi(ANSI_STYLE_INSTRUCTION, name);
         ss << " " << ansi(ANSI_STYLE_OPERATOR, ":") << " ";
@@ -3013,14 +2938,14 @@ struct ILIntrinsic :
         return ss.str();
     }
 
-    virtual std::string getRefRepr () {
+    virtual std::string getRefRepr () const {
         return ansi(ANSI_STYLE_INSTRUCTION, name);
     }
 
-    static ILIntrinsicRef create(
+    static ILIntrinsic *create(
         const std::string &name, Type *type) {
         assert(type);
-        auto value = std::make_shared<ILIntrinsic>();
+        auto value = new ILIntrinsic();
         value->name = name;
         value->intrinsic_type = type;
         return value;
@@ -3036,8 +2961,8 @@ struct ILIntrinsic :
     }
 };
 
-ILIntrinsicRef ILIntrinsic::Branch;
-ILIntrinsicRef ILIntrinsic::Return;
+ILIntrinsic *ILIntrinsic::Branch;
+ILIntrinsic *ILIntrinsic::Return;
 
 //------------------------------------------------------------------------------
 
@@ -3054,8 +2979,8 @@ public:
     }
 
     std::string name;
-    std::vector<ILParameterRef> parameters;
-    std::vector<ILValueRef> values;
+    std::vector<ILParameter *> parameters;
+    std::vector<ILValue *> values;
 
     void clear() {
         parameters.clear();
@@ -3066,7 +2991,7 @@ public:
         return parameters.size();
     }
 
-    ILParameterRef getParameter(size_t i) {
+    ILParameter *getParameter(size_t i) {
         return parameters[i];
     }
 
@@ -3074,7 +2999,7 @@ public:
         return values.size();
     }
 
-    ILValueRef getValue(size_t i) {
+    ILValue *getValue(size_t i) {
         return values[i];
     }
 
@@ -3082,11 +3007,11 @@ public:
         return values.size() - 1;
     }
 
-    ILValueRef getArgument(size_t i) {
+    ILValue *getArgument(size_t i) {
         return values[i + 1];
     }
 
-    virtual std::string getRepr () {
+    virtual std::string getRepr () const {
         std::stringstream ss;
         ss << getRefRepr();
         ss << " " << ansi(ANSI_STYLE_OPERATOR, "(");
@@ -3109,7 +3034,7 @@ public:
     }
 
     /*
-    void setValues(const std::vector<ILValueRef> &values_) {
+    void setValues(const std::vector<ILValue *> &values_) {
         auto self = sharedFromThis();
         for (size_t i = 0; i < values.size(); ++i) {
             values[i]->unlink(self, i);
@@ -3120,19 +3045,19 @@ public:
         }
     }
 
-    void appendValue(const ILValueRef &value) {
+    void appendValue(const ILValue *value) {
 
     }
     */
 
-    virtual std::string getRefRepr () {
+    virtual std::string getRefRepr () const {
         return format("%s%s%" PRId64,
             ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
             name.c_str(),
             uid);
     }
 
-    Type *inferType() {
+    Type *inferType() const {
         std::vector<Type *> params;
         for (size_t i = 0; i < parameters.size(); ++i) {
             params.push_back(parameters[i]->getType());
@@ -3140,17 +3065,17 @@ public:
         return Type::Continuation(params);
     }
 
-    ILParameterRef appendParameter(const ILParameterRef &param) {
-        param->parent = getSharedPtr<ILContinuation>();
+    ILParameter *appendParameter(ILParameter *param) {
+        param->parent = this;
         param->index = parameters.size();
         parameters.push_back(param);
         return param;
     }
 
-    static ILContinuationRef create(
+    static ILContinuation *create(
         size_t paramcount = 0,
         const std::string &name = "") {
-        auto value = std::make_shared<ILContinuation>();
+        auto value = new ILContinuation();
         value->name = name;
         for (size_t i = 0; i < paramcount; ++i) {
             value->appendParameter(ILParameter::create());
@@ -3161,7 +3086,7 @@ public:
 
 int64_t ILContinuation::unique_id_counter = 1;
 
-std::string ILParameter::getRefRepr () {
+std::string ILParameter::getRefRepr () const {
     auto parent = getParent();
     if (parent) {
         return format("%s%s%zu",
@@ -3197,22 +3122,22 @@ struct ILConstString :
     ILValueImpl<ILConstString, ILValue::ConstString, ILConstant> {
     std::string value;
 
-    static std::shared_ptr<ILConstString> create(const std::string &s) {
-        auto result = std::make_shared<ILConstString>();
+    static ILConstString *create(const std::string &s) {
+        auto result = new ILConstString();
         result->value = s;
         return result;
     }
 
-    static std::shared_ptr<ILConstString> create(String *c) {
+    static ILConstString *create(String *c) {
         assert(c);
         return create(c->getValue());
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return Type::Array(Type::Int8, value.size() + 1);
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         return ansi(ANSI_STYLE_STRING,
             format("\"%s\"",
                 quoteString(value, "\"").c_str()));
@@ -3226,24 +3151,24 @@ struct ILConstInteger :
     int64_t value;
     Type *value_type;
 
-    static std::shared_ptr<ILConstInteger> create(int64_t value, IntegerType *cdest) {
+    static ILConstInteger *create(int64_t value, IntegerType *cdest) {
         assert(cdest);
-        auto result = std::make_shared<ILConstInteger>();
+        auto result = new ILConstInteger();
         result->value_type = cdest;
         result->value = value;
         return result;
     }
 
-    static std::shared_ptr<ILConstInteger> create(Integer *c, IntegerType *cdest) {
+    static ILConstInteger *create(Integer *c, IntegerType *cdest) {
         assert(c);
         return create(c->getValue(), cdest);
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return value_type;
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         if (value_type == Type::Bool) {
             return ansi(ANSI_STYLE_KEYWORD,
                 value?"true":"false");
@@ -3261,24 +3186,24 @@ struct ILConstReal :
     double value;
     Type *value_type;
 
-    static std::shared_ptr<ILConstReal> create(double value, RealType *cdest) {
+    static ILConstReal *create(double value, RealType *cdest) {
         assert(cdest);
-        auto result = std::make_shared<ILConstReal>();
+        auto result = new ILConstReal();
         result->value_type = cdest;
         result->value = value;
         return result;
     }
 
-    static std::shared_ptr<ILConstReal> create(Real *c, RealType *cdest) {
+    static ILConstReal *create(Real *c, RealType *cdest) {
         assert(c);
         return create(c->getValue(), cdest);
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return value_type;
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         return ansi(ANSI_STYLE_NUMBER,
             format("%f", value));
     }
@@ -3288,16 +3213,16 @@ struct ILConstReal :
 
 struct ILConstTuple :
     ILValueImpl<ILConstTuple, ILValue::ConstTuple, ILConstant> {
-    std::vector<ILConstantRef> values;
+    std::vector<ILConstant *> values;
 
-    static std::shared_ptr<ILConstTuple> create(
-        const std::vector<ILConstantRef> &values_) {
-        auto result = std::make_shared<ILConstTuple>();
+    static ILConstTuple *create(
+        const std::vector<ILConstant *> &values_) {
+        auto result = new ILConstTuple();
         result->values = values_;
         return result;
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         NamedTypeArray types;
         for (auto &value : values) {
             types.push_back(
@@ -3306,7 +3231,7 @@ struct ILConstTuple :
         return Type::Tuple(types);
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "tupleof");
         for (auto &value : values) {
@@ -3324,19 +3249,19 @@ struct ILConstPointer :
     void *value;
     Type *pointer_type;
 
-    static std::shared_ptr<ILConstPointer> create(
+    static ILConstPointer *create(
         void *value, Type *pointer_type) {
-        auto result = std::make_shared<ILConstPointer>();
+        auto result = new ILConstPointer();
         result->value = value;
         result->pointer_type = pointer_type;
         return result;
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return pointer_type;
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         std::stringstream ss;
         if (pointer_type == Type::TypePointer) {
             ss << "(" << pointer_type->getRepr() << " "
@@ -3349,7 +3274,7 @@ struct ILConstPointer :
 };
 
 /*
-static Type *extract_consttype(const ILValueRef &value) {
+static Type *extract_consttype(const ILValue *value) {
     if (auto resulttype = llvm::dyn_cast<ILConstTypePointer>(value.get())) {
         return resulttype->value;
     }
@@ -3359,24 +3284,24 @@ static Type *extract_consttype(const ILValueRef &value) {
 
 //------------------------------------------------------------------------------
 
-typedef ILConstantRef (*ILBuiltinFunction)(const std::vector<ILConstantRef> &args);
+typedef ILConstant *(*ILBuiltinFunction)(const std::vector<ILConstant *> &args);
 
 struct ILConstBuiltin :
     ILValueImpl<ILConstBuiltin, ILValue::ConstBuiltin, ILConstant> {
 
     ILBuiltinFunction handler;
 
-    static std::shared_ptr<ILConstBuiltin> create(ILBuiltinFunction func) {
-        auto result = std::make_shared<ILConstBuiltin>();
+    static ILConstBuiltin *create(ILBuiltinFunction func) {
+        auto result = new ILConstBuiltin();
         result->handler = func;
         return result;
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return Type::Any;
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin");
         ss << " " << handler;
@@ -3392,20 +3317,20 @@ struct ILConstCFunction :
     std::string name;
     Type *function_type;
 
-    static std::shared_ptr<ILConstCFunction> create(
+    static ILConstCFunction *create(
         const std::string &name,
         Type *function_type) {
-        auto result = std::make_shared<ILConstCFunction>();
+        auto result = new ILConstCFunction();
         result->name = name;
         result->function_type = function_type;
         return result;
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return function_type;
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "cfunc");
         ss << " " << name;
@@ -3418,29 +3343,29 @@ struct ILConstCFunction :
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
-struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
-    ILContinuationRef continuation;
+struct ILBuilder {
+    ILContinuation *continuation;
 
-    void continueAt(const ILContinuationRef &cont) {
+    void continueAt(ILContinuation *cont) {
         this->continuation = cont;
         assert(!cont->values.size());
     }
 
     void insertAndAdvance(
-        const std::vector<ILValueRef> &values,
-        const ILContinuationRef &next) {
+        const std::vector<ILValue *> &values,
+        ILContinuation *next) {
         assert(continuation);
         assert(!continuation->values.size());
         continuation->values = values;
         continuation = next;
     }
 
-    void br(const std::vector<ILValueRef> &arguments) {
+    void br(const std::vector<ILValue *> &arguments) {
         insertAndAdvance(arguments, nullptr);
     }
 
     /*
-    ILParameterRef toparam(const ILValueRef &value) {
+    ILParameterRef toparam(const ILValue *value) {
         if (llvm::isa<ILParameter>(value.get())) {
             return value->getSharedPtr<ILParameter>();
         } else {
@@ -3451,7 +3376,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
     }
     */
 
-    ILParameterRef call(std::vector<ILValueRef> values) {
+    ILParameter *call(std::vector<ILValue *> values) {
         auto next = ILContinuation::create(1, "cret");
         values.push_back(next);
         insertAndAdvance(values, next);
@@ -3461,7 +3386,7 @@ struct ILBuilder : std::enable_shared_from_this<ILBuilder> {
 };
 
 //------------------------------------------------------------------------------
-// FFI
+// FOREIGN FUNCTION INTERFACE
 //------------------------------------------------------------------------------
 
 struct FFI {
@@ -3639,7 +3564,7 @@ struct FFI {
 
     };
 
-    ILConstantRef makeConstant(Type *il_type, const Variant &value) {
+    ILConstant *makeConstant(Type *il_type, const Variant &value) {
         switch(il_type->getKind()) {
             case T_Void: {
                 return ILConstTuple::create({});
@@ -3683,17 +3608,17 @@ struct FFI {
     }
 
     Variant convertConstant(
-        Type *il_type, const ILConstantRef &c) {
+        Type *il_type, const ILConstant *c) {
         Variant result;
         switch(il_type->getKind()) {
             case T_Integer: {
                 switch(c->kind) {
                     case ILValue::ConstInteger: {
-                        auto ci = llvm::cast<ILConstInteger>(c.get());
+                        auto ci = llvm::cast<ILConstInteger>(c);
                         result.set_integer(il_type, ci->value);
                     } break;
                     case ILValue::ConstReal: {
-                        auto cr = llvm::cast<ILConstReal>(c.get());
+                        auto cr = llvm::cast<ILConstReal>(c);
                         result.set_integer(il_type, (int64_t)cr->value);
                     } break;
                     default: {
@@ -3705,11 +3630,11 @@ struct FFI {
             case T_Real: {
                 switch(c->kind) {
                     case ILValue::ConstInteger: {
-                        auto ci = llvm::cast<ILConstInteger>(c.get());
+                        auto ci = llvm::cast<ILConstInteger>(c);
                         result.set_real(il_type, (double)ci->value);
                     } break;
                     case ILValue::ConstReal: {
-                        auto cr = llvm::cast<ILConstReal>(c.get());
+                        auto cr = llvm::cast<ILConstReal>(c);
                         result.set_real(il_type, cr->value);
                     } break;
                     default: {
@@ -3721,11 +3646,11 @@ struct FFI {
             case T_Pointer: {
                 switch(c->kind) {
                     case ILValue::ConstPointer: {
-                        auto cp = llvm::cast<ILConstPointer>(c.get());
+                        auto cp = llvm::cast<ILConstPointer>(c);
                         result.ptrval = cp->value;
                     } break;
                     case ILValue::ConstString: {
-                        auto cs = llvm::cast<ILConstString>(c.get());
+                        auto cs = llvm::cast<ILConstString>(c);
                         result.ptrval = (void *)cs->value.c_str();
                     } break;
                     default: {
@@ -3749,8 +3674,8 @@ struct FFI {
     }
 
     TypeLLVMValuePair convertFunction(
-        const ILConstantRef &value) {
-        auto ilfunc = llvm::dyn_cast<ILConstCFunction>(value.get());
+        const ILConstant *value) {
+        auto ilfunc = llvm::dyn_cast<ILConstCFunction>(value);
         if (!ilfunc) {
             ilError(nullptr, "not a C function");
         }
@@ -3816,8 +3741,8 @@ struct FFI {
         return result;
     }
 
-    ILConstantRef runFunction(
-        const ILConstantRef &func, const std::vector<ILConstantRef> &args) {
+    ILConstant *runFunction(
+        const ILConstant *func, const std::vector<ILConstant *> &args) {
 
         auto F = convertFunction(func);
         auto ilfunctype = F.first;
@@ -3859,15 +3784,14 @@ static FFI *ffi;
 // INTERPRETER
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<ILContinuationRef, std::vector<ILConstantRef> >
+typedef std::unordered_map<ILContinuation *, std::vector<ILConstant *> >
     Cont2ValuesMap;
 
 struct ILFrame;
-typedef std::shared_ptr<ILFrame> ILFrameRef;
 
 struct ILFrame {
     size_t idx;
-    ILFrameRef parent;
+    ILFrame *parent;
     Cont2ValuesMap map;
 
     std::string getRefRepr() {
@@ -3892,9 +3816,17 @@ struct ILFrame {
         return ss.str();
     }
 
-    static ILFrameRef create(const ILFrameRef &frame) {
+    static ILFrame *create() {
         // create closure
-        ILFrameRef newframe = std::make_shared<ILFrame>();
+        ILFrame *newframe = new ILFrame();
+        newframe->parent = nullptr;
+        newframe->idx = 0;
+        return newframe;
+    }
+
+    static ILFrame *create(ILFrame *frame) {
+        // create closure
+        ILFrame *newframe = new ILFrame();
         newframe->parent = frame;
         newframe->idx = frame->idx + 1;
         return newframe;
@@ -3903,23 +3835,23 @@ struct ILFrame {
 
 struct ILConstClosure :
     ILValueImpl<ILConstClosure, ILValue::ConstClosure, ILConstant> {
-    ILContinuationRef cont;
-    ILFrameRef frame;
+    ILContinuation *cont;
+    ILFrame *frame;
 
-    static std::shared_ptr<ILConstClosure> create(
-        const ILContinuationRef &cont,
-        const ILFrameRef &frame) {
-        auto result = std::make_shared<ILConstClosure>();
+    static ILConstClosure *create(
+        ILContinuation *cont,
+        ILFrame *frame) {
+        auto result = new ILConstClosure();
         result->cont = cont;
         result->frame = frame;
         return result;
     }
 
-    virtual Type *inferType() {
+    virtual Type *inferType() const {
         return Type::Any;
     }
 
-    virtual std::string getRefRepr() {
+    virtual std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "closure");
         ss << " " << cont->getRefRepr();
@@ -3929,25 +3861,25 @@ struct ILConstClosure :
     }
 };
 
-typedef std::vector<ILValueRef> ILValueArray;
+typedef std::vector<ILValue *> ILValueArray;
 
-ILConstantRef evaluate(const ILFrameRef &frame, const ILValueRef &value) {
-    if (llvm::isa<ILConstant>(value.get())) {
-        return value->getSharedPtr<ILConstant>();
+ILConstant *evaluate(ILFrame *frame, ILValue *value) {
+    if (auto c = llvm::dyn_cast<ILConstant>(value)) {
+        return c;
     }
     switch(value->kind) {
         case ILValue::Parameter: {
-            auto param = llvm::cast<ILParameter>(value.get());
-            ILFrame *ptr = frame.get();
+            auto param = llvm::cast<ILParameter>(value);
+            ILFrame *ptr = frame;
             while (ptr) {
-                auto cont = param->parent.lock();
+                auto cont = param->parent;
                 assert(cont && "parameter has no parent");
                 if (ptr->map.count(cont)) {
                     auto &values = ptr->map[cont];
                     assert(param->index < values.size());
                     return values[param->index];
                 }
-                ptr = ptr->parent.get();
+                ptr = ptr->parent;
             }
             assert(false && "parameter not bound in any frame");
             return nullptr;
@@ -3955,7 +3887,7 @@ ILConstantRef evaluate(const ILFrameRef &frame, const ILValueRef &value) {
         case ILValue::Continuation: {
             // create closure
             return ILConstClosure::create(
-                value->getSharedPtr<ILContinuation>(),
+                llvm::cast<ILContinuation>(value),
                 frame);
         } break;
         default:
@@ -3967,8 +3899,8 @@ ILConstantRef evaluate(const ILFrameRef &frame, const ILValueRef &value) {
 
 void evaluate_values(
     const ILValueArray &arguments,
-    const ILFrameRef &frame,
-    std::vector<ILConstantRef> &values) {
+    ILFrame *frame,
+    std::vector<ILConstant *> &values) {
     size_t argcount = arguments.size();
     for (size_t i = 1; i < argcount; ++i) {
         auto value = evaluate(frame, arguments[i]);
@@ -3979,10 +3911,10 @@ void evaluate_values(
 
 void map_continuation_arguments(
     const ILValueArray &arguments,
-    const ILContinuationRef &nextcont,
-    const ILFrameRef &frame,
-    const ILFrameRef &nextframe) {
-    std::vector<ILConstantRef> values;
+    ILContinuation *nextcont,
+    ILFrame *frame,
+    ILFrame *nextframe) {
+    std::vector<ILConstant *> values;
     evaluate_values(arguments, frame, values);
     size_t argcount = arguments.size() - 1;
     size_t paramcount = nextcont->getParameterCount();
@@ -3993,22 +3925,22 @@ void map_continuation_arguments(
     nextframe->map[nextcont] = values;
 }
 
-void map_closure(const std::shared_ptr<ILConstClosure> &closure,
+void map_closure(ILConstClosure *closure,
     ILValueArray &arguments,
-    ILFrameRef &frame) {
+    ILFrame *&frame) {
     map_continuation_arguments(
         arguments, closure->cont, frame, closure->frame);
     frame = closure->frame;
     arguments = closure->cont->values;
 }
 
-static bool extract_bool(const ILConstantRef &value);
-void execute(const ILContinuationRef &entry) {
+static bool extract_bool(const ILConstant *value);
+void execute(ILContinuation *entry) {
     assert(entry->getParameterCount() == 0);
 
-    //ILContinuationRef cont = entry;
-    std::vector<ILValueRef> arguments = entry->values;
-    ILFrameRef frame = std::make_shared<ILFrame>();
+    //ILContinuation *cont = entry;
+    std::vector<ILValue *> arguments = entry->values;
+    ILFrame *frame = ILFrame::create();
     frame->idx = 0;
 
     while (true) {
@@ -4018,19 +3950,18 @@ void execute(const ILContinuationRef &entry) {
         fflush(stdout);
 #endif
         assert(arguments.size() >= 1);
-        ILValueRef callee = arguments[0];
+        ILValue *callee = arguments[0];
         if (callee->kind == ILValue::Parameter) {
             callee = evaluate(frame, callee);
         }
         switch(callee->kind) {
             case ILValue::ConstClosure: {
                 map_closure(
-                    callee->getSharedPtr<ILConstClosure>(), arguments, frame);
+                    llvm::cast<ILConstClosure>(callee), arguments, frame);
             } break;
             case ILValue::Continuation: {
-                auto nextcont = callee->getSharedPtr<ILContinuation>();
-                ILFrameRef nextframe = frame;
-                nextframe = ILFrame::create(frame);
+                auto nextcont = llvm::cast<ILContinuation>(callee);
+                ILFrame *nextframe = ILFrame::create(frame);
                 map_continuation_arguments(arguments, nextcont, frame, nextframe);
                 arguments = nextcont->values;
                 frame = nextframe;
@@ -4047,35 +3978,35 @@ void execute(const ILContinuationRef &entry) {
                     assert(thenarg->kind == ILValue::Continuation);
                     assert(elsearg->kind == ILValue::Continuation);
                     if (condvalue) {
-                        arguments = thenarg->getSharedPtr<ILContinuation>()->values;
+                        arguments = llvm::cast<ILContinuation>(thenarg)->values;
                     } else {
-                        arguments = elsearg->getSharedPtr<ILContinuation>()->values;
+                        arguments = llvm::cast<ILContinuation>(elsearg)->values;
                     }
                 } else {
                     ilError(callee, "unhandled intrinsic");
                 }
             } break;
             case ILValue::ConstBuiltin: {
-                auto cb = callee->getSharedPtr<ILConstBuiltin>();
-                std::vector<ILConstantRef> values;
+                auto cb = llvm::cast<ILConstBuiltin>(callee);
+                std::vector<ILConstant *> values;
                 evaluate_values(arguments, frame, values);
                 assert(values.size() >= 1);
-                ILConstantRef closure = values.back();
+                ILConstant *closure = values.back();
                 values.pop_back();
-                ILConstantRef result = cb->handler(values);
+                ILConstant *result = cb->handler(values);
                 // generate fitting resume
                 arguments.clear();
                 arguments.push_back(closure);
                 arguments.push_back(result);
             } break;
             case ILValue::ConstCFunction: {
-                auto cb = callee->getSharedPtr<ILConstCFunction>();
-                std::vector<ILConstantRef> values;
+                auto cb = llvm::cast<ILConstCFunction>(callee);
+                std::vector<ILConstant *> values;
                 evaluate_values(arguments, frame, values);
                 assert(values.size() >= 1);
-                ILConstantRef closure = values.back();
+                ILConstant *closure = values.back();
                 values.pop_back();
-                ILConstantRef result = ffi->runFunction(cb, values);
+                ILConstant *result = ffi->runFunction(cb, values);
                 // generate fitting resume
                 arguments.clear();
                 arguments.push_back(closure);
@@ -4093,7 +4024,7 @@ void execute(const ILContinuationRef &entry) {
 // BUILTINS
 //------------------------------------------------------------------------------
 
-static bool builtin_checkparams (const std::vector<ILConstantRef> &args,
+static bool builtin_checkparams (const std::vector<ILConstant *> &args,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
@@ -4112,8 +4043,8 @@ static bool builtin_checkparams (const std::vector<ILConstantRef> &args,
     return true;
 }
 
-static bool extract_bool(const ILConstantRef &value) {
-    if (auto resulttype = llvm::dyn_cast<ILConstInteger>(value.get())) {
+static bool extract_bool(const ILConstant *value) {
+    if (auto resulttype = llvm::dyn_cast<ILConstInteger>(value)) {
         if (resulttype->getType() == Type::Bool) {
             return (bool)resulttype->value;
         }
@@ -4122,16 +4053,16 @@ static bool extract_bool(const ILConstantRef &value) {
     return false;
 }
 
-static std::string extract_string(const ILConstantRef &value) {
-    auto resulttype = llvm::dyn_cast<ILConstString>(value.get());
+static std::string extract_string(const ILConstant *value) {
+    auto resulttype = llvm::dyn_cast<ILConstString>(value);
     if (!resulttype) {
         ilError(value, "string constant expected");
     }
     return resulttype->value;
 }
 
-static Type *extract_type(const ILConstantRef &value) {
-    auto resulttype = llvm::dyn_cast<ILConstPointer>(value.get());
+static Type *extract_type(const ILConstant *value) {
+    auto resulttype = llvm::dyn_cast<ILConstPointer>(value);
     if (!resulttype) {
         ilError(value, "pointer constant expected");
     }
@@ -4141,65 +4072,48 @@ static Type *extract_type(const ILConstantRef &value) {
     return (Type *)resulttype->value;
 }
 
-static const std::vector<ILConstantRef> &extract_tuple(
-    const ILConstantRef &value) {
-    auto resulttype = llvm::dyn_cast<ILConstTuple>(value.get());
+static const std::vector<ILConstant *> &extract_tuple(
+    const ILConstant *value) {
+    auto resulttype = llvm::dyn_cast<ILConstTuple>(value);
     if (!resulttype) {
         ilError(value, "tuple expected");
     }
     return resulttype->values;
 }
 
-/*
-static ILConstantRef wrap(const ILConstantRef &value) {
-    return value;
-}
-*/
-
-static std::shared_ptr<ILConstPointer> wrap(Type *type) {
+static ILConstPointer *wrap(Type *type) {
     return ILConstPointer::create(type, Type::TypePointer);
 }
 
-static std::shared_ptr<ILConstInteger> wrap(bool value) {
+static ILConstInteger *wrap(bool value) {
     return ILConstInteger::create((int64_t)value,
         static_cast<IntegerType *>(Type::Bool));
 }
 
-static std::shared_ptr<ILConstInteger> wrap(int64_t value) {
+static ILConstInteger *wrap(int64_t value) {
     return ILConstInteger::create(value,
         static_cast<IntegerType *>(Type::Int64));
 }
 
-static std::shared_ptr<ILConstTuple> wrap(
-    const std::vector<ILConstantRef> &args) {
+static ILConstTuple *wrap(
+    const std::vector<ILConstant *> &args) {
     return ILConstTuple::create(args);
 }
 
-/*
-static std::shared_ptr<ILConstReal> wrap(float value) {
-    return ILConstReal::create(value,
-        static_cast<RealType *>(Type::Float));
-}
-*/
-
-static std::shared_ptr<ILConstReal> wrap(double value) {
+static ILConstReal *wrap(double value) {
     return ILConstReal::create(value,
         static_cast<RealType *>(Type::Double));
 }
 
-static std::shared_ptr<ILConstBuiltin> wrap(ILBuiltinFunction func) {
+static ILConstBuiltin *wrap(ILBuiltinFunction func) {
     return ILConstBuiltin::create(func);
 }
 
-static std::shared_ptr<ILConstTuple> wrap() {
-    return ILConstTuple::create({});
-}
-
-static std::shared_ptr<ILConstString> wrap(const std::string &s) {
+static ILConstString *wrap(const std::string &s) {
     return ILConstString::create(s);
 }
 
-static ILConstantRef builtin_print(const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_print(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 0, -1);
     for (size_t i = 0; i < args.size(); ++i) {
         if (i != 0)
@@ -4207,7 +4121,7 @@ static ILConstantRef builtin_print(const std::vector<ILConstantRef> &args) {
         auto &arg = args[i];
         switch(arg->kind) {
             case ILValue::ConstString: {
-                auto cs = arg->getSharedPtr<ILConstString>();
+                auto cs = llvm::cast<ILConstString>(arg);
                 std::cout << cs->value;
             } break;
             default: {
@@ -4216,23 +4130,23 @@ static ILConstantRef builtin_print(const std::vector<ILConstantRef> &args) {
         }
     }
     std::cout << "\n";
-    return wrap();
+    return ILConstTuple::create({});
 }
 
-static ILConstantRef builtin_repr(const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_repr(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 1, 1);
     return wrap(args[0]->getRepr());
 }
 
-static ILConstantRef builtin_tupleof(const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_tupleof(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 0, -1);
     return wrap(args);
 }
 
-static ILConstantRef builtin_cdecl(const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_cdecl(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 3, 3);
     Type *rettype = extract_type(args[0]);
-    const std::vector<ILConstantRef> &params = extract_tuple(args[1]);
+    const std::vector<ILConstant *> &params = extract_tuple(args[1]);
     bool vararg = extract_bool(args[2]);
 
     std::vector<Type *> paramtypes;
@@ -4243,7 +4157,7 @@ static ILConstantRef builtin_cdecl(const std::vector<ILConstantRef> &args) {
     return wrap(Type::CFunction(rettype, paramtypes, vararg));
 }
 
-static ILConstantRef builtin_external(const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_external(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 2, 2);
     std::string name = extract_string(args[0]);
     Type *rettype = extract_type(args[1]);
@@ -4335,18 +4249,18 @@ class builtin_le_op { public:
 
 template <class NextT>
 class builtin_filter_op { public:
-    static ILConstantRef operate(const double &a, const int64_t &b) {
+    static ILConstant *operate(const double &a, const int64_t &b) {
         return wrap(NextT::operate(a, b));
     }
-    static ILConstantRef operate(const int64_t &a, const double &b) {
+    static ILConstant *operate(const int64_t &a, const double &b) {
         return wrap(NextT::operate(a, b));
     }
     template<typename T>
-    static ILConstantRef operate(const T &a, const T &b) {
+    static ILConstant *operate(const T &a, const T &b) {
         return wrap(NextT::operate(a, b));
     }
     template<typename Ta, typename Tb>
-    static ILConstantRef operate(const Ta &a, const Tb &b) {
+    static ILConstant *operate(const Ta &a, const Tb &b) {
         ilError(nullptr, "illegal operands");
         return nullptr;
     }
@@ -4356,7 +4270,7 @@ class builtin_filter_op { public:
 class dispatch_types_failed {
 public:
     template<typename F>
-    static ILConstantRef dispatch(const ILConstantRef &v, const F &next) {
+    static ILConstant *dispatch(const ILConstant *v, const F &next) {
         ilError(v, "illegal operand");
         return nullptr;
     }
@@ -4366,9 +4280,9 @@ template<typename NextT>
 class dispatch_string_type {
 public:
     template<typename F>
-    static ILConstantRef dispatch(const ILConstantRef &v, const F &next) {
+    static ILConstant *dispatch(const ILConstant *v, const F &next) {
         if (v->kind == ILValue::ConstString) {
-            auto ca = v->getSharedPtr<ILConstString>();
+            auto ca = llvm::cast<ILConstString>(v);
             return next(ca->value);
         } else {
             return NextT::template dispatch<F>(v, next);
@@ -4380,9 +4294,9 @@ template<typename NextT>
 class dispatch_integer_type {
 public:
     template<typename F>
-    static ILConstantRef dispatch(const ILConstantRef &v, const F &next) {
+    static ILConstant *dispatch(const ILConstant *v, const F &next) {
         if (v->kind == ILValue::ConstInteger) {
-            auto ca = v->getSharedPtr<ILConstInteger>();
+            auto ca = llvm::cast<ILConstInteger>(v);
             if (ca->value_type != Type::Bool) {
                 return next(ca->value);
             }
@@ -4395,9 +4309,9 @@ template<typename NextT>
 class dispatch_bool_type {
 public:
     template<typename F>
-    static ILConstantRef dispatch(const ILConstantRef &v, const F &next) {
+    static ILConstant *dispatch(const ILConstant *v, const F &next) {
         if (v->kind == ILValue::ConstInteger) {
-            auto ca = v->getSharedPtr<ILConstInteger>();
+            auto ca = llvm::cast<ILConstInteger>(v);
             if (ca->value_type == Type::Bool) {
                 return next((bool)ca->value);
             }
@@ -4410,9 +4324,9 @@ template<typename NextT>
 class dispatch_real_type {
 public:
     template<typename F>
-    static ILConstantRef dispatch(const ILConstantRef &v, const F &next) {
+    static ILConstant *dispatch(const ILConstant *v, const F &next) {
         if (v->kind == ILValue::ConstReal) {
-            auto ca = v->getSharedPtr<ILConstReal>();
+            auto ca = llvm::cast<ILConstReal>(v);
             return next(ca->value);
         } else {
             return NextT::template dispatch<F>(v, next);
@@ -4446,7 +4360,7 @@ template<class D, class F>
 class builtin_binary_op1 {
 public:
     template<typename Q>
-    ILConstantRef operator ()(const Q &ca_value) const {
+    ILConstant *operator ()(const Q &ca_value) const {
         return wrap(F::operate(ca_value));
     }
 };
@@ -4458,7 +4372,7 @@ public:
     builtin_binary_op3(const T &ca_value_) : ca_value(ca_value_) {}
 
     template<typename Q>
-    ILConstantRef operator ()(const Q &cb_value) const {
+    ILConstant *operator ()(const Q &cb_value) const {
         return builtin_filter_op<F>::operate(ca_value, cb_value);
     }
 };
@@ -4466,18 +4380,18 @@ public:
 template<class D, class F>
 class builtin_binary_op2 {
 public:
-    const ILConstantRef &b;
-    builtin_binary_op2(const ILConstantRef &b_) : b(b_) {}
+    const ILConstant *b;
+    builtin_binary_op2(const ILConstant *b_) : b(b_) {}
 
     template<typename T>
-    ILConstantRef operator ()(const T &ca_value) const {
+    ILConstant *operator ()(const T &ca_value) const {
         return D::dispatch(b, builtin_binary_op3<D, F, T>(ca_value));
     }
 };
 
 template<class D, class F>
-static ILConstantRef builtin_binary_op(
-    const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_binary_op(
+    const std::vector<ILConstant *> &args) {
     if (args.size() != 2) {
         ilError(nullptr, "invalid number of arguments");
     }
@@ -4486,8 +4400,8 @@ static ILConstantRef builtin_binary_op(
 
 
 template<class D, class F>
-static ILConstantRef builtin_unary_op(
-    const std::vector<ILConstantRef> &args) {
+static ILConstant *builtin_unary_op(
+    const std::vector<ILConstant *> &args) {
     if (args.size() != 1) {
         ilError(nullptr, "invalid number of arguments");
     }
@@ -4500,73 +4414,43 @@ static ILConstantRef builtin_unary_op(
 
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 typedef std::unordered_map<std::string, Type *> NameTypeMap;
-typedef std::unordered_map<std::string, ILValueRef> NameValueMap;
+typedef std::unordered_map<std::string, ILValue *> NameValueMap;
 
 //------------------------------------------------------------------------------
 
 struct GlobalEnvironment {
-    ILBuilderRef builder;
+    ILBuilder builder;
 };
 
-struct Environment;
-typedef std::shared_ptr<Environment> EnvironmentRef;
-
-struct Environment : std::enable_shared_from_this<Environment> {
+struct Environment {
 protected:
     NameValueMap values;
-    NameValueMap mergevalues;
 public:
     GlobalEnvironment &global;
-    EnvironmentRef parent;
+    Environment *parent;
 
     Environment(GlobalEnvironment &global_) :
-        std::enable_shared_from_this<Environment>(),
-        global(global_)
+        global(global_),
+        parent(nullptr)
     {
         assert(!values.size());
-        assert(!mergevalues.size());
     }
 
-    Environment(const EnvironmentRef &parent_) :
-        std::enable_shared_from_this<Environment>(),
-        global(parent_->global),
-        parent(parent_)
+    Environment(Environment &parent_) :
+        global(parent_.global),
+        parent(&parent_)
     {
         assert(!values.size());
-        assert(!mergevalues.size());
-    }
-
-    void mergeup() {
-        if (!parent) return;
-
-        //dump();
-
-        for (auto entry : mergevalues) {
-            if (parent->values.count(entry.first)) {
-                parent->values[entry.first] = entry.second;
-            } else {
-                parent->mergevalues[entry.first] = entry.second;
-            }
-        }
     }
 
     const NameValueMap &getLocals() {
         return values;
     }
 
-    const NameValueMap &getMergeLocals() {
-        return mergevalues;
-    }
-
     void dump() {
-        printf("%i values, %i mergevalues\n",
-            (int)values.size(), (int)mergevalues.size());
+        printf("%i values\n",
+            (int)values.size());
         for (auto entry : values) {
-            ilMessage(entry.second, "%p.%s\n",
-                (void *)this, entry.first.c_str());
-            assert(entry.second);
-        }
-        for (auto entry : mergevalues) {
             ilMessage(entry.second, "%p.%s\n",
                 (void *)this, entry.first.c_str());
             assert(entry.second);
@@ -4577,25 +4461,15 @@ public:
         return values.count(name);
     }
 
-    bool isMergeLocal(const std::string &name) {
-        return mergevalues.count(name);
-    }
-
-    ILValueRef getLocal(const std::string &name) {
+    ILValue *getLocal(const std::string &name) {
         if (values.count(name)) {
             return values.at(name);
         }
         return nullptr;
     }
 
-    ILValueRef getMergeLocal(const std::string &name) {
-        if (mergevalues.count(name)) {
-            return mergevalues.at(name);
-        }
-        return nullptr;
-    }
-
-    bool set(const std::string &name, const ILValueRef &value) {
+    /*
+    bool set(const std::string &name, ILValue *value) {
         if (isLocal(name)) {
             replaceLocal(name, value);
         } else {
@@ -4607,37 +4481,28 @@ public:
         }
         return true;
     }
+    */
 
-    void setLocal(const std::string &name, const ILValueRef &value) {
+    void setLocal(const std::string &name, ILValue *value) {
         assert(!isLocal(name));
         assert(value);
         values[name] = value;
     }
 
-    void replaceLocal(const std::string &name, const ILValueRef &value) {
+    void replaceLocal(const std::string &name, ILValue *value) {
         assert(isLocal(name));
         assert(value);
         values[name] = value;
     }
 
-    void replaceScoped(const std::string &name, const ILValueRef &value) {
-        assert(!isLocal(name));
-        assert(value);
-        mergevalues[name] = value;
-    }
-
-    ILValueRef resolve(const std::string &name) {
+    ILValue *resolve(const std::string &name) {
         Environment *penv = this;
         while (penv) {
-            ILValueRef result = (*penv).getMergeLocal(name);
+            ILValue *result = (*penv).getLocal(name);
             if (result) {
                 return result;
             }
-            result = (*penv).getLocal(name);
-            if (result) {
-                return result;
-            }
-            penv = penv->parent.get();
+            penv = penv->parent;
         }
         return nullptr;
     }
@@ -4663,7 +4528,7 @@ static bool isSymbol (const Value *expr, const char *sym) {
 
 //------------------------------------------------------------------------------
 
-ILValueRef translate(const EnvironmentRef &env, ValueRef expr);
+ILValue *translate(Environment &env, ValueRef expr);
 
 void valueError (ValueRef expr, const char *format, ...) {
     Anchor *anchor = NULL;
@@ -4703,56 +4568,16 @@ static T *astVerifyKind(ValueRef expr) {
     return nullptr;
 }
 
-/*
-static ILValueRef parse_cdecl (const EnvironmentRef &env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_returntype);
-    UNPACK_ARG(expr, expr_parameters);
-
-    ILValueRef returntype = translate(env, expr_returntype);
-
-    Pointer *params = astVerifyKind<Pointer>(expr_parameters);
-
-    std::vector<ILValueRef> paramtypes;
-
-    ValueRef param = at(params);
-    bool vararg = false;
-    while (param) {
-        ValueRef nextparam = next(param);
-        if (!nextparam && isSymbol(param, "...")) {
-            vararg = true;
-        } else {
-            paramtypes.push_back(translate(env, param));
-        }
-
-        param = nextparam;
-    }
-
-    return env->global.builder->cdecl(returntype, paramtypes, vararg);
-}
-
-static ILValueRef parse_external (const EnvironmentRef &env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_name);
-    UNPACK_ARG(expr, expr_type);
-
-    ILValueRef name = translate(env, expr_name);
-    ILValueRef type = translate(env, expr_type);
-
-    return env->global.builder->external(name, type);
-}
-*/
-
-static ILValueRef parse_do (const EnvironmentRef &env, ValueRef expr) {
+static ILValue *parse_do (Environment &env, ValueRef expr) {
     expr = next(expr);
 
-    auto subenv = std::make_shared<Environment>(env);
+    Environment subenv(env);
 
-    ILValueRef value;
+    ILValue *value;
     while (expr) {
         value = translate(subenv, expr);
         expr = next(expr);
     }
-
-    subenv->mergeup();
 
     if (value)
         return value;
@@ -4761,17 +4586,17 @@ static ILValueRef parse_do (const EnvironmentRef &env, ValueRef expr) {
 
 }
 
-static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
+static ILValue *parse_function (Environment &env, ValueRef expr) {
     UNPACK_ARG(expr, expr_parameters);
 
-    auto currentblock = env->global.builder->continuation;
+    auto currentblock = env.global.builder.continuation;
 
     auto function = ILContinuation::create(0, "func");
 
-    env->global.builder->continueAt(function);
-    auto subenv = std::make_shared<Environment>(env);
+    env.global.builder.continueAt(function);
+    Environment subenv(env);
 
-    subenv->setLocal("this-function", function);
+    subenv.setLocal("this-function", function);
 
     Pointer *params = astVerifyKind<Pointer>(expr_parameters);
     ValueRef param = at(params);
@@ -4779,27 +4604,27 @@ static ILValueRef parse_function (const EnvironmentRef &env, ValueRef expr) {
         Symbol *symname = astVerifyKind<Symbol>(param);
         auto bp = ILParameter::create();
         function->appendParameter(bp);
-        subenv->setLocal(symname->getValue(), bp);
+        subenv.setLocal(symname->getValue(), bp);
         param = next(param);
     }
     auto ret = function->appendParameter(ILParameter::create());
 
     auto result = parse_do(subenv, expr_parameters);
 
-    env->global.builder->br({ret, result});
+    env.global.builder.br({ret, result});
 
-    env->global.builder->continueAt(currentblock);
+    env.global.builder.continueAt(currentblock);
 
     return function;
 }
 
-static ILValueRef parse_implicit_apply (const EnvironmentRef &env, ValueRef expr) {
+static ILValue *parse_implicit_apply (Environment &env, ValueRef expr) {
     ValueRef expr_callable = expr;
     UNPACK_ARG(expr, arg);
 
-    ILValueRef callable = translate(env, expr_callable);
+    ILValue *callable = translate(env, expr_callable);
 
-    std::vector<ILValueRef> args;
+    std::vector<ILValue *> args;
     args.push_back(callable);
 
     while (arg) {
@@ -4808,10 +4633,10 @@ static ILValueRef parse_implicit_apply (const EnvironmentRef &env, ValueRef expr
         arg = next(arg);
     }
 
-    return env->global.builder->call(args);
+    return env.global.builder.call(args);
 }
 
-static ILValueRef parse_apply (const EnvironmentRef &env, ValueRef expr) {
+static ILValue *parse_apply (Environment &env, ValueRef expr) {
     expr = next(expr);
     return parse_implicit_apply(env, expr);
 }
@@ -4823,41 +4648,40 @@ bool hasTypeValue(Type *type) {
     return true;
 }
 
-static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
+static ILValue *parse_select (Environment &env, ValueRef expr) {
     UNPACK_ARG(expr, expr_condition);
     UNPACK_ARG(expr, expr_true);
     UNPACK_ARG(expr, expr_false);
 
-    ILValueRef condition = translate(env, expr_condition);
-    auto bbstart = env->global.builder->continuation;
+    ILValue *condition = translate(env, expr_condition);
+    auto bbstart = env.global.builder.continuation;
 
     auto bbtrue = ILContinuation::create(0, "then");
-    env->global.builder->continueAt(bbtrue);
+    env.global.builder.continueAt(bbtrue);
 
-    EnvironmentRef subenv_true = std::make_shared<Environment>(env);
-    ILValueRef trueexpr = translate(subenv_true, expr_true);
-    auto bbtrue_end = env->global.builder->continuation;
+    Environment subenv_true(env);
+    ILValue *trueexpr = translate(subenv_true, expr_true);
+    auto bbtrue_end = env.global.builder.continuation;
 
     bool returnValue = hasTypeValue(trueexpr->getType());
 
-    ILContinuationRef bbfalse;
-    ILContinuationRef bbfalse_end;
-    ILValueRef falseexpr;
-    EnvironmentRef subenv_false;
+    ILContinuation *bbfalse = nullptr;
+    ILContinuation *bbfalse_end = nullptr;
+    ILValue *falseexpr = nullptr;
     if (expr_false) {
-        subenv_false = std::make_shared<Environment>(env);
+        Environment subenv_false(env);
         bbfalse = ILContinuation::create(0, "else");
-        env->global.builder->continueAt(bbfalse);
+        env.global.builder.continueAt(bbfalse);
         falseexpr = translate(subenv_false, expr_false);
-        bbfalse_end = env->global.builder->continuation;
+        bbfalse_end = env.global.builder.continuation;
         returnValue = returnValue && hasTypeValue(falseexpr->getType());
     } else {
         returnValue = false;
     }
 
     auto bbdone = ILContinuation::create(0, "endif");
-    ILValueRef result;
-    std::vector<ILValueRef> trueexprs;
+    ILValue *result;
+    std::vector<ILValue *> trueexprs;
     trueexprs.push_back(bbdone);
     if (returnValue) {
         auto result_param = ILParameter::create();
@@ -4868,51 +4692,51 @@ static ILValueRef parse_select (const EnvironmentRef &env, ValueRef expr) {
         result = ILConstTuple::create({});
     }
 
-    env->global.builder->continueAt(bbtrue_end);
-    env->global.builder->br(trueexprs);
+    env.global.builder.continueAt(bbtrue_end);
+    env.global.builder.br(trueexprs);
 
     if (bbfalse) {
-        env->global.builder->continueAt(bbfalse_end);
-        std::vector<ILValueRef> falsexprs;
+        env.global.builder.continueAt(bbfalse_end);
+        std::vector<ILValue *> falsexprs;
         falsexprs.push_back(bbdone);
         if (returnValue)
             falsexprs.push_back(falseexpr);
-        env->global.builder->br(falsexprs);
+        env.global.builder.br(falsexprs);
     } else {
         bbfalse = bbdone;
     }
 
-    env->global.builder->continueAt(bbstart);
-    env->global.builder->br(
+    env.global.builder.continueAt(bbstart);
+    env.global.builder.br(
         { ILIntrinsic::Branch, condition, bbtrue, bbfalse });
 
-    env->global.builder->continueAt(bbdone);
+    env.global.builder.continueAt(bbdone);
 
     return result;
 }
 
-static ILValueRef parse_let(const EnvironmentRef &env, ValueRef expr) {
+static ILValue *parse_let(Environment &env, ValueRef expr) {
     UNPACK_ARG(expr, expr_sym);
     UNPACK_ARG(expr, expr_value);
 
     Symbol *symname = astVerifyKind<Symbol>(expr_sym);
-    ILValueRef value;
+    ILValue *value;
 
     if (expr_value)
         value = translate(env, expr_value);
     else
         value = ILConstTuple::create({});
 
-    if (env->isLocal(symname->getValue())) {
+    if (env.isLocal(symname->getValue())) {
         valueError(symname, "already defined");
     }
-    env->setLocal(symname->getValue(), value);
+    env.setLocal(symname->getValue(), value);
 
     return value;
 }
 
 struct TranslateTable {
-    typedef ILValueRef (*TranslatorFunc)(const EnvironmentRef &env, ValueRef expr);
+    typedef ILValue *(*TranslatorFunc)(Environment &env, ValueRef expr);
 
     struct Translator {
         int mincount;
@@ -4993,7 +4817,7 @@ static void registerTranslators() {
     t.set(parse_function, "function", 1, -1);
 }
 
-static ILValueRef translateFromList (const EnvironmentRef &env, ValueRef expr) {
+static ILValue *translateFromList (Environment &env, ValueRef expr) {
     assert(expr);
     astVerifyKind<Symbol>(expr);
     auto func = translators.match(expr);
@@ -5004,14 +4828,14 @@ static ILValueRef translateFromList (const EnvironmentRef &env, ValueRef expr) {
     }
 }
 
-ILValueRef translate (const EnvironmentRef &env, ValueRef expr) {
+ILValue *translate (Environment &env, ValueRef expr) {
     assert(expr);
-    ILValueRef result;
+    ILValue *result = nullptr;
     if (!isAtom(expr)) {
         result = translateFromList(env, at(expr));
     } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
         std::string value = sym->getValue();
-        result = env->resolve(value);
+        result = env.resolve(value);
         if (!result) {
             valueError(expr, "unknown symbol '%s'",
                 value.c_str());
@@ -5049,9 +4873,6 @@ static void init() {
     ILIntrinsic::initIntrinsics();
     registerTranslators();
 
-    if (!gc_root)
-        gc_root = new Pointer();
-
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
     //LLVMLinkInInterpreter();
@@ -5066,84 +4887,80 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
-static void setupRootEnvironment (const EnvironmentRef &env) {
-    auto builder = env->global.builder;
-    env->setLocal("void", wrap(Type::Void));
-    env->setLocal("null", wrap(Type::Null));
-    env->setLocal("half", wrap(Type::Half));
-    env->setLocal("float", wrap(Type::Float));
-    env->setLocal("double", wrap(Type::Double));
-    env->setLocal("bool", wrap(Type::Bool));
+static void setupRootEnvironment (Environment &env) {
+    env.setLocal("void", wrap(Type::Void));
+    env.setLocal("null", wrap(Type::Null));
+    env.setLocal("half", wrap(Type::Half));
+    env.setLocal("float", wrap(Type::Float));
+    env.setLocal("double", wrap(Type::Double));
+    env.setLocal("bool", wrap(Type::Bool));
 
-    env->setLocal("int8", wrap(Type::Int8));
-    env->setLocal("int16", wrap(Type::Int16));
-    env->setLocal("int32", wrap(Type::Int32));
-    env->setLocal("int64", wrap(Type::Int64));
+    env.setLocal("int8", wrap(Type::Int8));
+    env.setLocal("int16", wrap(Type::Int16));
+    env.setLocal("int32", wrap(Type::Int32));
+    env.setLocal("int64", wrap(Type::Int64));
 
-    env->setLocal("uint8", wrap(Type::UInt8));
-    env->setLocal("uint16", wrap(Type::UInt16));
-    env->setLocal("uint32", wrap(Type::UInt32));
-    env->setLocal("uint64", wrap(Type::UInt64));
+    env.setLocal("uint8", wrap(Type::UInt8));
+    env.setLocal("uint16", wrap(Type::UInt16));
+    env.setLocal("uint32", wrap(Type::UInt32));
+    env.setLocal("uint64", wrap(Type::UInt64));
 
-    env->setLocal("usize_t",
+    env.setLocal("usize_t",
         wrap(Type::Integer(sizeof(size_t)*8,false)));
 
-    env->setLocal("rawstring", wrap(Type::Rawstring));
+    env.setLocal("rawstring", wrap(Type::Rawstring));
 
-    env->setLocal("int", env->resolve("int32"));
+    env.setLocal("int", env.resolve("int32"));
 
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
-    env->setLocal("true", ILConstInteger::create(new Integer(1), booltype));
-    env->setLocal("false", ILConstInteger::create(new Integer(0), booltype));
+    env.setLocal("true", ILConstInteger::create(new Integer(1), booltype));
+    env.setLocal("false", ILConstInteger::create(new Integer(0), booltype));
 
-    env->setLocal("print", wrap(builtin_print));
-    env->setLocal("repr", wrap(builtin_repr));
-    env->setLocal("cdecl", wrap(builtin_cdecl));
-    env->setLocal("tupleof", wrap(builtin_tupleof));
-    env->setLocal("external", wrap(builtin_external));
+    env.setLocal("print", wrap(builtin_print));
+    env.setLocal("repr", wrap(builtin_repr));
+    env.setLocal("cdecl", wrap(builtin_cdecl));
+    env.setLocal("tupleof", wrap(builtin_tupleof));
+    env.setLocal("external", wrap(builtin_external));
 
-    env->setLocal("+",
+    env.setLocal("+",
         wrap(builtin_binary_op<dispatch_arith_string_types, builtin_add_op>));
-    env->setLocal("-",
+    env.setLocal("-",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_sub_op>));
-    env->setLocal("*",
+    env.setLocal("*",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_mul_op>));
-    env->setLocal("/",
+    env.setLocal("/",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_div_op>));
-    env->setLocal("%",
+    env.setLocal("%",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_mod_op>));
 
-    env->setLocal("&",
+    env.setLocal("&",
         wrap(builtin_binary_op<dispatch_bit_types, builtin_bitand_op>));
-    env->setLocal("|",
+    env.setLocal("|",
         wrap(builtin_binary_op<dispatch_bit_types, builtin_bitor_op>));
-    env->setLocal("^",
+    env.setLocal("^",
         wrap(builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>));
-    env->setLocal("~",
+    env.setLocal("~",
         wrap(builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>));
 
-    env->setLocal("not",
+    env.setLocal("not",
         wrap(builtin_unary_op<dispatch_boolean_types, builtin_not_op>));
 
-    env->setLocal("==",
+    env.setLocal("==",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_eq_op>));
-    env->setLocal("!=",
+    env.setLocal("!=",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_ne_op>));
-    env->setLocal(">",
+    env.setLocal(">",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_gt_op>));
-    env->setLocal(">=",
+    env.setLocal(">=",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_ge_op>));
-    env->setLocal("<",
+    env.setLocal("<",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_lt_op>));
-    env->setLocal("<=",
+    env.setLocal("<=",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_le_op>));
 
 }
 
-static void teardownRootEnvironment (const EnvironmentRef &env) {
-}
-
-static void handleException(const EnvironmentRef &env, ValueRef expr) {
+static void handleException(Environment &env, ValueRef expr) {
     ValueRef tb = expr->getNext();
     if (tb && tb->getKind() == V_String) {
         std::cerr << llvm::cast<String>(tb)->getValue();
@@ -5152,17 +4969,17 @@ static void handleException(const EnvironmentRef &env, ValueRef expr) {
     valueError(expr, "an exception was raised");
 }
 
-static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
+static bool translateRootValueList (Environment &env, ValueRef expr) {
 
     auto mainfunc = ILContinuation::create();
-    env->global.builder->continueAt(mainfunc);
+    env.global.builder.continueAt(mainfunc);
 
     parse_do(env, expr);
-    env->global.builder->br({ ILIntrinsic::Return });
+    env.global.builder.br({ ILIntrinsic::Return });
 
 /*
 #ifdef BANGRA_DEBUG_IL
-    std::cout << env->global.module->getRepr();
+    std::cout << env.global.module->getRepr();
     fflush(stdout);
 #endif
 */
@@ -5173,7 +4990,7 @@ static bool translateRootValueList (const EnvironmentRef &env, ValueRef expr) {
 }
 
 template <typename T>
-static T *translateKind(const EnvironmentRef &env, ValueRef expr) {
+static T *translateKind(Environment &env, ValueRef expr) {
     T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
     if (obj) {
         return obj;
@@ -5185,8 +5002,14 @@ static T *translateKind(const EnvironmentRef &env, ValueRef expr) {
     return nullptr;
 }
 
-static bool compileModule (const EnvironmentRef &env, ValueRef expr) {
+static bool compileMain (ValueRef expr) {
     assert(expr);
+    expr = at(expr);
+    assert(expr);
+
+    GlobalEnvironment global;
+    Environment env(global);
+    setupRootEnvironment(env);
 
     std::string lastlang = "";
     while (true) {
@@ -5209,7 +5032,7 @@ static bool compileModule (const EnvironmentRef &env, ValueRef expr) {
         lastlang = head->getValue();
         ValueRef orig_expr = expr;
         try {
-            expr = preprocessor(env.get(), new Pointer(expr));
+            expr = preprocessor(&env, new Pointer(expr));
         } catch (ValueRef expr) {
             handleException(env, expr);
             return false;
@@ -5224,20 +5047,6 @@ static bool compileModule (const EnvironmentRef &env, ValueRef expr) {
     }
 
     return translateRootValueList (env, expr);
-}
-
-static bool compileMain (ValueRef expr) {
-    GlobalEnvironment global;
-    global.builder = std::make_shared<ILBuilder>();
-    auto env = std::make_shared<Environment>(global);
-
-    setupRootEnvironment(env);
-
-    bool result = compileModule(env, at(expr));
-
-    teardownRootEnvironment(env);
-
-    return result;
 }
 
 // This function isn't referenced outside its translation unit, but it
@@ -5334,7 +5143,6 @@ static bool compileStartupScript() {
     }
 
     if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
-        bangra::gc_root = cons(expr, bangra::gc_root);
         return bangra::compileMain(expr);
     }
 
@@ -5445,7 +5253,6 @@ int bangra_main(int argc, char ** argv) {
     }
 
     if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
-        bangra::gc_root = cons(expr, bangra::gc_root);
         bangra::compileMain(expr);
     } else {
         return 1;
@@ -5456,11 +5263,7 @@ int bangra_main(int argc, char ** argv) {
 
 ValueRef bangra_parse_file(const char *path) {
     bangra::Parser parser;
-    ValueRef expr = parser.parseFile(path);
-    if (expr) {
-        bangra::gc_root = cons(expr, bangra::gc_root);
-    }
-    return expr;
+    return parser.parseFile(path);
 }
 
 void bangra_print_value(ValueRef expr, int depth) {
@@ -5737,7 +5540,7 @@ int bangra_anchor_offset(ValueRef expr) {
 }
 
 Environment *bangra_parent_env(Environment *env) {
-    return env->parent.get();
+    return env->parent;
 }
 
 static int unique_symbol_counter = 0;
