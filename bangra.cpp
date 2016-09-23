@@ -684,21 +684,6 @@ static bool isAtom(ValueRef expr) {
     return true;
 }
 
-static ValueRef fixAnchor(Anchor &anchor, ValueRef value) {
-    if (value && !value->anchor.isValid() && anchor.isValid()) {
-        value->anchor = anchor;
-        if (auto ptr = llvm::dyn_cast<Pointer>(value)) {
-            auto elem = ptr->getAt();
-            while (elem) {
-                fixAnchor(anchor, elem);
-                elem = elem->getNext();
-            }
-        }
-        fixAnchor(anchor, value->getNext());
-    }
-    return value;
-}
-
 //------------------------------------------------------------------------------
 
 struct Integer : Value {
@@ -1733,6 +1718,7 @@ static void printValue(ValueRef e, size_t depth, bool naked) {
     TYPE_KIND(Vector) \
     TYPE_KIND(Tuple) \
     TYPE_KIND(Struct) \
+    TYPE_KIND(Enum) \
     TYPE_KIND(CFunction) \
     TYPE_KIND(Continuation)
 
@@ -1808,11 +1794,12 @@ public:
     static std::function<Type * (TypeArray)> Tuple;
     static Type *Struct(
         const std::string &name, bool builtin = false, bool union_ = false);
+    static Type *Enum(const std::string &name);
     static std::function<Type * (Type *, TypeArray, bool)> CFunction;
     static std::function<Type * (TypeArray)> Continuation;
-
-    std::string getRepr();
 };
+
+static std::string getRepr(Type *type);
 
 Type *Type::TypePointer;
 Type *Type::Void;
@@ -1945,8 +1932,8 @@ public:
 
     std::string getRepr() {
         return format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "pointer").c_str(),
-                element->getRepr().c_str());
+                ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
+                bangra::getRepr(element).c_str());
     }
 
 };
@@ -1979,7 +1966,7 @@ public:
     std::string getRepr() {
         return format("(%s %s %i)",
                 ansi(ANSI_STYLE_KEYWORD, "array").c_str(),
-                element->getRepr().c_str(),
+                bangra::getRepr(element).c_str(),
                 size);
     }
 
@@ -2013,7 +2000,7 @@ public:
     std::string getRepr() {
         return format("(%s %s %i)",
                 ansi(ANSI_STYLE_KEYWORD, "vector").c_str(),
-                element->getRepr().c_str(),
+                bangra::getRepr(element).c_str(),
                 size);
     }
 
@@ -2035,7 +2022,7 @@ public:
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "tuple");
         for (size_t i = 0; i < elements.size(); ++i) {
             ss << " ";
-            ss << elements[i]->getRepr();
+            ss << bangra::getRepr(elements[i]);
         }
         ss << ")";
         return ss.str();
@@ -2095,7 +2082,7 @@ public:
         std::string getRepr() const {
             return format("(%s %s)",
                     quoteReprString(name).c_str(),
-                    type->getRepr().c_str());
+                    bangra::getRepr(type).c_str());
         }
     };
 
@@ -2180,7 +2167,7 @@ public:
         return ss.str();
     }
 
-    std::string getRepr() {
+    std::string getFullRepr() {
         if (builtin) {
             return ansi(ANSI_STYLE_TYPE, name).c_str();
         } else {
@@ -2196,10 +2183,158 @@ public:
         }
     }
 
+    std::string getRepr() {
+        if (builtin) {
+            return ansi(ANSI_STYLE_TYPE, name).c_str();
+        } else {
+            std::stringstream ss;
+            ss << "(" << ansi(ANSI_STYLE_KEYWORD,
+                isUnion()?"union":"struct") << " ";
+            ss << getNameRepr();
+            ss << ")";
+            return ss.str();
+        }
+    }
+
 };
 
 Type *Type::Struct(const std::string &name, bool builtin, bool union_) {
     return new StructType(name, builtin, union_);
+}
+
+//------------------------------------------------------------------------------
+
+struct EnumType : TypeImpl<EnumType, T_Enum> {
+public:
+    struct Field {
+    protected:
+        std::string name;
+        int64_t value;
+        Anchor anchor;
+
+    public:
+        Field() {}
+
+        Field(const std::string &name_, int64_t value_) :
+            name(name_),
+            value(value_)
+            { assert(name.size() != 0); }
+
+        Field(const std::string &name_, int64_t value_, const Anchor &anchor_) :
+            name(name_),
+            value(value_),
+            anchor(anchor_)
+            {}
+
+        std::string getName() const {
+            return name;
+        }
+
+        std::string getRepr() const {
+            return format("(%s %s)",
+                    quoteReprString(name).c_str(),
+                    quoteReprInteger(value).c_str());
+        }
+    };
+
+protected:
+    std::string name;
+    std::vector<Field> fields;
+    std::unordered_map<std::string, size_t> byname;
+    IntegerType *enum_type;
+    Anchor anchor;
+
+public:
+
+    EnumType(const std::string &name_) :
+        name(name_),
+        enum_type(nullptr)
+        {}
+
+    void setType(Type *type) {
+        enum_type = llvm::cast<IntegerType>(type);
+    }
+
+    Type *getType() {
+        return enum_type;
+    }
+
+    const Anchor &getAnchor() {
+        return anchor;
+    }
+
+    void setAnchor(const Anchor &anchor_) {
+        anchor = anchor_;
+    }
+
+    void addField(const Field &field) {
+        byname[field.getName()] = fields.size();
+        fields.push_back(field);
+    }
+
+    void addFields(const std::vector<Field> &fields_) {
+        for (auto &field : fields_) {
+            addField(field);
+        }
+    }
+
+    size_t getFieldIndex(const std::string &name) {
+        auto it = byname.find(name);
+        if (it != byname.end()) {
+            return it->second;
+        } else {
+            return (size_t)-1;
+        }
+    }
+
+    size_t getFieldCount() {
+        return fields.size();
+    }
+
+    const Field &getField(size_t i) {
+        assert(i < fields.size());
+        return fields[i];
+    }
+
+    std::string getName() {
+        return name;
+    }
+
+    bool isUnnamed() {
+        return name.size() == 0;
+    }
+
+    std::string getNameRepr() {
+        std::stringstream ss;
+        if (isUnnamed()) {
+            ss << this;
+        } else {
+            ss << quoteReprString(name);
+        }
+        return ss.str();
+    }
+
+    std::string getRepr() {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "enum") << " ";
+        ss << getNameRepr();
+        ss << " " << ansi(ANSI_STYLE_OPERATOR, ":") << " ";
+        if (enum_type) {
+            ss << enum_type->getRepr();
+        } else {
+            ss << bangra::getRepr(Type::Any);
+        }
+        for (size_t i = 0; i < fields.size(); ++i) {
+            ss << " " << fields[i].getRepr();
+        }
+        ss << ")";
+        return ss.str();
+    }
+
+};
+
+Type *Type::Enum(const std::string &name) {
+    return new EnumType(name);
 }
 
 //------------------------------------------------------------------------------
@@ -2215,7 +2350,7 @@ public:
         for (size_t i = 0; i < parameters.size(); ++i) {
             if (i != 0)
                 ss << " ";
-            ss << parameters[i]->getRepr();
+            ss << bangra::getRepr(parameters[i]);
         }
         ss << ")";
         return ss.str();
@@ -2259,12 +2394,12 @@ public:
         const TypeArray &parameters, bool isvararg) {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "cdecl") << " ";
-        ss << result->getRepr();
+        ss << bangra::getRepr(result);
         ss << " (";
         for (size_t i = 0; i < parameters.size(); ++i) {
             if (i != 0)
                 ss << " ";
-            ss << parameters[i]->getRepr();
+            ss << bangra::getRepr(parameters[i]);
         }
         if (isvararg) {
             if (parameters.size())
@@ -2310,13 +2445,13 @@ Type *Type::newCFunctionType(Type *_returntype, TypeArray _parameters, bool _isv
 
 //------------------------------------------------------------------------------
 
-std::string Type::getRepr() {
+std::string getRepr(Type *type) {
 #define TYPE_KIND(NAME) \
     case T_ ## NAME: {\
-        auto spec = llvm::cast<NAME ## Type>(this); \
+        auto spec = llvm::cast<NAME ## Type>(type); \
         return spec->getRepr(); \
     } break;
-    switch(kind) {
+    switch(type->getKind()) {
     TYPE_ENUM_KINDS()
     }
 #undef TYPE_KIND
@@ -2395,7 +2530,7 @@ struct ILConstant;
             ILVALUE_KIND(ConstTuple) \
             ILVALUE_KIND(ConstStruct) \
             ILVALUE_KIND(ConstClosure) \
-            ILVALUE_KIND(ConstCFunction) \
+            ILVALUE_KIND(ConstExternal) \
             ILVALUE_KIND(ConstBuiltin) \
             ILVALUE_KIND_EOK(ConstantEnd) \
         ILVALUE_KIND(Parameter) \
@@ -2423,22 +2558,16 @@ public:
     ILValue(Kind kind_) :
         kind(kind_)
         {}
-
-    std::string getRepr () const;
-    std::string getRefRepr () const;
-    Type *inferType() const;
-
-    Type *getType() const {
-        return inferType();
-    }
 };
 
-std::string getRepr (const ILValue *self);
+static std::string getRepr (const ILValue *value);
+static std::string getRefRepr (const ILValue *value);
+static Type *getType(const ILValue *value);
 
 static void ilMessage (const ILValue *value, const char *format, ...) {
     const Anchor *anchor = NULL;
     if (value) {
-        std::cout << "at\n  " << value->getRepr() << "\n";
+        std::cout << "at\n  " << getRepr(value) << "\n";
         if (value->anchor.isValid()) {
             anchor = &value->anchor;
         }
@@ -2452,7 +2581,7 @@ static void ilMessage (const ILValue *value, const char *format, ...) {
 static void ilError (const ILValue *value, const char *format, ...) {
     const Anchor *anchor = NULL;
     if (value) {
-        std::cout << "at\n  " << value->getRepr() << "\n";
+        std::cout << "at\n  " << getRepr(value) << "\n";
         if (value->anchor.isValid()) {
             anchor = &value->anchor;
         }
@@ -2484,10 +2613,6 @@ struct ILPrimitive : ILValue {
     ILPrimitive(Kind kind_) :
         ILValue(kind_)
         {}
-
-    std::string getRepr () const {
-        return getRefRepr();
-    }
 
     static bool classof(const ILValue *value) {
         return (value->kind >= Primitive) && (value->kind < PrimitiveEnd);
@@ -2536,7 +2661,7 @@ struct ILParameter :
             ansi(ANSI_STYLE_OPERATOR,"@").c_str(),
             index,
             ansi(ANSI_STYLE_OPERATOR,":").c_str(),
-            getType()->getRepr().c_str());
+            bangra::getRepr(getType(this)).c_str());
     }
 
     std::string getRefRepr () const;
@@ -2567,7 +2692,7 @@ struct ILIntrinsic :
         std::stringstream ss;
         ss << ansi(ANSI_STYLE_INSTRUCTION, name);
         ss << " " << ansi(ANSI_STYLE_OPERATOR, ":") << " ";
-        ss << getType()->getRepr();
+        ss << bangra::getRepr(getType(this));
         return ss.str();
     }
 
@@ -2652,13 +2777,13 @@ public:
             if (i != 0) {
                 ss << ansi(ANSI_STYLE_OPERATOR, ", ");
             }
-            ss << parameters[i]->getRepr();
+            ss << bangra::getRepr(parameters[i]);
         }
         ss << ansi(ANSI_STYLE_OPERATOR, ")");
         if (values.size()) {
             for (size_t i = 0; i < values.size(); ++i) {
                 ss << " ";
-                ss << values[i]->getRefRepr();
+                ss << bangra::getRefRepr(values[i]);
             }
         } else {
             ss << ansi(ANSI_STYLE_ERROR, "<missing term>");
@@ -2676,7 +2801,7 @@ public:
     Type *inferType() const {
         std::vector<Type *> params;
         for (size_t i = 0; i < parameters.size(); ++i) {
-            params.push_back(parameters[i]->getType());
+            params.push_back(getType(parameters[i]));
         }
         return Type::Continuation(params);
     }
@@ -2735,6 +2860,10 @@ struct ILConstString :
         return Type::Array(Type::Int8, value.size() + 1);
     }
 
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
     std::string getRefRepr() const {
         return quoteReprString(value);
     }
@@ -2762,6 +2891,10 @@ struct ILConstInteger :
 
     Type *inferType() const {
         return value_type;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
     }
 
     std::string getRefRepr() const {
@@ -2799,6 +2932,10 @@ struct ILConstReal :
         return value_type;
     }
 
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
     std::string getRefRepr() const {
         return ansi(ANSI_STYLE_NUMBER,
             format("%f", value));
@@ -2821,16 +2958,20 @@ struct ILConstTuple :
     Type *inferType() const {
         TypeArray types;
         for (auto &value : values) {
-            types.push_back(value->getType());
+            types.push_back(getType(value));
         }
         return Type::Tuple(types);
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
     }
 
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "tupleof");
         for (auto &value : values) {
-            ss << " " << value->getRefRepr();
+            ss << " " << bangra::getRefRepr(value);
         }
         ss << ")";
         return ss.str();
@@ -2840,7 +2981,7 @@ struct ILConstTuple :
 //------------------------------------------------------------------------------
 
 struct ILConstStruct :
-    ILValueImpl<ILConstStruct, ILValue::ConstTuple, ILConstant> {
+    ILValueImpl<ILConstStruct, ILValue::ConstStruct, ILConstant> {
     std::vector<ILConstant *> values;
     StructType *struct_type;
 
@@ -2862,11 +3003,24 @@ struct ILConstStruct :
         return struct_type;
     }
 
+    std::string getRepr() const {
+        std::stringstream ss;
+        ss << "(" << struct_type->getRepr();
+        ss << " " << this;
+        for (size_t i = 0; i < struct_type->getFieldCount(); ++i) {
+            auto &field = struct_type->getField(i);
+            ss << "\n  " << quoteReprString(field.getName())
+                << " " << ansi(ANSI_STYLE_OPERATOR, "=") << " "
+                << bangra::getRefRepr(values[i]);
+        }
+        ss << ")";
+        return ss.str();
+    }
+
     std::string getRefRepr() const {
         std::stringstream ss;
-        ss << "(" << struct_type->getNameRepr();
-        ss << " " << this;
-        ss << ")";
+        ss << "(" << struct_type->getRepr();
+        ss << " " << this << ")";
         return ss.str();
     }
 };
@@ -2890,13 +3044,16 @@ struct ILConstPointer :
         return pointer_type;
     }
 
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
     std::string getRefRepr() const {
         std::stringstream ss;
         if (pointer_type == Type::TypePointer) {
-            ss << "(" << pointer_type->getRepr() << " "
-                << ((Type *)value)->getRepr() << ")";
+            ss << bangra::getRepr((Type *)value);
         } else {
-            ss << "(" << pointer_type->getRepr() << " " << value << ")";
+            ss << "(" << bangra::getRepr(pointer_type) << " " << value << ")";
         }
         return ss.str();
     }
@@ -2930,6 +3087,10 @@ struct ILConstBuiltin :
         return Type::Any;
     }
 
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin");
@@ -2941,29 +3102,33 @@ struct ILConstBuiltin :
 
 //------------------------------------------------------------------------------
 
-struct ILConstCFunction :
-    ILValueImpl<ILConstCFunction, ILValue::ConstCFunction, ILConstant> {
+struct ILConstExternal :
+    ILValueImpl<ILConstExternal, ILValue::ConstExternal, ILConstant> {
     std::string name;
-    Type *function_type;
+    Type *external_type;
 
-    static ILConstCFunction *create(
+    static ILConstExternal *create(
         const std::string &name,
-        Type *function_type) {
-        auto result = new ILConstCFunction();
+        Type *external_type) {
+        auto result = new ILConstExternal();
         result->name = name;
-        result->function_type = function_type;
+        result->external_type = external_type;
         return result;
     }
 
     Type *inferType() const {
-        return function_type;
+        return external_type;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
     }
 
     std::string getRefRepr() const {
         std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "cfunc");
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "external");
         ss << " " << name;
-        ss << " " << function_type->getRepr();
+        ss << " " << bangra::getRepr(external_type);
         ss << ")";
         return ss.str();
     }
@@ -2991,20 +3156,24 @@ struct ILConstClosure :
         return Type::Any;
     }
 
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
     std::string getRefRepr() const;
 };
 
 //------------------------------------------------------------------------------
 
-std::string ILValue::getRepr () const {
+std::string getRepr (const ILValue *value) {
 #define ILVALUE_KIND(NAME) \
     case ILValue::NAME: { \
-        auto spec = llvm::cast<IL ## NAME>(this); \
+        auto spec = llvm::cast<IL ## NAME>(value); \
         return spec->getRepr(); \
     } break;
 #define ILVALUE_KIND_ABSTRACT(NAME)
 #define ILVALUE_KIND_EOK(NAME)
-    switch(kind) {
+    switch(value->kind) {
         ILVALUE_ENUM_KINDS()
         default: {
             assert(false && "invalid IL value kind");
@@ -3016,15 +3185,15 @@ std::string ILValue::getRepr () const {
 #undef ILVALUE_KIND_EOK
 }
 
-std::string ILValue::getRefRepr () const {
+std::string getRefRepr (const ILValue *value) {
 #define ILVALUE_KIND(NAME) \
     case ILValue::NAME: { \
-        auto spec = llvm::cast<IL ## NAME>(this); \
+        auto spec = llvm::cast<IL ## NAME>(value); \
         return spec->getRefRepr(); \
     } break;
 #define ILVALUE_KIND_ABSTRACT(NAME)
 #define ILVALUE_KIND_EOK(NAME)
-    switch(kind) {
+    switch(value->kind) {
         ILVALUE_ENUM_KINDS()
         default: {
             assert(false && "invalid IL value kind");
@@ -3036,15 +3205,15 @@ std::string ILValue::getRefRepr () const {
 #undef ILVALUE_KIND_EOK
 }
 
-Type *ILValue::inferType () const {
+Type *getType(const ILValue *value) {
 #define ILVALUE_KIND(NAME) \
     case ILValue::NAME: { \
-        auto spec = llvm::cast<IL ## NAME>(this); \
+        auto spec = llvm::cast<IL ## NAME>(value); \
         return spec->inferType(); \
     } break;
 #define ILVALUE_KIND_ABSTRACT(NAME)
 #define ILVALUE_KIND_EOK(NAME)
-    switch(kind) {
+    switch(value->kind) {
         ILVALUE_ENUM_KINDS()
         default: {
             assert(false && "invalid IL value kind");
@@ -3203,6 +3372,15 @@ struct FFI {
                         } break;
                     }
                 } break;
+                case T_Struct: {
+                    auto st = llvm::cast<StructType>(il_type);
+                    size_t fieldcount = st->getFieldCount();
+                    LLVMTypeRef types[fieldcount];
+                    for (size_t i = 0; i < fieldcount; ++i) {
+                        types[i] = convertType(st->getField(i).getType());
+                    }
+                    result = LLVMStructType(types, fieldcount, false);
+                } break;
                 case T_Array: {
                     auto array = llvm::cast<ArrayType>(il_type);
                     result = LLVMArrayType(
@@ -3229,7 +3407,8 @@ struct FFI {
                         ftype->isVarArg());
                 } break;
                 default: {
-                    ilError(nullptr, "can not translate type");
+                    ilError(nullptr, "can not translate type %s",
+                        bangra::getRepr(il_type).c_str());
                 } break;
             }
             assert(result);
@@ -3339,7 +3518,7 @@ struct FFI {
                     } break;
                     default: {
                         ilError(nullptr, "can't convert %s to integer",
-                            c->getType()->getRepr().c_str());
+                            bangra::getRepr(getType(c)).c_str());
                     } break;
                 }
             } break;
@@ -3355,7 +3534,7 @@ struct FFI {
                     } break;
                     default: {
                         ilError(nullptr, "can't convert %s to real",
-                            c->getType()->getRepr().c_str());
+                            bangra::getRepr(getType(c)).c_str());
                     } break;
                 }
             } break;
@@ -3371,7 +3550,7 @@ struct FFI {
                     } break;
                     default: {
                         ilError(nullptr, "can't convert %s to pointer",
-                            c->getType()->getRepr().c_str());
+                            bangra::getRepr(getType(c)).c_str());
                     } break;
                 }
             } break;
@@ -3391,16 +3570,16 @@ struct FFI {
 
     TypeLLVMValuePair convertFunction(
         const ILConstant *value) {
-        auto ilfunc = llvm::dyn_cast<ILConstCFunction>(value);
+        auto ilfunc = llvm::dyn_cast<ILConstExternal>(value);
         if (!ilfunc) {
-            ilError(nullptr, "not a C function");
+            ilError(nullptr, "not an external");
         }
         auto &result = functions[ilfunc->name];
         if (!result.second) {
-            if (ilfunc->function_type->getKind() != T_CFunction) {
-                ilError(nullptr, "not a function type");
+            if (ilfunc->external_type->getKind() != T_CFunction) {
+                ilError(nullptr, "not a C function type");
             }
-            auto ilfunctype = static_cast<CFunctionType *>(ilfunc->function_type);
+            auto ilfunctype = static_cast<CFunctionType *>(ilfunc->external_type);
 
             LLVMTypeRef ofunctype = convertType(ilfunctype);
             LLVMValueRef ofunc = LLVMAddFunction(
@@ -3523,7 +3702,7 @@ struct ILFrame {
             ss << "  " << entry.first->getRefRepr();
             auto &value = entry.second;
             for (size_t i = 0; i < value.size(); ++i) {
-                ss << " " << value[i]->getRefRepr();
+                ss << " " << bangra::getRefRepr(value[i]);
             }
             ss << "\n";
         }
@@ -3694,8 +3873,8 @@ void execute(ILContinuation *entry) {
                 arguments.push_back(closure);
                 arguments.push_back(result);
             } break;
-            case ILValue::ConstCFunction: {
-                auto cb = llvm::cast<ILConstCFunction>(callee);
+            case ILValue::ConstExternal: {
+                auto cb = llvm::cast<ILConstExternal>(callee);
                 std::vector<ILConstant *> values;
                 evaluate_values(arguments, frame, values);
                 assert(values.size() >= 1);
@@ -3716,7 +3895,7 @@ void execute(ILContinuation *entry) {
 }
 
 //------------------------------------------------------------------------------
-// CLANG SERVICES
+// C BRIDGE (CLANG)
 //------------------------------------------------------------------------------
 
 class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
@@ -3727,7 +3906,7 @@ public:
     std::unordered_map<clang::EnumDecl *, bool> enum_defined;
     std::unordered_map<const char *, char *> path_cache;
     std::unordered_map<std::string, Type *> named_structs;
-    std::unordered_map<std::string, ILConstStruct *> named_enums;
+    std::unordered_map<std::string, Type *> named_enums;
     std::unordered_map<std::string, Type *> typedefs;
 
     CVisitor() : Context(NULL) {
@@ -3827,11 +4006,11 @@ public:
             }
         }
 
-        Anchor anchor = anchorFromLocation(rd->getSourceRange().getBegin());
-        struct_type->setAnchor(anchor);
-
         clang::RecordDecl * defn = rd->getDefinition();
         if (defn && !record_defined[rd]) {
+            Anchor anchor = anchorFromLocation(rd->getSourceRange().getBegin());
+            struct_type->setAnchor(anchor);
+
             GetFields(struct_type, defn);
 
             auto &rl = Context->getASTRecordLayout(rd);
@@ -3848,36 +4027,33 @@ public:
         return struct_type;
     }
 
-    ILConstStruct *TranslateEnum(clang::EnumDecl *ed) {
+    Type *TranslateEnum(clang::EnumDecl *ed) {
         std::string name = ed->getName();
 
-        ILConstStruct *enum_type = nullptr;
+        EnumType *enum_type = nullptr;
         if (name.size() && named_enums.count(name)) {
-            enum_type = named_enums[name];
+            enum_type = llvm::cast<EnumType>(named_enums[name]);
         } else {
-            auto struct_type = llvm::cast<StructType>(
-                    Type::Struct(name, false, false));
-            enum_type = ILConstStruct::create({}, struct_type);
-            if (!struct_type->isUnnamed()) {
+            enum_type = llvm::cast<EnumType>(Type::Enum(name));
+            if (!enum_type->isUnnamed()) {
                 named_enums[name] = enum_type;
             }
         }
 
-        llvm::cast<StructType>(enum_type->getType())->setAnchor(
-            anchorFromLocation(ed->getIntegerTypeRange().getBegin()));
-
         clang::EnumDecl * defn = ed->getDefinition();
         if (defn && !enum_defined[ed]) {
-            IntegerType *type = llvm::cast<IntegerType>(
-                TranslateType(ed->getIntegerType()));
+            enum_type->setAnchor(
+                anchorFromLocation(ed->getIntegerTypeRange().getBegin()));
+
+            enum_type->setType(TranslateType(ed->getIntegerType()));
 
             for (auto it : ed->enumerators()) {
                 Anchor anchor = anchorFromLocation(it->getSourceRange().getBegin());
                 auto &val = it->getInitVal();
 
                 enum_type->addField(
-                    ILConstInteger::create(val.getExtValue(), type),
-                    StructType::Field(it->getName().data(), type, anchor));
+                    EnumType::Field(it->getName().data(),
+                        val.getExtValue(), anchor));
             }
 
             enum_defined[ed] = true;
@@ -3913,11 +4089,9 @@ public:
             return TranslateRecord(rd);
         }  break;
         case clang::Type::Enum: {
-            const EnumType *ET = dyn_cast<EnumType>(Ty);
+            const clang::EnumType *ET = dyn_cast<clang::EnumType>(Ty);
             EnumDecl * ed = ET->getDecl();
-            // todo: use actual enum type
-            TranslateEnum(ed);
-            return Type::Int32;
+            return TranslateEnum(ed);
         } break;
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
@@ -4052,16 +4226,40 @@ public:
         return NULL;
     }
 
+    void exportType(const std::string &name, Type *type, const Anchor &anchor) {
+        dest->addField(
+            ILConstPointer::create(type, Type::TypePointer),
+            StructType::Field(
+                name,
+                Type::TypePointer,
+                anchor));
+    }
+
+    void exportExternal(const std::string &name, Type *type, const Anchor &anchor) {
+        dest->addField(
+            ILConstExternal::create(name, type),
+            StructType::Field(
+                name,
+                type,
+                anchor));
+    }
+
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
         if (rd->isFreeStanding()) {
-            TranslateRecord(rd);
+            auto type = llvm::cast<StructType>(TranslateRecord(rd));
+            if (!type->isUnnamed()) {
+                exportType(type->getName(), type, type->getAnchor());
+            }
         }
         return true;
     }
 
     bool TraverseEnumDecl(clang::EnumDecl *ed) {
         if (ed->isFreeStanding()) {
-            TranslateEnum(ed);
+            auto type = llvm::cast<EnumType>(TranslateEnum(ed));
+            if (!type->isUnnamed()) {
+                exportType(type->getName(), type, type->getAnchor());
+            }
         }
         return true;
     }
@@ -4073,8 +4271,7 @@ public:
             Type *type = TranslateType(vd->getType());
             if (!type) return true;
 
-            // TODO: global external
-            // vd->getName().data(), type
+            exportExternal(vd->getName().data(), type, anchor);
         }
 
         return true;
@@ -4089,6 +4286,7 @@ public:
         if (!type) return true;
 
         typedefs[td->getName().data()] = type;
+        exportType(td->getName().data(), type, anchor);
 
         return true;
     }
@@ -4121,8 +4319,7 @@ public:
 
         Anchor anchor = anchorFromLocation(f->getSourceRange().getBegin());
 
-        // TODO: global external
-        // FuncName.c_str(), functype
+        exportExternal(FuncName.c_str(), functype, anchor);
 
         return true;
     }
@@ -4168,16 +4365,16 @@ public:
     }
 };
 
-static LLVMModuleRef importCModule (ILConstStruct **table,
-    const char *path, const char **args, int argcount,
-    const char *buffer = NULL) {
+static ILConstStruct *importCModule (
+    const std::string &path, const std::vector<std::string> &args,
+    const char *buffer = nullptr) {
     using namespace clang;
 
     std::vector<const char *> aargs;
     aargs.push_back("clang");
-    aargs.push_back(path);
-    for (int i = 0; i < argcount; ++i) {
-        aargs.push_back(args[i]);
+    aargs.push_back(path.c_str());
+    for (size_t i = 0; i < args.size(); ++i) {
+        aargs.push_back(args[i].c_str());
     }
 
     CompilerInstance compiler;
@@ -4203,18 +4400,21 @@ static LLVMModuleRef importCModule (ILConstStruct **table,
 
     LLVMModuleRef M = NULL;
 
-    *table = ILConstStruct::create({},
+
+    auto result = ILConstStruct::create({},
         llvm::cast<StructType>(Type::Struct("", false)));
 
     // Create and execute the frontend to generate an LLVM bitcode module.
-    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(*table));
+    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(result));
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
-        return M;
+        return result;
+    } else {
+        ilError(nullptr, "compilation failed");
     }
 
-    return NULL;
+    return nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -4242,7 +4442,7 @@ static bool builtin_checkparams (const std::vector<ILConstant *> &args,
 
 static bool extract_bool(const ILConstant *value) {
     if (auto resulttype = llvm::dyn_cast<ILConstInteger>(value)) {
-        if (resulttype->getType() == Type::Bool) {
+        if (getType(resulttype) == Type::Bool) {
             return (bool)resulttype->value;
         }
     }
@@ -4263,7 +4463,7 @@ static Type *extract_type(const ILConstant *value) {
     if (!resulttype) {
         ilError(value, "pointer constant expected");
     }
-    if (resulttype->getType() != Type::TypePointer) {
+    if (getType(resulttype) != Type::TypePointer) {
         ilError(value, "pointer type constant expected");
     }
     return (Type *)resulttype->value;
@@ -4322,7 +4522,7 @@ static ILConstant *builtin_print(const std::vector<ILConstant *> &args) {
                 std::cout << cs->value;
             } break;
             default: {
-                std::cout << args[i]->getRefRepr();
+                std::cout << getRefRepr(args[i]);
             } break;
         }
     }
@@ -4332,7 +4532,7 @@ static ILConstant *builtin_print(const std::vector<ILConstant *> &args) {
 
 static ILConstant *builtin_repr(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 1, 1);
-    return wrap(args[0]->getRepr());
+    return wrap(getRepr(args[0]));
 }
 
 static ILConstant *builtin_tupleof(const std::vector<ILConstant *> &args) {
@@ -4357,9 +4557,64 @@ static ILConstant *builtin_cdecl(const std::vector<ILConstant *> &args) {
 static ILConstant *builtin_external(const std::vector<ILConstant *> &args) {
     builtin_checkparams(args, 2, 2);
     std::string name = extract_string(args[0]);
-    Type *rettype = extract_type(args[1]);
-    return ILConstCFunction::create(name, rettype);
+    Type *type = extract_type(args[1]);
+    return ILConstExternal::create(name, type);
 }
+
+// (import-c const-path (tupleof const-string ...))
+static ILConstant *builtin_import_c(const std::vector<ILConstant *> &args) {
+    builtin_checkparams(args, 2, 2);
+    std::string path = extract_string(args[0]);
+    auto compile_args = extract_tuple(args[1]);
+    std::vector<std::string> cargs;
+    for (size_t i = 0; i < compile_args.size(); ++i) {
+        cargs.push_back(extract_string(compile_args[i]));
+    }
+    return bangra::importCModule(path, cargs);
+}
+
+static ILConstant *builtin_at_op(const std::vector<ILConstant *> &args) {
+    builtin_checkparams(args, 2, 2);
+    ILConstant *obj = args[0];
+    ILConstant *key = args[1];
+    switch(obj->kind) {
+        case ILValue::ConstStruct: {
+            auto cs = llvm::cast<ILConstStruct>(obj);
+            auto t = llvm::cast<StructType>(getType(cs));
+            switch(key->kind) {
+                case ILValue::ConstInteger: {
+                    auto ci = llvm::cast<ILConstInteger>(key);
+                    if ((size_t)ci->value < t->getFieldCount()) {
+                        return cs->values[ci->value];
+                    } else {
+                        ilError(key, "index out of bounds");
+                        return nullptr;
+                    }
+                } break;
+                case ILValue::ConstString: {
+                    auto cstr = llvm::cast<ILConstString>(key);
+                    size_t idx = t->getFieldIndex(cstr->value);
+                    if (idx != (size_t)-1) {
+                        return cs->values[idx];
+                    } else {
+                        ilError(key, "no such member");
+                        return nullptr;
+                    }
+                } break;
+                default: {
+                    ilError(key, "illegal key type");
+                    return nullptr;
+                } break;
+            }
+        } break;
+        default: {
+            ilError(obj, "unsubscriptable type");
+            return nullptr;
+        } break;
+    }
+
+}
+
 
 template<typename A, typename B>
 class cast_join_type {};
@@ -4860,7 +5115,7 @@ static ILValue *parse_select (Environment &env, ValueRef expr) {
     ILValue *trueexpr = translate(subenv_true, expr_true);
     auto bbtrue_end = env.global.builder.continuation;
 
-    bool returnValue = hasTypeValue(trueexpr->getType());
+    bool returnValue = hasTypeValue(getType(trueexpr));
 
     ILContinuation *bbfalse = nullptr;
     ILContinuation *bbfalse_end = nullptr;
@@ -4871,7 +5126,7 @@ static ILValue *parse_select (Environment &env, ValueRef expr) {
         env.global.builder.continueAt(bbfalse);
         falseexpr = translate(subenv_false, expr_false);
         bbfalse_end = env.global.builder.continuation;
-        returnValue = returnValue && hasTypeValue(falseexpr->getType());
+        returnValue = returnValue && hasTypeValue(getType(falseexpr));
     } else {
         returnValue = false;
     }
@@ -5060,6 +5315,28 @@ ILValue *translate (Environment &env, ValueRef expr) {
 }
 
 //------------------------------------------------------------------------------
+// FILE SYSTEM
+//------------------------------------------------------------------------------
+
+struct ModuleLoader {
+    std::unordered_map<std::string, ILConstStruct *> modules;
+
+    ModuleLoader()
+    {}
+
+    ILConstStruct *import_module(const std::string &name) {
+        auto it = modules.find(name);
+        if (it != modules.end()) {
+            return it->second;
+        }
+        return nullptr;
+    }
+};
+
+ModuleLoader loader;
+
+
+//------------------------------------------------------------------------------
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
@@ -5118,6 +5395,9 @@ static void setupRootEnvironment (Environment &env) {
     env.setLocal("cdecl", wrap(builtin_cdecl));
     env.setLocal("tupleof", wrap(builtin_tupleof));
     env.setLocal("external", wrap(builtin_external));
+    env.setLocal("import-c", wrap(builtin_import_c));
+
+    env.setLocal("@", wrap(builtin_at_op));
 
     env.setLocal("+",
         wrap(builtin_binary_op<dispatch_arith_string_types, builtin_add_op>));
