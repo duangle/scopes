@@ -50,6 +50,18 @@ print
     sin 1.2
 print "done"
 
+let x 10
+
+let plus2
+    function (x)
+        + x 2
+
+print
+    plus2 50
+print
+    proto-eval
+        plus2 x
+
 let api
     import-c "bangra.h" (tupleof)
 

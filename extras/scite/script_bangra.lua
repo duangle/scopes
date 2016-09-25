@@ -57,7 +57,7 @@ local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
         "bangra let external cdecl apply do select function null true false label ..."
-            .. " print repr tupleof import-c"
+            .. " print repr tupleof import-c proto-eval"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

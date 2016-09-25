@@ -3166,6 +3166,7 @@ struct ILConstClosure :
 //------------------------------------------------------------------------------
 
 std::string getRepr (const ILValue *value) {
+    assert(value);
 #define ILVALUE_KIND(NAME) \
     case ILValue::NAME: { \
         auto spec = llvm::cast<IL ## NAME>(value); \
@@ -3186,6 +3187,7 @@ std::string getRepr (const ILValue *value) {
 }
 
 std::string getRefRepr (const ILValue *value) {
+    assert(value);
 #define ILVALUE_KIND(NAME) \
     case ILValue::NAME: { \
         auto spec = llvm::cast<IL ## NAME>(value); \
@@ -3206,6 +3208,7 @@ std::string getRefRepr (const ILValue *value) {
 }
 
 Type *getType(const ILValue *value) {
+    assert(value);
 #define ILVALUE_KIND(NAME) \
     case ILValue::NAME: { \
         auto spec = llvm::cast<IL ## NAME>(value); \
@@ -3809,7 +3812,7 @@ void map_closure(ILConstClosure *closure,
 }
 
 static bool extract_bool(const ILConstant *value);
-void execute(ILContinuation *entry) {
+ILConstant *execute(ILContinuation *entry) {
     assert(entry->getParameterCount() == 0);
 
     //ILContinuation *cont = entry;
@@ -3842,7 +3845,11 @@ void execute(ILContinuation *entry) {
             } break;
             case ILValue::Intrinsic: {
                 if (callee == ILIntrinsic::Return) {
-                    return;
+                    if (arguments.size() >= 2) {
+                        return evaluate(frame, arguments[1]);
+                    } else {
+                        return nullptr;
+                    }
                 } else if (callee == ILIntrinsic::Branch) {
                     auto condarg = arguments[1];
                     bool condvalue = extract_bool(
@@ -3892,6 +3899,7 @@ void execute(ILContinuation *entry) {
         }
     }
 
+    return nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -5025,7 +5033,7 @@ static ILValue *parse_do (Environment &env, ValueRef expr) {
 
     Environment subenv(env);
 
-    ILValue *value;
+    ILValue *value = nullptr;
     while (expr) {
         value = translate(subenv, expr);
         expr = next(expr);
@@ -5068,6 +5076,29 @@ static ILValue *parse_function (Environment &env, ValueRef expr) {
     env.global.builder.continueAt(currentblock);
 
     return function;
+}
+
+static ILValue *parse_proto_eval (Environment &env, ValueRef expr) {
+    UNPACK_ARG(expr, expr_protoeval);
+
+    auto currentblock = env.global.builder.continuation;
+
+    auto mainfunc = ILContinuation::create();
+
+    Environment subenv(env);
+    subenv.global.builder.continueAt(mainfunc);
+
+    auto retval = translate(subenv, expr_protoeval);
+    subenv.global.builder.br({ ILIntrinsic::Return, retval });
+
+    auto result = execute(mainfunc);
+
+    subenv.global.builder.continueAt(currentblock);
+
+    if (result)
+        return result;
+    else
+        return ILConstTuple::create({});
 }
 
 static ILValue *parse_implicit_apply (Environment &env, ValueRef expr) {
@@ -5267,6 +5298,7 @@ static void registerTranslators() {
     t.set(parse_do, "do", 0, -1);
     t.set(parse_select, "select", 2, 3);
     t.set(parse_function, "function", 1, -1);
+    t.set(parse_proto_eval, "proto-eval", 1, 1);
 }
 
 static ILValue *translateFromList (Environment &env, ValueRef expr) {
