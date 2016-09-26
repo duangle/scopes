@@ -1755,6 +1755,7 @@ protected:
 
 public:
     static Type *TypePointer;
+    static Type *ValuePointer;
     static Type *Void;
     static Type *Null;
     static Type *Bool;
@@ -1802,6 +1803,7 @@ public:
 static std::string getRepr(Type *type);
 
 Type *Type::TypePointer;
+Type *Type::ValuePointer;
 Type *Type::Void;
 Type *Type::Null;
 Type *Type::Bool;
@@ -2461,6 +2463,7 @@ std::string getRepr(Type *type) {
 
 void Type::initTypes() {
     TypePointer = Pointer(Struct("Type", true));
+    ValuePointer = Pointer(Struct("SymEx", true));
     //BasicBlock = Struct("BasicBlock", true);
 
     Empty = Tuple({});
@@ -2679,7 +2682,6 @@ struct ILParameter :
 struct ILIntrinsic :
     ILValueImpl<ILIntrinsic, ILValue::Intrinsic, ILValue> {
     static ILIntrinsic *Branch;
-    static ILIntrinsic *Return;
 
     std::string name;
     Type *intrinsic_type;
@@ -2714,13 +2716,10 @@ struct ILIntrinsic :
             Type::Continuation({ Type::Bool,
                 Type::Continuation({}),
                 Type::Continuation({}) }));
-        Return = create("return",
-            Type::Continuation({}));
     }
 };
 
 ILIntrinsic *ILIntrinsic::Branch;
-ILIntrinsic *ILIntrinsic::Return;
 
 //------------------------------------------------------------------------------
 
@@ -3796,7 +3795,7 @@ void map_continuation_arguments(
     size_t argcount = arguments.size() - 1;
     size_t paramcount = nextcont->getParameterCount();
     if (argcount != paramcount) {
-        ilError(nullptr, "argument count mismatch (%zu != %zu)",
+        ilError(nullptr, "argument count mismatch (%zu passed, %zu required)",
             argcount, paramcount);
     }
     nextframe->map[nextcont] = values;
@@ -3812,13 +3811,14 @@ void map_closure(ILConstClosure *closure,
 }
 
 static bool extract_bool(const ILConstant *value);
-ILConstant *execute(ILContinuation *entry) {
-    assert(entry->getParameterCount() == 0);
+ILConstant *execute(std::vector<ILValue *> arguments) {
 
-    //ILContinuation *cont = entry;
-    std::vector<ILValue *> arguments = entry->values;
     ILFrame *frame = ILFrame::create();
     frame->idx = 0;
+
+    auto retcont = ILContinuation::create(1);
+    // add special continuation as return function
+    arguments.push_back(retcont);
 
     while (true) {
 #ifdef BANGRA_DEBUG_IL
@@ -3833,8 +3833,16 @@ ILConstant *execute(ILContinuation *entry) {
         }
         switch(callee->kind) {
             case ILValue::ConstClosure: {
+                auto closure = llvm::cast<ILConstClosure>(callee);
+                if (closure->cont == retcont) {
+                    if (arguments.size() >= 2) {
+                        return evaluate(frame, arguments[1]);
+                    } else {
+                        return ILConstTuple::create({});
+                    }
+                }
                 map_closure(
-                    llvm::cast<ILConstClosure>(callee), arguments, frame);
+                    closure, arguments, frame);
             } break;
             case ILValue::Continuation: {
                 auto nextcont = llvm::cast<ILContinuation>(callee);
@@ -3844,13 +3852,7 @@ ILConstant *execute(ILContinuation *entry) {
                 frame = nextframe;
             } break;
             case ILValue::Intrinsic: {
-                if (callee == ILIntrinsic::Return) {
-                    if (arguments.size() >= 2) {
-                        return evaluate(frame, arguments[1]);
-                    } else {
-                        return nullptr;
-                    }
-                } else if (callee == ILIntrinsic::Branch) {
+                if (callee == ILIntrinsic::Branch) {
                     auto condarg = arguments[1];
                     bool condvalue = extract_bool(
                         evaluate(frame, condarg));
@@ -5084,21 +5086,19 @@ static ILValue *parse_proto_eval (Environment &env, ValueRef expr) {
     auto currentblock = env.global.builder.continuation;
 
     auto mainfunc = ILContinuation::create();
+    auto ret = mainfunc->appendParameter(ILParameter::create());
 
     Environment subenv(env);
     subenv.global.builder.continueAt(mainfunc);
 
     auto retval = translate(subenv, expr_protoeval);
-    subenv.global.builder.br({ ILIntrinsic::Return, retval });
+    subenv.global.builder.br({ ret, retval });
 
-    auto result = execute(mainfunc);
+    auto result = execute({mainfunc});
 
     subenv.global.builder.continueAt(currentblock);
 
-    if (result)
-        return result;
-    else
-        return ILConstTuple::create({});
+    return result;
 }
 
 static ILValue *parse_implicit_apply (Environment &env, ValueRef expr) {
@@ -5481,10 +5481,11 @@ static void handleException(Environment &env, ValueRef expr) {
 static bool translateRootValueList (Environment &env, ValueRef expr) {
 
     auto mainfunc = ILContinuation::create();
+    auto ret = mainfunc->appendParameter(ILParameter::create());
     env.global.builder.continueAt(mainfunc);
 
     parse_do(env, expr);
-    env.global.builder.br({ ILIntrinsic::Return });
+    env.global.builder.br({ ret });
 
 /*
 #ifdef BANGRA_DEBUG_IL
@@ -5493,7 +5494,7 @@ static bool translateRootValueList (Environment &env, ValueRef expr) {
 #endif
 */
 
-    execute(mainfunc);
+    execute({mainfunc});
 
     return true;
 }
