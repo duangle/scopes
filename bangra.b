@@ -65,21 +65,18 @@ print
 let api
     import-c "bangra.h" (tupleof)
 
-let new-symbol
-    @ api "bangra_symbol"
-let string-size
-    @ api "bangra_string_size"
-let string-value
-    @ api "bangra_string_value"
+///
+    let new-symbol
+        @ api "bangra_symbol"
+    let string-size
+        @ api "bangra_string_size"
+    let string-value
+        @ api "bangra_string_value"
 # signed long long int bangra_string_size(ValueRef expr);
 
 let puts
     external "puts"
         cdecl int (tupleof rawstring) false
-
-puts
-    string-value
-        new-symbol "12345"
 
 let testtext
     "yo yo yo"

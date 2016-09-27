@@ -16,112 +16,11 @@ enum {
     BANGRA_VERSION_PATCH = 0,
 };
 
-#ifdef BANGRA_CPP_IMPL
-namespace bangra {
-struct Value;
-struct Environment;
-} // namespace bangra
-typedef bangra::Value Value;
-typedef bangra::Environment Environment;
-#else
-typedef struct _Environment Environment;
-typedef struct _Value Value;
-#endif
-
-typedef Value *ValueRef;
-
 extern int bang_argc;
 extern char **bang_argv;
 extern char *bang_executable_path;
 
-// high level
-//------------------------------------------------------------------------------
-
 int bangra_main(int argc, char ** argv);
-ValueRef bangra_parse_file(const char *path);
-
-// LLVM compatibility
-//------------------------------------------------------------------------------
-
-Environment *bangra_parent_env(Environment *env);
-/*
-void *bangra_import_c_module(ValueRef dest,
-    const char *path, const char **args, int argcount);
-void *bangra_import_c_string(ValueRef dest,
-    const char *str, const char *path, const char **args, int argcount);
-*/
-
-// methods that apply to all types
-//------------------------------------------------------------------------------
-
-int bangra_get_kind(ValueRef expr);
-int bangra_eq(Value *a, Value *b);
-
-ValueRef bangra_clone(ValueRef expr);
-
-ValueRef bangra_next(ValueRef expr);
-ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs);
-ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs);
-
-void bangra_print_value(ValueRef expr, int depth);
-ValueRef bangra_format_value(ValueRef expr, int depth);
-
-const char *bangra_anchor_path(ValueRef expr);
-int bangra_anchor_lineno(ValueRef expr);
-int bangra_anchor_column(ValueRef expr);
-int bangra_anchor_offset(ValueRef expr);
-ValueRef bangra_set_anchor(
-    ValueRef expr, const char *path, int lineno, int column, int offset);
-ValueRef bangra_set_anchor_mutable(
-    ValueRef expr, const char *path, int lineno, int column, int offset);
-
-// pointer
-//------------------------------------------------------------------------------
-
-ValueRef bangra_ref(ValueRef lhs);
-ValueRef bangra_at(ValueRef expr);
-ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs);
-
-// string and symbol
-//------------------------------------------------------------------------------
-
-ValueRef bangra_string(const char *value, signed long long int size);
-ValueRef bangra_symbol(const char *value);
-const char *bangra_string_value(ValueRef expr);
-signed long long int bangra_string_size(ValueRef expr);
-ValueRef bangra_string_concat(ValueRef a, ValueRef b);
-ValueRef bangra_string_slice(ValueRef expr, int start, int end);
-
-// real
-//------------------------------------------------------------------------------
-
-ValueRef bangra_real(double value);
-double bangra_real_value(ValueRef value);
-
-// integer
-//------------------------------------------------------------------------------
-
-ValueRef bangra_integer(signed long long int value);
-signed long long int bangra_integer_value(ValueRef value);
-
-// exception handling
-//------------------------------------------------------------------------------
-
-void *bangra_xpcall (void *ctx,
-    void *(*try_func)(void *),
-    void *(*except_func)(void *, ValueRef));
-void bangra_raise (ValueRef expr);
-
-// metaprogramming
-//------------------------------------------------------------------------------
-
-typedef ValueRef (*bangra_preprocessor)(Environment *, ValueRef );
-
-void bangra_error_message(
-    Environment *env, ValueRef context, const char *format, ...);
-void bangra_set_preprocessor(const char *name, bangra_preprocessor f);
-bangra_preprocessor bangra_get_preprocessor(const char *name);
-ValueRef bangra_unique_symbol(const char *name);
 
 #if defined __cplusplus
 }
@@ -129,18 +28,6 @@ ValueRef bangra_unique_symbol(const char *name);
 
 #endif // BANGRA_CPP
 #ifdef BANGRA_CPP_IMPL
-
-/*
-TODO:
-    - validate getelementptr arguments where possible
-    - validate that used values are in the same block
-    - validate: Call parameter type does not match function signature!
-    - validate: PHI node operands are not the same type as the result!
-    - validate: Called function must be a pointer!
-    - validate: Function return type does not match operand type of return inst!
-    - validate: Function arguments must have first-class types!
-        (passing function without pointer to constructor)
-*/
 
 #define BANGRA_HEADER "bangra"
 //#define BANGRA_DEBUG_IL
@@ -457,29 +344,8 @@ static void dumpFileLine(const char *path, int offset) {
 }
 
 //------------------------------------------------------------------------------
-// DATA MODEL
+// ANCHORS
 //------------------------------------------------------------------------------
-
-enum ValueKind {
-    V_None = 0,
-    V_Pointer = 1,
-    V_String = 2,
-    V_Symbol = 3,
-    V_Integer = 4,
-    V_Real = 5,
-};
-
-static const char *valueKindName(int kind) {
-    switch(kind) {
-    case V_None: return "null";
-    case V_Pointer: return "list";
-    case V_String: return "string";
-    case V_Symbol: return "symbol";
-    case V_Integer: return "integer";
-    case V_Real: return "real";
-    default: return "#corrupted#";
-    }
-}
 
 struct Anchor {
     const char *path;
@@ -551,1157 +417,6 @@ struct Anchor {
     }
 
 };
-
-struct Value;
-static void printValue(ValueRef e, size_t depth=0, bool naked=true);
-static std::string formatValue(ValueRef e, size_t depth=0, bool naked=true);
-
-static ValueRef next(ValueRef expr);
-
-struct Value {
-    private: const ValueKind kind;
-    public: Anchor anchor;
-    // NULL = end of list
-    private: ValueRef next;
-protected:
-    Value(ValueKind kind_, ValueRef next_ = nullptr) :
-        kind(kind_),
-        next(next_) {
-    }
-
-public:
-    Anchor *findValidAnchor();
-    ValueRef getNext() const {
-        return next;
-    }
-
-    void setNext(ValueRef next) {
-        this->next = next;
-    }
-
-    size_t count() {
-        ValueRef self = this;
-        size_t count = 0;
-        while (self) {
-            ++ count;
-            self = bangra::next(self);
-        }
-        return count;
-    }
-
-    ValueKind getKind() const {
-        return kind;
-    }
-
-    std::string getHeader() const;
-};
-
-static Value *clone(Value *value);
-
-//------------------------------------------------------------------------------
-
-static ValueRef at(ValueRef expr);
-static bool isAtom(ValueRef expr);
-
-// NULL = empty list
-struct Pointer : Value {
-protected:
-    ValueRef _at;
-public:
-    Pointer(ValueRef at = NULL, ValueRef next_ = NULL) :
-        Value(V_Pointer, next_),
-        _at(at) {
-    }
-
-    ValueRef getAt() const {
-        return _at;
-    }
-
-    void setAt(ValueRef at) {
-        this->_at = at;
-    }
-
-    static bool classof(const Value *expr) {
-        return expr->getKind() == V_Pointer;
-    }
-
-    static ValueKind kind() {
-        return V_Pointer;
-    }
-};
-
-static ValueRef at(ValueRef expr) {
-    assert(expr && (expr->getKind() == V_Pointer));
-    if (auto pointer = llvm::dyn_cast<Pointer>(expr)) {
-        return pointer->getAt();
-    }
-    return NULL;
-}
-
-template<typename T>
-static T *kindAt(ValueRef expr) {
-    ValueRef val = at(expr);
-    if (val) {
-        return llvm::dyn_cast<T>(val);
-    }
-    return NULL;
-}
-
-static int kindOf(ValueRef expr) {
-    if (expr) {
-        return expr->getKind();
-    }
-    return V_None;
-}
-
-static ValueRef cons(ValueRef lhs, ValueRef rhs) {
-    assert(lhs);
-    lhs = clone(lhs);
-    lhs->setNext(rhs);
-    return lhs;
-}
-
-template<typename T>
-static bool isKindOf(ValueRef expr) {
-    return kindOf(expr) == T::kind();
-}
-
-static ValueRef next(ValueRef expr) {
-    if (expr) {
-        return expr->getNext();
-    }
-    return NULL;
-}
-
-static bool isAtom(ValueRef expr) {
-    if (expr) {
-        if (kindOf(expr) == V_Pointer) {
-            if (at(expr))
-                return false;
-        }
-    }
-    // empty list
-    return true;
-}
-
-//------------------------------------------------------------------------------
-
-struct Integer : Value {
-protected:
-    int64_t value;
-    bool is_unsigned;
-
-public:
-    Integer(int64_t number, bool is_unsigned_, ValueRef next_ = NULL) :
-        Value(V_Integer, next_),
-        value(number),
-        is_unsigned(is_unsigned_)
-        {}
-
-    Integer(int64_t number, ValueRef next_ = NULL) :
-        Value(V_Integer, next_),
-        value(number),
-        is_unsigned(false)
-        {}
-
-    bool isUnsigned() const {
-        return is_unsigned;
-    }
-
-    int64_t getValue() const {
-        return value;
-    }
-
-    static bool classof(const Value *expr) {
-        auto kind = expr->getKind();
-        return (kind == V_Integer);
-    }
-
-    static ValueKind kind() {
-        return V_Integer;
-    }
-
-};
-
-//------------------------------------------------------------------------------
-
-struct Real : Value {
-protected:
-    double value;
-
-public:
-    Real(double number, ValueRef next_ = NULL) :
-        Value(V_Real, next_),
-        value(number)
-        {}
-
-    double getValue() const {
-        return value;
-    }
-
-    static bool classof(const Value *expr) {
-        auto kind = expr->getKind();
-        return (kind == V_Real);
-    }
-
-    static ValueKind kind() {
-        return V_Real;
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct String : Value {
-protected:
-    std::string value;
-
-    String(ValueKind kind, const char *s, size_t len, ValueRef next_) :
-        Value(kind, next_),
-        value(s, len)
-        {}
-
-public:
-    String(const char *s, size_t len, ValueRef next_ = NULL) :
-        Value(V_String, next_),
-        value(s, len)
-        {}
-
-    String(const char *s, ValueRef next_ = NULL) :
-        Value(V_String, next_),
-        value(s, strlen(s))
-        {}
-
-    const std::string &getValue() const {
-        return value;
-    }
-
-    const char *c_str() const {
-        return value.c_str();
-    }
-
-    size_t size() const {
-        return value.size();
-    };
-
-    const char &operator [](size_t i) const {
-        return value[i];
-    }
-
-    char &operator [](size_t i) {
-        return value[i];
-    }
-
-    static bool classof(const Value *expr) {
-        auto kind = expr->getKind();
-        return (kind == V_String) || (kind == V_Symbol);
-    }
-
-    void unescape() {
-        value.resize(inplace_unescape(&value[0]));
-    }
-
-    static ValueKind kind() {
-        return V_String;
-    }
-
-};
-
-const char *stringAt(ValueRef expr) {
-    ValueRef val = at(expr);
-    if (val) {
-        if (auto sym = llvm::dyn_cast<String>(val)) {
-            return sym->c_str();
-        }
-    }
-    return NULL;
-}
-
-//------------------------------------------------------------------------------
-
-struct Symbol : String {
-    Symbol(const char *s, size_t len, ValueRef next_ = NULL) :
-        String(V_Symbol, s, len, next_) {}
-
-    Symbol(const char *s, ValueRef next_ = NULL) :
-        String(V_Symbol, s, strlen(s), next_) {}
-
-    static bool classof(const Value *expr) {
-        return expr->getKind() == V_Symbol;
-    }
-
-    static ValueKind kind() {
-        return V_Symbol;
-    }
-};
-
-//------------------------------------------------------------------------------
-
-Anchor *Value::findValidAnchor() {
-    if (anchor.isValid()) return &anchor;
-    if (auto pointer = llvm::dyn_cast<Pointer>(this)) {
-        if (pointer->getAt()) {
-            Anchor *result = pointer->getAt()->findValidAnchor();
-            if (result) return result;
-        }
-    }
-    if (getNext()) {
-        Anchor *result = getNext()->findValidAnchor();
-        if (result) return result;
-    }
-    return NULL;
-}
-
-std::string Value::getHeader() const {
-    if (auto pointer = llvm::dyn_cast<Pointer>(this)) {
-        if (pointer->getAt()) {
-            if (auto head = llvm::dyn_cast<Symbol>(pointer->getAt())) {
-                return head->getValue();
-            }
-        }
-    }
-    return "";
-}
-
-//------------------------------------------------------------------------------
-
-static Value *clone(Value *value) {
-    assert(value);
-    switch(value->getKind()) {
-        case V_Pointer: {
-            return new Pointer(*llvm::cast<Pointer>(value));
-        } break;
-        case V_Integer: {
-            return new Integer(*llvm::cast<Integer>(value));
-        } break;
-        case V_Real: {
-            return new Real(*llvm::cast<Real>(value));
-        } break;
-        case V_String: {
-            return new String(*llvm::cast<String>(value));
-        } break;
-        case V_Symbol: {
-            return new Symbol(*llvm::cast<Symbol>(value));
-        } break;
-        default: {
-            assert(false && "illegal value kind");
-            return nullptr;
-        } break;
-    }
-}
-
-//------------------------------------------------------------------------------
-
-// matches ((///...))
-static bool isComment(ValueRef expr) {
-    if (isAtom(expr)) return false;
-    if (isKindOf<Symbol>(at(expr)) && !memcmp(stringAt(expr),"///",3)) {
-        return true;
-    }
-    return false;
-}
-
-static ValueRef strip(ValueRef expr) {
-    if (!expr) return nullptr;
-    if (isComment(expr)) {
-        // skip
-        return strip(next(expr));
-    } else if (!isAtom(expr)) {
-        ValueRef atelem = at(expr);
-        ValueRef nextelem = next(expr);
-        ValueRef newatelem = strip(atelem);
-        ValueRef newnextelem = strip(nextelem);
-        if ((newatelem == atelem) && (newnextelem == nextelem))
-            return expr;
-        else
-            return new Pointer(newatelem, newnextelem);
-    } else {
-        ValueRef nextelem = next(expr);
-        ValueRef newnextelem = strip(nextelem);
-        if (newnextelem == nextelem)
-            return expr;
-        else {
-            expr = clone(expr);
-            expr->setNext(newnextelem);
-            return expr;
-        }
-    }
-}
-
-//------------------------------------------------------------------------------
-// S-EXPR LEXER / TOKENIZER
-//------------------------------------------------------------------------------
-
-typedef enum {
-    token_none = -1,
-    token_eof = 0,
-    token_open = '(',
-    token_close = ')',
-    token_square_open = '[',
-    token_square_close = ']',
-    token_curly_open = '{',
-    token_curly_close = '}',
-    token_string = '"',
-    token_symbol = 'S',
-    token_escape = '\\',
-    token_statement = ';',
-    token_integer = 'I',
-    token_real = 'R',
-} Token;
-
-const char symbol_terminators[]  = "()[]{}\"';#";
-const char integer_terminators[] = "()[]{}\"';#";
-const char real_terminators[]    = "()[]{}\"';#";
-
-struct Lexer {
-    const char *path;
-    const char *input_stream;
-    const char *eof;
-    const char *cursor;
-    const char *next_cursor;
-    // beginning of line
-    const char *line;
-    // next beginning of line
-    const char *next_line;
-
-    int lineno;
-    int next_lineno;
-
-    int base_offset;
-
-    int token;
-    const char *string;
-    int string_len;
-    int64_t integer;
-    bool is_unsigned;
-    double real;
-
-    std::string error_string;
-
-    Lexer() {}
-
-    void init (const char *input_stream, const char *eof, const char *path, int offset = 0) {
-        if (eof == NULL) {
-            eof = input_stream + strlen(input_stream);
-        }
-
-        this->base_offset = offset;
-        this->path = path;
-        this->input_stream = input_stream;
-        this->eof = eof;
-        this->next_cursor = input_stream;
-        this->next_lineno = 1;
-        this->next_line = input_stream;
-        this->error_string.clear();
-    }
-
-    void dumpLine() {
-        dumpFileLine(path, offset());
-    }
-
-    int offset () {
-        return base_offset + (cursor - input_stream);
-    }
-
-    int column () {
-        return cursor - line + 1;
-    }
-
-    void initAnchor(Anchor &anchor) {
-        anchor.path = path;
-        anchor.lineno = lineno;
-        anchor.column = column();
-        anchor.offset = offset();
-    }
-
-    void error( const char *format, ... ) {
-        va_list args;
-        va_start (args, format);
-        size_t size = vsnprintf(nullptr, 0, format, args);
-        va_end (args);
-        error_string.resize(size);
-        va_start (args, format);
-        vsnprintf( &error_string[0], size + 1, format, args );
-        va_end (args);
-        token = token_eof;
-    }
-
-    char next() {
-        return *next_cursor++;
-    }
-
-    bool verifyGoodTaste(char c) {
-        if (c == '\t') {
-            error("please use spaces instead of tabs.");
-            return false;
-        }
-        return true;
-    }
-
-    void readSymbol () {
-        bool escape = false;
-        while (true) {
-            if (next_cursor == eof) {
-                break;
-            }
-            char c = next();
-            if (escape) {
-                if (c == '\n') {
-                    ++next_lineno;
-                    next_line = next_cursor;
-                }
-                // ignore character
-                escape = false;
-            } else if (c == '\\') {
-                // escape
-                escape = true;
-            } else if (isspace(c)
-                || strchr(symbol_terminators, c)) {
-                -- next_cursor;
-                break;
-            }
-        }
-        string = cursor;
-        string_len = next_cursor - cursor;
-    }
-
-    void readSingleSymbol () {
-        string = cursor;
-        string_len = next_cursor - cursor;
-    }
-
-    void readString (char terminator) {
-        bool escape = false;
-        while (true) {
-            if (next_cursor == eof) {
-                error("unterminated sequence");
-                break;
-            }
-            char c = next();
-            if (c == '\n') {
-                ++next_lineno;
-                next_line = next_cursor;
-            }
-            if (escape) {
-                // ignore character
-                escape = false;
-            } else if (c == '\\') {
-                // escape
-                escape = true;
-            } else if (c == terminator) {
-                break;
-            }
-        }
-        string = cursor;
-        string_len = next_cursor - cursor;
-    }
-
-    bool readInteger() {
-        char *end;
-        errno = 0;
-        integer = std::strtoll(cursor, &end, 0);
-        if ((end == cursor)
-            || (errno == ERANGE)
-            || (end >= eof)
-            || (!isspace(*end) && !strchr(integer_terminators, *end)))
-            return false;
-        is_unsigned = false;
-        next_cursor = end;
-        return true;
-    }
-
-    bool readUInteger() {
-        char *end;
-        errno = 0;
-        integer = std::strtoull(cursor, &end, 0);
-        if ((end == cursor)
-            || (errno == ERANGE)
-            || (end >= eof)
-            || (!isspace(*end) && !strchr(integer_terminators, *end)))
-            return false;
-        is_unsigned = true;
-        next_cursor = end;
-        return true;
-    }
-
-    bool readReal() {
-        char *end;
-        errno = 0;
-        real = std::strtod(cursor, &end);
-        if ((end == cursor)
-            || (errno == ERANGE)
-            || (end >= eof)
-            || (!isspace(*end) && !strchr(real_terminators, *end)))
-            return false;
-        next_cursor = end;
-        return true;
-    }
-
-    int readToken () {
-        lineno = next_lineno;
-        line = next_line;
-        cursor = next_cursor;
-        while (true) {
-            if (next_cursor == eof) {
-                token = token_eof;
-                break;
-            }
-            char c = next();
-            if (!verifyGoodTaste(c)) break;
-            if (c == '\n') {
-                ++next_lineno;
-                next_line = next_cursor;
-            }
-            if (isspace(c)) {
-                lineno = next_lineno;
-                line = next_line;
-                cursor = next_cursor;
-            } else if (c == '#') {
-                readString('\n');
-                // and continue
-                lineno = next_lineno;
-                line = next_line;
-                cursor = next_cursor;
-            } else if (c == '(') {
-                token = token_open;
-                break;
-            } else if (c == ')') {
-                token = token_close;
-                break;
-            } else if (c == '[') {
-                token = token_square_open;
-                break;
-            } else if (c == ']') {
-                token = token_square_close;
-                break;
-            } else if (c == '{') {
-                token = token_curly_open;
-                break;
-            } else if (c == '}') {
-                token = token_curly_close;
-                break;
-            } else if (c == '\\') {
-                token = token_escape;
-                break;
-            } else if (c == '"') {
-                token = token_string;
-                readString(c);
-                break;
-            } else if (c == '\'') {
-                token = token_string;
-                readString(c);
-                break;
-            } else if (c == ';') {
-                token = token_statement;
-                break;
-            } else if (readInteger() || readUInteger()) {
-                token = token_integer;
-                break;
-            } else if (readReal()) {
-                token = token_real;
-                break;
-            } else {
-                token = token_symbol;
-                readSymbol();
-                break;
-            }
-        }
-        return token;
-    }
-
-    ValueRef getAsString() {
-        auto result = new String(string + 1, string_len - 2);
-        initAnchor(result->anchor);
-        result->unescape();
-        return result;
-    }
-
-    ValueRef getAsSymbol() {
-        auto result = new Symbol(string, string_len);
-        initAnchor(result->anchor);
-        result->unescape();
-        return result;
-    }
-
-    ValueRef getAsInteger() {
-        auto result = new Integer(integer, is_unsigned);
-        initAnchor(result->anchor);
-        return result;
-    }
-
-    ValueRef getAsReal() {
-        auto result = new Real(real);
-        initAnchor(result->anchor);
-        return result;
-    }
-
-};
-
-//------------------------------------------------------------------------------
-// S-EXPR PARSER
-//------------------------------------------------------------------------------
-
-struct Parser {
-    Lexer lexer;
-
-    Anchor error_origin;
-    Anchor parse_origin;
-    std::string error_string;
-    int errors;
-
-    Parser() :
-        errors(0)
-        {}
-
-    void init() {
-        error_string.clear();
-    }
-
-    void error( const char *format, ... ) {
-        ++errors;
-        lexer.initAnchor(error_origin);
-        parse_origin = error_origin;
-        va_list args;
-        va_start (args, format);
-        size_t size = vsnprintf(nullptr, 0, format, args);
-        va_end (args);
-        error_string.resize(size);
-        va_start (args, format);
-        vsnprintf( &error_string[0], size + 1, format, args );
-        va_end (args);
-    }
-
-    struct ListBuilder {
-        ValueRef result;
-        ValueRef start;
-        ValueRef lastend;
-        ValueRef tail;
-        Anchor anchor;
-
-        ListBuilder(Lexer &lexer) :
-            result(nullptr),
-            start(nullptr),
-            lastend(nullptr),
-            tail(nullptr) {
-            lexer.initAnchor(anchor);
-        }
-
-        void resetStart() {
-            start = nullptr;
-        }
-
-        bool split() {
-            // wrap newly added elements in new list
-            if (!start) {
-                return false;
-            }
-            ValueRef sublist = new Pointer(start);
-            if (lastend) {
-                // if a previous tail is known, reroute
-                lastend->setNext(sublist);
-            } else {
-                // list starts with sublist
-                result = sublist;
-            }
-            lastend = sublist;
-            tail = sublist;
-            start = nullptr;
-            return true;
-        }
-
-        void append(ValueRef newtail) {
-            if (tail) {
-                tail->setNext(newtail);
-            } else if (!result) {
-                result = newtail;
-                //result->anchor = anchor;
-            }
-            tail = newtail;
-            if (!start)
-                start = tail;
-        }
-
-        ValueRef getResult() {
-            auto ptr = new Pointer(result);
-            ptr->anchor = anchor;
-            return ptr;
-        }
-
-    };
-
-    ValueRef parseList(int end_token) {
-        ListBuilder builder(lexer);
-        lexer.readToken();
-        while (true) {
-            if (lexer.token == end_token) {
-                break;
-            } else if (lexer.token == token_escape) {
-                int column = lexer.column();
-                lexer.readToken();
-                auto elem = parseNaked(column, 1, end_token);
-                if (errors) return nullptr;
-                builder.append(elem);
-            } else if (lexer.token == token_eof) {
-                error("missing closing bracket");
-                // point to beginning of list
-                error_origin = builder.anchor;
-                return nullptr;
-            } else if (lexer.token == token_statement) {
-                if (!builder.split()) {
-                    error("empty expression");
-                    return nullptr;
-                }
-                lexer.readToken();
-            } else {
-                auto elem = parseAny();
-                if (errors) return nullptr;
-                builder.append(elem);
-                lexer.readToken();
-            }
-        }
-        return builder.getResult();
-    }
-
-    ValueRef parseAny () {
-        assert(lexer.token != token_eof);
-        if (lexer.token == token_open) {
-            return parseList(token_close);
-        } else if (lexer.token == token_square_open) {
-            auto list = parseList(token_square_close);
-            if (errors) return nullptr;
-            auto result = new Pointer(new Symbol("[", at(list)));
-            result->anchor = list->anchor;
-            return result;
-        } else if (lexer.token == token_curly_open) {
-            auto list = parseList(token_curly_close);
-            if (errors) return nullptr;
-            auto result = new Pointer(new Symbol("{", at(list)));
-            result->anchor = list->anchor;
-            return result;
-        } else if ((lexer.token == token_close)
-            || (lexer.token == token_square_close)
-            || (lexer.token == token_curly_close)) {
-            error("stray closing bracket");
-        } else if (lexer.token == token_string) {
-            return lexer.getAsString();
-        } else if (lexer.token == token_symbol) {
-            return lexer.getAsSymbol();
-        } else if (lexer.token == token_integer) {
-            return lexer.getAsInteger();
-        } else if (lexer.token == token_real) {
-            return lexer.getAsReal();
-        } else {
-            error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
-        }
-
-        return nullptr;
-    }
-
-    ValueRef parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
-        int lineno = lexer.lineno;
-
-        bool escape = false;
-        int subcolumn = 0;
-
-        ListBuilder builder(lexer);
-
-        while (lexer.token != token_eof) {
-            if (lexer.token == end_token) {
-                break;
-            } if (lexer.token == token_escape) {
-                escape = true;
-                lexer.readToken();
-                if (lexer.lineno <= lineno) {
-                    error("escape character is not at end of line");
-                    parse_origin = builder.anchor;
-                    return nullptr;
-                }
-                lineno = lexer.lineno;
-            } else if (lexer.lineno > lineno) {
-                if (depth > 0) {
-                    if (subcolumn == 0) {
-                        subcolumn = lexer.column();
-                    } else if (lexer.column() != subcolumn) {
-                        error("indentation mismatch");
-                        parse_origin = builder.anchor;
-                        return nullptr;
-                    }
-                } else {
-                    subcolumn = lexer.column();
-                }
-                if (column != subcolumn) {
-                    if ((column + 4) != subcolumn) {
-                        //printf("%i %i\n", column, subcolumn);
-                        error("indentations must nest by 4 spaces.");
-                        return nullptr;
-                    }
-                }
-
-                escape = false;
-                builder.resetStart();
-                lineno = lexer.lineno;
-                // keep adding elements while we're in the same line
-                while ((lexer.token != token_eof)
-                        && (lexer.token != end_token)
-                        && (lexer.lineno == lineno)) {
-                    auto elem = parseNaked(subcolumn, depth + 1, end_token);
-                    if (errors) return nullptr;
-                    builder.append(elem);
-                }
-            } else if (lexer.token == token_statement) {
-                if (!builder.split()) {
-                    error("empty expression");
-                    return nullptr;
-                }
-                lexer.readToken();
-                if (depth > 0) {
-                    // if we are in the same line and there was no preceding ":",
-                    // continue in parent
-                    if (lexer.lineno == lineno)
-                        break;
-                }
-            } else {
-                auto elem = parseAny();
-                if (errors) return nullptr;
-                builder.append(elem);
-                lineno = lexer.next_lineno;
-                lexer.readToken();
-            }
-
-            if (depth > 0) {
-                if ((!escape || (lexer.lineno > lineno))
-                    && (lexer.column() <= column)) {
-                    break;
-                }
-            }
-        }
-
-        if (!builder.result) {
-            assert(depth == 0);
-            return builder.getResult();
-        } else if (!builder.result->getNext()) {
-            return builder.result;
-        } else {
-            return builder.getResult();
-        }
-    }
-
-    ValueRef parseMemory (
-        const char *input_stream, const char *eof, const char *path, int offset = 0) {
-        init();
-        lexer.init(input_stream, eof, path, offset);
-
-        lexer.readToken();
-
-        auto result = parseNaked(lexer.column());
-
-        if (error_string.empty() && !lexer.error_string.empty()) {
-            error_string = lexer.error_string;
-            lexer.initAnchor(error_origin);
-            parse_origin = error_origin;
-        }
-
-        if (!error_string.empty()) {
-            printf("%s:%i:%i: error: %s\n",
-                error_origin.path,
-                error_origin.lineno,
-                error_origin.column,
-                error_string.c_str());
-            dumpFileLine(path, error_origin.offset);
-            if (!(parse_origin == error_origin)) {
-                printf("%s:%i:%i: while parsing expression\n",
-                    parse_origin.path,
-                    parse_origin.lineno,
-                    parse_origin.column);
-                dumpFileLine(path, parse_origin.offset);
-            }
-            return nullptr;
-        }
-
-        assert(result);
-        return strip(result);
-    }
-
-    ValueRef parseFile (const char *path) {
-        auto file = MappedFile::open(path);
-        if (file) {
-            return parseMemory(
-                file->strptr(), file->strptr() + file->size(),
-                path);
-        } else {
-            fprintf(stderr, "unable to open file: %s\n", path);
-            return NULL;
-        }
-    }
-
-
-};
-
-//------------------------------------------------------------------------------
-// PRINTING
-//------------------------------------------------------------------------------
-
-#if 0
-template<typename T>
-static void streamTraceback(T &stream) {
-    void *array[10];
-    size_t size;
-    char **strings;
-    size_t i;
-
-    size = backtrace (array, 10);
-    strings = backtrace_symbols (array, size);
-
-    for (i = 0; i < size; i++) {
-        stream << format("%s\n", strings[i]);
-    }
-
-    free (strings);
-}
-
-static std::string formatTraceback() {
-    std::stringstream ss;
-    streamTraceback(ss);
-    return ss.str();
-}
-#endif
-
-static bool isNested(ValueRef e) {
-    if (isAtom(e)) return false;
-    e = at(e);
-    while (e) {
-        if (!isAtom(e)) {
-            return true;
-        }
-        e = next(e);
-    }
-    return false;
-}
-
-template<typename T>
-static void streamAnchor(T &stream, ValueRef e, size_t depth=0) {
-    if (e) {
-        Anchor *anchor = e->findValidAnchor();
-        if (!anchor)
-            anchor = &e->anchor;
-        stream <<
-            format("%s:%i:%i: ",
-                anchor->path,
-                anchor->lineno,
-                anchor->column);
-    }
-    for(size_t i = 0; i < depth; i++)
-        stream << "    ";
-}
-
-template<typename T>
-static void streamValue(T &stream, ValueRef e, size_t depth=0, bool naked=true) {
-    if (naked) {
-        streamAnchor(stream, e, depth);
-    }
-
-	if (!e) {
-        stream << "#null#";
-        if (naked)
-            stream << '\n';
-        return;
-    }
-
-	switch(e->getKind()) {
-	case V_Pointer: {
-        e = at(e);
-        if (!e) {
-            stream << "()";
-            if (naked)
-                stream << '\n';
-            break;
-        }
-        if (naked) {
-            int offset = 0;
-            bool single = !next(e);
-        print_terse:
-            streamValue(stream, e, depth, false);
-            e = next(e);
-            offset++;
-            while (e) {
-                if (isNested(e))
-                    break;
-                stream << ' ';
-                streamValue(stream, e, depth, false);
-                e = next(e);
-                offset++;
-            }
-            stream << (single?";\n":"\n");
-        //print_sparse:
-            while (e) {
-                if (isAtom(e) // not a list
-                    && (offset >= 1) // not first element in list
-                    && next(e) // not last element in list
-                    && !isNested(next(e))) { // next element can be terse packed too
-                    single = false;
-                    streamAnchor(stream, e, depth + 1);
-                    stream << "\\ ";
-                    goto print_terse;
-                }
-                streamValue(stream, e, depth + 1);
-                e = next(e);
-                offset++;
-            }
-
-        } else {
-            stream << '(';
-            int offset = 0;
-            while (e) {
-                if (offset > 0)
-                    stream << ' ';
-                streamValue(stream, e, depth + 1, false);
-                e = next(e);
-                offset++;
-            }
-            stream << ')';
-            if (naked)
-                stream << '\n';
-        }
-    } return;
-    case V_Integer: {
-        const Integer *a = llvm::cast<Integer>(e);
-
-        if (a->isUnsigned())
-            stream << format("%" PRIu64, a->getValue());
-        else
-            stream << format("%" PRIi64, a->getValue());
-        if (naked)
-            stream << '\n';
-    } return;
-    case V_Real: {
-        const Real *a = llvm::cast<Real>(e);
-        stream << format("%g", a->getValue());
-        if (naked)
-            stream << '\n';
-    } return;
-	case V_Symbol:
-	case V_String: {
-        const String *a = llvm::cast<String>(e);
-		if (a->getKind() == V_String) stream << '"';
-        streamString(stream, a->getValue(), (a->getKind() == V_Symbol)?"[]{}()\"":"\"");
-		if (a->getKind() == V_String) stream << '"';
-        if (naked)
-            stream << '\n';
-    } return;
-    default:
-        printf("invalid kind: %i\n", e->getKind());
-        assert (false); break;
-	}
-}
-
-static std::string formatValue(ValueRef e, size_t depth, bool naked) {
-    std::stringstream ss;
-    streamValue(ss, e, depth, naked);
-    return ss.str();
-}
-
-static void printValue(ValueRef e, size_t depth, bool naked) {
-    streamValue(std::cout, e, depth, naked);
-}
 
 //------------------------------------------------------------------------------
 // TYPE SYSTEM
@@ -2527,6 +1242,7 @@ struct ILConstant;
     ILVALUE_KIND_ABSTRACT(Primitive) \
         ILVALUE_KIND_ABSTRACT(Constant) \
             ILVALUE_KIND(ConstString) \
+            ILVALUE_KIND(ConstSymbol) \
             ILVALUE_KIND(ConstInteger) \
             ILVALUE_KIND(ConstReal) \
             ILVALUE_KIND(ConstPointer) \
@@ -2566,14 +1282,13 @@ public:
 static std::string getRepr (const ILValue *value);
 static std::string getRefRepr (const ILValue *value);
 static Type *getType(const ILValue *value);
+static const Anchor *find_valid_anchor(const ILValue *expr);
 
 static void ilMessage (const ILValue *value, const char *format, ...) {
     const Anchor *anchor = NULL;
     if (value) {
         std::cout << "at\n  " << getRepr(value) << "\n";
-        if (value->anchor.isValid()) {
-            anchor = &value->anchor;
-        }
+        anchor = find_valid_anchor(value);
     }
     va_list args;
     va_start (args, format);
@@ -2585,9 +1300,7 @@ static void ilError (const ILValue *value, const char *format, ...) {
     const Anchor *anchor = NULL;
     if (value) {
         std::cout << "at\n  " << getRepr(value) << "\n";
-        if (value->anchor.isValid()) {
-            anchor = &value->anchor;
-        }
+        anchor = find_valid_anchor(value);
     }
     va_list args;
     va_start (args, format);
@@ -2604,6 +1317,10 @@ struct ILValueImpl : BaseT {
     ILValueImpl() :
         BaseT(KindT)
     {}
+
+    static ILValue::Kind classkind() {
+        return KindT;
+    }
 
     static bool classof(const ILValue *value) {
         return value->kind == KindT;
@@ -2850,9 +1567,37 @@ struct ILConstString :
         return result;
     }
 
-    static ILConstString *create(String *c) {
-        assert(c);
-        return create(c->getValue());
+    static ILConstString *create(const char *s, size_t len) {
+        return create(std::string(s, len));
+    }
+
+    Type *inferType() const {
+        return Type::Array(Type::Int8, value.size() + 1);
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        return quoteReprString(value);
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct ILConstSymbol :
+    ILValueImpl<ILConstSymbol, ILValue::ConstSymbol, ILConstant> {
+    std::string value;
+
+    static ILConstSymbol *create(const std::string &s) {
+        auto result = new ILConstSymbol();
+        result->value = s;
+        return result;
+    }
+
+    static ILConstSymbol *create(const char *s, size_t len) {
+        return create(std::string(s, len));
     }
 
     Type *inferType() const {
@@ -2873,19 +1618,14 @@ struct ILConstString :
 struct ILConstInteger :
     ILValueImpl<ILConstInteger, ILValue::ConstInteger, ILConstant> {
     int64_t value;
-    Type *value_type;
+    IntegerType *value_type;
 
-    static ILConstInteger *create(int64_t value, IntegerType *cdest) {
+    static ILConstInteger *create(int64_t value, Type *cdest) {
         assert(cdest);
         auto result = new ILConstInteger();
-        result->value_type = cdest;
+        result->value_type = llvm::cast<IntegerType>(cdest);
         result->value = value;
         return result;
-    }
-
-    static ILConstInteger *create(Integer *c, IntegerType *cdest) {
-        assert(c);
-        return create(c->getValue(), cdest);
     }
 
     Type *inferType() const {
@@ -2912,19 +1652,14 @@ struct ILConstInteger :
 struct ILConstReal :
     ILValueImpl<ILConstReal, ILValue::ConstReal, ILConstant> {
     double value;
-    Type *value_type;
+    RealType *value_type;
 
-    static ILConstReal *create(double value, RealType *cdest) {
+    static ILConstReal *create(double value, Type *cdest) {
         assert(cdest);
         auto result = new ILConstReal();
-        result->value_type = cdest;
+        result->value_type = llvm::cast<RealType>(cdest);
         result->value = value;
         return result;
-    }
-
-    static ILConstReal *create(Real *c, RealType *cdest) {
-        assert(c);
-        return create(c->getValue(), cdest);
     }
 
     Type *inferType() const {
@@ -3226,6 +1961,858 @@ Type *getType(const ILValue *value) {
 #undef ILVALUE_KIND_ABSTRACT
 #undef ILVALUE_KIND_EOK
 }
+
+const char *getClassName(ILValue::Kind kind) {
+#define ILVALUE_KIND(NAME) \
+    case ILValue::NAME: { \
+        return #NAME; \
+    } break;
+#define ILVALUE_KIND_ABSTRACT(NAME)
+#define ILVALUE_KIND_EOK(NAME)
+    switch(kind) {
+        ILVALUE_ENUM_KINDS()
+        default: {
+            return "???";
+        } break;
+    }
+#undef ILVALUE_KIND
+#undef ILVALUE_KIND_ABSTRACT
+#undef ILVALUE_KIND_EOK
+}
+
+//------------------------------------------------------------------------------
+// IL MODEL UTILITY FUNCTIONS
+//------------------------------------------------------------------------------
+
+static void unescape(ILConstString *s) {
+    s->value.resize(inplace_unescape(&s->value[0]));
+}
+
+static void unescape(ILConstSymbol *s) {
+    s->value.resize(inplace_unescape(&s->value[0]));
+}
+
+// matches ((///...))
+static bool is_comment(ILConstant *expr) {
+    if (auto tuple = llvm::dyn_cast<ILConstTuple>(expr)) {
+        if (tuple->values.size() > 0) {
+            if (auto sym = llvm::dyn_cast<ILConstSymbol>(tuple->values.front())) {
+                if (!memcmp(sym->value.c_str(),"///",3))
+                    return true;
+            }
+        }
+    }
+    return false;
+}
+
+static ILConstant *strip(ILConstant *expr) {
+    if (!expr) return nullptr;
+    if (auto tuple = llvm::dyn_cast<ILConstTuple>(expr)) {
+        auto copy = ILConstTuple::create({});
+        auto &values = tuple->values;
+        for (size_t i = 0; i < values.size(); ++i) {
+            auto value = strip(values[i]);
+            if (!is_comment(value)) {
+                copy->values.push_back(value);
+            }
+        }
+        return copy;
+    }
+    return expr;
+}
+
+static const Anchor *find_valid_anchor(const ILValue *expr) {
+    if (!expr) return nullptr;
+    if (expr->anchor.isValid()) return &expr->anchor;
+    if (auto tuple = llvm::dyn_cast<ILConstTuple>(expr)) {
+        auto &values = tuple->values;
+        for (size_t i = 0; i < values.size(); ++i) {
+            const Anchor *result = find_valid_anchor(values[i]);
+            if (result) return result;
+        }
+    }
+    return nullptr;
+}
+
+//------------------------------------------------------------------------------
+// PRINTING
+//------------------------------------------------------------------------------
+
+#if 0
+template<typename T>
+static void streamTraceback(T &stream) {
+    void *array[10];
+    size_t size;
+    char **strings;
+    size_t i;
+
+    size = backtrace (array, 10);
+    strings = backtrace_symbols (array, size);
+
+    for (i = 0; i < size; i++) {
+        stream << format("%s\n", strings[i]);
+    }
+
+    free (strings);
+}
+
+static std::string formatTraceback() {
+    std::stringstream ss;
+    streamTraceback(ss);
+    return ss.str();
+}
+#endif
+
+static bool isNested(ILConstant *e) {
+    if (auto tuple = llvm::dyn_cast<ILConstTuple>(e)) {
+        auto &values = tuple->values;
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (llvm::isa<ILConstTuple>(values[i]))
+                return true;
+        }
+    }
+    return false;
+}
+
+template<typename T>
+static void streamAnchor(T &stream, ILConstant *e, size_t depth=0) {
+    if (e) {
+        const Anchor *anchor = find_valid_anchor(e);
+        if (!anchor)
+            anchor = &e->anchor;
+        stream <<
+            format("%s:%i:%i: ",
+                anchor->path,
+                anchor->lineno,
+                anchor->column);
+    }
+    for(size_t i = 0; i < depth; i++)
+        stream << "    ";
+}
+
+template<typename T>
+static void streamValue(T &stream, ILConstant *e, size_t depth=0, bool naked=true) {
+    if (naked) {
+        streamAnchor(stream, e, depth);
+    }
+
+	if (!e) {
+        stream << "#null#";
+        if (naked)
+            stream << '\n';
+        return;
+    }
+
+	switch(e->kind) {
+	case ILValue::ConstTuple: {
+        auto tuple = llvm::cast<ILConstTuple>(e);
+        auto &values = tuple->values;
+        if (values.empty()) {
+            stream << "()";
+            if (naked)
+                stream << '\n';
+            break;
+        }
+        if (naked) {
+            size_t offset = 0;
+            bool single = ((offset + 1) == values.size());
+        print_terse:
+            streamValue(stream, values[offset], depth, false);
+            offset++;
+            while (offset != values.size()) {
+                if (isNested(values[offset]))
+                    break;
+                stream << ' ';
+                streamValue(stream, values[offset], depth, false);
+                offset++;
+            }
+            stream << (single?";\n":"\n");
+        //print_sparse:
+            while (offset != values.size()) {
+                auto value = values[offset];
+                if (!llvm::isa<ILConstTuple>(value) // not a list
+                    && (offset >= 1) // not first element in list
+                    && ((offset + 1) != values.size()) // not last element in list
+                    && !isNested(values[offset + 1])) { // next element can be terse packed too
+                    single = false;
+                    streamAnchor(stream, values[offset], depth + 1);
+                    stream << "\\ ";
+                    goto print_terse;
+                }
+                streamValue(stream, value, depth + 1);
+                offset++;
+            }
+
+        } else {
+            stream << '(';
+            size_t offset = 0;
+            while (offset != values.size()) {
+                if (offset > 0)
+                    stream << ' ';
+                streamValue(stream, values[offset], depth + 1, false);
+                offset++;
+            }
+            stream << ')';
+            if (naked)
+                stream << '\n';
+        }
+    } return;
+    case ILValue::ConstInteger: {
+        auto a = llvm::cast<ILConstInteger>(e);
+
+        if (a->value_type->isSigned())
+            stream << format("%" PRIi64, a->value);
+        else
+            stream << format("%" PRIu64, a->value);
+        if (naked)
+            stream << '\n';
+    } return;
+    case ILValue::ConstReal: {
+        auto a = llvm::cast<ILConstReal>(e);
+        stream << format("%g", a->value);
+        if (naked)
+            stream << '\n';
+    } return;
+	case ILValue::ConstSymbol: {
+        auto a = llvm::cast<ILConstSymbol>(e);
+        streamString(stream, a->value, "[]{}()\"");
+        if (naked)
+            stream << '\n';
+    } return;
+	case ILValue::ConstString: {
+        auto a = llvm::cast<ILConstString>(e);
+		stream << '"';
+        streamString(stream, a->value, "\"");
+		stream << '"';
+        if (naked)
+            stream << '\n';
+    } return;
+    default:
+        printf("invalid kind: %i\n", e->kind);
+        assert (false); break;
+	}
+}
+
+static std::string formatValue(ILConstant *e, size_t depth=0, bool naked=false) {
+    std::stringstream ss;
+    streamValue(ss, e, depth, naked);
+    return ss.str();
+}
+
+static void printValue(ILConstant *e, size_t depth=0, bool naked=false) {
+    streamValue(std::cout, e, depth, naked);
+}
+
+//------------------------------------------------------------------------------
+// S-EXPR LEXER / TOKENIZER
+//------------------------------------------------------------------------------
+
+typedef enum {
+    token_none = -1,
+    token_eof = 0,
+    token_open = '(',
+    token_close = ')',
+    token_square_open = '[',
+    token_square_close = ']',
+    token_curly_open = '{',
+    token_curly_close = '}',
+    token_string = '"',
+    token_symbol = 'S',
+    token_escape = '\\',
+    token_statement = ';',
+    token_integer = 'I',
+    token_real = 'R',
+} Token;
+
+const char symbol_terminators[]  = "()[]{}\"';#";
+const char integer_terminators[] = "()[]{}\"';#";
+const char real_terminators[]    = "()[]{}\"';#";
+
+struct Lexer {
+    const char *path;
+    const char *input_stream;
+    const char *eof;
+    const char *cursor;
+    const char *next_cursor;
+    // beginning of line
+    const char *line;
+    // next beginning of line
+    const char *next_line;
+
+    int lineno;
+    int next_lineno;
+
+    int base_offset;
+
+    int token;
+    const char *string;
+    int string_len;
+    int64_t integer;
+    bool is_unsigned;
+    double real;
+
+    std::string error_string;
+
+    Lexer() {}
+
+    void init (const char *input_stream, const char *eof, const char *path, int offset = 0) {
+        if (eof == NULL) {
+            eof = input_stream + strlen(input_stream);
+        }
+
+        this->base_offset = offset;
+        this->path = path;
+        this->input_stream = input_stream;
+        this->eof = eof;
+        this->next_cursor = input_stream;
+        this->next_lineno = 1;
+        this->next_line = input_stream;
+        this->error_string.clear();
+    }
+
+    void dumpLine() {
+        dumpFileLine(path, offset());
+    }
+
+    int offset () {
+        return base_offset + (cursor - input_stream);
+    }
+
+    int column () {
+        return cursor - line + 1;
+    }
+
+    void initAnchor(Anchor &anchor) {
+        anchor.path = path;
+        anchor.lineno = lineno;
+        anchor.column = column();
+        anchor.offset = offset();
+    }
+
+    void error( const char *format, ... ) {
+        va_list args;
+        va_start (args, format);
+        size_t size = vsnprintf(nullptr, 0, format, args);
+        va_end (args);
+        error_string.resize(size);
+        va_start (args, format);
+        vsnprintf( &error_string[0], size + 1, format, args );
+        va_end (args);
+        token = token_eof;
+    }
+
+    char next() {
+        return *next_cursor++;
+    }
+
+    bool verifyGoodTaste(char c) {
+        if (c == '\t') {
+            error("please use spaces instead of tabs.");
+            return false;
+        }
+        return true;
+    }
+
+    void readSymbol () {
+        bool escape = false;
+        while (true) {
+            if (next_cursor == eof) {
+                break;
+            }
+            char c = next();
+            if (escape) {
+                if (c == '\n') {
+                    ++next_lineno;
+                    next_line = next_cursor;
+                }
+                // ignore character
+                escape = false;
+            } else if (c == '\\') {
+                // escape
+                escape = true;
+            } else if (isspace(c)
+                || strchr(symbol_terminators, c)) {
+                -- next_cursor;
+                break;
+            }
+        }
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void readSingleSymbol () {
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void readString (char terminator) {
+        bool escape = false;
+        while (true) {
+            if (next_cursor == eof) {
+                error("unterminated sequence");
+                break;
+            }
+            char c = next();
+            if (c == '\n') {
+                ++next_lineno;
+                next_line = next_cursor;
+            }
+            if (escape) {
+                // ignore character
+                escape = false;
+            } else if (c == '\\') {
+                // escape
+                escape = true;
+            } else if (c == terminator) {
+                break;
+            }
+        }
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    bool readInteger() {
+        char *end;
+        errno = 0;
+        integer = std::strtoll(cursor, &end, 0);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            return false;
+        is_unsigned = false;
+        next_cursor = end;
+        return true;
+    }
+
+    bool readUInteger() {
+        char *end;
+        errno = 0;
+        integer = std::strtoull(cursor, &end, 0);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            return false;
+        is_unsigned = true;
+        next_cursor = end;
+        return true;
+    }
+
+    bool readReal() {
+        char *end;
+        errno = 0;
+        real = std::strtod(cursor, &end);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(real_terminators, *end)))
+            return false;
+        next_cursor = end;
+        return true;
+    }
+
+    int readToken () {
+        lineno = next_lineno;
+        line = next_line;
+        cursor = next_cursor;
+        while (true) {
+            if (next_cursor == eof) {
+                token = token_eof;
+                break;
+            }
+            char c = next();
+            if (!verifyGoodTaste(c)) break;
+            if (c == '\n') {
+                ++next_lineno;
+                next_line = next_cursor;
+            }
+            if (isspace(c)) {
+                lineno = next_lineno;
+                line = next_line;
+                cursor = next_cursor;
+            } else if (c == '#') {
+                readString('\n');
+                // and continue
+                lineno = next_lineno;
+                line = next_line;
+                cursor = next_cursor;
+            } else if (c == '(') {
+                token = token_open;
+                break;
+            } else if (c == ')') {
+                token = token_close;
+                break;
+            } else if (c == '[') {
+                token = token_square_open;
+                break;
+            } else if (c == ']') {
+                token = token_square_close;
+                break;
+            } else if (c == '{') {
+                token = token_curly_open;
+                break;
+            } else if (c == '}') {
+                token = token_curly_close;
+                break;
+            } else if (c == '\\') {
+                token = token_escape;
+                break;
+            } else if (c == '"') {
+                token = token_string;
+                readString(c);
+                break;
+            } else if (c == '\'') {
+                token = token_string;
+                readString(c);
+                break;
+            } else if (c == ';') {
+                token = token_statement;
+                break;
+            } else if (readInteger() || readUInteger()) {
+                token = token_integer;
+                break;
+            } else if (readReal()) {
+                token = token_real;
+                break;
+            } else {
+                token = token_symbol;
+                readSymbol();
+                break;
+            }
+        }
+        return token;
+    }
+
+    ILConstString *getAsString() {
+        auto result = ILConstString::create(string + 1, string_len - 2);
+        initAnchor(result->anchor);
+        unescape(result);
+        return result;
+    }
+
+    ILConstSymbol *getAsSymbol() {
+        auto result = ILConstSymbol::create(string, string_len);
+        initAnchor(result->anchor);
+        unescape(result);
+        return result;
+    }
+
+    ILConstInteger *getAsInteger() {
+        auto result = ILConstInteger::create(integer,
+            is_unsigned?Type::UInt64:Type::Int64);
+        initAnchor(result->anchor);
+        return result;
+    }
+
+    ILConstReal *getAsReal() {
+        auto result = ILConstReal::create(real, Type::Double);
+        initAnchor(result->anchor);
+        return result;
+    }
+
+};
+
+//------------------------------------------------------------------------------
+// S-EXPR PARSER
+//------------------------------------------------------------------------------
+
+struct Parser {
+    Lexer lexer;
+
+    Anchor error_origin;
+    Anchor parse_origin;
+    std::string error_string;
+    int errors;
+
+    Parser() :
+        errors(0)
+        {}
+
+    void init() {
+        error_string.clear();
+    }
+
+    void error( const char *format, ... ) {
+        ++errors;
+        lexer.initAnchor(error_origin);
+        parse_origin = error_origin;
+        va_list args;
+        va_start (args, format);
+        size_t size = vsnprintf(nullptr, 0, format, args);
+        va_end (args);
+        error_string.resize(size);
+        va_start (args, format);
+        vsnprintf( &error_string[0], size + 1, format, args );
+        va_end (args);
+    }
+
+    struct ListBuilder {
+    protected:
+        ILConstTuple *result;
+        size_t start;
+        Anchor anchor;
+    public:
+
+        ListBuilder(Lexer &lexer) :
+            result(ILConstTuple::create({})),
+            start(0) {
+            lexer.initAnchor(anchor);
+        }
+
+        const Anchor &getAnchor() const {
+            return anchor;
+        }
+
+        void resetStart() {
+            start = getResultSize();
+        }
+
+        bool split() {
+            // if we haven't appended anything, that's an error
+            if (start == getResultSize()) {
+                return false;
+            }
+            // move tail to new list
+            auto newtuple = ILConstTuple::create({});
+            for (size_t i = start; i < result->values.size(); ++i) {
+                newtuple->values.push_back(result->values[i]);
+            }
+            // remove tail
+            result->values.erase(
+                result->values.begin() + start,
+                result->values.end());
+            // append new list
+            append(newtuple);
+            resetStart();
+            return true;
+        }
+
+        void append(ILConstant *item) {
+            result->values.push_back(item);
+        }
+
+        size_t getResultSize() {
+            return result->values.size();
+        }
+
+        ILConstant *getSingleResult() {
+            return result->values.front();
+        }
+
+        ILConstTuple *getResult() {
+            result->anchor = anchor;
+            return result;
+        }
+
+    };
+
+    ILConstTuple *parseList(int end_token) {
+        ListBuilder builder(lexer);
+        lexer.readToken();
+        while (true) {
+            if (lexer.token == end_token) {
+                break;
+            } else if (lexer.token == token_escape) {
+                int column = lexer.column();
+                lexer.readToken();
+                auto elem = parseNaked(column, 1, end_token);
+                if (errors) return nullptr;
+                builder.append(elem);
+            } else if (lexer.token == token_eof) {
+                error("missing closing bracket");
+                // point to beginning of list
+                error_origin = builder.getAnchor();
+                return nullptr;
+            } else if (lexer.token == token_statement) {
+                if (!builder.split()) {
+                    error("empty expression");
+                    return nullptr;
+                }
+                lexer.readToken();
+            } else {
+                auto elem = parseAny();
+                if (errors) return nullptr;
+                builder.append(elem);
+                lexer.readToken();
+            }
+        }
+        return builder.getResult();
+    }
+
+    ILConstant *parseAny () {
+        assert(lexer.token != token_eof);
+        if (lexer.token == token_open) {
+            return parseList(token_close);
+        } else if (lexer.token == token_square_open) {
+            auto list = parseList(token_square_close);
+            if (errors) return nullptr;
+            auto sym = ILConstSymbol::create("[");
+            sym->anchor = list->anchor;
+            list->values.insert(list->values.begin(), sym);
+            return list;
+        } else if (lexer.token == token_curly_open) {
+            auto list = parseList(token_curly_close);
+            if (errors) return nullptr;
+            auto sym = ILConstSymbol::create("{");
+            sym->anchor = list->anchor;
+            list->values.insert(list->values.begin(), sym);
+            return list;
+        } else if ((lexer.token == token_close)
+            || (lexer.token == token_square_close)
+            || (lexer.token == token_curly_close)) {
+            error("stray closing bracket");
+        } else if (lexer.token == token_string) {
+            return lexer.getAsString();
+        } else if (lexer.token == token_symbol) {
+            return lexer.getAsSymbol();
+        } else if (lexer.token == token_integer) {
+            return lexer.getAsInteger();
+        } else if (lexer.token == token_real) {
+            return lexer.getAsReal();
+        } else {
+            error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
+        }
+
+        return nullptr;
+    }
+
+    ILConstant *parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
+        int lineno = lexer.lineno;
+
+        bool escape = false;
+        int subcolumn = 0;
+
+        ListBuilder builder(lexer);
+
+        while (lexer.token != token_eof) {
+            if (lexer.token == end_token) {
+                break;
+            } if (lexer.token == token_escape) {
+                escape = true;
+                lexer.readToken();
+                if (lexer.lineno <= lineno) {
+                    error("escape character is not at end of line");
+                    parse_origin = builder.getAnchor();
+                    return nullptr;
+                }
+                lineno = lexer.lineno;
+            } else if (lexer.lineno > lineno) {
+                if (depth > 0) {
+                    if (subcolumn == 0) {
+                        subcolumn = lexer.column();
+                    } else if (lexer.column() != subcolumn) {
+                        error("indentation mismatch");
+                        parse_origin = builder.getAnchor();
+                        return nullptr;
+                    }
+                } else {
+                    subcolumn = lexer.column();
+                }
+                if (column != subcolumn) {
+                    if ((column + 4) != subcolumn) {
+                        //printf("%i %i\n", column, subcolumn);
+                        error("indentations must nest by 4 spaces.");
+                        return nullptr;
+                    }
+                }
+
+                escape = false;
+                builder.resetStart();
+                lineno = lexer.lineno;
+                // keep adding elements while we're in the same line
+                while ((lexer.token != token_eof)
+                        && (lexer.token != end_token)
+                        && (lexer.lineno == lineno)) {
+                    auto elem = parseNaked(subcolumn, depth + 1, end_token);
+                    if (errors) return nullptr;
+                    builder.append(elem);
+                }
+            } else if (lexer.token == token_statement) {
+                if (!builder.split()) {
+                    error("empty expression");
+                    return nullptr;
+                }
+                lexer.readToken();
+                if (depth > 0) {
+                    // if we are in the same line and there was no preceding ":",
+                    // continue in parent
+                    if (lexer.lineno == lineno)
+                        break;
+                }
+            } else {
+                auto elem = parseAny();
+                if (errors) return nullptr;
+                builder.append(elem);
+                lineno = lexer.next_lineno;
+                lexer.readToken();
+            }
+
+            if (depth > 0) {
+                if ((!escape || (lexer.lineno > lineno))
+                    && (lexer.column() <= column)) {
+                    break;
+                }
+            }
+        }
+
+        if (builder.getResultSize() == 1) {
+            return builder.getSingleResult();
+        } else {
+            return builder.getResult();
+        }
+    }
+
+    ILConstant *parseMemory (
+        const char *input_stream, const char *eof, const char *path, int offset = 0) {
+        init();
+        lexer.init(input_stream, eof, path, offset);
+
+        lexer.readToken();
+
+        auto result = parseNaked(lexer.column());
+
+        if (error_string.empty() && !lexer.error_string.empty()) {
+            error_string = lexer.error_string;
+            lexer.initAnchor(error_origin);
+            parse_origin = error_origin;
+        }
+
+        if (!error_string.empty()) {
+            printf("%s:%i:%i: error: %s\n",
+                error_origin.path,
+                error_origin.lineno,
+                error_origin.column,
+                error_string.c_str());
+            dumpFileLine(path, error_origin.offset);
+            if (!(parse_origin == error_origin)) {
+                printf("%s:%i:%i: while parsing expression\n",
+                    parse_origin.path,
+                    parse_origin.lineno,
+                    parse_origin.column);
+                dumpFileLine(path, parse_origin.offset);
+            }
+            return nullptr;
+        }
+
+        assert(result);
+        return strip(result);
+    }
+
+    ILConstant *parseFile (const char *path) {
+        auto file = MappedFile::open(path);
+        if (file) {
+            return parseMemory(
+                file->strptr(), file->strptr() + file->size(),
+                path);
+        } else {
+            fprintf(stderr, "unable to open file: %s\n", path);
+            return NULL;
+        }
+    }
+
+
+};
 
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
@@ -4874,6 +4461,9 @@ static ILConstant *builtin_unary_op(
 // TRANSLATION
 //------------------------------------------------------------------------------
 
+struct Environment;
+typedef ILConstant *(*bangra_preprocessor)(Environment *, ILConstant *);
+
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 typedef std::unordered_map<std::string, Type *> NameTypeMap;
 typedef std::unordered_map<std::string, ILValue *> NameValueMap;
@@ -4975,27 +4565,20 @@ static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 //------------------------------------------------------------------------------
 
-static bool isSymbol (const Value *expr, const char *sym) {
+static bool isSymbol (const ILConstant *expr, const char *sym) {
     if (expr) {
-        if (auto symexpr = llvm::dyn_cast<Symbol>(expr))
-            return (symexpr->getValue() == sym);
+        if (auto symexpr = llvm::dyn_cast<ILConstSymbol>(expr))
+            return (symexpr->value == sym);
     }
     return false;
 }
 
 //------------------------------------------------------------------------------
 
-#define UNPACK_ARG(expr, name) \
-    expr = next(expr); ValueRef name = expr
+ILValue *translate(Environment &env, ILConstant *expr);
 
-//------------------------------------------------------------------------------
-
-ILValue *translate(Environment &env, ValueRef expr);
-
-void valueError (ValueRef expr, const char *format, ...) {
-    Anchor *anchor = NULL;
-    if (expr)
-        anchor = expr->findValidAnchor();
+void valueError (ILConstant *expr, const char *format, ...) {
+    const Anchor *anchor = find_valid_anchor(expr);
     if (!anchor) {
         if (expr)
             printValue(expr);
@@ -5006,10 +4589,8 @@ void valueError (ValueRef expr, const char *format, ...) {
     va_end (args);
 }
 
-void valueErrorV (ValueRef expr, const char *fmt, va_list args) {
-    Anchor *anchor = NULL;
-    if (expr)
-        anchor = expr->findValidAnchor();
+void valueErrorV (ILConstant *expr, const char *fmt, va_list args) {
+    const Anchor *anchor = find_valid_anchor(expr);
     if (!anchor) {
         if (expr)
             printValue(expr);
@@ -5018,27 +4599,61 @@ void valueErrorV (ValueRef expr, const char *fmt, va_list args) {
 }
 
 template <typename T>
-static T *astVerifyKind(ValueRef expr) {
+static T *astVerifyKind(ILConstant *expr) {
     T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
     if (obj) {
         return obj;
     } else {
         valueError(expr, "%s expected, not %s",
-            valueKindName(T::kind()),
-            valueKindName(kindOf(expr)));
+            getClassName(T::classkind()),
+            getClassName(expr->kind));
     }
     return nullptr;
 }
 
-static ILValue *parse_do (Environment &env, ValueRef expr) {
-    expr = next(expr);
+struct TupleIter {
+protected:
+    ILConstTuple *tuple;
+    size_t index;
+public:
+    size_t get_index() const {
+        return index;
+    }
+
+    TupleIter(ILConstTuple *value, size_t i) :
+        tuple(value),
+        index(i)
+    {}
+
+    TupleIter(ILConstant *value, size_t i=0) :
+        tuple(llvm::cast<ILConstTuple>(value)),
+        index(i) {
+    }
+
+    void next() {
+        index++;
+    }
+
+    operator bool() const {
+        return index < tuple->values.size();
+    }
+
+    ILConstant *operator *() const {
+        assert(index < tuple->values.size());
+        return tuple->values[index];
+    }
+
+};
+
+static ILValue *parse_do (Environment &env, ILConstant *expr, size_t offset) {
+    TupleIter it(expr, offset);
 
     Environment subenv(env);
 
     ILValue *value = nullptr;
-    while (expr) {
-        value = translate(subenv, expr);
-        expr = next(expr);
+    while (it) {
+        value = translate(subenv, *it);
+        it.next();
     }
 
     if (value)
@@ -5048,8 +4663,13 @@ static ILValue *parse_do (Environment &env, ValueRef expr) {
 
 }
 
-static ILValue *parse_function (Environment &env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_parameters);
+static ILValue *parse_do (Environment &env, ILConstant *expr) {
+    return parse_do(env, expr, 1);
+}
+
+static ILValue *parse_function (Environment &env, ILConstant *expr) {
+    TupleIter it(expr, 1);
+    auto expr_parameters = *it; it.next();
 
     auto currentblock = env.global.builder.continuation;
 
@@ -5060,18 +4680,18 @@ static ILValue *parse_function (Environment &env, ValueRef expr) {
 
     subenv.setLocal("this-function", function);
 
-    Pointer *params = astVerifyKind<Pointer>(expr_parameters);
-    ValueRef param = at(params);
+    auto params = astVerifyKind<ILConstTuple>(expr_parameters);
+    TupleIter param(params);
     while (param) {
-        Symbol *symname = astVerifyKind<Symbol>(param);
+        auto symname = astVerifyKind<ILConstSymbol>(*param);
         auto bp = ILParameter::create();
         function->appendParameter(bp);
-        subenv.setLocal(symname->getValue(), bp);
-        param = next(param);
+        subenv.setLocal(symname->value, bp);
+        param.next();
     }
     auto ret = function->appendParameter(ILParameter::create());
 
-    auto result = parse_do(subenv, expr_parameters);
+    auto result = parse_do(subenv, expr, 2);
 
     env.global.builder.br({ret, result});
 
@@ -5080,8 +4700,9 @@ static ILValue *parse_function (Environment &env, ValueRef expr) {
     return function;
 }
 
-static ILValue *parse_proto_eval (Environment &env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_protoeval);
+static ILValue *parse_proto_eval (Environment &env, ILConstant *expr) {
+    TupleIter it(expr, 1);
+    auto expr_protoeval = *it; it.next();
 
     auto currentblock = env.global.builder.continuation;
 
@@ -5101,27 +4722,26 @@ static ILValue *parse_proto_eval (Environment &env, ValueRef expr) {
     return result;
 }
 
-static ILValue *parse_implicit_apply (Environment &env, ValueRef expr) {
-    ValueRef expr_callable = expr;
-    UNPACK_ARG(expr, arg);
+static ILValue *parse_implicit_apply (Environment &env, ILConstant *expr,
+    size_t start = 0) {
+    TupleIter it(expr, start);
+    auto expr_callable = *it; it.next();
 
     ILValue *callable = translate(env, expr_callable);
 
     std::vector<ILValue *> args;
     args.push_back(callable);
 
-    while (arg) {
-        args.push_back(translate(env, arg));
-
-        arg = next(arg);
+    while (it) {
+        args.push_back(translate(env, *it));
+        it.next();
     }
 
     return env.global.builder.call(args);
 }
 
-static ILValue *parse_apply (Environment &env, ValueRef expr) {
-    expr = next(expr);
-    return parse_implicit_apply(env, expr);
+static ILValue *parse_apply (Environment &env, ILConstant *expr) {
+    return parse_implicit_apply(env, expr, 1);
 }
 
 bool hasTypeValue(Type *type) {
@@ -5131,10 +4751,11 @@ bool hasTypeValue(Type *type) {
     return true;
 }
 
-static ILValue *parse_select (Environment &env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_condition);
-    UNPACK_ARG(expr, expr_true);
-    UNPACK_ARG(expr, expr_false);
+static ILValue *parse_select (Environment &env, ILConstant *expr) {
+    TupleIter it(expr, 1);
+    auto expr_condition = *it; it.next();
+    auto expr_true = *it; it.next();
+    auto expr_false = *it; it.next();
 
     ILValue *condition = translate(env, expr_condition);
     auto bbstart = env.global.builder.continuation;
@@ -5198,11 +4819,12 @@ static ILValue *parse_select (Environment &env, ValueRef expr) {
     return result;
 }
 
-static ILValue *parse_let(Environment &env, ValueRef expr) {
-    UNPACK_ARG(expr, expr_sym);
-    UNPACK_ARG(expr, expr_value);
+static ILValue *parse_let(Environment &env, ILConstant *expr) {
+    TupleIter it(expr, 1);
+    auto expr_sym = *it; it.next();
+    auto expr_value = *it; it.next();
 
-    Symbol *symname = astVerifyKind<Symbol>(expr_sym);
+    auto symname = astVerifyKind<ILConstSymbol>(expr_sym);
     ILValue *value;
 
     if (expr_value)
@@ -5210,16 +4832,16 @@ static ILValue *parse_let(Environment &env, ValueRef expr) {
     else
         value = ILConstTuple::create({});
 
-    if (env.isLocal(symname->getValue())) {
+    if (env.isLocal(symname->value)) {
         valueError(symname, "already defined");
     }
-    env.setLocal(symname->getValue(), value);
+    env.setLocal(symname->value, value);
 
     return value;
 }
 
 struct TranslateTable {
-    typedef ILValue *(*TranslatorFunc)(Environment &env, ValueRef expr);
+    typedef ILValue *(*TranslatorFunc)(Environment &env, ILConstant *expr);
 
     struct Translator {
         int mincount;
@@ -5249,37 +4871,27 @@ struct TranslateTable {
         translators[name] = translator;
     }
 
-    static bool verifyParameterCount (ValueRef expr, int mincount, int maxcount) {
+    static bool verifyParameterCount (ILConstTuple *expr,
+        int mincount, int maxcount) {
         if ((mincount <= 0) && (maxcount == -1))
             return true;
+        int argcount = (int)expr->values.size() - 1;
 
-        ValueRef head = expr;
-        expr = next(expr);
-
-        int argcount = 0;
-        while (expr) {
-            ++ argcount;
-            if (maxcount >= 0) {
-                if (argcount > maxcount) {
-                    valueError(expr, "excess argument. At most %i arguments expected", maxcount);
-                    return false;
-                }
-            } else if (mincount >= 0) {
-                if (argcount >= mincount)
-                    break;
-            }
-            expr = next(expr);
+        if ((maxcount >= 0) && (argcount > maxcount)) {
+            valueError(expr->values[maxcount + 1],
+                "excess argument. At most %i arguments expected", maxcount);
+            return false;
         }
         if ((mincount >= 0) && (argcount < mincount)) {
-            valueError(head, "at least %i arguments expected", mincount);
+            valueError(expr, "at least %i arguments expected", mincount);
             return false;
         }
         return true;
     }
 
-    TranslatorFunc match(ValueRef expr) {
-        Symbol *head = astVerifyKind<Symbol>(expr);
-        auto &t = translators[head->getValue()];
+    TranslatorFunc match(ILConstTuple *expr) {
+        auto head = astVerifyKind<ILConstSymbol>(expr->values.front());
+        auto &t = translators[head->value];
         if (!t.translate) return nullptr;
         verifyParameterCount(expr, t.mincount, t.maxcount);
         return t.translate;
@@ -5301,9 +4913,11 @@ static void registerTranslators() {
     t.set(parse_proto_eval, "proto-eval", 1, 1);
 }
 
-static ILValue *translateFromList (Environment &env, ValueRef expr) {
+static ILValue *translateFromList (Environment &env, ILConstTuple *expr) {
     assert(expr);
-    astVerifyKind<Symbol>(expr);
+    if (expr->values.size() < 1) {
+        valueError(expr, "symbol expected");
+    }
     auto func = translators.match(expr);
     if (func) {
         return func(env, expr);
@@ -5312,32 +4926,28 @@ static ILValue *translateFromList (Environment &env, ValueRef expr) {
     }
 }
 
-ILValue *translate (Environment &env, ValueRef expr) {
+ILValue *translate (Environment &env, ILConstant *expr) {
     assert(expr);
     ILValue *result = nullptr;
-    if (!isAtom(expr)) {
-        result = translateFromList(env, at(expr));
-    } else if (auto sym = llvm::dyn_cast<Symbol>(expr)) {
-        std::string value = sym->getValue();
-        result = env.resolve(value);
-        if (!result) {
-            valueError(expr, "unknown symbol '%s'",
-                value.c_str());
-        }
-    } else if (auto str = llvm::dyn_cast<String>(expr)) {
-        result = ILConstString::create(str);
-    } else if (auto integer = llvm::dyn_cast<Integer>(expr)) {
-        result = ILConstInteger::create(integer,
-            llvm::cast<IntegerType>(Type::Int32));
-    } else if (auto real = llvm::dyn_cast<Real>(expr)) {
-        result = ILConstReal::create(real,
-            llvm::cast<RealType>(Type::Double));
-    } else {
-        valueError(expr, "expected expression, not %s",
-            valueKindName(kindOf(expr)));
+    switch(expr->kind) {
+        case ILValue::ConstTuple: {
+            result = translateFromList(env, llvm::cast<ILConstTuple>(expr));
+        } break;
+        case ILValue::ConstSymbol: {
+            auto sym = llvm::cast<ILConstSymbol>(expr);
+            std::string value = sym->value;
+            result = env.resolve(value);
+            if (!result) {
+                valueError(expr,
+                    "unknown symbol '%s'", value.c_str());
+            }
+        } break;
+        default: {
+            result = expr;
+        } break;
     }
     if (result && !result->anchor.isValid()) {
-        Anchor *anchor = expr->findValidAnchor();
+        const Anchor *anchor = find_valid_anchor(expr);
         if (anchor) {
             result->anchor = *anchor;
         }
@@ -5419,8 +5029,8 @@ static void setupRootEnvironment (Environment &env) {
     env.setLocal("int", env.resolve("int32"));
 
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
-    env.setLocal("true", ILConstInteger::create(new Integer(1), booltype));
-    env.setLocal("false", ILConstInteger::create(new Integer(0), booltype));
+    env.setLocal("true", ILConstInteger::create(1, booltype));
+    env.setLocal("false", ILConstInteger::create(0, booltype));
 
     env.setLocal("print", wrap(builtin_print));
     env.setLocal("repr", wrap(builtin_repr));
@@ -5469,16 +5079,12 @@ static void setupRootEnvironment (Environment &env) {
 
 }
 
-static void handleException(Environment &env, ValueRef expr) {
-    ValueRef tb = expr->getNext();
-    if (tb && tb->getKind() == V_String) {
-        std::cerr << llvm::cast<String>(tb)->getValue();
-    }
+static void handleException(Environment &env, ILConstant *expr) {
     streamValue(std::cerr, expr, 0, true);
     valueError(expr, "an exception was raised");
 }
 
-static bool translateRootValueList (Environment &env, ValueRef expr) {
+static bool translateRootValueList (Environment &env, ILConstant *expr) {
 
     auto mainfunc = ILContinuation::create();
     auto ret = mainfunc->appendParameter(ILParameter::create());
@@ -5499,23 +5105,9 @@ static bool translateRootValueList (Environment &env, ValueRef expr) {
     return true;
 }
 
-template <typename T>
-static T *translateKind(Environment &env, ValueRef expr) {
-    T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
-    if (obj) {
-        return obj;
-    } else {
-        valueError(expr, "%s expected, not %s",
-            valueKindName(T::kind()),
-            valueKindName(kindOf(expr)));
-    }
-    return nullptr;
-}
-
-static bool compileMain (ValueRef expr) {
+static bool compileMain (ILConstant *expr) {
     assert(expr);
-    expr = at(expr);
-    assert(expr);
+    auto tuple = astVerifyKind<ILConstTuple>(expr);
 
     GlobalEnvironment global;
     Environment env(global);
@@ -5523,37 +5115,35 @@ static bool compileMain (ValueRef expr) {
 
     std::string lastlang = "";
     while (true) {
-        Symbol *head = translateKind<Symbol>(env, expr);
+        auto head = astVerifyKind<ILConstSymbol>(tuple->values.front());
         if (!head) return false;
-        if (head->getValue() == BANGRA_HEADER)
+        if (head->value == BANGRA_HEADER)
             break;
-        auto preprocessor = preprocessors[head->getValue()];
+        auto preprocessor = preprocessors[head->value];
         if (!preprocessor) {
             valueError(expr, "unrecognized header: '%s'; try '%s' instead.",
-                head->getValue().c_str(),
+                head->value.c_str(),
                 BANGRA_HEADER);
             return false;
         }
-        if (lastlang == head->getValue()) {
+        if (lastlang == head->value) {
             valueError(expr,
                 "header has not changed after preprocessing; is still '%s'.",
-                head->getValue().c_str());
+                head->value.c_str());
         }
-        lastlang = head->getValue();
-        ValueRef orig_expr = expr;
+        lastlang = head->value;
+        auto orig_expr = expr;
         try {
-            expr = preprocessor(&env, new Pointer(expr));
-        } catch (ValueRef expr) {
+            expr = preprocessor(&env, expr);
+        } catch (ILConstant *expr) {
             handleException(env, expr);
             return false;
         }
         if (!expr) {
             valueError(orig_expr,
-                "preprocessor returned null.",
-                head->getValue().c_str());
+                "preprocessor returned null.");
             return false;
         }
-        expr = at(expr);
     }
 
     return translateRootValueList (env, expr);
@@ -5571,7 +5161,7 @@ std::string GetExecutablePath(const char *Argv0) {
   return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
 }
 
-static ValueRef parseLoader(const char *executable_path) {
+static ILConstant *parseLoader(const char *executable_path) {
     // attempt to read bootstrap expression from end of binary
     auto file = MappedFile::open(executable_path);
     if (!file) {
@@ -5596,31 +5186,36 @@ static ValueRef parseLoader(const char *executable_path) {
         cursor--;
 
     bangra::Parser footerParser;
-    ValueRef expr = footerParser.parseMemory(
+    auto expr = footerParser.parseMemory(
         cursor, ptr + size, executable_path, cursor - ptr);
     if (!expr) {
         fprintf(stderr, "could not parse footer expression\n");
         return NULL;
     }
-    if (expr->getKind() != V_Pointer)  {
+    if (expr->kind != ILValue::ConstTuple)  {
         fprintf(stderr, "footer expression is not a list\n");
         return NULL;
     }
-    expr = at(expr);
-    if (expr->getKind() != V_Symbol)  {
+    auto tuple = llvm::cast<ILConstTuple>(expr);
+    if (tuple->values.size() < 2) {
+        fprintf(stderr, "footer needs at least two arguments\n");
+        return NULL;
+    }
+    auto head = tuple->values[0];
+    if (head->kind != ILValue::ConstSymbol)  {
         fprintf(stderr, "footer expression does not begin with symbol\n");
         return NULL;
     }
-    if (!isSymbol(expr, "script-size"))  {
+    if (!isSymbol(head, "script-size"))  {
         fprintf(stderr, "footer expression does not begin with 'script-size'\n");
         return NULL;
     }
-    expr = next(expr);
-    if (expr->getKind() != V_Integer)  {
+    auto arg = tuple->values[1];
+    if (arg->kind != ILValue::ConstInteger)  {
         fprintf(stderr, "script-size argument is not integer\n");
         return NULL;
     }
-    auto offset = llvm::cast<Integer>(expr)->getValue();
+    auto offset = llvm::cast<ILConstInteger>(expr)->value;
     if (offset <= 0) {
         fprintf(stderr, "script-size must be larger than zero\n");
         return NULL;
@@ -5639,7 +5234,7 @@ static bool compileStartupScript() {
     std::string path = format("%s.b", base);
     free(base);
 
-    ValueRef expr = NULL;
+    ILConstant *expr = NULL;
     {
         auto file = MappedFile::open(path.c_str());
         if (file) {
@@ -5652,7 +5247,7 @@ static bool compileStartupScript() {
         }
     }
 
-    if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
+    if (expr) {
         return bangra::compileMain(expr);
     }
 
@@ -5703,7 +5298,7 @@ int bangra_main(int argc, char ** argv) {
 
     bangra::init();
 
-    ValueRef expr = NULL;
+    bangra::ILConstant *expr = NULL;
 
     if (argv) {
         if (argv[0]) {
@@ -5762,7 +5357,7 @@ int bangra_main(int argc, char ** argv) {
         }
     }
 
-    if (expr && bangra::isKindOf<bangra::Pointer>(expr)) {
+    if (expr) {
         bangra::compileMain(expr);
     } else {
         return 1;
@@ -5771,320 +5366,9 @@ int bangra_main(int argc, char ** argv) {
     return 0;
 }
 
-ValueRef bangra_parse_file(const char *path) {
+bangra::ILConstant *bangra_parse_file(const char *path) {
     bangra::Parser parser;
     return parser.parseFile(path);
-}
-
-void bangra_print_value(ValueRef expr, int depth) {
-    if (depth < 0) {
-        bangra::printValue(expr, 0, false);
-    } else {
-        bangra::printValue(expr, (size_t)depth, true);
-    }
-}
-
-ValueRef bangra_format_value(ValueRef expr, int depth) {
-    std::string str;
-    if (depth < 0) {
-        str = bangra::formatValue(expr, 0, false);
-    } else {
-        str = bangra::formatValue(expr, (size_t)depth, true);
-    }
-    return new bangra::String(str.c_str(), str.size());
-
-}
-
-void bangra_set_preprocessor(const char *name, bangra_preprocessor f) {
-    bangra::preprocessors[name] = f;
-}
-
-bangra_preprocessor bangra_get_preprocessor(const char *name) {
-    return bangra::preprocessors[name];
-}
-
-int bangra_get_kind(ValueRef expr) {
-    return kindOf(expr);
-}
-
-ValueRef bangra_at(ValueRef expr) {
-    if (expr) {
-        if (bangra::isKindOf<bangra::Pointer>(expr)) {
-            return at(expr);
-        }
-    }
-    return NULL;
-}
-
-ValueRef bangra_clone(ValueRef expr) {
-    if (expr) {
-        return clone(expr);
-    }
-    return NULL;
-}
-
-ValueRef bangra_next(ValueRef expr) {
-    return next(expr);
-}
-
-ValueRef bangra_set_next(ValueRef lhs, ValueRef rhs) {
-    if (lhs) {
-        if (lhs->getNext() != rhs) {
-            return cons(lhs, rhs);
-        } else {
-            return lhs;
-        }
-    }
-    return NULL;
-}
-
-ValueRef bangra_set_at_mutable(ValueRef lhs, ValueRef rhs) {
-    if (lhs) {
-        if (auto ptr = llvm::dyn_cast<bangra::Pointer>(lhs)) {
-            ptr->setAt(rhs);
-            return lhs;
-        }
-    }
-    return NULL;
-}
-
-ValueRef bangra_set_next_mutable(ValueRef lhs, ValueRef rhs) {
-    if (lhs) {
-        lhs->setNext(rhs);
-        return lhs;
-    }
-    return NULL;
-}
-
-const char *bangra_string_value(ValueRef expr) {
-    if (expr) {
-        if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
-            return str->getValue().c_str();
-        }
-    }
-    return NULL;
-}
-
-signed long long int bangra_string_size(ValueRef expr) {
-    if (expr) {
-        if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
-            return (signed long long int)str->getValue().size() + 1;
-        }
-    }
-    return 0;
-}
-
-ValueRef bangra_string_concat(ValueRef a, ValueRef b) {
-    if (a && b) {
-        auto str_a = llvm::dyn_cast<bangra::String>(a);
-        auto str_b = llvm::dyn_cast<bangra::String>(b);
-        if (str_a && str_b) {
-            auto str_result = str_a->getValue() + str_b->getValue();
-            if (str_a->getKind() == bangra::V_String) {
-                return new bangra::String(str_result.c_str(), str_result.size());
-            } else {
-                return new bangra::Symbol(str_result.c_str(), str_result.size());
-            }
-        }
-    }
-    return NULL;
-}
-
-ValueRef bangra_string_slice(ValueRef expr, int start, int end) {
-    if (expr) {
-        if (auto str = llvm::dyn_cast<bangra::String>(expr)) {
-            auto value = str->getValue();
-            int size = (int)value.size();
-            if (start < 0)
-                start = size + start;
-            if (start < 0)
-                start = 0;
-            else if (start > size)
-                start = size;
-            if (end < 0)
-                end = size + end;
-            if (end < start)
-                end = start;
-            else if (end > size)
-                end = size;
-            int len = end - start;
-            value = value.substr((size_t)start, (size_t)len);
-            if (str->getKind() == bangra::V_String) {
-                return new bangra::String(value.c_str(), value.size());
-            } else {
-                return new bangra::Symbol(value.c_str(), value.size());
-            }
-        }
-    }
-    return NULL;
-}
-
-void bangra_error_message(ValueRef context, const char *format, ...) {
-    va_list args;
-    va_start (args, format);
-    bangra::valueErrorV(context, format, args);
-    va_end (args);
-}
-
-int bangra_eq(Value *a, Value *b) {
-    if (a == b) return true;
-    if (a && b) {
-        auto kind = a->getKind();
-        if (kind != b->getKind())
-            return false;
-        switch (kind) {
-            case bangra::V_String:
-            case bangra::V_Symbol: {
-                bangra::String *sa = llvm::cast<bangra::String>(a);
-                bangra::String *sb = llvm::cast<bangra::String>(b);
-                return sa->getValue() == sb->getValue();
-            } break;
-            case bangra::V_Real: {
-                bangra::Real *sa = llvm::cast<bangra::Real>(a);
-                bangra::Real *sb = llvm::cast<bangra::Real>(b);
-                return sa->getValue() == sb->getValue();
-            } break;
-            case bangra::V_Integer: {
-                bangra::Integer *sa = llvm::cast<bangra::Integer>(a);
-                bangra::Integer *sb = llvm::cast<bangra::Integer>(b);
-                return sa->getValue() == sb->getValue();
-            } break;
-            case bangra::V_Pointer: {
-                bangra::Pointer *sa = llvm::cast<bangra::Pointer>(a);
-                bangra::Pointer *sb = llvm::cast<bangra::Pointer>(b);
-                return sa->getAt() == sb->getAt();
-            } break;
-            default: break;
-        };
-    }
-    return false;
-}
-
-ValueRef bangra_set_anchor(
-    ValueRef expr, const char *path, int lineno, int column, int offset) {
-    if (expr) {
-        ValueRef newexpr = clone(expr);
-        newexpr->anchor.path = path;
-        newexpr->anchor.lineno = lineno;
-        newexpr->anchor.column = column;
-        newexpr->anchor.offset = offset;
-        return newexpr;
-    }
-    return NULL;
-}
-
-ValueRef bangra_set_anchor_mutable(
-    ValueRef expr, const char *path, int lineno, int column, int offset) {
-    if (expr) {
-        expr->anchor.path = path;
-        expr->anchor.lineno = lineno;
-        expr->anchor.column = column;
-        expr->anchor.offset = offset;
-        return expr;
-    }
-    return NULL;
-}
-
-ValueRef bangra_ref(ValueRef lhs) {
-    return new bangra::Pointer(lhs);
-}
-
-ValueRef bangra_string(const char *value, signed long long int size) {
-    if (size < 0)
-        size = strlen(value);
-    return new bangra::String(value, (size_t)size);
-}
-ValueRef bangra_symbol(const char *value) {
-    return new bangra::Symbol(value);
-}
-
-ValueRef bangra_real(double value) {
-    return new bangra::Real(value);
-}
-double bangra_real_value(ValueRef value) {
-    if (value) {
-        if (auto real = llvm::dyn_cast<bangra::Real>(value)) {
-            return real->getValue();
-        }
-    }
-    return 0.0;
-}
-
-ValueRef bangra_integer(signed long long int value) {
-    return new bangra::Integer(value);
-}
-signed long long int bangra_integer_value(ValueRef value) {
-    if (value) {
-        if (auto integer = llvm::dyn_cast<bangra::Integer>(value)) {
-            return integer->getValue();
-        }
-    }
-    return 0;
-}
-
-const char *bangra_anchor_path(ValueRef expr) {
-    if (expr) { return expr->anchor.path; }
-    return NULL;
-}
-
-int bangra_anchor_lineno(ValueRef expr) {
-    if (expr) { return expr->anchor.lineno; }
-    return 0;
-}
-
-int bangra_anchor_column(ValueRef expr) {
-    if (expr) { return expr->anchor.column; }
-    return 0;
-}
-
-int bangra_anchor_offset(ValueRef expr) {
-    if (expr) { return expr->anchor.offset; }
-    return 0;
-}
-
-Environment *bangra_parent_env(Environment *env) {
-    return env->parent;
-}
-
-static int unique_symbol_counter = 0;
-ValueRef bangra_unique_symbol(const char *name) {
-    if (!name)
-        name = "";
-    auto symname = bangra::format("#%s%i", name, unique_symbol_counter++);
-    return new bangra::Symbol(symname.c_str());
-}
-
-/*
-void *bangra_import_c_module(ValueRef dest,
-    const char *path, const char **args, int argcount) {
-    return bangra::importCModule(dest, path, args, argcount);
-}
-
-void *bangra_import_c_string(ValueRef dest,
-    const char *str, const char *path, const char **args, int argcount) {
-    return bangra::importCModule(dest, path, args, argcount, str);
-}
-*/
-
-void *bangra_xpcall (void *ctx,
-    void *(*try_func)(void *),
-    void *(*except_func)(void *, ValueRef)) {
-    try {
-        return try_func(ctx);
-    } catch (ValueRef expr) {
-        return except_func(ctx, expr);
-    }
-}
-
-void bangra_raise (ValueRef expr) {
-    /*
-    std::string tb = bangra::formatTraceback();
-    ValueRef annot_expr =
-        bangra::cons(expr,
-            new bangra::String(tb.c_str(), tb.size()));
-    throw annot_expr;
-    */
-    throw expr;
 }
 
 //------------------------------------------------------------------------------
