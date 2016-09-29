@@ -4630,8 +4630,10 @@ public:
         index(i) {
     }
 
-    void next() {
-        index++;
+    TupleIter operator ++(int) {
+        auto oldself = *this;
+        ++index;
+        return oldself;
     }
 
     operator bool() const {
@@ -4653,7 +4655,7 @@ static Value *parse_do (Environment &env, ConstantValue *expr, size_t offset) {
     Value *value = nullptr;
     while (it) {
         value = translate(subenv, *it);
-        it.next();
+        it++;
     }
 
     if (value)
@@ -4669,7 +4671,7 @@ static Value *parse_do (Environment &env, ConstantValue *expr) {
 
 static Value *parse_function (Environment &env, ConstantValue *expr) {
     TupleIter it(expr, 1);
-    auto expr_parameters = *it; it.next();
+    auto expr_parameters = *it++;
 
     auto currentblock = env.global.builder.continuation;
 
@@ -4687,7 +4689,7 @@ static Value *parse_function (Environment &env, ConstantValue *expr) {
         auto bp = ParameterValue::create();
         function->appendParameter(bp);
         subenv.setLocal(symname->value, bp);
-        param.next();
+        param++;
     }
     auto ret = function->appendParameter(ParameterValue::create());
 
@@ -4702,7 +4704,7 @@ static Value *parse_function (Environment &env, ConstantValue *expr) {
 
 static Value *parse_proto_eval (Environment &env, ConstantValue *expr) {
     TupleIter it(expr, 1);
-    auto expr_protoeval = *it; it.next();
+    auto expr_protoeval = *it++;
 
     auto currentblock = env.global.builder.continuation;
 
@@ -4725,7 +4727,7 @@ static Value *parse_proto_eval (Environment &env, ConstantValue *expr) {
 static Value *parse_implicit_apply (Environment &env, ConstantValue *expr,
     size_t start = 0) {
     TupleIter it(expr, start);
-    auto expr_callable = *it; it.next();
+    auto expr_callable = *it++;
 
     Value *callable = translate(env, expr_callable);
 
@@ -4734,7 +4736,7 @@ static Value *parse_implicit_apply (Environment &env, ConstantValue *expr,
 
     while (it) {
         args.push_back(translate(env, *it));
-        it.next();
+        it++;
     }
 
     return env.global.builder.call(args);
@@ -4753,9 +4755,9 @@ bool hasTypeValue(Type *type) {
 
 static Value *parse_select (Environment &env, ConstantValue *expr) {
     TupleIter it(expr, 1);
-    auto expr_condition = *it; it.next();
-    auto expr_true = *it; it.next();
-    auto expr_false = *it; it.next();
+    auto expr_condition = *it++;
+    auto expr_true = *it++;
+    auto expr_false = *it++;
 
     Value *condition = translate(env, expr_condition);
     auto bbstart = env.global.builder.continuation;
@@ -4821,8 +4823,8 @@ static Value *parse_select (Environment &env, ConstantValue *expr) {
 
 static Value *parse_let(Environment &env, ConstantValue *expr) {
     TupleIter it(expr, 1);
-    auto expr_sym = *it; it.next();
-    auto expr_value = *it; it.next();
+    auto expr_sym = *it++;
+    auto expr_value = *it++;
 
     auto symname = astVerifyKind<SymbolValue>(expr_sym);
     Value *value;
