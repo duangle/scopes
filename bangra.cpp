@@ -1170,11 +1170,9 @@ std::string getRepr(Type *type) {
     } break;
     switch(type->getKind()) {
     TYPE_ENUM_KINDS()
-        default: {
-            return "?";
-        } break;
     }
 #undef TYPE_KIND
+    return "?";
 }
 
 //------------------------------------------------------------------------------
@@ -1236,25 +1234,22 @@ struct ParameterValue;
 struct PrimitiveValue;
 struct ILBuilder;
 struct IntrinsicValue;
-struct ConstantValue;
 
 //------------------------------------------------------------------------------
 
 #define ILVALUE_ENUM_KINDS() \
     ILVALUE_KIND(Intrinsic) \
     ILVALUE_KIND_ABSTRACT(Primitive) \
-        ILVALUE_KIND_ABSTRACT(Constant) \
-            ILVALUE_KIND(String) \
-            ILVALUE_KIND(Symbol) \
-            ILVALUE_KIND(Integer) \
-            ILVALUE_KIND(Real) \
-            ILVALUE_KIND(Pointer) \
-            ILVALUE_KIND(Tuple) \
-            ILVALUE_KIND(Struct) \
-            ILVALUE_KIND(Closure) \
-            ILVALUE_KIND(External) \
-            ILVALUE_KIND(Builtin) \
-            ILVALUE_KIND_EOK(ConstantEnd) \
+        ILVALUE_KIND(String) \
+        ILVALUE_KIND(Symbol) \
+        ILVALUE_KIND(Integer) \
+        ILVALUE_KIND(Real) \
+        ILVALUE_KIND(Pointer) \
+        ILVALUE_KIND(Tuple) \
+        ILVALUE_KIND(Struct) \
+        ILVALUE_KIND(Closure) \
+        ILVALUE_KIND(External) \
+        ILVALUE_KIND(Builtin) \
         ILVALUE_KIND(Parameter) \
         ILVALUE_KIND_EOK(PrimitiveEnd) \
     ILVALUE_KIND(Flow)
@@ -1287,6 +1282,7 @@ static std::string getRefRepr (const Value *value);
 static Type *getType(const Value *value);
 static const Anchor *find_valid_anchor(const Value *expr);
 
+/*
 static void ilMessage (const Value *value, const char *format, ...) {
     const Anchor *anchor = NULL;
     if (value) {
@@ -1298,6 +1294,7 @@ static void ilMessage (const Value *value, const char *format, ...) {
     Anchor::printMessageV(anchor, format, args);
     va_end (args);
 }
+*/
 
 static void ilError (const Value *value, const char *format, ...) {
     const Anchor *anchor = NULL;
@@ -1339,18 +1336,6 @@ struct PrimitiveValue : Value {
 
     static bool classof(const Value *value) {
         return (value->kind >= Primitive) && (value->kind < PrimitiveEnd);
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct ConstantValue : PrimitiveValue {
-    ConstantValue(Kind kind_) :
-        PrimitiveValue(kind_)
-        {}
-
-    static bool classof(const Value *value) {
-        return (value->kind >= Constant) && (value->kind < ConstantEnd);
     }
 };
 
@@ -1561,7 +1546,7 @@ std::string ParameterValue::getRefRepr () const {
 //------------------------------------------------------------------------------
 
 struct StringValue :
-    ValueImpl<StringValue, Value::String, ConstantValue> {
+    ValueImpl<StringValue, Value::String, PrimitiveValue> {
     std::string value;
 
     static StringValue *create(const std::string &s) {
@@ -1590,7 +1575,7 @@ struct StringValue :
 //------------------------------------------------------------------------------
 
 struct SymbolValue :
-    ValueImpl<SymbolValue, Value::Symbol, ConstantValue> {
+    ValueImpl<SymbolValue, Value::Symbol, PrimitiveValue> {
     std::string value;
 
     static SymbolValue *create(const std::string &s) {
@@ -1619,7 +1604,7 @@ struct SymbolValue :
 //------------------------------------------------------------------------------
 
 struct IntegerValue :
-    ValueImpl<IntegerValue, Value::Integer, ConstantValue> {
+    ValueImpl<IntegerValue, Value::Integer, PrimitiveValue> {
     int64_t value;
     IntegerType *value_type;
 
@@ -1653,7 +1638,7 @@ struct IntegerValue :
 //------------------------------------------------------------------------------
 
 struct RealValue :
-    ValueImpl<RealValue, Value::Real, ConstantValue> {
+    ValueImpl<RealValue, Value::Real, PrimitiveValue> {
     double value;
     RealType *value_type;
 
@@ -1682,11 +1667,11 @@ struct RealValue :
 //------------------------------------------------------------------------------
 
 struct TupleValue :
-    ValueImpl<TupleValue, Value::Tuple, ConstantValue> {
-    std::vector<ConstantValue *> values;
+    ValueImpl<TupleValue, Value::Tuple, PrimitiveValue> {
+    std::vector<Value *> values;
 
     static TupleValue *create(
-        const std::vector<ConstantValue *> &values_) {
+        const std::vector<Value *> &values_) {
         auto result = new TupleValue();
         result->values = values_;
         return result;
@@ -1718,20 +1703,20 @@ struct TupleValue :
 //------------------------------------------------------------------------------
 
 struct StructValue :
-    ValueImpl<StructValue, Value::Struct, ConstantValue> {
-    std::vector<ConstantValue *> values;
+    ValueImpl<StructValue, Value::Struct, PrimitiveValue> {
+    std::vector<Value *> values;
     StructType *struct_type;
 
-    static StructValue *create(const std::vector<ConstantValue *> &values,
-        StructType *struct_type) {
+    static StructValue *create(const std::vector<Value *> &values,
+        Type *struct_type) {
         auto result = new StructValue();
         result->values = values;
-        result->struct_type = struct_type;
-        assert(result->values.size() == struct_type->getFieldCount());
+        result->struct_type = llvm::cast<StructType>(struct_type);
+        assert(result->values.size() == result->struct_type->getFieldCount());
         return result;
     }
 
-    void addField(ConstantValue *c, const StructType::Field &field) {
+    void addField(Value *c, const StructType::Field &field) {
         struct_type->addField(field);
         values.push_back(c);
     }
@@ -1765,7 +1750,7 @@ struct StructValue :
 //------------------------------------------------------------------------------
 
 struct PointerValue :
-    ValueImpl<PointerValue, Value::Pointer, ConstantValue> {
+    ValueImpl<PointerValue, Value::Pointer, PrimitiveValue> {
     void *value;
     Type *pointer_type;
 
@@ -1807,10 +1792,10 @@ static Type *extract_consttype(const Value *value) {
 
 //------------------------------------------------------------------------------
 
-typedef ConstantValue *(*ILBuiltinFunction)(const std::vector<ConstantValue *> &args);
+typedef Value *(*ILBuiltinFunction)(const std::vector<Value *> &args);
 
 struct BuiltinValue :
-    ValueImpl<BuiltinValue, Value::Builtin, ConstantValue> {
+    ValueImpl<BuiltinValue, Value::Builtin, PrimitiveValue> {
 
     ILBuiltinFunction handler;
 
@@ -1840,7 +1825,7 @@ struct BuiltinValue :
 //------------------------------------------------------------------------------
 
 struct ExternalValue :
-    ValueImpl<ExternalValue, Value::External, ConstantValue> {
+    ValueImpl<ExternalValue, Value::External, PrimitiveValue> {
     std::string name;
     Type *external_type;
 
@@ -1876,7 +1861,7 @@ struct ExternalValue :
 struct FrameValue;
 
 struct ClosureValue :
-    ValueImpl<ClosureValue, Value::Closure, ConstantValue> {
+    ValueImpl<ClosureValue, Value::Closure, PrimitiveValue> {
     FlowValue *cont;
     FrameValue *frame;
 
@@ -1996,7 +1981,7 @@ static void unescape(SymbolValue *s) {
 }
 
 // matches ((///...))
-static bool is_comment(ConstantValue *expr) {
+static bool is_comment(Value *expr) {
     if (auto tuple = llvm::dyn_cast<TupleValue>(expr)) {
         if (tuple->values.size() > 0) {
             if (auto sym = llvm::dyn_cast<SymbolValue>(tuple->values.front())) {
@@ -2008,7 +1993,7 @@ static bool is_comment(ConstantValue *expr) {
     return false;
 }
 
-static ConstantValue *strip(ConstantValue *expr) {
+static Value *strip(Value *expr) {
     if (!expr) return nullptr;
     if (auto tuple = llvm::dyn_cast<TupleValue>(expr)) {
         auto copy = TupleValue::create({});
@@ -2066,7 +2051,7 @@ static std::string formatTraceback() {
 }
 #endif
 
-static bool isNested(ConstantValue *e) {
+static bool isNested(Value *e) {
     if (auto tuple = llvm::dyn_cast<TupleValue>(e)) {
         auto &values = tuple->values;
         for (size_t i = 0; i < values.size(); ++i) {
@@ -2078,7 +2063,7 @@ static bool isNested(ConstantValue *e) {
 }
 
 template<typename T>
-static void streamAnchor(T &stream, ConstantValue *e, size_t depth=0) {
+static void streamAnchor(T &stream, Value *e, size_t depth=0) {
     if (e) {
         const Anchor *anchor = find_valid_anchor(e);
         if (!anchor)
@@ -2094,7 +2079,7 @@ static void streamAnchor(T &stream, ConstantValue *e, size_t depth=0) {
 }
 
 template<typename T>
-static void streamValue(T &stream, ConstantValue *e, size_t depth=0, bool naked=true) {
+static void streamValue(T &stream, Value *e, size_t depth=0, bool naked=true) {
     if (naked) {
         streamAnchor(stream, e, depth);
     }
@@ -2197,14 +2182,14 @@ static void streamValue(T &stream, ConstantValue *e, size_t depth=0, bool naked=
 }
 
 /*
-static std::string formatValue(ConstantValue *e, size_t depth=0, bool naked=false) {
+static std::string formatValue(Value *e, size_t depth=0, bool naked=false) {
     std::stringstream ss;
     streamValue(ss, e, depth, naked);
     return ss.str();
 }
 */
 
-static void printValue(ConstantValue *e, size_t depth=0, bool naked=false) {
+static void printValue(Value *e, size_t depth=0, bool naked=false) {
     streamValue(std::cout, e, depth, naked);
 }
 
@@ -2593,7 +2578,7 @@ struct Parser {
             return true;
         }
 
-        void append(ConstantValue *item) {
+        void append(Value *item) {
             result->values.push_back(item);
         }
 
@@ -2601,7 +2586,7 @@ struct Parser {
             return result->values.size();
         }
 
-        ConstantValue *getSingleResult() {
+        Value *getSingleResult() {
             return result->values.front();
         }
 
@@ -2645,7 +2630,7 @@ struct Parser {
         return builder.getResult();
     }
 
-    ConstantValue *parseAny () {
+    Value *parseAny () {
         assert(lexer.token != token_eof);
         if (lexer.token == token_open) {
             return parseList(token_close);
@@ -2682,7 +2667,7 @@ struct Parser {
         return nullptr;
     }
 
-    ConstantValue *parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
+    Value *parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
         int lineno = lexer.lineno;
 
         bool escape = false;
@@ -2768,7 +2753,7 @@ struct Parser {
         }
     }
 
-    ConstantValue *parseMemory (
+    Value *parseMemory (
         const char *input_stream, const char *eof, const char *path, int offset = 0) {
         init();
         lexer.init(input_stream, eof, path, offset);
@@ -2804,7 +2789,7 @@ struct Parser {
         return strip(result);
     }
 
-    ConstantValue *parseFile (const char *path) {
+    Value *parseFile (const char *path) {
         auto file = MappedFile::open(path);
         if (file) {
             return parseMemory(
@@ -2843,18 +2828,6 @@ struct ILBuilder {
         insertAndAdvance(arguments, nullptr);
     }
 
-    /*
-    ILParameterRef toparam(const Value *value) {
-        if (llvm::isa<ParameterValue>(value.get())) {
-            return value->getSharedPtr<ParameterValue>();
-        } else {
-            auto next = FlowValue::create(module, 1);
-            insertAndAdvance( { next, value } , next);
-            return next->parameters[0];
-        }
-    }
-    */
-
     ParameterValue *call(std::vector<Value *> values) {
         auto next = FlowValue::create(1, "cret");
         values.push_back(next);
@@ -2863,6 +2836,8 @@ struct ILBuilder {
     }
 
 };
+
+static ILBuilder *builder;
 
 //------------------------------------------------------------------------------
 // FOREIGN FUNCTION INTERFACE
@@ -3053,7 +3028,7 @@ struct FFI {
 
     };
 
-    ConstantValue *makeConstant(Type *il_type, const Variant &value) {
+    Value *makeConstant(Type *il_type, const Variant &value) {
         switch(il_type->getKind()) {
             case T_Void: {
                 return TupleValue::create({});
@@ -3097,7 +3072,7 @@ struct FFI {
     }
 
     Variant convertConstant(
-        Type *il_type, const ConstantValue *c) {
+        Type *il_type, const Value *c) {
         Variant result;
         switch(il_type->getKind()) {
             case T_Integer: {
@@ -3163,7 +3138,7 @@ struct FFI {
     }
 
     TypeLLVMValuePair convertFunction(
-        const ConstantValue *value) {
+        const Value *value) {
         auto ilfunc = llvm::dyn_cast<ExternalValue>(value);
         if (!ilfunc) {
             ilError(nullptr, "not an external");
@@ -3230,8 +3205,8 @@ struct FFI {
         return result;
     }
 
-    ConstantValue *runFunction(
-        const ConstantValue *func, const std::vector<ConstantValue *> &args) {
+    Value *runFunction(
+        const Value *func, const std::vector<Value *> &args) {
 
         auto F = convertFunction(func);
         auto ilfunctype = F.first;
@@ -3273,7 +3248,7 @@ static FFI *ffi;
 // INTERPRETER
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<FlowValue *, std::vector<ConstantValue *> >
+typedef std::unordered_map<FlowValue *, std::vector<Value *> >
     Cont2ValuesMap;
 
 struct FrameValue {
@@ -3329,10 +3304,7 @@ std::string ClosureValue::getRefRepr() const {
 
 typedef std::vector<Value *> ILValueArray;
 
-ConstantValue *evaluate(FrameValue *frame, Value *value) {
-    if (auto c = llvm::dyn_cast<ConstantValue>(value)) {
-        return c;
-    }
+Value *evaluate(FrameValue *frame, Value *value) {
     switch(value->kind) {
         case Value::Parameter: {
             auto param = llvm::cast<ParameterValue>(value);
@@ -3357,16 +3329,15 @@ ConstantValue *evaluate(FrameValue *frame, Value *value) {
                 frame);
         } break;
         default:
-            ilError(value, "value can not be evaluated");
             break;
     }
-    return nullptr;
+    return value;
 }
 
 void evaluate_values(
     const ILValueArray &arguments,
     FrameValue *frame,
-    std::vector<ConstantValue *> &values) {
+    std::vector<Value *> &values) {
     size_t argcount = arguments.size();
     for (size_t i = 1; i < argcount; ++i) {
         auto value = evaluate(frame, arguments[i]);
@@ -3380,7 +3351,7 @@ void map_continuation_arguments(
     FlowValue *nextcont,
     FrameValue *frame,
     FrameValue *nextframe) {
-    std::vector<ConstantValue *> values;
+    std::vector<Value *> values;
     evaluate_values(arguments, frame, values);
     size_t argcount = arguments.size() - 1;
     size_t paramcount = nextcont->getParameterCount();
@@ -3400,8 +3371,8 @@ void map_closure(ClosureValue *closure,
     arguments = closure->cont->values;
 }
 
-static bool extract_bool(const ConstantValue *value);
-ConstantValue *execute(std::vector<Value *> arguments) {
+static bool extract_bool(const Value *value);
+Value *execute(std::vector<Value *> arguments) {
 
     FrameValue *frame = FrameValue::create();
     frame->idx = 0;
@@ -3461,12 +3432,12 @@ ConstantValue *execute(std::vector<Value *> arguments) {
             } break;
             case Value::Builtin: {
                 auto cb = llvm::cast<BuiltinValue>(callee);
-                std::vector<ConstantValue *> values;
+                std::vector<Value *> values;
                 evaluate_values(arguments, frame, values);
                 assert(values.size() >= 1);
-                ConstantValue *closure = values.back();
+                Value *closure = values.back();
                 values.pop_back();
-                ConstantValue *result = cb->handler(values);
+                Value *result = cb->handler(values);
                 // generate fitting resume
                 arguments.clear();
                 arguments.push_back(closure);
@@ -3474,12 +3445,12 @@ ConstantValue *execute(std::vector<Value *> arguments) {
             } break;
             case Value::External: {
                 auto cb = llvm::cast<ExternalValue>(callee);
-                std::vector<ConstantValue *> values;
+                std::vector<Value *> values;
                 evaluate_values(arguments, frame, values);
                 assert(values.size() >= 1);
-                ConstantValue *closure = values.back();
+                Value *closure = values.back();
                 values.pop_back();
-                ConstantValue *result = ffi->runFunction(cb, values);
+                Value *result = ffi->runFunction(cb, values);
                 // generate fitting resume
                 arguments.clear();
                 arguments.push_back(closure);
@@ -4018,7 +3989,7 @@ static StructValue *importCModule (
 // BUILTINS
 //------------------------------------------------------------------------------
 
-static bool builtin_checkparams (const std::vector<ConstantValue *> &args,
+static bool builtin_checkparams (const std::vector<Value *> &args,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
@@ -4037,7 +4008,7 @@ static bool builtin_checkparams (const std::vector<ConstantValue *> &args,
     return true;
 }
 
-static bool extract_bool(const ConstantValue *value) {
+static bool extract_bool(const Value *value) {
     if (auto resulttype = llvm::dyn_cast<IntegerValue>(value)) {
         if (getType(resulttype) == Type::Bool) {
             return (bool)resulttype->value;
@@ -4047,7 +4018,7 @@ static bool extract_bool(const ConstantValue *value) {
     return false;
 }
 
-static std::string extract_string(const ConstantValue *value) {
+static std::string extract_string(const Value *value) {
     auto resulttype = llvm::dyn_cast<StringValue>(value);
     if (!resulttype) {
         ilError(value, "string constant expected");
@@ -4055,7 +4026,7 @@ static std::string extract_string(const ConstantValue *value) {
     return resulttype->value;
 }
 
-static Type *extract_type(const ConstantValue *value) {
+static Type *extract_type(const Value *value) {
     auto resulttype = llvm::dyn_cast<PointerValue>(value);
     if (!resulttype) {
         ilError(value, "pointer constant expected");
@@ -4066,8 +4037,8 @@ static Type *extract_type(const ConstantValue *value) {
     return (Type *)resulttype->value;
 }
 
-static const std::vector<ConstantValue *> &extract_tuple(
-    const ConstantValue *value) {
+static const std::vector<Value *> &extract_tuple(
+    const Value *value) {
     auto resulttype = llvm::dyn_cast<TupleValue>(value);
     if (!resulttype) {
         ilError(value, "tuple expected");
@@ -4090,7 +4061,7 @@ static IntegerValue *wrap(int64_t value) {
 }
 
 static TupleValue *wrap(
-    const std::vector<ConstantValue *> &args) {
+    const std::vector<Value *> &args) {
     return TupleValue::create(args);
 }
 
@@ -4107,7 +4078,7 @@ static StringValue *wrap(const std::string &s) {
     return StringValue::create(s);
 }
 
-static ConstantValue *builtin_print(const std::vector<ConstantValue *> &args) {
+static Value *builtin_print(const std::vector<Value *> &args) {
     builtin_checkparams(args, 0, -1);
     for (size_t i = 0; i < args.size(); ++i) {
         if (i != 0)
@@ -4127,20 +4098,20 @@ static ConstantValue *builtin_print(const std::vector<ConstantValue *> &args) {
     return TupleValue::create({});
 }
 
-static ConstantValue *builtin_repr(const std::vector<ConstantValue *> &args) {
+static Value *builtin_repr(const std::vector<Value *> &args) {
     builtin_checkparams(args, 1, 1);
     return wrap(getRepr(args[0]));
 }
 
-static ConstantValue *builtin_tupleof(const std::vector<ConstantValue *> &args) {
+static Value *builtin_tupleof(const std::vector<Value *> &args) {
     builtin_checkparams(args, 0, -1);
     return wrap(args);
 }
 
-static ConstantValue *builtin_cdecl(const std::vector<ConstantValue *> &args) {
+static Value *builtin_cdecl(const std::vector<Value *> &args) {
     builtin_checkparams(args, 3, 3);
     Type *rettype = extract_type(args[0]);
-    const std::vector<ConstantValue *> &params = extract_tuple(args[1]);
+    const std::vector<Value *> &params = extract_tuple(args[1]);
     bool vararg = extract_bool(args[2]);
 
     std::vector<Type *> paramtypes;
@@ -4151,7 +4122,7 @@ static ConstantValue *builtin_cdecl(const std::vector<ConstantValue *> &args) {
     return wrap(Type::CFunction(rettype, paramtypes, vararg));
 }
 
-static ConstantValue *builtin_external(const std::vector<ConstantValue *> &args) {
+static Value *builtin_external(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
     std::string name = extract_string(args[0]);
     Type *type = extract_type(args[1]);
@@ -4159,7 +4130,7 @@ static ConstantValue *builtin_external(const std::vector<ConstantValue *> &args)
 }
 
 // (import-c const-path (tupleof const-string ...))
-static ConstantValue *builtin_import_c(const std::vector<ConstantValue *> &args) {
+static Value *builtin_import_c(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
     std::string path = extract_string(args[0]);
     auto compile_args = extract_tuple(args[1]);
@@ -4170,10 +4141,10 @@ static ConstantValue *builtin_import_c(const std::vector<ConstantValue *> &args)
     return bangra::importCModule(path, cargs);
 }
 
-static ConstantValue *builtin_at_op(const std::vector<ConstantValue *> &args) {
+static Value *builtin_at_op(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
-    ConstantValue *obj = args[0];
-    ConstantValue *key = args[1];
+    Value *obj = args[0];
+    Value *key = args[1];
     switch(obj->kind) {
         case Value::Struct: {
             auto cs = llvm::cast<StructValue>(obj);
@@ -4298,18 +4269,18 @@ class builtin_le_op { public:
 
 template <class NextT>
 class builtin_filter_op { public:
-    static ConstantValue *operate(const double &a, const int64_t &b) {
+    static Value *operate(const double &a, const int64_t &b) {
         return wrap(NextT::operate(a, b));
     }
-    static ConstantValue *operate(const int64_t &a, const double &b) {
+    static Value *operate(const int64_t &a, const double &b) {
         return wrap(NextT::operate(a, b));
     }
     template<typename T>
-    static ConstantValue *operate(const T &a, const T &b) {
+    static Value *operate(const T &a, const T &b) {
         return wrap(NextT::operate(a, b));
     }
     template<typename Ta, typename Tb>
-    static ConstantValue *operate(const Ta &a, const Tb &b) {
+    static Value *operate(const Ta &a, const Tb &b) {
         ilError(nullptr, "illegal operands");
         return nullptr;
     }
@@ -4319,7 +4290,7 @@ class builtin_filter_op { public:
 class dispatch_types_failed {
 public:
     template<typename F>
-    static ConstantValue *dispatch(const ConstantValue *v, const F &next) {
+    static Value *dispatch(const Value *v, const F &next) {
         ilError(v, "illegal operand");
         return nullptr;
     }
@@ -4329,7 +4300,7 @@ template<typename NextT>
 class dispatch_string_type {
 public:
     template<typename F>
-    static ConstantValue *dispatch(const ConstantValue *v, const F &next) {
+    static Value *dispatch(const Value *v, const F &next) {
         if (v->kind == Value::String) {
             auto ca = llvm::cast<StringValue>(v);
             return next(ca->value);
@@ -4343,7 +4314,7 @@ template<typename NextT>
 class dispatch_integer_type {
 public:
     template<typename F>
-    static ConstantValue *dispatch(const ConstantValue *v, const F &next) {
+    static Value *dispatch(const Value *v, const F &next) {
         if (v->kind == Value::Integer) {
             auto ca = llvm::cast<IntegerValue>(v);
             if (ca->value_type != Type::Bool) {
@@ -4358,7 +4329,7 @@ template<typename NextT>
 class dispatch_bool_type {
 public:
     template<typename F>
-    static ConstantValue *dispatch(const ConstantValue *v, const F &next) {
+    static Value *dispatch(const Value *v, const F &next) {
         if (v->kind == Value::Integer) {
             auto ca = llvm::cast<IntegerValue>(v);
             if (ca->value_type == Type::Bool) {
@@ -4373,7 +4344,7 @@ template<typename NextT>
 class dispatch_real_type {
 public:
     template<typename F>
-    static ConstantValue *dispatch(const ConstantValue *v, const F &next) {
+    static Value *dispatch(const Value *v, const F &next) {
         if (v->kind == Value::Real) {
             auto ca = llvm::cast<RealValue>(v);
             return next(ca->value);
@@ -4409,7 +4380,7 @@ template<class D, class F>
 class builtin_binary_op1 {
 public:
     template<typename Q>
-    ConstantValue *operator ()(const Q &ca_value) const {
+    Value *operator ()(const Q &ca_value) const {
         return wrap(F::operate(ca_value));
     }
 };
@@ -4421,7 +4392,7 @@ public:
     builtin_binary_op3(const T &ca_value_) : ca_value(ca_value_) {}
 
     template<typename Q>
-    ConstantValue *operator ()(const Q &cb_value) const {
+    Value *operator ()(const Q &cb_value) const {
         return builtin_filter_op<F>::operate(ca_value, cb_value);
     }
 };
@@ -4429,18 +4400,18 @@ public:
 template<class D, class F>
 class builtin_binary_op2 {
 public:
-    const ConstantValue *b;
-    builtin_binary_op2(const ConstantValue *b_) : b(b_) {}
+    const Value *b;
+    builtin_binary_op2(const Value *b_) : b(b_) {}
 
     template<typename T>
-    ConstantValue *operator ()(const T &ca_value) const {
+    Value *operator ()(const T &ca_value) const {
         return D::dispatch(b, builtin_binary_op3<D, F, T>(ca_value));
     }
 };
 
 template<class D, class F>
-static ConstantValue *builtin_binary_op(
-    const std::vector<ConstantValue *> &args) {
+static Value *builtin_binary_op(
+    const std::vector<Value *> &args) {
     if (args.size() != 2) {
         ilError(nullptr, "invalid number of arguments");
     }
@@ -4449,8 +4420,8 @@ static ConstantValue *builtin_binary_op(
 
 
 template<class D, class F>
-static ConstantValue *builtin_unary_op(
-    const std::vector<ConstantValue *> &args) {
+static Value *builtin_unary_op(
+    const std::vector<Value *> &args) {
     if (args.size() != 1) {
         ilError(nullptr, "invalid number of arguments");
     }
@@ -4461,8 +4432,7 @@ static ConstantValue *builtin_unary_op(
 // TRANSLATION
 //------------------------------------------------------------------------------
 
-struct Environment;
-typedef ConstantValue *(*bangra_preprocessor)(Environment *, ConstantValue *);
+typedef Value *(*bangra_preprocessor)(StructValue *, Value *);
 
 typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
 typedef std::unordered_map<std::string, Type *> NameTypeMap;
@@ -4470,102 +4440,60 @@ typedef std::unordered_map<std::string, Value *> NameValueMap;
 
 //------------------------------------------------------------------------------
 
-struct GlobalEnvironment {
-    ILBuilder builder;
-};
+static StructValue *new_scope() {
+    auto scope = StructValue::create({}, Type::Struct("scope"));
+    scope->addField(TupleValue::create({}),
+        StructType::Field("", Type::Empty));
+    return scope;
+}
 
-struct Environment {
-protected:
-    NameValueMap values;
-public:
-    GlobalEnvironment &global;
-    Environment *parent;
+static StructValue *new_scope(StructValue *scope) {
+    assert(scope);
+    auto subscope = StructValue::create({}, Type::Struct("scope"));
+    subscope->addField(scope,
+        StructType::Field("", getType(scope)));
+    return subscope;
+}
 
-    Environment(GlobalEnvironment &global_) :
-        global(global_),
-        parent(nullptr)
-    {
-        assert(!values.size());
+static void setLocal(StructValue *scope, const std::string &name, Value *value) {
+    assert(scope);
+    scope->addField(value,
+        StructType::Field(name, getType(value)));
+}
+
+static bool isLocal(StructValue *scope, const std::string &name) {
+    assert(scope);
+    size_t idx = scope->struct_type->getFieldIndex(name);
+    if (idx == (size_t)-1) return false;
+    return true;
+}
+
+static StructValue *getParent(StructValue *scope) {
+    if (scope->struct_type->getField(0).getType()->getKind() == T_Struct) {
+        return llvm::cast<StructValue>(scope->values[0]);
     }
+    return nullptr;
+}
 
-    Environment(Environment &parent_) :
-        global(parent_.global),
-        parent(&parent_)
-    {
-        assert(!values.size());
-    }
-
-    const NameValueMap &getLocals() {
-        return values;
-    }
-
-    void dump() {
-        printf("%i values\n",
-            (int)values.size());
-        for (auto entry : values) {
-            ilMessage(entry.second, "%p.%s\n",
-                (void *)this, entry.first.c_str());
-            assert(entry.second);
+static Value *getLocal(StructValue *scope, const std::string &name) {
+    assert(scope);
+    while (scope) {
+        size_t idx = scope->struct_type->getFieldIndex(name);
+        if (idx != (size_t)-1) {
+            return scope->values[idx];
+        }
+        if (scope->struct_type->getField(0).getType() != Type::Empty) {
+            scope = getParent(scope);
         }
     }
-
-    bool isLocal(const std::string &name) {
-        return values.count(name);
-    }
-
-    Value *getLocal(const std::string &name) {
-        if (values.count(name)) {
-            return values.at(name);
-        }
-        return nullptr;
-    }
-
-    /*
-    bool set(const std::string &name, Value *value) {
-        if (isLocal(name)) {
-            replaceLocal(name, value);
-        } else {
-            if (resolve(name)) {
-                replaceScoped(name, value);
-            } else {
-                return false;
-            }
-        }
-        return true;
-    }
-    */
-
-    void setLocal(const std::string &name, Value *value) {
-        assert(!isLocal(name));
-        assert(value);
-        values[name] = value;
-    }
-
-    void replaceLocal(const std::string &name, Value *value) {
-        assert(isLocal(name));
-        assert(value);
-        values[name] = value;
-    }
-
-    Value *resolve(const std::string &name) {
-        Environment *penv = this;
-        while (penv) {
-            Value *result = (*penv).getLocal(name);
-            if (result) {
-                return result;
-            }
-            penv = penv->parent;
-        }
-        return nullptr;
-    }
-
-};
+    return nullptr;
+}
 
 static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 //------------------------------------------------------------------------------
 
-static bool isSymbol (const ConstantValue *expr, const char *sym) {
+static bool isSymbol (const Value *expr, const char *sym) {
     if (expr) {
         if (auto symexpr = llvm::dyn_cast<SymbolValue>(expr))
             return (symexpr->value == sym);
@@ -4575,9 +4503,9 @@ static bool isSymbol (const ConstantValue *expr, const char *sym) {
 
 //------------------------------------------------------------------------------
 
-Value *translate(Environment &env, ConstantValue *expr);
+Value *translate(StructValue *env, Value *expr);
 
-void valueError (ConstantValue *expr, const char *format, ...) {
+void valueError (Value *expr, const char *format, ...) {
     const Anchor *anchor = find_valid_anchor(expr);
     if (!anchor) {
         if (expr)
@@ -4589,7 +4517,7 @@ void valueError (ConstantValue *expr, const char *format, ...) {
     va_end (args);
 }
 
-void valueErrorV (ConstantValue *expr, const char *fmt, va_list args) {
+void valueErrorV (Value *expr, const char *fmt, va_list args) {
     const Anchor *anchor = find_valid_anchor(expr);
     if (!anchor) {
         if (expr)
@@ -4599,7 +4527,7 @@ void valueErrorV (ConstantValue *expr, const char *fmt, va_list args) {
 }
 
 template <typename T>
-static T *astVerifyKind(ConstantValue *expr) {
+static T *astVerifyKind(Value *expr) {
     T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
     if (obj) {
         return obj;
@@ -4625,7 +4553,7 @@ public:
         index(i)
     {}
 
-    TupleIter(ConstantValue *value, size_t i=0) :
+    TupleIter(Value *value, size_t i=0) :
         tuple(llvm::cast<TupleValue>(value)),
         index(i) {
     }
@@ -4640,17 +4568,17 @@ public:
         return index < tuple->values.size();
     }
 
-    ConstantValue *operator *() const {
+    Value *operator *() const {
         assert(index < tuple->values.size());
         return tuple->values[index];
     }
 
 };
 
-static Value *parse_do (Environment &env, ConstantValue *expr, size_t offset) {
+static Value *parse_do (StructValue *env, Value *expr, size_t offset) {
     TupleIter it(expr, offset);
 
-    Environment subenv(env);
+    auto subenv = new_scope(env);
 
     Value *value = nullptr;
     while (it) {
@@ -4665,22 +4593,22 @@ static Value *parse_do (Environment &env, ConstantValue *expr, size_t offset) {
 
 }
 
-static Value *parse_do (Environment &env, ConstantValue *expr) {
+static Value *parse_do (StructValue *env, Value *expr) {
     return parse_do(env, expr, 1);
 }
 
-static Value *parse_function (Environment &env, ConstantValue *expr) {
+static Value *parse_function (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_parameters = *it++;
 
-    auto currentblock = env.global.builder.continuation;
+    auto currentblock = builder->continuation;
 
     auto function = FlowValue::create(0, "func");
 
-    env.global.builder.continueAt(function);
-    Environment subenv(env);
+    builder->continueAt(function);
+    auto subenv = new_scope(env);
 
-    subenv.setLocal("this-function", function);
+    setLocal(subenv, "this-function", function);
 
     auto params = astVerifyKind<TupleValue>(expr_parameters);
     TupleIter param(params);
@@ -4688,43 +4616,43 @@ static Value *parse_function (Environment &env, ConstantValue *expr) {
         auto symname = astVerifyKind<SymbolValue>(*param);
         auto bp = ParameterValue::create();
         function->appendParameter(bp);
-        subenv.setLocal(symname->value, bp);
+        setLocal(subenv, symname->value, bp);
         param++;
     }
     auto ret = function->appendParameter(ParameterValue::create());
 
     auto result = parse_do(subenv, expr, 2);
 
-    env.global.builder.br({ret, result});
+    builder->br({ret, result});
 
-    env.global.builder.continueAt(currentblock);
+    builder->continueAt(currentblock);
 
     return function;
 }
 
-static Value *parse_proto_eval (Environment &env, ConstantValue *expr) {
+static Value *parse_proto_eval (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_protoeval = *it++;
 
-    auto currentblock = env.global.builder.continuation;
+    auto currentblock = builder->continuation;
 
     auto mainfunc = FlowValue::create();
     auto ret = mainfunc->appendParameter(ParameterValue::create());
 
-    Environment subenv(env);
-    subenv.global.builder.continueAt(mainfunc);
+    auto subenv = new_scope(env);
+    builder->continueAt(mainfunc);
 
     auto retval = translate(subenv, expr_protoeval);
-    subenv.global.builder.br({ ret, retval });
+    builder->br({ ret, retval });
 
     auto result = execute({mainfunc});
 
-    subenv.global.builder.continueAt(currentblock);
+    builder->continueAt(currentblock);
 
     return result;
 }
 
-static Value *parse_implicit_apply (Environment &env, ConstantValue *expr,
+static Value *parse_implicit_apply (StructValue *env, Value *expr,
     size_t start = 0) {
     TupleIter it(expr, start);
     auto expr_callable = *it++;
@@ -4739,10 +4667,10 @@ static Value *parse_implicit_apply (Environment &env, ConstantValue *expr,
         it++;
     }
 
-    return env.global.builder.call(args);
+    return builder->call(args);
 }
 
-static Value *parse_apply (Environment &env, ConstantValue *expr) {
+static Value *parse_apply (StructValue *env, Value *expr) {
     return parse_implicit_apply(env, expr, 1);
 }
 
@@ -4753,21 +4681,21 @@ bool hasTypeValue(Type *type) {
     return true;
 }
 
-static Value *parse_select (Environment &env, ConstantValue *expr) {
+static Value *parse_select (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_condition = *it++;
     auto expr_true = *it++;
     auto expr_false = *it++;
 
     Value *condition = translate(env, expr_condition);
-    auto bbstart = env.global.builder.continuation;
+    auto bbstart = builder->continuation;
 
     auto bbtrue = FlowValue::create(0, "then");
-    env.global.builder.continueAt(bbtrue);
+    builder->continueAt(bbtrue);
 
-    Environment subenv_true(env);
+    auto subenv_true = new_scope(env);
     Value *trueexpr = translate(subenv_true, expr_true);
-    auto bbtrue_end = env.global.builder.continuation;
+    auto bbtrue_end = builder->continuation;
 
     bool returnValue = hasTypeValue(getType(trueexpr));
 
@@ -4775,11 +4703,11 @@ static Value *parse_select (Environment &env, ConstantValue *expr) {
     FlowValue *bbfalse_end = nullptr;
     Value *falseexpr = nullptr;
     if (expr_false) {
-        Environment subenv_false(env);
+        auto subenv_false = new_scope(env);
         bbfalse = FlowValue::create(0, "else");
-        env.global.builder.continueAt(bbfalse);
+        builder->continueAt(bbfalse);
         falseexpr = translate(subenv_false, expr_false);
-        bbfalse_end = env.global.builder.continuation;
+        bbfalse_end = builder->continuation;
         returnValue = returnValue && hasTypeValue(getType(falseexpr));
     } else {
         returnValue = false;
@@ -4798,30 +4726,30 @@ static Value *parse_select (Environment &env, ConstantValue *expr) {
         result = TupleValue::create({});
     }
 
-    env.global.builder.continueAt(bbtrue_end);
-    env.global.builder.br(trueexprs);
+    builder->continueAt(bbtrue_end);
+    builder->br(trueexprs);
 
     if (bbfalse) {
-        env.global.builder.continueAt(bbfalse_end);
+        builder->continueAt(bbfalse_end);
         std::vector<Value *> falsexprs;
         falsexprs.push_back(bbdone);
         if (returnValue)
             falsexprs.push_back(falseexpr);
-        env.global.builder.br(falsexprs);
+        builder->br(falsexprs);
     } else {
         bbfalse = bbdone;
     }
 
-    env.global.builder.continueAt(bbstart);
-    env.global.builder.br(
+    builder->continueAt(bbstart);
+    builder->br(
         { IntrinsicValue::Branch, condition, bbtrue, bbfalse });
 
-    env.global.builder.continueAt(bbdone);
+    builder->continueAt(bbdone);
 
     return result;
 }
 
-static Value *parse_let(Environment &env, ConstantValue *expr) {
+static Value *parse_let(StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_sym = *it++;
     auto expr_value = *it++;
@@ -4834,16 +4762,16 @@ static Value *parse_let(Environment &env, ConstantValue *expr) {
     else
         value = TupleValue::create({});
 
-    if (env.isLocal(symname->value)) {
+    if (isLocal(env, symname->value)) {
         valueError(symname, "already defined");
     }
-    env.setLocal(symname->value, value);
+    setLocal(env, symname->value, value);
 
     return value;
 }
 
 struct TranslateTable {
-    typedef Value *(*TranslatorFunc)(Environment &env, ConstantValue *expr);
+    typedef Value *(*TranslatorFunc)(StructValue *env, Value *expr);
 
     struct Translator {
         int mincount;
@@ -4915,7 +4843,7 @@ static void registerTranslators() {
     t.set(parse_proto_eval, "proto-eval", 1, 1);
 }
 
-static Value *translateFromList (Environment &env, TupleValue *expr) {
+static Value *translateFromList (StructValue *env, TupleValue *expr) {
     assert(expr);
     if (expr->values.size() < 1) {
         valueError(expr, "symbol expected");
@@ -4928,7 +4856,7 @@ static Value *translateFromList (Environment &env, TupleValue *expr) {
     }
 }
 
-Value *translate (Environment &env, ConstantValue *expr) {
+Value *translate (StructValue *env, Value *expr) {
     assert(expr);
     Value *result = nullptr;
     switch(expr->kind) {
@@ -4938,7 +4866,7 @@ Value *translate (Environment &env, ConstantValue *expr) {
         case Value::Symbol: {
             auto sym = llvm::cast<SymbolValue>(expr);
             std::string value = sym->value;
-            result = env.resolve(value);
+            result = getLocal(env, value);
             if (!result) {
                 valueError(expr,
                     "unknown symbol '%s'", value.c_str());
@@ -5000,100 +4928,101 @@ static void init() {
     LLVMInitializeNativeDisassembler();
 
     ffi = new FFI();
+    builder = new ILBuilder();
 
 }
 
 //------------------------------------------------------------------------------
 
-static void setupRootEnvironment (Environment &env) {
-    env.setLocal("void", wrap(Type::Void));
-    env.setLocal("null", wrap(Type::Null));
-    env.setLocal("half", wrap(Type::Half));
-    env.setLocal("float", wrap(Type::Float));
-    env.setLocal("double", wrap(Type::Double));
-    env.setLocal("bool", wrap(Type::Bool));
+static void setupRootScope (StructValue *env) {
+    setLocal(env, "void", wrap(Type::Void));
+    setLocal(env, "null", wrap(Type::Null));
+    setLocal(env, "half", wrap(Type::Half));
+    setLocal(env, "float", wrap(Type::Float));
+    setLocal(env, "double", wrap(Type::Double));
+    setLocal(env, "bool", wrap(Type::Bool));
 
-    env.setLocal("int8", wrap(Type::Int8));
-    env.setLocal("int16", wrap(Type::Int16));
-    env.setLocal("int32", wrap(Type::Int32));
-    env.setLocal("int64", wrap(Type::Int64));
+    setLocal(env, "int8", wrap(Type::Int8));
+    setLocal(env, "int16", wrap(Type::Int16));
+    setLocal(env, "int32", wrap(Type::Int32));
+    setLocal(env, "int64", wrap(Type::Int64));
 
-    env.setLocal("uint8", wrap(Type::UInt8));
-    env.setLocal("uint16", wrap(Type::UInt16));
-    env.setLocal("uint32", wrap(Type::UInt32));
-    env.setLocal("uint64", wrap(Type::UInt64));
+    setLocal(env, "uint8", wrap(Type::UInt8));
+    setLocal(env, "uint16", wrap(Type::UInt16));
+    setLocal(env, "uint32", wrap(Type::UInt32));
+    setLocal(env, "uint64", wrap(Type::UInt64));
 
-    env.setLocal("usize_t",
+    setLocal(env, "usize_t",
         wrap(Type::Integer(sizeof(size_t)*8,false)));
 
-    env.setLocal("rawstring", wrap(Type::Rawstring));
+    setLocal(env, "rawstring", wrap(Type::Rawstring));
 
-    env.setLocal("int", env.resolve("int32"));
+    setLocal(env, "int", getLocal(env, "int32"));
 
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
-    env.setLocal("true", IntegerValue::create(1, booltype));
-    env.setLocal("false", IntegerValue::create(0, booltype));
+    setLocal(env, "true", IntegerValue::create(1, booltype));
+    setLocal(env, "false", IntegerValue::create(0, booltype));
 
-    env.setLocal("print", wrap(builtin_print));
-    env.setLocal("repr", wrap(builtin_repr));
-    env.setLocal("cdecl", wrap(builtin_cdecl));
-    env.setLocal("tupleof", wrap(builtin_tupleof));
-    env.setLocal("external", wrap(builtin_external));
-    env.setLocal("import-c", wrap(builtin_import_c));
+    setLocal(env, "print", wrap(builtin_print));
+    setLocal(env, "repr", wrap(builtin_repr));
+    setLocal(env, "cdecl", wrap(builtin_cdecl));
+    setLocal(env, "tupleof", wrap(builtin_tupleof));
+    setLocal(env, "external", wrap(builtin_external));
+    setLocal(env, "import-c", wrap(builtin_import_c));
 
-    env.setLocal("@", wrap(builtin_at_op));
+    setLocal(env, "@", wrap(builtin_at_op));
 
-    env.setLocal("+",
+    setLocal(env, "+",
         wrap(builtin_binary_op<dispatch_arith_string_types, builtin_add_op>));
-    env.setLocal("-",
+    setLocal(env, "-",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_sub_op>));
-    env.setLocal("*",
+    setLocal(env, "*",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_mul_op>));
-    env.setLocal("/",
+    setLocal(env, "/",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_div_op>));
-    env.setLocal("%",
+    setLocal(env, "%",
         wrap(builtin_binary_op<dispatch_arith_types, builtin_mod_op>));
 
-    env.setLocal("&",
+    setLocal(env, "&",
         wrap(builtin_binary_op<dispatch_bit_types, builtin_bitand_op>));
-    env.setLocal("|",
+    setLocal(env, "|",
         wrap(builtin_binary_op<dispatch_bit_types, builtin_bitor_op>));
-    env.setLocal("^",
+    setLocal(env, "^",
         wrap(builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>));
-    env.setLocal("~",
+    setLocal(env, "~",
         wrap(builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>));
 
-    env.setLocal("not",
+    setLocal(env, "not",
         wrap(builtin_unary_op<dispatch_boolean_types, builtin_not_op>));
 
-    env.setLocal("==",
+    setLocal(env, "==",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_eq_op>));
-    env.setLocal("!=",
+    setLocal(env, "!=",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_ne_op>));
-    env.setLocal(">",
+    setLocal(env, ">",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_gt_op>));
-    env.setLocal(">=",
+    setLocal(env, ">=",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_ge_op>));
-    env.setLocal("<",
+    setLocal(env, "<",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_lt_op>));
-    env.setLocal("<=",
+    setLocal(env, "<=",
         wrap(builtin_binary_op<dispatch_cmp_types, builtin_le_op>));
 
 }
 
-static void handleException(Environment &env, ConstantValue *expr) {
+static void handleException(StructValue *env, Value *expr) {
     streamValue(std::cerr, expr, 0, true);
     valueError(expr, "an exception was raised");
 }
 
-static bool translateRootValueList (Environment &env, ConstantValue *expr) {
+static bool translateRootValueList (StructValue *env, Value *expr) {
 
     auto mainfunc = FlowValue::create();
     auto ret = mainfunc->appendParameter(ParameterValue::create());
-    env.global.builder.continueAt(mainfunc);
+    builder->continueAt(mainfunc);
 
     parse_do(env, expr);
-    env.global.builder.br({ ret });
+    builder->br({ ret });
 
 /*
 #ifdef BANGRA_DEBUG_IL
@@ -5107,13 +5036,12 @@ static bool translateRootValueList (Environment &env, ConstantValue *expr) {
     return true;
 }
 
-static bool compileMain (ConstantValue *expr) {
+static bool compileMain (Value *expr) {
     assert(expr);
     auto tuple = astVerifyKind<TupleValue>(expr);
 
-    GlobalEnvironment global;
-    Environment env(global);
-    setupRootEnvironment(env);
+    auto env = new_scope();
+    setupRootScope(env);
 
     std::string lastlang = "";
     while (true) {
@@ -5136,8 +5064,8 @@ static bool compileMain (ConstantValue *expr) {
         lastlang = head->value;
         auto orig_expr = expr;
         try {
-            expr = preprocessor(&env, expr);
-        } catch (ConstantValue *expr) {
+            expr = preprocessor(env, expr);
+        } catch (Value *expr) {
             handleException(env, expr);
             return false;
         }
@@ -5163,7 +5091,7 @@ std::string GetExecutablePath(const char *Argv0) {
   return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
 }
 
-static ConstantValue *parseLoader(const char *executable_path) {
+static Value *parseLoader(const char *executable_path) {
     // attempt to read bootstrap expression from end of binary
     auto file = MappedFile::open(executable_path);
     if (!file) {
@@ -5236,7 +5164,7 @@ static bool compileStartupScript() {
     std::string path = format("%s.b", base);
     free(base);
 
-    ConstantValue *expr = NULL;
+    Value *expr = NULL;
     {
         auto file = MappedFile::open(path.c_str());
         if (file) {
@@ -5300,7 +5228,7 @@ int bangra_main(int argc, char ** argv) {
 
     bangra::init();
 
-    bangra::ConstantValue *expr = NULL;
+    bangra::Value *expr = NULL;
 
     if (argv) {
         if (argv[0]) {
@@ -5368,7 +5296,7 @@ int bangra_main(int argc, char ** argv) {
     return 0;
 }
 
-bangra::ConstantValue *bangra_parse_file(const char *path) {
+bangra::Value *bangra_parse_file(const char *path) {
     bangra::Parser parser;
     return parser.parseFile(path);
 }
