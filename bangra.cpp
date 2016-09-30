@@ -1170,6 +1170,9 @@ std::string getRepr(Type *type) {
     } break;
     switch(type->getKind()) {
     TYPE_ENUM_KINDS()
+        default: {
+            return "?";
+        } break;
     }
 #undef TYPE_KIND
 }
@@ -2193,11 +2196,13 @@ static void streamValue(T &stream, ConstantValue *e, size_t depth=0, bool naked=
 	}
 }
 
+/*
 static std::string formatValue(ConstantValue *e, size_t depth=0, bool naked=false) {
     std::stringstream ss;
     streamValue(ss, e, depth, naked);
     return ss.str();
 }
+*/
 
 static void printValue(ConstantValue *e, size_t depth=0, bool naked=false) {
     streamValue(std::cout, e, depth, naked);
@@ -3135,7 +3140,7 @@ struct FFI {
                     } break;
                     case Value::String: {
                         auto cs = llvm::cast<StringValue>(c);
-                        result.ptrval = (void *)cs->value.c_str();
+                        result.ptrval = const_cast<char *>(cs->value.c_str());
                     } break;
                     default: {
                         ilError(nullptr, "can't convert %s to pointer",
@@ -3285,9 +3290,7 @@ struct FrameValue {
     std::string getRepr() {
         std::stringstream ss;
         ss << "#" << idx << ":" << this << ":\n";
-        bool any_entries = false;
         for (auto &entry : map) {
-            any_entries = true;
             ss << "  " << entry.first->getRefRepr();
             auto &value = entry.second;
             for (size_t i = 0; i < value.size(); ++i) {
@@ -3555,25 +3558,22 @@ public:
     }
 
     void GetFields(StructType *struct_type, clang::RecordDecl * rd) {
-        auto &rl = Context->getASTRecordLayout(rd);
+        //auto &rl = Context->getASTRecordLayout(rd);
 
-        bool opaque = false;
         for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
             clang::DeclarationName declname = it->getDeclName();
 
-            unsigned idx = it->getFieldIndex();
+            //unsigned idx = it->getFieldIndex();
 
-            auto offset = rl.getFieldOffset(idx);
+            //auto offset = rl.getFieldOffset(idx);
             //unsigned width = it->getBitWidthValue(*Context);
 
             if(it->isBitField() || (!it->isAnonymousStructOrUnion() && !declname)) {
-                opaque = true;
                 break;
             }
             clang::QualType FT = it->getType();
             Type *fieldtype = TranslateType(FT);
             if(!fieldtype) {
-                opaque = true;
                 break;
             }
             // todo: work offset into structure
@@ -3610,9 +3610,9 @@ public:
 
             GetFields(struct_type, defn);
 
-            auto &rl = Context->getASTRecordLayout(rd);
-            auto align = rl.getAlignment();
-            auto size = rl.getSize();
+            //auto &rl = Context->getASTRecordLayout(rd);
+            //auto align = rl.getAlignment();
+            //auto size = rl.getSize();
 
             // todo: make sure these fit
             // align.getQuantity()
