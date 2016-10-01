@@ -60,7 +60,11 @@ print
     plus2 50
 print
     proto-eval
-        plus2 x
+        do
+            let i 0
+            @
+                @ scope i
+                i
 
 let api
     import-c "bangra.h" (tupleof)

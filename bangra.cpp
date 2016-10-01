@@ -1245,6 +1245,7 @@ struct IntrinsicValue;
         ILVALUE_KIND(Integer) \
         ILVALUE_KIND(Real) \
         ILVALUE_KIND(Pointer) \
+        ILVALUE_KIND(Unit) \
         ILVALUE_KIND(Tuple) \
         ILVALUE_KIND(Struct) \
         ILVALUE_KIND(Closure) \
@@ -1661,6 +1662,32 @@ struct RealValue :
     std::string getRefRepr() const {
         return ansi(ANSI_STYLE_NUMBER,
             format("%f", value));
+    }
+};
+
+//------------------------------------------------------------------------------
+
+struct UnitValue :
+    ValueImpl<UnitValue, Value::Unit, PrimitiveValue> {
+    Type *unit_type;
+
+    static UnitValue *create_null() {
+        auto result = new UnitValue();
+        result->unit_type = Type::Null;
+        return result;
+    }
+
+    Type *inferType() const {
+        return unit_type;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        assert (unit_type == Type::Null);
+        return ansi(ANSI_STYLE_KEYWORD, "null");
     }
 };
 
@@ -4442,8 +4469,8 @@ typedef std::unordered_map<std::string, Value *> NameValueMap;
 
 static StructValue *new_scope() {
     auto scope = StructValue::create({}, Type::Struct("scope"));
-    scope->addField(TupleValue::create({}),
-        StructType::Field("", Type::Empty));
+    scope->addField(UnitValue::create_null(),
+        StructType::Field("", Type::Null));
     return scope;
 }
 
@@ -4475,6 +4502,17 @@ static StructValue *getParent(StructValue *scope) {
     return nullptr;
 }
 
+/*
+static StructValue *get_global_scope(StructValue *scope) {
+    assert(scope);
+    while (true) {
+        StructValue *parent = getParent(scope);
+        if (!parent) return scope;
+        scope = parent;
+    }
+}
+*/
+
 static Value *getLocal(StructValue *scope, const std::string &name) {
     assert(scope);
     while (scope) {
@@ -4482,9 +4520,7 @@ static Value *getLocal(StructValue *scope, const std::string &name) {
         if (idx != (size_t)-1) {
             return scope->values[idx];
         }
-        if (scope->struct_type->getField(0).getType() != Type::Empty) {
-            scope = getParent(scope);
-        }
+        scope = getParent(scope);
     }
     return nullptr;
 }
@@ -4640,6 +4676,8 @@ static Value *parse_proto_eval (StructValue *env, Value *expr) {
     auto ret = mainfunc->appendParameter(ParameterValue::create());
 
     auto subenv = new_scope(env);
+    setLocal(subenv, "scope", env);
+
     builder->continueAt(mainfunc);
 
     auto retval = translate(subenv, expr_protoeval);
@@ -4962,6 +5000,8 @@ static void setupRootScope (StructValue *env) {
     auto booltype = llvm::cast<IntegerType>(Type::Bool);
     setLocal(env, "true", IntegerValue::create(1, booltype));
     setLocal(env, "false", IntegerValue::create(0, booltype));
+
+    setLocal(env, "null", UnitValue::create_null());
 
     setLocal(env, "print", wrap(builtin_print));
     setLocal(env, "repr", wrap(builtin_repr));
