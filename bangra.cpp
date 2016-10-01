@@ -4648,8 +4648,6 @@ static Value *parse_function (StructValue *env, Value *expr) {
     builder->continueAt(function);
     auto subenv = new_scope(env);
 
-    setLocal(subenv, "this-function", function);
-
     auto params = verifyValueKind<TupleValue>(expr_parameters);
     TupleIter param(params);
     while (param) {
@@ -4790,27 +4788,6 @@ static Value *parse_select (StructValue *env, Value *expr) {
     return result;
 }
 
-static Value *parse_let(StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
-    auto expr_sym = *it++;
-    auto expr_value = *it++;
-
-    auto symname = verifyValueKind<SymbolValue>(expr_sym);
-    Value *value;
-
-    if (expr_value)
-        value = translate(env, expr_value);
-    else
-        value = TupleValue::create({});
-
-    if (isLocal(env, symname->value)) {
-        valueError(symname, "already defined");
-    }
-    setLocal(env, symname->value, value);
-
-    return value;
-}
-
 static Value *parse_quote (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_value = *it++;
@@ -4886,7 +4863,6 @@ static TranslateTable translators;
 
 static void registerTranslators() {
     auto &t = translators;
-    t.set(parse_let, "let", 1, 2);
     t.set(parse_apply, "apply", 1, -1);
     t.set(parse_do, "do", 0, -1);
     t.set(parse_select, "select", 2, 3);
