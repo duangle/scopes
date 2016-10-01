@@ -57,13 +57,29 @@ let plus2
         + x 2
 
 print
+    "quoting:"
+    quote
+        let plus2
+            function (x)
+                + x 2
+
+print
+    eval
+        quote
+            plus2 10
+        scope;
+
+
+print
     plus2 50
 print
     proto-eval
         do
+            let s
+                scope;
             let i 0
             @
-                @ scope i
+                @ s i
                 i
 
 let api

@@ -261,6 +261,10 @@ std::string quoteReprString(const std::string &value) {
             quoteString(value, "\"").c_str()));
 }
 
+std::string quoteReprSymbol(const std::string &value) {
+    return quoteString(value, "[]{}()\"\'");
+}
+
 std::string quoteReprInteger(int64_t value) {
     return ansi(ANSI_STYLE_NUMBER, format("%" PRIi64, value));
 }
@@ -1598,7 +1602,7 @@ struct SymbolValue :
     }
 
     std::string getRefRepr() const {
-        return quoteReprString(value);
+        return quoteReprSymbol(value);
     }
 };
 
@@ -2049,6 +2053,42 @@ static const Anchor *find_valid_anchor(const Value *expr) {
     return nullptr;
 }
 
+struct TupleIter {
+protected:
+    TupleValue *tuple;
+    size_t index;
+public:
+    size_t get_index() const {
+        return index;
+    }
+
+    TupleIter(TupleValue *value, size_t i) :
+        tuple(value),
+        index(i)
+    {}
+
+    TupleIter(Value *value, size_t i=0) :
+        tuple(llvm::cast<TupleValue>(value)),
+        index(i) {
+    }
+
+    TupleIter operator ++(int) {
+        auto oldself = *this;
+        ++index;
+        return oldself;
+    }
+
+    operator bool() const {
+        return index < tuple->values.size();
+    }
+
+    Value *operator *() const {
+        assert(index < tuple->values.size());
+        return tuple->values[index];
+    }
+
+};
+
 //------------------------------------------------------------------------------
 // PRINTING
 //------------------------------------------------------------------------------
@@ -2218,6 +2258,40 @@ static std::string formatValue(Value *e, size_t depth=0, bool naked=false) {
 
 static void printValue(Value *e, size_t depth=0, bool naked=false) {
     streamValue(std::cout, e, depth, naked);
+}
+
+void valueError (Value *expr, const char *format, ...) {
+    const Anchor *anchor = find_valid_anchor(expr);
+    if (!anchor) {
+        if (expr)
+            printValue(expr);
+    }
+    va_list args;
+    va_start (args, format);
+    Anchor::printErrorV(anchor, format, args);
+    va_end (args);
+}
+
+void valueErrorV (Value *expr, const char *fmt, va_list args) {
+    const Anchor *anchor = find_valid_anchor(expr);
+    if (!anchor) {
+        if (expr)
+            printValue(expr);
+    }
+    Anchor::printErrorV(anchor, fmt, args);
+}
+
+template <typename T>
+static T *verifyValueKind(Value *expr) {
+    T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
+    if (obj) {
+        return obj;
+    } else {
+        valueError(expr, "%s expected, not %s",
+            getClassName(T::classkind()),
+            getClassName(expr->kind));
+    }
+    return nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -4541,76 +4615,6 @@ static bool isSymbol (const Value *expr, const char *sym) {
 
 Value *translate(StructValue *env, Value *expr);
 
-void valueError (Value *expr, const char *format, ...) {
-    const Anchor *anchor = find_valid_anchor(expr);
-    if (!anchor) {
-        if (expr)
-            printValue(expr);
-    }
-    va_list args;
-    va_start (args, format);
-    Anchor::printErrorV(anchor, format, args);
-    va_end (args);
-}
-
-void valueErrorV (Value *expr, const char *fmt, va_list args) {
-    const Anchor *anchor = find_valid_anchor(expr);
-    if (!anchor) {
-        if (expr)
-            printValue(expr);
-    }
-    Anchor::printErrorV(anchor, fmt, args);
-}
-
-template <typename T>
-static T *astVerifyKind(Value *expr) {
-    T *obj = expr?llvm::dyn_cast<T>(expr):NULL;
-    if (obj) {
-        return obj;
-    } else {
-        valueError(expr, "%s expected, not %s",
-            getClassName(T::classkind()),
-            getClassName(expr->kind));
-    }
-    return nullptr;
-}
-
-struct TupleIter {
-protected:
-    TupleValue *tuple;
-    size_t index;
-public:
-    size_t get_index() const {
-        return index;
-    }
-
-    TupleIter(TupleValue *value, size_t i) :
-        tuple(value),
-        index(i)
-    {}
-
-    TupleIter(Value *value, size_t i=0) :
-        tuple(llvm::cast<TupleValue>(value)),
-        index(i) {
-    }
-
-    TupleIter operator ++(int) {
-        auto oldself = *this;
-        ++index;
-        return oldself;
-    }
-
-    operator bool() const {
-        return index < tuple->values.size();
-    }
-
-    Value *operator *() const {
-        assert(index < tuple->values.size());
-        return tuple->values[index];
-    }
-
-};
-
 static Value *parse_do (StructValue *env, Value *expr, size_t offset) {
     TupleIter it(expr, offset);
 
@@ -4646,10 +4650,10 @@ static Value *parse_function (StructValue *env, Value *expr) {
 
     setLocal(subenv, "this-function", function);
 
-    auto params = astVerifyKind<TupleValue>(expr_parameters);
+    auto params = verifyValueKind<TupleValue>(expr_parameters);
     TupleIter param(params);
     while (param) {
-        auto symname = astVerifyKind<SymbolValue>(*param);
+        auto symname = verifyValueKind<SymbolValue>(*param);
         auto bp = ParameterValue::create();
         function->appendParameter(bp);
         setLocal(subenv, symname->value, bp);
@@ -4676,7 +4680,6 @@ static Value *parse_proto_eval (StructValue *env, Value *expr) {
     auto ret = mainfunc->appendParameter(ParameterValue::create());
 
     auto subenv = new_scope(env);
-    setLocal(subenv, "scope", env);
 
     builder->continueAt(mainfunc);
 
@@ -4792,7 +4795,7 @@ static Value *parse_let(StructValue *env, Value *expr) {
     auto expr_sym = *it++;
     auto expr_value = *it++;
 
-    auto symname = astVerifyKind<SymbolValue>(expr_sym);
+    auto symname = verifyValueKind<SymbolValue>(expr_sym);
     Value *value;
 
     if (expr_value)
@@ -4806,6 +4809,16 @@ static Value *parse_let(StructValue *env, Value *expr) {
     setLocal(env, symname->value, value);
 
     return value;
+}
+
+static Value *parse_quote (StructValue *env, Value *expr) {
+    TupleIter it(expr, 1);
+    auto expr_value = *it++;
+    return expr_value;
+}
+
+static Value *parse_scope (StructValue *env, Value *expr) {
+    return env;
 }
 
 struct TranslateTable {
@@ -4858,7 +4871,7 @@ struct TranslateTable {
     }
 
     TranslatorFunc match(TupleValue *expr) {
-        auto head = astVerifyKind<SymbolValue>(expr->values.front());
+        auto head = verifyValueKind<SymbolValue>(expr->values.front());
         auto &t = translators[head->value];
         if (!t.translate) return nullptr;
         verifyParameterCount(expr, t.mincount, t.maxcount);
@@ -4879,6 +4892,8 @@ static void registerTranslators() {
     t.set(parse_select, "select", 2, 3);
     t.set(parse_function, "function", 1, -1);
     t.set(parse_proto_eval, "proto-eval", 1, 1);
+    t.set(parse_quote, "quote", 1, 1);
+    t.set(parse_scope, "scope", 0, 0);
 }
 
 static Value *translateFromList (StructValue *env, TupleValue *expr) {
@@ -4922,6 +4937,24 @@ Value *translate (StructValue *env, Value *expr) {
     }
     assert(result);
     return result;
+}
+
+static Value *builtin_eval(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 2, 2);
+    auto expr_eval = args[0];
+    auto scope = verifyValueKind<StructValue>(args[1]);
+
+    auto mainfunc = FlowValue::create();
+    auto ret = mainfunc->appendParameter(ParameterValue::create());
+
+    auto subenv = new_scope(scope);
+
+    builder->continueAt(mainfunc);
+
+    auto retval = translate(subenv, expr_eval);
+    builder->br({ ret, retval });
+
+    return execute({mainfunc});
 }
 
 //------------------------------------------------------------------------------
@@ -5009,6 +5042,7 @@ static void setupRootScope (StructValue *env) {
     setLocal(env, "tupleof", wrap(builtin_tupleof));
     setLocal(env, "external", wrap(builtin_external));
     setLocal(env, "import-c", wrap(builtin_import_c));
+    setLocal(env, "eval", wrap(builtin_eval));
 
     setLocal(env, "@", wrap(builtin_at_op));
 
@@ -5078,14 +5112,14 @@ static bool translateRootValueList (StructValue *env, Value *expr) {
 
 static bool compileMain (Value *expr) {
     assert(expr);
-    auto tuple = astVerifyKind<TupleValue>(expr);
+    auto tuple = verifyValueKind<TupleValue>(expr);
 
     auto env = new_scope();
     setupRootScope(env);
 
     std::string lastlang = "";
     while (true) {
-        auto head = astVerifyKind<SymbolValue>(tuple->values.front());
+        auto head = verifyValueKind<SymbolValue>(tuple->values.front());
         if (!head) return false;
         if (head->value == BANGRA_HEADER)
             break;
