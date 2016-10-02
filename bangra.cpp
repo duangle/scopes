@@ -439,7 +439,7 @@ struct Anchor {
     TYPE_KIND(Struct) \
     TYPE_KIND(Enum) \
     TYPE_KIND(CFunction) \
-    TYPE_KIND(Continuation)
+    TYPE_KIND(Flow)
 
 enum TypeKind {
 #define TYPE_KIND(NAME) T_ ## NAME,
@@ -465,7 +465,7 @@ private:
     static Type *newTupleType(TypeArray _elements);
     static Type *newCFunctionType(
         Type *_returntype, TypeArray _parameters, bool vararg);
-    static Type *newContinuationType(TypeArray _parameters);
+    static Type *newFlowType(TypeArray _parameters);
 
 protected:
     Type(TypeKind kind_) :
@@ -516,7 +516,7 @@ public:
         const std::string &name, bool builtin = false, bool union_ = false);
     static Type *Enum(const std::string &name);
     static std::function<Type * (Type *, TypeArray, bool)> CFunction;
-    static std::function<Type * (TypeArray)> Continuation;
+    static std::function<Type * (TypeArray)> Flow;
 };
 
 static std::string getRepr(Type *type);
@@ -549,7 +549,7 @@ std::function<Type * (Type *, unsigned)> Type::Array = memo(Type::newArrayType);
 std::function<Type * (Type *, unsigned)> Type::Vector = memo(Type::newVectorType);
 std::function<Type * (TypeArray)> Type::Tuple = memo(Type::newTupleType);
 std::function<Type * (Type *, TypeArray, bool)> Type::CFunction = memo(Type::newCFunctionType);
-std::function<Type * (TypeArray)> Type::Continuation = memo(Type::newContinuationType);
+std::function<Type * (TypeArray)> Type::Flow = memo(Type::newFlowType);
 
 //------------------------------------------------------------------------------
 
@@ -675,7 +675,7 @@ public:
         return element;
     }
 
-    unsigned getSize() {
+    unsigned getCount() {
         return size;
     }
 
@@ -709,7 +709,7 @@ public:
         return element;
     }
 
-    unsigned getSize() {
+    unsigned getCount() {
         return size;
     }
 
@@ -738,6 +738,15 @@ protected:
     TypeArray elements;
 
 public:
+    Type *getElement(size_t i) {
+        assert(i < elements.size());
+        return elements[i];
+    }
+
+    size_t getCount() {
+        return elements.size();
+    }
+
     static std::string getSpecRepr(const TypeArray &elements) {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "tuple");
@@ -1060,7 +1069,7 @@ Type *Type::Enum(const std::string &name) {
 
 //------------------------------------------------------------------------------
 
-struct ContinuationType : TypeImpl<ContinuationType, T_Continuation> {
+struct FlowType : TypeImpl<FlowType, T_Flow> {
 protected:
     TypeArray parameters;
 
@@ -1088,7 +1097,7 @@ public:
             return parameters[index];
     }
 
-    ContinuationType(const TypeArray &_parameters) :
+    FlowType(const TypeArray &_parameters) :
         parameters(_parameters)
         {}
 
@@ -1098,8 +1107,8 @@ public:
 
 };
 
-Type *Type::newContinuationType(TypeArray _parameters) {
-    return new ContinuationType(_parameters);
+Type *Type::newFlowType(TypeArray _parameters) {
+    return new FlowType(_parameters);
 }
 
 //------------------------------------------------------------------------------
@@ -1237,12 +1246,10 @@ struct FlowValue;
 struct ParameterValue;
 struct PrimitiveValue;
 struct ILBuilder;
-struct IntrinsicValue;
 
 //------------------------------------------------------------------------------
 
 #define ILVALUE_ENUM_KINDS() \
-    ILVALUE_KIND(Intrinsic) \
     ILVALUE_KIND_ABSTRACT(Primitive) \
         ILVALUE_KIND(String) \
         ILVALUE_KIND(Symbol) \
@@ -1351,6 +1358,7 @@ struct ParameterValue :
     FlowValue *parent;
     size_t index;
     Type *parameter_type;
+    std::string name;
 
     ParameterValue() :
         parent(nullptr),
@@ -1369,67 +1377,33 @@ struct ParameterValue :
             return Type::Any;
     }
 
+    std::string getReprName() const {
+        if (name.empty()) {
+            return format("%s%zu",
+                ansi(ANSI_STYLE_OPERATOR,"@").c_str(),
+                index);
+        } else {
+            return name;
+        }
+    }
+
     std::string getRepr() const {
-        return format("%s%zu %s %s",
-            ansi(ANSI_STYLE_OPERATOR,"@").c_str(),
-            index,
+        return format("%s %s %s",
+            getReprName().c_str(),
             ansi(ANSI_STYLE_OPERATOR,":").c_str(),
             bangra::getRepr(getType(this)).c_str());
     }
 
     std::string getRefRepr () const;
 
-    static ParameterValue *create(Type *type = nullptr) {
+    static ParameterValue *create(const std::string &name = "") {
         auto value = new ParameterValue();
         value->index = (size_t)-1;
-        value->parameter_type = type;
-        return value;
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct IntrinsicValue :
-    ValueImpl<IntrinsicValue, Value::Intrinsic, Value> {
-    static IntrinsicValue *Branch;
-
-    std::string name;
-    Type *intrinsic_type;
-
-    Type *inferType() const {
-        return intrinsic_type;
-    }
-
-    std::string getRepr () const {
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_INSTRUCTION, name);
-        ss << " " << ansi(ANSI_STYLE_OPERATOR, ":") << " ";
-        ss << bangra::getRepr(getType(this));
-        return ss.str();
-    }
-
-    std::string getRefRepr () const {
-        return ansi(ANSI_STYLE_INSTRUCTION, name);
-    }
-
-    static IntrinsicValue *create(
-        const std::string &name, Type *type) {
-        assert(type);
-        auto value = new IntrinsicValue();
         value->name = name;
-        value->intrinsic_type = type;
+        value->parameter_type = nullptr;
         return value;
     }
-
-    static void initIntrinsics() {
-        Branch = create("branch",
-            Type::Continuation({ Type::Bool,
-                Type::Continuation({}),
-                Type::Continuation({}) }));
-    }
 };
-
-IntrinsicValue *IntrinsicValue::Branch;
 
 //------------------------------------------------------------------------------
 
@@ -1447,6 +1421,8 @@ public:
 
     std::string name;
     std::vector<ParameterValue *> parameters;
+
+    // default path
     std::vector<Value *> values;
 
     void clear() {
@@ -1512,7 +1488,7 @@ public:
         for (size_t i = 0; i < parameters.size(); ++i) {
             params.push_back(getType(parameters[i]));
         }
-        return Type::Continuation(params);
+        return Type::Flow(params);
     }
 
     ParameterValue *appendParameter(ParameterValue *param) {
@@ -1539,10 +1515,10 @@ int64_t FlowValue::unique_id_counter = 1;
 std::string ParameterValue::getRefRepr () const {
     auto parent = getParent();
     if (parent) {
-        return format("%s%s%zu",
-            parent->getRefRepr().c_str(),
-            ansi(ANSI_STYLE_OPERATOR, "@").c_str(),
-            index);
+        return format("%s%s%s",
+            bangra::getRefRepr(parent).c_str(),
+            ansi(ANSI_STYLE_OPERATOR,".").c_str(),
+            getReprName().c_str());
     } else {
         return ansi(ANSI_STYLE_ERROR, "<unbound>");
     }
@@ -1829,10 +1805,13 @@ struct BuiltinValue :
     ValueImpl<BuiltinValue, Value::Builtin, PrimitiveValue> {
 
     ILBuiltinFunction handler;
+    std::string name;
 
-    static BuiltinValue *create(ILBuiltinFunction func) {
+    static BuiltinValue *create(ILBuiltinFunction func,
+        const std::string &name) {
         auto result = new BuiltinValue();
         result->handler = func;
+        result->name = name;
         return result;
     }
 
@@ -1847,7 +1826,7 @@ struct BuiltinValue :
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin");
-        ss << " " << handler;
+        ss << " " << name;
         ss << ")";
         return ss.str();
     }
@@ -2909,20 +2888,20 @@ struct Parser {
 //------------------------------------------------------------------------------
 
 struct ILBuilder {
-    FlowValue *continuation;
+    FlowValue *flow;
 
     void continueAt(FlowValue *cont) {
-        this->continuation = cont;
+        this->flow = cont;
         assert(!cont->values.size());
     }
 
     void insertAndAdvance(
         const std::vector<Value *> &values,
         FlowValue *next) {
-        assert(continuation);
-        assert(!continuation->values.size());
-        continuation->values = values;
-        continuation = next;
+        assert(flow);
+        assert(!flow->values.size());
+        flow->values = values;
+        flow = next;
     }
 
     void br(const std::vector<Value *> &arguments) {
@@ -3056,7 +3035,7 @@ struct FFI {
                     result = LLVMArrayType(
                         convertType(
                             array->getElement()),
-                        array->getSize());
+                        array->getCount());
                 } break;
                 case T_Pointer: {
                     result = LLVMPointerType(
@@ -3420,8 +3399,8 @@ Value *evaluate(FrameValue *frame, Value *value) {
                 }
                 ptr = ptr->parent;
             }
-            assert(false && "parameter not bound in any frame");
-            return nullptr;
+            // return unbound value
+            return value;
         } break;
         case Value::Flow: {
             // create closure
@@ -3447,7 +3426,7 @@ void evaluate_values(
     }
 }
 
-void map_continuation_arguments(
+void map_flow_arguments(
     const ILValueArray &arguments,
     FlowValue *nextcont,
     FrameValue *frame,
@@ -3466,7 +3445,7 @@ void map_continuation_arguments(
 void map_closure(ClosureValue *closure,
     ILValueArray &arguments,
     FrameValue *&frame) {
-    map_continuation_arguments(
+    map_flow_arguments(
         arguments, closure->cont, frame, closure->frame);
     frame = closure->frame;
     arguments = closure->cont->values;
@@ -3479,7 +3458,7 @@ Value *execute(std::vector<Value *> arguments) {
     frame->idx = 0;
 
     auto retcont = FlowValue::create(1);
-    // add special continuation as return function
+    // add special flow as return function
     arguments.push_back(retcont);
 
     while (true) {
@@ -3509,27 +3488,9 @@ Value *execute(std::vector<Value *> arguments) {
             case Value::Flow: {
                 auto nextcont = llvm::cast<FlowValue>(callee);
                 FrameValue *nextframe = FrameValue::create(frame);
-                map_continuation_arguments(arguments, nextcont, frame, nextframe);
+                map_flow_arguments(arguments, nextcont, frame, nextframe);
                 arguments = nextcont->values;
                 frame = nextframe;
-            } break;
-            case Value::Intrinsic: {
-                if (callee == IntrinsicValue::Branch) {
-                    auto condarg = arguments[1];
-                    bool condvalue = extract_bool(
-                        evaluate(frame, condarg));
-                    auto thenarg = arguments[2];
-                    auto elsearg = arguments[3];
-                    assert(thenarg->kind == Value::Flow);
-                    assert(elsearg->kind == Value::Flow);
-                    if (condvalue) {
-                        arguments = llvm::cast<FlowValue>(thenarg)->values;
-                    } else {
-                        arguments = llvm::cast<FlowValue>(elsearg)->values;
-                    }
-                } else {
-                    ilError(callee, "unhandled intrinsic");
-                }
             } break;
             case Value::Builtin: {
                 auto cb = llvm::cast<BuiltinValue>(callee);
@@ -3558,7 +3519,8 @@ Value *execute(std::vector<Value *> arguments) {
                 arguments.push_back(result);
             } break;
             default: {
-                ilError(callee, "can not apply expression");
+                ilError(callee, "can not apply %s",
+                    getClassName(callee->kind));
             } break;
         }
     }
@@ -4171,10 +4133,6 @@ static RealValue *wrap(double value) {
         static_cast<RealType *>(Type::Double));
 }
 
-static BuiltinValue *wrap(ILBuiltinFunction func) {
-    return BuiltinValue::create(func);
-}
-
 static StringValue *wrap(const std::string &s) {
     return StringValue::create(s);
 }
@@ -4247,6 +4205,25 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
     Value *obj = args[0];
     Value *key = args[1];
     switch(obj->kind) {
+        case Value::Tuple: {
+            auto cs = llvm::cast<TupleValue>(obj);
+            auto t = llvm::cast<TupleType>(getType(cs));
+            switch(key->kind) {
+                case Value::Integer: {
+                    auto ci = llvm::cast<IntegerValue>(key);
+                    if ((size_t)ci->value < t->getCount()) {
+                        return cs->values[ci->value];
+                    } else {
+                        ilError(key, "index out of bounds");
+                        return nullptr;
+                    }
+                } break;
+                default: {
+                    ilError(key, "illegal index type");
+                    return nullptr;
+                } break;
+            }
+        } break;
         case Value::Struct: {
             auto cs = llvm::cast<StructValue>(obj);
             auto t = llvm::cast<StructType>(getType(cs));
@@ -4562,6 +4539,12 @@ static void setLocal(StructValue *scope, const std::string &name, Value *value) 
         StructType::Field(name, getType(value)));
 }
 
+static void setBuiltin(
+    StructValue *scope, const std::string &name, ILBuiltinFunction func) {
+    assert(scope);
+    setLocal(scope, name, BuiltinValue::create(func, name));
+}
+
 static bool isLocal(StructValue *scope, const std::string &name) {
     assert(scope);
     size_t idx = scope->struct_type->getFieldIndex(name);
@@ -4615,14 +4598,12 @@ static bool isSymbol (const Value *expr, const char *sym) {
 
 Value *translate(StructValue *env, Value *expr);
 
-static Value *parse_do (StructValue *env, Value *expr, size_t offset) {
+static Value *parse_expr_list (StructValue *env, Value *expr, size_t offset) {
     TupleIter it(expr, offset);
-
-    auto subenv = new_scope(env);
 
     Value *value = nullptr;
     while (it) {
-        value = translate(subenv, *it);
+        value = translate(env, *it);
         it++;
     }
 
@@ -4633,15 +4614,11 @@ static Value *parse_do (StructValue *env, Value *expr, size_t offset) {
 
 }
 
-static Value *parse_do (StructValue *env, Value *expr) {
-    return parse_do(env, expr, 1);
-}
-
 static Value *parse_function (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_parameters = *it++;
 
-    auto currentblock = builder->continuation;
+    auto currentblock = builder->flow;
 
     auto function = FlowValue::create(0, "func");
 
@@ -4652,14 +4629,14 @@ static Value *parse_function (StructValue *env, Value *expr) {
     TupleIter param(params);
     while (param) {
         auto symname = verifyValueKind<SymbolValue>(*param);
-        auto bp = ParameterValue::create();
+        auto bp = ParameterValue::create(symname->value);
         function->appendParameter(bp);
         setLocal(subenv, symname->value, bp);
         param++;
     }
     auto ret = function->appendParameter(ParameterValue::create());
 
-    auto result = parse_do(subenv, expr, 2);
+    auto result = parse_expr_list(subenv, expr, 2);
 
     builder->br({ret, result});
 
@@ -4672,7 +4649,7 @@ static Value *parse_proto_eval (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_protoeval = *it++;
 
-    auto currentblock = builder->continuation;
+    auto currentblock = builder->flow;
 
     auto mainfunc = FlowValue::create();
     auto ret = mainfunc->appendParameter(ParameterValue::create());
@@ -4713,6 +4690,33 @@ static Value *parse_apply (StructValue *env, Value *expr) {
     return parse_implicit_apply(env, expr, 1);
 }
 
+static Value *parse_apply_rec (StructValue *env, Value *expr) {
+    TupleIter it(expr, 1);
+    auto expr_callable = *it++;
+
+    auto callable = verifyValueKind<FlowValue>(translate(env, expr_callable));
+
+    auto subenv = new_scope(env);
+
+    size_t paramcount = callable->getParameterCount();
+    for (size_t i = 0; i < paramcount; ++i) {
+        auto param = callable->getParameter(i);
+        if (!param->name.empty()) {
+            setLocal(subenv, param->name, param);
+        }
+    }
+
+    std::vector<Value *> args;
+    args.push_back(callable);
+
+    while (it) {
+        args.push_back(translate(subenv, *it));
+        it++;
+    }
+
+    return builder->call(args);
+}
+
 bool hasTypeValue(Type *type) {
     assert(type);
     if ((type == Type::Void) || (type == Type::Empty))
@@ -4720,78 +4724,42 @@ bool hasTypeValue(Type *type) {
     return true;
 }
 
-static Value *parse_select (StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
-    auto expr_condition = *it++;
-    auto expr_true = *it++;
-    auto expr_false = *it++;
-
-    Value *condition = translate(env, expr_condition);
-    auto bbstart = builder->continuation;
-
-    auto bbtrue = FlowValue::create(0, "then");
-    builder->continueAt(bbtrue);
-
-    auto subenv_true = new_scope(env);
-    Value *trueexpr = translate(subenv_true, expr_true);
-    auto bbtrue_end = builder->continuation;
-
-    bool returnValue = hasTypeValue(getType(trueexpr));
-
-    FlowValue *bbfalse = nullptr;
-    FlowValue *bbfalse_end = nullptr;
-    Value *falseexpr = nullptr;
-    if (expr_false) {
-        auto subenv_false = new_scope(env);
-        bbfalse = FlowValue::create(0, "else");
-        builder->continueAt(bbfalse);
-        falseexpr = translate(subenv_false, expr_false);
-        bbfalse_end = builder->continuation;
-        returnValue = returnValue && hasTypeValue(getType(falseexpr));
-    } else {
-        returnValue = false;
-    }
-
-    auto bbdone = FlowValue::create(0, "endif");
-    Value *result;
-    std::vector<Value *> trueexprs;
-    trueexprs.push_back(bbdone);
-    if (returnValue) {
-        auto result_param = ParameterValue::create();
-        bbdone->appendParameter(result_param);
-        trueexprs.push_back(trueexpr);
-        result = result_param;
-    } else {
-        result = TupleValue::create({});
-    }
-
-    builder->continueAt(bbtrue_end);
-    builder->br(trueexprs);
-
-    if (bbfalse) {
-        builder->continueAt(bbfalse_end);
-        std::vector<Value *> falsexprs;
-        falsexprs.push_back(bbdone);
-        if (returnValue)
-            falsexprs.push_back(falseexpr);
-        builder->br(falsexprs);
-    } else {
-        bbfalse = bbdone;
-    }
-
-    builder->continueAt(bbstart);
-    builder->br(
-        { IntrinsicValue::Branch, condition, bbtrue, bbfalse });
-
-    builder->continueAt(bbdone);
-
-    return result;
-}
-
 static Value *parse_quote (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
     auto expr_value = *it++;
     return expr_value;
+}
+
+static Value *parse_dump (StructValue *env, Value *expr) {
+    TupleIter it(expr, 1);
+    auto expr_value = *it++;
+    auto start_value = translate(env, expr_value);
+    std::list<Value *> todo;
+    std::unordered_set<Value *> visited;
+    todo.push_back(start_value);
+    while (!todo.empty()) {
+        auto value = todo.back();
+        todo.pop_back();
+        if (!visited.count(value)) {
+            visited.insert(value);
+            switch (value->kind) {
+                case Value::Flow: {
+                    std::cout << getRepr(value) << "\n";
+                    auto flow = llvm::cast<FlowValue>(value);
+                    for (size_t i = 0; i < flow->values.size(); ++i) {
+                        auto dest = flow->values[i];
+                        if (llvm::isa<FlowValue>(dest)) {
+                            todo.push_front(dest);
+                        }
+                    }
+                } break;
+                default: {
+                    std::cout << getRepr(value) << "\n";
+                } break;
+            }
+        }
+    }
+    return start_value;
 }
 
 static Value *parse_scope (StructValue *env, Value *expr) {
@@ -4864,12 +4832,12 @@ static TranslateTable translators;
 static void registerTranslators() {
     auto &t = translators;
     t.set(parse_apply, "apply", 1, -1);
-    t.set(parse_do, "do", 0, -1);
-    t.set(parse_select, "select", 2, 3);
+    t.set(parse_apply_rec, "apply-rec", 1, -1);
     t.set(parse_function, "function", 1, -1);
     t.set(parse_proto_eval, "proto-eval", 1, 1);
     t.set(parse_quote, "quote", 1, 1);
     t.set(parse_scope, "scope", 0, 0);
+    t.set(parse_dump, "dump", 1, 1);
 }
 
 static Value *translateFromList (StructValue *env, TupleValue *expr) {
@@ -4963,7 +4931,6 @@ static void init() {
     bangra::support_ansi = isatty(fileno(stdout));
 
     Type::initTypes();
-    IntrinsicValue::initIntrinsics();
     registerTranslators();
 
     LLVMEnablePrettyStackTrace();
@@ -5012,51 +4979,51 @@ static void setupRootScope (StructValue *env) {
 
     setLocal(env, "null", UnitValue::create_null());
 
-    setLocal(env, "print", wrap(builtin_print));
-    setLocal(env, "repr", wrap(builtin_repr));
-    setLocal(env, "cdecl", wrap(builtin_cdecl));
-    setLocal(env, "tupleof", wrap(builtin_tupleof));
-    setLocal(env, "external", wrap(builtin_external));
-    setLocal(env, "import-c", wrap(builtin_import_c));
-    setLocal(env, "eval", wrap(builtin_eval));
+    setBuiltin(env, "print", builtin_print);
+    setBuiltin(env, "repr", builtin_repr);
+    setBuiltin(env, "cdecl", builtin_cdecl);
+    setBuiltin(env, "tupleof", builtin_tupleof);
+    setBuiltin(env, "external", builtin_external);
+    setBuiltin(env, "import-c", builtin_import_c);
+    setBuiltin(env, "eval", builtin_eval);
 
-    setLocal(env, "@", wrap(builtin_at_op));
+    setBuiltin(env, "@", builtin_at_op);
 
-    setLocal(env, "+",
-        wrap(builtin_binary_op<dispatch_arith_string_types, builtin_add_op>));
-    setLocal(env, "-",
-        wrap(builtin_binary_op<dispatch_arith_types, builtin_sub_op>));
-    setLocal(env, "*",
-        wrap(builtin_binary_op<dispatch_arith_types, builtin_mul_op>));
-    setLocal(env, "/",
-        wrap(builtin_binary_op<dispatch_arith_types, builtin_div_op>));
-    setLocal(env, "%",
-        wrap(builtin_binary_op<dispatch_arith_types, builtin_mod_op>));
+    setBuiltin(env, "+",
+        builtin_binary_op<dispatch_arith_string_types, builtin_add_op>);
+    setBuiltin(env, "-",
+        builtin_binary_op<dispatch_arith_types, builtin_sub_op>);
+    setBuiltin(env, "*",
+        builtin_binary_op<dispatch_arith_types, builtin_mul_op>);
+    setBuiltin(env, "/",
+        builtin_binary_op<dispatch_arith_types, builtin_div_op>);
+    setBuiltin(env, "%",
+        builtin_binary_op<dispatch_arith_types, builtin_mod_op>);
 
-    setLocal(env, "&",
-        wrap(builtin_binary_op<dispatch_bit_types, builtin_bitand_op>));
-    setLocal(env, "|",
-        wrap(builtin_binary_op<dispatch_bit_types, builtin_bitor_op>));
-    setLocal(env, "^",
-        wrap(builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>));
-    setLocal(env, "~",
-        wrap(builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>));
+    setBuiltin(env, "&",
+        builtin_binary_op<dispatch_bit_types, builtin_bitand_op>);
+    setBuiltin(env, "|",
+        builtin_binary_op<dispatch_bit_types, builtin_bitor_op>);
+    setBuiltin(env, "^",
+        builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>);
+    setBuiltin(env, "~",
+        builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>);
 
-    setLocal(env, "not",
-        wrap(builtin_unary_op<dispatch_boolean_types, builtin_not_op>));
+    setBuiltin(env, "not",
+        builtin_unary_op<dispatch_boolean_types, builtin_not_op>);
 
-    setLocal(env, "==",
-        wrap(builtin_binary_op<dispatch_cmp_types, builtin_eq_op>));
-    setLocal(env, "!=",
-        wrap(builtin_binary_op<dispatch_cmp_types, builtin_ne_op>));
-    setLocal(env, ">",
-        wrap(builtin_binary_op<dispatch_cmp_types, builtin_gt_op>));
-    setLocal(env, ">=",
-        wrap(builtin_binary_op<dispatch_cmp_types, builtin_ge_op>));
-    setLocal(env, "<",
-        wrap(builtin_binary_op<dispatch_cmp_types, builtin_lt_op>));
-    setLocal(env, "<=",
-        wrap(builtin_binary_op<dispatch_cmp_types, builtin_le_op>));
+    setBuiltin(env, "==",
+        builtin_binary_op<dispatch_cmp_types, builtin_eq_op>);
+    setBuiltin(env, "!=",
+        builtin_binary_op<dispatch_cmp_types, builtin_ne_op>);
+    setBuiltin(env, ">",
+        builtin_binary_op<dispatch_cmp_types, builtin_gt_op>);
+    setBuiltin(env, ">=",
+        builtin_binary_op<dispatch_cmp_types, builtin_ge_op>);
+    setBuiltin(env, "<",
+        builtin_binary_op<dispatch_cmp_types, builtin_lt_op>);
+    setBuiltin(env, "<=",
+        builtin_binary_op<dispatch_cmp_types, builtin_le_op>);
 
 }
 
@@ -5071,7 +5038,7 @@ static bool translateRootValueList (StructValue *env, Value *expr) {
     auto ret = mainfunc->appendParameter(ParameterValue::create());
     builder->continueAt(mainfunc);
 
-    parse_do(env, expr);
+    parse_expr_list(env, expr, 1);
     builder->br({ ret });
 
 /*
