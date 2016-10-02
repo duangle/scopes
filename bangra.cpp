@@ -4143,6 +4143,28 @@ static Value *builtin_tupleof(const std::vector<Value *> &args) {
     return wrap(args);
 }
 
+static Value *builtin_structof(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 0, -1);
+    auto result = StructValue::create({}, Type::Struct(""));
+
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto &pair = extract_tuple(args[i]);
+        if (pair.size() != 2)
+            ilError(args[i], "tuple must have exactly two elements");
+        auto name = extract_string(pair[0]);
+        auto value = pair[1];
+        result->addField(value,
+            StructType::Field(name, getType(value)));
+    }
+
+    return result;
+}
+
+static Value *builtin_typeof(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    return wrap(getType(args[0]));
+}
+
 static Value *builtin_cdecl(const std::vector<Value *> &args) {
     builtin_checkparams(args, 3, 3);
     Type *rettype = extract_type(args[0]);
@@ -4959,6 +4981,8 @@ static void setupRootScope (StructValue *env) {
     setBuiltin(env, "repr", builtin_repr);
     setBuiltin(env, "cdecl", builtin_cdecl);
     setBuiltin(env, "tupleof", builtin_tupleof);
+    setBuiltin(env, "structof", builtin_structof);
+    setBuiltin(env, "typeof", builtin_typeof);
     setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);
     setBuiltin(env, "eval", builtin_eval);

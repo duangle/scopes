@@ -50,6 +50,13 @@ apply
             puts testtext
             sin 5
 
+        print
+            structof
+                tupleof "k" 2
+                tupleof "y" 3
+        print
+            typeof "test"
+
         apply
             @
                 tupleof
