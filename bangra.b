@@ -3,19 +3,24 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
-dump
-    function ()
-        print
-            apply-rec
-                function (func-a func-b)
-                    print "func-x!" func-a func-b
-                    func-a 1
-                function (x)
-                    print "func-a"
-                    + (func-b x) 1
-                function (x)
-                    print "func-b"
-                    * x 2
+apply-rec
+    function (func-a func-b)
+        print "func-x!" func-a func-b
+        func-a 1
+    function (x)
+        print "func-a" x
+        func-b (+ x 1)
+    function (x)
+        print "func-b" x
+        apply
+            @
+                tupleof
+                    function ()
+                        print "done."
+                        x
+                    function ()
+                        func-a (* x 2)
+                < x 1000
 
 apply
     function (sin x plus2 api puts testtext)

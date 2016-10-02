@@ -3329,12 +3329,12 @@ static FFI *ffi;
 //------------------------------------------------------------------------------
 
 typedef std::unordered_map<FlowValue *, std::vector<Value *> >
-    Cont2ValuesMap;
+    FlowValuesMap;
 
 struct FrameValue {
     size_t idx;
     FrameValue *parent;
-    Cont2ValuesMap map;
+    FlowValuesMap map;
 
     std::string getRefRepr() {
         std::stringstream ss;
@@ -3384,7 +3384,7 @@ std::string ClosureValue::getRefRepr() const {
 
 typedef std::vector<Value *> ILValueArray;
 
-Value *evaluate(FrameValue *frame, Value *value) {
+Value *evaluate(size_t argindex, FrameValue *frame, Value *value) {
     switch(value->kind) {
         case Value::Parameter: {
             auto param = llvm::cast<ParameterValue>(value);
@@ -3403,10 +3403,14 @@ Value *evaluate(FrameValue *frame, Value *value) {
             return value;
         } break;
         case Value::Flow: {
-            // create closure
-            return ClosureValue::create(
-                llvm::cast<FlowValue>(value),
-                frame);
+            if (argindex == 0)
+                // no closure creation required
+                return value;
+            else
+                // create closure
+                return ClosureValue::create(
+                    llvm::cast<FlowValue>(value),
+                    frame);
         } break;
         default:
             break;
@@ -3414,44 +3418,6 @@ Value *evaluate(FrameValue *frame, Value *value) {
     return value;
 }
 
-void evaluate_values(
-    const ILValueArray &arguments,
-    FrameValue *frame,
-    std::vector<Value *> &values) {
-    size_t argcount = arguments.size();
-    for (size_t i = 1; i < argcount; ++i) {
-        auto value = evaluate(frame, arguments[i]);
-        assert(value);
-        values.push_back(value);
-    }
-}
-
-void map_flow_arguments(
-    const ILValueArray &arguments,
-    FlowValue *nextcont,
-    FrameValue *frame,
-    FrameValue *nextframe) {
-    std::vector<Value *> values;
-    evaluate_values(arguments, frame, values);
-    size_t argcount = arguments.size() - 1;
-    size_t paramcount = nextcont->getParameterCount();
-    if (argcount != paramcount) {
-        ilError(nullptr, "argument count mismatch (%zu passed, %zu required)",
-            argcount, paramcount);
-    }
-    nextframe->map[nextcont] = values;
-}
-
-void map_closure(ClosureValue *closure,
-    ILValueArray &arguments,
-    FrameValue *&frame) {
-    map_flow_arguments(
-        arguments, closure->cont, frame, closure->frame);
-    frame = closure->frame;
-    arguments = closure->cont->values;
-}
-
-static bool extract_bool(const Value *value);
 Value *execute(std::vector<Value *> arguments) {
 
     FrameValue *frame = FrameValue::create();
@@ -3462,61 +3428,71 @@ Value *execute(std::vector<Value *> arguments) {
     arguments.push_back(retcont);
 
     while (true) {
+        assert(arguments.size() >= 1);
 #ifdef BANGRA_DEBUG_IL
-        std::cout << frame->getRepr() << "\n";
-        //std::cout << cont->getRepr() << "\n";
+        std::cout << frame->getRefRepr();
+        for (size_t i = 0; i < arguments.size(); ++i) {
+            std::cout << " ";
+            std::cout << getRefRepr(arguments[i]);
+        }
+        std::cout << "\n";
         fflush(stdout);
 #endif
-        assert(arguments.size() >= 1);
         Value *callee = arguments[0];
-        if (callee->kind == Value::Parameter) {
-            callee = evaluate(frame, callee);
+        if (callee == retcont) {
+            if (arguments.size() >= 2) {
+                return arguments[1];
+            } else {
+                return TupleValue::create({});
+            }
         }
+
+        if (callee->kind == Value::Closure) {
+            auto closure = llvm::cast<ClosureValue>(callee);
+
+            frame = closure->frame;
+            callee = closure->cont;
+        }
+
         switch(callee->kind) {
-            case Value::Closure: {
-                auto closure = llvm::cast<ClosureValue>(callee);
-                if (closure->cont == retcont) {
-                    if (arguments.size() >= 2) {
-                        return evaluate(frame, arguments[1]);
-                    } else {
-                        return TupleValue::create({});
-                    }
-                }
-                map_closure(
-                    closure, arguments, frame);
-            } break;
             case Value::Flow: {
-                auto nextcont = llvm::cast<FlowValue>(callee);
-                FrameValue *nextframe = FrameValue::create(frame);
-                map_flow_arguments(arguments, nextcont, frame, nextframe);
-                arguments = nextcont->values;
-                frame = nextframe;
+                auto flow = llvm::cast<FlowValue>(callee);
+
+                arguments.erase(arguments.begin());
+                if (arguments.size() > 0) {
+                    if (frame->map.count(flow)) {
+                        frame = FrameValue::create(frame);
+                    }
+                    frame->map[flow] = arguments;
+                }
+
+                size_t argcount = flow->values.size();
+                arguments.resize(argcount);
+                for (size_t i = 0; i < argcount; ++i) {
+                    arguments[i] = evaluate(i, frame, flow->values[i]);
+                }
             } break;
             case Value::Builtin: {
                 auto cb = llvm::cast<BuiltinValue>(callee);
-                std::vector<Value *> values;
-                evaluate_values(arguments, frame, values);
-                assert(values.size() >= 1);
-                Value *closure = values.back();
-                values.pop_back();
-                Value *result = cb->handler(values);
+                Value *closure = arguments.back();
+                arguments.pop_back();
+                arguments.erase(arguments.begin());
+                Value *result = cb->handler(arguments);
                 // generate fitting resume
-                arguments.clear();
-                arguments.push_back(closure);
-                arguments.push_back(result);
+                arguments.resize(2);
+                arguments[0] = closure;
+                arguments[1] = result;
             } break;
             case Value::External: {
                 auto cb = llvm::cast<ExternalValue>(callee);
-                std::vector<Value *> values;
-                evaluate_values(arguments, frame, values);
-                assert(values.size() >= 1);
-                Value *closure = values.back();
-                values.pop_back();
-                Value *result = ffi->runFunction(cb, values);
+                Value *closure = arguments.back();
+                arguments.pop_back();
+                arguments.erase(arguments.begin());
+                Value *result = ffi->runFunction(cb, arguments);
                 // generate fitting resume
-                arguments.clear();
-                arguments.push_back(closure);
-                arguments.push_back(result);
+                arguments.resize(2);
+                arguments[0] = closure;
+                arguments[1] = result;
             } break;
             default: {
                 ilError(callee, "can not apply %s",
