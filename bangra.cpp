@@ -4170,6 +4170,11 @@ static std::vector<Value *> builtin_branch(const std::vector<Value *> &args) {
     }
 }
 
+static std::vector<Value *> builtin_call_cc(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 2, 2, 1);
+    return { args[1], args[2], args[2] };
+}
+
 static Value *builtin_repr(const std::vector<Value *> &args) {
     builtin_checkparams(args, 1, 1);
     return wrap(getRepr(args[0]));
@@ -5025,6 +5030,7 @@ static void initGlobals () {
     setBuiltin(env, "import-c", builtin_import_c);
     setBuiltin(env, "eval", builtin_eval);
     setBuiltin(env, "branch", builtin_branch);
+    setBuiltin(env, "call/cc", builtin_call_cc);
 
     setBuiltin(env, "@", builtin_at_op);
 

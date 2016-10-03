@@ -3,6 +3,20 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
+letrec
+    with
+        f
+            function (return)
+                return 2
+                3
+
+    print # displays 3
+        f
+            function (x) x
+
+    print # displays 2
+        call/cc f
+
 print
     letrec
         with
