@@ -17,24 +17,30 @@ letrec
     print # displays 2
         call/cc f
 
-print
-    letrec
-        with
-            func-a
-                function (x)
-                    print "func-a" x
-                    func-b (+ x 1)
-            func-b
-                function (x)
-                    print "func-b" x
-                    branch (< x 1000)
-                        function ()
-                            func-a (* x 2)
-                        function ()
-                            print "done."
-                            x
-        print "func-x!" func-a func-b
-        func-a 1
+letrec
+    with
+        testf
+            function ()
+                letrec
+                    with
+                        func-a
+                            function (x)
+                                print "func-a" x
+                                func-b (+ x 1)
+                        func-b
+                            function (x)
+                                print "func-b" x
+                                branch (< x 1000)
+                                    function ()
+                                        func-a (* x 2)
+                                    function ()
+                                        print "done."
+                                        x
+                    print "func-x!" func-a func-b
+                    func-a 1
+    dump
+        testf
+    testf;
 
 letrec
     with

@@ -1244,27 +1244,25 @@ void Type::initTypes() {
 struct Value;
 struct FlowValue;
 struct ParameterValue;
-struct PrimitiveValue;
 struct ILBuilder;
 
 //------------------------------------------------------------------------------
 
 #define ILVALUE_ENUM_KINDS() \
-    ILVALUE_KIND_ABSTRACT(Primitive) \
-        ILVALUE_KIND(String) \
-        ILVALUE_KIND(Symbol) \
-        ILVALUE_KIND(Integer) \
-        ILVALUE_KIND(Real) \
-        ILVALUE_KIND(Pointer) \
-        ILVALUE_KIND(Unit) \
-        ILVALUE_KIND(Tuple) \
-        ILVALUE_KIND(Struct) \
-        ILVALUE_KIND(Closure) \
-        ILVALUE_KIND(External) \
-        ILVALUE_KIND(Builtin) \
-        ILVALUE_KIND(BuiltinFlow) \
-        ILVALUE_KIND(Parameter) \
-        ILVALUE_KIND_EOK(PrimitiveEnd) \
+    ILVALUE_KIND(String) \
+    ILVALUE_KIND(Symbol) \
+    ILVALUE_KIND(Integer) \
+    ILVALUE_KIND(Real) \
+    ILVALUE_KIND(Pointer) \
+    ILVALUE_KIND(Unit) \
+    ILVALUE_KIND(Tuple) \
+    ILVALUE_KIND(Struct) \
+    ILVALUE_KIND(Closure) \
+    ILVALUE_KIND(External) \
+    ILVALUE_KIND(Builtin) \
+    ILVALUE_KIND(BuiltinFlow) \
+    ILVALUE_KIND(Parameter) \
+    ILVALUE_KIND(Frame) \
     ILVALUE_KIND(Flow)
 
 //------------------------------------------------------------------------------
@@ -1342,20 +1340,8 @@ struct ValueImpl : BaseT {
 
 //------------------------------------------------------------------------------
 
-struct PrimitiveValue : Value {
-    PrimitiveValue(Kind kind_) :
-        Value(kind_)
-        {}
-
-    static bool classof(const Value *value) {
-        return (value->kind >= Primitive) && (value->kind < PrimitiveEnd);
-    }
-};
-
-//------------------------------------------------------------------------------
-
 struct ParameterValue :
-    ValueImpl<ParameterValue, Value::Parameter, PrimitiveValue> {
+    ValueImpl<ParameterValue, Value::Parameter, Value> {
     FlowValue *parent;
     size_t index;
     Type *parameter_type;
@@ -1409,7 +1395,7 @@ struct ParameterValue :
 //------------------------------------------------------------------------------
 
 struct StringValue :
-    ValueImpl<StringValue, Value::String, PrimitiveValue> {
+    ValueImpl<StringValue, Value::String, Value> {
     std::string value;
 
     static StringValue *create(const std::string &s) {
@@ -1438,7 +1424,7 @@ struct StringValue :
 //------------------------------------------------------------------------------
 
 struct SymbolValue :
-    ValueImpl<SymbolValue, Value::Symbol, PrimitiveValue> {
+    ValueImpl<SymbolValue, Value::Symbol, Value> {
     std::string value;
 
     static SymbolValue *create(const std::string &s) {
@@ -1467,7 +1453,7 @@ struct SymbolValue :
 //------------------------------------------------------------------------------
 
 struct IntegerValue :
-    ValueImpl<IntegerValue, Value::Integer, PrimitiveValue> {
+    ValueImpl<IntegerValue, Value::Integer, Value> {
     int64_t value;
     IntegerType *value_type;
 
@@ -1501,7 +1487,7 @@ struct IntegerValue :
 //------------------------------------------------------------------------------
 
 struct RealValue :
-    ValueImpl<RealValue, Value::Real, PrimitiveValue> {
+    ValueImpl<RealValue, Value::Real, Value> {
     double value;
     RealType *value_type;
 
@@ -1530,7 +1516,7 @@ struct RealValue :
 //------------------------------------------------------------------------------
 
 struct UnitValue :
-    ValueImpl<UnitValue, Value::Unit, PrimitiveValue> {
+    ValueImpl<UnitValue, Value::Unit, Value> {
     Type *unit_type;
 
     static UnitValue *create_null() {
@@ -1556,7 +1542,7 @@ struct UnitValue :
 //------------------------------------------------------------------------------
 
 struct TupleValue :
-    ValueImpl<TupleValue, Value::Tuple, PrimitiveValue> {
+    ValueImpl<TupleValue, Value::Tuple, Value> {
     std::vector<Value *> values;
 
     static TupleValue *create(
@@ -1592,7 +1578,7 @@ struct TupleValue :
 //------------------------------------------------------------------------------
 
 struct StructValue :
-    ValueImpl<StructValue, Value::Struct, PrimitiveValue> {
+    ValueImpl<StructValue, Value::Struct, Value> {
     std::vector<Value *> values;
     StructType *struct_type;
 
@@ -1639,7 +1625,7 @@ struct StructValue :
 //------------------------------------------------------------------------------
 
 struct PointerValue :
-    ValueImpl<PointerValue, Value::Pointer, PrimitiveValue> {
+    ValueImpl<PointerValue, Value::Pointer, Value> {
     void *value;
     Type *pointer_type;
 
@@ -1787,7 +1773,7 @@ std::string ParameterValue::getRefRepr () const {
 typedef Value *(*ILBuiltinFunction)(const std::vector<Value *> &args);
 
 struct BuiltinValue :
-    ValueImpl<BuiltinValue, Value::Builtin, PrimitiveValue> {
+    ValueImpl<BuiltinValue, Value::Builtin, Value> {
 
     ILBuiltinFunction handler;
     std::string name;
@@ -1823,7 +1809,7 @@ typedef std::vector<Value *> (*ILBuiltinFlowFunction)(
     const std::vector<Value *> &args);
 
 struct BuiltinFlowValue :
-    ValueImpl<BuiltinFlowValue, Value::BuiltinFlow, PrimitiveValue> {
+    ValueImpl<BuiltinFlowValue, Value::BuiltinFlow, Value> {
 
     ILBuiltinFlowFunction handler;
     std::string name;
@@ -1856,7 +1842,7 @@ struct BuiltinFlowValue :
 //------------------------------------------------------------------------------
 
 struct ExternalValue :
-    ValueImpl<ExternalValue, Value::External, PrimitiveValue> {
+    ValueImpl<ExternalValue, Value::External, Value> {
     std::string name;
     Type *external_type;
 
@@ -1889,10 +1875,60 @@ struct ExternalValue :
 
 //------------------------------------------------------------------------------
 
-struct FrameValue;
+typedef std::unordered_map<FlowValue *, std::vector<Value *> >
+    FlowValuesMap;
+
+struct FrameValue :
+    ValueImpl<FrameValue, Value::Frame, Value> {
+    size_t idx;
+    FrameValue *parent;
+    FlowValuesMap map;
+
+    Type *inferType() const {
+        return Type::Any;
+    }
+
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << "#" << idx << ":" << this;
+        return ss.str();
+    }
+
+    std::string getRepr() const {
+        std::stringstream ss;
+        ss << "#" << idx << ":" << this << ":\n";
+        for (auto &entry : map) {
+            ss << "  " << entry.first->getRefRepr();
+            auto &value = entry.second;
+            for (size_t i = 0; i < value.size(); ++i) {
+                ss << " " << bangra::getRefRepr(value[i]);
+            }
+            ss << "\n";
+        }
+        return ss.str();
+    }
+
+    static FrameValue *create() {
+        // create closure
+        FrameValue *newframe = new FrameValue();
+        newframe->parent = nullptr;
+        newframe->idx = 0;
+        return newframe;
+    }
+
+    static FrameValue *create(FrameValue *frame) {
+        // create closure
+        FrameValue *newframe = new FrameValue();
+        newframe->parent = frame;
+        newframe->idx = frame->idx + 1;
+        return newframe;
+    }
+};
+
+//------------------------------------------------------------------------------
 
 struct ClosureValue :
-    ValueImpl<ClosureValue, Value::Closure, PrimitiveValue> {
+    ValueImpl<ClosureValue, Value::Closure, Value> {
     FlowValue *cont;
     FrameValue *frame;
 
@@ -1913,7 +1949,15 @@ struct ClosureValue :
         return bangra::getRefRepr(this);
     }
 
-    std::string getRefRepr() const;
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "closure");
+        ss << " " << cont->getRefRepr();
+        ss << " " << frame->getRefRepr();
+        ss << ")";
+        return ss.str();
+    }
+
 };
 
 //------------------------------------------------------------------------------
@@ -1929,14 +1973,12 @@ std::string getRepr (const Value *value) {
 #define ILVALUE_KIND_EOK(NAME)
     switch(value->kind) {
         ILVALUE_ENUM_KINDS()
-        default: {
-            assert(false && "invalid IL value kind");
-            return "?";
-        } break;
     }
 #undef ILVALUE_KIND
 #undef ILVALUE_KIND_ABSTRACT
 #undef ILVALUE_KIND_EOK
+    assert(false && "invalid IL value kind");
+    return "?";
 }
 
 std::string getRefRepr (const Value *value) {
@@ -1950,14 +1992,12 @@ std::string getRefRepr (const Value *value) {
 #define ILVALUE_KIND_EOK(NAME)
     switch(value->kind) {
         ILVALUE_ENUM_KINDS()
-        default: {
-            assert(false && "invalid IL value kind");
-            return "?";
-        } break;
     }
 #undef ILVALUE_KIND
 #undef ILVALUE_KIND_ABSTRACT
 #undef ILVALUE_KIND_EOK
+    assert(false && "invalid IL value kind");
+    return "?";
 }
 
 Type *getType(const Value *value) {
@@ -1971,14 +2011,12 @@ Type *getType(const Value *value) {
 #define ILVALUE_KIND_EOK(NAME)
     switch(value->kind) {
         ILVALUE_ENUM_KINDS()
-        default: {
-            assert(false && "invalid IL value kind");
-            return nullptr;
-        } break;
     }
 #undef ILVALUE_KIND
 #undef ILVALUE_KIND_ABSTRACT
 #undef ILVALUE_KIND_EOK
+    assert(false && "invalid IL value kind");
+    return nullptr;
 }
 
 const char *getClassName(Value::Kind kind) {
@@ -1990,13 +2028,11 @@ const char *getClassName(Value::Kind kind) {
 #define ILVALUE_KIND_EOK(NAME)
     switch(kind) {
         ILVALUE_ENUM_KINDS()
-        default: {
-            return "???";
-        } break;
     }
 #undef ILVALUE_KIND
 #undef ILVALUE_KIND_ABSTRACT
 #undef ILVALUE_KIND_EOK
+    return "?";
 }
 
 //------------------------------------------------------------------------------
@@ -3349,60 +3385,6 @@ static FFI *ffi;
 // INTERPRETER
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<FlowValue *, std::vector<Value *> >
-    FlowValuesMap;
-
-struct FrameValue {
-    size_t idx;
-    FrameValue *parent;
-    FlowValuesMap map;
-
-    std::string getRefRepr() {
-        std::stringstream ss;
-        ss << "#" << idx << ":" << this;
-        return ss.str();
-    }
-
-    std::string getRepr() {
-        std::stringstream ss;
-        ss << "#" << idx << ":" << this << ":\n";
-        for (auto &entry : map) {
-            ss << "  " << entry.first->getRefRepr();
-            auto &value = entry.second;
-            for (size_t i = 0; i < value.size(); ++i) {
-                ss << " " << bangra::getRefRepr(value[i]);
-            }
-            ss << "\n";
-        }
-        return ss.str();
-    }
-
-    static FrameValue *create() {
-        // create closure
-        FrameValue *newframe = new FrameValue();
-        newframe->parent = nullptr;
-        newframe->idx = 0;
-        return newframe;
-    }
-
-    static FrameValue *create(FrameValue *frame) {
-        // create closure
-        FrameValue *newframe = new FrameValue();
-        newframe->parent = frame;
-        newframe->idx = frame->idx + 1;
-        return newframe;
-    }
-};
-
-std::string ClosureValue::getRefRepr() const {
-    std::stringstream ss;
-    ss << "(" << ansi(ANSI_STYLE_KEYWORD, "closure");
-    ss << " " << cont->getRefRepr();
-    ss << " " << frame->getRefRepr();
-    ss << ")";
-    return ss.str();
-}
-
 typedef std::vector<Value *> ILValueArray;
 
 Value *evaluate(size_t argindex, FrameValue *frame, Value *value) {
@@ -4207,6 +4189,44 @@ static Value *builtin_typeof(const std::vector<Value *> &args) {
     return wrap(getType(args[0]));
 }
 
+static Value *builtin_dump(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto start_value = args[0];
+    std::list<Value *> todo;
+    std::unordered_set<Value *> visited;
+    todo.push_back(start_value);
+    while (!todo.empty()) {
+        auto value = todo.back();
+        todo.pop_back();
+        if (!visited.count(value)) {
+            visited.insert(value);
+            std::cout << getRepr(value) << "\n";
+            switch (value->kind) {
+                case Value::Closure: {
+                    auto closure = llvm::cast<ClosureValue>(value);
+                    todo.push_front(closure->frame);
+                    todo.push_front(closure->cont);
+                } break;
+                case Value::Flow: {
+                    auto flow = llvm::cast<FlowValue>(value);
+                    if (flow->hasArguments()) {
+                        for (size_t i = 0;
+                            i < flow->arguments->values.size(); ++i) {
+                            auto dest = flow->arguments->values[i];
+                            if (llvm::isa<FlowValue>(dest)) {
+                                todo.push_front(dest);
+                            }
+                        }
+                    }
+                } break;
+                default: break;
+            }
+        }
+    }
+    return start_value;
+}
+
+
 static Value *builtin_cdecl(const std::vector<Value *> &args) {
     builtin_checkparams(args, 3, 3);
     Type *rettype = extract_type(args[0]);
@@ -4770,41 +4790,6 @@ static Value *parse_quote (StructValue *env, Value *expr) {
     return expr_value;
 }
 
-static Value *parse_dump (StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
-    auto expr_value = *it++;
-    auto start_value = translate(env, expr_value);
-    std::list<Value *> todo;
-    std::unordered_set<Value *> visited;
-    todo.push_back(start_value);
-    while (!todo.empty()) {
-        auto value = todo.back();
-        todo.pop_back();
-        if (!visited.count(value)) {
-            visited.insert(value);
-            switch (value->kind) {
-                case Value::Flow: {
-                    std::cout << getRepr(value) << "\n";
-                    auto flow = llvm::cast<FlowValue>(value);
-                    if (flow->hasArguments()) {
-                        for (size_t i = 0;
-                            i < flow->arguments->values.size(); ++i) {
-                            auto dest = flow->arguments->values[i];
-                            if (llvm::isa<FlowValue>(dest)) {
-                                todo.push_front(dest);
-                            }
-                        }
-                    }
-                } break;
-                default: {
-                    std::cout << getRepr(value) << "\n";
-                } break;
-            }
-        }
-    }
-    return start_value;
-}
-
 static Value *parse_locals (StructValue *env, Value *expr) {
 
     std::vector<Value *> args;
@@ -4894,7 +4879,6 @@ static void registerTranslators() {
     t.set(parse_function, "function", 1, -1);
     t.set(parse_quote, "quote", 1, 1);
     t.set(parse_locals, "locals", 0, 0);
-    t.set(parse_dump, "dump", 1, 1);
 }
 
 static Value *translateFromList (StructValue *env, TupleValue *expr) {
@@ -5031,6 +5015,7 @@ static void initGlobals () {
     setBuiltin(env, "eval", builtin_eval);
     setBuiltin(env, "branch", builtin_branch);
     setBuiltin(env, "call/cc", builtin_call_cc);
+    setBuiltin(env, "dump", builtin_dump);
 
     setBuiltin(env, "@", builtin_at_op);
 
