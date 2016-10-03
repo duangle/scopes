@@ -1262,6 +1262,7 @@ struct ILBuilder;
         ILVALUE_KIND(Closure) \
         ILVALUE_KIND(External) \
         ILVALUE_KIND(Builtin) \
+        ILVALUE_KIND(BuiltinFlow) \
         ILVALUE_KIND(Parameter) \
         ILVALUE_KIND_EOK(PrimitiveEnd) \
     ILVALUE_KIND(Flow)
@@ -1404,125 +1405,6 @@ struct ParameterValue :
         return value;
     }
 };
-
-//------------------------------------------------------------------------------
-
-struct FlowValue :
-    ValueImpl<FlowValue, Value::Flow, Value> {
-private:
-    static int64_t unique_id_counter;
-protected:
-    int64_t uid;
-
-public:
-    FlowValue() :
-        uid(unique_id_counter++) {
-    }
-
-    std::string name;
-    std::vector<ParameterValue *> parameters;
-
-    // default path
-    std::vector<Value *> values;
-
-    void clear() {
-        parameters.clear();
-        values.clear();
-    }
-
-    size_t getParameterCount() {
-        return parameters.size();
-    }
-
-    ParameterValue *getParameter(size_t i) {
-        return parameters[i];
-    }
-
-    size_t getValueCount() {
-        return values.size();
-    }
-
-    Value *getValue(size_t i) {
-        return values[i];
-    }
-
-    size_t getArgumentCount() {
-        return values.size() - 1;
-    }
-
-    Value *getArgument(size_t i) {
-        return values[i + 1];
-    }
-
-    std::string getRepr () const {
-        std::stringstream ss;
-        ss << getRefRepr();
-        ss << " " << ansi(ANSI_STYLE_OPERATOR, "(");
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            if (i != 0) {
-                ss << ansi(ANSI_STYLE_OPERATOR, ", ");
-            }
-            ss << bangra::getRepr(parameters[i]);
-        }
-        ss << ansi(ANSI_STYLE_OPERATOR, ")");
-        if (values.size()) {
-            for (size_t i = 0; i < values.size(); ++i) {
-                ss << " ";
-                ss << bangra::getRefRepr(values[i]);
-            }
-        } else {
-            ss << ansi(ANSI_STYLE_ERROR, "<missing term>");
-        }
-        return ss.str();
-    }
-
-    std::string getRefRepr () const {
-        return format("%s%s%" PRId64,
-            ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
-            name.c_str(),
-            uid);
-    }
-
-    Type *inferType() const {
-        std::vector<Type *> params;
-        for (size_t i = 0; i < parameters.size(); ++i) {
-            params.push_back(getType(parameters[i]));
-        }
-        return Type::Flow(params);
-    }
-
-    ParameterValue *appendParameter(ParameterValue *param) {
-        param->parent = this;
-        param->index = parameters.size();
-        parameters.push_back(param);
-        return param;
-    }
-
-    static FlowValue *create(
-        size_t paramcount = 0,
-        const std::string &name = "") {
-        auto value = new FlowValue();
-        value->name = name;
-        for (size_t i = 0; i < paramcount; ++i) {
-            value->appendParameter(ParameterValue::create());
-        }
-        return value;
-    }
-};
-
-int64_t FlowValue::unique_id_counter = 1;
-
-std::string ParameterValue::getRefRepr () const {
-    auto parent = getParent();
-    if (parent) {
-        return format("%s%s%s",
-            bangra::getRefRepr(parent).c_str(),
-            ansi(ANSI_STYLE_OPERATOR,".").c_str(),
-            getReprName().c_str());
-    } else {
-        return ansi(ANSI_STYLE_ERROR, "<unbound>");
-    }
-}
 
 //------------------------------------------------------------------------------
 
@@ -1799,6 +1681,109 @@ static Type *extract_consttype(const Value *value) {
 
 //------------------------------------------------------------------------------
 
+struct FlowValue :
+    ValueImpl<FlowValue, Value::Flow, Value> {
+private:
+    static int64_t unique_id_counter;
+protected:
+    int64_t uid;
+
+public:
+    FlowValue() :
+        uid(unique_id_counter++),
+        arguments(nullptr) {
+    }
+
+    std::string name;
+    std::vector<ParameterValue *> parameters;
+
+    // default path
+    TupleValue *arguments;
+
+    size_t getParameterCount() {
+        return parameters.size();
+    }
+
+    ParameterValue *getParameter(size_t i) {
+        return parameters[i];
+    }
+
+    bool hasArguments() const {
+        return arguments && arguments->values.size();
+    }
+
+    std::string getRepr () const {
+        std::stringstream ss;
+        ss << getRefRepr();
+        ss << " " << ansi(ANSI_STYLE_OPERATOR, "(");
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            if (i != 0) {
+                ss << ansi(ANSI_STYLE_OPERATOR, ", ");
+            }
+            ss << bangra::getRepr(parameters[i]);
+        }
+        ss << ansi(ANSI_STYLE_OPERATOR, ")");
+        if (hasArguments()) {
+            for (size_t i = 0; i < arguments->values.size(); ++i) {
+                ss << " ";
+                ss << bangra::getRefRepr(arguments->values[i]);
+            }
+        } else {
+            ss << ansi(ANSI_STYLE_ERROR, "<missing term>");
+        }
+        return ss.str();
+    }
+
+    std::string getRefRepr () const {
+        return format("%s%s%" PRId64,
+            ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
+            name.c_str(),
+            uid);
+    }
+
+    Type *inferType() const {
+        std::vector<Type *> params;
+        for (size_t i = 0; i < parameters.size(); ++i) {
+            params.push_back(getType(parameters[i]));
+        }
+        return Type::Flow(params);
+    }
+
+    ParameterValue *appendParameter(ParameterValue *param) {
+        param->parent = this;
+        param->index = parameters.size();
+        parameters.push_back(param);
+        return param;
+    }
+
+    static FlowValue *create(
+        size_t paramcount = 0,
+        const std::string &name = "") {
+        auto value = new FlowValue();
+        value->name = name;
+        for (size_t i = 0; i < paramcount; ++i) {
+            value->appendParameter(ParameterValue::create());
+        }
+        return value;
+    }
+};
+
+int64_t FlowValue::unique_id_counter = 1;
+
+std::string ParameterValue::getRefRepr () const {
+    auto parent = getParent();
+    if (parent) {
+        return format("%s%s%s",
+            bangra::getRefRepr(parent).c_str(),
+            ansi(ANSI_STYLE_OPERATOR,".").c_str(),
+            getReprName().c_str());
+    } else {
+        return ansi(ANSI_STYLE_ERROR, "<unbound>");
+    }
+}
+
+//------------------------------------------------------------------------------
+
 typedef Value *(*ILBuiltinFunction)(const std::vector<Value *> &args);
 
 struct BuiltinValue :
@@ -1826,6 +1811,42 @@ struct BuiltinValue :
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin");
+        ss << " " << name;
+        ss << ")";
+        return ss.str();
+    }
+};
+
+//------------------------------------------------------------------------------
+
+typedef std::vector<Value *> (*ILBuiltinFlowFunction)(
+    const std::vector<Value *> &args);
+
+struct BuiltinFlowValue :
+    ValueImpl<BuiltinFlowValue, Value::BuiltinFlow, PrimitiveValue> {
+
+    ILBuiltinFlowFunction handler;
+    std::string name;
+
+    static BuiltinFlowValue *create(ILBuiltinFlowFunction func,
+        const std::string &name) {
+        auto result = new BuiltinFlowValue();
+        result->handler = func;
+        result->name = name;
+        return result;
+    }
+
+    Type *inferType() const {
+        return Type::Any;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin-cc");
         ss << " " << name;
         ss << ")";
         return ss.str();
@@ -2892,15 +2913,15 @@ struct ILBuilder {
 
     void continueAt(FlowValue *cont) {
         this->flow = cont;
-        assert(!cont->values.size());
+        assert(!cont->hasArguments());
     }
 
     void insertAndAdvance(
         const std::vector<Value *> &values,
         FlowValue *next) {
         assert(flow);
-        assert(!flow->values.size());
-        flow->values = values;
+        assert(!flow->hasArguments());
+        flow->arguments = TupleValue::create(values);
         flow = next;
     }
 
@@ -3466,10 +3487,12 @@ Value *execute(std::vector<Value *> arguments) {
                     frame->map[flow] = arguments;
                 }
 
-                size_t argcount = flow->values.size();
+                assert(flow->arguments);
+                size_t argcount = flow->arguments->values.size();
                 arguments.resize(argcount);
                 for (size_t i = 0; i < argcount; ++i) {
-                    arguments[i] = evaluate(i, frame, flow->values[i]);
+                    arguments[i] = evaluate(i, frame,
+                        flow->arguments->values[i]);
                 }
             } break;
             case Value::Builtin: {
@@ -3482,6 +3505,10 @@ Value *execute(std::vector<Value *> arguments) {
                 arguments.resize(2);
                 arguments[0] = closure;
                 arguments[1] = result;
+            } break;
+            case Value::BuiltinFlow: {
+                auto cb = llvm::cast<BuiltinFlowValue>(callee);
+                arguments = cb->handler(arguments);
             } break;
             case Value::External: {
                 auto cb = llvm::cast<ExternalValue>(callee);
@@ -4029,11 +4056,11 @@ static StructValue *importCModule (
 //------------------------------------------------------------------------------
 
 static bool builtin_checkparams (const std::vector<Value *> &args,
-    int mincount, int maxcount) {
+    int mincount, int maxcount, int skip = 0) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
 
-    int argcount = (int)args.size();
+    int argcount = (int)args.size() - skip;
 
     if ((maxcount >= 0) && (argcount > maxcount)) {
         ilError(nullptr,
@@ -4131,6 +4158,16 @@ static Value *builtin_print(const std::vector<Value *> &args) {
     }
     std::cout << "\n";
     return TupleValue::create({});
+}
+
+static std::vector<Value *> builtin_branch(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 4, 4, 1);
+    auto cond = extract_bool(args[1]);
+    if (cond) {
+        return { args[2], args[4] };
+    } else {
+        return { args[3], args[4] };
+    }
 }
 
 static Value *builtin_repr(const std::vector<Value *> &args) {
@@ -4519,7 +4556,7 @@ typedef std::unordered_map<std::string, Value *> NameValueMap;
 static StructValue *new_scope() {
     auto scope = StructValue::create({}, Type::Struct("scope"));
     scope->addField(UnitValue::create_null(),
-        StructType::Field("", Type::Null));
+        StructType::Field("#parent", Type::Null));
     return scope;
 }
 
@@ -4527,7 +4564,7 @@ static StructValue *new_scope(StructValue *scope) {
     assert(scope);
     auto subscope = StructValue::create({}, Type::Struct("scope"));
     subscope->addField(scope,
-        StructType::Field("", getType(scope)));
+        StructType::Field("#parent", getType(scope)));
     return subscope;
 }
 
@@ -4543,6 +4580,12 @@ static void setBuiltin(
     setLocal(scope, name, BuiltinValue::create(func, name));
 }
 
+static void setBuiltin(
+    StructValue *scope, const std::string &name, ILBuiltinFlowFunction func) {
+    assert(scope);
+    setLocal(scope, name, BuiltinFlowValue::create(func, name));
+}
+
 static bool isLocal(StructValue *scope, const std::string &name) {
     assert(scope);
     size_t idx = scope->struct_type->getFieldIndex(name);
@@ -4551,22 +4594,12 @@ static bool isLocal(StructValue *scope, const std::string &name) {
 }
 
 static StructValue *getParent(StructValue *scope) {
-    if (scope->struct_type->getField(0).getType()->getKind() == T_Struct) {
-        return llvm::cast<StructValue>(scope->values[0]);
+    size_t idx = scope->struct_type->getFieldIndex("#parent");
+    if (idx != (size_t)-1) {
+        return llvm::dyn_cast<StructValue>(scope->values[idx]);
     }
     return nullptr;
 }
-
-/*
-static StructValue *get_global_scope(StructValue *scope) {
-    assert(scope);
-    while (true) {
-        StructValue *parent = getParent(scope);
-        if (!parent) return scope;
-        scope = parent;
-    }
-}
-*/
 
 static Value *getLocal(StructValue *scope, const std::string &name) {
     assert(scope);
@@ -4593,6 +4626,8 @@ static bool isSymbol (const Value *expr, const char *sym) {
 }
 
 //------------------------------------------------------------------------------
+
+static StructValue *globals = nullptr;
 
 Value *translate(StructValue *env, Value *expr);
 
@@ -4643,27 +4678,56 @@ static Value *parse_function (StructValue *env, Value *expr) {
     return function;
 }
 
-static Value *parse_proto_eval (StructValue *env, Value *expr) {
+static Value *parse_letrec (StructValue *env, Value *expr) {
     TupleIter it(expr, 1);
-    auto expr_protoeval = *it++;
+    auto expr_parameters = *it++;
 
     auto currentblock = builder->flow;
 
-    auto mainfunc = FlowValue::create();
-    auto ret = mainfunc->appendParameter(ParameterValue::create());
+    auto function = FlowValue::create(0, "letrec");
 
+    builder->continueAt(function);
     auto subenv = new_scope(env);
 
-    builder->continueAt(mainfunc);
+    auto params = verifyValueKind<TupleValue>(expr_parameters);
+    // declare parameters
+    TupleIter param(params);
+    if (!isSymbol(*param, "with")) {
+        ilError(*param, "'with' expected");
+    }
+    param++;
+    while (param) {
+        auto pair = verifyValueKind<TupleValue>(*param);
+        if (pair->values.size() != 2) {
+            ilError(pair, "pair expected");
+        }
+        auto symname = verifyValueKind<SymbolValue>(pair->values[0]);
+        auto bp = ParameterValue::create(symname->value);
+        function->appendParameter(bp);
+        setLocal(subenv, symname->value, bp);
+        param++;
+    }
 
-    auto retval = translate(subenv, expr_protoeval);
-    builder->br({ ret, retval });
+    auto ret = function->appendParameter(ParameterValue::create());
 
-    auto result = execute({mainfunc});
+    auto result = parse_expr_list(subenv, expr, 2);
+
+    builder->br({ret, result});
 
     builder->continueAt(currentblock);
 
-    return result;
+    std::vector<Value *> args;
+    args.push_back(function);
+
+    // initialize parameters
+    param = TupleIter(params, 1);
+    while (param) {
+        auto pair = verifyValueKind<TupleValue>(*param);
+        args.push_back(translate(subenv, pair->values[1]));
+        param++;
+    }
+
+    return builder->call(args);
 }
 
 static Value *parse_implicit_apply (StructValue *env, Value *expr,
@@ -4686,33 +4750,6 @@ static Value *parse_implicit_apply (StructValue *env, Value *expr,
 
 static Value *parse_apply (StructValue *env, Value *expr) {
     return parse_implicit_apply(env, expr, 1);
-}
-
-static Value *parse_apply_rec (StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
-    auto expr_callable = *it++;
-
-    auto callable = verifyValueKind<FlowValue>(translate(env, expr_callable));
-
-    auto subenv = new_scope(env);
-
-    size_t paramcount = callable->getParameterCount();
-    for (size_t i = 0; i < paramcount; ++i) {
-        auto param = callable->getParameter(i);
-        if (!param->name.empty()) {
-            setLocal(subenv, param->name, param);
-        }
-    }
-
-    std::vector<Value *> args;
-    args.push_back(callable);
-
-    while (it) {
-        args.push_back(translate(subenv, *it));
-        it++;
-    }
-
-    return builder->call(args);
 }
 
 bool hasTypeValue(Type *type) {
@@ -4744,10 +4781,13 @@ static Value *parse_dump (StructValue *env, Value *expr) {
                 case Value::Flow: {
                     std::cout << getRepr(value) << "\n";
                     auto flow = llvm::cast<FlowValue>(value);
-                    for (size_t i = 0; i < flow->values.size(); ++i) {
-                        auto dest = flow->values[i];
-                        if (llvm::isa<FlowValue>(dest)) {
-                            todo.push_front(dest);
+                    if (flow->hasArguments()) {
+                        for (size_t i = 0;
+                            i < flow->arguments->values.size(); ++i) {
+                            auto dest = flow->arguments->values[i];
+                            if (llvm::isa<FlowValue>(dest)) {
+                                todo.push_front(dest);
+                            }
                         }
                     }
                 } break;
@@ -4760,8 +4800,23 @@ static Value *parse_dump (StructValue *env, Value *expr) {
     return start_value;
 }
 
-static Value *parse_scope (StructValue *env, Value *expr) {
-    return env;
+static Value *parse_locals (StructValue *env, Value *expr) {
+
+    std::vector<Value *> args;
+    args.push_back(getLocal(globals, "structof"));
+
+    auto tupleof = getLocal(globals, "tupleof");
+
+    auto struct_type = env->struct_type;
+    size_t fieldcount = struct_type->getFieldCount();
+    for (size_t i = 0; i < fieldcount; ++i) {
+        auto &field = struct_type->getField(i);
+        args.push_back(
+            builder->call(
+                {tupleof, wrap(field.getName()), env->values[i]}));
+    }
+
+    return builder->call(args);
 }
 
 struct TranslateTable {
@@ -4830,11 +4885,10 @@ static TranslateTable translators;
 static void registerTranslators() {
     auto &t = translators;
     t.set(parse_apply, "apply", 1, -1);
-    t.set(parse_apply_rec, "apply-rec", 1, -1);
+    t.set(parse_letrec, "letrec", 1, -1);
     t.set(parse_function, "function", 1, -1);
-    t.set(parse_proto_eval, "proto-eval", 1, 1);
     t.set(parse_quote, "quote", 1, 1);
-    t.set(parse_scope, "scope", 0, 0);
+    t.set(parse_locals, "locals", 0, 0);
     t.set(parse_dump, "dump", 1, 1);
 }
 
@@ -4896,7 +4950,7 @@ static Value *builtin_eval(const std::vector<Value *> &args) {
     auto retval = translate(subenv, expr_eval);
     builder->br({ ret, retval });
 
-    return execute({mainfunc});
+    return mainfunc;
 }
 
 //------------------------------------------------------------------------------
@@ -4925,28 +4979,12 @@ ModuleLoader loader;
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
-static void init() {
-    bangra::support_ansi = isatty(fileno(stdout));
+static void initGlobals () {
+    globals = new_scope();
+    auto env = globals;
 
-    Type::initTypes();
-    registerTranslators();
+    setLocal(env, "globals", env);
 
-    LLVMEnablePrettyStackTrace();
-    LLVMLinkInMCJIT();
-    //LLVMLinkInInterpreter();
-    LLVMInitializeNativeTarget();
-    LLVMInitializeNativeAsmParser();
-    LLVMInitializeNativeAsmPrinter();
-    LLVMInitializeNativeDisassembler();
-
-    ffi = new FFI();
-    builder = new ILBuilder();
-
-}
-
-//------------------------------------------------------------------------------
-
-static void setupRootScope (StructValue *env) {
     setLocal(env, "void", wrap(Type::Void));
     setLocal(env, "null", wrap(Type::Null));
     setLocal(env, "half", wrap(Type::Half));
@@ -4986,6 +5024,7 @@ static void setupRootScope (StructValue *env) {
     setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);
     setBuiltin(env, "eval", builtin_eval);
+    setBuiltin(env, "branch", builtin_branch);
 
     setBuiltin(env, "@", builtin_at_op);
 
@@ -5027,6 +5066,28 @@ static void setupRootScope (StructValue *env) {
 
 }
 
+static void init() {
+    bangra::support_ansi = isatty(fileno(stdout));
+
+    Type::initTypes();
+    registerTranslators();
+
+    LLVMEnablePrettyStackTrace();
+    LLVMLinkInMCJIT();
+    //LLVMLinkInInterpreter();
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    LLVMInitializeNativeDisassembler();
+
+    ffi = new FFI();
+    builder = new ILBuilder();
+
+    initGlobals();
+}
+
+//------------------------------------------------------------------------------
+
 static void handleException(StructValue *env, Value *expr) {
     streamValue(std::cerr, expr, 0, true);
     valueError(expr, "an exception was raised");
@@ -5057,8 +5118,7 @@ static bool compileMain (Value *expr) {
     assert(expr);
     auto tuple = verifyValueKind<TupleValue>(expr);
 
-    auto env = new_scope();
-    setupRootScope(env);
+    auto env = globals;
 
     std::string lastlang = "";
     while (true) {

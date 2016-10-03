@@ -3,98 +3,114 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
-apply-rec
-    function (func-a func-b)
+print
+    letrec
+        with
+            func-a
+                function (x)
+                    print "func-a" x
+                    func-b (+ x 1)
+            func-b
+                function (x)
+                    print "func-b" x
+                    branch (< x 1000)
+                        function ()
+                            func-a (* x 2)
+                        function ()
+                            print "done."
+                            x
         print "func-x!" func-a func-b
         func-a 1
-    function (x)
-        print "func-a" x
-        func-b (+ x 1)
-    function (x)
-        print "func-b" x
+
+letrec
+    with
+        sin
+            external "sin"
+                cdecl double (tupleof double) false
+        x
+            10
+        plus2
+            function (x)
+                + x 2
+        api
+            import-c "bangra.h" (tupleof)
+        puts
+            external "puts"
+                cdecl int (tupleof rawstring) false
+        testtext
+            "yo yo yo"
+    print
+        sin 0.5
+
+    print "global:"
+        @ globals "float"
+
+    print
+        0.1
+        sin 0
+        sin 0.1
+        sin 0.5
+        sin 1.2
+    print "done"
+
+    print
+        "quoting:"
+        quote
+            function (x)
+                + x 2
+
+    print "sin:"
+        (locals)
+        sin
+        @ (locals) "sin"
+    print
+        plus2 50
+
+    print
+        puts testtext
+        sin 5
+
+    print "eval:"
         apply
-            @
-                tupleof
-                    function ()
-                        print "done."
-                        x
-                    function ()
-                        func-a (* x 2)
-                < x 1000
+            eval
+                quote
+                    + 0.5 0.5
+                structof
+                    tupleof "#parent" globals
 
-apply
-    function (sin x plus2 api puts testtext)
-        print
-            sin 0.5
+    print
+        structof
+            tupleof "k" 2
+            tupleof "y" 3
+    print
+        typeof "test"
 
-        print
-            0.1
-            sin 0
-            sin 0.1
-            sin 0.5
-            sin 1.2
-        print "done"
+    print
+        branch (< x 5)
+            function ()
+                print "yes"
+            function ()
+                print "no"
 
-        print
-            "quoting:"
-            quote
-                function (x)
-                    + x 2
+    print "hello world"
+        rawstring
 
-        print
-            scope;
-        print
-            plus2 50
-
-        print
-            puts testtext
-            sin 5
-
-        print
-            structof
-                tupleof "k" 2
-                tupleof "y" 3
-        print
-            typeof "test"
-
-        apply
-            @
-                tupleof
-                    function ()
-                        print "no"
-                    function ()
-                        print "yes"
-                < x 12
-
-        print "hello world"
-            rawstring
-
-        print
-            repr "hi"
-            | 1 2
-            ~ 0xff
-            not true
-            not false
-            + "hi" "ho"
-            != "a" "b"
-            * 2 3
-            % 4.3 3
-            == 4 5
-            == 3 2
-            == 3 3
-            == 3 3.0
-            == 3.0 3
-            == 3 3.5
-            == 2.5 2.5
-            float
-
-    external "sin"
-        cdecl double (tupleof double) false
-    10
-    function (x)
-        + x 2
-    import-c "bangra.h" (tupleof)
-    external "puts"
-        cdecl int (tupleof rawstring) false
-    "yo yo yo"
+    print
+        repr "hi"
+        | 1 2
+        ~ 0xff
+        not true
+        not false
+        + "hi" "ho"
+        != "a" "b"
+        * 2 3
+        % 4.3 3
+        == 4 5
+        == 3 2
+        == 3 3
+        == 3 3.0
+        == 3.0 3
+        == 3 3.5
+        == 2.5 2.5
+        float
 

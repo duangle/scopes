@@ -56,8 +56,9 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let external cdecl apply do select function null true false"
-            .. " print repr tupleof import-c proto-eval quote eval structof typeof"
+        "bangra let external cdecl apply do branch function null true false"
+            .. " print repr tupleof import-c proto-eval quote eval structof"
+            .. " typeof letrec with"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
