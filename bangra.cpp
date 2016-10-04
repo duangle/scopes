@@ -1263,6 +1263,7 @@ struct ILBuilder;
     ILVALUE_KIND(BuiltinFlow) \
     ILVALUE_KIND(Parameter) \
     ILVALUE_KIND(Frame) \
+    ILVALUE_KIND(TypeRef) \
     ILVALUE_KIND(Flow)
 
 //------------------------------------------------------------------------------
@@ -1624,6 +1625,33 @@ struct StructValue :
 
 //------------------------------------------------------------------------------
 
+struct TypeRefValue :
+    ValueImpl<TypeRefValue, Value::TypeRef, Value> {
+    Type *value;
+
+    static TypeRefValue *create(Type *value) {
+        auto result = new TypeRefValue();
+        result->value = value;
+        return result;
+    }
+
+    Type *inferType() const {
+        return Type::TypePointer;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << bangra::getRepr((Type *)value);
+        return ss.str();
+    }
+};
+
+//------------------------------------------------------------------------------
+
 struct PointerValue :
     ValueImpl<PointerValue, Value::Pointer, Value> {
     void *value;
@@ -1647,23 +1675,10 @@ struct PointerValue :
 
     std::string getRefRepr() const {
         std::stringstream ss;
-        if (pointer_type == Type::TypePointer) {
-            ss << bangra::getRepr((Type *)value);
-        } else {
-            ss << "(" << bangra::getRepr(pointer_type) << " " << value << ")";
-        }
+        ss << "(" << bangra::getRepr(pointer_type) << " " << value << ")";
         return ss.str();
     }
 };
-
-/*
-static Type *extract_consttype(const Value *value) {
-    if (auto resulttype = llvm::dyn_cast<ILConstTypePointer>(value.get())) {
-        return resulttype->value;
-    }
-    return Type::Any;
-}
-*/
 
 //------------------------------------------------------------------------------
 
@@ -3844,7 +3859,7 @@ public:
 
     void exportType(const std::string &name, Type *type, const Anchor &anchor) {
         dest->addField(
-            PointerValue::create(type, Type::TypePointer),
+            TypeRefValue::create(type),
             StructType::Field(
                 name,
                 Type::TypePointer,
@@ -4075,14 +4090,11 @@ static std::string extract_string(const Value *value) {
 }
 
 static Type *extract_type(const Value *value) {
-    auto resulttype = llvm::dyn_cast<PointerValue>(value);
+    auto resulttype = llvm::dyn_cast<TypeRefValue>(value);
     if (!resulttype) {
-        ilError(value, "pointer constant expected");
+        ilError(value, "type constant expected");
     }
-    if (getType(resulttype) != Type::TypePointer) {
-        ilError(value, "pointer type constant expected");
-    }
-    return (Type *)resulttype->value;
+    return resulttype->value;
 }
 
 static const std::vector<Value *> &extract_tuple(
@@ -4094,8 +4106,8 @@ static const std::vector<Value *> &extract_tuple(
     return resulttype->values;
 }
 
-static PointerValue *wrap(Type *type) {
-    return PointerValue::create(type, Type::TypePointer);
+static TypeRefValue *wrap(Type *type) {
+    return TypeRefValue::create(type);
 }
 
 static IntegerValue *wrap(bool value) {
