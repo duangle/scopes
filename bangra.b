@@ -3,19 +3,35 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
-let proc
-    function (x)
-        print "======= STAGE 1 ======="
-        apply
-            eval x globals
+let x 5
 
-::* proc
-::* quote do
+syntax-run
+    print "running in new context!" x
+    tupleof
+        quote do
+        quote let x 6
+        tupleof
+            quote print
+            "running in main context!"
+            \ "overriden value:" (quote x) "old value:" x
+
+do
+    let x
+        + 2
+            + 4 5
+    apply
+        eval (locals)
+            quote
+                print x
+
 let f
     function (return)
         return 2
         3
 
+::* apply
+::* eval (locals)
+::* quote do
 print # displays 3
     f
         function (x) x
@@ -29,7 +45,8 @@ let proc
         apply
             eval x globals
 
-::* proc
+::* apply
+::* eval globals
 ::* quote do
 let testf
     print "declaring testf..."
@@ -143,10 +160,10 @@ print
 print "eval:"
     apply
         eval
-            quote
-                + 0.5 0.5
             structof
                 tupleof "#parent" globals
+            quote
+                + 0.5 0.5
 
 print
     structof
