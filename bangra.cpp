@@ -1553,6 +1553,7 @@ struct TupleValue :
         return result;
     }
 
+
     Type *inferType() const {
         TypeArray types;
         for (auto &value : values) {
@@ -2123,6 +2124,13 @@ public:
         index(i) {
     }
 
+    bool operator ==(const TupleIter &other) const {
+        return (tuple == other.tuple) && (index == other.index);
+    }
+    bool operator !=(const TupleIter &other) const {
+        return (tuple != other.tuple) || (index != other.index);
+    }
+
     TupleIter operator ++(int) {
         auto oldself = *this;
         ++index;
@@ -2691,13 +2699,12 @@ struct Parser {
 
     struct ListBuilder {
     protected:
-        TupleValue *result;
+        std::vector<Value *> values;
         size_t start;
         Anchor anchor;
     public:
 
         ListBuilder(Lexer &lexer) :
-            result(TupleValue::create({})),
             start(0) {
             lexer.initAnchor(anchor);
         }
@@ -2716,33 +2723,32 @@ struct Parser {
                 return false;
             }
             // move tail to new list
-            auto newtuple = TupleValue::create({});
-            for (size_t i = start; i < result->values.size(); ++i) {
-                newtuple->values.push_back(result->values[i]);
-            }
+            std::vector<Value *> newvalues(
+                values.begin() + start, values.end());
             // remove tail
-            result->values.erase(
-                result->values.begin() + start,
-                result->values.end());
+            values.erase(
+                values.begin() + start,
+                values.end());
             // append new list
-            append(newtuple);
+            append(TupleValue::create(newvalues));
             resetStart();
             return true;
         }
 
         void append(Value *item) {
-            result->values.push_back(item);
+            values.push_back(item);
         }
 
         size_t getResultSize() {
-            return result->values.size();
+            return values.size();
         }
 
         Value *getSingleResult() {
-            return result->values.front();
+            return values.front();
         }
 
         TupleValue *getResult() {
+            auto result = TupleValue::create(values);
             result->anchor = anchor;
             return result;
         }
@@ -4666,26 +4672,34 @@ static bool isSymbol (const Value *expr, const char *sym) {
 
 static StructValue *globals = nullptr;
 
-Value *translate(StructValue *env, Value *expr);
+struct Cursor {
+    Value *value;
+    TupleIter next;
+};
 
-static Value *parse_expr_list (StructValue *env, Value *expr, size_t offset) {
-    TupleIter it(expr, offset);
+Cursor translate(StructValue *env, TupleIter it);
 
+static Cursor parse_expr_list (StructValue *env, TupleIter it) {
     Value *value = nullptr;
     while (it) {
-        value = translate(env, *it);
-        it++;
+        auto cur = translate(env, it);
+        value = cur.value;
+        it = cur.next;
     }
 
-    if (value)
-        return value;
-    else
-        return TupleValue::create({});
+    if (!value)
+        value = TupleValue::create({});
 
+    return { value, it };
 }
 
-static Value *parse_function (StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
+static Cursor parse_do (StructValue *env, TupleIter topit) {
+    auto cur = parse_expr_list(env, TupleIter(*topit++, 1));
+    return { cur.value, topit };
+}
+
+static Cursor parse_function (StructValue *env, TupleIter topit) {
+    TupleIter it(*topit++, 1);
     auto expr_parameters = *it++;
 
     auto currentblock = builder->flow;
@@ -4706,87 +4720,97 @@ static Value *parse_function (StructValue *env, Value *expr) {
     }
     auto ret = function->appendParameter(ParameterValue::create());
 
-    auto result = parse_expr_list(subenv, expr, 2);
+    auto result = parse_expr_list(subenv, it);
 
-    builder->br({ret, result});
+    builder->br({ret, result.value});
 
     builder->continueAt(currentblock);
 
-    return function;
+    return { function, topit };
 }
 
-static Value *parse_letrec (StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
-    auto expr_parameters = *it++;
+static Cursor parse_letrec (StructValue *env, TupleIter topit) {
+    TupleIter it(*topit++, 1);
 
     auto currentblock = builder->flow;
 
-    auto function = FlowValue::create(0, "letrec");
+    auto function = FlowValue::create(0, "let");
 
     builder->continueAt(function);
     auto subenv = new_scope(env);
 
-    auto params = verifyValueKind<TupleValue>(expr_parameters);
-    // declare parameters
-    TupleIter param(params);
-    if (!isSymbol(*param, "with")) {
-        ilError(*param, "'with' expected");
-    }
-    param++;
-    while (param) {
-        auto pair = verifyValueKind<TupleValue>(*param);
-        if (pair->values.size() != 2) {
-            ilError(pair, "pair expected");
-        }
-        auto symname = verifyValueKind<SymbolValue>(pair->values[0]);
+    bool multi = true;
+    if ((*it)->kind == Value::Symbol) {
+        multi = false;
+        auto symname = verifyValueKind<SymbolValue>(*it++);
         auto bp = ParameterValue::create(symname->value);
         function->appendParameter(bp);
         setLocal(subenv, symname->value, bp);
-        param++;
+    } else {
+        // declare parameters
+        TupleIter param(it);
+        while (param) {
+            auto pair = verifyValueKind<TupleValue>(*param);
+            if (pair->values.size() < 2) {
+                ilError(pair, "at least two arguments expected");
+            }
+            auto symname = verifyValueKind<SymbolValue>(pair->values[0]);
+            auto bp = ParameterValue::create(symname->value);
+            function->appendParameter(bp);
+            setLocal(subenv, symname->value, bp);
+            param++;
+        }
     }
 
     auto ret = function->appendParameter(ParameterValue::create());
 
-    auto result = parse_expr_list(subenv, expr, 2);
+    auto result = parse_expr_list(subenv, topit);
+    topit = result.next;
 
-    builder->br({ret, result});
+    builder->br({ret, result.value});
 
     builder->continueAt(currentblock);
 
     std::vector<Value *> args;
     args.push_back(function);
 
-    // initialize parameters
-    param = TupleIter(params, 1);
-    while (param) {
-        auto pair = verifyValueKind<TupleValue>(*param);
-        args.push_back(translate(subenv, pair->values[1]));
-        param++;
+    if (!multi) {
+        auto cur = parse_expr_list(subenv, it);
+        args.push_back(cur.value);
+    } else {
+        // initialize parameters
+        TupleIter param(it);
+        while (param) {
+            auto pair = verifyValueKind<TupleValue>(*param);
+            auto cur = parse_expr_list(subenv, TupleIter(pair, 1));
+            args.push_back(cur.value);
+            param++;
+        }
     }
 
-    return builder->call(args);
+    return { builder->call(args), topit };
 }
 
-static Value *parse_implicit_apply (StructValue *env, Value *expr,
-    size_t start = 0) {
-    TupleIter it(expr, start);
-    auto expr_callable = *it++;
-
-    Value *callable = translate(env, expr_callable);
+static Cursor parse_implicit_apply (StructValue *env, TupleIter it) {
+    auto ccur = translate(env, it);
+    Value *callable = ccur.value;
+    it = ccur.next;
 
     std::vector<Value *> args;
     args.push_back(callable);
 
     while (it) {
-        args.push_back(translate(env, *it));
-        it++;
+        auto cur = translate(env, it);
+        args.push_back(cur.value);
+        it = cur.next;
     }
 
-    return builder->call(args);
+    return { builder->call(args), it };
 }
 
-static Value *parse_apply (StructValue *env, Value *expr) {
-    return parse_implicit_apply(env, expr, 1);
+static Cursor parse_apply (StructValue *env, TupleIter topit) {
+    auto cur = parse_implicit_apply(env, TupleIter(*topit++, 1));
+    return { cur.value, topit };
 }
 
 bool hasTypeValue(Type *type) {
@@ -4796,14 +4820,67 @@ bool hasTypeValue(Type *type) {
     return true;
 }
 
-static Value *parse_quote (StructValue *env, Value *expr) {
-    TupleIter it(expr, 1);
+static Cursor parse_quote (StructValue *env, TupleIter topit) {
+    TupleIter it(*topit++, 1);
     auto expr_value = *it++;
-    return expr_value;
+    if (it) {
+        // multiple values, wrap in list
+        std::vector<Value *> lines = { expr_value };
+        while (it) {
+            lines.push_back(*it);
+            it++;
+        }
+        return { TupleValue::create(lines), topit };
+    } else {
+        // single value
+        return { expr_value, topit };
+    }
 }
 
-static Value *parse_locals (StructValue *env, Value *expr) {
+static Cursor parse_decorate1 (StructValue *env, TupleIter topit) {
+    auto startit = topit;
+    TupleIter it(*topit++, 1);
 
+    std::vector<Value *> values;
+    while (it) {
+        values.push_back(*it);
+        it++;
+    }
+
+    if (topit) {
+        auto cur = translate(env, topit);
+        values.push_back(cur.value);
+        topit = cur.next;
+    } else {
+        valueError(*startit, "missing next line");
+    }
+
+    std::vector<Value *> topvalues = { TupleValue::create(values) };
+    while (topit) {
+        topvalues.push_back(*topit++);
+    }
+
+    return translate(env, TupleIter(TupleValue::create(topvalues), 0));
+}
+
+static Cursor parse_decorate_all (StructValue *env, TupleIter topit) {
+    TupleIter it(*topit++, 1);
+
+    std::vector<Value *> values;
+    while (it) {
+        values.push_back(*it);
+        it++;
+    }
+
+    while (topit) {
+        values.push_back(*topit++);
+    }
+
+    return translate(env, TupleIter(
+        TupleValue::create({ TupleValue::create(values) }), 0));
+}
+
+static Cursor parse_locals (StructValue *env, TupleIter topit) {
     std::vector<Value *> args;
     args.push_back(getLocal(globals, "structof"));
 
@@ -4818,11 +4895,30 @@ static Value *parse_locals (StructValue *env, Value *expr) {
                 {tupleof, wrap(field.getName()), env->values[i]}));
     }
 
-    return builder->call(args);
+    topit++;
+    return { builder->call(args), topit };
+}
+
+static bool verifyParameterCount (TupleValue *expr,
+    int mincount, int maxcount) {
+    if ((mincount <= 0) && (maxcount == -1))
+        return true;
+    int argcount = (int)expr->values.size() - 1;
+
+    if ((maxcount >= 0) && (argcount > maxcount)) {
+        valueError(expr->values[maxcount + 1],
+            "excess argument. At most %i arguments expected", maxcount);
+        return false;
+    }
+    if ((mincount >= 0) && (argcount < mincount)) {
+        valueError(expr, "at least %i arguments expected", mincount);
+        return false;
+    }
+    return true;
 }
 
 struct TranslateTable {
-    typedef Value *(*TranslatorFunc)(StructValue *env, Value *expr);
+    typedef Cursor (*TranslatorFunc)(StructValue *env, TupleIter topit);
 
     struct Translator {
         int mincount;
@@ -4852,24 +4948,6 @@ struct TranslateTable {
         translators[name] = translator;
     }
 
-    static bool verifyParameterCount (TupleValue *expr,
-        int mincount, int maxcount) {
-        if ((mincount <= 0) && (maxcount == -1))
-            return true;
-        int argcount = (int)expr->values.size() - 1;
-
-        if ((maxcount >= 0) && (argcount > maxcount)) {
-            valueError(expr->values[maxcount + 1],
-                "excess argument. At most %i arguments expected", maxcount);
-            return false;
-        }
-        if ((mincount >= 0) && (argcount < mincount)) {
-            valueError(expr, "at least %i arguments expected", mincount);
-            return false;
-        }
-        return true;
-    }
-
     TranslatorFunc match(TupleValue *expr) {
         auto head = verifyValueKind<SymbolValue>(expr->values.front());
         auto &t = translators[head->value];
@@ -4887,31 +4965,40 @@ static TranslateTable translators;
 static void registerTranslators() {
     auto &t = translators;
     t.set(parse_apply, "apply", 1, -1);
-    t.set(parse_letrec, "letrec", 1, -1);
+    t.set(parse_letrec, "let", 1, -1);
+    t.set(parse_do, "do", 0, -1);
     t.set(parse_function, "function", 1, -1);
-    t.set(parse_quote, "quote", 1, 1);
+    t.set(parse_quote, "quote", 1, -1);
+    t.set(parse_decorate1, "::", 1, -1);
+    t.set(parse_decorate_all, "::*", 1, -1);
     t.set(parse_locals, "locals", 0, 0);
 }
 
-static Value *translateFromList (StructValue *env, TupleValue *expr) {
+static Cursor translateFromList (StructValue *env, TupleIter topit) {
+    auto expr = llvm::cast<TupleValue>(*topit);
     assert(expr);
     if (expr->values.size() < 1) {
         valueError(expr, "symbol expected");
     }
     auto func = translators.match(expr);
     if (func) {
-        return func(env, expr);
+        return func(env, topit);
     } else {
-        return parse_implicit_apply(env, expr);
+        auto cur = parse_implicit_apply(env, TupleIter(*topit++, 0));
+        return { cur.value, topit };
     }
 }
 
-Value *translate (StructValue *env, Value *expr) {
+Cursor translate (StructValue *env, TupleIter topit) {
+    auto expr = *topit;
     assert(expr);
     Value *result = nullptr;
     switch(expr->kind) {
         case Value::Tuple: {
-            result = translateFromList(env, llvm::cast<TupleValue>(expr));
+            auto cur = translateFromList(env, topit);
+            result = cur.value;
+            assert(cur.next != topit);
+            topit = cur.next;
         } break;
         case Value::Symbol: {
             auto sym = llvm::cast<SymbolValue>(expr);
@@ -4921,9 +5008,11 @@ Value *translate (StructValue *env, Value *expr) {
                 valueError(expr,
                     "unknown symbol '%s'", value.c_str());
             }
+            topit++;
         } break;
         default: {
             result = expr;
+            topit++;
         } break;
     }
     if (result && !result->anchor.isValid()) {
@@ -4933,7 +5022,7 @@ Value *translate (StructValue *env, Value *expr) {
         }
     }
     assert(result);
-    return result;
+    return { result, topit };
 }
 
 static Value *builtin_eval(const std::vector<Value *> &args) {
@@ -4948,8 +5037,9 @@ static Value *builtin_eval(const std::vector<Value *> &args) {
 
     builder->continueAt(mainfunc);
 
-    auto retval = translate(subenv, expr_eval);
-    builder->br({ ret, retval });
+    auto arg = TupleValue::create({expr_eval});
+    auto retval = translate(subenv, TupleIter(arg, 0));
+    builder->br({ ret, retval.value });
 
     return mainfunc;
 }
@@ -5102,7 +5192,7 @@ static bool translateRootValueList (StructValue *env, Value *expr) {
     auto ret = mainfunc->appendParameter(ParameterValue::create());
     builder->continueAt(mainfunc);
 
-    parse_expr_list(env, expr, 1);
+    parse_expr_list(env, TupleIter(expr, 1));
     builder->br({ ret });
 
 /*
