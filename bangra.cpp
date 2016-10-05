@@ -4920,6 +4920,7 @@ static bool isSymbol (const Value *expr, const char *sym) {
 struct ILBuilder {
     struct State {
         FlowValue *flow;
+        FlowValue *prevflow;
     };
 
     State state;
@@ -4936,7 +4937,7 @@ struct ILBuilder {
     }
 
     void continueAt(FlowValue *flow) {
-        restore({flow});
+        restore({flow,nullptr});
     }
 
     void insertAndAdvance(
@@ -4945,11 +4946,22 @@ struct ILBuilder {
         assert(state.flow);
         assert(!state.flow->hasArguments());
         state.flow->arguments = TupleValue::create(values);
+        state.prevflow = state.flow;
         state.flow = next;
     }
 
     void br(const std::vector<Value *> &arguments) {
-        insertAndAdvance(arguments, nullptr);
+        // patch previous flow destination to jump right to
+        // continuation when possible
+        assert(state.flow);
+        if (state.prevflow
+            && (arguments.size() == 2)
+            && (arguments[1] == state.flow->parameters[0])
+            && (state.prevflow->arguments->values.back() == state.flow)) {
+            state.prevflow->arguments->values.back() = arguments[0];
+        } else {
+            insertAndAdvance(arguments, nullptr);
+        }
     }
 
     ParameterValue *call(std::vector<Value *> values) {
