@@ -5207,7 +5207,7 @@ static Cursor translateFromList (StructValue *env, SListIter topit) {
                 Value *topexpr = const_cast<SListValue*>(topit.getSList());
                 auto result = verifyValueKind<SListValue>(
                     execute({macro->value, env, topexpr}));
-                return translate(env, SListIter(result));
+                return { result->at, SListIter(result->next) };
             } break;
             default: break;
         }

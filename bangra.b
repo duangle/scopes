@@ -15,14 +15,15 @@ syntax-scope (scope)
                         @ expr 0 1 1
                     let scope-param
                         parameter "scope"
-                    cons
-                        slist syntax-scope (slist scope-param)
-                            slist structof
-                                slist tupleof "#parent" scope-param
-                                slist tupleof (string name)
-                                    slist syntax-macro
-                                        cons (quote function) func
-                        @ expr 1
+                    expand env
+                        cons
+                            slist syntax-scope (slist scope-param)
+                                slist structof
+                                    slist tupleof "#parent" scope-param
+                                    slist tupleof (string name)
+                                        slist syntax-macro
+                                            cons (quote function) func
+                            @ expr 1
 
 let x 5
 syntax get-x (env expr)
