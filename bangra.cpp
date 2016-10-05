@@ -1244,7 +1244,6 @@ void Type::initTypes() {
 struct Value;
 struct FlowValue;
 struct ParameterValue;
-struct ILBuilder;
 
 //------------------------------------------------------------------------------
 
@@ -3122,42 +3121,6 @@ struct Parser {
 };
 
 //------------------------------------------------------------------------------
-//------------------------------------------------------------------------------
-
-struct ILBuilder {
-    FlowValue *flow;
-
-    void continueAt(FlowValue *cont) {
-        assert(cont);
-        this->flow = cont;
-        assert(!cont->hasArguments());
-    }
-
-    void insertAndAdvance(
-        const std::vector<Value *> &values,
-        FlowValue *next) {
-        assert(flow);
-        assert(!flow->hasArguments());
-        flow->arguments = TupleValue::create(values);
-        flow = next;
-    }
-
-    void br(const std::vector<Value *> &arguments) {
-        insertAndAdvance(arguments, nullptr);
-    }
-
-    ParameterValue *call(std::vector<Value *> values) {
-        auto next = FlowValue::create(1, "cret");
-        values.push_back(next);
-        insertAndAdvance(values, next);
-        return next->parameters[0];
-    }
-
-};
-
-static ILBuilder *builder;
-
-//------------------------------------------------------------------------------
 // FOREIGN FUNCTION INTERFACE
 //------------------------------------------------------------------------------
 
@@ -4952,6 +4915,55 @@ static bool isSymbol (const Value *expr, const char *sym) {
 }
 
 //------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+
+struct ILBuilder {
+    struct State {
+        FlowValue *flow;
+    };
+
+    State state;
+
+    State save() {
+        return state;
+    }
+
+    void restore(const State &state) {
+        this->state = state;
+        if (state.flow) {
+            assert(!state.flow->hasArguments());
+        }
+    }
+
+    void continueAt(FlowValue *flow) {
+        restore({flow});
+    }
+
+    void insertAndAdvance(
+        const std::vector<Value *> &values,
+        FlowValue *next) {
+        assert(state.flow);
+        assert(!state.flow->hasArguments());
+        state.flow->arguments = TupleValue::create(values);
+        state.flow = next;
+    }
+
+    void br(const std::vector<Value *> &arguments) {
+        insertAndAdvance(arguments, nullptr);
+    }
+
+    ParameterValue *call(std::vector<Value *> values) {
+        auto next = FlowValue::create(1, "cret");
+        values.push_back(next);
+        insertAndAdvance(values, next);
+        return next->parameters[0];
+    }
+
+};
+
+static ILBuilder *builder;
+
+//------------------------------------------------------------------------------
 
 static StructValue *globals = nullptr;
 
@@ -5016,7 +5028,7 @@ static Cursor parse_function (StructValue *env, SListIter topit) {
     SListIter it(*topit++, 1);
     auto expr_parameters = *it++;
 
-    auto currentblock = builder->flow;
+    auto currentblock = builder->save();
 
     auto function = FlowValue::create(0, "func");
 
@@ -5035,7 +5047,7 @@ static Cursor parse_function (StructValue *env, SListIter topit) {
 
     builder->br({ret, result.value});
 
-    builder->continueAt(currentblock);
+    builder->restore(currentblock);
 
     return { function, topit };
 }
@@ -5045,7 +5057,7 @@ static Cursor parse_letrec (StructValue *env, SListIter topit) {
 
     SListIter it(*topit++, 1);
 
-    auto currentblock = builder->flow;
+    auto currentblock = builder->save();
 
     auto function = FlowValue::create(0, "let");
 
@@ -5077,7 +5089,7 @@ static Cursor parse_letrec (StructValue *env, SListIter topit) {
 
     builder->br({ret, result.value});
 
-    builder->continueAt(currentblock);
+    builder->restore(currentblock);
 
     std::vector<Value *> args;
     args.push_back(function);
@@ -5257,7 +5269,7 @@ static Value *builtin_eval(const std::vector<Value *> &args) {
     auto scope = verifyValueKind<StructValue>(args[0]);
     auto expr_eval = args[1];
 
-    auto currentblock = builder->flow;
+    auto currentblock = builder->save();
 
     auto mainfunc = FlowValue::create();
     auto ret = mainfunc->appendParameter(ParameterValue::create());
@@ -5270,8 +5282,7 @@ static Value *builtin_eval(const std::vector<Value *> &args) {
     auto retval = translate(subenv, SListIter(arg, 0));
     builder->br({ ret, retval.value });
 
-    if (currentblock)
-        builder->continueAt(currentblock);
+    builder->restore(currentblock);
 
     return mainfunc;
 }
