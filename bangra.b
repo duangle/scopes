@@ -3,30 +3,41 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
+syntax-scope (scope)
+    structof
+        tupleof "#parent" scope
+        tupleof "syntax"
+            syntax-macro
+                function (env expr)
+                    let name
+                        @ expr 0 1 0
+                    let func
+                        @ expr 0 1 1
+                    cons
+                        slist (quote syntax-scope) (quote (scope))
+                            slist (quote structof)
+                                quote tupleof "#parent" scope
+                                slist (quote tupleof) (string name)
+                                    slist (quote syntax-macro)
+                                        cons (quote function) func
+                        @ expr 1
+
 let x 5
+syntax get-x (env expr)
+    cons x
+        @ expr 1
 
-syntax-run (scope)
-    print "running in new context!" x
-    tupleof
-        quote do
-        quote let x 6
-        tupleof
-            quote print
-            "running in main context!"
-            \ "\noverriden value:" (quote x) "\nold value:" x
-
-syntax-run (scope)
-    let get-x
-        function (env expr)
-            print env expr
-    tupleof
-        quote syntax-scope
-        structof
-            tupleof "#parent" scope
-            tupleof "get-x"
-                syntax-macro get-x
 do
-    print get-x
+    let x 6
+    print "get-x:" x (get-x)
+
+do
+    let k
+        quote a b c
+    print
+        @ k 0
+        @ k 1 0
+        @ k 1 1 0
 
 let f
     function (return)
@@ -72,6 +83,8 @@ print "quoted:"
     quote test
     quote 1 2 3
 
+print
+    + 1 2 3 4 5
 # prints 14 6
 print
     ::* + 2

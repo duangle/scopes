@@ -1192,7 +1192,7 @@ std::string getRepr(Type *type) {
 
 void Type::initTypes() {
     TypePointer = Pointer(Struct("Type", true));
-    ValuePointer = Pointer(Struct("SymEx", true));
+    ValuePointer = Pointer(Struct("SList", true));
     //BasicBlock = Struct("BasicBlock", true);
 
     Empty = Tuple({});
@@ -1256,6 +1256,7 @@ struct ILBuilder;
     ILVALUE_KIND(Pointer) \
     ILVALUE_KIND(Unit) \
     ILVALUE_KIND(Tuple) \
+    ILVALUE_KIND(SList) \
     ILVALUE_KIND(Struct) \
     ILVALUE_KIND(Closure) \
     ILVALUE_KIND(External) \
@@ -1577,6 +1578,70 @@ struct TupleValue :
         return ss.str();
     }
 };
+
+//------------------------------------------------------------------------------
+
+struct SListValue :
+    ValueImpl<SListValue, Value::SList, Value> {
+protected:
+    static SListValue *EOX;
+
+public:
+    Value *at;
+    SListValue *next;
+
+    static SListValue *get_eox() {
+        if (EOX)
+            return EOX;
+        auto result = new SListValue();
+        result->at = result->next = nullptr;
+        EOX = result;
+        return result;
+    }
+
+    static SListValue *create(Value *at, SListValue *next) {
+        assert(at);
+        assert(next);
+        auto result = new SListValue();
+        result->at = at;
+        result->next = next;
+        return result;
+    }
+
+    static SListValue *create(
+        const std::vector<Value *> &values) {
+        size_t c = values.size();
+        auto result = get_eox();
+        while (c) {
+            --c;
+            result = create(values[c], result);
+        }
+        return result;
+    }
+
+    Type *inferType() const {
+        return Type::Any;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "slist");
+        auto expr = this;
+        get_eox();
+        while (expr != EOX) {
+            ss << " " << bangra::getRefRepr(expr->at);
+            expr = expr->next;
+        }
+        ss << ")";
+        return ss.str();
+    }
+};
+
+SListValue *SListValue::EOX = nullptr;
 
 //------------------------------------------------------------------------------
 
@@ -2094,11 +2159,62 @@ static void unescape(SymbolValue *s) {
     s->value.resize(inplace_unescape(&s->value[0]));
 }
 
+struct SListIter {
+protected:
+    const SListValue *expr;
+public:
+    const SListValue *getSList() const {
+        return expr;
+    }
+
+    SListIter(const SListValue *value, size_t c) :
+        expr(value)
+    {
+        auto eox = SListValue::get_eox();
+        for (size_t i = 0; i < c; ++i) {
+            assert(expr != eox);
+            expr = expr->next;
+        }
+    }
+
+    SListIter(const Value *value, size_t i=0) :
+        SListIter(llvm::cast<SListValue>(value), i)
+    {}
+
+    bool operator ==(const SListIter &other) const {
+        return (expr == other.expr);
+    }
+    bool operator !=(const SListIter &other) const {
+        return (expr != other.expr);
+    }
+
+    SListIter operator +(int offset) const {
+        return SListIter(expr, (size_t)offset);
+    }
+
+    SListIter operator ++(int) {
+        auto oldself = *this;
+        assert (expr != SListValue::get_eox());
+        expr = expr->next;
+        return oldself;
+    }
+
+    operator bool() const {
+        return expr != SListValue::get_eox();
+    }
+
+    Value *operator *() const {
+        assert(expr != SListValue::get_eox());
+        return expr->at;
+    }
+
+};
+
 // matches ((///...))
 static bool is_comment(Value *expr) {
-    if (auto tuple = llvm::dyn_cast<TupleValue>(expr)) {
-        if (tuple->values.size() > 0) {
-            if (auto sym = llvm::dyn_cast<SymbolValue>(tuple->values.front())) {
+    if (auto slist = llvm::dyn_cast<SListValue>(expr)) {
+        if (slist != SListValue::get_eox()) {
+            if (auto sym = llvm::dyn_cast<SymbolValue>(slist->at)) {
                 if (!memcmp(sym->value.c_str(),"///",3))
                     return true;
             }
@@ -2109,16 +2225,17 @@ static bool is_comment(Value *expr) {
 
 static Value *strip(Value *expr) {
     if (!expr) return nullptr;
-    if (auto tuple = llvm::dyn_cast<TupleValue>(expr)) {
-        auto copy = TupleValue::create({});
-        auto &values = tuple->values;
-        for (size_t i = 0; i < values.size(); ++i) {
-            auto value = strip(values[i]);
+    if (auto slist = llvm::dyn_cast<SListValue>(expr)) {
+        std::vector<Value *> values;
+        auto it = SListIter(slist);
+        while (it) {
+            auto value = strip(*it);
             if (!is_comment(value)) {
-                copy->values.push_back(value);
+                values.push_back(value);
             }
+            it++;
         }
-        return copy;
+        return SListValue::create(values);
     }
     return expr;
 }
@@ -2126,58 +2243,25 @@ static Value *strip(Value *expr) {
 static const Anchor *find_valid_anchor(const Value *expr) {
     if (!expr) return nullptr;
     if (expr->anchor.isValid()) return &expr->anchor;
-    if (auto tuple = llvm::dyn_cast<TupleValue>(expr)) {
-        auto &values = tuple->values;
-        for (size_t i = 0; i < values.size(); ++i) {
-            const Anchor *result = find_valid_anchor(values[i]);
+    if (auto slist = llvm::dyn_cast<SListValue>(expr)) {
+        auto it = SListIter(slist);
+        while (it) {
+            const Anchor *result = find_valid_anchor(*it);
             if (result) return result;
+            it++;
         }
     }
     return nullptr;
 }
-
-struct TupleIter {
-protected:
-    TupleValue *tuple;
-    size_t index;
-public:
-    size_t get_index() const {
-        return index;
+static size_t getSize(SListValue *expr) {
+    SListIter it(expr);
+    size_t c = 0;
+    while (it) {
+        c++;
+        it++;
     }
-
-    TupleIter(TupleValue *value, size_t i) :
-        tuple(value),
-        index(i)
-    {}
-
-    TupleIter(Value *value, size_t i=0) :
-        tuple(llvm::cast<TupleValue>(value)),
-        index(i) {
-    }
-
-    bool operator ==(const TupleIter &other) const {
-        return (tuple == other.tuple) && (index == other.index);
-    }
-    bool operator !=(const TupleIter &other) const {
-        return (tuple != other.tuple) || (index != other.index);
-    }
-
-    TupleIter operator ++(int) {
-        auto oldself = *this;
-        ++index;
-        return oldself;
-    }
-
-    operator bool() const {
-        return index < tuple->values.size();
-    }
-
-    Value *operator *() const {
-        assert(index < tuple->values.size());
-        return tuple->values[index];
-    }
-
-};
+    return c;
+}
 
 //------------------------------------------------------------------------------
 // PRINTING
@@ -2208,19 +2292,20 @@ static std::string formatTraceback() {
 }
 #endif
 
-static bool isNested(Value *e) {
-    if (auto tuple = llvm::dyn_cast<TupleValue>(e)) {
-        auto &values = tuple->values;
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (llvm::isa<TupleValue>(values[i]))
+static bool isNested(const Value *e) {
+    if (auto slist = llvm::dyn_cast<SListValue>(e)) {
+        auto it = SListIter(slist);
+        while (it) {
+            if (llvm::isa<SListValue>(*it))
                 return true;
+            it++;
         }
     }
     return false;
 }
 
 template<typename T>
-static void streamAnchor(T &stream, Value *e, size_t depth=0) {
+static void streamAnchor(T &stream, const Value *e, size_t depth=0) {
     if (e) {
         const Anchor *anchor = find_valid_anchor(e);
         if (!anchor)
@@ -2236,7 +2321,7 @@ static void streamAnchor(T &stream, Value *e, size_t depth=0) {
 }
 
 template<typename T>
-static void streamValue(T &stream, Value *e, size_t depth=0, bool naked=true) {
+static void streamValue(T &stream, const Value *e, size_t depth=0, bool naked=true) {
     if (naked) {
         streamAnchor(stream, e, depth);
     }
@@ -2249,53 +2334,55 @@ static void streamValue(T &stream, Value *e, size_t depth=0, bool naked=true) {
     }
 
 	switch(e->kind) {
-	case Value::Tuple: {
-        auto tuple = llvm::cast<TupleValue>(e);
-        auto &values = tuple->values;
-        if (values.empty()) {
+	case Value::SList: {
+        auto slist = llvm::cast<SListValue>(e);
+        auto it = SListIter(slist);
+        if (!it) {
             stream << "()";
             if (naked)
                 stream << '\n';
             break;
         }
+        size_t offset = 0;
         if (naked) {
-            size_t offset = 0;
-            bool single = ((offset + 1) == values.size());
+            bool single = (it + 1);
         print_terse:
-            streamValue(stream, values[offset], depth, false);
+            streamValue(stream, *it++, depth, false);
             offset++;
-            while (offset != values.size()) {
-                if (isNested(values[offset]))
+            while (it) {
+                if (isNested(*it))
                     break;
                 stream << ' ';
-                streamValue(stream, values[offset], depth, false);
+                streamValue(stream, *it, depth, false);
                 offset++;
+                it++;
             }
             stream << (single?";\n":"\n");
         //print_sparse:
-            while (offset != values.size()) {
-                auto value = values[offset];
-                if (!llvm::isa<TupleValue>(value) // not a list
+            while (it) {
+                auto value = *it;
+                if (!llvm::isa<SListValue>(value) // not a list
                     && (offset >= 1) // not first element in list
-                    && ((offset + 1) != values.size()) // not last element in list
-                    && !isNested(values[offset + 1])) { // next element can be terse packed too
+                    && (it + 1) // not last element in list
+                    && !isNested(*(it + 1))) { // next element can be terse packed too
                     single = false;
-                    streamAnchor(stream, values[offset], depth + 1);
+                    streamAnchor(stream, *it, depth + 1);
                     stream << "\\ ";
                     goto print_terse;
                 }
                 streamValue(stream, value, depth + 1);
                 offset++;
+                it++;
             }
 
         } else {
             stream << '(';
-            size_t offset = 0;
-            while (offset != values.size()) {
+            while (it) {
                 if (offset > 0)
                     stream << ' ';
-                streamValue(stream, values[offset], depth + 1, false);
+                streamValue(stream, *it, depth + 1, false);
                 offset++;
+                it++;
             }
             stream << ')';
             if (naked)
@@ -2346,11 +2433,11 @@ static std::string formatValue(Value *e, size_t depth=0, bool naked=false) {
 }
 */
 
-static void printValue(Value *e, size_t depth=0, bool naked=false) {
+static void printValue(const Value *e, size_t depth=0, bool naked=false) {
     streamValue(std::cout, e, depth, naked);
 }
 
-void valueError (Value *expr, const char *format, ...) {
+void valueError (const Value *expr, const char *format, ...) {
     const Anchor *anchor = find_valid_anchor(expr);
     if (!anchor) {
         if (expr)
@@ -2761,7 +2848,7 @@ struct Parser {
                 values.begin() + start,
                 values.end());
             // append new list
-            append(TupleValue::create(newvalues));
+            append(SListValue::create(newvalues));
             resetStart();
             return true;
         }
@@ -2778,15 +2865,15 @@ struct Parser {
             return values.front();
         }
 
-        TupleValue *getResult() {
-            auto result = TupleValue::create(values);
+        SListValue *getResult() {
+            auto result = SListValue::create(values);
             result->anchor = anchor;
             return result;
         }
 
     };
 
-    TupleValue *parseList(int end_token) {
+    SListValue *parseList(int end_token) {
         ListBuilder builder(lexer);
         lexer.readToken();
         while (true) {
@@ -2828,15 +2915,13 @@ struct Parser {
             if (errors) return nullptr;
             auto sym = SymbolValue::create("[");
             sym->anchor = list->anchor;
-            list->values.insert(list->values.begin(), sym);
-            return list;
+            return SListValue::create(sym, list);
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return nullptr;
             auto sym = SymbolValue::create("{");
             sym->anchor = list->anchor;
-            list->values.insert(list->values.begin(), sym);
-            return list;
+            return SListValue::create(sym, list);
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -4171,6 +4256,34 @@ static StringValue *wrap(const std::string &s) {
     return StringValue::create(s);
 }
 
+static Value *builtin_string(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto &arg = args[0];
+    std::stringstream ss;
+    switch(arg->kind) {
+        case Value::Symbol: {
+            auto cs = llvm::cast<SymbolValue>(arg);
+            ss << cs->value;
+        } break;
+        case Value::String: {
+            auto cs = llvm::cast<StringValue>(arg);
+            ss << cs->value;
+        } break;
+        case Value::Real: {
+            auto cs = llvm::cast<RealValue>(arg);
+            ss << cs->value;
+        } break;
+        case Value::Integer: {
+            auto cs = llvm::cast<IntegerValue>(arg);
+            ss << cs->value;
+        } break;
+        default: {
+            ss << getRefRepr(arg);
+        } break;
+    }
+    return StringValue::create(ss.str());
+}
+
 static Value *builtin_print(const std::vector<Value *> &args) {
     builtin_checkparams(args, 0, -1);
     for (size_t i = 0; i < args.size(); ++i) {
@@ -4214,6 +4327,18 @@ static Value *builtin_repr(const std::vector<Value *> &args) {
 static Value *builtin_tupleof(const std::vector<Value *> &args) {
     builtin_checkparams(args, 0, -1);
     return wrap(args);
+}
+
+static Value *builtin_slist(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 0, -1);
+    return SListValue::create(args);
+}
+
+static Value *builtin_cons(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 2, 2);
+    auto at = args[0];
+    auto next = verifyValueKind<SListValue>(args[1]);
+    return SListValue::create(at, next);
 }
 
 static Value *builtin_structof(const std::vector<Value *> &args) {
@@ -4319,6 +4444,29 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
     Value *obj = args[0];
     Value *key = args[1];
     switch(obj->kind) {
+        case Value::SList: {
+            auto cs = llvm::cast<SListValue>(obj);
+            if (cs == SListValue::get_eox()) {
+                ilError(key, "attempting to index empty symbolic list");
+                return nullptr;
+            }
+            switch(key->kind) {
+                case Value::Integer: {
+                    auto ci = llvm::cast<IntegerValue>(key);
+                    if (ci->value == 0) {
+                        return cs->at;
+                    } else if (ci->value == 1) {
+                        return cs->next;
+                    } else if (ci->value > 1) {
+                        ilError(key, "index out of bounds");
+                        return nullptr;
+                    }
+                } break;
+                default: break;
+            }
+            ilError(key, "illegal index type");
+            return nullptr;
+        } break;
         case Value::Tuple: {
             auto cs = llvm::cast<TupleValue>(obj);
             auto t = llvm::cast<TupleType>(getType(cs));
@@ -4375,6 +4523,15 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
 
 }
 
+template<ILBuiltinFunction F>
+static Value *builtin_variadic_ltr(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 2, -1);
+    Value *result = F({args[0], args[1]});
+    for (size_t i = 2; i < args.size(); ++i) {
+        result = F({result, args[i]});
+    }
+    return result;
+}
 
 template<typename A, typename B>
 class cast_join_type {};
@@ -4488,6 +4645,14 @@ public:
     }
 };
 
+class dispatch_pointer_type {
+public:
+    template<typename F>
+    static Value *dispatch(const Value *v, const F &next) {
+        return next(v);
+    }
+};
+
 template<typename NextT>
 class dispatch_string_type {
 public:
@@ -4560,8 +4725,14 @@ typedef dispatch_integer_type<
                 dispatch_string_type<
                     dispatch_types_failed> > >
     dispatch_arith_string_types;
+typedef dispatch_integer_type<
+            dispatch_real_type<
+                dispatch_string_type<
+                    dispatch_pointer_type> > >
+    dispatch_arith_string_ptr_types;
 typedef dispatch_arithmetic_types dispatch_arith_cmp_types;
 typedef dispatch_arith_string_types dispatch_cmp_types;
+typedef dispatch_arith_string_ptr_types dispatch_eq_cmp_types;
 
 typedef dispatch_integer_type<dispatch_types_failed>
     dispatch_bit_types;
@@ -4710,12 +4881,12 @@ static StructValue *globals = nullptr;
 
 struct Cursor {
     Value *value;
-    TupleIter next;
+    SListIter next;
 };
 
-Cursor translate(StructValue *env, TupleIter it);
+Cursor translate(StructValue *env, SListIter it);
 
-static Cursor parse_expr_list (StructValue *env, TupleIter it) {
+static Cursor parse_expr_list (StructValue *env, SListIter it) {
     Value *value = nullptr;
     while (it) {
         auto cur = translate(env, it);
@@ -4729,13 +4900,13 @@ static Cursor parse_expr_list (StructValue *env, TupleIter it) {
     return { value, it };
 }
 
-static Cursor parse_do (StructValue *env, TupleIter topit) {
-    auto cur = parse_expr_list(env, TupleIter(*topit++, 1));
+static Cursor parse_do (StructValue *env, SListIter topit) {
+    auto cur = parse_expr_list(env, SListIter(*topit++, 1));
     return { cur.value, topit };
 }
 
-static Cursor parse_function (StructValue *env, TupleIter topit) {
-    TupleIter it(*topit++, 1);
+static Cursor parse_function (StructValue *env, SListIter topit) {
+    SListIter it(*topit++, 1);
     auto expr_parameters = *it++;
 
     auto currentblock = builder->flow;
@@ -4745,8 +4916,8 @@ static Cursor parse_function (StructValue *env, TupleIter topit) {
     builder->continueAt(function);
     auto subenv = new_scope(env);
 
-    auto params = verifyValueKind<TupleValue>(expr_parameters);
-    TupleIter param(params);
+    auto params = verifyValueKind<SListValue>(expr_parameters);
+    SListIter param(params);
     while (param) {
         auto symname = verifyValueKind<SymbolValue>(*param);
         auto bp = ParameterValue::create(symname->value);
@@ -4765,8 +4936,8 @@ static Cursor parse_function (StructValue *env, TupleIter topit) {
     return { function, topit };
 }
 
-static Cursor parse_letrec (StructValue *env, TupleIter topit) {
-    TupleIter it(*topit++, 1);
+static Cursor parse_letrec (StructValue *env, SListIter topit) {
+    SListIter it(*topit++, 1);
 
     auto currentblock = builder->flow;
 
@@ -4784,13 +4955,14 @@ static Cursor parse_letrec (StructValue *env, TupleIter topit) {
         setLocal(subenv, symname->value, bp);
     } else {
         // declare parameters
-        TupleIter param(it);
+        SListIter param(it);
         while (param) {
-            auto pair = verifyValueKind<TupleValue>(*param);
-            if (pair->values.size() < 2) {
+            auto pair = verifyValueKind<SListValue>(*param);
+            auto pairit = SListIter(pair);
+            if (!pairit) {
                 ilError(pair, "at least two arguments expected");
             }
-            auto symname = verifyValueKind<SymbolValue>(pair->values[0]);
+            auto symname = verifyValueKind<SymbolValue>(*pairit++);
             auto bp = ParameterValue::create(symname->value);
             function->appendParameter(bp);
             setLocal(subenv, symname->value, bp);
@@ -4815,10 +4987,15 @@ static Cursor parse_letrec (StructValue *env, TupleIter topit) {
         args.push_back(cur.value);
     } else {
         // initialize parameters
-        TupleIter param(it);
+        SListIter param(it);
         while (param) {
-            auto pair = verifyValueKind<TupleValue>(*param);
-            auto cur = parse_expr_list(subenv, TupleIter(pair, 1));
+            auto pair = verifyValueKind<SListValue>(*param);
+            auto pairit = SListIter(pair);
+            pairit++;
+            if (!pairit) {
+                ilError(pair, "at least two arguments expected");
+            }
+            auto cur = parse_expr_list(subenv, pairit);
             args.push_back(cur.value);
             param++;
         }
@@ -4827,7 +5004,7 @@ static Cursor parse_letrec (StructValue *env, TupleIter topit) {
     return { builder->call(args), topit };
 }
 
-static Cursor parse_implicit_apply (StructValue *env, TupleIter it) {
+static Cursor parse_implicit_apply (StructValue *env, SListIter it) {
     auto ccur = translate(env, it);
     Value *callable = ccur.value;
     it = ccur.next;
@@ -4844,8 +5021,8 @@ static Cursor parse_implicit_apply (StructValue *env, TupleIter it) {
     return { builder->call(args), it };
 }
 
-static Cursor parse_apply (StructValue *env, TupleIter topit) {
-    auto cur = parse_implicit_apply(env, TupleIter(*topit++, 1));
+static Cursor parse_apply (StructValue *env, SListIter topit) {
+    auto cur = parse_implicit_apply(env, SListIter(*topit++, 1));
     return { cur.value, topit };
 }
 
@@ -4856,8 +5033,8 @@ bool hasTypeValue(Type *type) {
     return true;
 }
 
-static Cursor parse_quote (StructValue *env, TupleIter topit) {
-    TupleIter it(*topit++, 1);
+static Cursor parse_quote (StructValue *env, SListIter topit) {
+    SListIter it(*topit++, 1);
     auto expr_value = *it++;
     if (it) {
         // multiple values, wrap in list
@@ -4866,15 +5043,15 @@ static Cursor parse_quote (StructValue *env, TupleIter topit) {
             lines.push_back(*it);
             it++;
         }
-        return { TupleValue::create(lines), topit };
+        return { SListValue::create(lines), topit };
     } else {
         // single value
         return { expr_value, topit };
     }
 }
 
-static Cursor parse_decorate_all (StructValue *env, TupleIter topit) {
-    TupleIter it(*topit++, 1);
+static Cursor parse_decorate_all (StructValue *env, SListIter topit) {
+    SListIter it(*topit++, 1);
 
     std::vector<Value *> values;
     while (it) {
@@ -4886,25 +5063,14 @@ static Cursor parse_decorate_all (StructValue *env, TupleIter topit) {
         values.push_back(*topit++);
     }
 
-    return translate(env, TupleIter(
-        TupleValue::create({ TupleValue::create(values) }), 0));
+    return translate(env, SListIter(
+        SListValue::create({ SListValue::create(values) }), 0));
 }
 
-static Cursor parse_syntax_run (StructValue *env, TupleIter topit) {
+static Cursor parse_syntax_scope (StructValue *env, SListIter topit) {
     auto cur = parse_function (env, topit++);
 
-    auto result = execute({cur.value, env});
-
-    std::vector<Value *> values = { result };
-    while (topit) {
-        values.push_back(*topit++);
-    }
-    return translate(env, TupleIter(TupleValue::create(values), 0));
-}
-
-static Cursor parse_syntax_scope (StructValue *env, TupleIter topit) {
-    TupleIter it(*topit++, 1);
-    auto expr_env = verifyValueKind<StructValue>(*it++);
+    auto expr_env = verifyValueKind<StructValue>(execute({cur.value, env}));
 
     auto result = parse_expr_list(expr_env, topit);
     topit = result.next;
@@ -4912,14 +5078,14 @@ static Cursor parse_syntax_scope (StructValue *env, TupleIter topit) {
     return { result.value, topit };
 }
 
-static bool verifyParameterCount (TupleValue *expr,
+static bool verifyParameterCount (SListValue *expr,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
-    int argcount = (int)expr->values.size() - 1;
+    int argcount = (int)getSize(expr) - 1;
 
     if ((maxcount >= 0) && (argcount > maxcount)) {
-        valueError(expr->values[maxcount + 1],
+        valueError(*SListIter(expr, maxcount + 1),
             "excess argument. At most %i arguments expected", maxcount);
         return false;
     }
@@ -4931,7 +5097,7 @@ static bool verifyParameterCount (TupleValue *expr,
 }
 
 struct TranslateTable {
-    typedef Cursor (*TranslatorFunc)(StructValue *env, TupleIter topit);
+    typedef Cursor (*TranslatorFunc)(StructValue *env, SListIter topit);
 
     struct Translator {
         int mincount;
@@ -4961,8 +5127,8 @@ struct TranslateTable {
         translators[name] = translator;
     }
 
-    TranslatorFunc match(TupleValue *expr) {
-        auto head = verifyValueKind<SymbolValue>(expr->values.front());
+    TranslatorFunc match(SListValue *expr) {
+        auto head = verifyValueKind<SymbolValue>(expr->at);
         auto &t = translators[head->value];
         if (!t.translate) return nullptr;
         verifyParameterCount(expr, t.mincount, t.maxcount);
@@ -4983,31 +5149,40 @@ static void registerTranslators() {
     t.set(parse_function, "function", 1, -1);
     t.set(parse_quote, "quote", 1, -1);
     t.set(parse_decorate_all, "::*", 1, -1);
-    t.set(parse_syntax_run, "syntax-run", 1, -1);
-    t.set(parse_syntax_scope, "syntax-scope", 1, 1);
+    t.set(parse_syntax_scope, "syntax-scope", 1, -1);
 }
 
-static Cursor translateFromList (StructValue *env, TupleIter topit) {
-    auto expr = llvm::cast<TupleValue>(*topit);
+static Cursor translateFromList (StructValue *env, SListIter topit) {
+    auto expr = llvm::cast<SListValue>(*topit);
     assert(expr);
-    if (expr->values.size() < 1) {
-        valueError(expr, "symbol expected");
+    if (expr == SListValue::get_eox()) {
+        valueError(topit.getSList(), "symbol expected");
+    }
+    auto head = verifyValueKind<SymbolValue>(expr->at);
+    auto sym = getLocal(env, head->value);
+    if (sym && (sym->kind == Value::Macro)) {
+        auto macro = llvm::cast<MacroValue>(sym);
+        Value *closure = macro->closure;
+        Value *topexpr = const_cast<SListValue*>(topit.getSList());
+        auto result = verifyValueKind<SListValue>(
+            execute({closure, env, topexpr}));
+        return translate(env, SListIter(result));
     }
     auto func = translators.match(expr);
     if (func) {
         return func(env, topit);
     } else {
-        auto cur = parse_implicit_apply(env, TupleIter(*topit++, 0));
+        auto cur = parse_implicit_apply(env, SListIter(*topit++, 0));
         return { cur.value, topit };
     }
 }
 
-Cursor translate (StructValue *env, TupleIter topit) {
+Cursor translate (StructValue *env, SListIter topit) {
     auto expr = *topit;
     assert(expr);
     Value *result = nullptr;
     switch(expr->kind) {
-        case Value::Tuple: {
+        case Value::SList: {
             auto cur = translateFromList(env, topit);
             result = cur.value;
             assert(cur.next != topit);
@@ -5050,8 +5225,8 @@ static Value *builtin_eval(const std::vector<Value *> &args) {
 
     builder->continueAt(mainfunc);
 
-    auto arg = TupleValue::create({expr_eval});
-    auto retval = translate(subenv, TupleIter(arg, 0));
+    auto arg = SListValue::create({expr_eval});
+    auto retval = translate(subenv, SListIter(arg, 0));
     builder->br({ ret, retval.value });
 
     return mainfunc;
@@ -5123,6 +5298,8 @@ static void initGlobals () {
     setBuiltin(env, "repr", builtin_repr);
     setBuiltin(env, "cdecl", builtin_cdecl);
     setBuiltin(env, "tupleof", builtin_tupleof);
+    setBuiltin(env, "slist", builtin_slist);
+    setBuiltin(env, "cons", builtin_cons);
     setBuiltin(env, "structof", builtin_structof);
     setBuiltin(env, "typeof", builtin_typeof);
     setBuiltin(env, "external", builtin_external);
@@ -5132,15 +5309,23 @@ static void initGlobals () {
     setBuiltin(env, "call/cc", builtin_call_cc);
     setBuiltin(env, "dump", builtin_dump);
     setBuiltin(env, "syntax-macro", builtin_syntax_macro);
+    setBuiltin(env, "string", builtin_string);
 
-    setBuiltin(env, "@", builtin_at_op);
+    setLocal(env, "eox", SListValue::get_eox());
+
+    setBuiltin(env, "@",
+        builtin_variadic_ltr<builtin_at_op>);
 
     setBuiltin(env, "+",
-        builtin_binary_op<dispatch_arith_string_types, builtin_add_op>);
+        builtin_variadic_ltr<
+            builtin_binary_op<dispatch_arith_string_types, builtin_add_op>
+            >);
     setBuiltin(env, "-",
         builtin_binary_op<dispatch_arith_types, builtin_sub_op>);
     setBuiltin(env, "*",
-        builtin_binary_op<dispatch_arith_types, builtin_mul_op>);
+        builtin_variadic_ltr<
+            builtin_binary_op<dispatch_arith_types, builtin_mul_op>
+            >);
     setBuiltin(env, "/",
         builtin_binary_op<dispatch_arith_types, builtin_div_op>);
     setBuiltin(env, "%",
@@ -5149,7 +5334,9 @@ static void initGlobals () {
     setBuiltin(env, "&",
         builtin_binary_op<dispatch_bit_types, builtin_bitand_op>);
     setBuiltin(env, "|",
-        builtin_binary_op<dispatch_bit_types, builtin_bitor_op>);
+        builtin_variadic_ltr<
+            builtin_binary_op<dispatch_bit_types, builtin_bitor_op>
+            >);
     setBuiltin(env, "^",
         builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>);
     setBuiltin(env, "~",
@@ -5159,9 +5346,9 @@ static void initGlobals () {
         builtin_unary_op<dispatch_boolean_types, builtin_not_op>);
 
     setBuiltin(env, "==",
-        builtin_binary_op<dispatch_cmp_types, builtin_eq_op>);
+        builtin_binary_op<dispatch_eq_cmp_types, builtin_eq_op>);
     setBuiltin(env, "!=",
-        builtin_binary_op<dispatch_cmp_types, builtin_ne_op>);
+        builtin_binary_op<dispatch_eq_cmp_types, builtin_ne_op>);
     setBuiltin(env, ">",
         builtin_binary_op<dispatch_cmp_types, builtin_gt_op>);
     setBuiltin(env, ">=",
@@ -5206,7 +5393,7 @@ static bool translateRootValueList (StructValue *env, Value *expr) {
     auto ret = mainfunc->appendParameter(ParameterValue::create());
     builder->continueAt(mainfunc);
 
-    parse_expr_list(env, TupleIter(expr, 1));
+    parse_expr_list(env, SListIter(expr, 1));
     builder->br({ ret });
 
 /*
@@ -5223,13 +5410,14 @@ static bool translateRootValueList (StructValue *env, Value *expr) {
 
 static bool compileMain (Value *expr) {
     assert(expr);
-    auto tuple = verifyValueKind<TupleValue>(expr);
+    auto slist = verifyValueKind<SListValue>(expr);
+    auto it = SListIter(slist);
 
     auto env = globals;
 
     std::string lastlang = "";
     while (true) {
-        auto head = verifyValueKind<SymbolValue>(tuple->values.front());
+        auto head = verifyValueKind<SymbolValue>(*it);
         if (!head) return false;
         if (head->value == BANGRA_HEADER)
             break;
@@ -5306,16 +5494,17 @@ static Value *parseLoader(const char *executable_path) {
         fprintf(stderr, "could not parse footer expression\n");
         return NULL;
     }
-    if (expr->kind != Value::Tuple)  {
-        fprintf(stderr, "footer expression is not a list\n");
+    if (expr->kind != Value::SList)  {
+        fprintf(stderr, "footer expression is not a symbolic list\n");
         return NULL;
     }
-    auto tuple = llvm::cast<TupleValue>(expr);
-    if (tuple->values.size() < 2) {
-        fprintf(stderr, "footer needs at least two arguments\n");
+    auto symlist = llvm::cast<SListValue>(expr);
+    SListIter it(symlist);
+    if (!it) {
+        fprintf(stderr, "footer expression is empty\n");
         return NULL;
     }
-    auto head = tuple->values[0];
+    auto head = *it++;
     if (head->kind != Value::Symbol)  {
         fprintf(stderr, "footer expression does not begin with symbol\n");
         return NULL;
@@ -5324,7 +5513,11 @@ static Value *parseLoader(const char *executable_path) {
         fprintf(stderr, "footer expression does not begin with 'script-size'\n");
         return NULL;
     }
-    auto arg = tuple->values[1];
+    if (!it) {
+        fprintf(stderr, "footer expression needs two arguments\n");
+        return NULL;
+    }
+    auto arg = *it++;
     if (arg->kind != Value::Integer)  {
         fprintf(stderr, "script-size argument is not integer\n");
         return NULL;
