@@ -57,8 +57,8 @@ local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
         "bangra let external cdecl apply do branch function null true false"
-            .. " print repr tupleof import-c proto-eval quote eval structof"
-            .. " typeof letrec with"
+            .. " print repr tupleof import-c syntax-run quote eval structof"
+            .. " typeof letrec with ::* syntax-macro syntax-scope"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
@@ -90,9 +90,9 @@ local dsl_table = {
 
 REALCONST = splitstr("inf +inf -inf nan +nan -nan")
 
-local symbol_terminators = "()[]{}\"';#:,."
-local integer_terminators = "()[]{}\"';#:,"
-local real_terminators = "()[]{}\"';#:,."
+local symbol_terminators = "()[]{}\"';#"
+local integer_terminators = "()[]{}\"';#"
+local real_terminators = "()[]{}\"';#."
 
 local token_eof = 0
 local token_open = '('
@@ -180,18 +180,6 @@ local function Lexer()
                 -- escape
                 escape = true
             elseif isspace(c) or strchr(symbol_terminators, c) then
-                next_cursor = next_cursor - 1
-                break
-            end
-        end
-    end
-
-    local function readDotSequence ()
-        while (next_cursor ~= eof) do
-            local c = readChar()
-            if (strchr(".:", c)) then
-                -- consume
-            else
                 next_cursor = next_cursor - 1
                 break
             end
@@ -335,14 +323,6 @@ local function Lexer()
                 break
             elseif (c == ';') then
                 token = token_statement
-                break
-            elseif (c == ',') then
-                token = token_symbol
-                readSingleSymbol()
-                break
-            elseif (c == ':') then
-                token = token_symbol
-                readDotSequence()
                 break
             elseif readNumber() then
                 token = token_number

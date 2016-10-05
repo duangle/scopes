@@ -5,7 +5,7 @@ bangra
 
 let x 5
 
-syntax-run
+syntax-run (scope)
     print "running in new context!" x
     tupleof
         quote do
@@ -13,25 +13,26 @@ syntax-run
         tupleof
             quote print
             "running in main context!"
-            \ "overriden value:" (quote x) "old value:" x
+            \ "\noverriden value:" (quote x) "\nold value:" x
 
+syntax-run (scope)
+    let get-x
+        function (env expr)
+            print env expr
+    tupleof
+        quote syntax-scope
+        structof
+            tupleof "#parent" scope
+            tupleof "get-x"
+                syntax-macro get-x
 do
-    let x
-        + 2
-            + 4 5
-    apply
-        eval (locals)
-            quote
-                print x
+    print get-x
 
 let f
     function (return)
         return 2
         3
 
-::* apply
-::* eval (locals)
-::* quote do
 print # displays 3
     f
         function (x) x
@@ -45,9 +46,6 @@ let proc
         apply
             eval x globals
 
-::* apply
-::* eval globals
-::* quote do
 let testf
     print "declaring testf..."
     function ()
@@ -74,19 +72,12 @@ print "quoted:"
     quote test
     quote 1 2 3
 
-do
-    :: let x
-    function (x)
-        x
-    print x
-
 # prints 14 6
 print
-    :: + 2
-    :: + 3
-    :: + 4
+    ::* + 2
+    ::* + 3
+    ::* + 4
     5
-    6
 
 # prints ((+ 2 3) (+ 4 6) (+ 10 12))
 print
@@ -146,10 +137,6 @@ print
         function (x)
             + x 2
 
-print "sin:"
-    (locals)
-    sin
-    @ (locals) "sin"
 print
     plus2 50
 

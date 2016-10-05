@@ -1263,6 +1263,7 @@ struct ILBuilder;
     ILVALUE_KIND(BuiltinFlow) \
     ILVALUE_KIND(Parameter) \
     ILVALUE_KIND(Frame) \
+    ILVALUE_KIND(Macro) \
     ILVALUE_KIND(TypeRef) \
     ILVALUE_KIND(Flow)
 
@@ -1974,6 +1975,36 @@ struct ClosureValue :
         return ss.str();
     }
 
+};
+
+//------------------------------------------------------------------------------
+
+struct MacroValue :
+    ValueImpl<MacroValue, Value::Macro, Value> {
+
+    ClosureValue *closure;
+
+    static MacroValue *create(Value *closure) {
+        auto result = new MacroValue();
+        result->closure = llvm::cast<ClosureValue>(closure);
+        return result;
+    }
+
+    Type *inferType() const {
+        return Type::Any;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "macro");
+        ss << " " << bangra::getRefRepr(closure);
+        ss << ")";
+        return ss.str();
+    }
 };
 
 //------------------------------------------------------------------------------
@@ -4202,6 +4233,11 @@ static Value *builtin_structof(const std::vector<Value *> &args) {
     return result;
 }
 
+static Value *builtin_syntax_macro(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    return MacroValue::create(verifyValueKind<ClosureValue>(args[0]));
+}
+
 static Value *builtin_typeof(const std::vector<Value *> &args) {
     builtin_checkparams(args, 1, 1);
     return wrap(getType(args[0]));
@@ -4837,32 +4873,6 @@ static Cursor parse_quote (StructValue *env, TupleIter topit) {
     }
 }
 
-static Cursor parse_decorate1 (StructValue *env, TupleIter topit) {
-    auto startit = topit;
-    TupleIter it(*topit++, 1);
-
-    std::vector<Value *> values;
-    while (it) {
-        values.push_back(*it);
-        it++;
-    }
-
-    if (topit) {
-        auto cur = translate(env, topit);
-        values.push_back(cur.value);
-        topit = cur.next;
-    } else {
-        valueError(*startit, "missing next line");
-    }
-
-    std::vector<Value *> topvalues = { TupleValue::create(values) };
-    while (topit) {
-        topvalues.push_back(*topit++);
-    }
-
-    return translate(env, TupleIter(TupleValue::create(topvalues), 0));
-}
-
 static Cursor parse_decorate_all (StructValue *env, TupleIter topit) {
     TupleIter it(*topit++, 1);
 
@@ -4880,57 +4890,26 @@ static Cursor parse_decorate_all (StructValue *env, TupleIter topit) {
         TupleValue::create({ TupleValue::create(values) }), 0));
 }
 
-static Cursor parse_locals (StructValue *env, TupleIter topit) {
-    std::vector<Value *> args;
-    args.push_back(getLocal(globals, "structof"));
-
-    auto tupleof = getLocal(globals, "tupleof");
-
-    std::unordered_set<std::string> visited;
-    while (env) {
-        auto struct_type = env->struct_type;
-        size_t fieldcount = struct_type->getFieldCount();
-        for (size_t i = 0; i < fieldcount; ++i) {
-            auto &field = struct_type->getField(i);
-            auto name = field.getName();
-            if (!visited.count(name)) {
-                visited.insert(name);
-                args.push_back(
-                    builder->call(
-                        {tupleof, wrap(name), env->values[i]}));
-            }
-        }
-        env = getParent(env);
-    }
-
-    topit++;
-    return { builder->call(args), topit };
-}
-
 static Cursor parse_syntax_run (StructValue *env, TupleIter topit) {
-    TupleIter it(*topit++, 1);
+    auto cur = parse_function (env, topit++);
 
-    auto currentblock = builder->flow;
-
-    auto mainfunc = FlowValue::create();
-    auto ret = mainfunc->appendParameter(ParameterValue::create());
-
-    auto subenv = new_scope(env);
-
-    builder->continueAt(mainfunc);
-
-    auto retval = parse_expr_list(subenv, it);
-    builder->br({ ret, retval.value });
-
-    auto result = execute({mainfunc});
-
-    builder->continueAt(currentblock);
+    auto result = execute({cur.value, env});
 
     std::vector<Value *> values = { result };
     while (topit) {
         values.push_back(*topit++);
     }
     return translate(env, TupleIter(TupleValue::create(values), 0));
+}
+
+static Cursor parse_syntax_scope (StructValue *env, TupleIter topit) {
+    TupleIter it(*topit++, 1);
+    auto expr_env = verifyValueKind<StructValue>(*it++);
+
+    auto result = parse_expr_list(expr_env, topit);
+    topit = result.next;
+
+    return { result.value, topit };
 }
 
 static bool verifyParameterCount (TupleValue *expr,
@@ -5003,10 +4982,9 @@ static void registerTranslators() {
     t.set(parse_do, "do", 0, -1);
     t.set(parse_function, "function", 1, -1);
     t.set(parse_quote, "quote", 1, -1);
-    t.set(parse_decorate1, "::", 1, -1);
     t.set(parse_decorate_all, "::*", 1, -1);
-    t.set(parse_locals, "locals", 0, 0);
     t.set(parse_syntax_run, "syntax-run", 1, -1);
+    t.set(parse_syntax_scope, "syntax-scope", 1, 1);
 }
 
 static Cursor translateFromList (StructValue *env, TupleIter topit) {
@@ -5153,6 +5131,7 @@ static void initGlobals () {
     setBuiltin(env, "branch", builtin_branch);
     setBuiltin(env, "call/cc", builtin_call_cc);
     setBuiltin(env, "dump", builtin_dump);
+    setBuiltin(env, "syntax-macro", builtin_syntax_macro);
 
     setBuiltin(env, "@", builtin_at_op);
 
