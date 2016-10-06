@@ -1263,6 +1263,7 @@ struct ParameterValue;
     ILVALUE_KIND(BuiltinFlow) \
     ILVALUE_KIND(Parameter) \
     ILVALUE_KIND(Frame) \
+    ILVALUE_KIND(SpecialForm) \
     ILVALUE_KIND(BuiltinMacro) \
     ILVALUE_KIND(Macro) \
     ILVALUE_KIND(TypeRef) \
@@ -1966,6 +1967,41 @@ struct BuiltinFlowValue :
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin-cc");
+        ss << " " << name;
+        ss << ")";
+        return ss.str();
+    }
+};
+
+//------------------------------------------------------------------------------
+
+typedef Value *(*SpecialFormFunction)(SListIter);
+
+struct SpecialFormValue :
+    ValueImpl<SpecialFormValue, Value::SpecialForm, Value> {
+
+    SpecialFormFunction handler;
+    std::string name;
+
+    static SpecialFormValue *create(SpecialFormFunction func,
+        const std::string &name) {
+        auto result = new SpecialFormValue();
+        result->handler = func;
+        result->name = name;
+        return result;
+    }
+
+    Type *inferType() const {
+        return Type::Any;
+    }
+
+    std::string getRepr () const {
+        return bangra::getRefRepr(this);
+    }
+
+    std::string getRefRepr() const {
+        std::stringstream ss;
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "form");
         ss << " " << name;
         ss << ")";
         return ss.str();
@@ -4218,6 +4254,17 @@ static std::string extract_string(const Value *value) {
     return resulttype->value;
 }
 
+static std::string extract_any_string(const Value *value) {
+    if (auto str = llvm::dyn_cast<StringValue>(value)) {
+        return str->value;
+    }
+    if (auto sym = llvm::dyn_cast<SymbolValue>(value)) {
+        return sym->value;
+    }
+    ilError(value, "string or symbol constant expected");
+    return "";
+}
+
 static Type *extract_type(const Value *value) {
     auto resulttype = llvm::dyn_cast<TypeRefValue>(value);
     if (!resulttype) {
@@ -4343,7 +4390,7 @@ static Value *builtin_slist(const std::vector<Value *> &args) {
 
 static Value *builtin_parameter(const std::vector<Value *> &args) {
     builtin_checkparams(args, 1, 1);
-    auto name = extract_string(args[0]);
+    auto name = extract_any_string(args[0]);
     return ParameterValue::create(name);
 }
 
@@ -4380,7 +4427,7 @@ static Value *builtin_structof(const std::vector<Value *> &args) {
         auto &pair = extract_tuple(args[i]);
         if (pair.size() != 2)
             ilError(args[i], "tuple must have exactly two elements");
-        auto name = extract_string(pair[0]);
+        auto name = extract_any_string(pair[0]);
         auto value = pair[1];
         result->addField(value,
             StructType::Field(name, getType(value)));
@@ -4862,6 +4909,12 @@ static void setBuiltin(
 }
 
 static void setBuiltin(
+    StructValue *scope, const std::string &name, SpecialFormFunction func) {
+    assert(scope);
+    setLocal(scope, name, SpecialFormValue::create(func, name));
+}
+
+static void setBuiltin(
     StructValue *scope, const std::string &name, ILBuiltinFunction func) {
     assert(scope);
     setLocal(scope, name, BuiltinValue::create(func, name));
@@ -4915,6 +4968,196 @@ static bool isSymbol (const Value *expr, const char *sym) {
 }
 
 //------------------------------------------------------------------------------
+// MACRO EXPANDER
+//------------------------------------------------------------------------------
+
+static StructValue *globals = nullptr;
+
+static bool verifyParameterCount (SListValue *expr,
+    int mincount, int maxcount) {
+    if ((mincount <= 0) && (maxcount == -1))
+        return true;
+    int argcount = (int)getSize(expr) - 1;
+
+    if ((maxcount >= 0) && (argcount > maxcount)) {
+        valueError(*SListIter(expr, maxcount + 1),
+            "excess argument. At most %i arguments expected", maxcount);
+        return false;
+    }
+    if ((mincount >= 0) && (argcount < mincount)) {
+        valueError(expr, "at least %i arguments expected", mincount);
+        return false;
+    }
+    return true;
+}
+
+static bool verifyParameterCount (SListIter topit,
+    int mincount, int maxcount) {
+    return verifyParameterCount(llvm::cast<SListValue>(*topit),
+        mincount, maxcount);
+}
+
+//------------------------------------------------------------------------------
+
+static Cursor expand (StructValue *env, SListIter topit);
+static Value *compile(Value *expr);
+
+static ParameterValue *toparameter (StructValue *env, Value *value) {
+    if (value->kind == Value::Parameter)
+        return llvm::cast<ParameterValue>(value);
+    auto symname = verifyValueKind<SymbolValue>(value);
+    auto bp = ParameterValue::create(symname->value);
+    setLocal(env, symname->value, bp);
+    return bp;
+}
+
+static SListValue *expand_expr_list (StructValue *env, SListIter it) {
+    std::vector<Value *> result;
+    while (it) {
+        auto cur = expand(env, it);
+        result.push_back(cur.value);
+        it = cur.next;
+    }
+
+    return SListValue::create(result);
+}
+static Cursor expand_function (StructValue *env, SListIter topit) {
+    verifyParameterCount(topit, 1, -1);
+
+    SListIter it(*topit++, 1);
+    auto expr_parameters = *it++;
+
+    auto subenv = new_scope(env);
+
+    std::vector<Value *> outargs;
+    auto params = verifyValueKind<SListValue>(expr_parameters);
+    SListIter param(params);
+    while (param) {
+        outargs.push_back(toparameter(subenv, *param));
+        param++;
+    }
+
+    return {
+        SListValue::create(
+            getLocal(globals, "form:function"),
+            SListValue::create(
+                SListValue::create(outargs),
+                    expand_expr_list(subenv, it))),
+        topit };
+}
+
+static Cursor expand_quote (StructValue *env, SListIter topit) {
+    verifyParameterCount(topit, 1, -1);
+
+    SListIter it(*topit++, 1);
+    SListValue *rest = const_cast<SListValue*>(it.getSList());
+    auto result = SListValue::create(getLocal(globals, "form:quote"), rest);
+    return { result, topit };
+}
+
+static Cursor expand_escape (StructValue *env, SListIter topit) {
+    SListIter it(*topit++, 1);
+    return { *it, topit };
+}
+
+static Cursor expand_syntax_scope (StructValue *env, SListIter topit) {
+
+    auto cur = expand_function (env, topit++);
+
+    auto fun = compile(cur.value);
+
+    auto expr_env = verifyValueKind<StructValue>(execute({fun, env}));
+
+    auto rest = expand_expr_list(expr_env, topit);
+    if (rest == SListValue::get_eox()) {
+        valueError(*topit, "missing subsequent expression");
+    }
+
+    return { rest->at, rest->next };
+}
+
+static Cursor expandFromList (StructValue *env, SListIter topit) {
+    auto expr = llvm::cast<SListValue>(*topit);
+    assert(expr);
+    if (expr == SListValue::get_eox()) {
+        valueError(topit.getSList(), "expression is empty");
+    }
+
+    auto head = expr->at;
+    if (auto sym = llvm::dyn_cast<SymbolValue>(head)) {
+        head = getLocal(env, sym->value);
+    }
+    if (head) {
+        switch(head->kind) {
+            case Value::BuiltinMacro: {
+                auto macro = llvm::cast<BuiltinMacroValue>(head);
+                return macro->handler(env, topit);
+            } break;
+            case Value::Macro: {
+                auto macro = llvm::cast<MacroValue>(head);
+                Value *topexpr = const_cast<SListValue*>(topit.getSList());
+                auto result = verifyValueKind<SListValue>(
+                    execute({macro->value, env, topexpr}));
+                return expand(env, SListIter(result));
+            } break;
+            default: {
+            } break;
+        }
+    }
+
+    SListIter it(*topit++);
+    return { expand_expr_list(env, it), topit };
+}
+
+static Cursor expand (StructValue *env, SListIter topit) {
+    auto expr = *topit;
+    assert(expr);
+    Value *result = nullptr;
+    switch(expr->kind) {
+        case Value::SList: {
+            auto cur = expandFromList(env, topit);
+            result = cur.value;
+            assert(cur.next != topit);
+            topit = cur.next;
+        } break;
+        case Value::Symbol: {
+            auto sym = llvm::cast<SymbolValue>(expr);
+            std::string value = sym->value;
+            result = getLocal(env, value);
+            if (!result) {
+                valueError(expr,
+                    "unknown symbol '%s'", value.c_str());
+            }
+            topit++;
+        } break;
+        default: {
+            result = expr;
+            topit++;
+        } break;
+    }
+    if (result && !result->anchor.isValid()) {
+        const Anchor *anchor = find_valid_anchor(expr);
+        if (anchor) {
+            result->anchor = *anchor;
+        }
+    }
+    assert(result);
+    return { result, topit };
+}
+
+static Value *builtin_expand(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 2, 2);
+    auto scope = verifyValueKind<StructValue>(args[0]);
+    auto expr_eval = args[1];
+
+    auto retval = expand(scope, expr_eval);
+
+    auto topexpr = const_cast<SListValue*>(retval.next.getSList());
+    return SListValue::create(retval.value, topexpr);
+}
+
+//------------------------------------------------------------------------------
+// COMPILER
 //------------------------------------------------------------------------------
 
 struct ILBuilder {
@@ -4977,67 +5220,22 @@ static ILBuilder *builder;
 
 //------------------------------------------------------------------------------
 
-static StructValue *globals = nullptr;
-
-static bool verifyParameterCount (SListValue *expr,
-    int mincount, int maxcount) {
-    if ((mincount <= 0) && (maxcount == -1))
-        return true;
-    int argcount = (int)getSize(expr) - 1;
-
-    if ((maxcount >= 0) && (argcount > maxcount)) {
-        valueError(*SListIter(expr, maxcount + 1),
-            "excess argument. At most %i arguments expected", maxcount);
-        return false;
-    }
-    if ((mincount >= 0) && (argcount < mincount)) {
-        valueError(expr, "at least %i arguments expected", mincount);
-        return false;
-    }
-    return true;
-}
-
-static bool verifyParameterCount (SListIter topit,
-    int mincount, int maxcount) {
-    return verifyParameterCount(llvm::cast<SListValue>(*topit),
-        mincount, maxcount);
-}
-
-Cursor translate(StructValue *env, SListIter it);
-
-static Cursor parse_expr_list (StructValue *env, SListIter it) {
+static Value *compile_expr_list (SListIter it) {
     Value *value = nullptr;
     while (it) {
-        auto cur = translate(env, it);
-        value = cur.value;
-        it = cur.next;
+        value = compile(*it);
+        it++;
     }
 
     if (!value)
         value = TupleValue::create({});
 
-    return { value, it };
+    return value;
 }
 
-static Cursor parse_do (StructValue *env, SListIter topit) {
-    verifyParameterCount(topit, 0, -1);
-    auto cur = parse_expr_list(env, SListIter(*topit++, 1));
-    return { cur.value, topit };
-}
+static Value *compile_function (SListIter it) {
+    it++;
 
-static ParameterValue *toparameter (StructValue *env, Value *value) {
-    if (value->kind == Value::Parameter)
-        return llvm::cast<ParameterValue>(value);
-    auto symname = verifyValueKind<SymbolValue>(value);
-    auto bp = ParameterValue::create(symname->value);
-    setLocal(env, symname->value, bp);
-    return bp;
-}
-
-static Cursor parse_function (StructValue *env, SListIter topit) {
-    verifyParameterCount(topit, 1, -1);
-
-    SListIter it(*topit++, 1);
     auto expr_parameters = *it++;
 
     auto currentblock = builder->save();
@@ -5045,293 +5243,78 @@ static Cursor parse_function (StructValue *env, SListIter topit) {
     auto function = FlowValue::create(0, "func");
 
     builder->continueAt(function);
-    auto subenv = new_scope(env);
 
     auto params = verifyValueKind<SListValue>(expr_parameters);
     SListIter param(params);
     while (param) {
-        function->appendParameter(toparameter(subenv, *param));
+        function->appendParameter(verifyValueKind<ParameterValue>(*param));
         param++;
     }
     auto ret = function->appendParameter(ParameterValue::create());
 
-    auto result = parse_expr_list(subenv, it);
+    auto result = compile_expr_list(it);
 
-    builder->br({ret, result.value});
-
-    builder->restore(currentblock);
-
-    return { function, topit };
-}
-
-static Cursor parse_letrec (StructValue *env, SListIter topit) {
-    verifyParameterCount(topit, 1, -1);
-
-    SListIter it(*topit++, 1);
-
-    auto currentblock = builder->save();
-
-    auto function = FlowValue::create(0, "let");
-
-    builder->continueAt(function);
-    auto subenv = new_scope(env);
-
-    bool multi = true;
-    if (((*it)->kind == Value::Symbol) || ((*it)->kind == Value::Parameter)) {
-        multi = false;
-        function->appendParameter(toparameter(subenv, *it++));
-    } else {
-        // declare parameters
-        SListIter param(it);
-        while (param) {
-            auto pair = verifyValueKind<SListValue>(*param);
-            auto pairit = SListIter(pair);
-            if (!pairit) {
-                ilError(pair, "at least two arguments expected");
-            }
-            function->appendParameter(toparameter(subenv, *pairit++));
-            param++;
-        }
-    }
-
-    auto ret = function->appendParameter(ParameterValue::create());
-
-    auto result = parse_expr_list(subenv, topit);
-    topit = result.next;
-
-    builder->br({ret, result.value});
+    builder->br({ret, result});
 
     builder->restore(currentblock);
 
-    std::vector<Value *> args;
-    args.push_back(function);
-
-    if (!multi) {
-        auto cur = parse_expr_list(subenv, it);
-        args.push_back(cur.value);
-    } else {
-        // initialize parameters
-        SListIter param(it);
-        while (param) {
-            auto pair = verifyValueKind<SListValue>(*param);
-            auto pairit = SListIter(pair);
-            pairit++;
-            if (!pairit) {
-                ilError(pair, "at least two arguments expected");
-            }
-            auto cur = parse_expr_list(subenv, pairit);
-            args.push_back(cur.value);
-            param++;
-        }
-    }
-
-    return { builder->call(args), topit };
+    return function;
 }
 
-static Cursor parse_implicit_apply (StructValue *env, SListIter it) {
-    auto ccur = translate(env, it);
-    Value *callable = ccur.value;
-    it = ccur.next;
+static Value *compile_implicit_call (SListIter it) {
+    Value *callable = compile(*it++);
 
     std::vector<Value *> args;
     args.push_back(callable);
 
     while (it) {
-        auto cur = translate(env, it);
-        args.push_back(cur.value);
-        it = cur.next;
-    }
-
-    return { builder->call(args), it };
-}
-
-static Cursor parse_apply (StructValue *env, SListIter topit) {
-    verifyParameterCount(topit, 1, -1);
-
-    auto cur = parse_implicit_apply(env, SListIter(*topit++, 1));
-    return { cur.value, topit };
-}
-
-bool hasTypeValue(Type *type) {
-    assert(type);
-    if ((type == Type::Void) || (type == Type::Empty))
-        return false;
-    return true;
-}
-
-static Cursor parse_quote (StructValue *env, SListIter topit) {
-    verifyParameterCount(topit, 1, -1);
-
-    SListIter it(*topit++, 1);
-    auto expr_value = *it++;
-    if (it) {
-        // multiple values, wrap in list
-        std::vector<Value *> lines = { expr_value };
-        while (it) {
-            lines.push_back(*it);
-            it++;
-        }
-        return { SListValue::create(lines), topit };
-    } else {
-        // single value
-        return { expr_value, topit };
-    }
-}
-
-static Cursor parse_decorate_all (StructValue *env, SListIter topit) {
-    verifyParameterCount(topit, 1, -1);
-
-    SListIter it(*topit++, 1);
-
-    std::vector<Value *> values;
-    while (it) {
-        values.push_back(*it);
+        args.push_back(compile(*it));
         it++;
     }
 
-    while (topit) {
-        values.push_back(*topit++);
-    }
-
-    return translate(env, SListIter(
-        SListValue::create({ SListValue::create(values) }), 0));
+    return builder->call(args);
 }
 
-static Cursor parse_syntax_scope (StructValue *env, SListIter topit) {
-    auto cur = parse_function (env, topit++);
+static Value *compile_call (SListIter it) {
+    it++;
+    return compile_implicit_call(it);
+}
 
-    auto expr_env = verifyValueKind<StructValue>(execute({cur.value, env}));
-
-    auto result = parse_expr_list(expr_env, topit);
-    topit = result.next;
-
-    return { result.value, topit };
+static Value *compile_quote (SListIter it) {
+    it++;
+    SListValue *rest = const_cast<SListValue*>(it.getSList());
+    if (rest->next == SListValue::get_eox())
+        return rest->at;
+    else
+        return rest;
 }
 
 //------------------------------------------------------------------------------
 
-static Cursor translateFromList (StructValue *env, SListIter topit) {
-    auto expr = llvm::cast<SListValue>(*topit);
-    assert(expr);
-    if (expr == SListValue::get_eox()) {
-        valueError(topit.getSList(), "symbol expected");
-    }
-    auto head = expr->at;
-    if (auto sym = llvm::dyn_cast<SymbolValue>(head)) {
-        head = getLocal(env, sym->value);
-    }
-    if (head) {
-        switch(head->kind) {
-            case Value::BuiltinMacro: {
-                auto macro = llvm::cast<BuiltinMacroValue>(head);
-                return macro->handler(env, topit);
-            } break;
-            case Value::Macro: {
-                auto macro = llvm::cast<MacroValue>(head);
-                Value *topexpr = const_cast<SListValue*>(topit.getSList());
-                auto result = verifyValueKind<SListValue>(
-                    execute({macro->value, env, topexpr}));
-                return { result->at, SListIter(result->next) };
-            } break;
-            default: break;
-        }
-    }
-    auto cur = parse_implicit_apply(env, SListIter(*topit++, 0));
-    return { cur.value, topit };
-}
-
-Cursor translate (StructValue *env, SListIter topit) {
-    auto expr = *topit;
+static Value *compile (Value *expr) {
     assert(expr);
     Value *result = nullptr;
     switch(expr->kind) {
         case Value::SList: {
-            auto cur = translateFromList(env, topit);
-            result = cur.value;
-            assert(cur.next != topit);
-            topit = cur.next;
-        } break;
-        case Value::Symbol: {
-            auto sym = llvm::cast<SymbolValue>(expr);
-            std::string value = sym->value;
-            result = getLocal(env, value);
-            if (!result) {
-                valueError(expr,
-                    "unknown symbol '%s'", value.c_str());
+            if (expr == SListValue::get_eox()) {
+                valueError(expr, "empty expression");
             }
-            topit++;
+            auto slist = llvm::cast<SListValue>(expr);
+            auto head = slist->at;
+            if (head->kind == Value::SpecialForm) {
+                auto form = verifyValueKind<SpecialFormValue>(head);
+                result = form->handler(SListIter(slist));
+            } else {
+                result = compile_implicit_call(SListIter(slist));
+            }
         } break;
         default: {
             result = expr;
-            topit++;
         } break;
     }
-    if (result && !result->anchor.isValid()) {
-        const Anchor *anchor = find_valid_anchor(expr);
-        if (anchor) {
-            result->anchor = *anchor;
-        }
-    }
     assert(result);
-    return { result, topit };
+    return result;
 }
-
-static Value *builtin_eval(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 2, 2);
-    auto scope = verifyValueKind<StructValue>(args[0]);
-    auto expr_eval = args[1];
-
-    auto currentblock = builder->save();
-
-    auto mainfunc = FlowValue::create();
-    auto ret = mainfunc->appendParameter(ParameterValue::create());
-
-    auto subenv = new_scope(scope);
-
-    builder->continueAt(mainfunc);
-
-    auto arg = SListValue::create({expr_eval});
-    auto retval = translate(subenv, SListIter(arg, 0));
-    builder->br({ ret, retval.value });
-
-    builder->restore(currentblock);
-
-    return mainfunc;
-}
-
-static Value *builtin_expand(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 2, 2);
-    auto scope = verifyValueKind<StructValue>(args[0]);
-    auto expr_eval = args[1];
-
-    auto retval = translate(scope, expr_eval);
-
-    auto topexpr = const_cast<SListValue*>(retval.next.getSList());
-    return SListValue::create(retval.value, topexpr);
-}
-
-
-//------------------------------------------------------------------------------
-// FILE SYSTEM
-//------------------------------------------------------------------------------
-
-struct ModuleLoader {
-    std::unordered_map<std::string, StructValue *> modules;
-
-    ModuleLoader()
-    {}
-
-    StructValue *import_module(const std::string &name) {
-        auto it = modules.find(name);
-        if (it != modules.end()) {
-            return it->second;
-        }
-        return nullptr;
-    }
-};
-
-ModuleLoader loader;
-
 
 //------------------------------------------------------------------------------
 // INITIALIZATION
@@ -5343,13 +5326,14 @@ static void initGlobals () {
 
     setLocal(env, "globals", env);
 
-    setBuiltin(env, "apply", parse_apply);
-    setBuiltin(env, "let", parse_letrec);
-    setBuiltin(env, "do", parse_do);
-    setBuiltin(env, "function", parse_function);
-    setBuiltin(env, "quote", parse_quote);
-    setBuiltin(env, "::*", parse_decorate_all);
-    setBuiltin(env, "syntax-scope", parse_syntax_scope);
+    setBuiltin(env, "form:call", compile_call);
+    setBuiltin(env, "form:function", compile_function);
+    setBuiltin(env, "form:quote", compile_quote);
+
+    setBuiltin(env, "function", expand_function);
+    setBuiltin(env, "quote", expand_quote);
+    setBuiltin(env, "syntax-scope", expand_syntax_scope);
+    setBuiltin(env, "escape", expand_escape);
 
     setLocal(env, "void", wrap(Type::Void));
     setLocal(env, "null", wrap(Type::Null));
@@ -5391,8 +5375,6 @@ static void initGlobals () {
     setBuiltin(env, "typeof", builtin_typeof);
     setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);
-    setBuiltin(env, "eval", builtin_eval);
-    setBuiltin(env, "expand", builtin_expand);
     setBuiltin(env, "branch", builtin_branch);
     setBuiltin(env, "call/cc", builtin_call_cc);
     setBuiltin(env, "dump", builtin_dump);
@@ -5400,6 +5382,7 @@ static void initGlobals () {
     setBuiltin(env, "string", builtin_string);
     setBuiltin(env, "parameter", builtin_parameter);
     setBuiltin(env, "empty?", builtin_is_empty);
+    setBuiltin(env, "expand", builtin_expand);
 
     setBuiltin(env, "@",
         builtin_variadic_ltr<builtin_at_op>);
@@ -5474,13 +5457,15 @@ static void handleException(StructValue *env, Value *expr) {
     valueError(expr, "an exception was raised");
 }
 
-static bool translateRootValueList (StructValue *env, Value *expr) {
+static bool compileRootValueList (StructValue *env, Value *expr) {
+
+    auto expexpr = expand_expr_list(env, SListIter(expr, 1));
 
     auto mainfunc = FlowValue::create();
     auto ret = mainfunc->appendParameter(ParameterValue::create());
     builder->continueAt(mainfunc);
 
-    parse_expr_list(env, SListIter(expr, 1));
+    compile_expr_list(SListIter(expexpr));
     builder->br({ ret });
 
 /*
@@ -5535,7 +5520,7 @@ static bool compileMain (Value *expr) {
         }
     }
 
-    return translateRootValueList (env, expr);
+    return compileRootValueList (env, expr);
 }
 
 // This function isn't referenced outside its translation unit, but it

@@ -56,10 +56,10 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let external cdecl apply do branch function null true false"
+        "bangra let external cdecl branch function null true false"
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* syntax-macro syntax-scope slist cons eox?"
-            .. " parameter string expand"
+            .. " parameter string expand call escape"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
