@@ -64,7 +64,7 @@ local function bangra_symbols()
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
         "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-            .. " *= /= %= ^= &= |= ~= <-"
+            .. " *= /= %= ^= &= |= ~= <- ?"
         ),
 
 
