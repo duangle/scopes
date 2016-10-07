@@ -4412,6 +4412,20 @@ static Value *builtin_is_empty(const std::vector<Value *> &args) {
     return wrap(result);
 }
 
+static Value *builtin_is_slist(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto arg = args[0];
+    bool result = (arg->kind == Value::SList);
+    return wrap(result);
+}
+
+static Value *builtin_is_symbol(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto arg = args[0];
+    bool result = (arg->kind == Value::Symbol);
+    return wrap(result);
+}
+
 static Value *builtin_cons(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
     auto at = args[0];
@@ -4525,8 +4539,8 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
         case Value::SList: {
             auto cs = llvm::cast<SListValue>(obj);
             if (cs == SListValue::get_eox()) {
-                ilError(key, "attempting to index empty symbolic list");
-                return nullptr;
+                //ilError(key, "attempting to index empty symbolic list");
+                return SListValue::get_eox();
             }
             switch(key->kind) {
                 case Value::Integer: {
@@ -5061,67 +5075,12 @@ static Cursor expand_escape (StructValue *env, SListIter topit) {
 }
 
 static Cursor expand_let_syntax (StructValue *env, SListIter topit) {
-    SListIter it(*topit++, 1);
 
-    auto subenv = new_scope(env);
+    auto cur = expand_function (env, topit++);
 
-    auto structof = getLocal(globals, "structof");
-    auto tupleof = getLocal(globals, "tupleof");
-    auto form_do = getLocal(globals, "do");
-    auto form_function = getLocal(globals, "form:function");
+    auto fun = compile(cur.value);
 
-    std::vector<Value *> outargs;
-    std::vector<Value *> tuplekeys = {
-        SListValue::create({tupleof,
-            StringValue::create("#parent"), env}) };
-    // declare parameters
-    SListIter param(it);
-    while (param) {
-        auto pair = verifyValueKind<SListValue>(*param);
-        auto pairit = SListIter(pair);
-        if (!pairit) {
-            ilError(pair, "at least two arguments expected");
-        }
-        auto p = toparameter(subenv, *pairit++);
-        outargs.push_back(p);
-        tuplekeys.push_back(
-            SListValue::create({tupleof, wrap(p->name), p}));
-        param++;
-    }
-
-    auto function =
-        SListValue::create({
-            form_function,
-            SListValue::create(outargs),
-            SListValue::create(structof,
-                SListValue::create(tuplekeys))});
-
-    std::vector<Value *> args = { function };
-
-    // initialize parameters
-    param = it;
-    while (param) {
-        auto pair = verifyValueKind<SListValue>(*param);
-        auto pairit = SListIter(pair);
-        pairit++;
-        if (!pairit) {
-            ilError(pair, "at least two arguments expected");
-        }
-        args.push_back(
-            SListValue::create(form_do, expand_expr_list(subenv, pairit)));
-        param++;
-    }
-
-    auto fcall = SListValue::create(args);
-    auto wrapfunc =
-        SListValue::create({
-            form_function,
-            SListValue::create({}),
-            fcall});
-
-    auto fun = compile(wrapfunc);
-
-    auto expr_env = verifyValueKind<StructValue>(execute({fun}));
+    auto expr_env = verifyValueKind<StructValue>(execute({fun, env}));
 
     auto rest = expand_expr_list(expr_env, topit);
     if (rest == SListValue::get_eox()) {
@@ -5454,6 +5413,8 @@ static void initGlobals () {
     setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
     setBuiltin(env, "set-globals!", builtin_set_globals);
+    setBuiltin(env, "slist?", builtin_is_slist);
+    setBuiltin(env, "symbol?", builtin_is_symbol);
 
     setBuiltin(env, "@",
         builtin_variadic_ltr<builtin_at_op>);
