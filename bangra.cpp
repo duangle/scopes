@@ -1521,12 +1521,16 @@ struct RealValue :
 
 struct UnitValue :
     ValueImpl<UnitValue, Value::Unit, Value> {
+    static UnitValue *Null;
     Type *unit_type;
 
-    static UnitValue *create_null() {
-        auto result = new UnitValue();
-        result->unit_type = Type::Null;
-        return result;
+    static UnitValue *get_null() {
+        if (!Null) {
+            auto result = new UnitValue();
+            result->unit_type = Type::Null;
+            Null = result;
+        }
+        return Null;
     }
 
     Type *inferType() const {
@@ -1542,6 +1546,8 @@ struct UnitValue :
         return ansi(ANSI_STYLE_KEYWORD, "null");
     }
 };
+
+UnitValue *UnitValue::Null = nullptr;
 
 //------------------------------------------------------------------------------
 
@@ -1595,7 +1601,7 @@ public:
         if (EOX)
             return EOX;
         auto result = new SListValue();
-        result->at = result->next = nullptr;
+        result->at = result->next = result;
         EOX = result;
         return result;
     }
@@ -4538,20 +4544,17 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
     switch(obj->kind) {
         case Value::SList: {
             auto cs = llvm::cast<SListValue>(obj);
-            if (cs == SListValue::get_eox()) {
-                //ilError(key, "attempting to index empty symbolic list");
-                return SListValue::get_eox();
-            }
             switch(key->kind) {
                 case Value::Integer: {
                     auto ci = llvm::cast<IntegerValue>(key);
                     if (ci->value == 0) {
                         return cs->at;
-                    } else if (ci->value == 1) {
-                        return cs->next;
-                    } else if (ci->value > 1) {
-                        ilError(key, "index out of bounds");
-                        return nullptr;
+                    } else {
+                        SListValue *result = cs;
+                        for (int64_t c = 0; c < ci->value; ++c) {
+                            result = result->next;
+                        }
+                        return result;
                     }
                 } break;
                 default: break;
@@ -4897,7 +4900,7 @@ typedef std::unordered_map<std::string, Value *> NameValueMap;
 
 static StructValue *new_scope() {
     auto scope = StructValue::create({}, Type::Struct("scope"));
-    scope->addField(UnitValue::create_null(),
+    scope->addField(UnitValue::get_null(),
         StructType::Field("#parent", Type::Null));
     return scope;
 }
@@ -5090,70 +5093,76 @@ static Cursor expand_let_syntax (StructValue *env, SListIter topit) {
     return { rest->at, rest->next };
 }
 
-static Cursor expandFromList (StructValue *env, SListIter topit) {
-    auto expr = llvm::cast<SListValue>(*topit);
-    assert(expr);
-    if (expr == SListValue::get_eox()) {
-        valueError(topit.getSList(), "expression is empty");
-    }
-
-    auto head = expr->at;
-    if (auto sym = llvm::dyn_cast<SymbolValue>(head)) {
-        head = getLocal(env, sym->value);
-    }
-    if (head) {
-        switch(head->kind) {
-            case Value::BuiltinMacro: {
-                auto macro = llvm::cast<BuiltinMacroValue>(head);
-                return macro->handler(env, topit);
-            } break;
-            case Value::Macro: {
-                auto macro = llvm::cast<MacroValue>(head);
-                Value *topexpr = const_cast<SListValue*>(topit.getSList());
-                auto result = verifyValueKind<SListValue>(
-                    execute({macro->value, env, topexpr}));
-                return expand(env, SListIter(result));
-            } break;
-            default: {
-            } break;
-        }
-    }
-
-    SListIter it(*topit++);
-    return { expand_expr_list(env, it), topit };
+static SListValue *expand_macro(
+    StructValue *env, Value *handler, SListIter topit) {
+    Value *topexpr = const_cast<SListValue*>(topit.getSList());
+    return verifyValueKind<SListValue>(
+        execute({handler, env, topexpr}));
 }
 
 static Cursor expand (StructValue *env, SListIter topit) {
-    auto expr = *topit;
-    assert(expr);
     Value *result = nullptr;
-    switch(expr->kind) {
-        case Value::SList: {
-            auto cur = expandFromList(env, topit);
-            result = cur.value;
-            assert(cur.next != topit);
-            topit = cur.next;
-        } break;
-        case Value::Symbol: {
-            auto sym = llvm::cast<SymbolValue>(expr);
-            std::string value = sym->value;
-            result = getLocal(env, value);
-            if (!result) {
-                valueError(expr,
-                    "unknown symbol '%s'", value.c_str());
-            }
-            topit++;
-        } break;
-        default: {
-            result = expr;
-            topit++;
-        } break;
-    }
-    if (result && !result->anchor.isValid()) {
-        const Anchor *anchor = find_valid_anchor(expr);
-        if (anchor) {
-            result->anchor = *anchor;
+process:
+    Value *expr = *topit;
+    assert(expr);
+    if (expr->kind == Value::SList) {
+        auto listexpr = llvm::cast<SListValue>(expr);
+        if (listexpr == SListValue::get_eox()) {
+            valueError(topit.getSList(), "expression is empty");
         }
+
+        auto head = listexpr->at;
+        if (auto sym = llvm::dyn_cast<SymbolValue>(head)) {
+            head = getLocal(env, sym->value);
+        }
+        if (head) {
+            if (head->kind == Value::BuiltinMacro) {
+                auto macro = llvm::cast<BuiltinMacroValue>(head);
+                return macro->handler(env, topit);
+            } else if (head->kind == Value::Macro) {
+                auto macro = llvm::cast<MacroValue>(head);
+                auto result = expand_macro(env, macro->value, topit);
+                if (result != SListValue::get_eox()) {
+                    topit = SListIter(result);
+                    goto process;
+                }
+            }
+        }
+
+        auto default_handler = getLocal(env, "#slist");
+        if (default_handler) {
+            auto result = expand_macro(env, default_handler, topit);
+            if (result != SListValue::get_eox()) {
+                topit = SListIter(result);
+                goto process;
+            }
+        }
+
+        SListIter it(*topit);
+        result = expand_expr_list(env, it);
+        topit++;
+    } else if (expr->kind == Value::Symbol) {
+        auto sym = llvm::cast<SymbolValue>(expr);
+        std::string value = sym->value;
+        result = getLocal(env, value);
+        if (!result) {
+            auto default_handler = getLocal(env, "#symbol");
+            if (default_handler) {
+                auto result = expand_macro(env, default_handler, topit);
+                if (result != SListValue::get_eox()) {
+                    topit = SListIter(result);
+                    goto process;
+                }
+            }
+        }
+        if (!result) {
+            valueError(expr,
+                "unknown symbol '%s'", value.c_str());
+        }
+        topit++;
+    } else {
+        result = expr;
+        topit++;
     }
     assert(result);
     return { result, topit };
@@ -5392,7 +5401,7 @@ static void initGlobals () {
     setLocal(env, "true", IntegerValue::create(1, booltype));
     setLocal(env, "false", IntegerValue::create(0, booltype));
 
-    setLocal(env, "null", UnitValue::create_null());
+    setLocal(env, "null", UnitValue::get_null());
 
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);

@@ -42,7 +42,7 @@ let-syntax (scope)
                                                 (cons function
                                                     (cons (slist param)
                                                         (@ expr 1)))
-                                                (@ expr 0 1 1 0)))))))
+                                                (@ expr 0 2 0)))))))
                             (parameter param-name))) (string (@ expr 0 1 0)))
         tupleof "?"
             syntax-macro
@@ -51,9 +51,9 @@ let-syntax (scope)
                         slist branch
                             @ expr 0 1 0
                             slist function (slist)
-                                @ expr 0 1 1 0
+                                @ expr 0 2 0
                             slist function (slist)
-                                @ expr 0 1 1 1 0
+                                @ expr 0 3 0
                         @ expr 1
         tupleof "syntax-set-globals!"
             syntax-macro
@@ -61,6 +61,10 @@ let-syntax (scope)
                     set-globals! env
                     cons (slist do)
                         @ expr 1
+        tupleof "#symbol"
+            function (env expr)
+                print expr
+                slist;
 
 let-syntax (scope)
     let slist-join
@@ -71,6 +75,15 @@ let-syntax (scope)
                     slist-join
                         @ a 1
                         b
+    let slist-head?
+        function (expr name)
+            ? (slist? expr)
+                do
+                    let head (@ expr 0)
+                    ? (symbol? head)
+                        == (string head) name
+                        false
+                false
     structof
         tupleof "#parent" scope
         tupleof "slist-join" slist-join
@@ -81,21 +94,40 @@ let-syntax (scope)
                         slist-join
                             @ expr 0 1
                             @ expr 1
+        tupleof "and"
+            syntax-macro
+                function (env expr)
+                    let tmp
+                        parameter "tmp"
+                    cons
+                        slist
+                            slist function (slist tmp)
+                                slist branch tmp
+                                    slist function (slist)
+                                        @ expr 0 2 0
+                                    slist function (slist) tmp
+                            @ expr 0 1 0
+                        @ expr 1
+        tupleof "or"
+            syntax-macro
+                function (env expr)
+                    let tmp
+                        parameter "tmp"
+                    cons
+                        slist
+                            slist function (slist tmp)
+                                slist branch tmp
+                                    slist function (slist) tmp
+                                    slist function (slist)
+                                        @ expr 0 2 0
+                            @ expr 0 1 0
+                        @ expr 1
         tupleof "if"
-            let head?
-                function (expr name)
-                    ? (slist? expr)
-                        do
-                            let head (@ expr 0)
-                            ? (symbol? head)
-                                == (string head) name
-                                false
-                        false
             let if-rec
                 function (env expr)
                     let next-expr
                         @ expr 1 0
-                    ? (head? next-expr "elseif")
+                    ? (slist-head? next-expr "elseif")
                         do
                             let nextif
                                 if-rec env
@@ -105,27 +137,27 @@ let-syntax (scope)
                                     @ expr 0 1 0
                                     cons function
                                         cons (slist)
-                                            @ expr 0 1 1
+                                            @ expr 0 2
                                     slist function (slist)
                                         @ nextif 0
                                 @ nextif 1
-                        ? (head? next-expr "else")
+                        ? (slist-head? next-expr "else")
                             cons
                                 slist branch
                                     @ expr 0 1 0
                                     cons function
                                         cons (slist)
-                                            @ expr 0 1 1
+                                            @ expr 0 2
                                     cons function
                                         cons (slist)
                                             @ expr 1 0 1
-                                @ expr 1 1
+                                @ expr 2
                             cons
                                 slist branch
                                     @ expr 0 1 0
                                     cons function
                                         cons (slist)
-                                            @ expr 0 1 1
+                                            @ expr 0 2
                                     cons function
                                         cons (slist) (slist)
                                 @ expr 1
@@ -143,18 +175,20 @@ do
     print (+ x 1)
     print x
     let k 1
-    if (== k 0)
-        print "if!"
-        1
-    elseif (== k 1)
-        print "elseif 1!"
-        2
-    elseif (== k 2)
-        print "elseif 2!"
-        3
-    else
-        print "else!"
-        4
+
+    print
+        if (== k 0)
+            print "if!"
+            1
+        elseif (== k 1)
+            print "elseif 1!"
+            2
+        elseif (== k 2)
+            print "elseif 2!"
+            3
+        else
+            print "else!"
+            4
 
     print "hi"
     print "ho"
