@@ -4432,6 +4432,20 @@ static Value *builtin_is_symbol(const std::vector<Value *> &args) {
     return wrap(result);
 }
 
+static Value *builtin_is_integer(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto arg = args[0];
+    bool result = (arg->kind == Value::Integer);
+    return wrap(result);
+}
+
+static Value *builtin_is_null(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto arg = args[0];
+    bool result = (arg == UnitValue::get_null());
+    return wrap(result);
+}
+
 static Value *builtin_cons(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
     auto at = args[0];
@@ -4525,6 +4539,13 @@ static Value *builtin_external(const std::vector<Value *> &args) {
     return ExternalValue::create(name, type);
 }
 
+static Value *builtin_error(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    std::string msg = extract_string(args[0]);
+    valueError(nullptr, "%s", msg.c_str());
+    return UnitValue::get_null();
+}
+
 // (import-c const-path (tupleof const-string ...))
 static Value *builtin_import_c(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
@@ -4535,6 +4556,41 @@ static Value *builtin_import_c(const std::vector<Value *> &args) {
         cargs.push_back(extract_string(compile_args[i]));
     }
     return bangra::importCModule(path, cargs);
+}
+
+static Value *builtin_is_key(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 2, 2);
+    Value *obj = args[0];
+    Value *key = args[1];
+    bool result = false;
+    switch(obj->kind) {
+        case Value::Struct: {
+            auto cs = llvm::cast<StructValue>(obj);
+            auto t = llvm::cast<StructType>(getType(cs));
+            switch(key->kind) {
+                case Value::Integer: {
+                    auto ci = llvm::cast<IntegerValue>(key);
+                    if ((size_t)ci->value < t->getFieldCount()) {
+                        result = true;
+                    }
+                } break;
+                case Value::String: {
+                    auto cstr = llvm::cast<StringValue>(key);
+                    size_t idx = t->getFieldIndex(cstr->value);
+                    if (idx != (size_t)-1) {
+                        result = true;
+                    }
+                } break;
+                default: {
+                    ilError(key, "illegal key type");
+                } break;
+            }
+        } break;
+        default: {
+            ilError(obj, "unsubscriptable type");
+        } break;
+    }
+    return wrap(result);
 }
 
 static Value *builtin_at_op(const std::vector<Value *> &args) {
@@ -4900,8 +4956,9 @@ typedef std::unordered_map<std::string, Value *> NameValueMap;
 
 static StructValue *new_scope() {
     auto scope = StructValue::create({}, Type::Struct("scope"));
+        /*
     scope->addField(UnitValue::get_null(),
-        StructType::Field("#parent", Type::Null));
+        StructType::Field("#parent", Type::Null));*/
     return scope;
 }
 
@@ -5259,7 +5316,7 @@ static Value *compile_expr_list (SListIter it) {
     }
 
     if (!value)
-        value = TupleValue::create({});
+        value = UnitValue::get_null();
 
     return value;
 }
@@ -5424,6 +5481,10 @@ static void initGlobals () {
     setBuiltin(env, "set-globals!", builtin_set_globals);
     setBuiltin(env, "slist?", builtin_is_slist);
     setBuiltin(env, "symbol?", builtin_is_symbol);
+    setBuiltin(env, "integer?", builtin_is_integer);
+    setBuiltin(env, "null?", builtin_is_null);
+    setBuiltin(env, "key?", builtin_is_key);
+    setBuiltin(env, "error", builtin_error);
 
     setBuiltin(env, "@",
         builtin_variadic_ltr<builtin_at_op>);

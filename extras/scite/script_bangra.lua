@@ -60,7 +60,8 @@ local function bangra_symbols()
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* syntax-macro syntax-scope slist cons"
             .. " parameter string expand call escape do empty? dump-syntax"
-            .. " let-syntax dump slist-join if else elseif"
+            .. " let-syntax dump slist-join slist-head? if else elseif loop"
+            .. " repeat syntax-single-macro"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
@@ -329,10 +330,6 @@ local function Lexer()
             elseif readNumber() then
                 token = token_number
                 --print("<" .. lexer.string() .. ">")
-                break
-            elseif (c == '.') then
-                token = token_symbol
-                readDotSequence()
                 break
             else
                 token = token_symbol
