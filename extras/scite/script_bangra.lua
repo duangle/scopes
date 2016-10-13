@@ -61,7 +61,7 @@ local function bangra_symbols()
             .. " typeof letrec with ::* syntax-macro syntax-scope slist cons"
             .. " parameter string expand call escape do empty? dump-syntax"
             .. " let-syntax dump slist-join slist-head? if else elseif loop"
-            .. " repeat syntax-single-macro"
+            .. " repeat syntax-single-macro length foreach"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

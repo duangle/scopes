@@ -103,6 +103,17 @@ let-syntax (scope)
                         slist-join
                             @ expr 0 1
                             @ expr 1
+        tupleof "."
+            syntax-single-macro
+                function (env expr)
+                    let key
+                        @ expr 2 0
+                    ? (symbol? key)
+                        slist @
+                            @ expr 1 0
+                            string key
+                        error "symbol expected"
+
         tupleof "function" # (function [name] (param ...) body ...)
             syntax-single-macro
                 function (env expr)
@@ -150,7 +161,6 @@ let-syntax (scope)
                                     @ expr 2
                         cons param-repeat
                             @ expr 1 0
-
         tupleof "if"
             let if-rec
                 function (env expr)
@@ -181,15 +191,15 @@ let-syntax (scope)
                                         cons (slist)
                                             @ expr 1 0 1
                                 @ expr 2
-                            cons
-                                slist branch
-                                    @ expr 0 1 0
-                                    cons function
-                                        cons (slist)
-                                            @ expr 0 2
-                                    cons function
-                                        cons (slist) null
-                                @ expr 1
+                            do
+                                cons
+                                    slist branch
+                                        @ expr 0 1 0
+                                        cons function
+                                            cons (slist)
+                                                @ expr 0 2
+                                        slist function (slist)
+                                    @ expr 1
             syntax-macro if-rec
         tupleof "syntax-infix-rules"
             syntax-single-macro
@@ -206,6 +216,21 @@ let-syntax (scope)
                         @ expr 2 0
 
 let-syntax (scope)
+
+    function fold (it init f)
+        let next
+            @ it 0
+        let st
+            next (@ it 1)
+        let out init
+        loop (out st)
+            if (null? st)
+                out
+            else
+                repeat
+                    f out (@ st 0)
+                    next (@ st 1)
+
     function get-ifx-op (env op)
         let key
             + "#ifx:" (string op)
@@ -298,6 +323,7 @@ let-syntax (scope)
 
     structof
         tupleof "#parent" scope
+        tupleof "fold" fold
         tupleof "#slist"
             function (env topexpr)
                 let expr
@@ -332,7 +358,7 @@ let-syntax (scope)
         #syntax-infix-op // (syntax-infix-rules 600 > //)
         syntax-infix-op * (syntax-infix-rules 600 > *)
         #syntax-infix-op ** (syntax-infix-rules 700 < **)
-        #syntax-infix-op . (syntax-infix-rules 800 > .)
+        syntax-infix-op . (syntax-infix-rules 800 > .)
         syntax-infix-op @ (syntax-infix-rules 800 > @)
         #syntax-infix-op .= (syntax-infix-rules 800 > .=)
         #syntax-infix-op @= (syntax-infix-rules 800 > @=)
@@ -346,6 +372,41 @@ do
 
     call print "hi"
 
+    function iter (s)
+        let ls
+            length s
+        let it
+            function (i)
+                if (i < ls)
+                    tupleof (@ s i) (i + 1)
+                else
+                    null
+        tupleof it 0
+
+    print
+        repr
+            fold (iter "hello world") ""
+                function (out k)
+                    print k
+                    if (k == "o")
+                        out
+                    else
+                        + out k k
+
+    print
+        repr
+            @ "abcdefghijklmnopqrstuvwxyz"
+                tupleof -3
+
+    print "lengths:"
+        length "hi!"
+        length ""
+        length
+            tupleof 1 2 3
+        length
+            structof
+                tupleof "key" 123
+
     print
         1 + 2 * 3 == 7
 
@@ -353,6 +414,22 @@ do
     print (+ x 1)
     print x
     let k 1
+
+    let V
+        structof
+            tupleof "x" 0
+            tupleof "y" 1
+            tupleof "z"
+                structof
+                    tupleof "u" 0
+                    tupleof "v" 1
+                    tupleof "w"
+                        structof
+                            tupleof "a" 0
+                            tupleof "b" 1
+                            tupleof "c" 2
+    print "dot:"
+        V . z @ "w" . c
 
     print
         2 * 2 + 1 == 5

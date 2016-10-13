@@ -484,6 +484,9 @@ public:
     static Type *Opaque;
     static Type *OpaquePointer;
 
+    static Type *Slice;
+    static Type *RSlice;
+
     static Type *Int8;
     static Type *Int16;
     static Type *Int32;
@@ -523,6 +526,8 @@ static std::string getRepr(Type *type);
 
 Type *Type::TypePointer;
 Type *Type::ValuePointer;
+Type *Type::Slice;
+Type *Type::RSlice;
 Type *Type::Void;
 Type *Type::Null;
 Type *Type::Bool;
@@ -1222,6 +1227,9 @@ void Type::initTypes() {
 
     Rawstring = Pointer(Int8);
 
+    Slice = Tuple({Int64, Int64});
+    RSlice = Tuple({Int64});
+
 }
 
 //------------------------------------------------------------------------------
@@ -1410,6 +1418,10 @@ struct StringValue :
 
     static StringValue *create(const char *s, size_t len) {
         return create(std::string(s, len));
+    }
+
+    static StringValue *create_empty() {
+        return create("");
     }
 
     Type *inferType() const {
@@ -4593,6 +4605,30 @@ static Value *builtin_is_key(const std::vector<Value *> &args) {
     return wrap(result);
 }
 
+static Value *builtin_length(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    Value *obj = args[0];
+    switch(obj->kind) {
+        case Value::String: {
+            auto cs = llvm::cast<StringValue>(obj);
+            return wrap((int64_t)cs->value.size());
+        } break;
+        case Value::Tuple: {
+            auto cs = llvm::cast<TupleValue>(obj);
+            return wrap((int64_t)cs->values.size());
+        } break;
+        case Value::Struct: {
+            auto cs = llvm::cast<StructValue>(obj);
+            return wrap((int64_t)cs->values.size());
+        } break;
+        default: {
+            ilError(obj, "unsubscriptable type");
+            return nullptr;
+        } break;
+    }
+}
+
+
 static Value *builtin_at_op(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
     Value *obj = args[0];
@@ -4617,6 +4653,57 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
             }
             ilError(key, "illegal index type");
             return nullptr;
+        } break;
+        case Value::String: {
+            auto cs = llvm::cast<StringValue>(obj);
+            int64_t size = cs->value.size();
+            int64_t k0;
+            int64_t k1;
+            switch(key->kind) {
+                case Value::Tuple: {
+                    auto ct = llvm::cast<TupleValue>(key);
+                    auto ctt = getType(ct);
+                    if (ctt == Type::RSlice) {
+                        k0 = llvm::cast<IntegerValue>(
+                            ct->values[0])->value;
+                        k1 = size;
+                    } else if (ctt == Type::Slice) {
+                        k0 = llvm::cast<IntegerValue>(
+                            ct->values[0])->value;
+                        k1 = llvm::cast<IntegerValue>(
+                            ct->values[1])->value;
+                    } else {
+                        ilError(key, "valid slice tuple expected");
+                        return nullptr;
+                    }
+                    if (k0 < 0)
+                        k0 = size + k0;
+                    if (k1 < 0)
+                        k1 = size + k1;
+                    if (k0 < 0) k0 = 0;
+                    else if (k0 >= size) k0 = size;
+                    if (k1 < 0) k1 = 0;
+                    else if (k1 >= size) k1 = size;
+                    if (k1 <= k0)
+                        return StringValue::create_empty();
+                } break;
+                case Value::Integer: {
+                    auto ci = llvm::cast<IntegerValue>(key);
+                    k0 = ci->value;
+                    if (k0 < 0)
+                        k0 = size + k0;
+                    if ((k0 < 0) || (k0 >= size)) {
+                        ilError(key, "index out of bounds");
+                        return nullptr;
+                    }
+                    k1 = k0 + 1;
+                } break;
+                default: {
+                    ilError(key, "illegal index type");
+                    return nullptr;
+                } break;
+            }
+            return StringValue::create(cs->value.substr(k0, k1 - k0));
         } break;
         case Value::Tuple: {
             auto cs = llvm::cast<TupleValue>(obj);
@@ -5485,6 +5572,7 @@ static void initGlobals () {
     setBuiltin(env, "null?", builtin_is_null);
     setBuiltin(env, "key?", builtin_is_key);
     setBuiltin(env, "error", builtin_error);
+    setBuiltin(env, "length", builtin_length);
 
     setBuiltin(env, "@",
         builtin_variadic_ltr<builtin_at_op>);
