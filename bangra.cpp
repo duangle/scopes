@@ -16,6 +16,27 @@ enum {
     BANGRA_VERSION_PATCH = 0,
 };
 
+#define TYPE_ENUM_KINDS() \
+    TYPE_KIND(Any) \
+    TYPE_KIND(Void) \
+    TYPE_KIND(Null) \
+    TYPE_KIND(Integer) \
+    TYPE_KIND(Real) \
+    TYPE_KIND(Pointer) \
+    TYPE_KIND(Array) \
+    TYPE_KIND(Vector) \
+    TYPE_KIND(Tuple) \
+    TYPE_KIND(Struct) \
+    TYPE_KIND(Enum) \
+    TYPE_KIND(CFunction) \
+    TYPE_KIND(Flow)
+
+enum TypeKind {
+#define TYPE_KIND(NAME) T_ ## NAME,
+    TYPE_ENUM_KINDS()
+#undef TYPE_KIND
+};
+
 extern int bang_argc;
 extern char **bang_argv;
 extern char *bang_executable_path;
@@ -424,29 +445,6 @@ struct Anchor {
 
 //------------------------------------------------------------------------------
 // TYPE SYSTEM
-//------------------------------------------------------------------------------
-
-#define TYPE_ENUM_KINDS() \
-    TYPE_KIND(Any) \
-    TYPE_KIND(Void) \
-    TYPE_KIND(Null) \
-    TYPE_KIND(Integer) \
-    TYPE_KIND(Real) \
-    TYPE_KIND(Pointer) \
-    TYPE_KIND(Array) \
-    TYPE_KIND(Vector) \
-    TYPE_KIND(Tuple) \
-    TYPE_KIND(Struct) \
-    TYPE_KIND(Enum) \
-    TYPE_KIND(CFunction) \
-    TYPE_KIND(Flow)
-
-enum TypeKind {
-#define TYPE_KIND(NAME) T_ ## NAME,
-    TYPE_ENUM_KINDS()
-#undef TYPE_KIND
-};
-
 //------------------------------------------------------------------------------
 
 struct Type;
@@ -963,6 +961,10 @@ public:
 
         std::string getName() const {
             return name;
+        }
+
+        int64_t getValue() const {
+            return value;
         }
 
         std::string getRepr() const {
@@ -4356,6 +4358,34 @@ static Value *builtin_string(const std::vector<Value *> &args) {
     return StringValue::create(ss.str());
 }
 
+static Value *builtin_symbol(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto &arg = args[0];
+    std::stringstream ss;
+    switch(arg->kind) {
+        case Value::Symbol: {
+            auto cs = llvm::cast<SymbolValue>(arg);
+            ss << cs->value;
+        } break;
+        case Value::String: {
+            auto cs = llvm::cast<StringValue>(arg);
+            ss << cs->value;
+        } break;
+        case Value::Real: {
+            auto cs = llvm::cast<RealValue>(arg);
+            ss << cs->value;
+        } break;
+        case Value::Integer: {
+            auto cs = llvm::cast<IntegerValue>(arg);
+            ss << cs->value;
+        } break;
+        default: {
+            ss << getRefRepr(arg);
+        } break;
+    }
+    return SymbolValue::create(ss.str());
+}
+
 static Value *builtin_print(const std::vector<Value *> &args) {
     builtin_checkparams(args, 0, -1);
     for (size_t i = 0; i < args.size(); ++i) {
@@ -4621,6 +4651,20 @@ static Value *builtin_length(const std::vector<Value *> &args) {
             auto cs = llvm::cast<StructValue>(obj);
             return wrap((int64_t)cs->values.size());
         } break;
+        case Value::TypeRef: {
+            auto cs = llvm::cast<TypeRefValue>(obj);
+            auto t = cs->value;
+            switch(t->getKind()) {
+                case T_Enum: {
+                    auto te = llvm::cast<EnumType>(t);
+                    return wrap((int64_t)te->getFieldCount());
+                } break;
+                default: {
+                    ilError(obj, "unsubscriptable type");
+                    return nullptr;
+                } break;
+            }
+        } break;
         default: {
             ilError(obj, "unsubscriptable type");
             return nullptr;
@@ -4628,6 +4672,11 @@ static Value *builtin_length(const std::vector<Value *> &args) {
     }
 }
 
+static Value *builtin_kindof(const std::vector<Value *> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto type = extract_type(args[0]);
+    return wrap((int64_t)type->getKind());
+}
 
 static Value *builtin_at_op(const std::vector<Value *> &args) {
     builtin_checkparams(args, 2, 2);
@@ -4749,6 +4798,48 @@ static Value *builtin_at_op(const std::vector<Value *> &args) {
                 } break;
                 default: {
                     ilError(key, "illegal key type");
+                    return nullptr;
+                } break;
+            }
+        } break;
+        case Value::TypeRef: {
+            auto cs = llvm::cast<TypeRefValue>(obj);
+            auto t = cs->value;
+            switch(t->getKind()) {
+                case T_Enum: {
+                    auto te = llvm::cast<EnumType>(t);
+                    switch(key->kind) {
+                        case Value::Integer: {
+                            auto ci = llvm::cast<IntegerValue>(key);
+                            if ((size_t)ci->value < te->getFieldCount()) {
+                                auto &field = te->getField(ci->value);
+                                return wrap({
+                                    wrap(field.getName()),
+                                    wrap(field.getValue())
+                                });
+                            } else {
+                                ilError(key, "index out of bounds");
+                                return nullptr;
+                            }
+                        } break;
+                        case Value::String: {
+                            auto cstr = llvm::cast<StringValue>(key);
+                            size_t idx = te->getFieldIndex(cstr->value);
+                            if (idx != (size_t)-1) {
+                                return wrap(te->getField(idx).getValue());
+                            } else {
+                                ilError(key, "no such member");
+                                return nullptr;
+                            }
+                        } break;
+                        default: {
+                            ilError(key, "illegal key type");
+                            return nullptr;
+                        } break;
+                    }
+                } break;
+                default: {
+                    ilError(obj, "unsubscriptable type");
                     return nullptr;
                 } break;
             }
@@ -4898,6 +4989,9 @@ public:
     static Value *dispatch(const Value *v, const F &next) {
         if (v->kind == Value::String) {
             auto ca = llvm::cast<StringValue>(v);
+            return next(ca->value);
+        } else if (v->kind == Value::Symbol) {
+            auto ca = llvm::cast<SymbolValue>(v);
             return next(ca->value);
         } else {
             return NextT::template dispatch<F>(v, next);
@@ -5562,6 +5656,7 @@ static void initGlobals () {
     setBuiltin(env, "dump", builtin_dump);
     setBuiltin(env, "syntax-macro", builtin_syntax_macro);
     setBuiltin(env, "string", builtin_string);
+    setBuiltin(env, "symbol", builtin_symbol);
     setBuiltin(env, "parameter", builtin_parameter);
     setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
@@ -5573,6 +5668,7 @@ static void initGlobals () {
     setBuiltin(env, "key?", builtin_is_key);
     setBuiltin(env, "error", builtin_error);
     setBuiltin(env, "length", builtin_length);
+    setBuiltin(env, "kindof", builtin_kindof);
 
     setBuiltin(env, "@",
         builtin_variadic_ltr<builtin_at_op>);

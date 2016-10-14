@@ -6,6 +6,9 @@ bangra
 let-syntax (scope)
     structof
         tupleof "#parent" scope
+        tupleof "API"
+            import-c "bangra.h"
+                tupleof;
         tupleof "syntax-single-macro"
             function (f)
                 syntax-macro
@@ -224,12 +227,20 @@ let-syntax (scope)
             next (@ it 1)
         let out init
         loop (out st)
-            if (null? st)
-                out
+            if (null? st) out
             else
                 repeat
                     f out (@ st 0)
                     next (@ st 1)
+
+    function iter-string-r (s)
+        tupleof
+            function (i)
+                if (> i 0)
+                    let k (- i 1)
+                    tupleof (@ s k) k
+                else null
+            length s
 
     function get-ifx-op (env op)
         let key
@@ -240,8 +251,7 @@ let-syntax (scope)
                     @ env key
                 elseif (key? env "#parent")
                     repeat (@ env "#parent")
-                else
-                    null
+                else null
             null
     function has-infix-ops (infix-table expr)
         let word
@@ -262,8 +272,7 @@ let-syntax (scope)
                     " is not an infix operator, but embedded in an infix expression"
         elseif (pred (@ op "prec") prec)
             op
-        else
-            null
+        else null
 
     function rtl-infix-op (infix-table token prec pred)
         let op
@@ -274,8 +283,7 @@ let-syntax (scope)
                     " is not an infix operator, but embedded in an infix expression"
         elseif (and (== (@ op "order") "<") (pred (@ op "prec") prec))
             op
-        else
-            null
+        else null
 
     function parse-infix-expr (infix-table lhs state mprec)
         loop (lhs state)
@@ -335,8 +343,27 @@ let-syntax (scope)
                                 \ (@ expr 0) (@ expr 1) 0
                             0
                         @ topexpr 1
-                else
-                    slist;
+                else (slist)
+
+        tupleof "#symbol"
+            function (env topexpr)
+                let it
+                    iter-string-r (string (@ topexpr 0))
+                if
+                    fold it false
+                        function (out k)
+                            if (== k ".") true
+                            else out
+
+                    cons
+                        fold it (slist (symbol ""))
+                            function (out k)
+                                if (== k ".")
+                                    cons (symbol "") (cons (quote .) out)
+                                else
+                                    cons (symbol (+ k (@ out 0))) (@ out 1)
+                        @ topexpr 1
+
         syntax-infix-op or (syntax-infix-rules 100 > or)
         syntax-infix-op and (syntax-infix-rules 200 > and)
         syntax-infix-op | (syntax-infix-rules 240 > |)
@@ -406,6 +433,11 @@ do
         length
             structof
                 tupleof "key" 123
+
+    print "kindof:"
+        ==
+            kindof float
+            API.TypeKind.T_Integer
 
     print
         1 + 2 * 3 == 7
