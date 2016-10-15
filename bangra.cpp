@@ -5334,8 +5334,10 @@ static Cursor expand_let_syntax (StructValue *env, SListIter topit) {
 static SListValue *expand_macro(
     StructValue *env, Value *handler, SListIter topit) {
     Value *topexpr = const_cast<SListValue*>(topit.getSList());
-    return verifyValueKind<SListValue>(
-        execute({handler, env, topexpr}));
+    auto result = execute({handler, env, topexpr});
+    if (result == UnitValue::get_null())
+        return nullptr;
+    return verifyValueKind<SListValue>(result);
 }
 
 static Cursor expand (StructValue *env, SListIter topit) {
@@ -5360,7 +5362,7 @@ process:
             } else if (head->kind == Value::Macro) {
                 auto macro = llvm::cast<MacroValue>(head);
                 auto result = expand_macro(env, macro->value, topit);
-                if (result != SListValue::get_eox()) {
+                if (result) {
                     topit = SListIter(result);
                     goto process;
                 }
@@ -5370,7 +5372,7 @@ process:
         auto default_handler = getLocal(env, "#slist");
         if (default_handler) {
             auto result = expand_macro(env, default_handler, topit);
-            if (result != SListValue::get_eox()) {
+            if (result) {
                 topit = SListIter(result);
                 goto process;
             }
@@ -5387,7 +5389,7 @@ process:
             auto default_handler = getLocal(env, "#symbol");
             if (default_handler) {
                 auto result = expand_macro(env, default_handler, topit);
-                if (result != SListValue::get_eox()) {
+                if (result) {
                     topit = SListIter(result);
                     goto process;
                 }

@@ -336,19 +336,44 @@ let-syntax (scope)
             function (env topexpr)
                 let expr
                     @ topexpr 0
-                if (has-infix-ops env expr)
+                let head
+                    @ expr 0
+                # method call syntax
+                if
+                    and
+                        symbol? head
+                        == (@ (string head) (tupleof 0 1)) "."
+
+                    let name
+                        @ (string head) (tupleof 1)
+                    let self-arg
+                        @ expr 1 0
+                    let rest
+                        @ expr 2
+                    let self
+                        parameter "self"
+                    cons
+                        slist
+                            slist function (slist self)
+                                cons
+                                    slist @ self name
+                                    cons self rest
+                            self-arg
+                        @ topexpr 1
+                # infix operator support
+                elseif (has-infix-ops env expr)
                     cons
                         @
                             parse-infix-expr env
                                 \ (@ expr 0) (@ expr 1) 0
                             0
                         @ topexpr 1
-                else (slist)
 
         tupleof "#symbol"
             function (env topexpr)
                 let it
-                    iter-string-r (string (@ topexpr 0))
+                    iter-string-r
+                        string (@ topexpr 0)
                 if
                     fold it false
                         function (out k)
@@ -392,6 +417,15 @@ let-syntax (scope)
         #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
 do
+    let T
+        structof
+            tupleof "test"
+                function (self a b)
+                    + a b
+
+    print
+        .test T 1 2
+
     print
         slist-join
             slist 1 2 3
