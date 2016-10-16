@@ -57,6 +57,20 @@ int bangra_main(int argc, char ** argv);
 // SHARED LIBRARY IMPLEMENTATION
 //------------------------------------------------------------------------------
 
+// CFF form implemented after
+// Leissa et al., Graph-Based Higher-Order Intermediate Representation
+// http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
+
+// some parts of the paper use hindley-milner notation
+// https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
+
+// more reading material:
+// Simple and Effective Type Check Removal through Lazy Basic Block Versioning
+// https://arxiv.org/pdf/1411.0352v2.pdf
+// Julia: A Fast Dynamic Language for Technical Computing
+// http://arxiv.org/pdf/1209.5145v1.pdf
+
+
 #undef NDEBUG
 #include <sys/types.h>
 #ifdef _WIN32
@@ -448,6 +462,7 @@ struct Anchor {
 //------------------------------------------------------------------------------
 
 struct Type;
+
 typedef std::vector<Type *> TypeArray;
 typedef std::vector<std::string> NameArray;
 
@@ -521,6 +536,7 @@ public:
 };
 
 static std::string getRepr(Type *type);
+static size_t getSize(Type *type);
 
 Type *Type::TypePointer;
 Type *Type::ValuePointer;
@@ -573,6 +589,8 @@ struct VoidType : TypeImpl<VoidType, T_Void> {
     std::string getRepr() {
         return ansi(ANSI_STYLE_TYPE, "void");
     }
+
+    size_t getSize() { return 0; }
 };
 
 //------------------------------------------------------------------------------
@@ -581,6 +599,8 @@ struct NullType : TypeImpl<NullType, T_Null> {
     std::string getRepr() {
         return ansi(ANSI_STYLE_TYPE, "null");
     }
+
+    size_t getSize() { return 0; }
 };
 
 //------------------------------------------------------------------------------
@@ -589,6 +609,8 @@ struct AnyType : TypeImpl<AnyType, T_Any> {
     std::string getRepr() {
         return ansi(ANSI_STYLE_ERROR, "any");
     }
+
+    size_t getSize();
 };
 
 //------------------------------------------------------------------------------
@@ -611,6 +633,7 @@ public:
         return ansi(ANSI_STYLE_TYPE, format("%sint%i", is_signed?"":"u", width));
     }
 
+    size_t getSize() { return (size_t)((width + 7) / 8); }
 };
 
 Type *Type::newIntegerType(int _width, bool _signed) {
@@ -633,6 +656,8 @@ public:
     std::string getRepr() {
         return ansi(ANSI_STYLE_TYPE, format("real%i", width));
     }
+
+    size_t getSize() { return (size_t)((width + 7) / 8); }
 };
 
 Type *Type::newRealType(int _width) {
@@ -660,6 +685,7 @@ public:
                 bangra::getRepr(element).c_str());
     }
 
+    size_t getSize() { return sizeof(void *); }
 };
 
 Type *Type::newPointerType(Type *_element) {
@@ -694,6 +720,7 @@ public:
                 size);
     }
 
+    size_t getSize() { return bangra::getSize(element) * size; }
 };
 
 Type *Type::newArrayType(Type *_element, unsigned _size) {
@@ -728,6 +755,7 @@ public:
                 size);
     }
 
+    size_t getSize() { return bangra::getSize(element) * size; }
 };
 
 Type *Type::newVectorType(Type *_element, unsigned _size) {
@@ -769,6 +797,21 @@ public:
         return getSpecRepr(elements);
     }
 
+    size_t getSize() {
+        size_t result = 0;
+        for (auto &elem : elements) {
+            result += bangra::getSize(elem);
+        }
+        return result;
+    }
+
+    size_t offsetOf(size_t idx) {
+        size_t result = 0;
+        for (size_t i = 0; i < idx; ++i) {
+            result += bangra::getSize(elements[i]);
+        }
+        return result;
+    }
 };
 
 Type *Type::newTupleType(TypeArray _elements) {
@@ -828,6 +871,22 @@ protected:
     Anchor anchor;
 
 public:
+
+    size_t getSize() {
+        size_t result = 0;
+        for (auto &field : fields) {
+            result += bangra::getSize(field.getType());
+        }
+        return result;
+    }
+
+    size_t offsetOf(size_t idx) {
+        size_t result = 0;
+        for (size_t i = 0; i < idx; ++i) {
+            result += bangra::getSize(fields[i].getType());
+        }
+        return result;
+    }
 
     StructType(const std::string &name_, bool builtin_, bool union_) :
         name(name_),
@@ -983,6 +1042,8 @@ protected:
 
 public:
 
+    size_t getSize() { return bangra::getSize(enum_type); }
+
     EnumType(const std::string &name_) :
         name(name_),
         enum_type(nullptr)
@@ -1081,6 +1142,8 @@ protected:
     TypeArray parameters;
 
 public:
+    size_t getSize() { return 0; }
+
     static std::string getSpecRepr(const TypeArray &parameters) {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "fn") << " ";
@@ -1127,6 +1190,8 @@ protected:
     bool isvararg;
 
 public:
+    size_t getSize() { return 0; }
+
     static std::string getSpecRepr(Type *result,
         const TypeArray &parameters, bool isvararg) {
         std::stringstream ss;
@@ -1195,6 +1260,19 @@ std::string getRepr(Type *type) {
     return "?";
 }
 
+size_t getSize(Type *type) {
+#define TYPE_KIND(NAME) \
+    case T_ ## NAME: {\
+        auto spec = llvm::cast<NAME ## Type>(type); \
+        return spec->getSize(); \
+    } break;
+    switch(type->getKind()) {
+    TYPE_ENUM_KINDS()
+    }
+#undef TYPE_KIND
+    return 0;
+}
+
 //------------------------------------------------------------------------------
 
 void Type::initTypes() {
@@ -1231,25 +1309,41 @@ void Type::initTypes() {
 
     Slice = Tuple({Int64, Int64});
     RSlice = Tuple({Int64});
-
 }
+
+//------------------------------------------------------------------------------
+// ANY POINTERS
+//------------------------------------------------------------------------------
+
+struct Any {
+    union {
+        void *ptr;
+
+        bool i1;
+
+        int8_t i8;
+        int16_t i16;
+        int32_t i32;
+        int64_t i64;
+
+        uint8_t u8;
+        uint16_t u16;
+        uint32_t u32;
+        uint64_t u64;
+
+        float r32;
+        double r64;
+
+        char *str;
+    };
+    Type *type;
+};
+
+size_t AnyType::getSize() { return sizeof(Any); }
 
 //------------------------------------------------------------------------------
 // MID-LEVEL IL
 //------------------------------------------------------------------------------
-
-// CFF form implemented after
-// Leissa et al., Graph-Based Higher-Order Intermediate Representation
-// http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
-
-// some parts of the paper use hindley-milner notation
-// https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
-
-// more reading material:
-// Simple and Effective Type Check Removal through Lazy Basic Block Versioning
-// https://arxiv.org/pdf/1411.0352v2.pdf
-// Julia: A Fast Dynamic Language for Technical Computing
-// http://arxiv.org/pdf/1209.5145v1.pdf
 
 struct Value;
 struct FlowValue;
