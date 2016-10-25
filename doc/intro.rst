@@ -11,7 +11,13 @@ How to build Bangra on Linux:
 
 * You need build-essentials, clang 3.8, libclang 3.8 and LLVM 3.8 installed
 * put ``clang++`` and ``llvm-config`` in your path OR extract the clang distro into
-  the repo folder and rename it to ``clang``
+  the repo folder and rename it to ``clang``.
+* You also need the latest source distribution of
+  `libffi <https://sourceware.org/libffi/>`_.
+* build libffi using `./configure --enable-shared=no --enable-static=yes && make` and
+  softlink the generated build folder (e.g. `x86_64-unknown-linux-gnu`) as `libffi`
+  in the repo folder.
+
 * execute ``./makebangra``
 
 How to build Bangra on Windows:
@@ -20,6 +26,7 @@ How to build Bangra on Windows:
   `install <https://github.com/valtron/llvm-stuff/wiki/Build-LLVM-3.8-with-MSYS2>`_
   both llvm and clang 3.8 for ``x86_64``. The packages are named
   ``mingw64/mingw-w64-x86_64-llvm`` and ``mingw64/mingw-w64-x86_64-clang``.
+* You also need to install the ``mingw64/mingw-w64-x86_64-libffi`` package.
 * put ``clang++`` in your path OR make sure msys2 resides in ``C:\msys64`` OR edit
   ``makebangra.bat`` and change the path accordingly.
 * copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll`` and ``libwinpthread-1.dll`` from

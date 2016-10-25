@@ -12,6 +12,7 @@ syntax: glob
 syntax: regexp
 
 ^clang
+^libffi
 ^bangra$
 ^bangra[.]h$
 ^doc/_build/

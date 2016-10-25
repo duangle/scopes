@@ -24,6 +24,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     -Wno-vla-extension \
     -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
     -lpthread -lm -ldl -ltinfo -lz \
+    -I$DIR/libffi/include $DIR/libffi/.libs/libffi.a \
     -lclangFrontend -lclangDriver \
     -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
     -lclangAnalysis \
