@@ -628,11 +628,11 @@ struct Type {
     bool (*eq_type)(Type *self, Type *other);
     // short string representation
     std::string (*tostring)(Type *self, const Any &value);
+    // return pointer to content
+    const void *(*getpointer)(Type *self, const Any &value);
 
     size_t size;
     size_t alignment;
-    // is represented as reference in Any?
-    bool is_ref;
 
     union {
         // integer: is type signed?
@@ -646,13 +646,24 @@ struct Type {
         // array, vector: number of elements
         size_t count;
     };
-    // array, vector, pointer, tuple, struct, union, function: field types
-    // array, vector, pointer: only have one type
-    // index 0 for functions is the result type, 1+ is parameter type
+    union {
+        // array, vector, pointer: type of element
+        Type *element_type;
+        // enum: type of tag
+        Type *tag_type;
+        // function: type of result
+        Type *result_type;
+    };
+    // tuple, struct, union: field types
+    // function: parameter types
+    // enum: payload types
     std::vector<Type *> types;
-    // tuple, struct, union: field offsets
+    // tuple, struct: field offsets
     std::vector<size_t> offsets;
-    // struct, union, enum: name to types index lookup table
+    // enum: tag values
+    std::vector<int64_t> tags;
+    // struct, union: name to types index lookup table
+    // enum: name to types & tag index lookup table
     std::unordered_map<std::string, size_t> name_index_map;
 
     //ffi_type *ctype;
@@ -668,8 +679,42 @@ static size_t get_size(Type *self) {
     return self->size;
 }
 
+static Type *get_type(Type *self, size_t i) {
+    return self->types[i];
+}
+
+static size_t get_field_count(Type *self) {
+    return self->types.size();
+}
+
+static size_t get_offset(Type *self, size_t i) {
+    return self->offsets[i];
+}
+
 static size_t get_alignment(Type *self) {
     return self->alignment;
+}
+
+static Type *get_element_type(Type *self) {
+    return self->element_type;
+}
+
+static Type *get_tag_type(Type *self) {
+    return self->tag_type;
+}
+
+static Type *get_result_type(Type *self) {
+    return self->result_type;
+}
+
+static const void *type_getpointer_inlined(Type *self, const Any &value) {
+    assert(self);
+    return &value;
+}
+
+static const void *type_getpointer_ptr(Type *self, const Any &value) {
+    assert(self);
+    return value.ptr;
 }
 
 static bool type_eq_default(Type *self, Type *other) {
@@ -687,7 +732,7 @@ static Type *new_type(const std::string &name) {
     auto result = new Type();
     result->size = 0;
     result->alignment = 1;
-    result->is_ref = false;
+    result->getpointer = nullptr;
     result->name = name;
     result->eq_type = type_eq_default;
     result->tostring = type_tostring_default;
@@ -699,15 +744,29 @@ static Type *new_type(const std::string &name) {
     return result;
 }
 
+static const void *get_pointer(const Any &value) {
+    assert(value.type->getpointer);
+    return value.type->getpointer(value.type, value);
+}
+
 static bool eq(Type *self, Type *other) {
     if (self == other) return true;
     assert(self && other);
     return self->eq_type(self, other) || other->eq_type(other, self);
 }
 
-static std::string tostring(Type *self, const Any &value) {
-    assert(self);
-    return self->tostring(self, value);
+static std::string tostring(const Any &value) {
+    return value.type->tostring(value.type, value);
+}
+
+//------------------------------------------------------------------------------
+
+static Any pstring(const std::string &s) {
+    return pointer(Types::String, new std::string(s));
+}
+
+static Any symbol(const std::string &s) {
+    return pointer(Types::Symbol, new std::string(s));
 }
 
 //------------------------------------------------------------------------------
@@ -797,8 +856,7 @@ static Type *extract_type(const Any &value) {
 }
 
 static std::string get_string(const Any &value) {
-    auto type = value.type;
-    return tostring(type, value);
+    return tostring(value);
 }
 
 static bool is_integer_type(Type *type) {
@@ -1341,8 +1399,8 @@ namespace Types {
         assert(element);
         Type *type = new_type("");
         type->count = size;
-        type->is_ref = true;
-        type->types = { element };
+        type->getpointer = type_getpointer_ptr;
+        type->element_type = element;
         auto padded_size = align(get_size(element), get_alignment(element));
         type->size = padded_size * type->count;
         type->alignment = element->alignment;
@@ -1380,23 +1438,23 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
-        type->types = { element };
+        type->getpointer = type_getpointer_inlined;
+        type->element_type = element;
         type->size = ffi_type_pointer.size;
         type->alignment = ffi_type_pointer.alignment;
         return type;
     }
 
-    static Type *_new_tuple_type(std::vector<Type *> types) {
-        std::stringstream ss;
-        ss << "(";
-        ss << ansi(ANSI_STYLE_KEYWORD, "tuple");
-        for (auto &element : types) {
-            ss << " " << get_name(element);
+    static void _set_field_names(Type *type, const std::vector<std::string> &names) {
+        for (size_t i = 0; i < names.size(); ++i) {
+            auto &name = names[i];
+            if (!name.empty()) {
+                type->name_index_map[name] = i;
+            }
         }
-        ss << ")";
-        Type *type = new_type(ss.str());
-        type->eq_type = type_tuple_eq;
-        type->is_ref = true;
+    }
+
+    static void _set_struct_field_types(Type *type, const std::vector<Type *> &types) {
         type->types = types;
         size_t offset = 0;
         size_t max_alignment = 1;
@@ -1410,6 +1468,34 @@ namespace Types {
         }
         type->size = align(offset, max_alignment);
         type->alignment = max_alignment;
+    }
+
+    static void _set_union_field_types(Type *type, const std::vector<Type *> &types) {
+        type->types = types;
+        size_t max_size = 0;
+        size_t max_alignment = 1;
+        for (auto &element : types) {
+            size_t size = get_size(element);
+            size_t alignment = get_alignment(element);
+            max_size = std::max(max_size, size);
+            max_alignment = std::max(max_alignment, alignment);
+        }
+        type->size = align(max_size, max_alignment);
+        type->alignment = max_alignment;
+    }
+
+    static Type *_new_tuple_type(std::vector<Type *> types) {
+        std::stringstream ss;
+        ss << "(";
+        ss << ansi(ANSI_STYLE_KEYWORD, "tuple");
+        for (auto &element : types) {
+            ss << " " << get_name(element);
+        }
+        ss << ")";
+        Type *type = new_type(ss.str());
+        type->eq_type = type_tuple_eq;
+        type->getpointer = type_getpointer_ptr;
+        _set_struct_field_types(type, types);
         return type;
     }
 
@@ -1454,7 +1540,9 @@ namespace Types {
         Type *type = new_type(ss.str());
         type->eq_type = type_cfunction_eq;
         type->is_vararg = vararg;
-        type->types = { result, parameters };
+        type->result_type = result;
+        type->getpointer = type_getpointer_inlined;
+        type->types = { parameters };
         return type;
     }
 
@@ -1480,6 +1568,7 @@ namespace Types {
 
         Type *type = new_type(format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
+        type->getpointer = type_getpointer_inlined;
         type->width = width;
         type->is_signed = signed_;
         type->size = itype->size;
@@ -1498,6 +1587,7 @@ namespace Types {
 
         Type *type = new_type(format("real%zu", width));
         type->eq_type = type_real_eq;
+        type->getpointer = type_getpointer_inlined;
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -1518,7 +1608,7 @@ namespace Types {
             type->name = ss.str();
         }
         type->eq_type = type_struct_eq;
-        type->is_ref = true;
+        type->getpointer = type_getpointer_ptr;
         return type;
     }
 
@@ -1530,6 +1620,7 @@ namespace Types {
         ss << ")";
         Type *type = new_type(ss.str());
         type->eq_type = type_enum_eq;
+        type->getpointer = type_getpointer_ptr;
         return type;
     }
 
@@ -2677,9 +2768,9 @@ public:
     void GetFields(Type *struct_type, clang::RecordDecl * rd) {
         //auto &rl = Context->getASTRecordLayout(rd);
 
-        auto names = new std::vector<std::string>();
-        auto types = new std::vector<Type *>();
-        auto anchors = new std::vector<Anchor>();
+        std::vector<std::string> names;
+        std::vector<Type *> types;
+        //auto anchors = new std::vector<Anchor>();
 
         for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
             clang::DeclarationName declname = it->getDeclName();
@@ -2698,24 +2789,19 @@ public:
                 break;
             }
             // todo: work offset into structure
-            names->push_back(
+            names.push_back(
                 it->isAnonymousStructOrUnion()?"":
                                     declname.getAsString());
-            types->push_back(fieldtype);
-            anchors->push_back(
-                anchorFromLocation(it->getSourceRange().getBegin()));
+            types.push_back(fieldtype);
+            //anchors->push_back(anchorFromLocation(it->getSourceRange().getBegin()));
         }
 
-        set_key(*struct_type, "field-names",
-            pointer(Types::Array(Types::String, names->size()),
-                &(*names)[0]));
-        set_key(*struct_type, "field-types",
-            pointer(Types::Array(Types::TypeRef, types->size()),
-                &(*types)[0]));
-        set_key(*struct_type, "field-anchors",
-            pointer(Types::Array(Types::AnchorRef, anchors->size()),
-                &(*anchors)[0]));
-
+        Types::_set_field_names(struct_type, names);
+        if (rd->isUnion()) {
+            Types::_set_union_field_types(struct_type, types);
+        } else {
+            Types::_set_struct_field_types(struct_type, types);
+        }
     }
 
     Type *TranslateRecord(clang::RecordDecl *rd) {
@@ -2727,7 +2813,7 @@ public:
         if (name.size() && named_structs.count(name)) {
             struct_type = named_structs[name];
         } else {
-            struct_type = Types::Struct(name, false, rd->isUnion());
+            struct_type = Types::Struct(name, false);
             if (name.size()) {
                 named_structs[name] = struct_type;
             }
@@ -2735,15 +2821,19 @@ public:
 
         clang::RecordDecl * defn = rd->getDefinition();
         if (defn && !record_defined[rd]) {
+            /*
             Anchor anchor = anchorFromLocation(rd->getSourceRange().getBegin());
             set_key(*struct_type, "anchor",
-                pointer(Types::AnchorRef, new Anchor(anchor)));
+                pointer(Types::AnchorRef, new Anchor(anchor)));*/
 
             GetFields(struct_type, defn);
 
-            //auto &rl = Context->getASTRecordLayout(rd);
-            //auto align = rl.getAlignment();
-            //auto size = rl.getSize();
+            auto &rl = Context->getASTRecordLayout(rd);
+            auto align = rl.getAlignment();
+            auto size = rl.getSize();
+            // should match
+            assert ((size_t)align.getQuantity() == struct_type->alignment);
+            assert ((size_t)size.getQuantity() == struct_type->size);
 
             // todo: make sure these fit
             // align.getQuantity()
@@ -2770,38 +2860,34 @@ public:
 
         clang::EnumDecl * defn = ed->getDefinition();
         if (defn && !enum_defined[ed]) {
+            /*
             set_key(*enum_type, "anchor",
                 pointer(Types::AnchorRef,
                     new Anchor(
                         anchorFromLocation(
                             ed->getIntegerTypeRange().getBegin()))));
+            */
 
-            set_key(*enum_type, "integer-type",
-                pointer(Types::TypeRef,
-                    TranslateType(ed->getIntegerType())));
+            enum_type->tag_type = TranslateType(ed->getIntegerType());
 
-            auto names = new std::vector<std::string>();
-            auto values = new std::vector<int64_t>();
-            auto anchors = new std::vector<Anchor>();
+            std::vector<std::string> names;
+            std::vector<int64_t> tags;
+            std::vector<Type *> types;
+            //auto anchors = new std::vector<Anchor>();
 
             for (auto it : ed->enumerators()) {
-                Anchor anchor = anchorFromLocation(it->getSourceRange().getBegin());
+                //Anchor anchor = anchorFromLocation(it->getSourceRange().getBegin());
                 auto &val = it->getInitVal();
 
-                names->push_back(it->getName().data());
-                values->push_back(val.getExtValue());
-                anchors->push_back(anchor);
+                names.push_back(it->getName().data());
+                tags.push_back(val.getExtValue());
+                types.push_back(Types::None);
+                //anchors->push_back(anchor);
             }
 
-            set_key(*enum_type, "field-names",
-                pointer(Types::Array(Types::String, names->size()),
-                    &(*names)[0]));
-            set_key(*enum_type, "field-values",
-                pointer(Types::Array(Types::TypeRef, values->size()),
-                    &(*values)[0]));
-            set_key(*enum_type, "field-anchors",
-                pointer(Types::Array(Types::AnchorRef, anchors->size()),
-                    &(*anchors)[0]));
+            enum_type->tags = tags;
+            Types::_set_union_field_types(enum_type, types);
+            Types::_set_field_names(enum_type, names);
 
             enum_defined[ed] = true;
         }
@@ -2971,9 +3057,9 @@ public:
         return NULL;
     }
 
-    void exportType(const std::string &name, Type *type, const Anchor &anchor) {
+    void exportType(const std::string &name, Type *type) {
         set_key(*dest, name,
-            pointer(Types::TypeRef, type, new Anchor(anchor)));
+            pointer(Types::TypeRef, type));
     }
 
     void exportExternal(const std::string &name, Type *type, const Anchor &anchor) {
@@ -2986,10 +3072,9 @@ public:
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
         if (rd->isFreeStanding()) {
             auto type = TranslateRecord(rd);
-            auto &name = *get_key(*type, "name").str;
+            auto name = get_name(type);
             if (name.size()) {
-                exportType(name, type,
-                    *get_key(*type, "anchor").anchor);
+                exportType(name, type);
             }
         }
         return true;
@@ -2998,10 +3083,9 @@ public:
     bool TraverseEnumDecl(clang::EnumDecl *ed) {
         if (ed->isFreeStanding()) {
             auto type = TranslateEnum(ed);
-            auto &name = *get_key(*type, "name").str;
+            auto name = get_name(type);
             if (name.size()) {
-                exportType(name, type,
-                    *get_key(*type, "anchor").anchor);
+                exportType(name, type);
             }
         }
         return true;
@@ -3023,13 +3107,13 @@ public:
 
     bool TraverseTypedefDecl(clang::TypedefDecl *td) {
 
-        Anchor anchor = anchorFromLocation(td->getSourceRange().getBegin());
+        //Anchor anchor = anchorFromLocation(td->getSourceRange().getBegin());
 
         Type *type = TranslateType(td->getUnderlyingType());
         if (!type) return true;
 
         typedefs[td->getName().data()] = type;
-        exportType(td->getName().data(), type, anchor);
+        exportType(td->getName().data(), type);
 
         return true;
     }
@@ -3194,186 +3278,100 @@ static Any wrap(int64_t value) {
     return integer(Types::I64, value);
 }
 
-static TupleValue *wrap(
-    const std::vector<Value *> &args) {
-    return TupleValue::create(args);
-}
+static Any wrap(
+    const std::vector<Any> &args) {
 
-static RealValue *wrap(double value) {
-    return RealValue::create(value,
-        static_cast<RealType *>(Type::Double));
-}
-
-static StringValue *wrap(const std::string &s) {
-    return StringValue::create(s);
-}
-
-static Value *builtin_string(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto &arg = args[0];
-    std::stringstream ss;
-    switch(arg->kind) {
-        case Value::Symbol: {
-            auto cs = llvm::cast<SymbolValue>(arg);
-            ss << cs->value;
-        } break;
-        case Value::String: {
-            auto cs = llvm::cast<StringValue>(arg);
-            ss << cs->value;
-        } break;
-        case Value::Real: {
-            auto cs = llvm::cast<RealValue>(arg);
-            ss << cs->value;
-        } break;
-        case Value::Integer: {
-            auto cs = llvm::cast<IntegerValue>(arg);
-            ss << cs->value;
-        } break;
-        default: {
-            ss << getRefRepr(arg);
-        } break;
+    std::vector<Type *> types;
+    for (auto &arg : args) {
+        types.push_back(arg.type);
     }
-    return StringValue::create(ss.str());
-}
-
-static Value *builtin_symbol(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto &arg = args[0];
-    std::stringstream ss;
-    switch(arg->kind) {
-        case Value::Symbol: {
-            auto cs = llvm::cast<SymbolValue>(arg);
-            ss << cs->value;
-        } break;
-        case Value::String: {
-            auto cs = llvm::cast<StringValue>(arg);
-            ss << cs->value;
-        } break;
-        case Value::Real: {
-            auto cs = llvm::cast<RealValue>(arg);
-            ss << cs->value;
-        } break;
-        case Value::Integer: {
-            auto cs = llvm::cast<IntegerValue>(arg);
-            ss << cs->value;
-        } break;
-        default: {
-            ss << getRefRepr(arg);
-        } break;
+    Type *type = Types::Tuple(types);
+    char *data = (char *)malloc(get_size(type));
+    for (size_t i = 0; i < args.size(); ++i) {
+        auto elemtype = get_type(type, i);
+        auto offset = get_offset(type, i);
+        auto srcptr = get_pointer(args[i]);
+        memcpy(data + offset, srcptr, get_size(elemtype));
     }
-    return SymbolValue::create(ss.str());
+
+    return pointer(type, data);
 }
 
-static Value *builtin_print(const std::vector<Value *> &args) {
+static Any wrap(double value) {
+    return real(Types::R64, value);
+}
+
+static Any wrap(const std::string &s) {
+    return pstring(s);
+}
+
+static Any builtin_string(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    return pstring(get_string(args[0]));
+}
+
+static Any builtin_symbol(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    return symbol(get_string(args[0]));
+}
+
+static Any builtin_print(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
     for (size_t i = 0; i < args.size(); ++i) {
         if (i != 0)
             std::cout << " ";
         auto &arg = args[i];
-        switch(arg->kind) {
-            case Value::String: {
-                auto cs = llvm::cast<StringValue>(arg);
-                std::cout << cs->value;
-            } break;
-            default: {
-                std::cout << getRefRepr(args[i]);
-            } break;
-        }
+        std::cout << get_string(arg);
     }
     std::cout << "\n";
-    return TupleValue::create({});
+    return const_none;
 }
 
-static std::vector<Value *> builtin_branch(const std::vector<Value *> &args) {
+static Any builtin_branch(const std::vector<Any> &args) {
     builtin_checkparams(args, 4, 4, 1);
     auto cond = extract_bool(args[1]);
     if (cond) {
-        return { args[2], args[4] };
+        return wrap({ args[2], args[4] });
     } else {
-        return { args[3], args[4] };
+        return wrap({ args[3], args[4] });
     }
 }
 
-static std::vector<Value *> builtin_call_cc(const std::vector<Value *> &args) {
+static std::vector<Any> builtin_call_cc(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2, 1);
     return { args[1], args[2], args[2] };
 }
 
-static Value *builtin_repr(const std::vector<Value *> &args) {
+static Any builtin_repr(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
-    return wrap(getRepr(args[0]));
+    return wrap(get_string(args[0]));
 }
 
-static Value *builtin_tupleof(const std::vector<Value *> &args) {
+static Any builtin_tupleof(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
     return wrap(args);
 }
 
-static Value *builtin_slist(const std::vector<Value *> &args) {
+static Any builtin_slist(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
-    return SListValue::create(args);
+    return pointer(Types::SList, SList::create(args));
 }
 
-static Value *builtin_parameter(const std::vector<Value *> &args) {
+static Any builtin_parameter(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     auto name = extract_any_string(args[0]);
-    return ParameterValue::create(name);
+    return pointer(Types::Parameter, Parameter::create(name));
 }
 
-static Value *builtin_is_empty(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto arg = args[0];
-    auto result = false;
-    switch(arg->kind) {
-        case Value::SList: {
-            result = (arg == SListValue::get_eox());
-        } break;
-        case Value::Tuple: {
-            auto cs = llvm::cast<TupleValue>(arg);
-            result = (cs->values.size() == 0);
-        } break;
-        default: {
-        } break;
-    }
-    return wrap(result);
-}
-
-static Value *builtin_is_slist(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto arg = args[0];
-    bool result = (arg->kind == Value::SList);
-    return wrap(result);
-}
-
-static Value *builtin_is_symbol(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto arg = args[0];
-    bool result = (arg->kind == Value::Symbol);
-    return wrap(result);
-}
-
-static Value *builtin_is_integer(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto arg = args[0];
-    bool result = (arg->kind == Value::Integer);
-    return wrap(result);
-}
-
-static Value *builtin_is_null(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto arg = args[0];
-    bool result = (arg == UnitValue::get_null());
-    return wrap(result);
-}
-
-static Value *builtin_cons(const std::vector<Value *> &args) {
+static Any builtin_cons(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
-    auto at = args[0];
-    auto next = verifyValueKind<SListValue>(args[1]);
-    return SListValue::create(at, next);
+    auto &at = args[0];
+    auto next = args[1];
+    verifyValueKind(Types::SList, next);
+    return pointer(Types::SList, SList::create(at, next.slist));
 }
 
-static Value *builtin_structof(const std::vector<Value *> &args) {
+static Any builtin_structof(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
     auto result = StructValue::create({}, Type::Struct(""));
 
