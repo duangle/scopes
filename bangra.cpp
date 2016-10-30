@@ -628,11 +628,12 @@ struct Type {
     bool (*eq_type)(Type *self, Type *other);
     // short string representation
     std::string (*tostring)(Type *self, const Any &value);
-    // return pointer to content
-    const void *(*getpointer)(Type *self, const Any &value);
+    // return contained item
+    Any (*at)(Type *self, const Any &value, size_t index);
 
     size_t size;
     size_t alignment;
+    bool is_ref;
 
     union {
         // integer: is type signed?
@@ -707,19 +708,14 @@ static Type *get_result_type(Type *self) {
     return self->result_type;
 }
 
-static const void *type_getpointer_inlined(Type *self, const Any &value) {
-    assert(self);
-    return &value;
-}
-
-static const void *type_getpointer_ptr(Type *self, const Any &value) {
-    assert(self);
-    return value.ptr;
-}
-
 static bool type_eq_default(Type *self, Type *other) {
     assert(self && other);
     return false;
+}
+
+static Any type_at_default(Type *self, const Any &value, size_t index) {
+    assert(false && "type not indexable");
+    return const_none;
 }
 
 static std::string type_tostring_default(Type *self, const Any &value) {
@@ -732,7 +728,8 @@ static Type *new_type(const std::string &name) {
     auto result = new Type();
     result->size = 0;
     result->alignment = 1;
-    result->getpointer = nullptr;
+    result->is_ref = false;
+    result->at = type_at_default;
     result->name = name;
     result->eq_type = type_eq_default;
     result->tostring = type_tostring_default;
@@ -745,8 +742,11 @@ static Type *new_type(const std::string &name) {
 }
 
 static const void *get_pointer(const Any &value) {
-    assert(value.type->getpointer);
-    return value.type->getpointer(value.type, value);
+    if (value.type->is_ref) {
+        return value.ptr;
+    } else {
+        return &value.u64;
+    }
 }
 
 static bool eq(Type *self, Type *other) {
@@ -757,6 +757,21 @@ static bool eq(Type *self, Type *other) {
 
 static std::string tostring(const Any &value) {
     return value.type->tostring(value.type, value);
+}
+
+static Any at(const Any &value, size_t index) {
+    return value.type->at(value.type, value, index);
+}
+
+static Any from_pointer(Type *self, const void *ptr) {
+    if (self->is_ref) {
+        return pointer(self, ptr);
+    } else {
+        Any result = make_any(self);
+        result.u64 = 0;
+        memcpy(&result.u64, ptr, get_size(self));
+        return result;
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -824,6 +839,19 @@ static std::string extract_string(const Any &value) {
         error(value, "can not extract string");
         return "";
     }
+}
+
+static std::vector<Any> extract_tuple(const Any &value) {
+    if (eq(value.type, Types::TTuple)) {
+        std::vector<Any> result;
+        size_t count = get_field_count(value.type);
+        for (size_t i = 0; i < count; ++i) {
+            result.push_back(at(value, i));
+        }
+        return result;
+    }
+    error(value, "can not extract tuple");
+    return {};
 }
 
 static std::string extract_any_string(const Any &value) {
@@ -1395,11 +1423,21 @@ namespace Types {
         return (other == TEnum);
     }
 
+    static bangra::Any type_array_at(Type *self,
+        const bangra::Any &value, size_t index) {
+        auto padded_size = align(
+            get_size(self->element_type), get_alignment(self->element_type));
+        auto offset = padded_size * index;
+        assert(offset < self->size);
+        return from_pointer(self->element_type, (char *)value.ptr + offset);
+    }
+
     static Type *__new_array_type(Type *element, size_t size) {
         assert(element);
         Type *type = new_type("");
         type->count = size;
-        type->getpointer = type_getpointer_ptr;
+        type->is_ref = true;
+        type->at = type_array_at;
         type->element_type = element;
         auto padded_size = align(get_size(element), get_alignment(element));
         type->size = padded_size * type->count;
@@ -1431,6 +1469,12 @@ namespace Types {
         return type;
     }
 
+    static bangra::Any type_pointer_at(Type *self,
+        const bangra::Any &value, size_t index) {
+        assert(index == 0);
+        return from_pointer(self->element_type, (char *)value.ptr);
+    }
+
     static Type *_new_pointer_type(Type *element) {
         assert(element);
         Type *type = new_type(
@@ -1438,11 +1482,19 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
-        type->getpointer = type_getpointer_inlined;
+        type->is_ref = false;
+        type->at = type_pointer_at;
         type->element_type = element;
         type->size = ffi_type_pointer.size;
         type->alignment = ffi_type_pointer.alignment;
         return type;
+    }
+
+    static bangra::Any type_tuple_at(Type *self,
+        const bangra::Any &value, size_t index) {
+        assert(index < self->types.size());
+        auto offset = self->offsets[index];
+        return from_pointer(self->types[index], (char *)value.ptr + offset);
     }
 
     static void _set_field_names(Type *type, const std::vector<std::string> &names) {
@@ -1494,7 +1546,8 @@ namespace Types {
         ss << ")";
         Type *type = new_type(ss.str());
         type->eq_type = type_tuple_eq;
-        type->getpointer = type_getpointer_ptr;
+        type->at = type_tuple_at;
+        type->is_ref = true;
         _set_struct_field_types(type, types);
         return type;
     }
@@ -1541,8 +1594,10 @@ namespace Types {
         type->eq_type = type_cfunction_eq;
         type->is_vararg = vararg;
         type->result_type = result;
-        type->getpointer = type_getpointer_inlined;
+        type->is_ref = false;
         type->types = { parameters };
+        type->size = ffi_type_pointer.size;
+        type->alignment = ffi_type_pointer.alignment;
         return type;
     }
 
@@ -1568,7 +1623,7 @@ namespace Types {
 
         Type *type = new_type(format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
-        type->getpointer = type_getpointer_inlined;
+        type->is_ref = false;
         type->width = width;
         type->is_signed = signed_;
         type->size = itype->size;
@@ -1587,7 +1642,7 @@ namespace Types {
 
         Type *type = new_type(format("real%zu", width));
         type->eq_type = type_real_eq;
-        type->getpointer = type_getpointer_inlined;
+        type->is_ref = false;
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -1608,7 +1663,8 @@ namespace Types {
             type->name = ss.str();
         }
         type->eq_type = type_struct_eq;
-        type->getpointer = type_getpointer_ptr;
+        type->is_ref = true;
+        type->at = type_tuple_at;
         return type;
     }
 
@@ -1620,7 +1676,7 @@ namespace Types {
         ss << ")";
         Type *type = new_type(ss.str());
         type->eq_type = type_enum_eq;
-        type->getpointer = type_getpointer_ptr;
+        type->is_ref = true;
         return type;
     }
 
@@ -3373,73 +3429,42 @@ static Any builtin_cons(const std::vector<Any> &args) {
 
 static Any builtin_structof(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
-    auto result = StructValue::create({}, Type::Struct(""));
-
+    std::vector<std::string> names;
+    std::vector<Any> values;
     for (size_t i = 0; i < args.size(); ++i) {
-        auto &pair = extract_tuple(args[i]);
+        auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
-            ilError(args[i], "tuple must have exactly two elements");
+            error(args[i], "tuple must have exactly two elements");
         auto name = extract_any_string(pair[0]);
+        names.push_back(name);
         auto value = pair[1];
-        result->addField(value,
-            StructType::Field(name, getType(value)));
+        values.push_back(value);
     }
 
-    return result;
+    Any t = wrap(values);
+
+    auto struct_type = Types::Struct("");
+    Types::_set_struct_field_types(struct_type, t.type->types);
+    Types::_set_field_names(struct_type, names);
+
+    return pointer(struct_type, t.ptr);
 }
 
-static Value *builtin_syntax_macro(const std::vector<Value *> &args) {
+static Any builtin_syntax_macro(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
-    return MacroValue::create(verifyValueKind<Closure>(args[0]));
+    verifyValueKind(Types::Closure, args[0]);
+    return pointer(Types::Macro, Macro::create(args[0]));
 }
 
-static Value *builtin_typeof(const std::vector<Value *> &args) {
+static Any builtin_typeof(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
-    return wrap(getType(args[0]));
+    return wrap(args[0].type);
 }
 
-static Value *builtin_dump(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto start_value = args[0];
-    std::list<Value *> todo;
-    std::unordered_set<Value *> visited;
-    todo.push_back(start_value);
-    while (!todo.empty()) {
-        auto value = todo.back();
-        todo.pop_back();
-        if (!visited.count(value)) {
-            visited.insert(value);
-            std::cout << getRepr(value) << "\n";
-            switch (value->kind) {
-                case Value::Closure: {
-                    auto closure = llvm::cast<Closure>(value);
-                    todo.push_front(closure->frame);
-                    todo.push_front(closure->cont);
-                } break;
-                case Value::Flow: {
-                    auto flow = llvm::cast<Flow>(value);
-                    if (flow->hasArguments()) {
-                        for (size_t i = 0;
-                            i < flow->arguments->values.size(); ++i) {
-                            auto dest = flow->arguments->values[i];
-                            if (llvm::isa<Flow>(dest)) {
-                                todo.push_front(dest);
-                            }
-                        }
-                    }
-                } break;
-                default: break;
-            }
-        }
-    }
-    return start_value;
-}
-
-
-static Value *builtin_cdecl(const std::vector<Value *> &args) {
+static Any builtin_cdecl(const std::vector<Any> &args) {
     builtin_checkparams(args, 3, 3);
     Type *rettype = extract_type(args[0]);
-    const std::vector<Value *> &params = extract_tuple(args[1]);
+    auto params = extract_tuple(args[1]);
     bool vararg = extract_bool(args[2]);
 
     std::vector<Type *> paramtypes;
@@ -3447,14 +3472,14 @@ static Value *builtin_cdecl(const std::vector<Value *> &args) {
     for (size_t i = 0; i < paramcount; ++i) {
         paramtypes.push_back(extract_type(params[i]));
     }
-    return wrap(Type::CFunction(rettype, paramtypes, vararg));
+    return wrap(Types::CFunction(rettype, paramtypes, vararg));
 }
 
-static Value *builtin_external(const std::vector<Value *> &args) {
+static Any builtin_external(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     std::string name = extract_string(args[0]);
     Type *type = extract_type(args[1]);
-    return ExternalValue::create(name, type);
+    return External::create(name, type);
 }
 
 static Value *builtin_error(const std::vector<Value *> &args) {
