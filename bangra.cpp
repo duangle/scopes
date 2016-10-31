@@ -465,13 +465,11 @@ struct Builtin;
 struct BuiltinFlow;
 struct Type;
 
-typedef Any (*BuiltinFunction)(Any *args, size_t count);
-typedef std::vector<Any> (*BuiltinFlowFunction)(Any *args, size_t count);
+typedef Any (*BuiltinFunction)(const std::vector<Any> &args);
+typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
 
 struct Any {
     union {
-        void *ptr;
-
         bool i1;
 
         int8_t i8;
@@ -487,6 +485,7 @@ struct Any {
         float r32;
         double r64;
 
+        void *ptr;
         char *c_str;
         BuiltinFunction func;
         SList *slist;
@@ -498,6 +497,7 @@ struct Any {
         Builtin *builtin;
         BuiltinFlow *builtin_flow;
         Anchor *anchorref;
+        Table *table;
     };
     Type *type;
     Anchor *anchor;
@@ -686,6 +686,15 @@ static Type *get_type(Type *self, size_t i) {
 
 static size_t get_field_count(Type *self) {
     return self->types.size();
+}
+
+static size_t get_field_index(Type *self, const std::string &name) {
+    auto it = self->name_index_map.find(name);
+    if (it == self->name_index_map.end()) {
+        return (size_t)-1;
+    } else {
+        return it->second;
+    }
 }
 
 static size_t get_offset(Type *self, size_t i) {
@@ -943,6 +952,30 @@ static Any integer(Type *type, int64_t value) {
     return any;
 }
 
+static int64_t extract_integer(const Any &value) {
+    auto type = value.type;
+    if (type == Types::I8) {
+        return (int64_t)value.i8;
+    } else if (type == Types::I16) {
+        return (int64_t)value.i16;
+    } else if (type == Types::I32) {
+        return (int64_t)value.i32;
+    } else if (type == Types::I64) {
+        return value.i64;
+    } else if (type == Types::U8) {
+        return (int64_t)value.u8;
+    } else if (type == Types::U16) {
+        return (int64_t)value.u16;
+    } else if (type == Types::U32) {
+        return (int64_t)value.u32;
+    } else if (type == Types::U64) {
+        return (int64_t)value.u64;
+    } else {
+        assert(false && "not an integer type");
+        return 0;
+    }
+}
+
 static Any real(Type *type, double value) {
     Any any = make_any(type);
     if (type == Types::R32) {
@@ -953,6 +986,18 @@ static Any real(Type *type, double value) {
         assert(false && "not a real type");
     }
     return any;
+}
+
+static double extract_real(const Any &value) {
+    auto type = value.type;
+    if (type == Types::R32) {
+        return (double)value.r32;
+    } else if (type == Types::R64) {
+        return (double)value.r64;
+    } else {
+        assert(false && "not a real type");
+        return 0;
+    }
 }
 
 
@@ -2732,14 +2777,14 @@ Any execute(std::vector<Any> arguments) {
             Any closure = arguments.back();
             arguments.pop_back();
             arguments.erase(arguments.begin());
-            Any result = cb->handler(&arguments[0], arguments.size());
+            Any result = cb->handler(arguments);
             // generate fitting resume
             arguments.resize(2);
             arguments[0] = closure;
             arguments[1] = result;
         } else if (callee.type == Types::BuiltinFlow) {
             auto cb = callee.builtin_flow;
-            arguments = cb->handler(&arguments[0], arguments.size());
+            arguments = cb->handler(arguments);
         } else if (is_pointer_type(callee.type)) {
             Any closure = arguments.back();
             arguments.pop_back();
@@ -3475,22 +3520,15 @@ static Any builtin_cdecl(const std::vector<Any> &args) {
     return wrap(Types::CFunction(rettype, paramtypes, vararg));
 }
 
-static Any builtin_external(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
-    std::string name = extract_string(args[0]);
-    Type *type = extract_type(args[1]);
-    return External::create(name, type);
-}
-
-static Value *builtin_error(const std::vector<Value *> &args) {
+static Any builtin_error(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     std::string msg = extract_string(args[0]);
-    valueError(nullptr, "%s", msg.c_str());
-    return UnitValue::get_null();
+    error(args[0], "%s", msg.c_str());
+    return const_none;
 }
 
 // (import-c const-path (tupleof const-string ...))
-static Value *builtin_import_c(const std::vector<Value *> &args) {
+static Any builtin_import_c(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     std::string path = extract_string(args[0]);
     auto compile_args = extract_tuple(args[1]);
@@ -3498,265 +3536,13 @@ static Value *builtin_import_c(const std::vector<Value *> &args) {
     for (size_t i = 0; i < compile_args.size(); ++i) {
         cargs.push_back(extract_string(compile_args[i]));
     }
-    return bangra::importCModule(path, cargs);
+    return pointer(Types::Table, bangra::importCModule(path, cargs));
 }
 
-static Value *builtin_is_key(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 2, 2);
-    Value *obj = args[0];
-    Value *key = args[1];
-    bool result = false;
-    switch(obj->kind) {
-        case Value::Struct: {
-            auto cs = llvm::cast<StructValue>(obj);
-            auto t = llvm::cast<StructType>(getType(cs));
-            switch(key->kind) {
-                case Value::Integer: {
-                    auto ci = llvm::cast<IntegerValue>(key);
-                    if ((size_t)ci->value < t->getFieldCount()) {
-                        result = true;
-                    }
-                } break;
-                case Value::String: {
-                    auto cstr = llvm::cast<StringValue>(key);
-                    size_t idx = t->getFieldIndex(cstr->value);
-                    if (idx != (size_t)-1) {
-                        result = true;
-                    }
-                } break;
-                default: {
-                    ilError(key, "illegal key type");
-                } break;
-            }
-        } break;
-        default: {
-            ilError(obj, "unsubscriptable type");
-        } break;
-    }
-    return wrap(result);
-}
-
-static Value *builtin_length(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    Value *obj = args[0];
-    switch(obj->kind) {
-        case Value::String: {
-            auto cs = llvm::cast<StringValue>(obj);
-            return wrap((int64_t)cs->value.size());
-        } break;
-        case Value::Tuple: {
-            auto cs = llvm::cast<TupleValue>(obj);
-            return wrap((int64_t)cs->values.size());
-        } break;
-        case Value::Struct: {
-            auto cs = llvm::cast<StructValue>(obj);
-            return wrap((int64_t)cs->values.size());
-        } break;
-        case Value::TypeRef: {
-            auto cs = llvm::cast<TypeRefValue>(obj);
-            auto t = cs->value;
-            switch(t->getKind()) {
-                case T_Enum: {
-                    auto te = llvm::cast<EnumType>(t);
-                    return wrap((int64_t)te->getFieldCount());
-                } break;
-                default: {
-                    ilError(obj, "unsubscriptable type");
-                    return nullptr;
-                } break;
-            }
-        } break;
-        default: {
-            ilError(obj, "unsubscriptable type");
-            return nullptr;
-        } break;
-    }
-}
-
-static Value *builtin_kindof(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto type = extract_type(args[0]);
-    return wrap((int64_t)type->getKind());
-}
-
-static Value *builtin_at_op(const std::vector<Value *> &args) {
-    builtin_checkparams(args, 2, 2);
-    Value *obj = args[0];
-    Value *key = args[1];
-    switch(obj->kind) {
-        case Value::SList: {
-            auto cs = llvm::cast<SListValue>(obj);
-            switch(key->kind) {
-                case Value::Integer: {
-                    auto ci = llvm::cast<IntegerValue>(key);
-                    if (ci->value == 0) {
-                        return cs->at;
-                    } else {
-                        SListValue *result = cs;
-                        for (int64_t c = 0; c < ci->value; ++c) {
-                            result = result->next;
-                        }
-                        return result;
-                    }
-                } break;
-                default: break;
-            }
-            ilError(key, "illegal index type");
-            return nullptr;
-        } break;
-        case Value::String: {
-            auto cs = llvm::cast<StringValue>(obj);
-            int64_t size = cs->value.size();
-            int64_t k0;
-            int64_t k1;
-            switch(key->kind) {
-                case Value::Tuple: {
-                    auto ct = llvm::cast<TupleValue>(key);
-                    auto ctt = getType(ct);
-                    if (ctt == Type::RSlice) {
-                        k0 = llvm::cast<IntegerValue>(
-                            ct->values[0])->value;
-                        k1 = size;
-                    } else if (ctt == Type::Slice) {
-                        k0 = llvm::cast<IntegerValue>(
-                            ct->values[0])->value;
-                        k1 = llvm::cast<IntegerValue>(
-                            ct->values[1])->value;
-                    } else {
-                        ilError(key, "valid slice tuple expected");
-                        return nullptr;
-                    }
-                    if (k0 < 0)
-                        k0 = size + k0;
-                    if (k1 < 0)
-                        k1 = size + k1;
-                    if (k0 < 0) k0 = 0;
-                    else if (k0 >= size) k0 = size;
-                    if (k1 < 0) k1 = 0;
-                    else if (k1 >= size) k1 = size;
-                    if (k1 <= k0)
-                        return StringValue::create_empty();
-                } break;
-                case Value::Integer: {
-                    auto ci = llvm::cast<IntegerValue>(key);
-                    k0 = ci->value;
-                    if (k0 < 0)
-                        k0 = size + k0;
-                    if ((k0 < 0) || (k0 >= size)) {
-                        ilError(key, "index out of bounds");
-                        return nullptr;
-                    }
-                    k1 = k0 + 1;
-                } break;
-                default: {
-                    ilError(key, "illegal index type");
-                    return nullptr;
-                } break;
-            }
-            return StringValue::create(cs->value.substr(k0, k1 - k0));
-        } break;
-        case Value::Tuple: {
-            auto cs = llvm::cast<TupleValue>(obj);
-            auto t = llvm::cast<TupleType>(getType(cs));
-            switch(key->kind) {
-                case Value::Integer: {
-                    auto ci = llvm::cast<IntegerValue>(key);
-                    if ((size_t)ci->value < t->getCount()) {
-                        return cs->values[ci->value];
-                    } else {
-                        ilError(key, "index out of bounds");
-                        return nullptr;
-                    }
-                } break;
-                default: {
-                    ilError(key, "illegal index type");
-                    return nullptr;
-                } break;
-            }
-        } break;
-        case Value::Struct: {
-            auto cs = llvm::cast<StructValue>(obj);
-            auto t = llvm::cast<StructType>(getType(cs));
-            switch(key->kind) {
-                case Value::Integer: {
-                    auto ci = llvm::cast<IntegerValue>(key);
-                    if ((size_t)ci->value < t->getFieldCount()) {
-                        return cs->values[ci->value];
-                    } else {
-                        ilError(key, "index out of bounds");
-                        return nullptr;
-                    }
-                } break;
-                case Value::String: {
-                    auto cstr = llvm::cast<StringValue>(key);
-                    size_t idx = t->getFieldIndex(cstr->value);
-                    if (idx != (size_t)-1) {
-                        return cs->values[idx];
-                    } else {
-                        ilError(key, "no such member");
-                        return nullptr;
-                    }
-                } break;
-                default: {
-                    ilError(key, "illegal key type");
-                    return nullptr;
-                } break;
-            }
-        } break;
-        case Value::TypeRef: {
-            auto cs = llvm::cast<TypeRefValue>(obj);
-            auto t = cs->value;
-            switch(t->getKind()) {
-                case T_Enum: {
-                    auto te = llvm::cast<EnumType>(t);
-                    switch(key->kind) {
-                        case Value::Integer: {
-                            auto ci = llvm::cast<IntegerValue>(key);
-                            if ((size_t)ci->value < te->getFieldCount()) {
-                                auto &field = te->getField(ci->value);
-                                return wrap({
-                                    wrap(field.getName()),
-                                    wrap(field.getValue())
-                                });
-                            } else {
-                                ilError(key, "index out of bounds");
-                                return nullptr;
-                            }
-                        } break;
-                        case Value::String: {
-                            auto cstr = llvm::cast<StringValue>(key);
-                            size_t idx = te->getFieldIndex(cstr->value);
-                            if (idx != (size_t)-1) {
-                                return wrap(te->getField(idx).getValue());
-                            } else {
-                                ilError(key, "no such member");
-                                return nullptr;
-                            }
-                        } break;
-                        default: {
-                            ilError(key, "illegal key type");
-                            return nullptr;
-                        } break;
-                    }
-                } break;
-                default: {
-                    ilError(obj, "unsubscriptable type");
-                    return nullptr;
-                } break;
-            }
-        } break;
-        default: {
-            ilError(obj, "unsubscriptable type");
-            return nullptr;
-        } break;
-    }
-
-}
-
-template<ILBuiltinFunction F>
-static Value *builtin_variadic_ltr(const std::vector<Value *> &args) {
+template<BuiltinFunction F>
+static Any builtin_variadic_ltr(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, -1);
-    Value *result = F({args[0], args[1]});
+    Any result = F({args[0], args[1]});
     for (size_t i = 2; i < args.size(); ++i) {
         result = F({result, args[i]});
     }
@@ -3848,20 +3634,20 @@ class builtin_le_op { public:
 
 template <class NextT>
 class builtin_filter_op { public:
-    static Value *operate(const double &a, const int64_t &b) {
+    static Any operate(const double &a, const int64_t &b) {
         return wrap(NextT::operate(a, b));
     }
-    static Value *operate(const int64_t &a, const double &b) {
+    static Any operate(const int64_t &a, const double &b) {
         return wrap(NextT::operate(a, b));
     }
     template<typename T>
-    static Value *operate(const T &a, const T &b) {
+    static Any operate(const T &a, const T &b) {
         return wrap(NextT::operate(a, b));
     }
     template<typename Ta, typename Tb>
-    static Value *operate(const Ta &a, const Tb &b) {
-        ilError(nullptr, "illegal operands");
-        return nullptr;
+    static Any operate(const Ta &a, const Tb &b) {
+        error(const_none, "illegal operands");
+        return const_none;
     }
 };
 
@@ -3869,16 +3655,16 @@ class builtin_filter_op { public:
 class dispatch_types_failed {
 public:
     template<typename F>
-    static Value *dispatch(const Value *v, const F &next) {
-        ilError(v, "illegal operand");
-        return nullptr;
+    static Any dispatch(const Any &v, const F &next) {
+        error(v, "illegal operand");
+        return const_none;
     }
 };
 
 class dispatch_pointer_type {
 public:
     template<typename F>
-    static Value *dispatch(const Value *v, const F &next) {
+    static Any dispatch(const Any &v, const F &next) {
         return next(v);
     }
 };
@@ -3887,13 +3673,11 @@ template<typename NextT>
 class dispatch_string_type {
 public:
     template<typename F>
-    static Value *dispatch(const Value *v, const F &next) {
-        if (v->kind == Value::String) {
-            auto ca = llvm::cast<StringValue>(v);
-            return next(ca->value);
-        } else if (v->kind == Value::Symbol) {
-            auto ca = llvm::cast<SymbolValue>(v);
-            return next(ca->value);
+    static Any dispatch(const Any &v, const F &next) {
+        if (eq(v.type, Types::String)) {
+            return next(*v.str);
+        } else if (eq(v.type, Types::Symbol)) {
+            return next(*v.str);
         } else {
             return NextT::template dispatch<F>(v, next);
         }
@@ -3904,12 +3688,9 @@ template<typename NextT>
 class dispatch_integer_type {
 public:
     template<typename F>
-    static Value *dispatch(const Value *v, const F &next) {
-        if (v->kind == Value::Integer) {
-            auto ca = llvm::cast<IntegerValue>(v);
-            if (ca->value_type != Type::Bool) {
-                return next(ca->value);
-            }
+    static Any dispatch(const Any &v, const F &next) {
+        if (eq(v.type, Types::TInteger)) {
+            return next(extract_integer(v));
         }
         return NextT::template dispatch<F>(v, next);
     }
@@ -3919,12 +3700,9 @@ template<typename NextT>
 class dispatch_bool_type {
 public:
     template<typename F>
-    static Value *dispatch(const Value *v, const F &next) {
-        if (v->kind == Value::Integer) {
-            auto ca = llvm::cast<IntegerValue>(v);
-            if (ca->value_type == Type::Bool) {
-                return next((bool)ca->value);
-            }
+    static Any dispatch(const Any &v, const F &next) {
+        if (eq(v.type, Types::Bool)) {
+            return next(v.i1);
         }
         return NextT::template dispatch<F>(v, next);
     }
@@ -3934,10 +3712,9 @@ template<typename NextT>
 class dispatch_real_type {
 public:
     template<typename F>
-    static Value *dispatch(const Value *v, const F &next) {
-        if (v->kind == Value::Real) {
-            auto ca = llvm::cast<RealValue>(v);
-            return next(ca->value);
+    static Any dispatch(const Any &v, const F &next) {
+        if (eq(v.type, Types::TReal)) {
+            return next(extract_real(v));
         } else {
             return NextT::template dispatch<F>(v, next);
         }
@@ -3976,7 +3753,7 @@ template<class D, class F>
 class builtin_binary_op1 {
 public:
     template<typename Q>
-    Value *operator ()(const Q &ca_value) const {
+    Any operator ()(const Q &ca_value) const {
         return wrap(F::operate(ca_value));
     }
 };
@@ -3988,7 +3765,7 @@ public:
     builtin_binary_op3(const T &ca_value_) : ca_value(ca_value_) {}
 
     template<typename Q>
-    Value *operator ()(const Q &cb_value) const {
+    Any operator ()(const Q &cb_value) const {
         return builtin_filter_op<F>::operate(ca_value, cb_value);
     }
 };
@@ -3996,30 +3773,30 @@ public:
 template<class D, class F>
 class builtin_binary_op2 {
 public:
-    const Value *b;
-    builtin_binary_op2(const Value *b_) : b(b_) {}
+    const Any &b;
+    builtin_binary_op2(const Any &b_) : b(b_) {}
 
     template<typename T>
-    Value *operator ()(const T &ca_value) const {
+    Any operator ()(const T &ca_value) const {
         return D::dispatch(b, builtin_binary_op3<D, F, T>(ca_value));
     }
 };
 
 template<class D, class F>
-static Value *builtin_binary_op(
-    const std::vector<Value *> &args) {
+static Any builtin_binary_op(
+    const std::vector<Any> &args) {
     if (args.size() != 2) {
-        ilError(nullptr, "invalid number of arguments");
+        error(const_none, "invalid number of arguments");
     }
     return D::dispatch(args[0], builtin_binary_op2<D, F>(args[1]));
 }
 
 
 template<class D, class F>
-static Value *builtin_unary_op(
-    const std::vector<Value *> &args) {
+static Any builtin_unary_op(
+    const std::vector<Any> &args) {
     if (args.size() != 1) {
-        ilError(nullptr, "invalid number of arguments");
+        error(const_none, "invalid number of arguments");
     }
     return D::dispatch(args[0], builtin_binary_op1<D, F>());
 }
@@ -4028,11 +3805,7 @@ static Value *builtin_unary_op(
 // TRANSLATION
 //------------------------------------------------------------------------------
 
-typedef Value *(*bangra_preprocessor)(StructValue *, Value *);
-
-typedef std::map<std::string, bangra_preprocessor> NameMacroMap;
-typedef std::unordered_map<std::string, Type *> NameTypeMap;
-typedef std::unordered_map<std::string, Value *> NameValueMap;
+typedef Any (*bangra_preprocessor)(Table *, const Any &);
 
 //------------------------------------------------------------------------------
 
