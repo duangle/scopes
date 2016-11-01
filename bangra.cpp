@@ -463,7 +463,10 @@ struct Table;
 struct Closure;
 struct Builtin;
 struct BuiltinFlow;
+struct BuiltinMacro;
 struct Type;
+struct Macro;
+struct SpecialForm;
 
 typedef Any (*BuiltinFunction)(const std::vector<Any> &args);
 typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
@@ -496,8 +499,11 @@ struct Any {
         Closure *closure;
         Builtin *builtin;
         BuiltinFlow *builtin_flow;
+        BuiltinMacro *builtin_macro;
+        SpecialForm *special_form;
         Anchor *anchorref;
         Table *table;
+        Macro *macro;
     };
     Type *type;
     Anchor *anchor;
@@ -585,7 +591,7 @@ namespace Types {
     static Type *_new_vector_type(Type *element, size_t size);
     static Type *_new_tuple_type(std::vector<Type *> types);
     static Type *_new_cfunction_type(
-        Type *result, std::vector<Type *> parameters, bool vararg);
+        Type *result, Type *parameters, bool vararg);
     static Type *_new_pointer_type(Type *element);
     static Type *_new_integer_type(size_t width, bool signed_);
     static Type *_new_real_type(size_t width);
@@ -630,6 +636,8 @@ struct Type {
     std::string (*tostring)(Type *self, const Any &value);
     // return contained item
     Any (*at)(Type *self, const Any &value, size_t index);
+    // return true if objects are equivalent
+    bool (*eq)(Type *self, const Any &a, const Any &b);
 
     size_t size;
     size_t alignment;
@@ -717,8 +725,12 @@ static Type *get_result_type(Type *self) {
     return self->result_type;
 }
 
-static bool type_eq_default(Type *self, Type *other) {
+static bool type_eq_type_default(Type *self, Type *other) {
     assert(self && other);
+    return false;
+}
+
+static bool type_eq_default(Type *self, const Any &a, const Any &b) {
     return false;
 }
 
@@ -733,14 +745,15 @@ static std::string type_tostring_default(Type *self, const Any &value) {
 }
 
 static Type *new_type(const std::string &name) {
-    assert(!name.empty());
+    //assert(!name.empty());
     auto result = new Type();
     result->size = 0;
     result->alignment = 1;
     result->is_ref = false;
     result->at = type_at_default;
     result->name = name;
-    result->eq_type = type_eq_default;
+    result->eq_type = type_eq_type_default;
+    result->eq = type_eq_default;
     result->tostring = type_tostring_default;
     result->is_signed = false;
     result->is_vararg = false;
@@ -762,6 +775,10 @@ static bool eq(Type *self, Type *other) {
     if (self == other) return true;
     assert(self && other);
     return self->eq_type(self, other) || other->eq_type(other, self);
+}
+
+static bool eq(const Any &a, const Any &b) {
+    return a.type->eq(a.type, a, b) || b.type->eq(b.type, b, a);
 }
 
 static std::string tostring(const Any &value) {
@@ -1114,7 +1131,7 @@ public:
         return expr;
     }
 
-    SListIter(const SList *value, size_t c) :
+    SListIter(const SList *value, size_t c=0) :
         expr(value)
     {
         auto eox = const_eol.slist;
@@ -1167,17 +1184,14 @@ protected:
 
 public:
     Flow() :
-        uid(unique_id_counter++),
-        arguments(nullptr),
-        count(0) {
+        uid(unique_id_counter++) {
     }
 
     std::string name;
     std::vector<Parameter *> parameters;
 
     // default path
-    Any *arguments;
-    size_t count;
+    std::vector<Any> arguments;
 
     size_t getParameterCount() {
         return parameters.size();
@@ -1188,7 +1202,7 @@ public:
     }
 
     bool hasArguments() const {
-        return arguments && count;
+        return !arguments.empty();
     }
 
     std::string getRefRepr () const {
@@ -2040,7 +2054,7 @@ void valueErrorV (const Any &expr, const char *fmt, va_list args) {
 }
 
 static void verifyValueKind(Type *type, const Any &expr) {
-    if (expr.type != type) {
+    if (!eq(expr.type, type)) {
         valueError(expr, "%s expected, not %s",
             get_string(pointer(Types::TType, type)).c_str(),
             get_string(pointer(Types::TType, expr.type)).c_str());
@@ -2765,8 +2779,8 @@ Any execute(std::vector<Any> arguments) {
                 frame->map[flow] = arguments;
             }
 
-            assert(flow->arguments);
-            size_t argcount = flow->count;
+            assert(!flow->arguments.empty());
+            size_t argcount = flow->arguments.size();
             arguments.resize(argcount);
             for (size_t i = 0; i < argcount; ++i) {
                 arguments[i] = evaluate(i, frame,
@@ -3152,7 +3166,8 @@ public:
         }
 
         if(valid) {
-            return Types::CFunction(returntype, argtypes, vararg);
+            return Types::CFunction(returntype,
+                Types::Tuple(argtypes), vararg);
         }
 
         return NULL;
@@ -3367,6 +3382,18 @@ static bool builtin_checkparams (const std::vector<Any> &args,
     return true;
 }
 
+static Any wrap(Flow *flow) {
+    return pointer(Types::Flow, flow);
+}
+
+static Any wrap(Parameter *param) {
+    return pointer(Types::Parameter, param);
+}
+
+static Any wrap(SList *slist) {
+    return pointer(Types::SList, slist);
+}
+
 static Any wrap(Type *type) {
     return pointer(Types::TypeRef, type);
 }
@@ -3517,7 +3544,7 @@ static Any builtin_cdecl(const std::vector<Any> &args) {
     for (size_t i = 0; i < paramcount; ++i) {
         paramtypes.push_back(extract_type(params[i]));
     }
-    return wrap(Types::CFunction(rettype, paramtypes, vararg));
+    return wrap(Types::CFunction(rettype, Types::Tuple(paramtypes), vararg));
 }
 
 static Any builtin_error(const std::vector<Any> &args) {
@@ -3606,6 +3633,13 @@ class builtin_not_op { public:
     template<typename T>
     static T operate(const T &x) { return !x; }
 };
+
+static bool operator ==(const Any &a, const Any &b) {
+    return eq(a, b);
+}
+static bool operator !=(const Any &a, const Any &b) {
+    return !eq(a, b);
+}
 
 class builtin_eq_op { public:
     template<typename Ta, typename Tb>
@@ -3809,50 +3843,48 @@ typedef Any (*bangra_preprocessor)(Table *, const Any &);
 
 //------------------------------------------------------------------------------
 
-static StructValue *new_scope() {
-    auto scope = StructValue::create({}, Type::Struct("scope"));
-        /*
-    scope->addField(UnitValue::get_null(),
-        StructType::Field("#parent", Type::Null));*/
-    return scope;
+static Table *new_scope() {
+    return new_table();
 }
 
-static StructValue *new_scope(StructValue *scope) {
+static Table *new_scope(Table *scope) {
     assert(scope);
-    auto subscope = StructValue::create({}, Type::Struct("scope"));
-    subscope->addField(scope,
-        StructType::Field("#parent", getType(scope)));
+    auto subscope = new_table();
+    set_key(*subscope, "#parent", pointer(Types::Table, scope));
     return subscope;
 }
 
-static void setLocal(StructValue *scope, const std::string &name, Value *value) {
+static void setLocal(Table *scope, const std::string &name, const Any &value) {
     assert(scope);
-    scope->addField(value,
-        StructType::Field(name, getType(value)));
+    set_key(*scope, name, value);
 }
 
 static void setBuiltin(
-    StructValue *scope, const std::string &name, MacroBuiltinFunction func) {
+    Table *scope, const std::string &name, MacroBuiltinFunction func) {
     assert(scope);
-    setLocal(scope, name, BuiltinMacroValue::create(func, name));
+    setLocal(scope, name,
+        pointer(Types::BuiltinMacro, BuiltinMacro::create(func, name)));
 }
 
 static void setBuiltin(
-    StructValue *scope, const std::string &name, SpecialFormFunction func) {
+    Table *scope, const std::string &name, SpecialFormFunction func) {
     assert(scope);
-    setLocal(scope, name, SpecialFormValue::create(func, name));
+    setLocal(scope, name,
+        pointer(Types::SpecialForm, SpecialForm::create(func, name)));
 }
 
 static void setBuiltin(
-    StructValue *scope, const std::string &name, ILBuiltinFunction func) {
+    Table *scope, const std::string &name, BuiltinFunction func) {
     assert(scope);
-    setLocal(scope, name, BuiltinValue::create(func, name));
+    setLocal(scope, name,
+        pointer(Types::Builtin, Builtin::create(func, name)));
 }
 
 static void setBuiltin(
-    StructValue *scope, const std::string &name, ILBuiltinFlowFunction func) {
+    Table *scope, const std::string &name, BuiltinFlowFunction func) {
     assert(scope);
-    setLocal(scope, name, BuiltinFlow::create(func, name));
+    setLocal(scope, name,
+        pointer(Types::BuiltinFlow, BuiltinFlow::create(func, name)));
 }
 
 /*
@@ -3864,34 +3896,31 @@ static bool isLocal(StructValue *scope, const std::string &name) {
 }
 */
 
-static StructValue *getParent(StructValue *scope) {
-    size_t idx = scope->struct_type->getFieldIndex("#parent");
-    if (idx != (size_t)-1) {
-        return llvm::dyn_cast<StructValue>(scope->values[idx]);
-    }
+static Table *getParent(Table *scope) {
+    auto parent = get_key(*scope, "#parent", const_none);
+    if (parent.type == Types::Table)
+        return parent.table;
     return nullptr;
 }
 
-static Value *getLocal(StructValue *scope, const std::string &name) {
+static Any getLocal(Table *scope, const std::string &name) {
     assert(scope);
     while (scope) {
-        size_t idx = scope->struct_type->getFieldIndex(name);
-        if (idx != (size_t)-1) {
-            return scope->values[idx];
-        }
+        auto parent = get_key(*scope, name, const_none);
+        if (parent.type != Types::None)
+            return parent;
         scope = getParent(scope);
     }
-    return nullptr;
+    return const_none;
 }
 
 static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 //------------------------------------------------------------------------------
 
-static bool isSymbol (const Value *expr, const char *sym) {
-    if (expr) {
-        if (auto symexpr = llvm::dyn_cast<SymbolValue>(expr))
-            return (symexpr->value == sym);
+static bool isSymbol (const Any &expr, const char *sym) {
+    if (expr.type == Types::Symbol) {
+        return (*expr.str) == sym;
     }
     return false;
 }
@@ -3900,21 +3929,21 @@ static bool isSymbol (const Value *expr, const char *sym) {
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
 
-static StructValue *globals = nullptr;
+static Table *globals = nullptr;
 
-static bool verifyParameterCount (SListValue *expr,
+static bool verifyParameterCount (SList *expr,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
     int argcount = (int)getSize(expr) - 1;
 
     if ((maxcount >= 0) && (argcount > maxcount)) {
-        valueError(*SListIter(expr, maxcount + 1),
+        error(const_none,
             "excess argument. At most %i arguments expected", maxcount);
         return false;
     }
     if ((mincount >= 0) && (argcount < mincount)) {
-        valueError(expr, "at least %i arguments expected", mincount);
+        error(const_none, "at least %i arguments expected", mincount);
         return false;
     }
     return true;
@@ -3922,35 +3951,36 @@ static bool verifyParameterCount (SListValue *expr,
 
 static bool verifyParameterCount (SListIter topit,
     int mincount, int maxcount) {
-    return verifyParameterCount(llvm::cast<SListValue>(*topit),
-        mincount, maxcount);
+    auto val = *topit;
+    verifyValueKind(Types::SList, val);
+    return verifyParameterCount(val.slist, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
 
-static Cursor expand (StructValue *env, SListIter topit);
-static Value *compile(Value *expr);
+static Cursor expand (Table *env, SListIter topit);
+static Any compile(const Any &expr);
 
-static ParameterValue *toparameter (StructValue *env, Value *value) {
-    if (value->kind == Value::Parameter)
-        return llvm::cast<ParameterValue>(value);
-    auto symname = verifyValueKind<SymbolValue>(value);
-    auto bp = ParameterValue::create(symname->value);
-    setLocal(env, symname->value, bp);
+static Any toparameter (Table *env, const Any &value) {
+    if (eq(value.type, Types::Parameter))
+        return value;
+    verifyValueKind(Types::Symbol, value);
+    auto bp = pointer(Types::Parameter, Parameter::create(*value.str));
+    setLocal(env, *value.str, bp);
     return bp;
 }
 
-static SListValue *expand_expr_list (StructValue *env, SListIter it) {
-    std::vector<Value *> result;
+static SList *expand_expr_list (Table *env, SListIter it) {
+    std::vector<Any> result;
     while (it) {
         auto cur = expand(env, it);
         result.push_back(cur.value);
         it = cur.next;
     }
 
-    return SListValue::create(result);
+    return SList::create(result);
 }
-static Cursor expand_function (StructValue *env, SListIter topit) {
+static Cursor expand_function (Table *env, SListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
     SListIter it(*topit++, 1);
@@ -3958,8 +3988,9 @@ static Cursor expand_function (StructValue *env, SListIter topit) {
 
     auto subenv = new_scope(env);
 
-    std::vector<Value *> outargs;
-    auto params = verifyValueKind<SListValue>(expr_parameters);
+    std::vector<Any> outargs;
+    verifyValueKind(Types::SList, expr_parameters);
+    auto params = expr_parameters.slist;
     SListIter param(params);
     while (param) {
         outargs.push_back(toparameter(subenv, *param));
@@ -3967,75 +3998,76 @@ static Cursor expand_function (StructValue *env, SListIter topit) {
     }
 
     return {
-        SListValue::create(
-            getLocal(globals, "form:function"),
-            SListValue::create(
-                SListValue::create(outargs),
-                    expand_expr_list(subenv, it))),
+        wrap(
+            SList::create(
+                getLocal(globals, "form:function"),
+                SList::create(
+                    wrap(SList::create(outargs)),
+                        expand_expr_list(subenv, it)))),
         topit };
 }
 
-static Cursor expand_quote (StructValue *env, SListIter topit) {
+static Cursor expand_quote (Table *env, SListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
     SListIter it(*topit++, 1);
-    SListValue *rest = const_cast<SListValue*>(it.getSList());
-    auto result = SListValue::create(getLocal(globals, "form:quote"), rest);
-    return { result, topit };
+    SList *rest = const_cast<SList*>(it.getSList());
+    auto result = SList::create(getLocal(globals, "form:quote"), rest);
+    return { wrap(result), topit };
 }
 
-static Cursor expand_escape (StructValue *env, SListIter topit) {
+static Cursor expand_escape (Table *env, SListIter topit) {
     SListIter it(*topit++, 1);
     return { *it, topit };
 }
 
-static Cursor expand_let_syntax (StructValue *env, SListIter topit) {
+static Cursor expand_let_syntax (Table *env, SListIter topit) {
 
     auto cur = expand_function (env, topit++);
 
     auto fun = compile(cur.value);
 
-    auto expr_env = verifyValueKind<StructValue>(execute({fun, env}));
+    auto expr_env = execute({fun, pointer(Types::Table, env)});
+    verifyValueKind(Types::Table, expr_env);
 
-    auto rest = expand_expr_list(expr_env, topit);
-    if (rest == SListValue::get_eox()) {
-        valueError(*topit, "missing subsequent expression");
+    auto rest = expand_expr_list(expr_env.table, topit);
+    if (rest == const_eol.slist) {
+        error(*topit, "missing subsequent expression");
     }
 
     return { rest->at, rest->next };
 }
 
-static SListValue *expand_macro(
-    StructValue *env, Value *handler, SListIter topit) {
-    Value *topexpr = const_cast<SListValue*>(topit.getSList());
-    auto result = execute({handler, env, topexpr});
-    if (result == UnitValue::get_null())
+static SList *expand_macro(
+    Table *env, const Any &handler, SListIter topit) {
+    auto topexpr = const_cast<SList*>(topit.getSList());
+    auto result = execute({handler,
+        wrap(env),
+        wrap(topexpr)});
+    if (result.type == Types::None)
         return nullptr;
-    return verifyValueKind<SListValue>(result);
+    verifyValueKind(Types::SList, result);
+    return result.slist;
 }
 
-static Cursor expand (StructValue *env, SListIter topit) {
-    Value *result = nullptr;
+static Cursor expand (Table *env, SListIter topit) {
+    Any result = const_none;
 process:
-    Value *expr = *topit;
-    assert(expr);
-    if (expr->kind == Value::SList) {
-        auto listexpr = llvm::cast<SListValue>(expr);
-        if (listexpr == SListValue::get_eox()) {
-            valueError(topit.getSList(), "expression is empty");
+    Any expr = *topit;
+    if (eq(expr.type, Types::SList)) {
+        if (expr.slist == const_eol.slist) {
+            error(expr, "expression is empty");
         }
 
-        auto head = listexpr->at;
-        if (auto sym = llvm::dyn_cast<SymbolValue>(head)) {
-            head = getLocal(env, sym->value);
+        auto head = expr.slist->at;
+        if (eq(head.type, Types::Symbol)) {
+            head = getLocal(env, *head.str);
         }
-        if (head) {
-            if (head->kind == Value::BuiltinMacro) {
-                auto macro = llvm::cast<BuiltinMacroValue>(head);
-                return macro->handler(env, topit);
-            } else if (head->kind == Value::Macro) {
-                auto macro = llvm::cast<MacroValue>(head);
-                auto result = expand_macro(env, macro->value, topit);
+        if (head.type != Types::None) {
+            if (eq(head.type, Types::BuiltinMacro)) {
+                return head.builtin_macro->handler(env, topit);
+            } else if (eq(head.type, Types::Macro)) {
+                auto result = expand_macro(env, head.macro->value, topit);
                 if (result) {
                     topit = SListIter(result);
                     goto process;
@@ -4044,7 +4076,7 @@ process:
         }
 
         auto default_handler = getLocal(env, "#slist");
-        if (default_handler) {
+        if (default_handler.type != Types::None) {
             auto result = expand_macro(env, default_handler, topit);
             if (result) {
                 topit = SListIter(result);
@@ -4053,52 +4085,52 @@ process:
         }
 
         SListIter it(*topit);
-        result = expand_expr_list(env, it);
+        result = wrap(expand_expr_list(env, it));
         topit++;
-    } else if (expr->kind == Value::Symbol) {
-        auto sym = llvm::cast<SymbolValue>(expr);
-        std::string value = sym->value;
-        result = getLocal(env, value);
-        if (!result) {
+    } else if (eq(expr.type, Types::Symbol)) {
+        std::string value = *expr.str;
+        result = getLocal(env, *expr.str);
+        if (result.type != Types::None) {
             auto default_handler = getLocal(env, "#symbol");
-            if (default_handler) {
+            if (default_handler.type != Types::None) {
                 auto result = expand_macro(env, default_handler, topit);
                 if (result) {
                     topit = SListIter(result);
                     goto process;
                 }
             }
-        }
-        if (!result) {
-            valueError(expr,
-                "unknown symbol '%s'", value.c_str());
+        } else {
+            error(expr,
+                "unknown symbol '%s'", expr.str->c_str());
         }
         topit++;
     } else {
         result = expr;
         topit++;
     }
-    assert(result);
+    assert(result.type != Types::None);
     return { result, topit };
 }
 
-static Value *builtin_expand(const std::vector<Value *> &args) {
+static Any builtin_expand(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
-    auto scope = verifyValueKind<StructValue>(args[0]);
+    auto scope = args[0];
+    verifyValueKind(Types::Table, scope);
     auto expr_eval = args[1];
 
-    auto retval = expand(scope, expr_eval);
+    auto retval = expand(scope.table, expr_eval);
 
-    auto topexpr = const_cast<SListValue*>(retval.next.getSList());
-    return SListValue::create(retval.value, topexpr);
+    auto topexpr = const_cast<SList*>(retval.next.getSList());
+    return wrap(SList::create(retval.value, topexpr));
 }
 
-static Value *builtin_set_globals(const std::vector<Value *> &args) {
+static Any builtin_set_globals(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
-    auto scope = verifyValueKind<StructValue>(args[0]);
+    auto scope = args[0];
+    verifyValueKind(Types::Table, scope);
 
-    globals = scope;
-    return TupleValue::create({});
+    globals = scope.table;
+    return const_none;
 }
 
 //------------------------------------------------------------------------------
@@ -4129,32 +4161,34 @@ struct ILBuilder {
     }
 
     void insertAndAdvance(
-        const std::vector<Value *> &values,
+        const std::vector<Any> &values,
         Flow *next) {
         assert(state.flow);
         assert(!state.flow->hasArguments());
-        state.flow->arguments = TupleValue::create(values);
+        state.flow->arguments = values;
         state.prevflow = state.flow;
         state.flow = next;
     }
 
-    void br(const std::vector<Value *> &arguments) {
+    void br(const std::vector<Any> &arguments) {
         // patch previous flow destination to jump right to
         // continuation when possible
         assert(state.flow);
         if (state.prevflow
             && (arguments.size() == 2)
-            && (arguments[1] == state.flow->parameters[0])
-            && (state.prevflow->arguments->values.back() == state.flow)) {
-            state.prevflow->arguments->values.back() = arguments[0];
+            && (eq(Types::Parameter, arguments[1].type))
+            && (arguments[1].parameter == state.flow->parameters[0])
+            && (eq(Types::Flow, state.prevflow->arguments.back().type))
+            && (state.prevflow->arguments.back().flow == state.flow)) {
+            state.prevflow->arguments.back() = arguments[0];
         } else {
             insertAndAdvance(arguments, nullptr);
         }
     }
 
-    ParameterValue *call(std::vector<Value *> values) {
+    Parameter *call(std::vector<Any> values) {
         auto next = Flow::create(1, "cret");
-        values.push_back(next);
+        values.push_back(wrap(next));
         insertAndAdvance(values, next);
         return next->parameters[0];
     }
@@ -4165,26 +4199,21 @@ static ILBuilder *builder;
 
 //------------------------------------------------------------------------------
 
-static Value *compile_expr_list (SListIter it) {
-    Value *value = nullptr;
+static Any compile_expr_list (SListIter it) {
+    Any value = const_none;
     while (it) {
         value = compile(*it);
         it++;
     }
-
-    if (!value)
-        value = UnitValue::get_null();
-
     return value;
 }
 
-static Value *compile_do (SListIter it) {
+static Any compile_do (SListIter it) {
     it++;
-
     return compile_expr_list(it);
 }
 
-static Value *compile_function (SListIter it) {
+static Any compile_function (SListIter it) {
     it++;
 
     auto expr_parameters = *it++;
@@ -4195,27 +4224,28 @@ static Value *compile_function (SListIter it) {
 
     builder->continueAt(function);
 
-    auto params = verifyValueKind<SListValue>(expr_parameters);
-    SListIter param(params);
+    verifyValueKind(Types::SList, expr_parameters);
+    SListIter param(expr_parameters.slist);
     while (param) {
-        function->appendParameter(verifyValueKind<ParameterValue>(*param));
+        verifyValueKind(Types::Parameter, *param);
+        function->appendParameter((*param).parameter);
         param++;
     }
-    auto ret = function->appendParameter(ParameterValue::create());
+    auto ret = function->appendParameter(Parameter::create());
 
     auto result = compile_expr_list(it);
 
-    builder->br({ret, result});
+    builder->br({wrap(ret), result});
 
     builder->restore(currentblock);
 
-    return function;
+    return wrap(function);
 }
 
-static Value *compile_implicit_call (SListIter it) {
-    Value *callable = compile(*it++);
+static Any compile_implicit_call (SListIter it) {
+    Any callable = compile(*it++);
 
-    std::vector<Value *> args;
+    std::vector<Any> args;
     args.push_back(callable);
 
     while (it) {
@@ -4223,47 +4253,42 @@ static Value *compile_implicit_call (SListIter it) {
         it++;
     }
 
-    return builder->call(args);
+    return wrap(builder->call(args));
 }
 
-static Value *compile_call (SListIter it) {
+static Any compile_call (SListIter it) {
     it++;
     return compile_implicit_call(it);
 }
 
-static Value *compile_quote (SListIter it) {
+static Any compile_quote (SListIter it) {
     it++;
-    SListValue *rest = const_cast<SListValue*>(it.getSList());
-    if (rest->next == SListValue::get_eox())
+    SList *rest = const_cast<SList*>(it.getSList());
+    if (rest->next == const_eol.slist)
         return rest->at;
     else
-        return rest;
+        return wrap(rest);
 }
 
 //------------------------------------------------------------------------------
 
-static Value *compile (Value *expr) {
-    assert(expr);
-    Value *result = nullptr;
-    switch(expr->kind) {
-        case Value::SList: {
-            if (expr == SListValue::get_eox()) {
-                valueError(expr, "empty expression");
-            }
-            auto slist = llvm::cast<SListValue>(expr);
-            auto head = slist->at;
-            if (head->kind == Value::SpecialForm) {
-                auto form = verifyValueKind<SpecialFormValue>(head);
-                result = form->handler(SListIter(slist));
-            } else {
-                result = compile_implicit_call(SListIter(slist));
-            }
-        } break;
-        default: {
-            result = expr;
-        } break;
+static Any compile (const Any &expr) {
+    Any result = const_none;
+    if (eq(expr.type, Types::SList)) {
+        if (expr.slist == const_eol.slist) {
+            error(expr, "empty expression");
+        }
+        auto slist = expr.slist;
+        auto head = slist->at;
+        if (eq(head.type, Types::SpecialForm)) {
+            result = head.special_form->handler(SListIter(slist));
+        } else {
+            result = compile_implicit_call(SListIter(slist));
+        }
+        assert(result.type != Types::None);
+    } else {
+        result = expr;
     }
-    assert(result);
     return result;
 }
 
@@ -4275,7 +4300,7 @@ static void initGlobals () {
     globals = new_scope();
     auto env = globals;
 
-    setLocal(env, "globals", env);
+    setLocal(env, "globals", wrap(env));
 
     setBuiltin(env, "form:call", compile_call);
     setBuiltin(env, "form:function", compile_function);
@@ -4287,35 +4312,34 @@ static void initGlobals () {
     setBuiltin(env, "let-syntax", expand_let_syntax);
     setBuiltin(env, "escape", expand_escape);
 
-    setLocal(env, "void", wrap(Type::Void));
-    setLocal(env, "null", wrap(Type::Null));
-    setLocal(env, "half", wrap(Type::Half));
-    setLocal(env, "float", wrap(Type::Float));
-    setLocal(env, "double", wrap(Type::Double));
-    setLocal(env, "bool", wrap(Type::Bool));
+    setLocal(env, "void", wrap(Types::Void));
+    setLocal(env, "None", wrap(Types::None));
+    setLocal(env, "half", wrap(Types::R16));
+    setLocal(env, "float", wrap(Types::R32));
+    setLocal(env, "double", wrap(Types::R64));
+    setLocal(env, "bool", wrap(Types::Bool));
 
-    setLocal(env, "int8", wrap(Type::Int8));
-    setLocal(env, "int16", wrap(Type::Int16));
-    setLocal(env, "int32", wrap(Type::Int32));
-    setLocal(env, "int64", wrap(Type::Int64));
+    setLocal(env, "int8", wrap(Types::I8));
+    setLocal(env, "int16", wrap(Types::I16));
+    setLocal(env, "int32", wrap(Types::I32));
+    setLocal(env, "int64", wrap(Types::I64));
 
-    setLocal(env, "uint8", wrap(Type::UInt8));
-    setLocal(env, "uint16", wrap(Type::UInt16));
-    setLocal(env, "uint32", wrap(Type::UInt32));
-    setLocal(env, "uint64", wrap(Type::UInt64));
+    setLocal(env, "uint8", wrap(Types::U8));
+    setLocal(env, "uint16", wrap(Types::U16));
+    setLocal(env, "uint32", wrap(Types::U32));
+    setLocal(env, "uint64", wrap(Types::U64));
 
     setLocal(env, "usize_t",
-        wrap(Type::Integer(sizeof(size_t)*8,false)));
+        wrap(Types::Integer(sizeof(size_t)*8,false)));
 
-    setLocal(env, "rawstring", wrap(Type::Rawstring));
+    setLocal(env, "rawstring", wrap(Types::Rawstring));
 
     setLocal(env, "int", getLocal(env, "int32"));
 
-    auto booltype = llvm::cast<IntegerType>(Type::Bool);
-    setLocal(env, "true", IntegerValue::create(1, booltype));
-    setLocal(env, "false", IntegerValue::create(0, booltype));
+    setLocal(env, "true", wrap(true));
+    setLocal(env, "false", wrap(false));
 
-    setLocal(env, "null", UnitValue::get_null());
+    setLocal(env, "none", const_none);
 
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);
@@ -4325,29 +4349,27 @@ static void initGlobals () {
     setBuiltin(env, "cons", builtin_cons);
     setBuiltin(env, "structof", builtin_structof);
     setBuiltin(env, "typeof", builtin_typeof);
-    setBuiltin(env, "external", builtin_external);
+    //setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);
     setBuiltin(env, "branch", builtin_branch);
     setBuiltin(env, "call/cc", builtin_call_cc);
-    setBuiltin(env, "dump", builtin_dump);
+    //setBuiltin(env, "dump", builtin_dump);
     setBuiltin(env, "syntax-macro", builtin_syntax_macro);
     setBuiltin(env, "string", builtin_string);
     setBuiltin(env, "symbol", builtin_symbol);
     setBuiltin(env, "parameter", builtin_parameter);
-    setBuiltin(env, "empty?", builtin_is_empty);
+    //setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
     setBuiltin(env, "set-globals!", builtin_set_globals);
-    setBuiltin(env, "slist?", builtin_is_slist);
-    setBuiltin(env, "symbol?", builtin_is_symbol);
-    setBuiltin(env, "integer?", builtin_is_integer);
-    setBuiltin(env, "null?", builtin_is_null);
-    setBuiltin(env, "key?", builtin_is_key);
+    //setBuiltin(env, "slist?", builtin_is_slist);
+    //setBuiltin(env, "symbol?", builtin_is_symbol);
+    //setBuiltin(env, "integer?", builtin_is_integer);
+    //setBuiltin(env, "null?", builtin_is_null);
+    //setBuiltin(env, "key?", builtin_is_key);
     setBuiltin(env, "error", builtin_error);
-    setBuiltin(env, "length", builtin_length);
-    setBuiltin(env, "kindof", builtin_kindof);
+    //setBuiltin(env, "length", builtin_length);
 
-    setBuiltin(env, "@",
-        builtin_variadic_ltr<builtin_at_op>);
+    //setBuiltin(env, "@", builtin_variadic_ltr<builtin_at_op>);
 
     setBuiltin(env, "+",
         builtin_variadic_ltr<
@@ -4397,6 +4419,7 @@ static void init() {
     bangra::support_ansi = isatty(fileno(stdout));
 
     Types::initTypes();
+    initConstants();
 
     LLVMEnablePrettyStackTrace();
     LLVMLinkInMCJIT();
@@ -4414,21 +4437,21 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
-static void handleException(StructValue *env, Value *expr) {
+static void handleException(Table *env, const Any &expr) {
     streamValue(std::cerr, expr, 0, true);
-    valueError(expr, "an exception was raised");
+    error(expr, "an exception was raised");
 }
 
-static bool compileRootValueList (StructValue *env, Value *expr) {
+static bool compileRootValueList (Table *env, const Any &expr) {
 
     auto expexpr = expand_expr_list(env, SListIter(expr, 1));
 
     auto mainfunc = Flow::create();
-    auto ret = mainfunc->appendParameter(ParameterValue::create());
+    auto ret = mainfunc->appendParameter(Parameter::create());
     builder->continueAt(mainfunc);
 
     compile_expr_list(SListIter(expexpr));
-    builder->br({ ret });
+    builder->br({ wrap(ret) });
 
 /*
 #ifdef BANGRA_DEBUG_IL
@@ -4437,47 +4460,46 @@ static bool compileRootValueList (StructValue *env, Value *expr) {
 #endif
 */
 
-    execute({mainfunc});
+    execute({wrap(mainfunc)});
 
     return true;
 }
 
-static bool compileMain (Value *expr) {
-    assert(expr);
-    auto slist = verifyValueKind<SListValue>(expr);
-    auto it = SListIter(slist);
+static bool compileMain (Any expr) {
+    verifyValueKind(Types::SList, expr);
+    auto it = SListIter(expr.slist);
 
     auto env = globals;
 
     std::string lastlang = "";
     while (true) {
-        auto head = verifyValueKind<SymbolValue>(*it);
-        if (!head) return false;
-        if (head->value == BANGRA_HEADER)
+        verifyValueKind(Types::Symbol, *it);
+        auto &head = *(*it).str;
+        if (head == BANGRA_HEADER)
             break;
-        auto preprocessor = preprocessors[head->value];
+        auto preprocessor = preprocessors[head];
         if (!preprocessor) {
-            valueError(expr, "unrecognized header: '%s'; try '%s' instead.",
-                head->value.c_str(),
+            error(expr, "unrecognized header: '%s'; try '%s' instead.",
+                head.c_str(),
                 BANGRA_HEADER);
             return false;
         }
-        if (lastlang == head->value) {
-            valueError(expr,
+        if (lastlang == head) {
+            error(expr,
                 "header has not changed after preprocessing; is still '%s'.",
-                head->value.c_str());
+                head.c_str());
         }
-        lastlang = head->value;
+        lastlang = head;
         auto orig_expr = expr;
         try {
             expr = preprocessor(env, expr);
-        } catch (Value *expr) {
+        } catch (Any expr) {
             handleException(env, expr);
             return false;
         }
-        if (!expr) {
-            valueError(orig_expr,
-                "preprocessor returned null.");
+        if (expr.type == Types::None) {
+            error(orig_expr,
+                "preprocessor returned none.");
             return false;
         }
     }
@@ -4497,12 +4519,12 @@ std::string GetExecutablePath(const char *Argv0) {
   return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
 }
 
-static Value *parseLoader(const char *executable_path) {
+static Any parseLoader(const char *executable_path) {
     // attempt to read bootstrap expression from end of binary
     auto file = MappedFile::open(executable_path);
     if (!file) {
         fprintf(stderr, "could not open binary\n");
-        return NULL;
+        return const_none;
     }
     auto ptr = file->strptr();
     auto size = file->size();
@@ -4513,9 +4535,9 @@ static Value *parseLoader(const char *executable_path) {
         // skip the trailing text formatting garbage
         // that win32 echo produces
         cursor--;
-        if (cursor < ptr) return NULL;
+        if (cursor < ptr) return const_none;
     }
-    if (*cursor != ')') return NULL;
+    if (*cursor != ')') return const_none;
     cursor--;
     // seek backwards to find beginning of expression
     while ((cursor >= ptr) && (*cursor != '('))
@@ -4524,42 +4546,42 @@ static Value *parseLoader(const char *executable_path) {
     bangra::Parser footerParser;
     auto expr = footerParser.parseMemory(
         cursor, ptr + size, executable_path, cursor - ptr);
-    if (!expr) {
+    if (expr.type == Types::None) {
         fprintf(stderr, "could not parse footer expression\n");
-        return NULL;
+        return const_none;
     }
-    if (expr->kind != Value::SList)  {
+    if (!eq(expr.type, Types::SList))  {
         fprintf(stderr, "footer expression is not a symbolic list\n");
-        return NULL;
+        return const_none;
     }
-    auto symlist = llvm::cast<SListValue>(expr);
+    auto symlist = expr.slist;
     SListIter it(symlist);
     if (!it) {
         fprintf(stderr, "footer expression is empty\n");
-        return NULL;
+        return const_none;
     }
     auto head = *it++;
-    if (head->kind != Value::Symbol)  {
+    if (!eq(head.type, Types::Symbol))  {
         fprintf(stderr, "footer expression does not begin with symbol\n");
-        return NULL;
+        return const_none;
     }
     if (!isSymbol(head, "script-size"))  {
         fprintf(stderr, "footer expression does not begin with 'script-size'\n");
-        return NULL;
+        return const_none;
     }
     if (!it) {
         fprintf(stderr, "footer expression needs two arguments\n");
-        return NULL;
+        return const_none;
     }
     auto arg = *it++;
-    if (arg->kind != Value::Integer)  {
+    if (!eq(arg.type, Types::TInteger))  {
         fprintf(stderr, "script-size argument is not integer\n");
-        return NULL;
+        return const_none;
     }
-    auto offset = llvm::cast<IntegerValue>(expr)->value;
+    auto offset = extract_integer(arg);
     if (offset <= 0) {
         fprintf(stderr, "script-size must be larger than zero\n");
-        return NULL;
+        return const_none;
     }
     bangra::Parser parser;
     auto script_start = cursor - offset;
@@ -4575,7 +4597,7 @@ static bool compileStartupScript() {
     std::string path = format("%s.b", base);
     free(base);
 
-    Value *expr = NULL;
+    Any expr = const_none;
     {
         auto file = MappedFile::open(path.c_str());
         if (file) {
@@ -4588,7 +4610,7 @@ static bool compileStartupScript() {
         }
     }
 
-    if (expr) {
+    if (expr.type != Types::None) {
         return bangra::compileMain(expr);
     }
 
@@ -4639,7 +4661,7 @@ int bangra_main(int argc, char ** argv) {
 
     bangra::init();
 
-    bangra::Value *expr = NULL;
+    bangra::Any expr = bangra::const_none;
 
     if (argv) {
         if (argv[0]) {
@@ -4650,7 +4672,7 @@ int bangra_main(int argc, char ** argv) {
             expr = bangra::parseLoader(bang_executable_path);
         }
 
-        if (!expr) {
+        if (expr.type == bangra::Types::None) {
             // running in interpreter mode
             char *sourcepath = NULL;
             // skip startup script
@@ -4698,7 +4720,7 @@ int bangra_main(int argc, char ** argv) {
         }
     }
 
-    if (expr) {
+    if (expr.type != bangra::Types::None) {
         bangra::compileMain(expr);
     } else {
         return 1;
@@ -4707,7 +4729,7 @@ int bangra_main(int argc, char ** argv) {
     return 0;
 }
 
-bangra::Value *bangra_parse_file(const char *path) {
+bangra::Any bangra_parse_file(const char *path) {
     bangra::Parser parser;
     return parser.parseFile(path);
 }
