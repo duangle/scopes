@@ -781,7 +781,7 @@ static bool eq(const Any &a, const Any &b) {
     return a.type->eq(a.type, a, b) || b.type->eq(b.type, b, a);
 }
 
-static std::string tostring(const Any &value) {
+static std::string get_string(const Any &value) {
     return value.type->tostring(value.type, value);
 }
 
@@ -907,10 +907,6 @@ static Type *extract_type(const Any &value) {
     }
     error(value, "type constant expected");
     return nullptr;
-}
-
-static std::string get_string(const Any &value) {
-    return tostring(value);
 }
 
 static bool is_integer_type(Type *type) {
@@ -1446,6 +1442,10 @@ struct Macro {
 
 namespace Types {
 
+    static std::string _string_tostring(Type *self, const bangra::Any &value) {
+        return *value.str;
+    }
+
     static bool type_array_eq(Type *self, Type *other) {
         return (other == TArray);
     }
@@ -1537,7 +1537,7 @@ namespace Types {
     static Type *_new_pointer_type(Type *element) {
         assert(element);
         Type *type = new_type(
-            format("(%s %s %s)",
+            format("(%s %s)",
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
@@ -1782,6 +1782,7 @@ namespace Types {
 
         Void = Struct("void", true);
         String = Struct("String", true);
+        String->tostring = _string_tostring;
 
         Parameter = Struct("Parameter", true);
         Table = Struct("Table", true);
@@ -1834,10 +1835,10 @@ static void unescape(std::string &s) {
 
 // matches ((///...))
 static bool is_comment(const Any &expr) {
-    if (expr.type == Types::SList) {
+    if (eq(expr.type, Types::SList)) {
         if (expr.slist != const_eol.slist) {
-            Any &sym = const_eol.slist->at;
-            if (sym.type == Types::Symbol) {
+            Any &sym = expr.slist->at;
+            if (eq(sym.type, Types::Symbol)) {
                 if (!memcmp(sym.str->c_str(),"///",3))
                     return true;
             }
@@ -1847,7 +1848,7 @@ static bool is_comment(const Any &expr) {
 }
 
 static Any strip(const Any &expr) {
-    if (expr.type == Types::SList) {
+    if (eq(expr.type, Types::SList)) {
         std::vector<Any> values;
         auto it = SListIter(expr);
         while (it) {
