@@ -3,7 +3,9 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
-print "hello world"
+print
+    print-number
+        + 2 3
 
 ///
     let-syntax (scope)
