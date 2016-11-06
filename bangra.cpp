@@ -2206,7 +2206,7 @@ struct Lexer {
     int string_len;
     int64_t integer;
     bool is_unsigned;
-    double real;
+    float real;
 
     std::string error_string;
 
@@ -2368,7 +2368,7 @@ struct Lexer {
     bool readReal() {
         char *end;
         errno = 0;
-        real = std::strtod(cursor, &end);
+        real = std::strtof(cursor, &end);
         if ((end == cursor)
             || (errno == ERANGE)
             || (end >= eof)
@@ -2465,16 +2465,26 @@ struct Lexer {
     }
 
     Any getAsInteger() {
-        auto result = make_any(
-            is_unsigned?(Types::U64):(Types::I64),
-            newAnchor());
-        result.i64 = integer;
+        size_t width;
+        if (is_unsigned) {
+            width = ((uint64_t)integer > (uint64_t)INT_MAX)?64:32;
+        } else {
+            width =
+                ((integer < (int64_t)INT_MIN) || (integer > (int64_t)INT_MAX))?64:32;
+        }
+        auto type = Types::Integer(width, !is_unsigned);
+        auto result = make_any(type, newAnchor());
+
+        if (width == 32)
+            result.i32 = (int32_t)integer;
+        else
+            result.i64 = integer;
         return result;
     }
 
     Any getAsReal() {
-        auto result = make_any(Types::R64, newAnchor());
-        result.r64 = real;
+        auto result = make_any(Types::R32, newAnchor());
+        result.r32 = real;
         return result;
     }
 
@@ -2783,7 +2793,6 @@ struct Parser {
 
 struct FFI {
     std::unordered_map<Type *, ffi_type *> ffi_types;
-    std::unordered_map<Type *, ffi_cif *> ffi_cifs;
 
     FFI() {}
 
@@ -2834,34 +2843,6 @@ struct FFI {
         }
     }
 
-    ffi_cif *create_ffi_cif(Type *ftype) {
-        ffi_cif *cif = (ffi_cif *)malloc(sizeof(ffi_cif));
-        memset(cif, 0, sizeof(ffi_cif));
-        ffi_cifs[ftype] = cif;
-
-        auto rtype = get_ffi_type(get_result_type(ftype));
-        auto count = get_parameter_count(ftype);
-        ffi_type **argtypes = (ffi_type **)malloc(sizeof(ffi_type *) * count);
-        for (size_t i = 0; i < count; ++i) {
-            argtypes[i] = get_ffi_type(get_parameter_type(ftype, i));
-        }
-        auto result = ffi_prep_cif(
-            cif, FFI_DEFAULT_ABI, count, rtype, argtypes);
-        assert(result == FFI_OK);
-        return cif;
-    }
-
-    ffi_cif *get_ffi_cif(Type *ftype) {
-        auto it = ffi_cifs.find(ftype);
-        if (it == ffi_cifs.end()) {
-            auto result = create_ffi_cif(ftype);
-            ffi_cifs[ftype] = result;
-            return result;
-        } else {
-            return it->second;
-        }
-    }
-
     Any runFunction(
         const Any &func, const std::vector<Any> &args) {
         assert(is_pointer_type(func.type));
@@ -2871,9 +2852,27 @@ struct FFI {
         if (count != args.size()) {
             error(func, "parameter count mismatch");
         }
-        ffi_cif *cif = get_ffi_cif(ftype);
+        if (is_vararg(ftype)) {
+            error(func, "vararg functions not supported yet");
+        }
 
         auto rtype = get_result_type(ftype);
+
+        ffi_cif cif;
+        ffi_type *argtypes[count];
+        for (size_t i = 0; i < count; ++i) {
+            auto ptype = get_parameter_type(ftype, i);
+            if (!eq(ptype, args[i].type)) {
+                error(args[i], "%s type expected, %s provided",
+                    get_name(ptype).c_str(),
+                    get_name(args[i].type).c_str());
+            }
+            argtypes[i] = get_ffi_type(ptype);
+        }
+        auto prep_result = ffi_prep_cif(
+            &cif, FFI_DEFAULT_ABI, count, get_ffi_type(rtype), argtypes);
+        assert(prep_result == FFI_OK);
+
         Any result = make_any(rtype);
         if (is_ref(rtype)) {
             // todo: align when necessary
@@ -2888,7 +2887,7 @@ struct FFI {
             avalues[i] = const_cast<void *>(get_pointer(args[i]));
         }
 
-        ffi_call(cif, FFI_FN(func.ptr), rvalue, avalues);
+        ffi_call(&cif, FFI_FN(func.ptr), rvalue, avalues);
 
         return result;
     }

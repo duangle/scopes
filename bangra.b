@@ -4,8 +4,7 @@
 bangra
 
 print
-    print-number
-        + 2 3
+    print-number 10
 
 ///
     let-syntax (scope)
