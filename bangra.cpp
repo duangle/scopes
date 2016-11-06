@@ -510,29 +510,25 @@ struct Any {
         Macro *macro;
     };
     Type *type;
-    Anchor *anchor;
 };
 
-static Any make_any(Type *type, Anchor *anchor = nullptr) {
+static Any make_any(Type *type) {
     Any any;
     any.type = type;
-    any.anchor = anchor;
     return any;
 }
 
-static Any pointer(Type *type, const void *ptr, Anchor *anchor = nullptr) {
-    Any any = make_any(type, anchor);
+static Any pointer(Type *type, const void *ptr) {
+    Any any = make_any(type);
     any.ptr = const_cast<void *>(ptr);
     return any;
 }
 
 static void error (const Any &any, const char *format, ...) {
-    const Anchor *anchor = any.anchor;
-    if (!anchor) {
-        // TODO: find valid anchor
-        //std::cout << "at\n  " << getRepr(value) << "\n";
-        //anchor = find_valid_anchor(value);
-    }
+    const Anchor *anchor = nullptr;
+    // TODO: find valid anchor
+    //std::cout << "at\n  " << getRepr(value) << "\n";
+    //anchor = find_valid_anchor(value);
     va_list args;
     va_start (args, format);
     Anchor::printErrorV(anchor, format, args);
@@ -2451,20 +2447,23 @@ struct Lexer {
     }
 
     Any getAsString() {
-        auto result = make_any(Types::String, newAnchor());
+        // TODO: anchor
+        auto result = make_any(Types::String);
         result.str = new std::string(string + 1, string_len - 2);
         unescape(*result.str);
         return result;
     }
 
     Any getAsSymbol() {
-        auto result = make_any(Types::Symbol, newAnchor());
+        // TODO: anchor
+        auto result = make_any(Types::Symbol);
         result.str = new std::string(string, string_len);
         unescape(*result.str);
         return result;
     }
 
     Any getAsInteger() {
+        // TODO: anchor
         size_t width;
         if (is_unsigned) {
             width = ((uint64_t)integer > (uint64_t)INT_MAX)?64:32;
@@ -2473,7 +2472,7 @@ struct Lexer {
                 ((integer < (int64_t)INT_MIN) || (integer > (int64_t)INT_MAX))?64:32;
         }
         auto type = Types::Integer(width, !is_unsigned);
-        auto result = make_any(type, newAnchor());
+        auto result = make_any(type);
 
         if (width == 32)
             result.i32 = (int32_t)integer;
@@ -2483,7 +2482,8 @@ struct Lexer {
     }
 
     Any getAsReal() {
-        auto result = make_any(Types::R32, newAnchor());
+        // TODO: anchor
+        auto result = make_any(Types::R32);
         result.r32 = real;
         return result;
     }
@@ -2575,7 +2575,7 @@ struct Parser {
         }
 
         Any getResult() {
-            auto result = make_any(Types::SList, new Anchor(anchor));
+            auto result = make_any(Types::SList); // TODO: new Anchor(anchor)
             result.slist = SList::create(values);
             return result;
         }
@@ -2621,13 +2621,15 @@ struct Parser {
         } else if (lexer.token == token_square_open) {
             auto list = parseList(token_square_close);
             if (errors) return const_none;
-            Any sym = make_any(Types::Symbol, list.anchor);
+            // todo: list.anchor
+            Any sym = make_any(Types::Symbol);
             sym.str = new std::string("[");
             return pointer(Types::SList, SList::create(sym, list.slist));
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return const_none;
-            Any sym = make_any(Types::Symbol, list.anchor);
+            // todo: list.anchor
+            Any sym = make_any(Types::Symbol);
             sym.str = new std::string("{");
             return pointer(Types::SList, SList::create(sym, list.slist));
         } else if ((lexer.token == token_close)
@@ -3383,8 +3385,7 @@ public:
     void exportExternal(const std::string &name, Type *type, const Anchor &anchor) {
         set_key(*dest, name,
             pointer(type,
-                dlsym(NULL, name.c_str()),
-                new Anchor(anchor)));
+                dlsym(NULL, name.c_str())));
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
