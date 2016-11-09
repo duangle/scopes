@@ -4,7 +4,9 @@
 bangra
 
 print
-    print-number 10
+    @
+        tupleof "x" 0
+        0
 
 ///
     let-syntax (scope)

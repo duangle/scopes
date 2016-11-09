@@ -477,20 +477,20 @@ typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
 
 struct Any {
     union {
-        bool i1;
+        bool *p_i1;
 
-        int8_t i8;
-        int16_t i16;
-        int32_t i32;
-        int64_t i64;
+        int8_t *p_i8;
+        int16_t *p_i16;
+        int32_t *p_i32;
+        int64_t *p_i64;
 
-        uint8_t u8;
-        uint16_t u16;
-        uint32_t u32;
-        uint64_t u64;
+        uint8_t *p_u8;
+        uint16_t *p_u16;
+        uint32_t *p_u32;
+        uint64_t *p_u64;
 
-        float r32;
-        double r64;
+        float *p_r32;
+        double *p_r64;
 
         void *ptr;
         char *c_str;
@@ -518,7 +518,7 @@ static Any make_any(Type *type) {
     return any;
 }
 
-static Any pointer(Type *type, const void *ptr) {
+static Any wrap(Type *type, const void *ptr) {
     Any any = make_any(type);
     any.ptr = const_cast<void *>(ptr);
     return any;
@@ -608,8 +608,6 @@ namespace Types {
 //------------------------------------------------------------------------------
 
 static Any const_none;
-static Any const_true;
-static Any const_false;
 static Any const_eol;
 
 //------------------------------------------------------------------------------
@@ -640,7 +638,6 @@ struct Type {
 
     size_t size;
     size_t alignment;
-    bool is_ref;
 
     union {
         // integer: is type signed?
@@ -682,10 +679,6 @@ static std::string get_name(Type *self) {
 
 static size_t get_size(Type *self) {
     return self->size;
-}
-
-static bool is_ref(Type *self) {
-    return self->is_ref;
 }
 
 static size_t get_width(Type *self) {
@@ -763,7 +756,7 @@ static Any type_at_default(Type *self, const Any &value, size_t index) {
 
 static std::string type_tostring_default(Type *self, const Any &value) {
     assert(self);
-    return format("(%s %p)", get_name(self).c_str(), value.ptr);
+    return format("<value of %s>", get_name(self).c_str());
 }
 
 static Type *new_type(const std::string &name) {
@@ -771,7 +764,6 @@ static Type *new_type(const std::string &name) {
     auto result = new Type();
     result->size = 0;
     result->alignment = 1;
-    result->is_ref = false;
     result->at = type_at_default;
     result->name = name;
     result->eq_type = type_eq_type_default;
@@ -783,14 +775,6 @@ static Type *new_type(const std::string &name) {
     result->count = 0;
     //result->ctype = nullptr;
     return result;
-}
-
-static const void *get_pointer(const Any &value) {
-    if (value.type->is_ref) {
-        return value.ptr;
-    } else {
-        return &value.u64;
-    }
 }
 
 static bool eq(Type *self, Type *other) {
@@ -811,25 +795,14 @@ static Any at(const Any &value, size_t index) {
     return value.type->at(value.type, value, index);
 }
 
-static Any from_pointer(Type *self, const void *ptr) {
-    if (self->is_ref) {
-        return pointer(self, ptr);
-    } else {
-        Any result = make_any(self);
-        result.u64 = 0;
-        memcpy(&result.u64, ptr, get_size(self));
-        return result;
-    }
-}
-
 //------------------------------------------------------------------------------
 
 static Any pstring(const std::string &s) {
-    return pointer(Types::String, new std::string(s));
+    return wrap(Types::String, new std::string(s));
 }
 
 static Any symbol(const std::string &s) {
-    return pointer(Types::Symbol, new std::string(s));
+    return wrap(Types::Symbol, new std::string(s));
 }
 
 //------------------------------------------------------------------------------
@@ -967,7 +940,7 @@ static std::string extract_any_string(const Any &value) {
 
 static bool extract_bool(const Any &value) {
     if (eq(value.type, Types::Bool)) {
-        return value.i1;
+        return *value.p_i1;
     }
     error(value, "boolean expected");
     return false;
@@ -981,28 +954,53 @@ static Type *extract_type(const Any &value) {
     return nullptr;
 }
 
-static Any boolean(bool value) {
-    return value?const_true:const_false;
+template <typename T>
+static T **alloc_ptr(T *value) {
+    T **ptr = (T **)malloc(sizeof(T *));
+    *ptr = value;
+    return ptr;
+}
+
+template <typename T>
+static T *alloc_int(int64_t value) {
+    T *ptr = (T *)malloc(sizeof(T));
+    *ptr = (T)value;
+    return ptr;
+}
+
+template <typename T>
+static T *alloc_uint(uint64_t value) {
+    T *ptr = (T *)malloc(sizeof(T));
+    *ptr = (T)value;
+    return ptr;
+}
+
+static Any wrap_ptr(Type *type, void *ptr) {
+    Any any = make_any(type);
+    any.ptr = alloc_ptr(ptr);
+    return any;
 }
 
 static Any integer(Type *type, int64_t value) {
     Any any = make_any(type);
-    if (type == Types::I8) {
-        any.i8 = (int8_t)value;
+    if (type == Types::Bool) {
+        any.p_i1 = alloc_int<bool>(value);
+    } else if (type == Types::I8) {
+        any.p_i8 = alloc_int<int8_t>(value);
     } else if (type == Types::I16) {
-        any.i16 = (int16_t)value;
+        any.p_i16 = alloc_int<int16_t>(value);
     } else if (type == Types::I32) {
-        any.i32 = (int32_t)value;
+        any.p_i32 = alloc_int<int32_t>(value);
     } else if (type == Types::I64) {
-        any.i64 = value;
+        any.p_i64 = alloc_int<int64_t>(value);
     } else if (type == Types::U8) {
-        any.u8 = (uint8_t)value;
+        any.p_u8 = alloc_uint<uint8_t>((uint64_t)value);
     } else if (type == Types::U16) {
-        any.u16 = (uint16_t)value;
+        any.p_u16 = alloc_uint<uint16_t>((uint64_t)value);
     } else if (type == Types::U32) {
-        any.u32 = (uint32_t)value;
+        any.p_u32 = alloc_uint<uint32_t>((uint64_t)value);
     } else if (type == Types::U64) {
-        any.u64 = (uint64_t)value;
+        any.p_u64 = alloc_uint<uint64_t>((uint64_t)value);
     } else {
         assert(false && "not an integer type");
     }
@@ -1011,34 +1009,43 @@ static Any integer(Type *type, int64_t value) {
 
 static int64_t extract_integer(const Any &value) {
     auto type = value.type;
-    if (type == Types::I8) {
-        return (int64_t)value.i8;
+    if (type == Types::Bool) {
+        return (int64_t)*value.p_i1;
+    } else if (type == Types::I8) {
+        return (int64_t)*value.p_i8;
     } else if (type == Types::I16) {
-        return (int64_t)value.i16;
+        return (int64_t)*value.p_i16;
     } else if (type == Types::I32) {
-        return (int64_t)value.i32;
+        return (int64_t)*value.p_i32;
     } else if (type == Types::I64) {
-        return value.i64;
+        return *value.p_i64;
     } else if (type == Types::U8) {
-        return (int64_t)value.u8;
+        return (int64_t)*value.p_u8;
     } else if (type == Types::U16) {
-        return (int64_t)value.u16;
+        return (int64_t)*value.p_u16;
     } else if (type == Types::U32) {
-        return (int64_t)value.u32;
+        return (int64_t)*value.p_u32;
     } else if (type == Types::U64) {
-        return (int64_t)value.u64;
+        return (int64_t)*value.p_u64;
     } else {
         assert(false && "not an integer type");
         return 0;
     }
 }
 
+template <typename T>
+static T *alloc_real(double value) {
+    T *ptr = (T *)malloc(sizeof(T));
+    *ptr = (T)value;
+    return ptr;
+}
+
 static Any real(Type *type, double value) {
     Any any = make_any(type);
     if (type == Types::R32) {
-        any.r32 = (float)value;
+        any.p_r32 = alloc_real<float>(value);
     } else if (type == Types::R64) {
-        any.r64 = value;
+        any.p_r64 = alloc_real<double>(value);
     } else {
         assert(false && "not a real type");
     }
@@ -1048,15 +1055,19 @@ static Any real(Type *type, double value) {
 static double extract_real(const Any &value) {
     auto type = value.type;
     if (type == Types::R32) {
-        return (double)value.r32;
+        return (double)*value.p_r32;
     } else if (type == Types::R64) {
-        return (double)value.r64;
+        return (double)*value.p_r64;
     } else {
         assert(false && "not a real type");
         return 0;
     }
 }
 
+template<typename T>
+static T *extract_ptr(const bangra::Any &value) {
+    return *(T **)value.ptr;
+}
 
 //------------------------------------------------------------------------------
 
@@ -1277,7 +1288,7 @@ std::string Parameter::getRefRepr () const {
     auto parent = getParent();
     return format("%s%s%s",
         parent?
-            (get_string(pointer(Types::Flow, parent)).c_str())
+            (get_string(wrap(Types::Flow, parent)).c_str())
             :ansi(ANSI_STYLE_ERROR, "<unbound>").c_str(),
         ansi(ANSI_STYLE_OPERATOR,".").c_str(),
         getReprName().c_str());
@@ -1408,7 +1419,7 @@ struct Frame {
         std::stringstream ss;
         ss << "#" << idx << ":" << this << ":\n";
         for (auto &entry : map) {
-            ss << "  " << get_string(pointer(Types::Flow, entry.first));
+            ss << "  " << get_string(wrap(Types::Flow, entry.first));
             auto &value = entry.second;
             for (size_t i = 0; i < value.size(); ++i) {
                 ss << " " << get_string(value[i]);
@@ -1453,8 +1464,8 @@ struct Closure {
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "closure");
-        ss << " " << get_string(pointer(Types::Flow, cont));
-        ss << " " << get_string(pointer(Types::Frame, frame));
+        ss << " " << get_string(wrap(Types::Flow, cont));
+        ss << " " << get_string(wrap(Types::Frame, frame));
         ss << ")";
         return ss.str();
     }
@@ -1488,6 +1499,36 @@ namespace Types {
 
     static std::string _string_tostring(Type *self, const bangra::Any &value) {
         return *value.str;
+    }
+
+    static std::string _integer_tostring(Type *self, const bangra::Any &value) {
+        auto ivalue = extract_integer(value);
+        if (self->width == 1) {
+            return ivalue?"true":"false";
+        }
+        if (self->is_signed)
+            return format("%" PRId64, ivalue);
+        else
+            return format("%" PRIu64, ivalue);
+    }
+
+    static std::string _real_tostring(Type *self, const bangra::Any &value) {
+        return format("%g", extract_real(value));
+    }
+
+    static bangra::Any type_pointer_at(Type *self,
+        const bangra::Any &value, size_t index) {
+        assert(index == 0);
+        return wrap(self->element_type, *(char **)value.ptr);
+    }
+
+    static std::string _pointer_tostring(Type *self, const bangra::Any &value) {
+        return format("(& %s)",
+            get_string(type_pointer_at(self, value, 0)).c_str());
+    }
+
+    static std::string _type_tostring(Type *self, const bangra::Any &value) {
+        return get_name(value.typeref);
     }
 
     static bool type_array_eq(Type *self, Type *other) {
@@ -1532,14 +1573,13 @@ namespace Types {
             get_size(self->element_type), get_alignment(self->element_type));
         auto offset = padded_size * index;
         assert(offset < self->size);
-        return from_pointer(self->element_type, (char *)value.ptr + offset);
+        return wrap(self->element_type, (char *)value.ptr + offset);
     }
 
     static Type *__new_array_type(Type *element, size_t size) {
         assert(element);
         Type *type = new_type("");
         type->count = size;
-        type->is_ref = true;
         type->at = type_array_at;
         type->element_type = element;
         auto padded_size = align(get_size(element), get_alignment(element));
@@ -1572,12 +1612,6 @@ namespace Types {
         return type;
     }
 
-    static bangra::Any type_pointer_at(Type *self,
-        const bangra::Any &value, size_t index) {
-        assert(index == 0);
-        return from_pointer(self->element_type, (char *)value.ptr);
-    }
-
     static Type *_new_pointer_type(Type *element) {
         assert(element);
         Type *type = new_type(
@@ -1585,8 +1619,8 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
-        type->is_ref = false;
         type->at = type_pointer_at;
+        type->tostring = _pointer_tostring;
         type->element_type = element;
         type->size = ffi_type_pointer.size;
         type->alignment = ffi_type_pointer.alignment;
@@ -1597,7 +1631,7 @@ namespace Types {
         const bangra::Any &value, size_t index) {
         assert(index < self->types.size());
         auto offset = self->offsets[index];
-        return from_pointer(self->types[index], (char *)value.ptr + offset);
+        return wrap(self->types[index], (char *)value.ptr + offset);
     }
 
     static void _set_field_names(Type *type, const std::vector<std::string> &names) {
@@ -1650,7 +1684,6 @@ namespace Types {
         Type *type = new_type(ss.str());
         type->eq_type = type_tuple_eq;
         type->at = type_tuple_at;
-        type->is_ref = true;
         _set_struct_field_types(type, types);
         return type;
     }
@@ -1697,7 +1730,6 @@ namespace Types {
         type->eq_type = type_cfunction_eq;
         type->is_vararg = vararg;
         type->result_type = result;
-        type->is_ref = false;
         type->types = { parameters };
         type->size = ffi_type_pointer.size;
         type->alignment = ffi_type_pointer.alignment;
@@ -1708,6 +1740,7 @@ namespace Types {
         ffi_type *itype = nullptr;
         if (signed_) {
             switch (width) {
+                case 1: itype = &ffi_type_uint8; break;
                 case 8: itype = &ffi_type_sint8; break;
                 case 16: itype = &ffi_type_sint16; break;
                 case 32: itype = &ffi_type_sint32; break;
@@ -1716,6 +1749,7 @@ namespace Types {
             }
         } else {
             switch (width) {
+                case 1: itype = &ffi_type_uint8; break;
                 case 8: itype = &ffi_type_uint8; break;
                 case 16: itype = &ffi_type_uint16; break;
                 case 32: itype = &ffi_type_uint32; break;
@@ -1724,10 +1758,12 @@ namespace Types {
             }
         }
 
-        Type *type = new_type(format("%sint%zu", signed_?"":"u", width));
+        Type *type = new_type(
+            (width == 1)?"bool":
+                format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
-        type->is_ref = false;
         type->width = width;
+        type->tostring = _integer_tostring;
         type->is_signed = signed_;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -1744,8 +1780,8 @@ namespace Types {
         }
 
         Type *type = new_type(format("real%zu", width));
+        type->tostring = _real_tostring;
         type->eq_type = type_real_eq;
-        type->is_ref = false;
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -1766,7 +1802,6 @@ namespace Types {
             type->name = ss.str();
         }
         type->eq_type = type_struct_eq;
-        type->is_ref = true;
         type->at = type_tuple_at;
         return type;
     }
@@ -1779,12 +1814,12 @@ namespace Types {
         ss << ")";
         Type *type = new_type(ss.str());
         type->eq_type = type_enum_eq;
-        type->is_ref = true;
         return type;
     }
 
     static void initTypes() {
         TType = Struct("type", true);
+        TType->tostring = _type_tostring;
 
         TArray = Struct("array", true);
         TVector = Struct("vector", true);
@@ -1803,12 +1838,7 @@ namespace Types {
         const_none = make_any(Types::None);
         const_none.ptr = nullptr;
 
-        Bool = Struct("bool", true);
-        const_true = make_any(Types::Bool);
-        const_true.i1 = true;
-
-        const_false = make_any(Types::Bool);
-        const_false.i1 = false;
+        Bool = Integer(1, true);
 
         I8 = Integer(8, true);
         I16 = Integer(16, true);
@@ -1841,7 +1871,7 @@ namespace Types {
         Closure = Struct("Closure", true);
         Macro = Struct("Macro", true);
 
-        TypeRef = Pointer(TType);
+        TypeRef = TType;
         Rawstring = Pointer(I8);
     }
 
@@ -1869,23 +1899,27 @@ static Any tuple(const std::vector<Any> &values) {
 */
 
 static Any wrap(Flow *flow) {
-    return pointer(Types::Flow, flow);
+    return wrap(Types::Flow, flow);
 }
 
 static Any wrap(Parameter *param) {
-    return pointer(Types::Parameter, param);
+    return wrap(Types::Parameter, param);
 }
 
 static Any wrap(SList *slist) {
-    return pointer(Types::SList, slist);
+    return wrap(Types::SList, slist);
 }
 
 static Any wrap(Type *type) {
-    return pointer(Types::TypeRef, type);
+    return wrap(Types::TypeRef, type);
 }
 
 static Any wrap(bool value) {
-    return boolean(value);
+    return integer(Types::Bool, value);
+}
+
+static Any wrap(int32_t value) {
+    return integer(Types::I32, value);
 }
 
 static Any wrap(int64_t value) {
@@ -1904,11 +1938,11 @@ static Any wrap(
     for (size_t i = 0; i < args.size(); ++i) {
         auto elemtype = get_type(type, i);
         auto offset = get_offset(type, i);
-        auto srcptr = get_pointer(args[i]);
+        auto srcptr = args[i].ptr;
         memcpy(data + offset, srcptr, get_size(elemtype));
     }
 
-    return pointer(type, data);
+    return wrap(type, data);
 }
 
 static Any wrap(double value) {
@@ -1952,7 +1986,7 @@ static Any strip(const Any &expr) {
             }
             it++;
         }
-        return pointer(Types::SList, SList::create(values));
+        return wrap(Types::SList, SList::create(values));
     }
     return expr;
 }
@@ -2151,8 +2185,8 @@ void valueErrorV (const Any &expr, const char *fmt, va_list args) {
 static void verifyValueKind(Type *type, const Any &expr) {
     if (!eq(expr.type, type)) {
         valueError(expr, "%s expected, not %s",
-            get_string(pointer(Types::TType, type)).c_str(),
-            get_string(pointer(Types::TType, expr.type)).c_str());
+            get_name(type).c_str(),
+            get_name(expr.type).c_str());
     }
 }
 
@@ -2472,20 +2506,12 @@ struct Lexer {
                 ((integer < (int64_t)INT_MIN) || (integer > (int64_t)INT_MAX))?64:32;
         }
         auto type = Types::Integer(width, !is_unsigned);
-        auto result = make_any(type);
 
-        if (width == 32)
-            result.i32 = (int32_t)integer;
-        else
-            result.i64 = integer;
-        return result;
+        return bangra::integer(type, this->integer);
     }
 
     Any getAsReal() {
-        // TODO: anchor
-        auto result = make_any(Types::R32);
-        result.r32 = real;
-        return result;
+        return bangra::real(Types::R32, this->real);
     }
 
 };
@@ -2557,7 +2583,7 @@ struct Parser {
                 values.begin() + start,
                 values.end());
             // append new list
-            append(pointer(Types::SList, SList::create(newvalues)));
+            append(wrap(Types::SList, SList::create(newvalues)));
             resetStart();
             return true;
         }
@@ -2624,14 +2650,14 @@ struct Parser {
             // todo: list.anchor
             Any sym = make_any(Types::Symbol);
             sym.str = new std::string("[");
-            return pointer(Types::SList, SList::create(sym, list.slist));
+            return wrap(Types::SList, SList::create(sym, list.slist));
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return const_none;
             // todo: list.anchor
             Any sym = make_any(Types::Symbol);
             sym.str = new std::string("{");
-            return pointer(Types::SList, SList::create(sym, list.slist));
+            return wrap(Types::SList, SList::create(sym, list.slist));
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -2876,20 +2902,16 @@ struct FFI {
         assert(prep_result == FFI_OK);
 
         Any result = make_any(rtype);
-        if (is_ref(rtype)) {
-            // todo: align when necessary
-            result.ptr = malloc(get_size(rtype));
-        } else {
-            result.ptr = nullptr;
-        }
-        void *rvalue = const_cast<void *>(get_pointer(result));
+        // TODO: align properly
+        void *rvalue = malloc(get_size(rtype));
+        result.ptr = rvalue;
 
         void *avalues[count];
         for (size_t i = 0; i < count; ++i) {
-            avalues[i] = const_cast<void *>(get_pointer(args[i]));
+            avalues[i] = const_cast<void *>(args[i].ptr);
         }
 
-        ffi_call(&cif, FFI_FN(func.ptr), rvalue, avalues);
+        ffi_call(&cif, FFI_FN(extract_ptr<void>(func)), rvalue, avalues);
 
         return result;
     }
@@ -2926,7 +2948,7 @@ Any evaluate(size_t argindex, Frame *frame, const Any &value) {
             return value;
         else
             // create closure
-            return pointer(Types::Closure, Closure::create(
+            return wrap(Types::Closure, Closure::create(
                 value.flow,
                 frame));
     }
@@ -2940,7 +2962,7 @@ Any execute(std::vector<Any> arguments) {
 
     auto retcont = Flow::create(1);
     // add special flow as return function
-    arguments.push_back(pointer(Types::Flow, retcont));
+    arguments.push_back(wrap(Types::Flow, retcont));
 
     while (true) {
         assert(arguments.size() >= 1);
@@ -2967,7 +2989,7 @@ Any execute(std::vector<Any> arguments) {
             auto closure = callee.closure;
 
             frame = closure->frame;
-            callee = pointer(Types::Flow, closure->cont);
+            callee = wrap(Types::Flow, closure->cont);
         }
 
         if (callee.type == Types::Flow) {
@@ -3379,12 +3401,12 @@ public:
 
     void exportType(const std::string &name, Type *type) {
         set_key(*dest, name,
-            pointer(Types::TypeRef, type));
+            wrap(Types::TypeRef, type));
     }
 
     void exportExternal(const std::string &name, Type *type, const Anchor &anchor) {
         set_key(*dest, name,
-            pointer(type,
+            wrap(type,
                 dlsym(NULL, name.c_str())));
     }
 
@@ -3607,6 +3629,11 @@ static Any builtin_print(const std::vector<Any> &args) {
     return const_none;
 }
 
+static Any builtin_at(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    return at(args[0], extract_integer(args[1]));
+}
+
 static Any builtin_branch(const std::vector<Any> &args) {
     builtin_checkparams(args, 4, 4, 1);
     auto cond = extract_bool(args[1]);
@@ -3634,13 +3661,13 @@ static Any builtin_tupleof(const std::vector<Any> &args) {
 
 static Any builtin_slist(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
-    return pointer(Types::SList, SList::create(args));
+    return wrap(Types::SList, SList::create(args));
 }
 
 static Any builtin_parameter(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     auto name = extract_any_string(args[0]);
-    return pointer(Types::Parameter, Parameter::create(name));
+    return wrap(Types::Parameter, Parameter::create(name));
 }
 
 static Any builtin_cons(const std::vector<Any> &args) {
@@ -3648,7 +3675,7 @@ static Any builtin_cons(const std::vector<Any> &args) {
     auto &at = args[0];
     auto next = args[1];
     verifyValueKind(Types::SList, next);
-    return pointer(Types::SList, SList::create(at, next.slist));
+    return wrap(Types::SList, SList::create(at, next.slist));
 }
 
 static Any builtin_structof(const std::vector<Any> &args) {
@@ -3671,13 +3698,13 @@ static Any builtin_structof(const std::vector<Any> &args) {
     Types::_set_struct_field_types(struct_type, t.type->types);
     Types::_set_field_names(struct_type, names);
 
-    return pointer(struct_type, t.ptr);
+    return wrap(struct_type, t.ptr);
 }
 
 static Any builtin_syntax_macro(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     verifyValueKind(Types::Closure, args[0]);
-    return pointer(Types::Macro, Macro::create(args[0]));
+    return wrap(Types::Macro, Macro::create(args[0]));
 }
 
 static Any builtin_typeof(const std::vector<Any> &args) {
@@ -3715,7 +3742,7 @@ static Any builtin_import_c(const std::vector<Any> &args) {
     for (size_t i = 0; i < compile_args.size(); ++i) {
         cargs.push_back(extract_string(compile_args[i]));
     }
-    return pointer(Types::Table, bangra::importCModule(path, cargs));
+    return wrap(Types::Table, bangra::importCModule(path, cargs));
 }
 
 template<BuiltinFunction F>
@@ -3888,7 +3915,7 @@ public:
     template<typename F>
     static Any dispatch(const Any &v, const F &next) {
         if (is_bool_type(v.type)) {
-            return next(v.i1);
+            return next(*v.p_i1);
         }
         return NextT::template dispatch<F>(v, next);
     }
@@ -4002,7 +4029,7 @@ static Table *new_scope() {
 static Table *new_scope(Table *scope) {
     assert(scope);
     auto subscope = new_table();
-    set_key(*subscope, "#parent", pointer(Types::Table, scope));
+    set_key(*subscope, "#parent", wrap(Types::Table, scope));
     return subscope;
 }
 
@@ -4015,28 +4042,28 @@ static void setBuiltin(
     Table *scope, const std::string &name, MacroBuiltinFunction func) {
     assert(scope);
     setLocal(scope, name,
-        pointer(Types::BuiltinMacro, BuiltinMacro::create(func, name)));
+        wrap(Types::BuiltinMacro, BuiltinMacro::create(func, name)));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, SpecialFormFunction func) {
     assert(scope);
     setLocal(scope, name,
-        pointer(Types::SpecialForm, SpecialForm::create(func, name)));
+        wrap(Types::SpecialForm, SpecialForm::create(func, name)));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, BuiltinFunction func) {
     assert(scope);
     setLocal(scope, name,
-        pointer(Types::Builtin, Builtin::create(func, name)));
+        wrap(Types::Builtin, Builtin::create(func, name)));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, BuiltinFlowFunction func) {
     assert(scope);
     setLocal(scope, name,
-        pointer(Types::BuiltinFlow, BuiltinFlow::create(func, name)));
+        wrap(Types::BuiltinFlow, BuiltinFlow::create(func, name)));
 }
 
 /*
@@ -4117,7 +4144,7 @@ static Any toparameter (Table *env, const Any &value) {
     if (eq(value.type, Types::Parameter))
         return value;
     verifyValueKind(Types::Symbol, value);
-    auto bp = pointer(Types::Parameter, Parameter::create(*value.str));
+    auto bp = wrap(Types::Parameter, Parameter::create(*value.str));
     setLocal(env, *value.str, bp);
     return bp;
 }
@@ -4179,7 +4206,7 @@ static Cursor expand_let_syntax (Table *env, SListIter topit) {
 
     auto fun = compile(cur.value);
 
-    auto expr_env = execute({fun, pointer(Types::Table, env)});
+    auto expr_env = execute({fun, wrap(Types::Table, env)});
     verifyValueKind(Types::Table, expr_env);
 
     auto rest = expand_expr_list(expr_env.table, topit);
@@ -4471,16 +4498,14 @@ static void initGlobals () {
 
     // test
     setLocal(env, "print-number",
-        pointer(
+        wrap_ptr(
             Types::Pointer(
                 Types::CFunction(Types::I32, Types::Tuple({Types::I32}), false)),
             (void *)print_number));
 
     setLocal(env, "void", wrap(Types::None));
     setLocal(env, "None", wrap(Types::None));
-    setLocal(env, "half", wrap(Types::R16));
-    setLocal(env, "float", wrap(Types::R32));
-    setLocal(env, "double", wrap(Types::R64));
+
     setLocal(env, "bool", wrap(Types::Bool));
 
     setLocal(env, "int8", wrap(Types::I8));
@@ -4492,6 +4517,17 @@ static void initGlobals () {
     setLocal(env, "uint16", wrap(Types::U16));
     setLocal(env, "uint32", wrap(Types::U32));
     setLocal(env, "uint64", wrap(Types::U64));
+
+    setLocal(env, "int", wrap(Types::I32));
+    setLocal(env, "uint", wrap(Types::U32));
+
+    setLocal(env, "real16", wrap(Types::R16));
+    setLocal(env, "real32", wrap(Types::R32));
+    setLocal(env, "real64", wrap(Types::R64));
+
+    setLocal(env, "half", wrap(Types::R16));
+    setLocal(env, "float", wrap(Types::R32));
+    setLocal(env, "double", wrap(Types::R64));
 
     setLocal(env, "usize_t",
         wrap(Types::Integer(sizeof(size_t)*8,false)));
@@ -4533,6 +4569,7 @@ static void initGlobals () {
     setBuiltin(env, "error", builtin_error);
     //setBuiltin(env, "length", builtin_length);
 
+    setBuiltin(env, "@", builtin_at);
     //setBuiltin(env, "@", builtin_variadic_ltr<builtin_at_op>);
 
     setBuiltin(env, "+",
