@@ -458,7 +458,6 @@ struct Anchor {
 //------------------------------------------------------------------------------
 
 struct Parameter;
-struct String;
 struct Flow;
 struct Any;
 struct Hash;
@@ -472,53 +471,61 @@ struct Type;
 struct Macro;
 struct SpecialForm;
 
+template<typename T>
+struct Slice {
+    const T *ptr;
+    size_t count;
+};
+
+typedef Slice<char> String;
+
 typedef Any (*BuiltinFunction)(const std::vector<Any> &args);
 typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
 
 struct Any {
     union {
-        bool *p_i1;
+        const bool *p_i1;
 
-        int8_t *p_i8;
-        int16_t *p_i16;
-        int32_t *p_i32;
-        int64_t *p_i64;
+        const int8_t *p_i8;
+        const int16_t *p_i16;
+        const int32_t *p_i32;
+        const int64_t *p_i64;
 
-        uint8_t *p_u8;
-        uint16_t *p_u16;
-        uint32_t *p_u32;
-        uint64_t *p_u64;
+        const uint8_t *p_u8;
+        const uint16_t *p_u16;
+        const uint32_t *p_u32;
+        const uint64_t *p_u64;
 
-        float *p_r32;
-        double *p_r64;
+        const float *p_r32;
+        const double *p_r64;
 
-        void *ptr;
-        char *c_str;
-        BuiltinFunction func;
-        SList *slist;
-        std::string *str;
-        Type *typeref;
-        Parameter *parameter;
-        Flow *flow;
-        Closure *closure;
-        Builtin *builtin;
-        BuiltinFlow *builtin_flow;
-        BuiltinMacro *builtin_macro;
-        SpecialForm *special_form;
-        Anchor *anchorref;
-        Table *table;
-        Macro *macro;
+        const void *ptr;
+        const char *c_str;
+        const BuiltinFunction func;
+        const SList *slist;
+        const String *str;
+        const Type *typeref;
+        const Parameter *parameter;
+        const Flow *flow;
+        const Closure *closure;
+        const Builtin *builtin;
+        const BuiltinFlow *builtin_flow;
+        const BuiltinMacro *builtin_macro;
+        const SpecialForm *special_form;
+        const Anchor *anchorref;
+        const Table *table;
+        const Macro *macro;
     };
-    Type *type;
+    const Type *type;
 };
 
-static Any make_any(Type *type) {
+static Any make_any(const Type *type) {
     Any any;
     any.type = type;
     return any;
 }
 
-static Any wrap(Type *type, const void *ptr) {
+static Any wrap(const Type *type, const void *ptr) {
     Any any = make_any(type);
     any.ptr = const_cast<void *>(ptr);
     return any;
@@ -538,62 +545,62 @@ static void error (const Any &any, const char *format, ...) {
 //------------------------------------------------------------------------------
 
 namespace Types {
-    static Type *TType;
-    static Type *TArray;
-    static Type *TVector;
-    static Type *TTuple;
-    static Type *TPointer;
-    static Type *TCFunction;
-    static Type *TInteger;
-    static Type *TReal;
-    static Type *TStruct;
-    static Type *TEnum;
+    static const Type *TType;
+    static const Type *TArray;
+    static const Type *TVector;
+    static const Type *TTuple;
+    static const Type *TPointer;
+    static const Type *TCFunction;
+    static const Type *TInteger;
+    static const Type *TReal;
+    static const Type *TStruct;
+    static const Type *TEnum;
 
-    static Type *Bool;
-    static Type *I8;
-    static Type *I16;
-    static Type *I32;
-    static Type *I64;
-    static Type *U8;
-    static Type *U16;
-    static Type *U32;
-    static Type *U64;
+    static const Type *Bool;
+    static const Type *I8;
+    static const Type *I16;
+    static const Type *I32;
+    static const Type *I64;
+    static const Type *U8;
+    static const Type *U16;
+    static const Type *U32;
+    static const Type *U64;
 
-    static Type *R16;
-    static Type *R32;
-    static Type *R64;
+    static const Type *R16;
+    static const Type *R32;
+    static const Type *R64;
 
-    static Type *Rawstring;
-    static Type *None;
-    static Type *String; // std::string
+    static const Type *Rawstring;
+    static const Type *None;
+    static const Type *String; // std::string
 
-    static Type *Parameter;
-    static Type *Table;
-    static Type *SList;
-    static Type *Symbol; // std::string
+    static const Type *Parameter;
+    static const Type *Table;
+    static const Type *SList;
+    static const Type *Symbol; // std::string
 
-    static Type *Builtin;
-    static Type *BuiltinFlow;
-    static Type *Flow;
+    static const Type *Builtin;
+    static const Type *BuiltinFlow;
+    static const Type *Flow;
 
-    static Type *SpecialForm;
-    static Type *BuiltinMacro;
-    static Type *Frame;
-    static Type *Closure;
-    static Type *Macro;
+    static const Type *SpecialForm;
+    static const Type *BuiltinMacro;
+    static const Type *Frame;
+    static const Type *Closure;
+    static const Type *Macro;
 
-    static Type *TypeRef;
-    static Type *Any;
-    static Type *AnchorRef;
+    static const Type *TypeRef;
+    static const Type *Any;
+    static const Type *AnchorRef;
 
-    static Type *_new_array_type(Type *element, size_t size);
-    static Type *_new_vector_type(Type *element, size_t size);
-    static Type *_new_tuple_type(std::vector<Type *> types);
-    static Type *_new_cfunction_type(
-        Type *result, Type *parameters, bool vararg);
-    static Type *_new_pointer_type(Type *element);
-    static Type *_new_integer_type(size_t width, bool signed_);
-    static Type *_new_real_type(size_t width);
+    static const Type *_new_array_type(const Type *element, size_t size);
+    static const Type *_new_vector_type(const Type *element, size_t size);
+    static const Type *_new_tuple_type(std::vector<const Type *> types);
+    static const Type *_new_cfunction_type(
+        const Type *result, const Type *parameters, bool vararg);
+    static const Type *_new_pointer_type(const Type *element);
+    static const Type *_new_integer_type(size_t width, bool signed_);
+    static const Type *_new_real_type(size_t width);
 
     static auto Array = memo(_new_array_type);
     static auto Vector = memo(_new_vector_type);
@@ -628,13 +635,13 @@ struct Type {
     std::string name;
 
     // return true if self supports the interface of other
-    bool (*eq_type)(Type *self, Type *other);
+    bool (*eq_type)(const Type *self, const Type *other);
     // short string representation
-    std::string (*tostring)(Type *self, const Any &value);
+    std::string (*tostring)(const Type *self, const Any &value);
     // return contained item
-    Any (*at)(Type *self, const Any &value, size_t index);
+    Any (*at)(const Type *self, const Any &value, size_t index);
     // return true if objects are equivalent
-    bool (*eq)(Type *self, const Any &a, const Any &b);
+    bool (*eq)(const Type *self, const Any &a, const Any &b);
 
     size_t size;
     size_t alignment;
@@ -653,16 +660,16 @@ struct Type {
     };
     union {
         // array, vector, pointer: type of element
-        Type *element_type;
+        const Type *element_type;
         // enum: type of tag
-        Type *tag_type;
+        const Type *tag_type;
         // function: type of result
-        Type *result_type;
+        const Type *result_type;
     };
     // tuple, struct, union: field types
     // function: parameter types
     // enum: payload types
-    std::vector<Type *> types;
+    std::vector<const Type *> types;
     // tuple, struct: field offsets
     std::vector<size_t> offsets;
     // enum: tag values
@@ -672,40 +679,40 @@ struct Type {
     std::unordered_map<std::string, size_t> name_index_map;
 };
 
-static std::string get_name(Type *self) {
+static std::string get_name(const Type *self) {
     assert(self);
     return self->name;
 }
 
-static size_t get_size(Type *self) {
+static size_t get_size(const Type *self) {
     return self->size;
 }
 
-static size_t get_width(Type *self) {
+static size_t get_width(const Type *self) {
     return self->width;
 }
 
-static bool is_signed(Type *self) {
+static bool is_signed(const Type *self) {
     return self->is_signed;
 }
 
-static Type *get_type(Type *self, size_t i) {
+static const Type *get_type(const Type *self, size_t i) {
     return self->types[i];
 }
 
-static size_t get_field_count(Type *self) {
+static size_t get_field_count(const Type *self) {
     return self->types.size();
 }
 
-static bool is_vararg(Type *self) {
+static bool is_vararg(const Type *self) {
     return self->is_vararg;
 }
 
-static size_t get_parameter_count(Type *self) {
+static size_t get_parameter_count(const Type *self) {
     return get_field_count(self->types[0]);
 }
 
-static Type *get_parameter_type(Type *self, size_t i) {
+static const Type *get_parameter_type(const Type *self, size_t i) {
     return get_type(self->types[0], i);
 }
 
@@ -720,15 +727,15 @@ static size_t get_field_index(Type *self, const std::string &name) {
 }
 */
 
-static size_t get_offset(Type *self, size_t i) {
+static size_t get_offset(const Type *self, size_t i) {
     return self->offsets[i];
 }
 
-static size_t get_alignment(Type *self) {
+static size_t get_alignment(const Type *self) {
     return self->alignment;
 }
 
-static Type *get_element_type(Type *self) {
+static const Type *get_element_type(const Type *self) {
     return self->element_type;
 }
 /*
@@ -736,25 +743,25 @@ static Type *get_tag_type(Type *self) {
     return self->tag_type;
 }
 */
-static Type *get_result_type(Type *self) {
+static const Type *get_result_type(const Type *self) {
     return self->result_type;
 }
 
-static bool type_eq_type_default(Type *self, Type *other) {
+static bool type_eq_type_default(const Type *self, const Type *other) {
     assert(self && other);
     return false;
 }
 
-static bool type_eq_default(Type *self, const Any &a, const Any &b) {
+static bool type_eq_default(const Type *self, const Any &a, const Any &b) {
     return false;
 }
 
-static Any type_at_default(Type *self, const Any &value, size_t index) {
+static Any type_at_default(const Type *self, const Any &value, size_t index) {
     assert(false && "type not indexable");
     return const_none;
 }
 
-static std::string type_tostring_default(Type *self, const Any &value) {
+static std::string type_tostring_default(const Type *self, const Any &value) {
     assert(self);
     return format("<value of %s>", get_name(self).c_str());
 }
@@ -777,7 +784,7 @@ static Type *new_type(const std::string &name) {
     return result;
 }
 
-static bool eq(Type *self, Type *other) {
+static bool eq(const Type *self, const Type *other) {
     if (self == other) return true;
     assert(self && other);
     return self->eq_type(self, other) || other->eq_type(other, self);
@@ -793,16 +800,6 @@ static std::string get_string(const Any &value) {
 
 static Any at(const Any &value, size_t index) {
     return value.type->at(value.type, value, index);
-}
-
-//------------------------------------------------------------------------------
-
-static Any pstring(const std::string &s) {
-    return wrap(Types::String, new std::string(s));
-}
-
-static Any symbol(const std::string &s) {
-    return wrap(Types::Symbol, new std::string(s));
 }
 
 //------------------------------------------------------------------------------
@@ -839,7 +836,8 @@ static const Any &get_key(Table &table, const std::string &key) {
 }
 */
 
-static const Any &get_key(Table &table, const std::string &key, const Any &defvalue) {
+static const Any &get_key(const Table &table,
+    const std::string &key, const Any &defvalue) {
     auto it = table._.find(key);
     if (it == table._.end())
         return defvalue;
@@ -857,23 +855,23 @@ static Any call(const Any &what, const std::vector<Any> &args) {
 }
 */
 
-static bool is_typeref_type(Type *type) {
+static bool is_typeref_type(const Type *type) {
     return eq(type, Types::TypeRef);
 }
 
-static bool is_none_type(Type *type) {
+static bool is_none_type(const Type *type) {
     return eq(type, Types::None);
 }
 
-static bool is_bool_type(Type *type) {
+static bool is_bool_type(const Type *type) {
     return eq(type, Types::Bool);
 }
 
-static bool is_integer_type(Type *type) {
+static bool is_integer_type(const Type *type) {
     return eq(type, Types::TInteger);
 }
 
-static bool is_real_type(Type *type) {
+static bool is_real_type(const Type *type) {
     return eq(type, Types::TReal);
 }
 
@@ -883,7 +881,7 @@ static bool is_struct_type(Type *type) {
 }
 */
 
-static bool is_tuple_type(Type *type) {
+static bool is_tuple_type(const Type *type) {
     return eq(type, Types::TTuple);
 }
 
@@ -893,11 +891,11 @@ static bool is_array_type(Type *type) {
 }
 */
 
-static bool is_cfunction_type(Type *type) {
+static bool is_cfunction_type(const Type *type) {
     return eq(type, Types::TCFunction);
 }
 
-static bool is_pointer_type(Type *type) {
+static bool is_pointer_type(const Type *type) {
     return eq(type, Types::TPointer);
 }
 
@@ -905,7 +903,7 @@ static std::string extract_string(const Any &value) {
     if (eq(value.type, Types::Rawstring)) {
         return value.c_str;
     } else if (eq(value.type, Types::String)) {
-        return *value.str;
+        return std::string(value.str->ptr, value.str->count);
     } else {
         error(value, "can not extract string");
         return "";
@@ -929,9 +927,9 @@ static std::string extract_any_string(const Any &value) {
     if (eq(value.type, Types::Rawstring)) {
         return value.c_str;
     } else if (eq(value.type, Types::String)) {
-        return *value.str;
+        return std::string(value.str->ptr, value.str->count);
     } else if (eq(value.type, Types::Symbol)) {
-        return *value.str;
+        return std::string(value.str->ptr, value.str->count);
     } else {
         error(value, "can not extract string");
         return "";
@@ -946,12 +944,35 @@ static bool extract_bool(const Any &value) {
     return false;
 }
 
-static Type *extract_type(const Any &value) {
+static const Type *extract_type(const Any &value) {
     if (is_typeref_type(value.type)) {
         return value.typeref;
     }
     error(value, "type constant expected");
     return nullptr;
+}
+
+template<typename T>
+static Slice<T> *alloc_slice(const T *ptr, size_t count) {
+    Slice<T> *s = (Slice<T> *)malloc(sizeof(Slice<T>));
+    s->ptr = ptr;
+    s->count = count;
+    return s;
+}
+
+static String *alloc_string(const char *ptr, size_t count) {
+    char *ptrcpy = (char *)malloc(sizeof(char) * count + 1);
+    memcpy(ptrcpy, ptr, sizeof(char) * count);
+    ptrcpy[count] = 0;
+    return alloc_slice(ptrcpy, count);
+}
+
+static Any pstring(const std::string &s) {
+    return wrap(Types::String, alloc_string(s.c_str(), s.size()));
+}
+
+static Any symbol(const std::string &s) {
+    return wrap(Types::Symbol, alloc_string(s.c_str(), s.size()));
 }
 
 template <typename T>
@@ -975,13 +996,13 @@ static T *alloc_uint(uint64_t value) {
     return ptr;
 }
 
-static Any wrap_ptr(Type *type, void *ptr) {
+static Any wrap_ptr(const Type *type, void *ptr) {
     Any any = make_any(type);
     any.ptr = alloc_ptr(ptr);
     return any;
 }
 
-static Any integer(Type *type, int64_t value) {
+static Any integer(const Type *type, int64_t value) {
     Any any = make_any(type);
     if (type == Types::Bool) {
         any.p_i1 = alloc_int<bool>(value);
@@ -1040,7 +1061,7 @@ static T *alloc_real(double value) {
     return ptr;
 }
 
-static Any real(Type *type, double value) {
+static Any real(const Type *type, double value) {
     Any any = make_any(type);
     if (type == Types::R32) {
         any.p_r32 = alloc_real<float>(value);
@@ -1119,12 +1140,23 @@ struct Parameter {
 
 //------------------------------------------------------------------------------
 
+static Any wrap(const SList *slist) {
+    return wrap(Types::SList, slist);
+}
+
 struct SList {
 public:
     Any at;
-    SList *next;
+    const SList *next;
 
-    static SList *create(const Any &at, SList *next) {
+    static const SList *create_eol() {
+        auto result = new SList();
+        result->at = wrap(result);
+        result->next = result;
+        return result;
+    }
+
+    static const SList *create(const Any &at, const SList *next) {
         assert(next);
         auto result = new SList();
         result->at = at;
@@ -1132,7 +1164,7 @@ public:
         return result;
     }
 
-    static SList *create(Any *values, size_t count) {
+    static const SList *create(Any *values, size_t count) {
         auto result = const_eol.slist;
         while (count) {
             --count;
@@ -1141,7 +1173,7 @@ public:
         return result;
     }
 
-    static SList *create(const std::vector<Any> &values) {
+    static const SList *create(const std::vector<Any> &values) {
         return create(const_cast<Any *>(&values[0]), values.size());
     }
 
@@ -1167,7 +1199,7 @@ public:
     */
 };
 
-static SList *extract_slist(const Any &value) {
+static const SList *extract_slist(const Any &value) {
     assert(value.type == Types::SList);
     return value.slist;
 }
@@ -1375,7 +1407,7 @@ struct Cursor {
     SListIter next;
 };
 
-typedef Cursor (*MacroBuiltinFunction)(Table *, SListIter);
+typedef Cursor (*MacroBuiltinFunction)(const Table *, SListIter);
 
 struct BuiltinMacro {
 
@@ -1401,7 +1433,7 @@ struct BuiltinMacro {
 
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<Flow *, std::vector<Any> >
+typedef std::unordered_map<const Flow *, std::vector<Any> >
     FlowValuesMap;
 
 struct Frame {
@@ -1449,11 +1481,11 @@ struct Frame {
 //------------------------------------------------------------------------------
 
 struct Closure {
-    Flow *cont;
+    const Flow *cont;
     Frame *frame;
 
-    static Closure *create(
-        Flow *cont,
+    static const Closure *create(
+        const Flow *cont,
         Frame *frame) {
         auto result = new Closure();
         result->cont = cont;
@@ -1497,11 +1529,11 @@ struct Macro {
 
 namespace Types {
 
-    static std::string _string_tostring(Type *self, const bangra::Any &value) {
-        return *value.str;
+    static std::string _string_tostring(const Type *self, const bangra::Any &value) {
+        return extract_string(value);
     }
 
-    static std::string _integer_tostring(Type *self, const bangra::Any &value) {
+    static std::string _integer_tostring(const Type *self, const bangra::Any &value) {
         auto ivalue = extract_integer(value);
         if (self->width == 1) {
             return ivalue?"true":"false";
@@ -1512,62 +1544,62 @@ namespace Types {
             return format("%" PRIu64, ivalue);
     }
 
-    static std::string _real_tostring(Type *self, const bangra::Any &value) {
+    static std::string _real_tostring(const Type *self, const bangra::Any &value) {
         return format("%g", extract_real(value));
     }
 
-    static bangra::Any type_pointer_at(Type *self,
+    static bangra::Any type_pointer_at(const Type *self,
         const bangra::Any &value, size_t index) {
         assert(index == 0);
         return wrap(self->element_type, *(char **)value.ptr);
     }
 
-    static std::string _pointer_tostring(Type *self, const bangra::Any &value) {
+    static std::string _pointer_tostring(const Type *self, const bangra::Any &value) {
         return format("(& %s)",
             get_string(type_pointer_at(self, value, 0)).c_str());
     }
 
-    static std::string _type_tostring(Type *self, const bangra::Any &value) {
+    static std::string _type_tostring(const Type *self, const bangra::Any &value) {
         return get_name(value.typeref);
     }
 
-    static bool type_array_eq(Type *self, Type *other) {
+    static bool type_array_eq(const Type *self, const Type *other) {
         return (other == TArray);
     }
 
-    static bool type_vector_eq(Type *self, Type *other) {
+    static bool type_vector_eq(const Type *self, const Type *other) {
         return (other == TVector);
     }
 
-    static bool type_pointer_eq(Type *self, Type *other) {
+    static bool type_pointer_eq(const Type *self, const Type *other) {
         return (other == TPointer);
     }
 
-    static bool type_tuple_eq(Type *self, Type *other) {
+    static bool type_tuple_eq(const Type *self, const Type *other) {
         return (other == TTuple);
     }
 
-    static bool type_cfunction_eq(Type *self, Type *other) {
+    static bool type_cfunction_eq(const Type *self, const Type *other) {
         return (other == TCFunction);
     }
 
-    static bool type_integer_eq(Type *self, Type *other) {
+    static bool type_integer_eq(const Type *self, const Type *other) {
         return (other == TInteger);
     }
 
-    static bool type_real_eq(Type *self, Type *other) {
+    static bool type_real_eq(const Type *self, const Type *other) {
         return (other == TReal);
     }
 
-    static bool type_struct_eq(Type *self, Type *other) {
+    static bool type_struct_eq(const Type *self, const Type *other) {
         return (other == TStruct);
     }
 
-    static bool type_enum_eq(Type *self, Type *other) {
+    static bool type_enum_eq(const Type *self, const Type *other) {
         return (other == TEnum);
     }
 
-    static bangra::Any type_array_at(Type *self,
+    static bangra::Any type_array_at(const Type *self,
         const bangra::Any &value, size_t index) {
         auto padded_size = align(
             get_size(self->element_type), get_alignment(self->element_type));
@@ -1576,7 +1608,7 @@ namespace Types {
         return wrap(self->element_type, (char *)value.ptr + offset);
     }
 
-    static Type *__new_array_type(Type *element, size_t size) {
+    static Type *__new_array_type(const Type *element, size_t size) {
         assert(element);
         Type *type = new_type("");
         type->count = size;
@@ -1588,7 +1620,7 @@ namespace Types {
         return type;
     }
 
-    static Type *_new_array_type(Type *element, size_t size) {
+    static const Type *_new_array_type(const Type *element, size_t size) {
         assert(element);
         Type *type = __new_array_type(element, size);
         type->name = format("(%s %s %s)",
@@ -1600,7 +1632,7 @@ namespace Types {
         return type;
     }
 
-    static Type *_new_vector_type(Type *element, size_t size) {
+    static const Type *_new_vector_type(const Type *element, size_t size) {
         assert(element);
         Type *type = __new_array_type(element, size);
         type->name = format("(%s %s %s)",
@@ -1612,7 +1644,7 @@ namespace Types {
         return type;
     }
 
-    static Type *_new_pointer_type(Type *element) {
+    static const Type *_new_pointer_type(const Type *element) {
         assert(element);
         Type *type = new_type(
             format("(%s %s)",
@@ -1627,7 +1659,7 @@ namespace Types {
         return type;
     }
 
-    static bangra::Any type_tuple_at(Type *self,
+    static bangra::Any type_tuple_at(const Type *self,
         const bangra::Any &value, size_t index) {
         assert(index < self->types.size());
         auto offset = self->offsets[index];
@@ -1643,7 +1675,7 @@ namespace Types {
         }
     }
 
-    static void _set_struct_field_types(Type *type, const std::vector<Type *> &types) {
+    static void _set_struct_field_types(Type *type, const std::vector<const Type *> &types) {
         type->types = types;
         size_t offset = 0;
         size_t max_alignment = 1;
@@ -1659,7 +1691,7 @@ namespace Types {
         type->alignment = max_alignment;
     }
 
-    static void _set_union_field_types(Type *type, const std::vector<Type *> &types) {
+    static void _set_union_field_types(Type *type, const std::vector<const Type *> &types) {
         type->types = types;
         size_t max_size = 0;
         size_t max_alignment = 1;
@@ -1673,7 +1705,7 @@ namespace Types {
         type->alignment = max_alignment;
     }
 
-    static Type *_new_tuple_type(std::vector<Type *> types) {
+    static const Type *_new_tuple_type(std::vector<const Type *> types) {
         std::stringstream ss;
         ss << "(";
         ss << ansi(ANSI_STYLE_KEYWORD, "tuple");
@@ -1717,8 +1749,8 @@ namespace Types {
 
     */
 
-    static Type *_new_cfunction_type(
-        Type *result, Type *parameters, bool vararg) {
+    static const Type *_new_cfunction_type(
+        const Type *result, const Type *parameters, bool vararg) {
         assert(eq(parameters, TTuple));
         std::stringstream ss;
         ss << "(";
@@ -1736,7 +1768,7 @@ namespace Types {
         return type;
     }
 
-    static Type *_new_integer_type(size_t width, bool signed_) {
+    static const Type *_new_integer_type(size_t width, bool signed_) {
         ffi_type *itype = nullptr;
         if (signed_) {
             switch (width) {
@@ -1770,7 +1802,7 @@ namespace Types {
         return type;
     }
 
-    static Type *_new_real_type(size_t width) {
+    static const Type *_new_real_type(size_t width) {
         ffi_type *itype = nullptr;
         switch (width) {
             case 16: itype = &ffi_type_uint16; break;
@@ -1818,8 +1850,9 @@ namespace Types {
     }
 
     static void initTypes() {
-        TType = Struct("type", true);
-        TType->tostring = _type_tostring;
+        Type *tmp = Struct("type", true);
+        tmp->tostring = _type_tostring;
+        TType = tmp;
 
         TArray = Struct("array", true);
         TVector = Struct("vector", true);
@@ -1854,12 +1887,22 @@ namespace Types {
         R32 = Real(32);
         R64 = Real(64);
 
-        String = Struct("String", true);
-        String->tostring = _string_tostring;
+        struct _string_alignment { char c; bangra::String s; };
+
+        tmp = Struct("String", true);
+        tmp->tostring = _string_tostring;
+        tmp->size = sizeof(bangra::String);
+        tmp->alignment = offsetof(_string_alignment, s);
+        String = tmp;
+
+        tmp = Struct("Symbol", true);
+        tmp->size = sizeof(bangra::String);
+        tmp->alignment = offsetof(_string_alignment, s);
+
+        Symbol = tmp;
 
         Parameter = Struct("Parameter", true);
         Table = Struct("Table", true);
-        Symbol = Struct("Symbol", true);
         SList = Struct("SList", true);
         Builtin = Struct("Builtin", true);
         BuiltinFlow = Struct("BuiltinFlow", true);
@@ -1879,9 +1922,7 @@ namespace Types {
 
 static void initConstants() {
     const_eol = make_any(Types::SList);
-    const_eol.slist = new SList();
-    const_eol.slist->at = const_eol;
-    const_eol.slist->next = const_eol.slist;
+    const_eol.slist = SList::create_eol();
 }
 
 /*
@@ -1898,19 +1939,15 @@ static Any tuple(const std::vector<Any> &values) {
 }
 */
 
-static Any wrap(Flow *flow) {
+static Any wrap(const Flow *flow) {
     return wrap(Types::Flow, flow);
 }
 
-static Any wrap(Parameter *param) {
+static Any wrap(const Parameter *param) {
     return wrap(Types::Parameter, param);
 }
 
-static Any wrap(SList *slist) {
-    return wrap(Types::SList, slist);
-}
-
-static Any wrap(Type *type) {
+static Any wrap(const Type *type) {
     return wrap(Types::TypeRef, type);
 }
 
@@ -1929,11 +1966,11 @@ static Any wrap(int64_t value) {
 static Any wrap(
     const std::vector<Any> &args) {
 
-    std::vector<Type *> types;
+    std::vector<const Type *> types;
     for (auto &arg : args) {
         types.push_back(arg.type);
     }
-    Type *type = Types::Tuple(types);
+    const Type *type = Types::Tuple(types);
     char *data = (char *)malloc(get_size(type));
     for (size_t i = 0; i < args.size(); ++i) {
         auto elemtype = get_type(type, i);
@@ -1957,17 +1994,18 @@ static Any wrap(const std::string &s) {
 // IL MODEL UTILITY FUNCTIONS
 //------------------------------------------------------------------------------
 
-static void unescape(std::string &s) {
-    s.resize(inplace_unescape(&s[0]));
+static void unescape(String &s) {
+    s.count = inplace_unescape(const_cast<char *>(s.ptr));
 }
 
 // matches ((///...))
 static bool is_comment(const Any &expr) {
     if (eq(expr.type, Types::SList)) {
         if (expr.slist != const_eol.slist) {
-            Any &sym = expr.slist->at;
+            const Any &sym = expr.slist->at;
             if (eq(sym.type, Types::Symbol)) {
-                if (!memcmp(sym.str->c_str(),"///",3))
+                auto s = extract_any_string(sym);
+                if (!memcmp(s.c_str(),"///",3))
                     return true;
             }
         }
@@ -2007,7 +2045,7 @@ static const Anchor *find_valid_anchor(const Any &expr) {
     */
     return nullptr;
 }
-static size_t getSize(SList *expr) {
+static size_t getSize(const SList *expr) {
     SListIter it(expr, 0);
     size_t c = 0;
     while (it) {
@@ -2136,10 +2174,10 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         }
     } else {
         if (e.type == Types::Symbol) {
-            streamString(stream, *e.str, "[]{}()\"");
+            streamString(stream, extract_any_string(e), "[]{}()\"");
         } else if (e.type == Types::String) {
             stream << '"';
-            streamString(stream, *e.str, "\"");
+            streamString(stream, extract_string(e), "\"");
             stream << '"';
         } else {
             stream << get_string(e);
@@ -2182,7 +2220,7 @@ void valueErrorV (const Any &expr, const char *fmt, va_list args) {
     Anchor::printErrorV(anchor, fmt, args);
 }
 
-static void verifyValueKind(Type *type, const Any &expr) {
+static void verifyValueKind(const Type *type, const Any &expr) {
     if (!eq(expr.type, type)) {
         valueError(expr, "%s expected, not %s",
             get_name(type).c_str(),
@@ -2483,16 +2521,18 @@ struct Lexer {
     Any getAsString() {
         // TODO: anchor
         auto result = make_any(Types::String);
-        result.str = new std::string(string + 1, string_len - 2);
-        unescape(*result.str);
+        auto s = alloc_string(string + 1, string_len - 2);
+        unescape(*s);
+        result.str = s;
         return result;
     }
 
     Any getAsSymbol() {
         // TODO: anchor
         auto result = make_any(Types::Symbol);
-        result.str = new std::string(string, string_len);
-        unescape(*result.str);
+        auto s = alloc_string(string, string_len);
+        unescape(*s);
+        result.str = s;
         return result;
     }
 
@@ -2648,15 +2688,13 @@ struct Parser {
             auto list = parseList(token_square_close);
             if (errors) return const_none;
             // todo: list.anchor
-            Any sym = make_any(Types::Symbol);
-            sym.str = new std::string("[");
+            Any sym = symbol("[");
             return wrap(Types::SList, SList::create(sym, list.slist));
         } else if (lexer.token == token_curly_open) {
             auto list = parseList(token_curly_close);
             if (errors) return const_none;
             // todo: list.anchor
-            Any sym = make_any(Types::Symbol);
-            sym.str = new std::string("{");
+            Any sym = symbol("{");
             return wrap(Types::SList, SList::create(sym, list.slist));
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
@@ -2820,7 +2858,7 @@ struct Parser {
 // TODO: libffi based calls
 
 struct FFI {
-    std::unordered_map<Type *, ffi_type *> ffi_types;
+    std::unordered_map<const Type *, ffi_type *> ffi_types;
 
     FFI() {}
 
@@ -2832,7 +2870,7 @@ struct FFI {
         return result;
     }
 
-    ffi_type *create_ffi_type(Type *type) {
+    ffi_type *create_ffi_type(const Type *type) {
         if (is_none_type(type)) {
             return &ffi_type_void;
         } else if (is_integer_type(type)) {
@@ -2860,7 +2898,7 @@ struct FFI {
         return nullptr;
     }
 
-    ffi_type *get_ffi_type(Type *type) {
+    ffi_type *get_ffi_type(const Type *type) {
         auto it = ffi_types.find(type);
         if (it == ffi_types.end()) {
             auto result = create_ffi_type(type);
@@ -3056,7 +3094,7 @@ public:
     std::unordered_map<const char *, char *> path_cache;
     std::unordered_map<std::string, Type *> named_structs;
     std::unordered_map<std::string, Type *> named_enums;
-    std::unordered_map<std::string, Type *> typedefs;
+    std::unordered_map<std::string, const Type *> typedefs;
 
     CVisitor() : Context(NULL) {
     }
@@ -3110,7 +3148,7 @@ public:
         //auto &rl = Context->getASTRecordLayout(rd);
 
         std::vector<std::string> names;
-        std::vector<Type *> types;
+        std::vector<const Type *> types;
         //auto anchors = new std::vector<Anchor>();
 
         for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
@@ -3125,7 +3163,7 @@ public:
                 break;
             }
             clang::QualType FT = it->getType();
-            Type *fieldtype = TranslateType(FT);
+            const Type *fieldtype = TranslateType(FT);
             if(!fieldtype) {
                 break;
             }
@@ -3145,7 +3183,7 @@ public:
         }
     }
 
-    Type *TranslateRecord(clang::RecordDecl *rd) {
+    const Type *TranslateRecord(clang::RecordDecl *rd) {
         if (!rd->isStruct() && !rd->isUnion()) return NULL;
 
         std::string name = rd->getName();
@@ -3186,7 +3224,7 @@ public:
         return struct_type;
     }
 
-    Type *TranslateEnum(clang::EnumDecl *ed) {
+    const Type *TranslateEnum(clang::EnumDecl *ed) {
         std::string name = ed->getName();
 
         Type *enum_type = nullptr;
@@ -3213,7 +3251,7 @@ public:
 
             std::vector<std::string> names;
             std::vector<int64_t> tags;
-            std::vector<Type *> types;
+            std::vector<const Type *> types;
             //auto anchors = new std::vector<Anchor>();
 
             for (auto it : ed->enumerators()) {
@@ -3236,7 +3274,7 @@ public:
         return enum_type;
     }
 
-    Type *TranslateType(clang::QualType T) {
+    const Type *TranslateType(clang::QualType T) {
         using namespace clang;
 
         const clang::Type *Ty = T.getTypePtr();
@@ -3316,7 +3354,7 @@ public:
         case clang::Type::Pointer: {
             const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            Type *pointee = TranslateType(ETy);
+            const Type *pointee = TranslateType(ETy);
             if (pointee != NULL) {
                 return Types::Pointer(pointee);
             }
@@ -3326,7 +3364,7 @@ public:
             break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
-            Type *at = TranslateType(ATy->getElementType());
+            const Type *at = TranslateType(ATy->getElementType());
             if(at) {
                 int sz = ATy->getSize().getZExtValue();
                 Types::Array(at, sz);
@@ -3335,7 +3373,7 @@ public:
         case clang::Type::ExtVector:
         case clang::Type::Vector: {
                 const clang::VectorType *VT = cast<clang::VectorType>(T);
-                Type *at = TranslateType(VT->getElementType());
+                const Type *at = TranslateType(VT->getElementType());
                 if(at) {
                     int n = VT->getNumElements();
                     return Types::Vector(at, n);
@@ -3364,12 +3402,12 @@ public:
         return NULL;
     }
 
-    Type *TranslateFuncType(const clang::FunctionType * f) {
+    const Type *TranslateFuncType(const clang::FunctionType * f) {
 
         bool valid = true;
         clang::QualType RT = f->getReturnType();
 
-        Type *returntype = TranslateType(RT);
+        const Type *returntype = TranslateType(RT);
 
         if (!returntype)
             valid = false;
@@ -3377,12 +3415,12 @@ public:
         bool vararg = false;
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
-        std::vector<Type *> argtypes;
+        std::vector<const Type *> argtypes;
         if(proto) {
             vararg = proto->isVariadic();
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
-                Type *paramtype = TranslateType(PT);
+                const Type *paramtype = TranslateType(PT);
                 if(!paramtype) {
                     valid = false;
                 } else if(valid) {
@@ -3399,12 +3437,13 @@ public:
         return NULL;
     }
 
-    void exportType(const std::string &name, Type *type) {
+    void exportType(const std::string &name, const Type *type) {
         set_key(*dest, name,
             wrap(Types::TypeRef, type));
     }
 
-    void exportExternal(const std::string &name, Type *type, const Anchor &anchor) {
+    void exportExternal(const std::string &name, const Type *type,
+        const Anchor &anchor) {
         set_key(*dest, name,
             wrap(type,
                 dlsym(NULL, name.c_str())));
@@ -3436,7 +3475,7 @@ public:
         if (vd->isExternC()) {
             Anchor anchor = anchorFromLocation(vd->getSourceRange().getBegin());
 
-            Type *type = TranslateType(vd->getType());
+            const Type *type = TranslateType(vd->getType());
             if (!type) return true;
 
             exportExternal(vd->getName().data(), type, anchor);
@@ -3450,7 +3489,7 @@ public:
 
         //Anchor anchor = anchorFromLocation(td->getSourceRange().getBegin());
 
-        Type *type = TranslateType(td->getUnderlyingType());
+        const Type *type = TranslateType(td->getUnderlyingType());
         if (!type) return true;
 
         typedefs[td->getName().data()] = type;
@@ -3471,7 +3510,7 @@ public:
             return true;
         }
 
-        Type *functype = TranslateFuncType(fntyp);
+        const Type *functype = TranslateFuncType(fntyp);
         if (!functype)
             return true;
 
@@ -3714,11 +3753,11 @@ static Any builtin_typeof(const std::vector<Any> &args) {
 
 static Any builtin_cdecl(const std::vector<Any> &args) {
     builtin_checkparams(args, 3, 3);
-    Type *rettype = extract_type(args[0]);
+    const Type *rettype = extract_type(args[0]);
     auto params = extract_tuple(args[1]);
     bool vararg = extract_bool(args[2]);
 
-    std::vector<Type *> paramtypes;
+    std::vector<const Type *> paramtypes;
     size_t paramcount = params.size();
     for (size_t i = 0; i < paramcount; ++i) {
         paramtypes.push_back(extract_type(params[i]));
@@ -3888,9 +3927,9 @@ public:
     template<typename F>
     static Any dispatch(const Any &v, const F &next) {
         if (eq(v.type, Types::String)) {
-            return next(*v.str);
+            return next(extract_string(v));
         } else if (eq(v.type, Types::Symbol)) {
-            return next(*v.str);
+            return next(extract_any_string(v));
         } else {
             return NextT::template dispatch<F>(v, next);
         }
@@ -4018,7 +4057,7 @@ static Any builtin_unary_op(
 // TRANSLATION
 //------------------------------------------------------------------------------
 
-typedef Any (*bangra_preprocessor)(Table *, const Any &);
+typedef Any (*bangra_preprocessor)(const Table *, const Any &);
 
 //------------------------------------------------------------------------------
 
@@ -4026,7 +4065,7 @@ static Table *new_scope() {
     return new_table();
 }
 
-static Table *new_scope(Table *scope) {
+static Table *new_scope(const Table *scope) {
     assert(scope);
     auto subscope = new_table();
     set_key(*subscope, "#parent", wrap(Types::Table, scope));
@@ -4075,14 +4114,14 @@ static bool isLocal(StructValue *scope, const std::string &name) {
 }
 */
 
-static Table *getParent(Table *scope) {
+static const Table *getParent(const Table *scope) {
     auto parent = get_key(*scope, "#parent", const_none);
     if (parent.type == Types::Table)
         return parent.table;
     return nullptr;
 }
 
-static Any getLocal(Table *scope, const std::string &name) {
+static Any getLocal(const Table *scope, const std::string &name) {
     assert(scope);
     while (scope) {
         auto parent = get_key(*scope, name, const_none);
@@ -4099,7 +4138,7 @@ static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 static bool isSymbol (const Any &expr, const char *sym) {
     if (expr.type == Types::Symbol) {
-        return (*expr.str) == sym;
+        return extract_any_string(expr) == sym;
     }
     return false;
 }
@@ -4108,9 +4147,9 @@ static bool isSymbol (const Any &expr, const char *sym) {
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
 
-static Table *globals = nullptr;
+static const Table *globals = nullptr;
 
-static bool verifyParameterCount (SList *expr,
+static bool verifyParameterCount (const SList *expr,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
@@ -4137,19 +4176,21 @@ static bool verifyParameterCount (SListIter topit,
 
 //------------------------------------------------------------------------------
 
-static Cursor expand (Table *env, SListIter topit);
+static Cursor expand (const Table *env, SListIter topit);
 static Any compile(const Any &expr);
 
 static Any toparameter (Table *env, const Any &value) {
     if (eq(value.type, Types::Parameter))
         return value;
     verifyValueKind(Types::Symbol, value);
-    auto bp = wrap(Types::Parameter, Parameter::create(*value.str));
-    setLocal(env, *value.str, bp);
+    auto key = extract_any_string(value);
+    auto bp = wrap(Types::Parameter,
+        Parameter::create(key));
+    setLocal(env, key, bp);
     return bp;
 }
 
-static SList *expand_expr_list (Table *env, SListIter it) {
+static const SList *expand_expr_list (const Table *env, SListIter it) {
     std::vector<Any> result;
     while (it) {
         auto cur = expand(env, it);
@@ -4159,7 +4200,7 @@ static SList *expand_expr_list (Table *env, SListIter it) {
 
     return SList::create(result);
 }
-static Cursor expand_function (Table *env, SListIter topit) {
+static Cursor expand_function (const Table *env, SListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
     SListIter it(*topit++, 1);
@@ -4186,21 +4227,21 @@ static Cursor expand_function (Table *env, SListIter topit) {
         topit };
 }
 
-static Cursor expand_quote (Table *env, SListIter topit) {
+static Cursor expand_quote (const Table *env, SListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
     SListIter it(*topit++, 1);
-    SList *rest = const_cast<SList*>(it.getSList());
-    auto result = SList::create(getLocal(globals, "form:quote"), rest);
+    auto result = SList::create(
+        getLocal(globals, "form:quote"), it.getSList());
     return { wrap(result), topit };
 }
 
-static Cursor expand_escape (Table *env, SListIter topit) {
+static Cursor expand_escape (const Table *env, SListIter topit) {
     SListIter it(*topit++, 1);
     return { *it, topit };
 }
 
-static Cursor expand_let_syntax (Table *env, SListIter topit) {
+static Cursor expand_let_syntax (const Table *env, SListIter topit) {
 
     auto cur = expand_function (env, topit++);
 
@@ -4217,19 +4258,18 @@ static Cursor expand_let_syntax (Table *env, SListIter topit) {
     return { rest->at, rest->next };
 }
 
-static SList *expand_macro(
-    Table *env, const Any &handler, SListIter topit) {
-    auto topexpr = const_cast<SList*>(topit.getSList());
+static const SList *expand_macro(
+    const Table *env, const Any &handler, SListIter topit) {
     auto result = execute({handler,
         wrap(env),
-        wrap(topexpr)});
+        wrap(topit.getSList())});
     if (isnone(result))
         return nullptr;
     verifyValueKind(Types::SList, result);
     return result.slist;
 }
 
-static Cursor expand (Table *env, SListIter topit) {
+static Cursor expand (const Table *env, SListIter topit) {
     Any result = const_none;
 process:
     Any expr = *topit;
@@ -4240,7 +4280,7 @@ process:
 
         auto head = expr.slist->at;
         if (eq(head.type, Types::Symbol)) {
-            head = getLocal(env, *head.str);
+            head = getLocal(env, extract_any_string(head));
         }
         if (head.type != Types::None) {
             if (eq(head.type, Types::BuiltinMacro)) {
@@ -4267,8 +4307,8 @@ process:
         result = wrap(expand_expr_list(env, it));
         topit++;
     } else if (eq(expr.type, Types::Symbol)) {
-        std::string value = *expr.str;
-        result = getLocal(env, *expr.str);
+        auto value = extract_any_string(expr);
+        result = getLocal(env, value);
         if (result.type != Types::None) {
             auto default_handler = getLocal(env, "#symbol");
             if (default_handler.type != Types::None) {
@@ -4280,7 +4320,7 @@ process:
             }
         } else {
             error(expr,
-                "unknown symbol '%s'", expr.str->c_str());
+                "unknown symbol '%s'", value.c_str());
         }
         topit++;
     } else {
@@ -4407,7 +4447,7 @@ static Any compile_function (SListIter it) {
     SListIter param(expr_parameters.slist);
     while (param) {
         verifyValueKind(Types::Parameter, *param);
-        function->appendParameter((*param).parameter);
+        function->appendParameter(const_cast<Parameter*>((*param).parameter));
         param++;
     }
     auto ret = function->appendParameter(Parameter::create());
@@ -4481,8 +4521,8 @@ static int print_number(int value) {
 }
 
 static void initGlobals () {
-    globals = new_scope();
-    auto env = globals;
+    auto env = new_scope();
+    globals = env;
 
     setLocal(env, "globals", wrap(env));
 
@@ -4638,12 +4678,12 @@ static void init() {
 
 //------------------------------------------------------------------------------
 
-static void handleException(Table *env, const Any &expr) {
+static void handleException(const Table *env, const Any &expr) {
     streamValue(std::cerr, expr, 0, true);
     error(expr, "an exception was raised");
 }
 
-static bool compileRootValueList (Table *env, const Any &expr) {
+static bool compileRootValueList (const Table *env, const Any &expr) {
 
     auto expexpr = expand_expr_list(env, SListIter(expr, 1));
 
@@ -4675,7 +4715,7 @@ static bool compileMain (Any expr) {
     std::string lastlang = "";
     while (true) {
         verifyValueKind(Types::Symbol, *it);
-        auto &head = *(*it).str;
+        auto head = extract_any_string(*it);
         if (head == BANGRA_HEADER)
             break;
         auto preprocessor = preprocessors[head];

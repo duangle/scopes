@@ -5,7 +5,10 @@ bangra
 
 print
     @
-        tupleof "x" 0
+        structof
+            tupleof "x" 3
+            tupleof "y" 4
+            tupleof "z" 5
         0
 
 ///
