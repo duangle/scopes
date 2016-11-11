@@ -502,9 +502,9 @@ struct Any {
         const BuiltinFunction func;
         const SList *slist;
         const String *str;
-        const Type *typeref;
 
         const void **pptr;
+        const Type **ptype;
         const Parameter **pparameter;
         const Flow **pflow;
         const Closure **pclosure;
@@ -573,24 +573,10 @@ namespace Types {
     static const Type *SList;
     static const Type *Symbol; // std::string
 
-    static const Type *TypeRef;
     static const Type *Any;
     static const Type *AnchorRef;
 
-    /*
-    static const Type *Table;
-    static const Type *Parameter;
-    static const Type *Builtin;
-    static const Type *BuiltinFlow;
-    static const Type *Flow;
-
-    static const Type *SpecialForm;
-    static const Type *BuiltinMacro;
-    static const Type *Frame;
-    static const Type *Closure;
-    static const Type *Macro;
-    */
-
+    static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
     static const Type *PBuiltin;
@@ -651,6 +637,8 @@ struct Type {
     Any (*at)(const Type *self, const Any &value, const Any &index);
     // return true if objects are equivalent
     bool (*eq)(const Type *self, const Any &a, const Any &b);
+    // apply the type
+    Any (*apply_type)(const Type *self, const std::vector<Any> &args);
 
     size_t size;
     size_t alignment;
@@ -725,17 +713,6 @@ static const Type *get_parameter_type(const Type *self, size_t i) {
     return get_type(self->types[0], i);
 }
 
-/*
-static size_t get_field_index(Type *self, const std::string &name) {
-    auto it = self->name_index_map.find(name);
-    if (it == self->name_index_map.end()) {
-        return (size_t)-1;
-    } else {
-        return it->second;
-    }
-}
-*/
-
 static size_t get_offset(const Type *self, size_t i) {
     return self->offsets[i];
 }
@@ -770,6 +747,11 @@ static Any type_at_default(const Type *self, const Any &value, const Any &index)
     return const_none;
 }
 
+static Any type_apply_default(const Type *self, const std::vector<Any> &args) {
+    assert(false && "type not applicable");
+    return const_none;
+}
+
 static std::string type_tostring_default(const Type *self, const Any &value) {
     assert(self);
     return format("<value of %s>", get_name(self).c_str());
@@ -783,6 +765,7 @@ static Type *new_type(const std::string &name) {
     result->at = type_at_default;
     result->name = name;
     result->eq_type = type_eq_type_default;
+    result->apply_type = type_apply_default;
     result->eq = type_eq_default;
     result->tostring = type_tostring_default;
     result->is_signed = false;
@@ -833,11 +816,11 @@ static void set_key(Table &table, const std::string &key, const Any &value) {
     table._[key] = value;
 }
 
-/*
-static bool has_key(Table &table, const std::string &key) {
+static bool has_key(const Table &table, const std::string &key) {
     return table._.find(key) != table._.end();
 }
 
+/*
 static const Any &get_key(Table &table, const std::string &key) {
     auto it = table._.find(key);
     assert (it != table._.end());
@@ -865,7 +848,7 @@ static Any call(const Any &what, const std::vector<Any> &args) {
 */
 
 static bool is_typeref_type(const Type *type) {
-    return eq(type, Types::TypeRef);
+    return eq(type, Types::PType);
 }
 
 static bool is_none_type(const Type *type) {
@@ -946,7 +929,7 @@ static bool extract_bool(const Any &value) {
 
 static const Type *extract_type(const Any &value) {
     if (is_typeref_type(value.type)) {
-        return value.typeref;
+        return *value.ptype;
     }
     error(value, "type constant expected");
     return nullptr;
@@ -1593,7 +1576,7 @@ static Any wrap(const Parameter *param) {
 }
 
 static Any wrap(const Type *type) {
-    return wrap(Types::TypeRef, type);
+    return wrap_ptr(Types::PType, type);
 }
 
 static Any wrap(const Table *table) {
@@ -1630,6 +1613,25 @@ static Any wrap(double value) {
 
 static Any wrap(const std::string &s) {
     return pstring(s);
+}
+
+static bool builtin_checkparams (const std::vector<Any> &args,
+    int mincount, int maxcount, int skip = 0) {
+    if ((mincount <= 0) && (maxcount == -1))
+        return true;
+
+    int argcount = (int)args.size() - skip;
+
+    if ((maxcount >= 0) && (argcount > maxcount)) {
+        error(const_none,
+            "excess argument. At most %i arguments expected", maxcount);
+        return false;
+    }
+    if ((mincount >= 0) && (argcount < mincount)) {
+        error(const_none, "at least %i arguments expected", mincount);
+        return false;
+    }
+    return true;
 }
 
 //------------------------------------------------------------------------------
@@ -1915,14 +1917,32 @@ namespace Types {
         return at(pointer_element(self, value), index);
     }
 
+    static bool value_pointer_eq(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (self != b.type) return false;
+        return *a.pptr == *b.pptr;
+    }
+
+    static bool value_none_eq(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return (self == b.type);
+    }
+
+    static bool value_slist_eq(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (self != b.type) return false;
+        return a.slist == b.slist;
+    }
+
     static std::string _pointer_tostring(const Type *self,
         const bangra::Any &value) {
         return format("(& %s)",
             get_string(pointer_element(self, value)).c_str());
     }
 
-    static std::string _type_tostring(const Type *self, const bangra::Any &value) {
-        return get_name(value.typeref);
+    static std::string _type_tostring(
+        const Type *self, const bangra::Any &value) {
+        return "type:" + get_name((const Type *)value.ptr);
     }
 
     static bool type_array_eq(const Type *self, const Type *other) {
@@ -1959,6 +1979,18 @@ namespace Types {
 
     static bool type_enum_eq(const Type *self, const Type *other) {
         return (other == TEnum);
+    }
+
+    static bangra::Any _symbol_apply_type(const Type *self,
+        const std::vector<bangra::Any> &args) {
+        builtin_checkparams(args, 1, 1);
+        return symbol(get_string(args[0]));
+    }
+
+    static bangra::Any _slist_apply_type(const Type *self,
+        const std::vector<bangra::Any> &args) {
+        builtin_checkparams(args, 0, -1);
+        return wrap(SList::create(args));
     }
 
     static bangra::Any type_array_at(const Type *self,
@@ -2020,6 +2052,7 @@ namespace Types {
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
         type->at = type_pointer_at;
+        type->eq = value_pointer_eq;
         type->tostring = _pointer_tostring;
         type->element_type = element;
         type->size = ffi_type_pointer.size;
@@ -2278,7 +2311,9 @@ namespace Types {
         Any = Struct("Any", true);
         AnchorRef = Struct("Anchor", true);
 
-        None = Struct("None", true);
+        tmp = Struct("None", true);
+        tmp->eq = value_none_eq;
+        None = tmp;
         const_none = make_any(Types::None);
         const_none.ptr = nullptr;
 
@@ -2310,12 +2345,15 @@ namespace Types {
 
         tmp = Struct("Symbol", true);
         tmp->tostring = _symbol_tostring;
+        tmp->apply_type = _symbol_apply_type;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         Symbol = tmp;
 
         tmp = Struct("SList", true);
         tmp->at = type_slist_at;
+        tmp->eq = value_slist_eq;
+        tmp->apply_type = _slist_apply_type;
         tmp->tostring = _slist_tostring;
         SList = tmp;
 
@@ -2331,7 +2369,9 @@ namespace Types {
         PBuiltin = Pointer(tmp);
         PBuiltinFlow = Pointer(Struct("BuiltinFlow", true));
         PFlow = Pointer(Struct("Flow", true));
-        PSpecialForm = Pointer(Struct("SpecialForm", true));
+        tmp = Struct("SpecialForm", true);
+        tmp->tostring = _named_object_tostring<SpecialForm>;
+        PSpecialForm = Pointer(tmp);
         tmp = Struct("BuiltinMacro", true);
         tmp->tostring = _named_object_tostring<BuiltinMacro>;
         PBuiltinMacro = Pointer(tmp);
@@ -2339,7 +2379,7 @@ namespace Types {
         PClosure = Pointer(Struct("Closure", true));
         PMacro = Pointer(Struct("Macro", true));
 
-        TypeRef = TType;
+        PType = Pointer(TType);
         Rawstring = Pointer(I8);
     }
 
@@ -3183,6 +3223,16 @@ Any execute(std::vector<Any> arguments) {
         } else if (eq(callee.type, Types::PBuiltinFlow)) {
             auto cb = *callee.pbuiltin_flow;
             arguments = cb->handler(arguments);
+        } else if (eq(callee.type, Types::PType)) {
+            auto cb = *callee.ptype;
+            Any closure = arguments.back();
+            arguments.pop_back();
+            arguments.erase(arguments.begin());
+            Any result = cb->apply_type(cb, arguments);
+            // generate fitting resume
+            arguments.resize(2);
+            arguments[0] = closure;
+            arguments[1] = result;
         } else if (
             is_pointer_type(callee.type)
                 && is_cfunction_type(get_element_type(callee.type))) {
@@ -3561,7 +3611,7 @@ public:
 
     void exportType(const std::string &name, const Type *type) {
         set_key(*dest, name,
-            wrap(Types::TypeRef, type));
+            wrap(type));
     }
 
     void exportExternal(const std::string &name, const Type *type,
@@ -3749,33 +3799,9 @@ static Table *importCModule (
 // BUILTINS
 //------------------------------------------------------------------------------
 
-static bool builtin_checkparams (const std::vector<Any> &args,
-    int mincount, int maxcount, int skip = 0) {
-    if ((mincount <= 0) && (maxcount == -1))
-        return true;
-
-    int argcount = (int)args.size() - skip;
-
-    if ((maxcount >= 0) && (argcount > maxcount)) {
-        error(const_none,
-            "excess argument. At most %i arguments expected", maxcount);
-        return false;
-    }
-    if ((mincount >= 0) && (argcount < mincount)) {
-        error(const_none, "at least %i arguments expected", mincount);
-        return false;
-    }
-    return true;
-}
-
 static Any builtin_string(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     return pstring(get_string(args[0]));
-}
-
-static Any builtin_symbol(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
-    return symbol(get_string(args[0]));
 }
 
 static Any builtin_print(const std::vector<Any> &args) {
@@ -3824,11 +3850,6 @@ static Any builtin_dump(const std::vector<Any> &args) {
 static Any builtin_tupleof(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
     return wrap(args);
-}
-
-static Any builtin_slist(const std::vector<Any> &args) {
-    builtin_checkparams(args, 0, -1);
-    return wrap(Types::SList, SList::create(args));
 }
 
 static Any builtin_parameter(const std::vector<Any> &args) {
@@ -4008,7 +4029,9 @@ static bool operator !=(const Any &a, const Any &b) {
 
 class builtin_eq_op { public:
     template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) { return a == b; }
+    static bool operate(const Ta &a, const Tb &b) {
+        return a == b;
+    }
 };
 class builtin_ne_op { public:
     template<typename Ta, typename Tb>
@@ -4268,12 +4291,21 @@ static const Table *getParent(const Table *scope) {
     return nullptr;
 }
 
+static bool hasLocal(const Table *scope, const std::string &name) {
+    assert(scope);
+    while (scope) {
+        if (has_key(*scope, name)) return true;
+        scope = getParent(scope);
+    }
+    return false;
+}
+
 static Any getLocal(const Table *scope, const std::string &name) {
     assert(scope);
     while (scope) {
-        auto parent = get_key(*scope, name, const_none);
-        if (parent.type != Types::None)
-            return parent;
+        auto result = get_key(*scope, name, const_none);
+        if (result.type != Types::None)
+            return result;
         scope = getParent(scope);
     }
     return const_none;
@@ -4456,26 +4488,24 @@ process:
         topit++;
     } else if (eq(expr.type, Types::Symbol)) {
         auto value = extract_any_string(expr);
-        result = getLocal(env, value);
-        if (result.type != Types::None) {
-            auto default_handler = getLocal(env, "#symbol");
-            if (default_handler.type != Types::None) {
-                auto result = expand_macro(env, default_handler, topit);
-                if (result) {
-                    topit = SListIter(result);
-                    goto process;
-                }
-            }
-        } else {
+        if (!hasLocal(env, value)) {
             error(expr,
                 "unknown symbol '%s'", value.c_str());
+        }
+        result = getLocal(env, value);
+        auto default_handler = getLocal(env, "#symbol");
+        if (default_handler.type != Types::None) {
+            auto result = expand_macro(env, default_handler, topit);
+            if (result) {
+                topit = SListIter(result);
+                goto process;
+            }
         }
         topit++;
     } else {
         result = expr;
         topit++;
     }
-    assert(result.type != Types::None);
     return { result, topit };
 }
 
@@ -4722,6 +4752,9 @@ static void initGlobals () {
     setLocal(env, "float", wrap(Types::R32));
     setLocal(env, "double", wrap(Types::R64));
 
+    setLocal(env, "symbol", wrap(Types::Symbol));
+    setLocal(env, "slist", wrap(Types::SList));
+
     setLocal(env, "usize_t",
         wrap(Types::Integer(sizeof(size_t)*8,false)));
 
@@ -4738,7 +4771,6 @@ static void initGlobals () {
     setBuiltin(env, "repr", builtin_repr);
     setBuiltin(env, "cdecl", builtin_cdecl);
     setBuiltin(env, "tupleof", builtin_tupleof);
-    setBuiltin(env, "slist", builtin_slist);
     setBuiltin(env, "cons", builtin_cons);
     setBuiltin(env, "structof", builtin_structof);
     setBuiltin(env, "table", builtin_table);
@@ -4750,7 +4782,6 @@ static void initGlobals () {
     setBuiltin(env, "dump", builtin_dump);
     setBuiltin(env, "syntax-macro", builtin_syntax_macro);
     setBuiltin(env, "string", builtin_string);
-    setBuiltin(env, "symbol", builtin_symbol);
     setBuiltin(env, "parameter", builtin_parameter);
     //setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
