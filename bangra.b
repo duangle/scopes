@@ -3,89 +3,77 @@
 # path/to/executable.b and, if found, executes it.
 bangra
 
-print
-    @
-        structof
-            tupleof "x" 3
-            tupleof "y" 4
-            tupleof "z" 5
-        0
+let-syntax (scope)
+    table
+        tupleof "#parent" scope
+        tupleof "API"
+            import-c "bangra.h"
+                tupleof;
+        tupleof "syntax-single-macro"
+            function (f)
+                syntax-macro
+                    function (env expr)
+                        cons
+                            f env
+                                @ expr 0
+                            @ expr 1
+        tupleof "call"
+            syntax-macro
+                function (env expr)
+                    cons
+                        @ expr 0 1
+                        @ expr 1
+        tupleof "dump-syntax"
+            syntax-macro
+                function (env expr)
+                    ((function (e)
+                        (dump
+                            (@ e 0 0))
+                        (cons
+                            (slist escape
+                                (@ e 0 0))
+                            (@ e 1)))
+                        (expand env
+                            (cons
+                                (@ expr 0 1)
+                                (@ expr 1))))
+        tupleof "let"
+            syntax-macro
+                function (env expr)
+                    ((function (param-name)
+                        ((function (param)
+                            (slist
+                                (cons escape
+                                    (expand
+                                        (table
+                                            (tupleof "#parent" env)
+                                            (tupleof param-name param))
+                                        (slist
+                                            (slist
+                                                (cons function
+                                                    (cons (slist param)
+                                                        (@ expr 1)))
+                                                (@ expr 0 2 0)))))))
+                            (parameter param-name))) (@ expr 0 1 0))
+        tupleof "?"
+            syntax-macro
+                function (env expr)
+                    cons
+                        slist branch
+                            @ expr 0 1 0
+                            slist function (slist)
+                                @ expr 0 2 0
+                            slist function (slist)
+                                @ expr 0 3 0
+                        @ expr 1
+        tupleof "syntax-set-globals!"
+            syntax-macro
+                function (env expr)
+                    set-globals! env
+                    cons (slist do)
+                        @ expr 1
 
 ///
-    let-syntax (scope)
-        structof
-            tupleof "#parent" scope
-            tupleof "API"
-                import-c "bangra.h"
-                    tupleof;
-            tupleof "syntax-single-macro"
-                function (f)
-                    syntax-macro
-                        function (env expr)
-                            cons
-                                f env
-                                    @ expr 0
-                                @ expr 1
-            tupleof "call"
-                syntax-macro
-                    function (env expr)
-                        cons
-                            @ expr 0 1
-                            @ expr 1
-            tupleof "dump-syntax"
-                syntax-macro
-                    function (env expr)
-                        ((function (e)
-                            (dump
-                                (@ e 0 0))
-                            (cons
-                                (slist escape
-                                    (@ e 0 0))
-                                (@ e 1)))
-                            (expand env
-                                (cons
-                                    (@ expr 0 1)
-                                    (@ expr 1))))
-            tupleof "let"
-                syntax-macro
-                    function (env expr)
-                        ((function (param-name)
-                            ((function (param)
-                                (slist
-                                    (cons escape
-                                        (expand
-                                            (structof
-                                                (tupleof "#parent" env)
-                                                (tupleof param-name param))
-                                            (slist
-                                                (slist
-                                                    (cons function
-                                                        (cons (slist param)
-                                                            (@ expr 1)))
-                                                    (@ expr 0 2 0)))))))
-                                (parameter param-name))) (string (@ expr 0 1 0)))
-            tupleof "?"
-                syntax-macro
-                    function (env expr)
-                        cons
-                            slist branch
-                                @ expr 0 1 0
-                                slist function (slist)
-                                    @ expr 0 2 0
-                                slist function (slist)
-                                    @ expr 0 3 0
-                            @ expr 1
-            tupleof "syntax-set-globals!"
-                syntax-macro
-                    function (env expr)
-                        set-globals! env
-                        cons (slist do)
-                            @ expr 1
-            tupleof "#symbol"
-                function (env expr)
-                    print expr
-                    slist;
-
     let-syntax (scope)
         let slist-join
             function (a b)
@@ -104,7 +92,7 @@ print
                             == (string head) name
                             false
                     false
-        structof
+        table
             tupleof "#parent" scope
             tupleof "slist-join" slist-join
             tupleof "slist-head?" slist-head?
