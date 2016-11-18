@@ -1260,12 +1260,29 @@ static const SList *extract_slist(const Any &value) {
     return value.slist;
 }
 
+#if 0
 // (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
+// this is the version for immutables; input lists are not modified
 static const SList *reverse_slist(const SList *l, const SList *eol = nullptr) {
     const SList *next = nullptr;
     while (l != eol) {
         next = SList::create(l->at, next, l->anchor);
         l = l->next;
+    }
+    return next;
+}
+#endif
+
+// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
+// this is the mutating version; input lists are modified, direction is inverted
+static const SList *reverse_slist_inplace(
+    const SList *l, const SList *eol = nullptr) {
+    const SList *next = nullptr;
+    while (l != eol) {
+        const SList *iternext = l->next;
+        const_cast<SList *>(l)->next = next;
+        next = l;
+        l = iternext;
     }
     return next;
 }
@@ -2840,7 +2857,7 @@ struct Parser {
             // reverse what we have, up to last split point and wrap result
             // in cell
             prev = SList::create(
-                wrap(reverse_slist(prev, eol)), eol, lexer.getAnchor());
+                wrap(reverse_slist_inplace(prev, eol)), eol, lexer.getAnchor());
             resetStart();
             return true;
         }
@@ -2858,11 +2875,12 @@ struct Parser {
         }
 
         const SList *getResult() {
-            return reverse_slist(this->prev);
+            return reverse_slist_inplace(this->prev);
         }
 
         const SList *getResult(const SList *prev) {
-            return SList::create(wrap(reverse_slist(this->prev)), prev, anchor);
+            return SList::create(
+                wrap(reverse_slist_inplace(this->prev)), prev, anchor);
         }
     };
 
