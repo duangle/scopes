@@ -340,7 +340,7 @@ let-syntax (scope)
                             @ rhs-state 0
                         @ rhs-state 1
 
-    structof
+    table
         tupleof "#parent" scope
         tupleof "fold" fold
         tupleof "#slist"
@@ -541,6 +541,6 @@ do
         else
             print "else!"
             4
-
+    print;
     print "hi"
     print "ho"

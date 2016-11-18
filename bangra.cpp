@@ -380,6 +380,8 @@ static void dumpFileLine(const char *path, int offset) {
 // ANCHORS
 //------------------------------------------------------------------------------
 
+struct RuntimeException {};
+
 struct Anchor {
     const char *path;
     int lineno;
@@ -446,7 +448,7 @@ struct Anchor {
         if (anchor) {
             dumpFileLine(anchor->path, anchor->offset);
         }
-        exit(1);
+        throw (RuntimeException());
     }
 
 };
@@ -610,7 +612,6 @@ namespace Types {
 //------------------------------------------------------------------------------
 
 static Any const_none;
-static Any const_eol;
 
 //------------------------------------------------------------------------------
 
@@ -635,10 +636,15 @@ struct Type {
     std::string (*tostring)(const Type *self, const Any &value);
     // return contained item
     Any (*at)(const Type *self, const Any &value, const Any &index);
+    // return range
+    Any (*slice)(const Type *self, const Any &value,
+        const Any &index, const Any &count);
     // return true if objects are equivalent
     bool (*eq)(const Type *self, const Any &a, const Any &b);
     // apply the type
     Any (*apply_type)(const Type *self, const std::vector<Any> &args);
+    // length of value, if any
+    size_t (*length)(const Type *self, const Any &value);
 
     size_t size;
     size_t alignment;
@@ -757,6 +763,17 @@ static std::string type_tostring_default(const Type *self, const Any &value) {
     return format("<value of %s>", get_name(self).c_str());
 }
 
+static size_t type_length_default(const Type *self, const Any &value) {
+    return (size_t)-1;
+}
+
+static Any type_slice_default(const Type *self, const Any &value,
+    const Any &index, const Any &count) {
+    assert(false && "type not slicable");
+    return const_none;
+}
+
+
 static Type *new_type(const std::string &name) {
     //assert(!name.empty());
     auto result = new Type();
@@ -768,6 +785,8 @@ static Type *new_type(const std::string &name) {
     result->apply_type = type_apply_default;
     result->eq = type_eq_default;
     result->tostring = type_tostring_default;
+    result->length = type_length_default;
+    result->slice = type_slice_default;
     result->is_signed = false;
     result->is_vararg = false;
     result->width = 0;
@@ -792,6 +811,14 @@ static std::string get_string(const Any &value) {
 
 static Any at(const Any &value, const Any &index) {
     return value.type->at(value.type, value, index);
+}
+
+static size_t length(const Any &value) {
+    auto s = value.type->length(value.type, value);
+    if (s == (size_t)-1) {
+        error(value, "length operator not applicable");
+    }
+    return s;
 }
 
 //------------------------------------------------------------------------------
@@ -1176,27 +1203,25 @@ static Any wrap(const SList *slist) {
 }
 
 struct SList {
-public:
     Any at;
     const SList *next;
+    Anchor anchor;
 
-    static const SList *create_eol() {
-        auto result = new SList();
-        result->at = wrap(result);
-        result->next = result;
-        return result;
-    }
-
-    static const SList *create(const Any &at, const SList *next) {
-        assert(next);
+    static SList *create(const Any &at, const SList *next) {
         auto result = new SList();
         result->at = at;
         result->next = next;
         return result;
     }
 
+    static SList *create(const Any &at, const SList *next, const Anchor &anchor) {
+        auto result = create(at, next);
+        result->anchor = anchor;
+        return result;
+    }
+
     static const SList *create(Any *values, size_t count) {
-        auto result = const_eol.slist;
+        SList *result = nullptr;
         while (count) {
             --count;
             result = create(values[count], result);
@@ -1235,6 +1260,16 @@ static const SList *extract_slist(const Any &value) {
     return value.slist;
 }
 
+// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
+static const SList *reverse_slist(const SList *l, const SList *eol = nullptr) {
+    const SList *next = nullptr;
+    while (l != eol) {
+        next = SList::create(l->at, next, l->anchor);
+        l = l->next;
+    }
+    return next;
+}
+
 //------------------------------------------------------------------------------
 
 struct SListIter {
@@ -1246,11 +1281,9 @@ public:
     }
 
     SListIter(const SList *value, size_t c=0) :
-        expr(value)
-    {
-        auto eox = const_eol.slist;
+        expr(value) {
         for (size_t i = 0; i < c; ++i) {
-            assert(expr != eox);
+            assert(expr);
             expr = expr->next;
         }
     }
@@ -1272,17 +1305,21 @@ public:
 
     SListIter operator ++(int) {
         auto oldself = *this;
-        assert (expr != const_eol.slist);
+        assert (expr);
         expr = expr->next;
         return oldself;
     }
 
+    bool isValid() const {
+        return expr != nullptr;
+    }
+
     operator bool() const {
-        return expr != const_eol.slist;
+        return isValid();
     }
 
     const Any &operator *() const {
-        assert(expr != const_eol.slist);
+        assert(expr);
         return expr->at;
     }
 
@@ -1306,6 +1343,7 @@ public:
 
     // default path
     std::vector<Any> arguments;
+    Anchor anchor;
 
     size_t getParameterCount() {
         return parameters.size();
@@ -1645,7 +1683,7 @@ static void unescape(String &s) {
 // matches ((///...))
 static bool is_comment(const Any &expr) {
     if (eq(expr.type, Types::SList)) {
-        if (expr.slist != const_eol.slist) {
+        if (expr.slist) {
             const Any &sym = expr.slist->at;
             if (eq(sym.type, Types::Symbol)) {
                 auto s = extract_any_string(sym);
@@ -1668,7 +1706,7 @@ static Any strip(const Any &expr) {
             }
             it++;
         }
-        return wrap(Types::SList, SList::create(values));
+        return wrap(SList::create(values));
     }
     return expr;
 }
@@ -1773,7 +1811,7 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         }
         size_t offset = 0;
         if (naked) {
-            bool single = (it + 1);
+            bool single = !(it + 1);
         print_terse:
             streamValue(stream, *it++, depth, false);
             offset++;
@@ -1932,6 +1970,11 @@ namespace Types {
         const bangra::Any &a, const bangra::Any &b) {
         if (self != b.type) return false;
         return a.slist == b.slist;
+    }
+
+    static std::string _none_tostring(const Type *self,
+        const bangra::Any &value) {
+        return "none";
     }
 
     static std::string _pointer_tostring(const Type *self,
@@ -2094,7 +2137,7 @@ namespace Types {
 
     static bangra::Any type_slist_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (!is_integer_type(vindex.type)) {
+        if (!(value.slist && is_integer_type(vindex.type))) {
             return const_none;
         }
         auto index = (size_t)extract_integer(vindex);
@@ -2108,6 +2151,14 @@ namespace Types {
             }
             return wrap(result);
         }
+    }
+
+    static size_t _string_length(const Type *self, const bangra::Any &value) {
+        return value.str->count;
+    }
+
+    static size_t _tuple_length(const Type *self, const bangra::Any &value) {
+        return self->types.size();
     }
 
     static void _set_field_names(Type *type, const std::vector<std::string> &names) {
@@ -2160,6 +2211,7 @@ namespace Types {
         Type *type = new_type(ss.str());
         type->eq_type = type_tuple_eq;
         type->at = type_tuple_at;
+        type->length = _tuple_length;
         _set_struct_field_types(type, types);
         return type;
     }
@@ -2279,6 +2331,7 @@ namespace Types {
         }
         type->eq_type = type_struct_eq;
         type->at = type_struct_at;
+        type->length = _tuple_length;
         return type;
     }
 
@@ -2313,6 +2366,7 @@ namespace Types {
 
         tmp = Struct("None", true);
         tmp->eq = value_none_eq;
+        tmp->tostring = _none_tostring;
         None = tmp;
         const_none = make_any(Types::None);
         const_none.ptr = nullptr;
@@ -2339,12 +2393,14 @@ namespace Types {
 
         tmp = Struct("String", true);
         tmp->tostring = _string_tostring;
+        tmp->length = _string_length;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         String = tmp;
 
         tmp = Struct("Symbol", true);
         tmp->tostring = _symbol_tostring;
+        tmp->length = _string_length;
         tmp->apply_type = _symbol_apply_type;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
@@ -2385,10 +2441,7 @@ namespace Types {
 
 } // namespace Types
 
-static void initConstants() {
-    const_eol = make_any(Types::SList);
-    const_eol.slist = SList::create_eol();
-}
+static void initConstants() {}
 
 //------------------------------------------------------------------------------
 // S-EXPR LEXER / TOKENIZER
@@ -2476,14 +2529,12 @@ struct Lexer {
         anchor.offset = offset();
     }
 
-    Anchor *newAnchor() {
-        auto anchor = new Anchor();
-        anchor->path = path;
-        anchor->lineno = lineno;
-        anchor->column = column();
-        anchor->offset = offset();
+    Anchor getAnchor() {
+        Anchor anchor;
+        initAnchor(anchor);
         return anchor;
     }
+
 
     void error( const char *format, ... ) {
         va_list args;
@@ -2708,7 +2759,6 @@ struct Lexer {
                 ((integer < (int64_t)INT_MIN) || (integer > (int64_t)INT_MAX))?64:32;
         }
         auto type = Types::Integer(width, !is_unsigned);
-
         return bangra::integer(type, this->integer);
     }
 
@@ -2754,62 +2804,70 @@ struct Parser {
 
     struct ListBuilder {
     protected:
-        std::vector<Any> values;
-        size_t start;
+        Lexer &lexer;
+        const SList *prev;
+        const SList *eol;
         Anchor anchor;
     public:
-
-        ListBuilder(Lexer &lexer) :
-            start(0) {
-            lexer.initAnchor(anchor);
+        ListBuilder(Lexer &lexer_) :
+            lexer(lexer_),
+            prev(nullptr),
+            eol(nullptr) {
+            anchor = lexer.getAnchor();
         }
 
-        const Anchor &getAnchor() const {
+        const Anchor &getAnchor() {
             return anchor;
         }
 
+        const SList *getPrev() {
+            return prev;
+        }
+
+        void setPrev(const SList *prev) {
+            this->prev = prev;
+        }
+
         void resetStart() {
-            start = getResultSize();
+            eol = prev;
         }
 
         bool split() {
             // if we haven't appended anything, that's an error
-            if (start == getResultSize()) {
+            if (!prev) {
                 return false;
             }
-            // move tail to new list
-            std::vector<Any> newvalues(
-                values.begin() + start, values.end());
-            // remove tail
-            values.erase(
-                values.begin() + start,
-                values.end());
-            // append new list
-            append(wrap(Types::SList, SList::create(newvalues)));
+            // reverse what we have, up to last split point and wrap result
+            // in cell
+            prev = SList::create(
+                wrap(reverse_slist(prev, eol)), eol, lexer.getAnchor());
             resetStart();
             return true;
         }
 
-        void append(const Any &item) {
-            values.push_back(item);
+        bool isSingleResult() {
+            return prev && !prev->next;
         }
 
-        size_t getResultSize() {
-            return values.size();
+        const SList *getSingleResult(const SList *prev) {
+            assert(this->prev);
+            return SList::create(
+                    this->prev?this->prev->at:const_none,
+                    prev,
+                    this->prev->anchor);
         }
 
-        const Any &getSingleResult() {
-            return values.front();
+        const SList *getResult() {
+            return reverse_slist(this->prev);
         }
 
-        Any getResult() {
-            auto result = make_any(Types::SList); // TODO: new Anchor(anchor)
-            result.slist = SList::create(values);
-            return result;
+        const SList *getResult(const SList *prev) {
+            return SList::create(wrap(reverse_slist(this->prev)), prev, anchor);
         }
     };
 
-    Any parseList(int end_token) {
+    // parses a list to its terminator and returns a handle to the first cell
+    const SList *parseList(int end_token) {
         ListBuilder builder(lexer);
         lexer.readToken();
         while (true) {
@@ -2818,66 +2876,70 @@ struct Parser {
             } else if (lexer.token == token_escape) {
                 int column = lexer.column();
                 lexer.readToken();
-                auto elem = parseNaked(column, 1, end_token);
-                if (errors) return const_none;
-                builder.append(elem);
+                const SList *elem = parseNaked(builder.getPrev(),
+                    column, 1, end_token);
+                if (errors) return nullptr;
+                builder.setPrev(elem);
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket");
                 // point to beginning of list
                 error_origin = builder.getAnchor();
-                return const_none;
+                return nullptr;
             } else if (lexer.token == token_statement) {
                 if (!builder.split()) {
                     error("empty expression");
-                    return const_none;
+                    return nullptr;
                 }
                 lexer.readToken();
             } else {
-                auto elem = parseAny();
-                if (errors) return const_none;
-                builder.append(elem);
+                const SList *elem = parseAny(builder.getPrev());
+                if (errors) return nullptr;
+                builder.setPrev(elem);
                 lexer.readToken();
             }
         }
         return builder.getResult();
     }
 
-    Any parseAny () {
+    // parses the next sequence and returns it wrapped in a cell that points
+    // to prev
+    const SList *parseAny (const SList *prev) {
         assert(lexer.token != token_eof);
+        auto anchor = lexer.getAnchor();
+        Any result = const_none;
         if (lexer.token == token_open) {
-            return parseList(token_close);
+            result = wrap(parseList(token_close));
         } else if (lexer.token == token_square_open) {
-            auto list = parseList(token_square_close);
-            if (errors) return const_none;
-            // todo: list.anchor
+            const SList *list = parseList(token_square_close);
+            if (errors) return nullptr;
             Any sym = symbol("[");
-            return wrap(Types::SList, SList::create(sym, list.slist));
+            result = wrap(SList::create(sym, list, anchor));
         } else if (lexer.token == token_curly_open) {
-            auto list = parseList(token_curly_close);
-            if (errors) return const_none;
-            // todo: list.anchor
+            const SList *list = parseList(token_curly_close);
+            if (errors) return nullptr;
             Any sym = symbol("{");
-            return wrap(Types::SList, SList::create(sym, list.slist));
+            result = wrap(SList::create(sym, list, anchor));
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
             error("stray closing bracket");
         } else if (lexer.token == token_string) {
-            return lexer.getAsString();
+            result = lexer.getAsString();
         } else if (lexer.token == token_symbol) {
-            return lexer.getAsSymbol();
+            result = lexer.getAsSymbol();
         } else if (lexer.token == token_integer) {
-            return lexer.getAsInteger();
+            result = lexer.getAsInteger();
         } else if (lexer.token == token_real) {
-            return lexer.getAsReal();
+            result = lexer.getAsReal();
         } else {
             error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
         }
-
-        return const_none;
+        if (errors) return nullptr;
+        return SList::create(result, prev, anchor);
     }
 
-    Any parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
+    const SList *parseNaked (const SList *prev,
+        int column = 0, int depth = 0, int end_token = token_none) {
         int lineno = lexer.lineno;
 
         bool escape = false;
@@ -2894,7 +2956,7 @@ struct Parser {
                 if (lexer.lineno <= lineno) {
                     error("escape character is not at end of line");
                     parse_origin = builder.getAnchor();
-                    return const_none;
+                    return nullptr;
                 }
                 lineno = lexer.lineno;
             } else if (lexer.lineno > lineno) {
@@ -2904,7 +2966,7 @@ struct Parser {
                     } else if (lexer.column() != subcolumn) {
                         error("indentation mismatch");
                         parse_origin = builder.getAnchor();
-                        return const_none;
+                        return nullptr;
                     }
                 } else {
                     subcolumn = lexer.column();
@@ -2913,7 +2975,7 @@ struct Parser {
                     if ((column + 4) != subcolumn) {
                         //printf("%i %i\n", column, subcolumn);
                         error("indentations must nest by 4 spaces.");
-                        return const_none;
+                        return nullptr;
                     }
                 }
 
@@ -2924,14 +2986,15 @@ struct Parser {
                 while ((lexer.token != token_eof)
                         && (lexer.token != end_token)
                         && (lexer.lineno == lineno)) {
-                    auto elem = parseNaked(subcolumn, depth + 1, end_token);
-                    if (errors) return const_none;
-                    builder.append(elem);
+                    const SList *elem = parseNaked(
+                        builder.getPrev(), subcolumn, depth + 1, end_token);
+                    if (errors) return nullptr;
+                    builder.setPrev(elem);
                 }
             } else if (lexer.token == token_statement) {
                 if (!builder.split()) {
                     error("empty expression");
-                    return const_none;
+                    return nullptr;
                 }
                 lexer.readToken();
                 if (depth > 0) {
@@ -2941,9 +3004,9 @@ struct Parser {
                         break;
                 }
             } else {
-                auto elem = parseAny();
-                if (errors) return const_none;
-                builder.append(elem);
+                const SList *elem = parseAny(builder.getPrev());
+                if (errors) return nullptr;
+                builder.setPrev(elem);
                 lineno = lexer.next_lineno;
                 lexer.readToken();
             }
@@ -2956,10 +3019,10 @@ struct Parser {
             }
         }
 
-        if (builder.getResultSize() == 1) {
-            return builder.getSingleResult();
+        if (builder.isSingleResult()) {
+            return builder.getSingleResult(prev);
         } else {
-            return builder.getResult();
+            return builder.getResult(prev);
         }
     }
 
@@ -2970,7 +3033,7 @@ struct Parser {
 
         lexer.readToken();
 
-        auto result = parseNaked(lexer.column());
+        auto result = parseNaked(nullptr, lexer.column());
 
         if (error_string.empty() && !lexer.error_string.empty()) {
             error_string = lexer.error_string;
@@ -2995,7 +3058,9 @@ struct Parser {
             return const_none;
         }
 
-        return strip(result);
+        //printValue(result->at, 0, true);
+
+        return strip(result->at);
     }
 
     Any parseFile (const char *path) {
@@ -3821,6 +3886,11 @@ static Any builtin_at(const std::vector<Any> &args) {
     return at(args[0], args[1]);
 }
 
+static Any builtin_length(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    return wrap(length(args[0]));
+}
+
 static std::vector<Any> builtin_branch(const std::vector<Any> &args) {
     builtin_checkparams(args, 4, 4, 1);
     auto cond = extract_bool(args[1]);
@@ -4056,7 +4126,13 @@ class builtin_le_op { public:
 
 template <class NextT>
 class builtin_filter_op { public:
+    static Any operate(const double &a, const int32_t &b) {
+        return wrap(NextT::operate(a, b));
+    }
     static Any operate(const double &a, const int64_t &b) {
+        return wrap(NextT::operate(a, b));
+    }
+    static Any operate(const int32_t &a, const double &b) {
         return wrap(NextT::operate(a, b));
     }
     static Any operate(const int64_t &a, const double &b) {
@@ -4430,7 +4506,7 @@ static Cursor expand_let_syntax (const Table *env, SListIter topit) {
     verifyValueKind(Types::PTable, expr_env);
 
     auto rest = expand_expr_list(*expr_env.ptable, topit);
-    if (rest == const_eol.slist) {
+    if (!rest) {
         error(*topit, "missing subsequent expression");
     }
 
@@ -4453,7 +4529,7 @@ static Cursor expand (const Table *env, SListIter topit) {
 process:
     Any expr = *topit;
     if (eq(expr.type, Types::SList)) {
-        if (expr.slist == const_eol.slist) {
+        if (!expr.slist) {
             error(expr, "expression is empty");
         }
 
@@ -4665,7 +4741,7 @@ static Any compile_call (SListIter it) {
 static Any compile_quote (SListIter it) {
     it++;
     SList *rest = const_cast<SList*>(it.getSList());
-    if (rest->next == const_eol.slist)
+    if (!rest->next)
         return rest->at;
     else
         return wrap(rest);
@@ -4676,7 +4752,7 @@ static Any compile_quote (SListIter it) {
 static Any compile (const Any &expr) {
     Any result = const_none;
     if (eq(expr.type, Types::SList)) {
-        if (expr.slist == const_eol.slist) {
+        if (!expr.slist) {
             error(expr, "empty expression");
         }
         auto slist = expr.slist;
@@ -4792,7 +4868,7 @@ static void initGlobals () {
     //setBuiltin(env, "null?", builtin_is_null);
     //setBuiltin(env, "key?", builtin_is_key);
     setBuiltin(env, "error", builtin_error);
-    //setBuiltin(env, "length", builtin_length);
+    setBuiltin(env, "length", builtin_length);
 
     setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
 
