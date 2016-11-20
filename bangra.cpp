@@ -527,15 +527,37 @@ static Any make_any(const Type *type) {
     return any;
 }
 
-static void error (const Any &any, const char *format, ...) {
-    const Anchor *anchor = nullptr;
-    // TODO: find valid anchor
-    //std::cout << "at\n  " << getRepr(value) << "\n";
-    //anchor = find_valid_anchor(value);
-    va_list args;
-    va_start (args, format);
-    Anchor::printErrorV(anchor, format, args);
-    va_end (args);
+//------------------------------------------------------------------------------
+
+typedef std::unordered_map<const void *, const Anchor *> PtrAnchorMap;
+
+static PtrAnchorMap anchor_map;
+
+static const Anchor *get_anchor(const void *ptr) {
+    auto it = anchor_map.find(ptr);
+    if (it != anchor_map.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+static const Anchor *get_anchor(const Any &value) {
+    return get_anchor(value.ptr);
+}
+
+static void set_anchor(const void *ptr, const Anchor *anchor) {
+    if (anchor) {
+        anchor_map[ptr] = anchor;
+    } else {
+        auto it = anchor_map.find(ptr);
+        if (it != anchor_map.end()) {
+            anchor_map.erase(it);
+        }
+    }
+}
+
+static void set_anchor(const Any &value, const Anchor *anchor) {
+    set_anchor(value.ptr, anchor);
 }
 
 //------------------------------------------------------------------------------
@@ -612,6 +634,21 @@ namespace Types {
 //------------------------------------------------------------------------------
 
 static Any const_none;
+
+//------------------------------------------------------------------------------
+
+static const Anchor *find_valid_anchor(const Any &expr);
+
+static void error (const Any &any, const char *format, ...) {
+    const Anchor *anchor = nullptr;
+    // TODO: find valid anchor
+    //std::cout << "at\n  " << getRepr(value) << "\n";
+    //anchor = find_valid_anchor(value);
+    va_list args;
+    va_start (args, format);
+    Anchor::printErrorV(anchor, format, args);
+    va_end (args);
+}
 
 //------------------------------------------------------------------------------
 
@@ -1205,18 +1242,18 @@ static Any wrap(const SList *slist) {
 struct SList {
     Any at;
     const SList *next;
-    Anchor anchor;
 
     static SList *create(const Any &at, const SList *next) {
         auto result = new SList();
         result->at = at;
         result->next = next;
+        set_anchor(result, get_anchor(at));
         return result;
     }
 
-    static SList *create(const Any &at, const SList *next, const Anchor &anchor) {
+    static SList *create(const Any &at, const SList *next, const Anchor *anchor) {
         auto result = create(at, next);
-        result->anchor = anchor;
+        set_anchor(result, anchor);
         return result;
     }
 
@@ -1266,7 +1303,7 @@ static const SList *extract_slist(const Any &value) {
 static const SList *reverse_slist(const SList *l, const SList *eol = nullptr) {
     const SList *next = nullptr;
     while (l != eol) {
-        next = SList::create(l->at, next, l->anchor);
+        next = SList::create(l->at, next, get_anchor(l));
         l = l->next;
     }
     return next;
@@ -1712,6 +1749,25 @@ static bool is_comment(const Any &expr) {
     return false;
 }
 
+static const Anchor *find_valid_anchor(const Any &expr) {
+    const Anchor *a = get_anchor(expr);
+    if (!a) {
+        if (eq(expr.type, Types::SList)) {
+            const SList *l = expr.slist;
+            while (l) {
+                a = get_anchor(l);
+                if (!a) {
+                    a = find_valid_anchor(l->at);
+                    if (!a) {
+                        l = l->next;
+                    }
+                }
+            }
+        }
+    }
+    return a;
+}
+
 static Any strip(const Any &expr) {
     if (eq(expr.type, Types::SList)) {
         std::vector<Any> values;
@@ -1728,22 +1784,6 @@ static Any strip(const Any &expr) {
     return expr;
 }
 
-static const Anchor *find_valid_anchor(const Any &expr) {
-    // TODO
-    /*
-    if (!expr) return nullptr;
-    if (expr->anchor.isValid()) return &expr->anchor;
-    if (auto slist = llvm::dyn_cast<SListValue>(expr)) {
-        auto it = SListIter(slist);
-        while (it) {
-            const Anchor *result = find_valid_anchor(*it);
-            if (result) return result;
-            it++;
-        }
-    }
-    */
-    return nullptr;
-}
 static size_t getSize(const SList *expr) {
     SListIter it(expr, 0);
     size_t c = 0;
@@ -1797,16 +1837,14 @@ static bool isNested(const Any &e) {
 
 template<typename T>
 static void streamAnchor(T &stream, const Any &e, size_t depth=0) {
-    //if (e) {
-        const Anchor *anchor = find_valid_anchor(e);
-        if (anchor) {
-            stream <<
-                format("%s:%i:%i: ",
-                    anchor->path,
-                    anchor->lineno,
-                    anchor->column);
-        }
-    //}
+    const Anchor *anchor = find_valid_anchor(e);
+    if (anchor) {
+        stream <<
+            format("%s:%i:%i: ",
+                anchor->path,
+                anchor->lineno,
+                anchor->column);
+    }
     for(size_t i = 0; i < depth; i++)
         stream << "    ";
 }
@@ -2552,6 +2590,11 @@ struct Lexer {
         return anchor;
     }
 
+    const Anchor *newAnchor() {
+        Anchor *anchor = new Anchor();
+        initAnchor(*anchor);
+        return anchor;
+    }
 
     void error( const char *format, ... ) {
         va_list args;
@@ -2837,12 +2880,18 @@ struct Parser {
             return anchor;
         }
 
+        /*
         const SList *getPrev() {
             return prev;
         }
 
         void setPrev(const SList *prev) {
             this->prev = prev;
+        }
+        */
+
+        void append(const Any &value) {
+            this->prev = SList::create(value, this->prev);
         }
 
         void resetStart() {
@@ -2857,7 +2906,7 @@ struct Parser {
             // reverse what we have, up to last split point and wrap result
             // in cell
             prev = SList::create(
-                wrap(reverse_slist_inplace(prev, eol)), eol, lexer.getAnchor());
+                wrap(reverse_slist_inplace(prev, eol)), eol, lexer.newAnchor());
             resetStart();
             return true;
         }
@@ -2866,21 +2915,12 @@ struct Parser {
             return prev && !prev->next;
         }
 
-        const SList *getSingleResult(const SList *prev) {
-            assert(this->prev);
-            return SList::create(
-                    this->prev?this->prev->at:const_none,
-                    prev,
-                    this->prev->anchor);
+        Any getSingleResult() {
+            return this->prev?this->prev->at:const_none;
         }
 
         const SList *getResult() {
             return reverse_slist_inplace(this->prev);
-        }
-
-        const SList *getResult(const SList *prev) {
-            return SList::create(
-                wrap(reverse_slist_inplace(this->prev)), prev, anchor);
         }
     };
 
@@ -2894,10 +2934,9 @@ struct Parser {
             } else if (lexer.token == token_escape) {
                 int column = lexer.column();
                 lexer.readToken();
-                const SList *elem = parseNaked(builder.getPrev(),
-                    column, 1, end_token);
+                auto elem = parseNaked(column, 1, end_token);
                 if (errors) return nullptr;
-                builder.setPrev(elem);
+                builder.append(elem);
             } else if (lexer.token == token_eof) {
                 error("missing closing bracket");
                 // point to beginning of list
@@ -2910,9 +2949,9 @@ struct Parser {
                 }
                 lexer.readToken();
             } else {
-                const SList *elem = parseAny(builder.getPrev());
+                auto elem = parseAny();
                 if (errors) return nullptr;
-                builder.setPrev(elem);
+                builder.append(elem);
                 lexer.readToken();
             }
         }
@@ -2921,20 +2960,20 @@ struct Parser {
 
     // parses the next sequence and returns it wrapped in a cell that points
     // to prev
-    const SList *parseAny (const SList *prev) {
+    Any parseAny () {
         assert(lexer.token != token_eof);
-        auto anchor = lexer.getAnchor();
+        auto anchor = lexer.newAnchor();
         Any result = const_none;
         if (lexer.token == token_open) {
             result = wrap(parseList(token_close));
         } else if (lexer.token == token_square_open) {
             const SList *list = parseList(token_square_close);
-            if (errors) return nullptr;
+            if (errors) return const_none;
             Any sym = symbol("[");
             result = wrap(SList::create(sym, list, anchor));
         } else if (lexer.token == token_curly_open) {
             const SList *list = parseList(token_curly_close);
-            if (errors) return nullptr;
+            if (errors) return const_none;
             Any sym = symbol("{");
             result = wrap(SList::create(sym, list, anchor));
         } else if ((lexer.token == token_close)
@@ -2952,12 +2991,12 @@ struct Parser {
         } else {
             error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
         }
-        if (errors) return nullptr;
-        return SList::create(result, prev, anchor);
+        if (errors) return const_none;
+        set_anchor(result, anchor);
+        return result;
     }
 
-    const SList *parseNaked (const SList *prev,
-        int column = 0, int depth = 0, int end_token = token_none) {
+    Any parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
         int lineno = lexer.lineno;
 
         bool escape = false;
@@ -2974,7 +3013,7 @@ struct Parser {
                 if (lexer.lineno <= lineno) {
                     error("escape character is not at end of line");
                     parse_origin = builder.getAnchor();
-                    return nullptr;
+                    return const_none;
                 }
                 lineno = lexer.lineno;
             } else if (lexer.lineno > lineno) {
@@ -2984,7 +3023,7 @@ struct Parser {
                     } else if (lexer.column() != subcolumn) {
                         error("indentation mismatch");
                         parse_origin = builder.getAnchor();
-                        return nullptr;
+                        return const_none;
                     }
                 } else {
                     subcolumn = lexer.column();
@@ -2993,7 +3032,7 @@ struct Parser {
                     if ((column + 4) != subcolumn) {
                         //printf("%i %i\n", column, subcolumn);
                         error("indentations must nest by 4 spaces.");
-                        return nullptr;
+                        return const_none;
                     }
                 }
 
@@ -3004,15 +3043,15 @@ struct Parser {
                 while ((lexer.token != token_eof)
                         && (lexer.token != end_token)
                         && (lexer.lineno == lineno)) {
-                    const SList *elem = parseNaked(
-                        builder.getPrev(), subcolumn, depth + 1, end_token);
-                    if (errors) return nullptr;
-                    builder.setPrev(elem);
+                    auto elem = parseNaked(
+                        subcolumn, depth + 1, end_token);
+                    if (errors) return const_none;
+                    builder.append(elem);
                 }
             } else if (lexer.token == token_statement) {
                 if (!builder.split()) {
                     error("empty expression");
-                    return nullptr;
+                    return const_none;
                 }
                 lexer.readToken();
                 if (depth > 0) {
@@ -3022,9 +3061,9 @@ struct Parser {
                         break;
                 }
             } else {
-                const SList *elem = parseAny(builder.getPrev());
-                if (errors) return nullptr;
-                builder.setPrev(elem);
+                auto elem = parseAny();
+                if (errors) return const_none;
+                builder.append(elem);
                 lineno = lexer.next_lineno;
                 lexer.readToken();
             }
@@ -3038,9 +3077,9 @@ struct Parser {
         }
 
         if (builder.isSingleResult()) {
-            return builder.getSingleResult(prev);
+            return builder.getSingleResult();
         } else {
-            return builder.getResult(prev);
+            return wrap(builder.getResult());
         }
     }
 
@@ -3051,7 +3090,7 @@ struct Parser {
 
         lexer.readToken();
 
-        auto result = parseNaked(nullptr, lexer.column());
+        auto result = parseNaked(lexer.column());
 
         if (error_string.empty() && !lexer.error_string.empty()) {
             error_string = lexer.error_string;
@@ -3076,9 +3115,9 @@ struct Parser {
             return const_none;
         }
 
-        //printValue(result->at, 0, true);
+        printValue(result, 0, true);
 
-        return strip(result->at);
+        return strip(result);
     }
 
     Any parseFile (const char *path) {
