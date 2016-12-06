@@ -429,7 +429,16 @@ struct Anchor {
         }
     }
 
+    static void printMessage (const Anchor *anchor, const char *fmt, ...) {
+        va_list args;
+        va_start (args, fmt);
+        Anchor::printMessageV(anchor, fmt, args);
+        va_end (args);
+    }
+
     static void printErrorV (const Anchor *anchor, const char *fmt, va_list args) {
+        if (anchor && !anchor->isValid())
+            anchor = nullptr;
         if (anchor) {
             std::cout
                 << ansi(ANSI_STYLE_LOCATION, anchor->path)
@@ -448,7 +457,13 @@ struct Anchor {
         if (anchor) {
             dumpFileLine(anchor->path, anchor->offset);
         }
-        throw (RuntimeException());
+    }
+
+    static void printError (const Anchor *anchor, const char *fmt, ...) {
+        va_list args;
+        va_start (args, fmt);
+        Anchor::printErrorV(anchor, fmt, args);
+        va_end (args);
     }
 
 };
@@ -639,6 +654,10 @@ static Any const_none;
 
 static const Anchor *find_valid_anchor(const Any &expr);
 
+static void throw_any(const Any &any) {
+    throw any;
+}
+
 static void error (const Any &any, const char *format, ...) {
     const Anchor *anchor = nullptr;
     // TODO: find valid anchor
@@ -648,6 +667,7 @@ static void error (const Any &any, const char *format, ...) {
     va_start (args, format);
     Anchor::printErrorV(anchor, format, args);
     va_end (args);
+    throw_any(const_none);
 }
 
 //------------------------------------------------------------------------------
@@ -1247,7 +1267,7 @@ struct SList {
         auto result = new SList();
         result->at = at;
         result->next = next;
-        set_anchor(result, get_anchor(at));
+        //set_anchor(result, get_anchor(at));
         return result;
     }
 
@@ -1257,7 +1277,7 @@ struct SList {
         return result;
     }
 
-    static const SList *create(Any *values, size_t count) {
+    static const SList *create_from_c_array(Any *values, size_t count) {
         SList *result = nullptr;
         while (count) {
             --count;
@@ -1266,8 +1286,8 @@ struct SList {
         return result;
     }
 
-    static const SList *create(const std::vector<Any> &values) {
-        return create(const_cast<Any *>(&values[0]), values.size());
+    static const SList *create_from_array(const std::vector<Any> &values) {
+        return create_from_c_array(const_cast<Any *>(&values[0]), values.size());
     }
 
     /*
@@ -1334,6 +1354,10 @@ public:
         return expr;
     }
 
+    const Anchor *getAnchor() const {
+        return get_anchor(expr);
+    }
+
     SListIter(const SList *value, size_t c=0) :
         expr(value) {
         for (size_t i = 0; i < c; ++i) {
@@ -1397,7 +1421,6 @@ public:
 
     // default path
     std::vector<Any> arguments;
-    Anchor anchor;
 
     size_t getParameterCount() {
         return parameters.size();
@@ -1689,11 +1712,12 @@ static Any wrap(
         auto offset = get_offset(type, i);
         auto srcptr = args[i].ptr;
         auto size = get_size(elemtype);
-        if (!size) {
+        if (size) {
+            memcpy(data + offset, srcptr, size);
+        } else if (!isnone(args[i])) {
             error(args[i], "attempting to pack opaque type %s in tuple",
                 get_name(args[i].type).c_str());
         }
-        memcpy(data + offset, srcptr, size);
     }
 
     return wrap(type, data);
@@ -1749,20 +1773,27 @@ static bool is_comment(const Any &expr) {
     return false;
 }
 
+static const Anchor *find_valid_anchor(const SList *l) {
+    const Anchor *a = nullptr;
+    while (l) {
+        a = get_anchor(l);
+        if (!a) {
+            a = find_valid_anchor(l->at);
+        }
+        if (!a) {
+            l = l->next;
+        } else {
+            break;
+        }
+    }
+    return a;
+}
+
 static const Anchor *find_valid_anchor(const Any &expr) {
     const Anchor *a = get_anchor(expr);
     if (!a) {
         if (eq(expr.type, Types::SList)) {
-            const SList *l = expr.slist;
-            while (l) {
-                a = get_anchor(l);
-                if (!a) {
-                    a = find_valid_anchor(l->at);
-                    if (!a) {
-                        l = l->next;
-                    }
-                }
-            }
+            a = find_valid_anchor(expr.slist);
         }
     }
     return a;
@@ -1770,16 +1801,16 @@ static const Anchor *find_valid_anchor(const Any &expr) {
 
 static Any strip(const Any &expr) {
     if (eq(expr.type, Types::SList)) {
-        std::vector<Any> values;
+        const SList *l = nullptr;
         auto it = SListIter(expr);
         while (it) {
             auto value = strip(*it);
             if (!is_comment(value)) {
-                values.push_back(value);
+                l = SList::create(value, l, it.getAnchor());
             }
             it++;
         }
-        return wrap(SList::create(values));
+        return wrap(reverse_slist_inplace(l));
     }
     return expr;
 }
@@ -1946,6 +1977,7 @@ void valueError (const Any &expr, const char *format, ...) {
     va_start (args, format);
     Anchor::printErrorV(anchor, format, args);
     va_end (args);
+    throw_any(const_none);
 }
 
 void valueErrorV (const Any &expr, const char *fmt, va_list args) {
@@ -1955,6 +1987,7 @@ void valueErrorV (const Any &expr, const char *fmt, va_list args) {
         std::cout << "\n";
     }
     Anchor::printErrorV(anchor, fmt, args);
+    throw_any(const_none);
 }
 
 static void verifyValueKind(const Type *type, const Any &expr) {
@@ -2088,7 +2121,7 @@ namespace Types {
     static bangra::Any _slist_apply_type(const Type *self,
         const std::vector<bangra::Any> &args) {
         builtin_checkparams(args, 0, -1);
-        return wrap(SList::create(args));
+        return wrap(SList::create_from_array(args));
     }
 
     static bangra::Any type_array_at(const Type *self,
@@ -2169,6 +2202,19 @@ namespace Types {
         }
         auto offset = self->offsets[index];
         return wrap(self->types[index], (char *)value.ptr + offset);
+    }
+
+    static std::string _tuple_tostring(const Type *self, const bangra::Any &value) {
+        std::stringstream ss;
+        ss << "<";
+        ss << ansi(ANSI_STYLE_KEYWORD, "tupleof");
+        for (size_t i = 0; i < self->types.size(); i++) {
+            auto offset = self->offsets[i];
+            ss << " " << get_string(
+                wrap(self->types[i], (char *)value.ptr + offset));
+        }
+        ss << ">";
+        return ss.str();
     }
 
     static bangra::Any type_struct_at(const Type *self,
@@ -2267,6 +2313,7 @@ namespace Types {
         type->eq_type = type_tuple_eq;
         type->at = type_tuple_at;
         type->length = _tuple_length;
+        type->tostring = _tuple_tostring;
         _set_struct_field_types(type, types);
         return type;
     }
@@ -2891,7 +2938,7 @@ struct Parser {
         */
 
         void append(const Any &value) {
-            this->prev = SList::create(value, this->prev);
+            this->prev = SList::create(value, this->prev, get_anchor(value));
         }
 
         void resetStart() {
@@ -3115,8 +3162,7 @@ struct Parser {
             return const_none;
         }
 
-        printValue(result, 0, true);
-
+        //printValue(result, 0, true);
         return strip(result);
     }
 
@@ -3277,6 +3323,15 @@ Any evaluate(size_t argindex, Frame *frame, const Any &value) {
     return value;
 }
 
+void print_stack_frames(Frame *frame) {
+    if (!frame) return;
+    print_stack_frames(frame->parent);
+    auto anchor = get_anchor(frame);
+    if (anchor) {
+        Anchor::printMessage(anchor, "while evaluating");
+    }
+}
+
 Any execute(std::vector<Any> arguments) {
 
     Frame *frame = Frame::create();
@@ -3286,90 +3341,105 @@ Any execute(std::vector<Any> arguments) {
     // add special flow as return function
     arguments.push_back(wrap_ptr(Types::PFlow, retcont));
 
-    while (true) {
-        assert(arguments.size() >= 1);
+    std::vector<Any> active_arguments;
+
+continue_execution:
+    try {
+        while (true) {
+            active_arguments = arguments;
+
+            assert(arguments.size() >= 1);
 #ifdef BANGRA_DEBUG_IL
-        std::cout << frame->getRefRepr();
-        for (size_t i = 0; i < arguments.size(); ++i) {
-            std::cout << " ";
-            std::cout << getRefRepr(arguments[i]);
-        }
-        std::cout << "\n";
-        fflush(stdout);
+            std::cout << frame->getRefRepr();
+            for (size_t i = 0; i < arguments.size(); ++i) {
+                std::cout << " ";
+                std::cout << getRefRepr(arguments[i]);
+            }
+            std::cout << "\n";
+            fflush(stdout);
 #endif
-        Any callee = arguments[0];
-        if (eq(callee.type, Types::PFlow)
-            && (*callee.pflow == retcont)) {
-            if (arguments.size() >= 2) {
-                return arguments[1];
-            } else {
-                return const_none;
-            }
-        }
-
-        if (eq(callee.type, Types::PClosure)) {
-            auto closure = *callee.pclosure;
-
-            frame = closure->frame;
-            callee = wrap_ptr(Types::PFlow, closure->cont);
-        }
-
-        if (eq(callee.type, Types::PFlow)) {
-            auto flow = *callee.pflow;
-
-            arguments.erase(arguments.begin());
-            if (arguments.size() > 0) {
-                if (frame->map.count(flow)) {
-                    frame = Frame::create(frame);
+            Any callee = arguments[0];
+            if (eq(callee.type, Types::PFlow)
+                && (*callee.pflow == retcont)) {
+                if (arguments.size() >= 2) {
+                    return arguments[1];
+                } else {
+                    return const_none;
                 }
-                frame->map[flow] = arguments;
             }
 
-            assert(!flow->arguments.empty());
-            size_t argcount = flow->arguments.size();
-            arguments.resize(argcount);
-            for (size_t i = 0; i < argcount; ++i) {
-                arguments[i] = evaluate(i, frame,
-                    flow->arguments[i]);
+            if (eq(callee.type, Types::PClosure)) {
+                auto closure = *callee.pclosure;
+
+                frame = closure->frame;
+                callee = wrap_ptr(Types::PFlow, closure->cont);
             }
-        } else if (eq(callee.type, Types::PBuiltin)) {
-            auto cb = *callee.pbuiltin;
-            Any closure = arguments.back();
-            arguments.pop_back();
-            arguments.erase(arguments.begin());
-            Any result = cb->handler(arguments);
-            // generate fitting resume
-            arguments.resize(2);
-            arguments[0] = closure;
-            arguments[1] = result;
-        } else if (eq(callee.type, Types::PBuiltinFlow)) {
-            auto cb = *callee.pbuiltin_flow;
-            arguments = cb->handler(arguments);
-        } else if (eq(callee.type, Types::PType)) {
-            auto cb = *callee.ptype;
-            Any closure = arguments.back();
-            arguments.pop_back();
-            arguments.erase(arguments.begin());
-            Any result = cb->apply_type(cb, arguments);
-            // generate fitting resume
-            arguments.resize(2);
-            arguments[0] = closure;
-            arguments[1] = result;
-        } else if (
-            is_pointer_type(callee.type)
-                && is_cfunction_type(get_element_type(callee.type))) {
-            Any closure = arguments.back();
-            arguments.pop_back();
-            arguments.erase(arguments.begin());
-            Any result = ffi->runFunction(callee, arguments);
-            // generate fitting resume
-            arguments.resize(2);
-            arguments[0] = closure;
-            arguments[1] = result;
-        } else {
-            error(callee, "can not apply %s",
-                get_name(callee.type).c_str());
+
+            if (eq(callee.type, Types::PFlow)) {
+                auto flow = *callee.pflow;
+
+                arguments.erase(arguments.begin());
+                if (arguments.size() > 0) {
+                    if (frame->map.count(flow)) {
+                        frame = Frame::create(frame);
+                        set_anchor(frame, get_anchor(flow));
+                    }
+                    frame->map[flow] = arguments;
+                }
+
+                assert(!flow->arguments.empty());
+                size_t argcount = flow->arguments.size();
+                arguments.resize(argcount);
+                for (size_t i = 0; i < argcount; ++i) {
+                    arguments[i] = evaluate(i, frame,
+                        flow->arguments[i]);
+                }
+            } else if (eq(callee.type, Types::PBuiltin)) {
+                auto cb = *callee.pbuiltin;
+                Any closure = arguments.back();
+                arguments.pop_back();
+                arguments.erase(arguments.begin());
+                Any result = cb->handler(arguments);
+                // generate fitting resume
+                arguments.resize(2);
+                arguments[0] = closure;
+                arguments[1] = result;
+            } else if (eq(callee.type, Types::PBuiltinFlow)) {
+                auto cb = *callee.pbuiltin_flow;
+                arguments = cb->handler(arguments);
+            } else if (eq(callee.type, Types::PType)) {
+                auto cb = *callee.ptype;
+                Any closure = arguments.back();
+                arguments.pop_back();
+                arguments.erase(arguments.begin());
+                Any result = cb->apply_type(cb, arguments);
+                // generate fitting resume
+                arguments.resize(2);
+                arguments[0] = closure;
+                arguments[1] = result;
+            } else if (
+                is_pointer_type(callee.type)
+                    && is_cfunction_type(get_element_type(callee.type))) {
+                Any closure = arguments.back();
+                arguments.pop_back();
+                arguments.erase(arguments.begin());
+                Any result = ffi->runFunction(callee, arguments);
+                // generate fitting resume
+                arguments.resize(2);
+                arguments[0] = closure;
+                arguments[1] = result;
+            } else {
+                error(callee, "can not apply %s",
+                    get_name(callee.type).c_str());
+            }
         }
+    } catch (const Any &any) {
+        printValue(wrap(active_arguments), 0, true);
+
+        print_stack_frames(frame);
+        //goto continue_execution;
+        fflush(stdout);
+        throw_any(any);
     }
 
     return const_none;
@@ -4502,29 +4572,32 @@ static Any toparameter (Table *env, const Any &value) {
 }
 
 static const SList *expand_expr_list (const Table *env, SListIter it) {
-    std::vector<Any> result;
+    const SList *l = nullptr;
     while (it) {
         auto cur = expand(env, it);
-        result.push_back(cur.value);
+        l = SList::create(cur.value, l, it.getAnchor());
         it = cur.next;
     }
-
-    return SList::create(result);
+    return reverse_slist_inplace(l);
 }
+
 static Cursor expand_function (const Table *env, SListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
-    SListIter it(*topit++, 1);
+    SListIter it(*topit++);
+    auto topanchor = it.getAnchor();
+    it++;
     auto expr_parameters = *it++;
 
     auto subenv = new_scope(env);
 
-    std::vector<Any> outargs;
+    const SList *outargs = nullptr;
     verifyValueKind(Types::SList, expr_parameters);
     auto params = expr_parameters.slist;
     SListIter param(params);
     while (param) {
-        outargs.push_back(toparameter(subenv, *param));
+        outargs = SList::create(toparameter(subenv, *param),
+            outargs, param.getAnchor());
         param++;
     }
 
@@ -4533,17 +4606,23 @@ static Cursor expand_function (const Table *env, SListIter topit) {
             SList::create(
                 getLocal(globals, "form:function"),
                 SList::create(
-                    wrap(SList::create(outargs)),
-                        expand_expr_list(subenv, it)))),
+                    wrap(reverse_slist_inplace(outargs)),
+                    expand_expr_list(subenv, it),
+                    get_anchor(params)),
+                topanchor)),
         topit };
 }
 
 static Cursor expand_quote (const Table *env, SListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
-    SListIter it(*topit++, 1);
+    SListIter it(*topit++);
+    auto anchor = it.getAnchor();
+    it++;
     auto result = SList::create(
-        getLocal(globals, "form:quote"), it.getSList());
+        getLocal(globals, "form:quote"),
+        it.getSList(),
+        anchor);
     return { wrap(result), topit };
 }
 
@@ -4555,6 +4634,7 @@ static Cursor expand_escape (const Table *env, SListIter topit) {
 static Cursor expand_let_syntax (const Table *env, SListIter topit) {
 
     auto cur = expand_function (env, topit++);
+    //printValue(cur.value, 0, true);
 
     auto fun = compile(cur.value);
 
@@ -4578,6 +4658,14 @@ static const SList *expand_macro(
     if (isnone(result))
         return nullptr;
     verifyValueKind(Types::SList, result);
+    if (!get_anchor(result)) {
+        auto head = *topit;
+        const Anchor *anchor = get_anchor(head);
+        if (!anchor) {
+            anchor = topit.getAnchor();
+        }
+        set_anchor(result, anchor);
+    }
     return result.slist;
 }
 
@@ -4718,8 +4806,9 @@ struct ILBuilder {
         }
     }
 
-    Parameter *call(std::vector<Any> values) {
+    Parameter *call(std::vector<Any> values, const Anchor *anchor) {
         auto next = Flow::create(1, "cret");
+        set_anchor(next, anchor);
         values.push_back(wrap(next));
         insertAndAdvance(values, next);
         return next->parameters[0];
@@ -4746,6 +4835,8 @@ static Any compile_do (SListIter it) {
 }
 
 static Any compile_function (SListIter it) {
+    auto anchor = find_valid_anchor(it.getSList());
+
     it++;
 
     auto expr_parameters = *it++;
@@ -4753,6 +4844,7 @@ static Any compile_function (SListIter it) {
     auto currentblock = builder->save();
 
     auto function = Flow::create(0, "func");
+    set_anchor(function, anchor);
 
     builder->continueAt(function);
 
@@ -4776,7 +4868,11 @@ static Any compile_function (SListIter it) {
     return wrap(function);
 }
 
-static Any compile_implicit_call (SListIter it) {
+static Any compile_implicit_call (SListIter it,
+    const Anchor *anchor = nullptr) {
+    if (!anchor)
+        anchor = find_valid_anchor(it.getSList());
+
     Any callable = compile(*it++);
 
     std::vector<Any> args;
@@ -4787,12 +4883,13 @@ static Any compile_implicit_call (SListIter it) {
         it++;
     }
 
-    return wrap(builder->call(args));
+    return wrap(builder->call(args, anchor));
 }
 
 static Any compile_call (SListIter it) {
+    auto anchor = find_valid_anchor(it.getSList());
     it++;
-    return compile_implicit_call(it);
+    return compile_implicit_call(it, anchor);
 }
 
 static Any compile_quote (SListIter it) {
