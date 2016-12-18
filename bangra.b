@@ -4,6 +4,9 @@
 bangra
 
 let-syntax (scope)
+    /// print
+        + 10 none
+
     table
         tupleof "#parent" scope
         tupleof "symbol?"

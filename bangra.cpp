@@ -2002,6 +2002,9 @@ static void verifyValueKind(const Type *type, const Any &expr) {
 // TYPE SETUP
 //------------------------------------------------------------------------------
 
+// set by execute()
+static Frame *handler_frame = nullptr;
+
 namespace Types {
 
     static std::string _string_tostring(const Type *self, const bangra::Any &value) {
@@ -2121,7 +2124,9 @@ namespace Types {
     static bangra::Any _slist_apply_type(const Type *self,
         const std::vector<bangra::Any> &args) {
         builtin_checkparams(args, 0, -1);
-        return wrap(SList::create_from_array(args));
+        auto result = SList::create_from_array(args);
+        set_anchor(result, get_anchor(handler_frame));
+        return wrap(result);
     }
 
     static bangra::Any type_array_at(const Type *self,
@@ -3377,15 +3382,16 @@ continue_execution:
 
             if (eq(callee.type, Types::PFlow)) {
                 auto flow = *callee.pflow;
+                assert(get_anchor(flow));
 
                 arguments.erase(arguments.begin());
                 if (arguments.size() > 0) {
                     if (frame->map.count(flow)) {
                         frame = Frame::create(frame);
-                        set_anchor(frame, get_anchor(flow));
                     }
                     frame->map[flow] = arguments;
                 }
+                set_anchor(frame, get_anchor(flow));
 
                 assert(!flow->arguments.empty());
                 size_t argcount = flow->arguments.size();
@@ -3399,20 +3405,29 @@ continue_execution:
                 Any closure = arguments.back();
                 arguments.pop_back();
                 arguments.erase(arguments.begin());
+                auto _oldframe = handler_frame;
+                handler_frame = frame;
                 Any result = cb->handler(arguments);
+                handler_frame = _oldframe;
                 // generate fitting resume
                 arguments.resize(2);
                 arguments[0] = closure;
                 arguments[1] = result;
             } else if (eq(callee.type, Types::PBuiltinFlow)) {
                 auto cb = *callee.pbuiltin_flow;
+                auto _oldframe = handler_frame;
+                handler_frame = frame;
                 arguments = cb->handler(arguments);
+                handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
                 auto cb = *callee.ptype;
                 Any closure = arguments.back();
                 arguments.pop_back();
                 arguments.erase(arguments.begin());
+                auto _oldframe = handler_frame;
+                handler_frame = frame;
                 Any result = cb->apply_type(cb, arguments);
+                handler_frame = _oldframe;
                 // generate fitting resume
                 arguments.resize(2);
                 arguments[0] = closure;
@@ -4060,7 +4075,8 @@ static Any builtin_cons(const std::vector<Any> &args) {
     auto &at = args[0];
     auto next = args[1];
     verifyValueKind(Types::SList, next);
-    return wrap(Types::SList, SList::create(at, next.slist));
+    return wrap(Types::SList, SList::create(at, next.slist,
+        get_anchor(handler_frame)));
 }
 
 static Any builtin_structof(const std::vector<Any> &args) {
@@ -4780,15 +4796,17 @@ struct ILBuilder {
 
     void insertAndAdvance(
         const std::vector<Any> &values,
-        Flow *next) {
+        Flow *next,
+        const Anchor *anchor) {
         assert(state.flow);
         assert(!state.flow->hasArguments());
         state.flow->arguments = values;
+        set_anchor(state.flow, anchor);
         state.prevflow = state.flow;
         state.flow = next;
     }
 
-    void br(const std::vector<Any> &arguments) {
+    void br(const std::vector<Any> &arguments, const Anchor *anchor) {
         // patch previous flow destination to jump right to
         // continuation when possible
         assert(state.flow);
@@ -4802,15 +4820,15 @@ struct ILBuilder {
                 == state.flow)) {
             state.prevflow->arguments.back() = arguments[0];
         } else {
-            insertAndAdvance(arguments, nullptr);
+            insertAndAdvance(arguments, nullptr, anchor);
         }
     }
 
     Parameter *call(std::vector<Any> values, const Anchor *anchor) {
+        assert(anchor);
         auto next = Flow::create(1, "cret");
-        set_anchor(next, anchor);
         values.push_back(wrap(next));
-        insertAndAdvance(values, next);
+        insertAndAdvance(values, next, anchor);
         return next->parameters[0];
     }
 
@@ -4836,6 +4854,10 @@ static Any compile_do (SListIter it) {
 
 static Any compile_function (SListIter it) {
     auto anchor = find_valid_anchor(it.getSList());
+    if (!anchor || !anchor->isValid()) {
+        printValue(wrap(it.getSList()), 0, true);
+        error(const_none, "function expression not anchored");
+    }
 
     it++;
 
@@ -4861,7 +4883,7 @@ static Any compile_function (SListIter it) {
 
     auto result = compile_expr_list(it);
 
-    builder->br({wrap(ret), result});
+    builder->br({wrap(ret), result}, anchor);
 
     builder->restore(currentblock);
 
@@ -4870,8 +4892,13 @@ static Any compile_function (SListIter it) {
 
 static Any compile_implicit_call (SListIter it,
     const Anchor *anchor = nullptr) {
-    if (!anchor)
+    if (!anchor) {
         anchor = find_valid_anchor(it.getSList());
+        if (!anchor || !anchor->isValid()) {
+            printValue(wrap(it.getSList()), 0, true);
+            error(const_none, "call expression not anchored");
+        }
+    }
 
     Any callable = compile(*it++);
 
@@ -4888,6 +4915,10 @@ static Any compile_implicit_call (SListIter it,
 
 static Any compile_call (SListIter it) {
     auto anchor = find_valid_anchor(it.getSList());
+    if (!anchor || !anchor->isValid()) {
+        printValue(wrap(it.getSList()), 0, true);
+        error(const_none, "call expression not anchored");
+    }
     it++;
     return compile_implicit_call(it, anchor);
 }
@@ -5099,14 +5130,16 @@ static void handleException(const Table *env, const Any &expr) {
 
 static bool compileRootValueList (const Table *env, const Any &expr) {
 
-    auto expexpr = expand_expr_list(env, SListIter(expr, 1));
+    auto rootit = SListIter(expr, 1);
+    auto expexpr = expand_expr_list(env, rootit);
+    auto anchor = find_valid_anchor(rootit.getSList());
 
     auto mainfunc = Flow::create();
     auto ret = mainfunc->appendParameter(Parameter::create());
     builder->continueAt(mainfunc);
 
     compile_expr_list(SListIter(expexpr));
-    builder->br({ wrap(ret) });
+    builder->br({ wrap(ret) }, anchor);
 
 /*
 #ifdef BANGRA_DEBUG_IL
