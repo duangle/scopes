@@ -615,6 +615,8 @@ namespace Types {
     static const Type *Any;
     static const Type *AnchorRef;
 
+    static const Type *Table;
+
     static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
@@ -694,8 +696,7 @@ struct Type {
     // return contained item
     Any (*at)(const Type *self, const Any &value, const Any &index);
     // return range
-    Any (*slice)(const Type *self, const Any &value,
-        const Any &index, const Any &count);
+    Any (*slice)(const Type *self, const Any &value, size_t i0, size_t i1);
     // return true if objects are equivalent
     bool (*eq)(const Type *self, const Any &a, const Any &b);
     // apply the type
@@ -824,9 +825,9 @@ static size_t type_length_default(const Type *self, const Any &value) {
     return (size_t)-1;
 }
 
-static Any type_slice_default(const Type *self, const Any &value,
-    const Any &index, const Any &count) {
-    assert(false && "type not slicable");
+static Any type_slice_default(
+    const Type *self, const Any &value, size_t i0, size_t i1) {
+    error(value, "type %s not sliceable", get_name(self).c_str());
     return const_none;
 }
 
@@ -868,6 +869,10 @@ static std::string get_string(const Any &value) {
 
 static Any at(const Any &value, const Any &index) {
     return value.type->at(value.type, value, index);
+}
+
+static Any slice(const Any &value, size_t i0, size_t i1) {
+    return value.type->slice(value.type, value, i0, i1);
 }
 
 static size_t length(const Any &value) {
@@ -1200,8 +1205,10 @@ static bangra::Any pointer_element(
 static const Table *extract_table(const Any &value) {
     if (is_table_type(value.type)) {
         return *value.ptable;
+    } else if (eq(value.type, Types::Table)) {
+        return (Table *)value.ptr;
     }
-    error(value, "table expected");
+    error(value, "table expected, not %s", get_name(value.type).c_str());
     return nullptr;
 }
 
@@ -2230,6 +2237,7 @@ namespace Types {
             assert((it != self->name_index_map.end()) && "no such field");
             return type_tuple_at(self, value, wrap(it->second));
         } else {
+            error(const_none, "string or symbol expected");
             return type_tuple_at(self, value, vindex);
         }
     }
@@ -2262,6 +2270,32 @@ namespace Types {
     static size_t _string_length(const Type *self, const bangra::Any &value) {
         return value.str->count;
     }
+
+    static bangra::Any _string_slice(
+        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
+        return wrap(Types::String, alloc_string(
+            value.str->ptr + i0, i1 - i0));
+    }
+
+    static bangra::Any _string_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        if (!is_integer_type(vindex.type)) {
+            return const_none;
+        }
+        auto index = (size_t)extract_integer(vindex);
+        if (index >= value.str->count) {
+            return const_none;
+        }
+        return _string_slice(self, value, index, index + 1);
+    }
+
+    /*
+    static bangra::Any _symbol_slice(
+        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
+        return wrap(Types::Symbol, alloc_string(
+            value.str->ptr + i0, i1 - i0));
+    }
+    */
 
     static size_t _tuple_length(const Type *self, const bangra::Any &value) {
         return self->types.size();
@@ -2501,6 +2535,8 @@ namespace Types {
         tmp = Struct("String", true);
         tmp->tostring = _string_tostring;
         tmp->length = _string_length;
+        tmp->slice = _string_slice;
+        tmp->at = _string_at;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         String = tmp;
@@ -2508,6 +2544,8 @@ namespace Types {
         tmp = Struct("Symbol", true);
         tmp->tostring = _symbol_tostring;
         tmp->length = _string_length;
+        //tmp->slice = _symbol_slice;
+        //tmp->at = _string_at;
         tmp->apply_type = _symbol_apply_type;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
@@ -2522,7 +2560,8 @@ namespace Types {
 
         tmp = Struct("Table", true);
         tmp->at = type_table_at;
-        PTable = Pointer(tmp);
+        Table = tmp;
+        PTable = Pointer(Table);
 
         tmp = Struct("Parameter", true);
         tmp->tostring = _named_object_tostring<Parameter>;
@@ -4033,6 +4072,33 @@ static Any builtin_length(const std::vector<Any> &args) {
     return wrap(length(args[0]));
 }
 
+static Any builtin_slice(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 3);
+    int64_t i0;
+    int64_t i1;
+    int64_t l = (int64_t)length(args[0]);
+    if (!is_integer_type(args[1].type)) {
+        error(args[1], "integer expected");
+    }
+    i0 = extract_integer(args[1]);
+    if (i0 < 0)
+        i0 += l;
+    i0 = std::min(std::max(i0, (int64_t)0), l);
+    if (args.size() > 2) {
+        if (!is_integer_type(args[2].type)) {
+            error(args[2], "integer expected");
+        }
+        i1 = extract_integer(args[2]);
+        if (i1 < 0)
+            i1 += l;
+        i1 = std::min(std::max(i1, i0), l);
+    } else {
+        i1 = l;
+    }
+
+    return slice(args[0], (size_t)i0, (size_t)i1);
+}
+
 static std::vector<Any> builtin_branch(const std::vector<Any> &args) {
     builtin_checkparams(args, 4, 4, 1);
     auto cond = extract_bool(args[1]);
@@ -5056,6 +5122,8 @@ static void initGlobals () {
     setBuiltin(env, "length", builtin_length);
 
     setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
+
+    setBuiltin(env, "slice", builtin_slice);
 
     setBuiltin(env, "+",
         builtin_variadic_ltr<

@@ -356,10 +356,10 @@ let-syntax (scope)
                 if
                     and
                         symbol? head
-                        == (@ (string head) (tupleof 0 1)) "."
+                        == (slice (string head) 0 1) "."
 
                     let name
-                        @ (string head) (tupleof 1)
+                        slice (string head) 1
                     let self-arg
                         @ expr 1 0
                     let rest
