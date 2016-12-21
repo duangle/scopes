@@ -4,9 +4,6 @@
 bangra
 
 let-syntax (scope)
-    /// print
-        + 10 none
-
     table
         tupleof "#parent" scope
         tupleof "symbol?"
@@ -437,6 +434,7 @@ do
                 function (self a b)
                     + a b
 
+
     print
         .test T 1 2
 
@@ -470,8 +468,7 @@ do
 
     print
         repr
-            @ "abcdefghijklmnopqrstuvwxyz"
-                tupleof -3
+            slice "abcdefghijklmnopqrstuvwxyz" -3
 
     print "lengths:"
         length "hi!"
@@ -481,11 +478,6 @@ do
         length
             structof
                 tupleof "key" 123
-
-    print "kindof:"
-        ==
-            kindof float
-            API.TypeKind.T_Integer
 
     print
         1 + 2 * 3 == 7

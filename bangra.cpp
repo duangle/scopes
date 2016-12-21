@@ -517,10 +517,10 @@ struct Any {
         const void *ptr;
         const char *c_str;
         const BuiltinFunction func;
-        const SList *slist;
         const String *str;
 
         const void **pptr;
+        const SList **pslist;
         const Type **ptype;
         const Parameter **pparameter;
         const Flow **pflow;
@@ -608,15 +608,16 @@ namespace Types {
     static const Type *Rawstring;
     static const Type *None;
     static const Type *String; // std::string
-
-    static const Type *SList;
     static const Type *Symbol; // std::string
 
     static const Type *Any;
     static const Type *AnchorRef;
 
-    static const Type *Table;
+    // opaque internal pointers
+    static const Type *_Table;
+    static const Type *_SList;
 
+    static const Type *PSList;
     static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
@@ -861,6 +862,10 @@ static bool eq(const Type *self, const Type *other) {
 
 static bool eq(const Any &a, const Any &b) {
     return a.type->eq(a.type, a, b) || b.type->eq(b.type, b, a);
+}
+
+static bool ne(const Any &a, const Any &b) {
+    return !eq(a,b);
 }
 
 static std::string get_string(const Any &value) {
@@ -1127,7 +1132,7 @@ static int64_t extract_integer(const Any &value) {
     } else if (type == Types::U64) {
         return (int64_t)*value.p_u64;
     } else {
-        assert(false && "not an integer type");
+        error(value, "integer expected, not %s", get_name(type).c_str());
         return 0;
     }
 }
@@ -1158,7 +1163,7 @@ static double extract_real(const Any &value) {
     } else if (type == Types::R64) {
         return (double)*value.p_r64;
     } else {
-        assert(false && "not a real type");
+        error(value, "real expected, not %s", get_name(type).c_str());
         return 0;
     }
 }
@@ -1205,7 +1210,7 @@ static bangra::Any pointer_element(
 static const Table *extract_table(const Any &value) {
     if (is_table_type(value.type)) {
         return *value.ptable;
-    } else if (eq(value.type, Types::Table)) {
+    } else if (eq(value.type, Types::_Table)) {
         return (Table *)value.ptr;
     }
     error(value, "table expected, not %s", get_name(value.type).c_str());
@@ -1263,7 +1268,7 @@ struct Parameter {
 //------------------------------------------------------------------------------
 
 static Any wrap(const SList *slist) {
-    return wrap(Types::SList, slist);
+    return wrap_ptr(Types::PSList, slist);
 }
 
 struct SList {
@@ -1320,8 +1325,14 @@ struct SList {
 };
 
 static const SList *extract_slist(const Any &value) {
-    assert(value.type == Types::SList);
-    return value.slist;
+    if (eq(value.type, Types::PSList)) {
+        return *value.pslist;
+    } else if (eq(value.type, Types::_SList)) {
+        return (const SList *)value.ptr;
+    } else {
+        error(value, "slist expected, not %s", get_name(value.type).c_str());
+    }
+    return nullptr;
 }
 
 #if 0
@@ -1767,9 +1778,9 @@ static void unescape(String &s) {
 
 // matches ((///...))
 static bool is_comment(const Any &expr) {
-    if (eq(expr.type, Types::SList)) {
-        if (expr.slist) {
-            const Any &sym = expr.slist->at;
+    if (eq(expr.type, Types::PSList)) {
+        if (*expr.pslist) {
+            const Any &sym = (*expr.pslist)->at;
             if (eq(sym.type, Types::Symbol)) {
                 auto s = extract_any_string(sym);
                 if (!memcmp(s.c_str(),"///",3))
@@ -1799,15 +1810,15 @@ static const Anchor *find_valid_anchor(const SList *l) {
 static const Anchor *find_valid_anchor(const Any &expr) {
     const Anchor *a = get_anchor(expr);
     if (!a) {
-        if (eq(expr.type, Types::SList)) {
-            a = find_valid_anchor(expr.slist);
+        if (eq(expr.type, Types::PSList)) {
+            a = find_valid_anchor(*expr.pslist);
         }
     }
     return a;
 }
 
 static Any strip(const Any &expr) {
-    if (eq(expr.type, Types::SList)) {
+    if (eq(expr.type, Types::PSList)) {
         const SList *l = nullptr;
         auto it = SListIter(expr);
         while (it) {
@@ -1862,10 +1873,10 @@ static std::string formatTraceback() {
 #endif
 
 static bool isNested(const Any &e) {
-    if (e.type == Types::SList) {
+    if (e.type == Types::PSList) {
         auto it = SListIter(e);
         while (it) {
-            if ((*it).type == Types::SList)
+            if ((*it).type == Types::PSList)
                 return true;
             it++;
         }
@@ -1893,7 +1904,7 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         streamAnchor(stream, e, depth);
     }
 
-    if (e.type == Types::SList) {
+    if (e.type == Types::PSList) {
         //auto slist = llvm::cast<SListValue>(e);
         auto it = SListIter(e);
         if (!it) {
@@ -1920,7 +1931,7 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         //print_sparse:
             while (it) {
                 auto value = *it;
-                if ((value.type != Types::SList) // not a list
+                if ((value.type != Types::PSList) // not a list
                     && (offset >= 1) // not first element in list
                     && (it + 1) // not last element in list
                     && !isNested(*(it + 1))) { // next element can be terse packed too
@@ -2053,6 +2064,12 @@ namespace Types {
         return at(pointer_element(self, value), index);
     }
 
+    /*
+    static bangra::Any _pointer_apply_type(const Type *self,
+        const std::vector<bangra::Any> &args) {
+    }
+    */
+
     static bool value_pointer_eq(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         if (self != b.type) return false;
@@ -2064,10 +2081,14 @@ namespace Types {
         return (self == b.type);
     }
 
-    static bool value_slist_eq(const Type *self,
+    static bool _integer_eq(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        if (self != b.type) return false;
-        return a.slist == b.slist;
+        return extract_integer(a) == extract_integer(b);
+    }
+
+    static bool _real_eq(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return extract_real(a) == extract_real(b);
     }
 
     static std::string _none_tostring(const Type *self,
@@ -2138,14 +2159,13 @@ namespace Types {
 
     static bangra::Any type_array_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (!is_integer_type(vindex.type)) {
-            return const_none;
-        }
+        auto index = (size_t)extract_integer(vindex);
         auto padded_size = align(
             get_size(self->element_type), get_alignment(self->element_type));
-        auto index = (size_t)extract_integer(vindex);
         auto offset = padded_size * index;
         if (offset >= self->size) {
+            error(vindex, "index %zu out of array bounds (%zu)",
+                index, self->size / padded_size);
             return const_none;
         }
         return wrap(self->element_type, (char *)value.ptr + offset);
@@ -2205,11 +2225,10 @@ namespace Types {
 
     static bangra::Any type_tuple_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (!is_integer_type(vindex.type)) {
-            return const_none;
-        }
         auto index = (size_t)extract_integer(vindex);
         if (index >= self->types.size()) {
+            error(vindex, "index %zu out of tuple bounds (%zu)",
+                index, self->types.size());
             return const_none;
         }
         auto offset = self->offsets[index];
@@ -2234,10 +2253,12 @@ namespace Types {
         if (eq(vindex.type, Types::String) || eq(vindex.type, Types::Symbol)) {
             auto key = extract_any_string(vindex);
             auto it = self->name_index_map.find(key);
-            assert((it != self->name_index_map.end()) && "no such field");
+            if (it == self->name_index_map.end()) {
+                error(vindex, "no such field in struct: %s",
+                    key.c_str());
+            }
             return type_tuple_at(self, value, wrap(it->second));
         } else {
-            error(const_none, "string or symbol expected");
             return type_tuple_at(self, value, vindex);
         }
     }
@@ -2251,18 +2272,25 @@ namespace Types {
 
     static bangra::Any type_slist_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (!(value.slist && is_integer_type(vindex.type))) {
-            return const_none;
+        auto slist = extract_slist(value);
+        if (!slist) {
+            //error(value, "can not index into empty slist");
+            return wrap((bangra::SList*)nullptr);
         }
         auto index = (size_t)extract_integer(vindex);
         if (index == 0) {
-            return value.slist->at;
+            return slist->at;
         } else {
-            const bangra::SList *result = value.slist;
-            while (index != 0) {
+            const bangra::SList *result = slist;
+            while ((index != 0) && result) {
                 --index;
                 result = result->next;
             }
+            /*
+            if (index != 0) {
+                error(value, "index %zu out of slist bounds", index);
+            }
+            */
             return wrap(result);
         }
     }
@@ -2279,14 +2307,20 @@ namespace Types {
 
     static bangra::Any _string_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (!is_integer_type(vindex.type)) {
-            return const_none;
-        }
         auto index = (size_t)extract_integer(vindex);
         if (index >= value.str->count) {
-            return const_none;
+            error(value, "index %zu out of string bounds (%zu)",
+                index, value.str->count);
         }
         return _string_slice(self, value, index, index + 1);
+    }
+
+    static bool value_string_eq(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if ((b.type != Types::String) && (b.type != Types::Symbol))
+            return false;
+        if (a.str->count != b.str->count) return false;
+        return (memcmp(a.str->ptr, b.str->ptr, a.str->count) == 0);
     }
 
     /*
@@ -2357,35 +2391,6 @@ namespace Types {
         return type;
     }
 
-    /*
-    // size of type in bytes
-    size_t size;
-    // is represented as reference in Any?
-    bool is_ref;
-
-    union {
-        // integer: is type signed?
-        bool is_signed;
-        // function: is vararg?
-        bool is_vararg;
-    };
-    union {
-        // integer, real: width in bits
-        size_t width;
-        // array, vector: number of elements
-        size_t count;
-    };
-    // array, vector, pointer, tuple, struct, union, function: field types
-    // array, vector, pointer: only have one type
-    // index 0 for functions is the result type, 1+ is parameter type
-    std::vector<Type *> types;
-    // tuple, struct, union: field offsets
-    std::vector<size_t> offsets;
-    // struct, union, enum: name to types index lookup table
-    std::unordered_map<std::string, size_t> name_index_map;
-
-    */
-
     static const Type *_new_cfunction_type(
         const Type *result, const Type *parameters, bool vararg) {
         assert(eq(parameters, TTuple));
@@ -2431,6 +2436,7 @@ namespace Types {
             (width == 1)?"bool":
                 format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
+        type->eq = _integer_eq;
         type->width = width;
         type->tostring = _integer_tostring;
         type->is_signed = signed_;
@@ -2451,6 +2457,7 @@ namespace Types {
         Type *type = new_type(format("real%zu", width));
         type->tostring = _real_tostring;
         type->eq_type = type_real_eq;
+        type->eq = _real_eq;
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -2537,6 +2544,7 @@ namespace Types {
         tmp->length = _string_length;
         tmp->slice = _string_slice;
         tmp->at = _string_at;
+        tmp->eq = value_string_eq;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         String = tmp;
@@ -2546,6 +2554,7 @@ namespace Types {
         tmp->length = _string_length;
         //tmp->slice = _symbol_slice;
         //tmp->at = _string_at;
+        tmp->eq = value_string_eq;
         tmp->apply_type = _symbol_apply_type;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
@@ -2553,15 +2562,19 @@ namespace Types {
 
         tmp = Struct("SList", true);
         tmp->at = type_slist_at;
-        tmp->eq = value_slist_eq;
+        //tmp->apply_type = _slist_apply_type;
+        //tmp->size = sizeof(bangra::SList);
+        //tmp->alignment = offsetof(_slist_alignment, s);
+        _SList = tmp;
+        tmp = const_cast<Type *>(Pointer(_SList));
         tmp->apply_type = _slist_apply_type;
         tmp->tostring = _slist_tostring;
-        SList = tmp;
+        PSList = tmp;
 
         tmp = Struct("Table", true);
         tmp->at = type_table_at;
-        Table = tmp;
-        PTable = Pointer(Table);
+        _Table = tmp;
+        PTable = Pointer(_Table);
 
         tmp = Struct("Parameter", true);
         tmp->tostring = _named_object_tostring<Parameter>;
@@ -3376,6 +3389,7 @@ void print_stack_frames(Frame *frame) {
     }
 }
 
+static bool trace_arguments = false;
 Any execute(std::vector<Any> arguments) {
 
     Frame *frame = Frame::create();
@@ -3431,6 +3445,10 @@ continue_execution:
                     frame->map[flow] = arguments;
                 }
                 set_anchor(frame, get_anchor(flow));
+                if (trace_arguments) {
+                    auto anchor = get_anchor(flow);
+                    Anchor::printMessage(anchor, "trace");
+                }
 
                 assert(!flow->arguments.empty());
                 size_t argcount = flow->arguments.size();
@@ -3488,7 +3506,12 @@ continue_execution:
             }
         }
     } catch (const Any &any) {
-        printValue(wrap(active_arguments), 0, true);
+        printf("while evaluating arguments:\n");
+        for (size_t i = 0; i < active_arguments.size(); ++i) {
+            printf("  #%zu: ", i);
+            printValue(active_arguments[i], 0, true);
+        }
+        printf("\n");
 
         print_stack_frames(frame);
         //goto continue_execution;
@@ -4067,6 +4090,16 @@ static Any builtin_at(const std::vector<Any> &args) {
     return at(args[0], args[1]);
 }
 
+static Any builtin_eq(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    return wrap(eq(args[0], args[1]));
+}
+
+static Any builtin_ne(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    return wrap(ne(args[0], args[1]));
+}
+
 static Any builtin_length(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     return wrap(length(args[0]));
@@ -4140,8 +4173,8 @@ static Any builtin_cons(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     auto &at = args[0];
     auto next = args[1];
-    verifyValueKind(Types::SList, next);
-    return wrap(Types::SList, SList::create(at, next.slist,
+    verifyValueKind(Types::PSList, next);
+    return wrap(SList::create(at, *next.pslist,
         get_anchor(handler_frame)));
 }
 
@@ -4306,16 +4339,6 @@ static bool operator !=(const Any &a, const Any &b) {
     return !eq(a, b);
 }
 
-class builtin_eq_op { public:
-    template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) {
-        return a == b;
-    }
-};
-class builtin_ne_op { public:
-    template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) { return a != b; }
-};
 class builtin_gt_op { public:
     template<typename Ta, typename Tb>
     static bool operate(const Ta &a, const Tb &b) { return a > b; }
@@ -4634,8 +4657,8 @@ static bool verifyParameterCount (const SList *expr,
 static bool verifyParameterCount (SListIter topit,
     int mincount, int maxcount) {
     auto val = *topit;
-    verifyValueKind(Types::SList, val);
-    return verifyParameterCount(val.slist, mincount, maxcount);
+    verifyValueKind(Types::PSList, val);
+    return verifyParameterCount(*val.pslist, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
@@ -4674,8 +4697,8 @@ static Cursor expand_function (const Table *env, SListIter topit) {
     auto subenv = new_scope(env);
 
     const SList *outargs = nullptr;
-    verifyValueKind(Types::SList, expr_parameters);
-    auto params = expr_parameters.slist;
+    verifyValueKind(Types::PSList, expr_parameters);
+    auto params = *expr_parameters.pslist;
     SListIter param(params);
     while (param) {
         outargs = SList::create(toparameter(subenv, *param),
@@ -4714,7 +4737,7 @@ static Cursor expand_escape (const Table *env, SListIter topit) {
 }
 
 static Cursor expand_let_syntax (const Table *env, SListIter topit) {
-
+    auto startit = topit;
     auto cur = expand_function (env, topit++);
     //printValue(cur.value, 0, true);
 
@@ -4726,7 +4749,7 @@ static Cursor expand_let_syntax (const Table *env, SListIter topit) {
 
     auto rest = expand_expr_list(*expr_env.ptable, topit);
     if (!rest) {
-        error(*topit, "missing subsequent expression");
+        error(*startit, "let-syntax: missing subsequent expression");
     }
 
     return { rest->at, rest->next };
@@ -4739,7 +4762,7 @@ static const SList *expand_macro(
         wrap(topit.getSList())});
     if (isnone(result))
         return nullptr;
-    verifyValueKind(Types::SList, result);
+    verifyValueKind(Types::PSList, result);
     if (!get_anchor(result)) {
         auto head = *topit;
         const Anchor *anchor = get_anchor(head);
@@ -4748,19 +4771,19 @@ static const SList *expand_macro(
         }
         set_anchor(result, anchor);
     }
-    return result.slist;
+    return *result.pslist;
 }
 
 static Cursor expand (const Table *env, SListIter topit) {
     Any result = const_none;
 process:
     Any expr = *topit;
-    if (eq(expr.type, Types::SList)) {
-        if (!expr.slist) {
+    if (eq(expr.type, Types::PSList)) {
+        if (!(*expr.pslist)) {
             error(expr, "expression is empty");
         }
 
-        auto head = expr.slist->at;
+        auto head = (*expr.pslist)->at;
         if (eq(head.type, Types::Symbol)) {
             head = getLocal(env, extract_any_string(head));
         }
@@ -4936,8 +4959,8 @@ static Any compile_function (SListIter it) {
 
     builder->continueAt(function);
 
-    verifyValueKind(Types::SList, expr_parameters);
-    SListIter param(expr_parameters.slist);
+    verifyValueKind(Types::PSList, expr_parameters);
+    SListIter param(*expr_parameters.pslist);
     while (param) {
         auto pparam = *param;
         verifyValueKind(Types::PParameter, pparam);
@@ -5002,11 +5025,11 @@ static Any compile_quote (SListIter it) {
 
 static Any compile (const Any &expr) {
     Any result = const_none;
-    if (eq(expr.type, Types::SList)) {
-        if (!expr.slist) {
+    if (eq(expr.type, Types::PSList)) {
+        if (!(*expr.pslist)) {
             error(expr, "empty expression");
         }
-        auto slist = expr.slist;
+        auto slist = *expr.pslist;
         auto head = slist->at;
         if (eq(head.type, Types::PSpecialForm)) {
             result = (*head.pspecial_form)->handler(
@@ -5080,7 +5103,7 @@ static void initGlobals () {
     setLocal(env, "double", wrap(Types::R64));
 
     setLocal(env, "symbol", wrap(Types::Symbol));
-    setLocal(env, "slist", wrap(Types::SList));
+    setLocal(env, "slist", wrap(Types::PSList));
 
     setLocal(env, "usize_t",
         wrap(Types::Integer(sizeof(size_t)*8,false)));
@@ -5154,10 +5177,8 @@ static void initGlobals () {
     setBuiltin(env, "not",
         builtin_unary_op<dispatch_boolean_types, builtin_not_op>);
 
-    setBuiltin(env, "==",
-        builtin_binary_op<dispatch_eq_cmp_types, builtin_eq_op>);
-    setBuiltin(env, "!=",
-        builtin_binary_op<dispatch_eq_cmp_types, builtin_ne_op>);
+    setBuiltin(env, "==", builtin_eq);
+    setBuiltin(env, "!=", builtin_ne);
     setBuiltin(env, ">",
         builtin_binary_op<dispatch_cmp_types, builtin_gt_op>);
     setBuiltin(env, ">=",
@@ -5222,8 +5243,8 @@ static bool compileRootValueList (const Table *env, const Any &expr) {
 }
 
 static bool compileMain (Any expr) {
-    verifyValueKind(Types::SList, expr);
-    auto it = SListIter(expr.slist);
+    verifyValueKind(Types::PSList, expr);
+    auto it = SListIter(*expr.pslist);
 
     auto env = globals;
 
@@ -5306,11 +5327,11 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "could not parse footer expression\n");
         return const_none;
     }
-    if (!eq(expr.type, Types::SList))  {
+    if (!eq(expr.type, Types::PSList))  {
         fprintf(stderr, "footer expression is not a symbolic list\n");
         return const_none;
     }
-    auto symlist = expr.slist;
+    auto symlist = *expr.pslist;
     SListIter it(symlist);
     if (!it) {
         fprintf(stderr, "footer expression is empty\n");
@@ -5405,6 +5426,7 @@ void print_help(const char *exename) {
     "   -v, --version               print program version and exit.\n"
     "   --skip-startup              skip startup script.\n"
     "   -a, --enable-ansi           enable ANSI output.\n"
+    "   -t, --trace                 trace interpreter commands.\n"
     "   --                          terminate option list.\n"
     , exename
     );
@@ -5448,6 +5470,8 @@ int bangra_main(int argc, char ** argv) {
                             skip_startup = true;
                         } else if (!strcmp(*arg, "--enable-ansi") || !strcmp(*arg, "-a")) {
                             bangra::support_ansi = true;
+                        } else if (!strcmp(*arg, "--trace") || !strcmp(*arg, "-t")) {
+                            bangra::trace_arguments = true;
                         } else if (!strcmp(*arg, "--")) {
                             parse_options = false;
                         } else {
