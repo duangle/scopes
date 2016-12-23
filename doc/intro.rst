@@ -29,8 +29,9 @@ How to build Bangra on Windows:
 * You also need to install the ``mingw64/mingw-w64-x86_64-libffi`` package.
 * put ``clang++`` in your path OR make sure msys2 resides in ``C:\msys64`` OR edit
   ``makebangra.bat`` and change the path accordingly.
-* copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll`` and ``libwinpthread-1.dll`` from
-  the msys2 installation into the repo folder. ``bangra.exe`` will depend on them.
+* copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll``, ``libwinpthread-1.dll`` and
+  ``libffi-6.dll`` from the msys2 installation into the repo folder.
+  ``bangra.exe`` will depend on them.
 * run ``makebangra.bat``
 
 There should now be a ``bangra`` executable in your root folder.

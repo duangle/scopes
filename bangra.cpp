@@ -68,7 +68,7 @@ int bangra_main(int argc, char ** argv);
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
-#include <dlfcn.h>
+//#include <dlfcn.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <libgen.h>
@@ -534,6 +534,12 @@ struct Any {
         const Anchor *anchorref;
     };
     const Type *type;
+
+    Any() {}
+    Any &operator =(const Any &other) {
+        ptr = other.ptr;
+        type = other.type;
+    }
 };
 
 static Any make_any(const Type *type) {
@@ -3885,9 +3891,12 @@ public:
 
     void exportExternal(const std::string &name, const Type *type,
         const Anchor &anchor) {
+        // TODO
+        /*
         set_key(*dest, name,
             wrap(type,
                 dlsym(NULL, name.c_str())));
+        */
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
