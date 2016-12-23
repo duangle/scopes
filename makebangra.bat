@@ -1,5 +1,5 @@
 @echo off
-rem you need msys2 and the llvm and clang 3.8 packages installed.
+rem you need msys2 and the llvm and clang 3.9 packages installed.
 rem additionally, the built executable depends on
 rem libstdc++-6.dll, libgcc_s_seh-1.dll and libwinpthread-1.dll
 setlocal
@@ -30,21 +30,21 @@ g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
     -Wl,--export-all-symbols ^
     -lLLVMLTO -lLLVMObjCARCOpts ^
     -lLLVMMIRParser -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoDWARF ^
-    -lLLVMTableGen -lLLVMLineEditor -lLLVMOrcJIT -lLLVMCppBackendCodeGen ^
-    -lLLVMCppBackendInfo -lLLVMARMDisassembler -lLLVMARMCodeGen ^
+    -lLLVMTableGen -lLLVMLineEditor -lLLVMOrcJIT ^
+    -lLLVMARMDisassembler -lLLVMARMCodeGen ^
     -lLLVMARMAsmParser -lLLVMARMDesc -lLLVMARMInfo -lLLVMARMAsmPrinter ^
     -lLLVMLibDriver -lLLVMOption -lLLVMX86Disassembler -lLLVMX86AsmParser ^
     -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMAsmPrinter -lLLVMX86Desc ^
     -lLLVMMCDisassembler -lLLVMX86Info -lLLVMX86AsmPrinter -lLLVMX86Utils ^
     -lLLVMMCJIT -lLLVMPasses -lLLVMipo -lLLVMVectorize -lLLVMLinker ^
-    -lLLVMIRReader -lLLVMAsmParser -lLLVMDebugInfoCodeView ^
+    -lLLVMIRReader -lLLVMAsmParser -lLLVMDebugInfoCodeView -lLLVMCoverage ^
     -lLLVMExecutionEngine -lLLVMRuntimeDyld -lLLVMCodeGen -lLLVMTarget ^
     -lLLVMScalarOpts -lLLVMInstCombine -lLLVMInstrumentation -lLLVMProfileData ^
     -lLLVMObject -lLLVMMCParser -lLLVMTransformUtils -lLLVMMC -lLLVMBitWriter ^
     -lLLVMBitReader -lLLVMAnalysis -lLLVMCore -lLLVMSupport ^
     -Wl,--no-whole-archive ^
     -lLLVMInterpreter ^
-    -lffi -lole32 -luuid ^
+    -lffi -lole32 -luuid -lversion ^
     -fexceptions
 if errorlevel 1 goto :fail
 %DIR%bangra.exe %DIR%testing\test_all.b

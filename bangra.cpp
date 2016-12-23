@@ -539,6 +539,7 @@ struct Any {
     Any &operator =(const Any &other) {
         ptr = other.ptr;
         type = other.type;
+        return *this;
     }
 };
 
@@ -698,6 +699,7 @@ typedef
 enum {
     OP1_Neg = 0,
     OP1_Not,
+    OP1_BoolNot,
     OP1_Rcp,
 
     OP1_Count,
@@ -714,6 +716,8 @@ enum {
     OP2_Xor,
     OP2_Concat,
     OP2_At,
+    OP2_LShift,
+    OP2_RShift,
 
     OP2_Count,
 };
@@ -741,8 +745,12 @@ struct Type {
     UnaryOpFunction op1[OP1_Count];
     // implementation of binary operators
     BinaryOpFunction op2[OP2_Count];
+    // implementation of reverse binary operators
+    BinaryOpFunction rop2[OP2_Count];
     // implementation of binary comparison operators
     BoolBinaryOpFunction bop2[BOP2_Count];
+    // implementation of reverse binary comparison operators
+    BoolBinaryOpFunction brop2[BOP2_Count];
     // return true if self supports the interface of other
     bool (*eq_type)(const Type *self, const Type *other);
     // short string representation
@@ -853,17 +861,17 @@ static bool type_eq_type_default(const Type *self, const Type *other) {
 }
 
 static Any op1_default(const Type *self, const Any &value) {
-    error("invalid operation");
+    error(value, "invalid operation");
     return const_none;
 }
 
 static Any op2_default(const Type *self, const Any &a, const Any &b) {
-    error("invalid operation");
+    error(a, "invalid operation");
     return const_none;
 }
 
 static bool bop2_default(const Type *self, const Any &a, const Any &b) {
-    error("invalid operation");
+    error(a, "invalid operation");
     return false;
 }
 
@@ -904,9 +912,11 @@ static Type *new_type(const std::string &name) {
     }
     for (size_t i = 0; i < OP2_Count; ++i) {
         result->op2[i] = op2_default;
+        result->rop2[i] = op2_default;
     }
     for (size_t i = 0; i < BOP2_Count; ++i) {
         result->bop2[i] = bop2_default;
+        result->brop2[i] = bop2_default;
     }
     result->is_signed = false;
     result->is_vararg = false;
@@ -922,30 +932,123 @@ static bool eq(const Type *self, const Type *other) {
     return self->eq_type(self, other) || other->eq_type(other, self);
 }
 
-static bool eq(const Any &a, const Any &b) {
+template<int OP>
+static Any op2(const Any &a, const Any &b) {
     try {
-    } except (const Any &any) {
+        return a.type->op2[OP](a.type, a, b);
+    } catch (const Any &any) {
+        return b.type->rop2[OP](b.type, b, a);
     }
-        if (a.type->bop2[BOP2_Equal](a.type, a, b))
-            return true;
-    }
-    if (b.type->bop2[BOP2_Equal]) {
-        return b.type->bop2[BOP2_Equal](b.type, a, b)
-    } else if (!a.type->bop2[BOP2_Equal]
+}
 
-    return (a.type->bop2[ a.type->eq(a.type, a, b) || b.type->eq(b.type, b, a);
+template<int OP>
+static bool bop2(const Any &a, const Any &b) {
+    try {
+        return a.type->bop2[OP](a.type, a, b);
+    } catch (const Any &any) {
+        return b.type->brop2[OP](b.type, b, a);
+    }
+}
+
+template<int OP, int NEGOP>
+static bool bop2_fallback(const Any &a, const Any &b) {
+    try {
+        return bop2<OP>(a, b);
+    } catch (const Any &any) {
+        return !bop2<NEGOP>(a, b);
+    }
+}
+
+static bool eq(const Any &a, const Any &b) {
+    return bop2_fallback<BOP2_Equal, BOP2_NotEqual>(a, b);
 }
 
 static bool ne(const Any &a, const Any &b) {
-    return !eq(a,b);
+    return bop2_fallback<BOP2_NotEqual, BOP2_Equal>(a, b);
+}
+
+static bool gt(const Any &a, const Any &b) {
+    return bop2_fallback<BOP2_Greater, BOP2_LessEqual>(a, b);
+}
+
+static bool ge(const Any &a, const Any &b) {
+    return bop2_fallback<BOP2_GreaterEqual, BOP2_Less>(a, b);
+}
+
+static bool lt(const Any &a, const Any &b) {
+    return bop2_fallback<BOP2_Less, BOP2_GreaterEqual>(a, b);
+}
+
+static bool le(const Any &a, const Any &b) {
+    return bop2_fallback<BOP2_LessEqual, BOP2_Greater>(a, b);
+}
+
+static Any add(const Any &a, const Any &b) {
+    return op2<OP2_Add>(a, b);
+}
+
+static Any sub(const Any &a, const Any &b) {
+    return op2<OP2_Sub>(a, b);
+}
+
+static Any mul(const Any &a, const Any &b) {
+    return op2<OP2_Mul>(a, b);
+}
+
+static Any div(const Any &a, const Any &b) {
+    return op2<OP2_Div>(a, b);
+}
+
+static Any mod(const Any &a, const Any &b) {
+    return op2<OP2_Mod>(a, b);
+}
+
+static Any bit_and(const Any &a, const Any &b) {
+    return op2<OP2_And>(a, b);
+}
+
+static Any bit_or(const Any &a, const Any &b) {
+    return op2<OP2_Or>(a, b);
+}
+
+static Any bit_xor(const Any &a, const Any &b) {
+    return op2<OP2_Xor>(a, b);
+}
+
+static Any concat(const Any &a, const Any &b) {
+    return op2<OP2_Concat>(a, b);
+}
+
+static Any at(const Any &value, const Any &index) {
+    return op2<OP2_At>(value, index);
+}
+
+static Any lshift(const Any &a, const Any &b) {
+    return op2<OP2_LShift>(a, b);
+}
+
+static Any rshift(const Any &a, const Any &b) {
+    return op2<OP2_RShift>(a, b);
+}
+
+static Any neg(const Any &value) {
+    return value.type->op1[OP1_Neg](value.type, value);
+}
+
+static Any bit_not(const Any &value) {
+    return value.type->op1[OP1_Not](value.type, value);
+}
+
+static Any bool_not(const Any &value) {
+    return value.type->op1[OP1_BoolNot](value.type, value);
+}
+
+static Any rcp(const Any &value) {
+    return value.type->op1[OP1_Rcp](value.type, value);
 }
 
 static std::string get_string(const Any &value) {
     return value.type->tostring(value.type, value);
-}
-
-static Any at(const Any &value, const Any &index) {
-    return value.type->at(value.type, value, index);
 }
 
 static Any slice(const Any &value, size_t i0, size_t i1) {
@@ -2247,7 +2350,7 @@ namespace Types {
         assert(element);
         Type *type = new_type("");
         type->count = size;
-        type->at = type_array_at;
+        type->op2[OP2_At] = type_array_at;
         type->element_type = element;
         auto padded_size = align(get_size(element), get_alignment(element));
         type->size = padded_size * type->count;
@@ -2286,8 +2389,8 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
-        type->at = type_pointer_at;
-        type->eq = value_pointer_eq;
+        type->op2[OP2_At] = type_pointer_at;
+        type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = value_pointer_eq;
         type->tostring = _pointer_tostring;
         type->element_type = element;
         type->size = ffi_type_pointer.size;
@@ -2456,7 +2559,7 @@ namespace Types {
         ss << ")";
         Type *type = new_type(ss.str());
         type->eq_type = type_tuple_eq;
-        type->at = type_tuple_at;
+        type->op2[OP2_At] = type_tuple_at;
         type->length = _tuple_length;
         type->tostring = _tuple_tostring;
         _set_struct_field_types(type, types);
@@ -2508,7 +2611,7 @@ namespace Types {
             (width == 1)?"bool":
                 format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
-        type->eq = _integer_eq;
+        type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = _integer_eq;
         type->width = width;
         type->tostring = _integer_tostring;
         type->is_signed = signed_;
@@ -2529,7 +2632,7 @@ namespace Types {
         Type *type = new_type(format("real%zu", width));
         type->tostring = _real_tostring;
         type->eq_type = type_real_eq;
-        type->eq = _real_eq;
+        type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = _real_eq;
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -2550,7 +2653,7 @@ namespace Types {
             type->name = ss.str();
         }
         type->eq_type = type_struct_eq;
-        type->at = type_struct_at;
+        type->op2[OP2_At] = type_struct_at;
         type->length = _tuple_length;
         return type;
     }
@@ -2585,7 +2688,7 @@ namespace Types {
         AnchorRef = Struct("Anchor", true);
 
         tmp = Struct("None", true);
-        tmp->eq = value_none_eq;
+        tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_none_eq;
         tmp->tostring = _none_tostring;
         None = tmp;
         const_none = make_any(Types::None);
@@ -2615,8 +2718,8 @@ namespace Types {
         tmp->tostring = _string_tostring;
         tmp->length = _string_length;
         tmp->slice = _string_slice;
-        tmp->at = _string_at;
-        tmp->eq = value_string_eq;
+        tmp->op2[OP2_At] = _string_at;
+        tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_string_eq;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         String = tmp;
@@ -2625,15 +2728,15 @@ namespace Types {
         tmp->tostring = _symbol_tostring;
         tmp->length = _string_length;
         //tmp->slice = _symbol_slice;
-        //tmp->at = _string_at;
-        tmp->eq = value_string_eq;
+        //tmp->op2[OP2_At] = _string_at;
+        tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_string_eq;
         tmp->apply_type = _symbol_apply_type;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         Symbol = tmp;
 
         tmp = Struct("SList", true);
-        tmp->at = type_slist_at;
+        tmp->op2[OP2_At] = type_slist_at;
         //tmp->apply_type = _slist_apply_type;
         //tmp->size = sizeof(bangra::SList);
         //tmp->alignment = offsetof(_slist_alignment, s);
@@ -2644,7 +2747,7 @@ namespace Types {
         PSList = tmp;
 
         tmp = Struct("Table", true);
-        tmp->at = type_table_at;
+        tmp->op2[OP2_At] = type_table_at;
         _Table = tmp;
         PTable = Pointer(_Table);
 
@@ -4349,261 +4452,22 @@ static Any builtin_variadic_ltr(const std::vector<Any> &args) {
     return result;
 }
 
-template<typename A, typename B>
-class cast_join_type {};
-template<typename T> class cast_join_type<T, T> {
-    public: typedef T return_type; };
-template<> class cast_join_type<int64_t, double> {
-    public: typedef double return_type; };
-template<> class cast_join_type<double, int64_t> {
-    public: typedef double return_type; };
-
-class builtin_add_op { public:
-    template<typename Ta, typename Tb>
-    static typename cast_join_type<Ta,Tb>::return_type
-        operate(const Ta &a, const Tb &b) { return a + b; }
-};
-class builtin_sub_op { public:
-    template<typename Ta, typename Tb>
-    static typename cast_join_type<Ta,Tb>::return_type
-        operate(const Ta &a, const Tb &b) { return a - b; }
-};
-class builtin_mul_op { public:
-    template<typename Ta, typename Tb>
-    static typename cast_join_type<Ta,Tb>::return_type
-        operate(const Ta &a, const Tb &b) { return a * b; }
-};
-class builtin_div_op { public:
-    template<typename Ta, typename Tb>
-    static typename cast_join_type<Ta,Tb>::return_type
-        operate(const Ta &a, const Tb &b) { return a / b; }
-    static double operate(const int64_t &a, const int64_t &b) {
-            return (double)a / (double)b; }
-};
-class builtin_mod_op { public:
-    template<typename Ta, typename Tb>
-    static typename cast_join_type<Ta,Tb>::return_type
-        operate(const Ta &a, const Tb &b) { return fmod(a,b); }
-};
-
-class builtin_bitand_op { public:
-    template<typename T>
-    static T operate(const T &a, const T &b) { return a & b; }
-};
-class builtin_bitor_op { public:
-    template<typename T>
-    static T operate(const T &a, const T &b) { return a | b; }
-};
-class builtin_bitxor_op { public:
-    template<typename T>
-    static T operate(const T &a, const T &b) { return a ^ b; }
-};
-class builtin_bitnot_op { public:
-    template<typename T>
-    static T operate(const T &x) { return ~x; }
-};
-class builtin_not_op { public:
-    template<typename T>
-    static T operate(const T &x) { return !x; }
-};
-
-static bool operator ==(const Any &a, const Any &b) {
-    return eq(a, b);
-}
-static bool operator !=(const Any &a, const Any &b) {
-    return !eq(a, b);
+template<Any (*F)(const Any &)>
+static Any builtin_unary_op(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    return F(args[0]);
 }
 
-class builtin_gt_op { public:
-    template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) { return a > b; }
-};
-class builtin_ge_op { public:
-    template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) { return a >= b; }
-};
-class builtin_lt_op { public:
-    template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) { return a < b; }
-};
-class builtin_le_op { public:
-    template<typename Ta, typename Tb>
-    static bool operate(const Ta &a, const Tb &b) { return a <= b; }
-};
-
-template <class NextT>
-class builtin_filter_op { public:
-    static Any operate(const double &a, const int32_t &b) {
-        return wrap(NextT::operate(a, b));
-    }
-    static Any operate(const double &a, const int64_t &b) {
-        return wrap(NextT::operate(a, b));
-    }
-    static Any operate(const int32_t &a, const double &b) {
-        return wrap(NextT::operate(a, b));
-    }
-    static Any operate(const int64_t &a, const double &b) {
-        return wrap(NextT::operate(a, b));
-    }
-    template<typename T>
-    static Any operate(const T &a, const T &b) {
-        return wrap(NextT::operate(a, b));
-    }
-    template<typename Ta, typename Tb>
-    static Any operate(const Ta &a, const Tb &b) {
-        error(const_none, "illegal operands");
-        return const_none;
-    }
-};
-
-
-class dispatch_types_failed {
-public:
-    template<typename F>
-    static Any dispatch(const Any &v, const F &next) {
-        error(v, "illegal operand");
-        return const_none;
-    }
-};
-
-class dispatch_pointer_type {
-public:
-    template<typename F>
-    static Any dispatch(const Any &v, const F &next) {
-        return next(v);
-    }
-};
-
-template<typename NextT>
-class dispatch_string_type {
-public:
-    template<typename F>
-    static Any dispatch(const Any &v, const F &next) {
-        if (eq(v.type, Types::String)) {
-            return next(extract_string(v));
-        } else if (eq(v.type, Types::Symbol)) {
-            return next(extract_any_string(v));
-        } else {
-            return NextT::template dispatch<F>(v, next);
-        }
-    }
-};
-
-template<typename NextT>
-class dispatch_integer_type {
-public:
-    template<typename F>
-    static Any dispatch(const Any &v, const F &next) {
-        if (is_integer_type(v.type)) {
-            return next(extract_integer(v));
-        }
-        return NextT::template dispatch<F>(v, next);
-    }
-};
-
-template<typename NextT>
-class dispatch_bool_type {
-public:
-    template<typename F>
-    static Any dispatch(const Any &v, const F &next) {
-        if (is_bool_type(v.type)) {
-            return next(*v.p_i1);
-        }
-        return NextT::template dispatch<F>(v, next);
-    }
-};
-
-template<typename NextT>
-class dispatch_real_type {
-public:
-    template<typename F>
-    static Any dispatch(const Any &v, const F &next) {
-        if (is_real_type(v.type)) {
-            return next(extract_real(v));
-        } else {
-            return NextT::template dispatch<F>(v, next);
-        }
-    }
-};
-
-typedef dispatch_integer_type<
-    dispatch_real_type <
-        dispatch_types_failed> >
-    dispatch_arithmetic_types;
-
-typedef dispatch_integer_type<
-            dispatch_real_type<
-                dispatch_types_failed> >
-    dispatch_arith_types;
-typedef dispatch_integer_type<
-            dispatch_real_type<
-                dispatch_string_type<
-                    dispatch_types_failed> > >
-    dispatch_arith_string_types;
-typedef dispatch_integer_type<
-            dispatch_real_type<
-                dispatch_string_type<
-                    dispatch_pointer_type> > >
-    dispatch_arith_string_ptr_types;
-typedef dispatch_arithmetic_types dispatch_arith_cmp_types;
-typedef dispatch_arith_string_types dispatch_cmp_types;
-typedef dispatch_arith_string_ptr_types dispatch_eq_cmp_types;
-
-typedef dispatch_integer_type<dispatch_types_failed>
-    dispatch_bit_types;
-typedef dispatch_bool_type<dispatch_types_failed>
-    dispatch_boolean_types;
-
-template<class D, class F>
-class builtin_binary_op1 {
-public:
-    template<typename Q>
-    Any operator ()(const Q &ca_value) const {
-        return wrap(F::operate(ca_value));
-    }
-};
-
-template<class D, class F, typename T>
-class builtin_binary_op3 {
-public:
-    const T &ca_value;
-    builtin_binary_op3(const T &ca_value_) : ca_value(ca_value_) {}
-
-    template<typename Q>
-    Any operator ()(const Q &cb_value) const {
-        return builtin_filter_op<F>::operate(ca_value, cb_value);
-    }
-};
-
-template<class D, class F>
-class builtin_binary_op2 {
-public:
-    const Any &b;
-    builtin_binary_op2(const Any &b_) : b(b_) {}
-
-    template<typename T>
-    Any operator ()(const T &ca_value) const {
-        return D::dispatch(b, builtin_binary_op3<D, F, T>(ca_value));
-    }
-};
-
-template<class D, class F>
-static Any builtin_binary_op(
-    const std::vector<Any> &args) {
-    if (args.size() != 2) {
-        error(const_none, "invalid number of arguments");
-    }
-    return D::dispatch(args[0], builtin_binary_op2<D, F>(args[1]));
+template<Any (*F)(const Any &, const Any &)>
+static Any builtin_binary_op(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    return F(args[0], args[1]);
 }
 
-
-template<class D, class F>
-static Any builtin_unary_op(
-    const std::vector<Any> &args) {
-    if (args.size() != 1) {
-        error(const_none, "invalid number of arguments");
-    }
-    return D::dispatch(args[0], builtin_binary_op1<D, F>());
+template<bool (*F)(const Any &, const Any &)>
+static Any builtin_bool_binary_op(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    return wrap(F(args[0], args[1]));
 }
 
 //------------------------------------------------------------------------------
@@ -5224,40 +5088,34 @@ static void initGlobals () {
     setBuiltin(env, "slice", builtin_slice);
 
     setBuiltin(env, "+",
-        builtin_variadic_ltr< builtin_binary_op<OP2_Add> >);
+        builtin_variadic_ltr< builtin_binary_op<add> >);
     setBuiltin(env, "-",
-        builtin_binary_op<OP2_Sub>);
+        builtin_binary_op<sub>);
     setBuiltin(env, "*",
-        builtin_variadic_ltr< builtin_binary_op<OP2_Mul> >);
+        builtin_variadic_ltr< builtin_binary_op<mul> >);
     setBuiltin(env, "/",
-        builtin_binary_op<OP2_Div>);
+        builtin_binary_op<div>);
     setBuiltin(env, "%",
-        builtin_binary_op<OP2_Mod>);
+        builtin_binary_op<mod>);
 
     setBuiltin(env, "&",
-        builtin_binary_op<dispatch_bit_types, builtin_bitand_op>);
+        builtin_binary_op<bit_and>);
     setBuiltin(env, "|",
-        builtin_variadic_ltr<
-            builtin_binary_op<dispatch_bit_types, builtin_bitor_op>
-            >);
+        builtin_variadic_ltr< builtin_binary_op<bit_or> >);
     setBuiltin(env, "^",
-        builtin_binary_op<dispatch_bit_types, builtin_bitxor_op>);
+        builtin_binary_op<bit_xor>);
     setBuiltin(env, "~",
-        builtin_unary_op<dispatch_bit_types, builtin_bitnot_op>);
+        builtin_unary_op<bit_not>);
 
     setBuiltin(env, "not",
-        builtin_unary_op<dispatch_boolean_types, builtin_not_op>);
+        builtin_unary_op<bool_not>);
 
-    setBuiltin(env, "==", builtin_eq);
-    setBuiltin(env, "!=", builtin_ne);
-    setBuiltin(env, ">",
-        builtin_binary_op<dispatch_cmp_types, builtin_gt_op>);
-    setBuiltin(env, ">=",
-        builtin_binary_op<dispatch_cmp_types, builtin_ge_op>);
-    setBuiltin(env, "<",
-        builtin_binary_op<dispatch_cmp_types, builtin_lt_op>);
-    setBuiltin(env, "<=",
-        builtin_binary_op<dispatch_cmp_types, builtin_le_op>);
+    setBuiltin(env, "==", builtin_bool_binary_op<eq>);
+    setBuiltin(env, "!=", builtin_bool_binary_op<ne>);
+    setBuiltin(env, ">", builtin_bool_binary_op<gt>);
+    setBuiltin(env, ">=", builtin_bool_binary_op<ge>);
+    setBuiltin(env, "<", builtin_bool_binary_op<lt>);
+    setBuiltin(env, "<=", builtin_bool_binary_op<le>);
 
 }
 
