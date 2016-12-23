@@ -688,6 +688,47 @@ struct Table {
 
 //------------------------------------------------------------------------------
 
+typedef
+    Any (*UnaryOpFunction)(const Type *self, const Any &value);
+typedef
+    Any (*BinaryOpFunction)(const Type *self, const Any &a, const Any &b);
+typedef
+    bool (*BoolBinaryOpFunction)(const Type *self, const Any &a, const Any &b);
+
+enum {
+    OP1_Neg = 0,
+    OP1_Not,
+    OP1_Rcp,
+
+    OP1_Count,
+};
+
+enum {
+    OP2_Add = 0,
+    OP2_Sub,
+    OP2_Mul,
+    OP2_Div,
+    OP2_Mod,
+    OP2_And,
+    OP2_Or,
+    OP2_Xor,
+    OP2_Concat,
+    OP2_At,
+
+    OP2_Count,
+};
+
+enum {
+    BOP2_Equal = 0,
+    BOP2_NotEqual,
+    BOP2_Greater,
+    BOP2_GreaterEqual,
+    BOP2_Less,
+    BOP2_LessEqual,
+
+    BOP2_Count,
+};
+
 struct Type {
     // dynamic attributes
     Table table;
@@ -696,16 +737,18 @@ struct Type {
 
     std::string name;
 
+    // implementation of unary operators
+    UnaryOpFunction op1[OP1_Count];
+    // implementation of binary operators
+    BinaryOpFunction op2[OP2_Count];
+    // implementation of binary comparison operators
+    BoolBinaryOpFunction bop2[BOP2_Count];
     // return true if self supports the interface of other
     bool (*eq_type)(const Type *self, const Type *other);
     // short string representation
     std::string (*tostring)(const Type *self, const Any &value);
-    // return contained item
-    Any (*at)(const Type *self, const Any &value, const Any &index);
     // return range
     Any (*slice)(const Type *self, const Any &value, size_t i0, size_t i1);
-    // return true if objects are equivalent
-    bool (*eq)(const Type *self, const Any &a, const Any &b);
     // apply the type
     Any (*apply_type)(const Type *self, const std::vector<Any> &args);
     // length of value, if any
@@ -809,13 +852,19 @@ static bool type_eq_type_default(const Type *self, const Type *other) {
     return false;
 }
 
-static bool type_eq_default(const Type *self, const Any &a, const Any &b) {
-    return false;
+static Any op1_default(const Type *self, const Any &value) {
+    error("invalid operation");
+    return const_none;
 }
 
-static Any type_at_default(const Type *self, const Any &value, const Any &index) {
-    assert(false && "type not indexable");
+static Any op2_default(const Type *self, const Any &a, const Any &b) {
+    error("invalid operation");
     return const_none;
+}
+
+static bool bop2_default(const Type *self, const Any &a, const Any &b) {
+    error("invalid operation");
+    return false;
 }
 
 static Any type_apply_default(const Type *self, const std::vector<Any> &args) {
@@ -844,14 +893,21 @@ static Type *new_type(const std::string &name) {
     auto result = new Type();
     result->size = 0;
     result->alignment = 1;
-    result->at = type_at_default;
     result->name = name;
     result->eq_type = type_eq_type_default;
     result->apply_type = type_apply_default;
-    result->eq = type_eq_default;
     result->tostring = type_tostring_default;
     result->length = type_length_default;
     result->slice = type_slice_default;
+    for (size_t i = 0; i < OP1_Count; ++i) {
+        result->op1[i] = op1_default;
+    }
+    for (size_t i = 0; i < OP2_Count; ++i) {
+        result->op2[i] = op2_default;
+    }
+    for (size_t i = 0; i < BOP2_Count; ++i) {
+        result->bop2[i] = bop2_default;
+    }
     result->is_signed = false;
     result->is_vararg = false;
     result->width = 0;
@@ -867,7 +923,17 @@ static bool eq(const Type *self, const Type *other) {
 }
 
 static bool eq(const Any &a, const Any &b) {
-    return a.type->eq(a.type, a, b) || b.type->eq(b.type, b, a);
+    try {
+    } except (const Any &any) {
+    }
+        if (a.type->bop2[BOP2_Equal](a.type, a, b))
+            return true;
+    }
+    if (b.type->bop2[BOP2_Equal]) {
+        return b.type->bop2[BOP2_Equal](b.type, a, b)
+    } else if (!a.type->bop2[BOP2_Equal]
+
+    return (a.type->bop2[ a.type->eq(a.type, a, b) || b.type->eq(b.type, b, a);
 }
 
 static bool ne(const Any &a, const Any &b) {
@@ -5158,19 +5224,15 @@ static void initGlobals () {
     setBuiltin(env, "slice", builtin_slice);
 
     setBuiltin(env, "+",
-        builtin_variadic_ltr<
-            builtin_binary_op<dispatch_arith_string_types, builtin_add_op>
-            >);
+        builtin_variadic_ltr< builtin_binary_op<OP2_Add> >);
     setBuiltin(env, "-",
-        builtin_binary_op<dispatch_arith_types, builtin_sub_op>);
+        builtin_binary_op<OP2_Sub>);
     setBuiltin(env, "*",
-        builtin_variadic_ltr<
-            builtin_binary_op<dispatch_arith_types, builtin_mul_op>
-            >);
+        builtin_variadic_ltr< builtin_binary_op<OP2_Mul> >);
     setBuiltin(env, "/",
-        builtin_binary_op<dispatch_arith_types, builtin_div_op>);
+        builtin_binary_op<OP2_Div>);
     setBuiltin(env, "%",
-        builtin_binary_op<dispatch_arith_types, builtin_mod_op>);
+        builtin_binary_op<OP2_Mod>);
 
     setBuiltin(env, "&",
         builtin_binary_op<dispatch_bit_types, builtin_bitand_op>);
