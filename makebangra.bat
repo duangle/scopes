@@ -1,7 +1,7 @@
 @echo off
 rem you need msys2 and the llvm and clang 3.9 packages installed.
 rem additionally, the built executable depends on
-rem libstdc++-6.dll, libgcc_s_seh-1.dll and libwinpthread-1.dll
+rem libstdc++-6.dll, libgcc_s_seh-1.dll, libffi-6.dll and libwinpthread-1.dll
 setlocal
 set DIR=%~dp0
 set MSYSPATH=C:\msys64

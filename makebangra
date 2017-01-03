@@ -10,7 +10,7 @@ cd $DIR
 MODE=release
 if [ $MODE = "release" ]; then
     echo Building with clang release version...
-    PATH=$DIR/clang/bin:/usr/lib/llvm-3.8/bin:$PATH
+    PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
 else
     echo Building with clang debug version...
     PATH=$DIR/../../llvm/build/bin:$PATH
@@ -23,6 +23,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     -ferror-limit=1 \
     -Wno-vla-extension \
     -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
+    -D_GLIBCXX_USE_CXX11_ABI=0 \
     -lpthread -lm -ldl -ltinfo -lz \
     -I$DIR/libffi/include $DIR/libffi/.libs/libffi.a \
     -lclangFrontend -lclangDriver \
@@ -33,7 +34,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     `llvm-config --cxxflags` \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
-    `llvm-config --libs engine passes option objcarcopts` \
+    `llvm-config --libs engine passes option objcarcopts coverage support` \
     -Wl,--no-whole-archive \
     -O0 \
     -fexceptions \
