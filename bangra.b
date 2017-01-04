@@ -524,14 +524,17 @@ do
         V . z @ "w" . blue
         V.z.w.blue
 
-    print
+    print "2 * 2 + 1 == 5:"
         2 * 2 + 1 == 5
 
-    print
+    print "true and true or true:"
         true and true or true
 
-    print
+    print "(tupleof 1 2 3) @ 2 == 3:"
         (tupleof 1 2 3) @ 2 == 3
+
+    print
+        "yes" + "no"
 
     do
         let i 0

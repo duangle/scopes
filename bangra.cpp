@@ -668,17 +668,7 @@ static void throw_any(const Any &any) {
     throw any;
 }
 
-static void error (const Any &any, const char *format, ...) {
-    const Anchor *anchor = nullptr;
-    // TODO: find valid anchor
-    //std::cout << "at\n  " << getRepr(value) << "\n";
-    //anchor = find_valid_anchor(value);
-    va_list args;
-    va_start (args, format);
-    Anchor::printErrorV(anchor, format, args);
-    va_end (args);
-    throw_any(const_none);
-}
+static void error (const char *format, ...);
 
 //------------------------------------------------------------------------------
 
@@ -861,25 +851,26 @@ static bool type_eq_type_default(const Type *self, const Type *other) {
 }
 
 static Any op1_default(const Type *self, const Any &value) {
-    error(value, "unary operator not applicable to type %s",
+    error("unary operator not applicable to type %s",
         get_name(self).c_str());
     return const_none;
 }
 
 static Any op2_default(const Type *self, const Any &a, const Any &b) {
-    error(a, "binary operator not applicable to type %s",
+    error("binary operator not applicable to type %s",
         get_name(self).c_str());
     return const_none;
 }
 
 static bool bop2_default(const Type *self, const Any &a, const Any &b) {
-    error(a, "boolean binary operator not applicable to type %s",
+    error("boolean binary operator not applicable to type %s",
         get_name(self).c_str());
     return false;
 }
 
 static Any type_apply_default(const Type *self, const std::vector<Any> &args) {
-    assert(false && "type not applicable");
+    error("type %s has no constructor",
+        get_name(self).c_str());
     return const_none;
 }
 
@@ -894,7 +885,7 @@ static size_t type_length_default(const Type *self, const Any &value) {
 
 static Any type_slice_default(
     const Type *self, const Any &value, size_t i0, size_t i1) {
-    error(value, "type %s not sliceable", get_name(self).c_str());
+    error("type %s not sliceable", get_name(self).c_str());
     return const_none;
 }
 
@@ -1061,7 +1052,7 @@ static Any slice(const Any &value, size_t i0, size_t i1) {
 static size_t length(const Any &value) {
     auto s = value.type->length(value.type, value);
     if (s == (size_t)-1) {
-        error(value, "length operator not applicable");
+        error("length operator not applicable");
     }
     return s;
 }
@@ -1173,7 +1164,7 @@ static std::string extract_string(const Any &value) {
     } else if (eq(value.type, Types::String)) {
         return std::string(value.str->ptr, value.str->count);
     } else {
-        error(value, "can not extract string");
+        error("can not extract string");
         return "";
     }
 }
@@ -1186,7 +1177,7 @@ static std::string extract_any_string(const Any &value) {
     } else if (eq(value.type, Types::Symbol)) {
         return std::string(value.str->ptr, value.str->count);
     } else {
-        error(value, "can not extract string");
+        error("can not extract string");
         return "";
     }
 }
@@ -1195,7 +1186,7 @@ static bool extract_bool(const Any &value) {
     if (eq(value.type, Types::Bool)) {
         return *value.p_i1;
     }
-    error(value, "boolean expected");
+    error("boolean expected");
     return false;
 }
 
@@ -1203,7 +1194,7 @@ static const Type *extract_type(const Any &value) {
     if (is_typeref_type(value.type)) {
         return *value.ptype;
     }
-    error(value, "type constant expected");
+    error("type constant expected");
     return nullptr;
 }
 
@@ -1310,7 +1301,7 @@ static int64_t extract_integer(const Any &value) {
     } else if (type == Types::U64) {
         return (int64_t)*value.p_u64;
     } else {
-        error(value, "integer expected, not %s", get_name(type).c_str());
+        error("integer expected, not %s", get_name(type).c_str());
         return 0;
     }
 }
@@ -1341,7 +1332,7 @@ static double extract_real(const Any &value) {
     } else if (type == Types::R64) {
         return (double)*value.p_r64;
     } else {
-        error(value, "real expected, not %s", get_name(type).c_str());
+        error("real expected, not %s", get_name(type).c_str());
         return 0;
     }
 }
@@ -1376,7 +1367,7 @@ static std::vector<Any> extract_tuple(const Any &value) {
         }
         return result;
     }
-    error(value, "can not extract tuple");
+    error("can not extract tuple");
     return {};
 }
 
@@ -1391,7 +1382,7 @@ static const Table *extract_table(const Any &value) {
     } else if (eq(value.type, Types::_Table)) {
         return (Table *)value.ptr;
     }
-    error(value, "table expected, not %s", get_name(value.type).c_str());
+    error("table expected, not %s", get_name(value.type).c_str());
     return nullptr;
 }
 
@@ -1508,7 +1499,7 @@ static const SList *extract_slist(const Any &value) {
     } else if (eq(value.type, Types::_SList)) {
         return (const SList *)value.ptr;
     } else {
-        error(value, "slist expected, not %s", get_name(value.type).c_str());
+        error("slist expected, not %s", get_name(value.type).c_str());
     }
     return nullptr;
 }
@@ -1911,7 +1902,7 @@ static Any wrap(
         if (size) {
             memcpy(data + offset, srcptr, size);
         } else if (!isnone(args[i])) {
-            error(args[i], "attempting to pack opaque type %s in tuple",
+            error("attempting to pack opaque type %s in tuple",
                 get_name(args[i].type).c_str());
         }
     }
@@ -1935,16 +1926,37 @@ static bool builtin_checkparams (const std::vector<Any> &args,
     int argcount = (int)args.size() - skip;
 
     if ((maxcount >= 0) && (argcount > maxcount)) {
-        error(const_none,
-            "excess argument. At most %i arguments expected", maxcount);
+        error("excess argument. At most %i arguments expected", maxcount);
         return false;
     }
     if ((mincount >= 0) && (argcount < mincount)) {
-        error(const_none, "at least %i arguments expected", mincount);
+        error("at least %i arguments expected", mincount);
         return false;
     }
     return true;
 }
+
+static void error (const char *format, ...) {
+    //const Anchor *anchor = nullptr;
+    // TODO: find valid anchor
+    //std::cout << "at\n  " << getRepr(value) << "\n";
+    //anchor = find_valid_anchor(value);
+    va_list args;
+
+    va_start (args, format);
+    size_t size = vsnprintf(nullptr, 0, format, args);
+    va_end (args);
+
+    std::string str;
+    str.resize(size);
+
+    va_start (args, format);
+    vsnprintf(&str[0], size + 1, format, args);
+    va_end (args);
+
+    throw_any(wrap(str));
+}
+
 
 //------------------------------------------------------------------------------
 // IL MODEL UTILITY FUNCTIONS
@@ -2387,7 +2399,7 @@ namespace Types {
             get_size(self->element_type), get_alignment(self->element_type));
         auto offset = padded_size * index;
         if (offset >= self->size) {
-            error(vindex, "index %zu out of array bounds (%zu)",
+            error("index %zu out of array bounds (%zu)",
                 index, self->size / padded_size);
             return const_none;
         }
@@ -2450,7 +2462,7 @@ namespace Types {
         const bangra::Any &value, const bangra::Any &vindex) {
         auto index = (size_t)extract_integer(vindex);
         if (index >= self->types.size()) {
-            error(vindex, "index %zu out of tuple bounds (%zu)",
+            error("index %zu out of tuple bounds (%zu)",
                 index, self->types.size());
             return const_none;
         }
@@ -2477,7 +2489,7 @@ namespace Types {
             auto key = extract_any_string(vindex);
             auto it = self->name_index_map.find(key);
             if (it == self->name_index_map.end()) {
-                error(vindex, "no such field in struct: %s",
+                error("no such field in struct: %s",
                     key.c_str());
             }
             return type_tuple_at(self, value, wrap(it->second));
@@ -2497,7 +2509,7 @@ namespace Types {
         const bangra::Any &value, const bangra::Any &vindex) {
         auto slist = extract_slist(value);
         if (!slist) {
-            //error(value, "can not index into empty slist");
+            //error("can not index into empty slist");
             return wrap((bangra::SList*)nullptr);
         }
         auto index = (size_t)extract_integer(vindex);
@@ -2511,7 +2523,7 @@ namespace Types {
             }
             /*
             if (index != 0) {
-                error(value, "index %zu out of slist bounds", index);
+                error("index %zu out of slist bounds", index);
             }
             */
             return wrap(result);
@@ -2532,7 +2544,7 @@ namespace Types {
         const bangra::Any &value, const bangra::Any &vindex) {
         auto index = (size_t)extract_integer(vindex);
         if (index >= value.str->count) {
-            error(value, "index %zu out of string bounds (%zu)",
+            error("index %zu out of string bounds (%zu)",
                 index, value.str->count);
         }
         return _string_slice(self, value, index, index + 1);
@@ -3527,7 +3539,7 @@ struct FFI {
                 }
             }
         }
-        error(wrap(type), "can not translate %s to FFI type",
+        error("can not translate %s to FFI type",
             get_name(type).c_str());
         return nullptr;
     }
@@ -3550,10 +3562,10 @@ struct FFI {
         assert(is_cfunction_type(ftype));
         auto count = get_parameter_count(ftype);
         if (count != args.size()) {
-            error(func, "parameter count mismatch");
+            error("parameter count mismatch");
         }
         if (is_vararg(ftype)) {
-            error(func, "vararg functions not supported yet");
+            error("vararg functions not supported yet");
         }
 
         auto rtype = get_result_type(ftype);
@@ -3563,7 +3575,7 @@ struct FFI {
         for (size_t i = 0; i < count; ++i) {
             auto ptype = get_parameter_type(ftype, i);
             if (!eq(ptype, args[i].type)) {
-                error(args[i], "%s type expected, %s provided",
+                error("%s type expected, %s provided",
                     get_name(ptype).c_str(),
                     get_name(args[i].type).c_str());
             }
@@ -3748,7 +3760,7 @@ continue_execution:
                 arguments[0] = closure;
                 arguments[1] = result;
             } else {
-                error(callee, "can not apply %s",
+                error("can not apply %s",
                     get_name(callee.type).c_str());
             }
         }
@@ -3761,8 +3773,12 @@ continue_execution:
         printf("\n");
 
         print_stack_frames(frame);
+
+        std::cout << ansi(ANSI_STYLE_ERROR, "error:") << " " << get_string(any) << "\n";
+
         //goto continue_execution;
         fflush(stdout);
+
         throw_any(any);
     }
 
@@ -4363,7 +4379,7 @@ static Any builtin_slice(const std::vector<Any> &args) {
     int64_t i1;
     int64_t l = (int64_t)length(args[0]);
     if (!is_integer_type(args[1].type)) {
-        error(args[1], "integer expected");
+        error("integer expected");
     }
     i0 = extract_integer(args[1]);
     if (i0 < 0)
@@ -4371,7 +4387,7 @@ static Any builtin_slice(const std::vector<Any> &args) {
     i0 = std::min(std::max(i0, (int64_t)0), l);
     if (args.size() > 2) {
         if (!is_integer_type(args[2].type)) {
-            error(args[2], "integer expected");
+            error("integer expected");
         }
         i1 = extract_integer(args[2]);
         if (i1 < 0)
@@ -4437,7 +4453,7 @@ static Any builtin_structof(const std::vector<Any> &args) {
     for (size_t i = 0; i < args.size(); ++i) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
-            error(args[i], "tuple must have exactly two elements");
+            error("tuple must have exactly two elements");
         auto name = extract_any_string(pair[0]);
         names.push_back(name);
         auto value = pair[1];
@@ -4461,7 +4477,7 @@ static Any builtin_table(const std::vector<Any> &args) {
     for (size_t i = 0; i < args.size(); ++i) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
-            error(args[i], "tuple must have exactly two elements");
+            error("tuple must have exactly two elements");
         auto name = extract_any_string(pair[0]);
         auto value = pair[1];
         set_key(*t, name, value);
@@ -4500,7 +4516,7 @@ static Any builtin_cdecl(const std::vector<Any> &args) {
 static Any builtin_error(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     std::string msg = extract_string(args[0]);
-    error(args[0], "%s", msg.c_str());
+    error("%s", msg.c_str());
     return const_none;
 }
 
@@ -4668,12 +4684,11 @@ static bool verifyParameterCount (const SList *expr,
     int argcount = (int)getSize(expr) - 1;
 
     if ((maxcount >= 0) && (argcount > maxcount)) {
-        error(const_none,
-            "excess argument. At most %i arguments expected", maxcount);
+        error("excess argument. At most %i arguments expected", maxcount);
         return false;
     }
     if ((mincount >= 0) && (argcount < mincount)) {
-        error(const_none, "at least %i arguments expected", mincount);
+        error("at least %i arguments expected", mincount);
         return false;
     }
     return true;
@@ -4774,7 +4789,7 @@ static Cursor expand_let_syntax (const Table *env, SListIter topit) {
 
     auto rest = expand_expr_list(*expr_env.ptable, topit);
     if (!rest) {
-        error(*startit, "let-syntax: missing subsequent expression");
+        error("let-syntax: missing subsequent expression");
     }
 
     return { rest->at, rest->next };
@@ -4805,7 +4820,7 @@ process:
     Any expr = *topit;
     if (eq(expr.type, Types::PSList)) {
         if (!(*expr.pslist)) {
-            error(expr, "expression is empty");
+            error("expression is empty");
         }
 
         auto head = (*expr.pslist)->at;
@@ -4848,8 +4863,7 @@ process:
                     goto process;
                 }
             }
-            error(expr,
-                "no such symbol in scope: '%s'", value.c_str());
+            error("no such symbol in scope: '%s'", value.c_str());
         }
         result = getLocal(env, value);
         topit++;
@@ -4970,7 +4984,7 @@ static Any compile_function (SListIter it) {
     auto anchor = find_valid_anchor(it.getSList());
     if (!anchor || !anchor->isValid()) {
         printValue(wrap(it.getSList()), 0, true);
-        error(const_none, "function expression not anchored");
+        error("function expression not anchored");
     }
 
     it++;
@@ -5010,7 +5024,7 @@ static Any compile_implicit_call (SListIter it,
         anchor = find_valid_anchor(it.getSList());
         if (!anchor || !anchor->isValid()) {
             printValue(wrap(it.getSList()), 0, true);
-            error(const_none, "call expression not anchored");
+            error("call expression not anchored");
         }
     }
 
@@ -5031,7 +5045,7 @@ static Any compile_call (SListIter it) {
     auto anchor = find_valid_anchor(it.getSList());
     if (!anchor || !anchor->isValid()) {
         printValue(wrap(it.getSList()), 0, true);
-        error(const_none, "call expression not anchored");
+        error("call expression not anchored");
     }
     it++;
     return compile_implicit_call(it, anchor);
@@ -5052,7 +5066,7 @@ static Any compile (const Any &expr) {
     Any result = const_none;
     if (eq(expr.type, Types::PSList)) {
         if (!(*expr.pslist)) {
-            error(expr, "empty expression");
+            error("empty expression");
         }
         auto slist = *expr.pslist;
         auto head = slist->at;
@@ -5237,7 +5251,7 @@ static void init() {
 
 static void handleException(const Table *env, const Any &expr) {
     streamValue(std::cerr, expr, 0, true);
-    error(expr, "an exception was raised");
+    error("an exception was raised");
 }
 
 static bool compileRootValueList (const Table *env, const Any &expr) {
@@ -5279,13 +5293,13 @@ static bool compileMain (Any expr) {
             break;
         auto preprocessor = preprocessors[head];
         if (!preprocessor) {
-            error(expr, "unrecognized header: '%s'; try '%s' instead.",
+            error("unrecognized header: '%s'; try '%s' instead.",
                 head.c_str(),
                 BANGRA_HEADER);
             return false;
         }
         if (lastlang == head) {
-            error(expr,
+            error(
                 "header has not changed after preprocessing; is still '%s'.",
                 head.c_str());
         }
@@ -5298,8 +5312,7 @@ static bool compileMain (Any expr) {
             return false;
         }
         if (isnone(expr)) {
-            error(orig_expr,
-                "preprocessor returned none.");
+            error("preprocessor returned none.");
             return false;
         }
     }
