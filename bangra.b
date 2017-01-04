@@ -226,7 +226,7 @@ let-syntax (scope)
             syntax-single-macro
                 function (env expr)
                     slist tupleof
-                        (+ "#ifx:" (string (@ expr 1 0)))
+                        .. "#ifx:" (string (@ expr 1 0))
                         @ expr 2 0
 
 let-syntax (scope)
@@ -255,7 +255,7 @@ let-syntax (scope)
 
     function get-ifx-op (env op)
         let key
-            + "#ifx:" (string op)
+            .. "#ifx:" (string op)
         ? (symbol? op)
             loop (env)
                 if (key? env key)
@@ -349,14 +349,18 @@ let-syntax (scope)
                     @ topexpr 0
                 let head
                     @ expr 0
+                let headstr
+                    string head
                 # method call syntax
                 if
                     and
                         symbol? head
-                        == (slice (string head) 0 1) "."
+                        and
+                            != headstr ".."
+                            == (slice headstr 0 1) "."
 
                     let name
-                        slice (string head) 1
+                        slice headstr 1
                     let self-arg
                         @ expr 1 0
                     let rest
@@ -379,25 +383,40 @@ let-syntax (scope)
                                 \ (@ expr 0) (@ expr 1) 0
                             0
                         @ topexpr 1
-
         tupleof "#symbol"
             function (env topexpr)
+                let sym
+                    @ topexpr 0
                 let it
                     iter-string-r
-                        string (@ topexpr 0)
-                if
-                    fold it false
-                        function (out k)
-                            if (== k ".") true
-                            else out
-
+                        string sym
+                function finalize-head (out)
                     cons
-                        fold it (slist (symbol ""))
+                        symbol
+                            @ out 0
+                        @ out 1
+                # return tokenized list if string contains a dot
+                # and it's not the concat operator
+                if
+                    and
+                        != sym (quote ..)
+                        fold it false
                             function (out k)
-                                if (== k ".")
-                                    cons (symbol "") (cons (quote .) out)
-                                else
-                                    cons (symbol (+ k (@ out 0))) (@ out 1)
+                                if (== k ".") true
+                                else out
+                    cons
+                        finalize-head
+                            fold it (slist "")
+                                function (out k)
+                                    if (== k ".")
+                                        cons ""
+                                            cons
+                                                quote .
+                                                finalize-head out
+                                    else
+                                        cons
+                                            .. k (@ out 0)
+                                            @ out 1
                         @ topexpr 1
 
         syntax-infix-op or (syntax-infix-rules 100 > or)
@@ -412,6 +431,7 @@ let-syntax (scope)
         syntax-infix-op != (syntax-infix-rules 300 > !=)
         syntax-infix-op == (syntax-infix-rules 300 > ==)
         #syntax-infix-op is (syntax-infix-rules 300 > is)
+        syntax-infix-op .. (syntax-infix-rules 400 < ..)
         #syntax-infix-op << (syntax-infix-rules 450 > <<)
         #syntax-infix-op >> (syntax-infix-rules 450 > >>)
         syntax-infix-op - (syntax-infix-rules 500 > -)
@@ -464,7 +484,7 @@ do
                     if (k == "o")
                         out
                     else
-                        + out k k
+                        .. out k k
 
     print
         repr
@@ -497,11 +517,12 @@ do
                     tupleof "v" 1
                     tupleof "w"
                         structof
-                            tupleof "a" 0
-                            tupleof "b" 1
-                            tupleof "c" 2
+                            tupleof "red" 0
+                            tupleof "green" 1
+                            tupleof "blue" 2
     print "dot:"
-        V . z @ "w" . c
+        V . z @ "w" . blue
+        V.z.w.blue
 
     print
         2 * 2 + 1 == 5
@@ -519,7 +540,7 @@ do
             loop (i k)
                 if (i < 10)
                     print "#" i k
-                    repeat (i + 1) (k + "!")
+                    repeat (i + 1) (k .. "!")
                 else
                     k
 

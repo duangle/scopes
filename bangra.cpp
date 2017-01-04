@@ -861,17 +861,20 @@ static bool type_eq_type_default(const Type *self, const Type *other) {
 }
 
 static Any op1_default(const Type *self, const Any &value) {
-    error(value, "invalid operation");
+    error(value, "unary operator not applicable to type %s",
+        get_name(self).c_str());
     return const_none;
 }
 
 static Any op2_default(const Type *self, const Any &a, const Any &b) {
-    error(a, "invalid operation");
+    error(a, "binary operator not applicable to type %s",
+        get_name(self).c_str());
     return const_none;
 }
 
 static bool bop2_default(const Type *self, const Any &a, const Any &b) {
-    error(a, "invalid operation");
+    error(a, "boolean binary operator not applicable to type %s",
+        get_name(self).c_str());
     return false;
 }
 
@@ -2256,9 +2259,54 @@ namespace Types {
         return (self == b.type);
     }
 
+    static bangra::Any _integer_add(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) + extract_integer(b));
+    }
+
+    static bangra::Any _integer_sub(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) - extract_integer(b));
+    }
+
+    static bangra::Any _integer_mul(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) * extract_integer(b));
+    }
+
+    static bangra::Any _integer_div(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) / extract_integer(b));
+    }
+
     static bool _integer_eq(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         return extract_integer(a) == extract_integer(b);
+    }
+
+    static bool _integer_ne(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return extract_integer(a) != extract_integer(b);
+    }
+
+    static bool _integer_gt(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return extract_integer(a) > extract_integer(b);
+    }
+
+    static bool _integer_ge(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return extract_integer(a) >= extract_integer(b);
+    }
+
+    static bool _integer_lt(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return extract_integer(a) < extract_integer(b);
+    }
+
+    static bool _integer_le(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return extract_integer(a) <= extract_integer(b);
     }
 
     static bool _real_eq(const Type *self,
@@ -2510,6 +2558,11 @@ namespace Types {
         return self->types.size();
     }
 
+    static bangra::Any _string_concat(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_string(a) + extract_string(b));
+    }
+
     static void _set_field_names(Type *type, const std::vector<std::string> &names) {
         for (size_t i = 0; i < names.size(); ++i) {
             auto &name = names[i];
@@ -2611,7 +2664,25 @@ namespace Types {
             (width == 1)?"bool":
                 format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
+
+        type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
+        type->op2[OP2_Sub] = _integer_sub;
+        type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
+        type->op2[OP2_Div] = _integer_div;
+
         type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = _integer_eq;
+        type->bop2[BOP2_NotEqual] = type->brop2[BOP2_NotEqual] = _integer_ne;
+
+        type->bop2[BOP2_Greater] = _integer_gt;
+        type->bop2[BOP2_GreaterEqual] = _integer_ge;
+        type->brop2[BOP2_Greater] = _integer_le;
+        type->brop2[BOP2_GreaterEqual] = _integer_lt;
+
+        type->bop2[BOP2_Less] = _integer_lt;
+        type->bop2[BOP2_LessEqual] = _integer_le;
+        type->brop2[BOP2_Less] = _integer_ge;
+        type->brop2[BOP2_LessEqual] = _integer_gt;
+
         type->width = width;
         type->tostring = _integer_tostring;
         type->is_signed = signed_;
@@ -2719,6 +2790,7 @@ namespace Types {
         tmp->length = _string_length;
         tmp->slice = _string_slice;
         tmp->op2[OP2_At] = _string_at;
+        tmp->op2[OP2_Concat] = _string_concat;
         tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_string_eq;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
@@ -4268,6 +4340,7 @@ static Any builtin_at(const std::vector<Any> &args) {
     return at(args[0], args[1]);
 }
 
+/*
 static Any builtin_eq(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     return wrap(eq(args[0], args[1]));
@@ -4277,6 +4350,7 @@ static Any builtin_ne(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     return wrap(ne(args[0], args[1]));
 }
+*/
 
 static Any builtin_length(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
@@ -4333,7 +4407,7 @@ static Any builtin_repr(const std::vector<Any> &args) {
 static Any builtin_dump(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     printValue(args[0], 0, true);
-    return const_none;
+    return args[0];
 }
 
 static Any builtin_tupleof(const std::vector<Any> &args) {
@@ -4445,9 +4519,21 @@ static Any builtin_import_c(const std::vector<Any> &args) {
 template<BuiltinFunction F>
 static Any builtin_variadic_ltr(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, -1);
+    size_t k = args.size();
     Any result = F({args[0], args[1]});
-    for (size_t i = 2; i < args.size(); ++i) {
+    for (size_t i = 2; i < k; ++i) {
         result = F({result, args[i]});
+    }
+    return result;
+}
+
+template<BuiltinFunction F>
+static Any builtin_variadic_rtl(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, -1);
+    size_t k = args.size();
+    Any result = args[k - 1];
+    for (size_t i = 2; i <= k; ++i) {
+        result = F({args[k - i], result});
     }
     return result;
 }
@@ -4754,18 +4840,18 @@ process:
     } else if (eq(expr.type, Types::Symbol)) {
         auto value = extract_any_string(expr);
         if (!hasLocal(env, value)) {
+            auto default_handler = getLocal(env, "#symbol");
+            if (default_handler.type != Types::None) {
+                auto result = expand_macro(env, default_handler, topit);
+                if (result) {
+                    topit = SListIter(result);
+                    goto process;
+                }
+            }
             error(expr,
-                "unknown symbol '%s'", value.c_str());
+                "no such symbol in scope: '%s'", value.c_str());
         }
         result = getLocal(env, value);
-        auto default_handler = getLocal(env, "#symbol");
-        if (default_handler.type != Types::None) {
-            auto result = expand_macro(env, default_handler, topit);
-            if (result) {
-                topit = SListIter(result);
-                goto process;
-            }
-        }
         topit++;
     } else {
         result = expr;
@@ -5098,6 +5184,9 @@ static void initGlobals () {
     setBuiltin(env, "%",
         builtin_binary_op<mod>);
 
+    setBuiltin(env, "..",
+        builtin_variadic_rtl<builtin_binary_op<concat> >);
+
     setBuiltin(env, "&",
         builtin_binary_op<bit_and>);
     setBuiltin(env, "|",
@@ -5106,6 +5195,11 @@ static void initGlobals () {
         builtin_binary_op<bit_xor>);
     setBuiltin(env, "~",
         builtin_unary_op<bit_not>);
+
+    setBuiltin(env, "<<",
+        builtin_binary_op<lshift>);
+    setBuiltin(env, ">>",
+        builtin_binary_op<rshift>);
 
     setBuiltin(env, "not",
         builtin_unary_op<bool_not>);
