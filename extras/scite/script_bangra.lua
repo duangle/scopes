@@ -20,39 +20,6 @@ local function splitstr(str)
     return result
 end
 
-local function IR_symbols()
-    return {
-    KEYWORDS = splitstr(getprop("keywords.bangra_ir") or
-        "bangra import-c dump-module function"
-            .. " call int real defvalue deftype phi br ret cond-br defstruct"
-            .. " trunc zext sext fptrunc fpext fptoui fptosi uitofp sitofp ptrtoint inttoptr"
-            .. " bitcast addrspacecast alignof sizeof lengthof getelementtype undef error"
-            .. " structof arrayof vectorof insertvalue insertelement shufflevector"
-            .. " getelementptr define declare type packed execute module vector array struct"
-            .. " splice null global quote typeof dump extractelement extractvalue load store ..."
-            .. " compiler-do icmp fcmp IR alloca dumptype escape qquote block set-block"
-            .. " unquote unquote-splice constant invoke landingpad cleanup resume unreachable"
-            .. " include incoming module select pointer va_arg"
-            .. " add add-nsw add-nuw fadd sub sub-nsw sub-nuw fsub mul mul-nsw mul-nuw fmul"
-            .. " udiv sdiv exact-sdiv urem srem frem shl lshr ashr and or xor true false"
-            -- macros
-            .. " ? if else run &str loop print and? or? table assert not null? handle"
-        ),
-
-    OPERATORS = splitstr(getprop("operators.bangra_ir") or
-        "+ - ++ -- * / % == != > >= < <= and or = @ ** ^ & | ~ , . .. : += -="
-            .. " *= /= %= ^= &= |= ~= i> i>= i< i<= u> u>= u< u<= o> o>= o< o<="
-            .. " o== o!= u== u!= this-block"
-        ),
-
-
-
-    TYPES = splitstr(getprop("types.bangra_ir") or
-        "i1 i8 i16 i32 i64 half float double void rawstring opaque Value Environment"
-        )
-    }
-end
-
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
@@ -62,7 +29,7 @@ local function bangra_symbols()
             .. " parameter string expand call escape do empty? dump-syntax"
             .. " let-syntax dump slist-join slist-head? if else elseif loop"
             .. " repeat syntax-single-macro length foreach kindof"
-            .. " table none slice"
+            .. " table none slice null? assert"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
@@ -88,10 +55,7 @@ local function unknown_symbols()
     }
 end
 
-local dsl_table = {
-    IR = IR_symbols,
-    bangra = bangra_symbols
-}
+local dsl_table = {}
 
 REALCONST = splitstr("inf +inf -inf nan +nan -nan")
 
@@ -373,7 +337,7 @@ end
 
 function OnStyle(styler)
     local header = getHeader()
-    local symbols = (dsl_table[header] or unknown_symbols)()
+    local symbols = (dsl_table[header] or bangra_symbols)()
 
     S_DEFAULT = 32
     S_WHITESPACE = 0

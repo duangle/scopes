@@ -29,7 +29,6 @@ int bangra_main(int argc, char ** argv);
 #endif // BANGRA_CPP
 #ifdef BANGRA_CPP_IMPL
 
-#define BANGRA_HEADER "bangra"
 //#define BANGRA_DEBUG_IL
 
 //------------------------------------------------------------------------------
@@ -1966,7 +1965,7 @@ static void unescape(String &s) {
     s.count = inplace_unescape(const_cast<char *>(s.ptr));
 }
 
-// matches ((///...))
+// matches (///...)
 static bool is_comment(const Any &expr) {
     if (eq(expr.type, Types::PSList)) {
         if (*expr.pslist) {
@@ -3297,7 +3296,7 @@ struct Parser {
             } else if (lexer.token == token_escape) {
                 int column = lexer.column();
                 lexer.readToken();
-                auto elem = parseNaked(column, 1, end_token);
+                auto elem = parseNaked(column, end_token);
                 if (errors) return nullptr;
                 builder.append(elem);
             } else if (lexer.token == token_eof) {
@@ -3359,7 +3358,27 @@ struct Parser {
         return result;
     }
 
-    Any parseNaked (int column = 0, int depth = 0, int end_token = token_none) {
+    Any parseRoot () {
+        int column = 1;
+        int lineno = lexer.lineno;
+
+        bool escape = false;
+        int subcolumn = 0;
+
+        ListBuilder builder(lexer);
+
+        while (lexer.token != token_eof) {
+            if (lexer.token == token_none)
+                break;
+            auto elem = parseNaked(1, token_none);
+            if (errors) return const_none;
+            builder.append(elem);
+        }
+
+        return wrap(builder.getResult());
+    }
+
+    Any parseNaked (int column = 0, int end_token = token_none) {
         int lineno = lexer.lineno;
 
         bool escape = false;
@@ -3370,7 +3389,7 @@ struct Parser {
         while (lexer.token != token_eof) {
             if (lexer.token == end_token) {
                 break;
-            } if (lexer.token == token_escape) {
+            } else if (lexer.token == token_escape) {
                 escape = true;
                 lexer.readToken();
                 if (lexer.lineno <= lineno) {
@@ -3380,16 +3399,12 @@ struct Parser {
                 }
                 lineno = lexer.lineno;
             } else if (lexer.lineno > lineno) {
-                if (depth > 0) {
-                    if (subcolumn == 0) {
-                        subcolumn = lexer.column();
-                    } else if (lexer.column() != subcolumn) {
-                        error("indentation mismatch");
-                        parse_origin = builder.getAnchor();
-                        return const_none;
-                    }
-                } else {
+                if (subcolumn == 0) {
                     subcolumn = lexer.column();
+                } else if (lexer.column() != subcolumn) {
+                    error("indentation mismatch");
+                    parse_origin = builder.getAnchor();
+                    return const_none;
                 }
                 if (column != subcolumn) {
                     if ((column + 4) != subcolumn) {
@@ -3407,7 +3422,7 @@ struct Parser {
                         && (lexer.token != end_token)
                         && (lexer.lineno == lineno)) {
                     auto elem = parseNaked(
-                        subcolumn, depth + 1, end_token);
+                        subcolumn, end_token);
                     if (errors) return const_none;
                     builder.append(elem);
                 }
@@ -3417,12 +3432,10 @@ struct Parser {
                     return const_none;
                 }
                 lexer.readToken();
-                if (depth > 0) {
-                    // if we are in the same line and there was no preceding ":",
-                    // continue in parent
-                    if (lexer.lineno == lineno)
-                        break;
-                }
+                // if we are in the same line and there was no preceding ":",
+                // continue in parent
+                if (lexer.lineno == lineno)
+                    break;
             } else {
                 auto elem = parseAny();
                 if (errors) return const_none;
@@ -3431,11 +3444,9 @@ struct Parser {
                 lexer.readToken();
             }
 
-            if (depth > 0) {
-                if ((!escape || (lexer.lineno > lineno))
-                    && (lexer.column() <= column)) {
-                    break;
-                }
+            if ((!escape || (lexer.lineno > lineno))
+                && (lexer.column() <= column)) {
+                break;
             }
         }
 
@@ -3453,7 +3464,7 @@ struct Parser {
 
         lexer.readToken();
 
-        auto result = parseNaked(lexer.column());
+        auto result = parseRoot();
 
         if (error_string.empty() && !lexer.error_string.empty()) {
             error_string = lexer.error_string;
@@ -4576,10 +4587,6 @@ static Any builtin_bool_binary_op(const std::vector<Any> &args) {
 // TRANSLATION
 //------------------------------------------------------------------------------
 
-typedef Any (*bangra_preprocessor)(const Table *, const Any &);
-
-//------------------------------------------------------------------------------
-
 static Table *new_scope() {
     return new_table();
 }
@@ -4659,8 +4666,6 @@ static Any getLocal(const Table *scope, const std::string &name) {
     }
     return const_none;
 }
-
-static std::unordered_map<std::string, bangra_preprocessor> preprocessors;
 
 //------------------------------------------------------------------------------
 
@@ -5255,8 +5260,8 @@ static void handleException(const Table *env, const Any &expr) {
 }
 
 static bool compileRootValueList (const Table *env, const Any &expr) {
-
-    auto rootit = SListIter(expr, 1);
+    verifyValueKind(Types::PSList, expr);
+    auto rootit = SListIter(expr);
     auto expexpr = expand_expr_list(env, rootit);
     auto anchor = find_valid_anchor(rootit.getSList());
 
@@ -5280,44 +5285,7 @@ static bool compileRootValueList (const Table *env, const Any &expr) {
 }
 
 static bool compileMain (Any expr) {
-    verifyValueKind(Types::PSList, expr);
-    auto it = SListIter(*expr.pslist);
-
-    auto env = globals;
-
-    std::string lastlang = "";
-    while (true) {
-        verifyValueKind(Types::Symbol, *it);
-        auto head = extract_any_string(*it);
-        if (head == BANGRA_HEADER)
-            break;
-        auto preprocessor = preprocessors[head];
-        if (!preprocessor) {
-            error("unrecognized header: '%s'; try '%s' instead.",
-                head.c_str(),
-                BANGRA_HEADER);
-            return false;
-        }
-        if (lastlang == head) {
-            error(
-                "header has not changed after preprocessing; is still '%s'.",
-                head.c_str());
-        }
-        lastlang = head;
-        auto orig_expr = expr;
-        try {
-            expr = preprocessor(env, expr);
-        } catch (Any expr) {
-            handleException(env, expr);
-            return false;
-        }
-        if (isnone(expr)) {
-            error("preprocessor returned none.");
-            return false;
-        }
-    }
-
-    return compileRootValueList (env, expr);
+    return compileRootValueList (globals, expr);
 }
 
 // This function isn't referenced outside its translation unit, but it
@@ -5477,69 +5445,78 @@ int bangra_main(int argc, char ** argv) {
 
     bangra::Any expr = bangra::const_none;
 
-    if (argv) {
-        if (argv[0]) {
-            std::string loader = bangra::GetExecutablePath(argv[0]);
-            // string must be kept resident
-            bang_executable_path = strdup(loader.c_str());
+    try {
 
-            expr = bangra::parseLoader(bang_executable_path);
+        if (argv) {
+            if (argv[0]) {
+                std::string loader = bangra::GetExecutablePath(argv[0]);
+                // string must be kept resident
+                bang_executable_path = strdup(loader.c_str());
+
+                expr = bangra::parseLoader(bang_executable_path);
+            }
+
+            if (isnone(expr)) {
+                // running in interpreter mode
+                char *sourcepath = NULL;
+                // skip startup script
+                bool skip_startup = false;
+
+                if (argv[1]) {
+                    bool parse_options = true;
+
+                    char ** arg = argv;
+                    while (*(++arg)) {
+                        if (parse_options && (**arg == '-')) {
+                            if (!strcmp(*arg, "--help") || !strcmp(*arg, "-h")) {
+                                print_help(argv[0]);
+                            } else if (!strcmp(*arg, "--version") || !strcmp(*arg, "-v")) {
+                                print_version();
+                            } else if (!strcmp(*arg, "--skip-startup")) {
+                                skip_startup = true;
+                            } else if (!strcmp(*arg, "--enable-ansi") || !strcmp(*arg, "-a")) {
+                                bangra::support_ansi = true;
+                            } else if (!strcmp(*arg, "--trace") || !strcmp(*arg, "-t")) {
+                                bangra::trace_arguments = true;
+                            } else if (!strcmp(*arg, "--")) {
+                                parse_options = false;
+                            } else {
+                                printf("unrecognized option: %s. Try --help for help.\n", *arg);
+                                exit(1);
+                            }
+                        } else if (!sourcepath) {
+                            sourcepath = *arg;
+                        } else {
+                            printf("unrecognized argument: %s. Try --help for help.\n", *arg);
+                            exit(1);
+                        }
+                    }
+                }
+
+                if (!skip_startup && bang_executable_path) {
+                    if (!bangra::compileStartupScript()) {
+                        return 1;
+                    }
+                }
+
+                if (sourcepath) {
+                    bangra::Parser parser;
+                    expr = parser.parseFile(sourcepath);
+                }
+            }
         }
 
         if (isnone(expr)) {
-            // running in interpreter mode
-            char *sourcepath = NULL;
-            // skip startup script
-            bool skip_startup = false;
-
-            if (argv[1]) {
-                bool parse_options = true;
-
-                char ** arg = argv;
-                while (*(++arg)) {
-                    if (parse_options && (**arg == '-')) {
-                        if (!strcmp(*arg, "--help") || !strcmp(*arg, "-h")) {
-                            print_help(argv[0]);
-                        } else if (!strcmp(*arg, "--version") || !strcmp(*arg, "-v")) {
-                            print_version();
-                        } else if (!strcmp(*arg, "--skip-startup")) {
-                            skip_startup = true;
-                        } else if (!strcmp(*arg, "--enable-ansi") || !strcmp(*arg, "-a")) {
-                            bangra::support_ansi = true;
-                        } else if (!strcmp(*arg, "--trace") || !strcmp(*arg, "-t")) {
-                            bangra::trace_arguments = true;
-                        } else if (!strcmp(*arg, "--")) {
-                            parse_options = false;
-                        } else {
-                            printf("unrecognized option: %s. Try --help for help.\n", *arg);
-                            exit(1);
-                        }
-                    } else if (!sourcepath) {
-                        sourcepath = *arg;
-                    } else {
-                        printf("unrecognized argument: %s. Try --help for help.\n", *arg);
-                        exit(1);
-                    }
-                }
-            }
-
-            if (!skip_startup && bang_executable_path) {
-                if (!bangra::compileStartupScript()) {
-                    return 1;
-                }
-            }
-
-            if (sourcepath) {
-                bangra::Parser parser;
-                expr = parser.parseFile(sourcepath);
-            }
+            return 1;
+        } else {
+            bangra::compileMain(expr);
         }
-    }
 
-    if (isnone(expr)) {
+    } catch (const bangra::Any &any) {
+        std::cout << bangra::ansi(ANSI_STYLE_ERROR, "error:")
+            << " " << bangra::get_string(any) << "\n";
+        fflush(stdout);
         return 1;
-    } else {
-        bangra::compileMain(expr);
     }
 
     return 0;

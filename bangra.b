@@ -1,8 +1,6 @@
 # boot script
 # the bangra executable looks for a boot file at
 # path/to/executable.b and, if found, executes it.
-bangra
-
 let-syntax (scope)
     table
         tupleof "#parent" scope
@@ -110,6 +108,13 @@ let-syntax (scope)
         tupleof "#parent" scope
         tupleof "slist-join" slist-join
         tupleof "slist-head?" slist-head?
+        tupleof "assert" # (assert bool-expr [error-message])
+            syntax-single-macro
+                function (env expr)
+                    slist ? (@ expr 1 0) true
+                        slist error
+                            ? (empty? (@ expr 2)) "assertion failed"
+                                @ expr 2 0
         tupleof "::*"
             syntax-macro
                 function (env expr)
@@ -419,6 +424,7 @@ let-syntax (scope)
                                             @ out 1
                         @ topexpr 1
 
+        syntax-infix-op := (syntax-infix-rules 50 < let)
         syntax-infix-op or (syntax-infix-rules 100 > or)
         syntax-infix-op and (syntax-infix-rules 200 > and)
         syntax-infix-op | (syntax-infix-rules 240 > |)
@@ -448,15 +454,16 @@ let-syntax (scope)
         #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
 do
-    let T
+    k := 3
+    T :=
         structof
             tupleof "test"
                 function (self a b)
                     + a b
 
 
-    print
-        .test T 1 2
+    assert
+        k == (.test T 1 2)
 
     print
         slist-join
@@ -524,7 +531,7 @@ do
         V . z @ "w" . blue
         V.z.w.blue
 
-    print "2 * 2 + 1 == 5:"
+    print
         2 * 2 + 1 == 5
 
     print "true and true or true:"
@@ -533,8 +540,7 @@ do
     print "(tupleof 1 2 3) @ 2 == 3:"
         (tupleof 1 2 3) @ 2 == 3
 
-    print
-        "yes" + "no"
+    assert true
 
     do
         let i 0
