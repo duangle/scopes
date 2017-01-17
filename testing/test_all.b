@@ -1,45 +1,115 @@
-#!/usr/bin/env bangra
-IR
+k := 3
+T :=
+    structof
+        tupleof "test"
+            function (self a b)
+                + a b
 
-include "../macros.b"
-include "../libc.b"
 
-define macro-testfile (env expr)
-    preprocessor-func
-    defvalue filename
-        call set-next
-            call next expr
-            null Value
-    ret
-        qquote
-            module (unquote filename) IR
-                include (unquote filename)
+assert
+    k == (.test T 1 2)
 
-run
-    call set-macro env
-        &str "testfile"
-        macro-testfile
+print
+    slist-join
+        slist 1 2 3
+        slist 4 5 6
 
-testfile "test_xpcall.b"
-testfile "test_table.b"
-testfile "test_run.b"
-testfile "test_string.b"
-testfile "test_andor.b"
-testfile "test_constexpr.b"
-testfile "test_intrinsic.b"
-testfile "test_argv.b"
-testfile "test_ascii.b"
-testfile "test_dynamic.b"
-testfile "test_gep.b"
-testfile "test_helloworld.b"
-testfile "test_intro.b"
-testfile "test_loop.b"
-testfile "test_macro.b"
-testfile "test_parsing.b"
-testfile "test_quoteloc.b"
-testfile "test_submodule.b"
-testfile "test_bangra.b"
+call print "hi"
 
-run
-    call printf
-        &str "\n\nAll tests finished.\n"
+function iter (s)
+    let ls
+        length s
+    let it
+        function (i)
+            if (i < ls)
+                tupleof (@ s i) (i + 1)
+            else
+                none
+    tupleof it 0
+
+print
+    repr
+        fold (iter "hello world") ""
+            function (out k)
+                print k
+                if (k == "o")
+                    out
+                else
+                    .. out k k
+
+print
+    repr
+        slice "abcdefghijklmnopqrstuvwxyz" -3
+
+print "lengths:"
+    length "hi!"
+    length ""
+    length
+        tupleof 1 2 3
+    length
+        structof
+            tupleof "key" 123
+
+print
+    1 + 2 * 3 == 7
+
+let x 5
+print (+ x 1)
+print x
+let k 1
+
+let V
+    structof
+        tupleof "x" 0
+        tupleof "y" 1
+        tupleof "z"
+            structof
+                tupleof "u" 0
+                tupleof "v" 1
+                tupleof "w"
+                    structof
+                        tupleof "red" 0
+                        tupleof "green" 1
+                        tupleof "blue" 2
+print "dot:"
+    V . z @ "w" . blue
+    V.z.w.blue
+
+print
+    2 * 2 + 1 == 5
+
+print "true and true or true:"
+    true and true or true
+
+print "(tupleof 1 2 3) @ 2 == 3:"
+    (tupleof 1 2 3) @ 2 == 3
+
+assert true
+
+do
+    let i 0
+    let k "!"
+    print
+        loop (i k)
+            if (i < 10)
+                print "#" i k
+                repeat (i + 1) (k .. "!")
+            else
+                k
+
+print
+    if (k == 0)
+        print "if!"
+        1
+    elseif (k == 1)
+        print "elseif 1!"
+        2
+    elseif (k == 2)
+        print "elseif 2!"
+        3
+    else
+        print "else!"
+        4
+print;
+print "hi"
+print "ho"
