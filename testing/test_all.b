@@ -5,7 +5,6 @@ T :=
             function (self a b)
                 + a b
 
-
 assert
     k == (.test T 1 2)
 

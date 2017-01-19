@@ -16,9 +16,10 @@ enum {
     BANGRA_VERSION_PATCH = 0,
 };
 
-extern int bang_argc;
-extern char **bang_argv;
-extern char *bang_executable_path;
+extern int bangra_argc;
+extern char **bangra_argv;
+extern char *bangra_interpreter_path;
+extern char *bangra_interpreter_dir;
 
 int bangra_main(int argc, char ** argv);
 
@@ -4335,7 +4336,7 @@ static Table *importCModule (
         assert(M);
         return result;
     } else {
-        assert(false && "compilation failed");
+        error("compilation failed");
     }
 
     return nullptr;
@@ -5370,7 +5371,7 @@ static Any parseLoader(const char *executable_path) {
 }
 
 static bool compileStartupScript() {
-    char *base = strdup(bang_executable_path);
+    char *base = strdup(bangra_interpreter_path);
     char *ext = extension(base);
     if (ext) {
         *ext = 0;
@@ -5403,9 +5404,10 @@ static bool compileStartupScript() {
 // C API
 //------------------------------------------------------------------------------
 
-char *bang_executable_path = NULL;
-int bang_argc = 0;
-char **bang_argv = NULL;
+char *bangra_interpreter_path = NULL;
+char *bangra_interpreter_dir = NULL;
+int bangra_argc = 0;
+char **bangra_argv = NULL;
 
 void print_version() {
     std::string versionstr = bangra::format("%i.%i",
@@ -5417,7 +5419,7 @@ void print_version() {
     "Bangra version %s\n"
     "Executable path: %s\n"
     , versionstr.c_str()
-    , bang_executable_path
+    , bangra_interpreter_path
     );
     exit(0);
 }
@@ -5438,8 +5440,8 @@ void print_help(const char *exename) {
 }
 
 int bangra_main(int argc, char ** argv) {
-    bang_argc = argc;
-    bang_argv = argv;
+    bangra_argc = argc;
+    bangra_argv = argv;
 
     bangra::init();
 
@@ -5451,10 +5453,21 @@ int bangra_main(int argc, char ** argv) {
             if (argv[0]) {
                 std::string loader = bangra::GetExecutablePath(argv[0]);
                 // string must be kept resident
-                bang_executable_path = strdup(loader.c_str());
+                bangra_interpreter_path = strdup(loader.c_str());
 
-                expr = bangra::parseLoader(bang_executable_path);
+                expr = bangra::parseLoader(bangra_interpreter_path);
+            } else {
+                bangra_interpreter_path = strdup("");
             }
+
+            bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
+
+            bangra::setLocal(const_cast<bangra::Table *>(bangra::globals),
+                "interpreter-path",
+                bangra::wrap(std::string(bangra_interpreter_path)));
+            bangra::setLocal(const_cast<bangra::Table *>(bangra::globals),
+                "interpreter-dir",
+                bangra::wrap(std::string(bangra_interpreter_dir)));
 
             if (isnone(expr)) {
                 // running in interpreter mode
@@ -5493,7 +5506,7 @@ int bangra_main(int argc, char ** argv) {
                     }
                 }
 
-                if (!skip_startup && bang_executable_path) {
+                if (!skip_startup && bangra_interpreter_path) {
                     if (!bangra::compileStartupScript()) {
                         return 1;
                     }

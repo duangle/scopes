@@ -20,7 +20,9 @@ let-syntax (scope)
             function (x y)
                 != (@ x y) none
         tupleof "API"
-            import-c "bangra.h"
+            import-c
+                # todo: search path & embedded resources
+                .. interpreter-dir "/bangra.h"
                 tupleof;
         tupleof "syntax-single-macro"
             function (f)
