@@ -112,3 +112,10 @@ print
 print;
 print "hi"
 print "ho"
+
+do
+    ::@ print "test:"
+    1 + 3
+    print 2
+    print 3
+

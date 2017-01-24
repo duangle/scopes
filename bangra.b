@@ -118,6 +118,15 @@ let-syntax (scope)
                         slist error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
+        tupleof "::@"
+            syntax-macro
+                function (env expr)
+                    cons
+                        slist-join
+                            @ expr 0 1
+                            slist
+                                @ expr 1 0
+                        @ expr 2
         tupleof "::*"
             syntax-macro
                 function (env expr)
