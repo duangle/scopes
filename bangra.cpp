@@ -12,7 +12,7 @@ extern "C" {
 enum {
     // semver style versioning
     BANGRA_VERSION_MAJOR = 0,
-    BANGRA_VERSION_MINOR = 3,
+    BANGRA_VERSION_MINOR = 4,
     BANGRA_VERSION_PATCH = 0,
 };
 
@@ -1358,6 +1358,11 @@ static Any wrap(size_t value) {
     return integer(Types::SizeT, value);
 }
 
+// undefined catch-all that produces diagnostic messages when it is selected,
+// which should never happen.
+template<typename T>
+static Any wrap(const T &arg);
+
 static std::vector<Any> extract_tuple(const Any &value) {
     if (is_tuple_type(value.type)) {
         std::vector<Any> result;
@@ -1437,6 +1442,9 @@ struct Parameter {
 //------------------------------------------------------------------------------
 
 static Any wrap(const SList *slist) {
+    return wrap_ptr(Types::PSList, slist);
+}
+static Any wrap(SList *slist) {
     return wrap_ptr(Types::PSList, slist);
 }
 
@@ -1872,8 +1880,14 @@ static Any tuple(const std::vector<Any> &values) {
 static Any wrap(const Flow *flow) {
     return wrap_ptr(Types::PFlow, flow);
 }
+static Any wrap(Flow *flow) {
+    return wrap_ptr(Types::PFlow, flow);
+}
 
 static Any wrap(const Parameter *param) {
+    return wrap_ptr(Types::PParameter, param);
+}
+static Any wrap(Parameter *param) {
     return wrap_ptr(Types::PParameter, param);
 }
 
@@ -1882,6 +1896,9 @@ static Any wrap(const Type *type) {
 }
 
 static Any wrap(const Table *table) {
+    return wrap_ptr(Types::PTable, table);
+}
+static Any wrap(Table *table) {
     return wrap_ptr(Types::PTable, table);
 }
 
@@ -3360,12 +3377,6 @@ struct Parser {
     }
 
     Any parseRoot () {
-        int column = 1;
-        int lineno = lexer.lineno;
-
-        bool escape = false;
-        int subcolumn = 0;
-
         ListBuilder builder(lexer);
 
         while (lexer.token != token_eof) {
@@ -4783,7 +4794,6 @@ static Cursor expand_escape (const Table *env, SListIter topit) {
 }
 
 static Cursor expand_let_syntax (const Table *env, SListIter topit) {
-    auto startit = topit;
     auto cur = expand_function (env, topit++);
     //printValue(cur.value, 0, true);
 
