@@ -1,3 +1,23 @@
+
+qquote-test :=
+    qquote
+        print
+            unquote
+                k := 1
+                k + 2
+        unquote-splice
+            k := 2
+            qquote
+                print
+                    unquote k
+                print 1
+print
+    == qquote-test
+        quote
+            print 3
+            print 2
+            print 1
+
 k := 3
 T :=
     structof

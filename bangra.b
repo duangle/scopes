@@ -27,20 +27,20 @@ let-syntax (scope)
         tupleof "syntax-single-macro"
             function (f)
                 syntax-macro
-                    function (env expr)
+                    function (scope expr)
                         cons
-                            f env
+                            f scope
                                 @ expr 0
                             @ expr 1
         tupleof "call"
             syntax-macro
-                function (env expr)
+                function (scope expr)
                     cons
                         @ expr 0 1
                         @ expr 1
         tupleof "dump-syntax"
             syntax-macro
-                function (env expr)
+                function (scope expr)
                     ((function (e)
                         (dump
                             (@ e 0 0))
@@ -48,20 +48,20 @@ let-syntax (scope)
                             (slist escape
                                 (@ e 0 0))
                             (@ e 1)))
-                        (expand env
+                        (expand scope
                             (cons
                                 (@ expr 0 1)
                                 (@ expr 1))))
         tupleof "let"
             syntax-macro
-                function (env expr)
+                function (scope expr)
                     ((function (param-name)
                         ((function (param)
                             (slist
                                 (cons escape
                                     (expand
                                         (table
-                                            (tupleof "#parent" env)
+                                            (tupleof "#parent" scope)
                                             (tupleof param-name param))
                                         (slist
                                             (slist
@@ -72,7 +72,7 @@ let-syntax (scope)
                             (parameter param-name))) (@ expr 0 1 0))
         tupleof "?"
             syntax-macro
-                function (env expr)
+                function (scope expr)
                     cons
                         slist branch
                             @ expr 0 1 0
@@ -83,8 +83,8 @@ let-syntax (scope)
                         @ expr 1
         tupleof "syntax-set-globals!"
             syntax-macro
-                function (env expr)
-                    set-globals! env
+                function (scope expr)
+                    set-globals! scope
                     cons
                         none
                         @ expr 1
@@ -111,16 +111,21 @@ let-syntax (scope)
         tupleof "#parent" scope
         tupleof "slist-join" slist-join
         tupleof "slist-head?" slist-head?
+        tupleof "slist-atom?"
+            function (x)
+                ? (slist? x)
+                    empty? x
+                    true
         tupleof "assert" # (assert bool-expr [error-message])
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     slist ? (@ expr 1 0) true
                         slist error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
         tupleof "::@"
             syntax-macro
-                function (env expr)
+                function (scope expr)
                     cons
                         slist-join
                             @ expr 0 1
@@ -129,14 +134,14 @@ let-syntax (scope)
                         @ expr 2
         tupleof "::*"
             syntax-macro
-                function (env expr)
+                function (scope expr)
                     slist
                         slist-join
                             @ expr 0 1
                             @ expr 1
         tupleof "."
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     let key
                         @ expr 2 0
                     ? (symbol? key)
@@ -148,7 +153,7 @@ let-syntax (scope)
 
         tupleof "function" # (function [name] (param ...) body ...)
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     ? (symbol? (@ expr 1 0))
                         slist let
                             @ expr 1 0
@@ -158,7 +163,7 @@ let-syntax (scope)
                             @ expr 1
         tupleof "and"
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     let tmp
                         parameter "tmp"
                     slist
@@ -170,7 +175,7 @@ let-syntax (scope)
                         @ expr 1 0
         tupleof "or"
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     let tmp
                         parameter "tmp"
                     slist
@@ -182,7 +187,7 @@ let-syntax (scope)
                         @ expr 1 0
         tupleof "loop"
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     let param-repeat
                         quote repeat
                     slist do
@@ -195,13 +200,13 @@ let-syntax (scope)
                             @ expr 1 0
         tupleof "if"
             let if-rec
-                function (env expr)
+                function (scope expr)
                     let next-expr
                         @ expr 1 0
                     ? (slist-head? next-expr "elseif")
                         do
                             let nextif
-                                if-rec env
+                                if-rec scope
                                     @ expr 1
                             cons
                                 slist branch
@@ -235,19 +240,25 @@ let-syntax (scope)
             syntax-macro if-rec
         tupleof "syntax-infix-rules"
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     slist structof
                         slist tupleof "prec" (@ expr 1 0)
                         slist tupleof "order" (string (@ expr 2 0))
                         slist tupleof "name" (@ expr 3 0)
         tupleof "syntax-infix-op"
             syntax-single-macro
-                function (env expr)
+                function (scope expr)
                     slist tupleof
                         .. "#ifx:" (string (@ expr 1 0))
                         @ expr 2 0
 
 let-syntax (scope)
+
+    function unwrap-single (expr)
+        # unwrap single item from list or prepend 'do' clause to list
+        ? (empty? (@ expr 1))
+            @ expr 0
+            cons do expr
 
     function fold (it init f)
         let next
@@ -281,15 +292,15 @@ let-syntax (scope)
                 else none
             length s
 
-    function get-ifx-op (env op)
+    function get-ifx-op (scope op)
         let key
             .. "#ifx:" (string op)
         ? (symbol? op)
-            loop (env)
-                if (key? env key)
-                    @ env key
-                elseif (key? env "#parent")
-                    repeat (@ env "#parent")
+            loop (scope)
+                if (key? scope key)
+                    @ scope key
+                elseif (key? scope "#parent")
+                    repeat (@ scope "#parent")
                 else none
             none
     function has-infix-ops (infix-table expr)
@@ -372,8 +383,39 @@ let-syntax (scope)
         tupleof "#parent" scope
         tupleof "fold" fold
         tupleof "iter" iter
+        # quasiquote support
+        # (qquote expr [...])
+        tupleof "qquote"
+            do
+                function qquote-1 (x)
+                    if (slist-atom? x)
+                        slist quote x
+                    elseif (slist-head? x "unquote")
+                        unwrap-single (@ x 1)
+                    elseif (slist-head? x "qquote")
+                        qquote-1 (qquote-1 (@ x 1 0))
+                    elseif (slist-atom? (@ x 0))
+                        slist cons
+                            qquote-1 (@ x 0)
+                            qquote-1 (@ x 1)
+                    elseif (slist-head? (@ x 0) "unquote-splice")
+                        slist slist-join
+                            unwrap-single (@ x 0 1)
+                            qquote-1 (@ x 1)
+                    else
+                        slist cons
+                            qquote-1 (@ x 0)
+                            qquote-1 (@ x 1)
+                syntax-macro
+                    function (scope expr)
+                        cons
+                            ? (empty? (@ expr 0 2))
+                                qquote-1 (@ expr 0 1 0)
+                                qquote-1 (@ expr 0 1)
+                            @ expr 1
+
         tupleof "#slist"
-            function (env topexpr)
+            function (scope topexpr)
                 let expr
                     @ topexpr 0
                 let head
@@ -405,15 +447,15 @@ let-syntax (scope)
                             self-arg
                         @ topexpr 1
                 # infix operator support
-                elseif (has-infix-ops env expr)
+                elseif (has-infix-ops scope expr)
                     cons
                         @
-                            parse-infix-expr env
+                            parse-infix-expr scope
                                 \ (@ expr 0) (@ expr 1) 0
                             0
                         @ topexpr 1
         tupleof "#symbol"
-            function (env topexpr)
+            function (scope topexpr)
                 let sym
                     @ topexpr 0
                 let it
