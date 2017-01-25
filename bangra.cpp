@@ -679,12 +679,21 @@ struct Table {
 
 //------------------------------------------------------------------------------
 
+enum Ordering {
+    Less,
+    Equal,
+    Greater,
+    Unrelated,
+};
+
 typedef
     Any (*UnaryOpFunction)(const Type *self, const Any &value);
 typedef
     Any (*BinaryOpFunction)(const Type *self, const Any &a, const Any &b);
 typedef
     bool (*BoolBinaryOpFunction)(const Type *self, const Any &a, const Any &b);
+typedef
+    Ordering (*CompareFunction)(const Type *self, const Any &a, const Any &b);
 
 enum {
     OP1_Neg = 0,
@@ -712,17 +721,6 @@ enum {
     OP2_Count,
 };
 
-enum {
-    BOP2_Equal = 0,
-    BOP2_NotEqual,
-    BOP2_Greater,
-    BOP2_GreaterEqual,
-    BOP2_Less,
-    BOP2_LessEqual,
-
-    BOP2_Count,
-};
-
 struct Type {
     // dynamic attributes
     Table table;
@@ -737,10 +735,8 @@ struct Type {
     BinaryOpFunction op2[OP2_Count];
     // implementation of reverse binary operators
     BinaryOpFunction rop2[OP2_Count];
-    // implementation of binary comparison operators
-    BoolBinaryOpFunction bop2[BOP2_Count];
-    // implementation of reverse binary comparison operators
-    BoolBinaryOpFunction brop2[BOP2_Count];
+    // implementation of comparison
+    CompareFunction cmp;
     // return true if self supports the interface of other
     bool (*eq_type)(const Type *self, const Type *other);
     // short string representation
@@ -862,10 +858,10 @@ static Any op2_default(const Type *self, const Any &a, const Any &b) {
     return const_none;
 }
 
-static bool bop2_default(const Type *self, const Any &a, const Any &b) {
-    error("boolean binary operator not applicable to type %s",
+static Ordering cmp_default(const Type *self, const Any &a, const Any &b) {
+    error("comparison not applicable to type %s",
         get_name(self).c_str());
-    return false;
+    return Unrelated;
 }
 
 static Any type_apply_default(const Type *self, const std::vector<Any> &args) {
@@ -908,10 +904,7 @@ static Type *new_type(const std::string &name) {
         result->op2[i] = op2_default;
         result->rop2[i] = op2_default;
     }
-    for (size_t i = 0; i < BOP2_Count; ++i) {
-        result->bop2[i] = bop2_default;
-        result->brop2[i] = bop2_default;
-    }
+    result->cmp = cmp_default;
     result->is_signed = false;
     result->is_vararg = false;
     result->width = 0;
@@ -935,46 +928,68 @@ static Any op2(const Any &a, const Any &b) {
     }
 }
 
-template<int OP>
-static bool bop2(const Any &a, const Any &b) {
+static Ordering compare(const Any &a, const Any &b) {
     try {
-        return a.type->bop2[OP](a.type, a, b);
+        return a.type->cmp(a.type, a, b);
     } catch (const Any &any) {
-        return b.type->brop2[OP](b.type, b, a);
-    }
-}
-
-template<int OP, int NEGOP>
-static bool bop2_fallback(const Any &a, const Any &b) {
-    try {
-        return bop2<OP>(a, b);
-    } catch (const Any &any) {
-        return !bop2<NEGOP>(a, b);
+        // reverse lesser/greater
+        auto result = b.type->cmp(b.type, b, a);
+        switch(result) {
+            case Less: return Greater;
+            case Greater: return Less;
+            default: return result;
+        }
     }
 }
 
 static bool eq(const Any &a, const Any &b) {
-    return bop2_fallback<BOP2_Equal, BOP2_NotEqual>(a, b);
+    try {
+        return compare(a, b) == Equal;
+    } catch (const Any &any) {
+        return false;
+    }
 }
 
 static bool ne(const Any &a, const Any &b) {
-    return bop2_fallback<BOP2_NotEqual, BOP2_Equal>(a, b);
+    try {
+        return compare(a, b) != Equal;
+    } catch (const Any &any) {
+        return true;
+    }
 }
 
 static bool gt(const Any &a, const Any &b) {
-    return bop2_fallback<BOP2_Greater, BOP2_LessEqual>(a, b);
+    try {
+        return compare(a, b) == Greater;
+    } catch (const Any &any) {
+        return false;
+    }
 }
 
 static bool ge(const Any &a, const Any &b) {
-    return bop2_fallback<BOP2_GreaterEqual, BOP2_Less>(a, b);
+    try {
+        auto result = compare(a, b);
+        return (result == Equal) || (result == Greater);
+    } catch (const Any &any) {
+        return false;
+    }
 }
 
 static bool lt(const Any &a, const Any &b) {
-    return bop2_fallback<BOP2_Less, BOP2_GreaterEqual>(a, b);
+    try {
+        return compare(a, b) == Less;
+    } catch (const Any &any) {
+        return false;
+    }
 }
 
 static bool le(const Any &a, const Any &b) {
-    return bop2_fallback<BOP2_LessEqual, BOP2_Greater>(a, b);
+    try {
+        auto result = compare(a, b);
+        return (result == Equal) || (result == Less);
+    } catch (const Any &any) {
+        return false;
+    }
 }
 
 static Any add(const Any &a, const Any &b) {
@@ -2277,15 +2292,15 @@ namespace Types {
     }
     */
 
-    static bool value_pointer_eq(const Type *self,
+    static Ordering value_pointer_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        if (self != b.type) return false;
-        return *a.pptr == *b.pptr;
+        if (self != b.type) error("can not compare to type");
+        return (*a.pptr == *b.pptr)?Equal:Unrelated;
     }
 
-    static bool value_none_eq(const Type *self,
+    static Ordering value_none_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return (self == b.type);
+        return (self == b.type)?Equal:Unrelated;
     }
 
     static bangra::Any _integer_add(const Type *self,
@@ -2308,39 +2323,23 @@ namespace Types {
         return wrap(extract_integer(a) / extract_integer(b));
     }
 
-    static bool _integer_eq(const Type *self,
+    static Ordering _integer_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return extract_integer(a) == extract_integer(b);
+        auto x = extract_integer(a);
+        auto y = extract_integer(b);
+        if (x == y) return Equal;
+        else if (x < y) return Less;
+        else return Greater;
     }
 
-    static bool _integer_ne(const Type *self,
+    static Ordering _real_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return extract_integer(a) != extract_integer(b);
-    }
-
-    static bool _integer_gt(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return extract_integer(a) > extract_integer(b);
-    }
-
-    static bool _integer_ge(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return extract_integer(a) >= extract_integer(b);
-    }
-
-    static bool _integer_lt(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return extract_integer(a) < extract_integer(b);
-    }
-
-    static bool _integer_le(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return extract_integer(a) <= extract_integer(b);
-    }
-
-    static bool _real_eq(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return extract_real(a) == extract_real(b);
+        auto x = extract_real(a);
+        auto y = extract_real(b);
+        if (x == y) return Equal;
+        else if (x < y) return Less;
+        else if (x > y) return Greater;
+        else return Unrelated;
     }
 
     static std::string _none_tostring(const Type *self,
@@ -2467,7 +2466,7 @@ namespace Types {
                 get_name(element).c_str()));
         type->eq_type = type_pointer_eq;
         type->op2[OP2_At] = type_pointer_at;
-        type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = value_pointer_eq;
+        type->cmp = value_pointer_cmp;
         type->tostring = _pointer_tostring;
         type->element_type = element;
         type->size = ffi_type_pointer.size;
@@ -2567,12 +2566,26 @@ namespace Types {
         return _string_slice(self, value, index, index + 1);
     }
 
-    static bool value_string_eq(const Type *self,
+    static int zucmp(size_t a, size_t b) {
+        if (a == b) return 0;
+        else if (a < b) return -1;
+        return 1;
+    }
+
+    static Ordering value_string_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         if ((b.type != Types::String) && (b.type != Types::Symbol))
-            return false;
-        if (a.str->count != b.str->count) return false;
-        return (memcmp(a.str->ptr, b.str->ptr, a.str->count) == 0);
+            error("incomparable values");
+        int c = zucmp(a.str->count, b.str->count);
+        if (!c) {
+            c = memcmp(a.str->ptr, b.str->ptr, a.str->count);
+        }
+        switch(c) {
+            case -1: return Less;
+            case 0: return Equal;
+            case 1: return Greater;
+            default: return Unrelated;
+        }
     }
 
     /*
@@ -2699,18 +2712,7 @@ namespace Types {
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
         type->op2[OP2_Div] = _integer_div;
 
-        type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = _integer_eq;
-        type->bop2[BOP2_NotEqual] = type->brop2[BOP2_NotEqual] = _integer_ne;
-
-        type->bop2[BOP2_Greater] = _integer_gt;
-        type->bop2[BOP2_GreaterEqual] = _integer_ge;
-        type->brop2[BOP2_Greater] = _integer_le;
-        type->brop2[BOP2_GreaterEqual] = _integer_lt;
-
-        type->bop2[BOP2_Less] = _integer_lt;
-        type->bop2[BOP2_LessEqual] = _integer_le;
-        type->brop2[BOP2_Less] = _integer_ge;
-        type->brop2[BOP2_LessEqual] = _integer_gt;
+        type->cmp = _integer_cmp;
 
         type->width = width;
         type->tostring = _integer_tostring;
@@ -2732,7 +2734,7 @@ namespace Types {
         Type *type = new_type(format("real%zu", width));
         type->tostring = _real_tostring;
         type->eq_type = type_real_eq;
-        type->bop2[BOP2_Equal] = type->brop2[BOP2_Equal] = _real_eq;
+        type->cmp = _real_cmp;
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -2788,7 +2790,7 @@ namespace Types {
         AnchorRef = Struct("Anchor", true);
 
         tmp = Struct("None", true);
-        tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_none_eq;
+        tmp->cmp = value_none_cmp;
         tmp->tostring = _none_tostring;
         None = tmp;
         const_none = make_any(Types::None);
@@ -2820,7 +2822,7 @@ namespace Types {
         tmp->slice = _string_slice;
         tmp->op2[OP2_At] = _string_at;
         tmp->op2[OP2_Concat] = _string_concat;
-        tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_string_eq;
+        tmp->cmp = value_string_cmp;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
         String = tmp;
@@ -2830,7 +2832,7 @@ namespace Types {
         tmp->length = _string_length;
         //tmp->slice = _symbol_slice;
         //tmp->op2[OP2_At] = _string_at;
-        tmp->bop2[BOP2_Equal] = tmp->brop2[BOP2_Equal] = value_string_eq;
+        tmp->cmp = value_string_cmp;
         tmp->apply_type = _symbol_apply_type;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
