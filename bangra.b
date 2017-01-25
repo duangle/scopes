@@ -262,7 +262,17 @@ let-syntax (scope)
                     f out (@ st 0)
                     next (@ st 1)
 
-    function iter-string-r (s)
+    function iter (s)
+        let ls
+            length s
+        tupleof
+            function (i)
+                if (< i ls)
+                    tupleof (@ s i) (+ i 1)
+                else none
+            0
+
+    function iter-r (s)
         tupleof
             function (i)
                 if (> i 0)
@@ -361,6 +371,7 @@ let-syntax (scope)
     table
         tupleof "#parent" scope
         tupleof "fold" fold
+        tupleof "iter" iter
         tupleof "#slist"
             function (env topexpr)
                 let expr
@@ -406,7 +417,7 @@ let-syntax (scope)
                 let sym
                     @ topexpr 0
                 let it
-                    iter-string-r
+                    iter-r
                         string sym
                 function finalize-head (out)
                     cons

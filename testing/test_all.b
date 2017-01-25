@@ -15,17 +15,6 @@ print
 
 call print "hi"
 
-function iter (s)
-    let ls
-        length s
-    let it
-        function (i)
-            if (i < ls)
-                tupleof (@ s i) (i + 1)
-            else
-                none
-    tupleof it 0
-
 print
     repr
         fold (iter "hello world") ""
