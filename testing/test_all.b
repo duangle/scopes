@@ -1,4 +1,10 @@
 
+/// print
+    require "test_module"
+
+print
+    symbol "test"
+
 qquote-test :=
     qquote
         print

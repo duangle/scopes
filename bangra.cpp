@@ -497,6 +497,8 @@ typedef Slice<char> String;
 typedef Any (*BuiltinFunction)(const std::vector<Any> &args);
 typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
 
+typedef uint64_t Symbol;
+
 struct Any {
     union {
         const bool *p_i1;
@@ -518,6 +520,7 @@ struct Any {
         const char *c_str;
         const BuiltinFunction func;
         const String *str;
+        const Symbol *symbol;
 
         const void **pptr;
         const SList **pslist;
@@ -584,6 +587,28 @@ static void set_anchor(const Any &value, const Anchor *anchor) {
 
 //------------------------------------------------------------------------------
 
+static Symbol next_symbol_id = 1;
+static std::map<Symbol, std::string> map_symbol_name;
+static std::map<std::string, Symbol> map_name_symbol;
+
+static Symbol get_symbol(const std::string &name) {
+    auto it = map_name_symbol.find(name);
+    if (it != map_name_symbol.end()) {
+        return it->second;
+    } else {
+        Symbol id = ++next_symbol_id;
+        map_name_symbol[name] = id;
+        map_symbol_name[id] = name;
+        return id;
+    }
+}
+
+static std::string get_symbol_name(Symbol id) {
+    return map_symbol_name[id];
+}
+
+//------------------------------------------------------------------------------
+
 namespace Types {
     static const Type *TType;
     static const Type *TArray;
@@ -614,8 +639,8 @@ namespace Types {
 
     static const Type *Rawstring;
     static const Type *None;
-    static const Type *String; // std::string
-    static const Type *Symbol; // std::string
+    static const Type *String; // Slice<char>
+    static const Type *Symbol; // Symbol token (uint64_t)
 
     static const Type *Any;
     static const Type *AnchorRef;
@@ -680,10 +705,10 @@ struct Table {
 //------------------------------------------------------------------------------
 
 enum Ordering {
-    Less,
-    Equal,
-    Greater,
-    Unrelated,
+    Less = -1,
+    Equal = 0,
+    Greater = 1,
+    Unrelated = 0x7f,
 };
 
 typedef
@@ -1190,7 +1215,7 @@ static std::string extract_any_string(const Any &value) {
     } else if (eq(value.type, Types::String)) {
         return std::string(value.str->ptr, value.str->count);
     } else if (eq(value.type, Types::Symbol)) {
-        return std::string(value.str->ptr, value.str->count);
+        return get_symbol_name(*value.symbol);
     } else {
         error("can not extract string");
         return "";
@@ -1238,10 +1263,6 @@ static Any pstring(const std::string &s) {
     return wrap(Types::String, alloc_string(s.c_str(), s.size()));
 }
 
-static Any symbol(const std::string &s) {
-    return wrap(Types::Symbol, alloc_string(s.c_str(), s.size()));
-}
-
 template <typename T>
 static T **alloc_ptr(T *value) {
     T **ptr = (T **)malloc(sizeof(T *));
@@ -1261,6 +1282,10 @@ static T *alloc_uint(uint64_t value) {
     T *ptr = (T *)malloc(sizeof(T));
     *ptr = (T)value;
     return ptr;
+}
+
+static Any symbol(const std::string &s) {
+    return wrap(Types::Symbol, alloc_uint<Symbol>(get_symbol(s)));
 }
 
 static Any wrap_ptr(const Type *type, const void *ptr) {
@@ -2327,19 +2352,43 @@ namespace Types {
         const bangra::Any &a, const bangra::Any &b) {
         auto x = extract_integer(a);
         auto y = extract_integer(b);
-        if (x == y) return Equal;
-        else if (x < y) return Less;
-        else return Greater;
+        return (Ordering)((y < x) - (x < y));
+    }
+
+    static Ordering value_symbol_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (self != b.type) error("can not compare to type");
+        auto x = *a.symbol;
+        auto y = *b.symbol;
+        return (x == y)?Equal:Unrelated;
+    }
+
+    static bangra::Any _real_add(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_real(a) + extract_real(b));
+    }
+
+    static bangra::Any _real_sub(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_real(a) - extract_real(b));
+    }
+
+    static bangra::Any _real_mul(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_real(a) * extract_real(b));
+    }
+
+    static bangra::Any _real_div(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_real(a) / extract_real(b));
     }
 
     static Ordering _real_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         auto x = extract_real(a);
         auto y = extract_real(b);
-        if (x == y) return Equal;
-        else if (x < y) return Less;
-        else if (x > y) return Greater;
-        else return Unrelated;
+        if (std::isnan(x + y)) return Unrelated;
+        return (Ordering)((y < x) - (x < y));
     }
 
     static std::string _none_tostring(const Type *self,
@@ -2567,25 +2616,18 @@ namespace Types {
     }
 
     static int zucmp(size_t a, size_t b) {
-        if (a == b) return 0;
-        else if (a < b) return -1;
-        return 1;
+        return (b < a) - (a < b);
     }
 
     static Ordering value_string_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        if ((b.type != Types::String) && (b.type != Types::Symbol))
+        if (b.type != self)
             error("incomparable values");
         int c = zucmp(a.str->count, b.str->count);
         if (!c) {
             c = memcmp(a.str->ptr, b.str->ptr, a.str->count);
         }
-        switch(c) {
-            case -1: return Less;
-            case 0: return Equal;
-            case 1: return Greater;
-            default: return Unrelated;
-        }
+        return (Ordering)c;
     }
 
     /*
@@ -2734,7 +2776,14 @@ namespace Types {
         Type *type = new_type(format("real%zu", width));
         type->tostring = _real_tostring;
         type->eq_type = type_real_eq;
+
+        type->op2[OP2_Add] = type->rop2[OP2_Add] = _real_add;
+        type->op2[OP2_Sub] = _real_sub;
+        type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _real_mul;
+        type->op2[OP2_Div] = _real_div;
+
         type->cmp = _real_cmp;
+
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
@@ -2815,6 +2864,7 @@ namespace Types {
         R64 = Real(64);
 
         struct _string_alignment { char c; bangra::String s; };
+        struct _symbol_alignment { char c; bangra::Symbol s; };
 
         tmp = Struct("String", true);
         tmp->tostring = _string_tostring;
@@ -2829,13 +2879,10 @@ namespace Types {
 
         tmp = Struct("Symbol", true);
         tmp->tostring = _symbol_tostring;
-        tmp->length = _string_length;
-        //tmp->slice = _symbol_slice;
-        //tmp->op2[OP2_At] = _string_at;
-        tmp->cmp = value_string_cmp;
+        tmp->cmp = value_symbol_cmp;
         tmp->apply_type = _symbol_apply_type;
-        tmp->size = sizeof(bangra::String);
-        tmp->alignment = offsetof(_string_alignment, s);
+        tmp->size = sizeof(bangra::Symbol);
+        tmp->alignment = offsetof(_symbol_alignment, s);
         Symbol = tmp;
 
         tmp = Struct("SList", true);
@@ -3184,11 +3231,9 @@ struct Lexer {
 
     Any getAsSymbol() {
         // TODO: anchor
-        auto result = make_any(Types::Symbol);
-        auto s = alloc_string(string, string_len);
-        unescape(*s);
-        result.str = s;
-        return result;
+        std::string s(string, string_len);
+        inplace_unescape(const_cast<char *>(s.c_str()));
+        return bangra::symbol(s);
     }
 
     Any getAsInteger() {
