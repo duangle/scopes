@@ -1,4 +1,3 @@
-
 /// print
     require "test_module"
 
@@ -145,3 +144,4 @@ assert
         ::@ 5 +
         1 + 3
 
+print "ok"

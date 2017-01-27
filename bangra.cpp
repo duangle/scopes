@@ -3746,16 +3746,18 @@ typedef std::vector<Any> ILValueArray;
 Any evaluate(size_t argindex, Frame *frame, const Any &value) {
     if (eq(value.type, Types::PParameter)) {
         auto param = *value.pparameter;
-        Frame *ptr = frame;
-        while (ptr) {
-            auto cont = param->parent;
-            assert(cont && "parameter has no parent");
-            if (ptr->map.count(cont)) {
-                auto &values = ptr->map[cont];
-                assert(param->index < values.size());
-                return values[param->index];
+        auto cont = param->parent;
+        if (cont) {
+            // parameter is bound - attempt resolve
+            Frame *ptr = frame;
+            while (ptr) {
+                if (ptr->map.count(cont)) {
+                    auto &values = ptr->map[cont];
+                    assert(param->index < values.size());
+                    return values[param->index];
+                }
+                ptr = ptr->parent;
             }
-            ptr = ptr->parent;
         }
         // return unbound value
         return value;

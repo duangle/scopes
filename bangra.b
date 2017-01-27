@@ -70,20 +70,19 @@ let-syntax (scope)
             syntax-macro
                 function (scope expr)
                     ((function (param-name)
-                        ((function (param)
+                        ((function (param scope-name)
                             (slist
-                                (cons escape
-                                    (expand
-                                        (table
-                                            (tupleof scope-parent-symbol scope)
-                                            (tupleof param-name param))
-                                        (slist
-                                            (slist
-                                                (cons function
-                                                    (cons (slist param)
-                                                        (@ expr 1)))
-                                                (@ expr 0 2 0)))))))
-                            (parameter param-name))) (@ expr 0 1 0))
+                                (slist let-syntax (slist scope-name)
+                                    (slist table
+                                        (slist tupleof (slist quote scope-parent-symbol) scope-name)
+                                        (slist tupleof (slist quote param-name) param)))
+                                (slist
+                                    (cons function
+                                        (cons (slist param)
+                                                (@ expr 1)))
+                                    (@ expr 0 2 0))))
+                            (parameter param-name)
+                            (quote scope))) (@ expr 0 1 0))
         tupleof
             quote ?
             syntax-macro
