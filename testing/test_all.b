@@ -2,9 +2,6 @@
 /// print
     require "test_module"
 
-print
-    symbol "test"
-
 qquote-test :=
     qquote
         print
@@ -17,7 +14,7 @@ qquote-test :=
                 print
                     unquote k
                 print 1
-print
+assert
     == qquote-test
         quote
             print 3
@@ -27,44 +24,58 @@ print
 k := 3
 T :=
     structof
-        : test
+        test :
             function (self a b)
                 + a b
 
 assert
     k == (.test T 1 2)
 
-print
-    slist-join
+assert
+    <
+        slist 1 2 2
         slist 1 2 3
-        slist 4 5 6
+
+assert
+    ==
+        slist-join
+            slist 1 2 3
+            slist 4 5 6
+        slist 1 2 3 4 5 6
 
 call print "hi"
 
-print
-    repr
+assert
+    == "hheellll  wwrrlldd"
         fold (iter "hello world") ""
             function (out k)
-                print k
                 if (k == "o")
                     out
                 else
                     .. out k k
 
-print
-    repr
+assert
+    == "xyz"
         slice "abcdefghijklmnopqrstuvwxyz" -3
+    "slice failed"
 
-print "lengths:"
-    length "hi!"
-    length ""
-    length
-        tupleof 1 2 3
-    length
-        structof
-            key : 123
+assert
+    == 3
+        length "hi!"
+assert
+    == 0
+        length ""
+assert
+    == 3
+        length
+            tupleof 1 2 3
+assert
+    == 1
+        length
+            structof
+                key : 123
 
-print
+assert
     1 + 2 * 3 == 7
 
 let x 5
@@ -85,52 +96,52 @@ let V
                         red : 0
                         green : 1
                         blue : 2
-print "dot:"
-    V . z @ (quote w) . blue
-    V.z.w.blue
+assert
+    == V.z.w.blue
+        V . z @ (quote w) . blue
+    "accessors failed"
 
-print
+assert
     2 * 2 + 1 == 5
+    "infix operators failed"
 
-print "true and true or true:"
-    true and true or true
+assert
+    (true and true or true) == true
+    "and/or failed"
 
-print "(tupleof 1 2 3) @ 2 == 3:"
+assert
     (tupleof 1 2 3) @ 2 == 3
-
-assert true
+    "tuple indexing failed"
 
 do
     let i 0
     let k "!"
-    print
-        loop (i k)
-            if (i < 10)
-                print "#" i k
-                repeat (i + 1) (k .. "!")
-            else
-                k
+    assert
+        == "!!!!!!!!!!!"
+            loop (i k)
+                if (i < 10)
+                    print "#" i k
+                    repeat (i + 1) (k .. "!")
+                else
+                    k
+        "loop failed"
 
-print
-    if (k == 0)
-        print "if!"
-        1
-    elseif (k == 1)
-        print "elseif 1!"
-        2
-    elseif (k == 2)
-        print "elseif 2!"
-        3
-    else
-        print "else!"
-        4
+assert
+    == 2
+        if (k == 0)
+            1
+        elseif (k == 1)
+            q := 2
+            q
+        elseif (k == 2)
+            3
+        else
+            4
+    "if-tree failed"
 print;
-print "hi"
-print "ho"
 
-do
-    ::@ print "test:"
-    1 + 3
-    print 2
-    print 3
+assert
+    == 9
+        ::@ 5 +
+        1 + 3
 

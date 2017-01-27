@@ -19,7 +19,11 @@ let-syntax (scope)
         tupleof
             quote empty?
             function (x)
-                == x (slist)
+                branch
+                    == (typeof x) slist
+                    function ()
+                        == x (slist)
+                    function () false
         tupleof
             quote key?
             function (x y)

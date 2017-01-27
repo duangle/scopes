@@ -734,7 +734,7 @@ enum Ordering {
     Less = -1,
     Equal = 0,
     Greater = 1,
-    Unrelated = 0x7f,
+    Unordered = 0x7f,
 };
 
 typedef
@@ -912,7 +912,7 @@ static Any op2_default(const Type *self, const Any &a, const Any &b) {
 static Ordering cmp_default(const Type *self, const Any &a, const Any &b) {
     error("comparison not applicable to type %s",
         get_name(self).c_str());
-    return Unrelated;
+    return Unordered;
 }
 
 static Any type_apply_default(const Type *self, const std::vector<Any> &args) {
@@ -994,53 +994,53 @@ static Ordering compare(const Any &a, const Any &b) {
 }
 
 static bool eq(const Any &a, const Any &b) {
-    try {
+    //try {
         return compare(a, b) == Equal;
-    } catch (const Any &any) {
-        return false;
-    }
+    //} catch (const Any &any) {
+    //    return false;
+    //}
 }
 
 static bool ne(const Any &a, const Any &b) {
-    try {
+    //try {
         return compare(a, b) != Equal;
-    } catch (const Any &any) {
-        return true;
-    }
+    //} catch (const Any &any) {
+    //    return true;
+    //}
 }
 
 static bool gt(const Any &a, const Any &b) {
-    try {
+    //try {
         return compare(a, b) == Greater;
-    } catch (const Any &any) {
-        return false;
-    }
+    //} catch (const Any &any) {
+    //    return false;
+    //}
 }
 
 static bool ge(const Any &a, const Any &b) {
-    try {
+    //try {
         auto result = compare(a, b);
         return (result == Equal) || (result == Greater);
-    } catch (const Any &any) {
-        return false;
-    }
+    //} catch (const Any &any) {
+    //    return false;
+    //}
 }
 
 static bool lt(const Any &a, const Any &b) {
-    try {
+    //try {
         return compare(a, b) == Less;
-    } catch (const Any &any) {
-        return false;
-    }
+    //} catch (const Any &any) {
+    //    return false;
+    //}
 }
 
 static bool le(const Any &a, const Any &b) {
-    try {
+    //try {
         auto result = compare(a, b);
         return (result == Equal) || (result == Less);
-    } catch (const Any &any) {
-        return false;
-    }
+    //} catch (const Any &any) {
+    //    return false;
+    //}
 }
 
 static Any add(const Any &a, const Any &b) {
@@ -2329,6 +2329,21 @@ namespace Types {
         return ss.str();
     }
 
+    static Ordering _slist_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto x = extract_slist(a);
+        auto y = extract_slist(b);
+        while (true) {
+            if (x == y) return Equal;
+            else if (!x) return Less;
+            else if (!y) return Greater;
+            auto result = compare(x->at, y->at);
+            if (result != Equal) return result;
+            x = x->next;
+            y = y->next;
+        }
+    }
+
     static bangra::Any type_pointer_at(const Type *self,
         const bangra::Any &value, const bangra::Any &index) {
         return at(pointer_element(self, value), index);
@@ -2342,13 +2357,19 @@ namespace Types {
 
     static Ordering value_pointer_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        if (self != b.type) error("can not compare to type");
-        return (*a.pptr == *b.pptr)?Equal:Unrelated;
+        auto y = is_pointer_type(b.type)?pointer_element(b.type, b):b;
+        return compare(pointer_element(self, a), y);
+    }
+
+    static Ordering _struct_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (!eq(a.type, b.type)) return Unordered;
+        return (a.ptr == b.ptr)?Equal:Unordered;
     }
 
     static Ordering value_none_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return (self == b.type)?Equal:Unrelated;
+        return (self == b.type)?Equal:Unordered;
     }
 
     static bangra::Any _integer_add(const Type *self,
@@ -2387,7 +2408,7 @@ namespace Types {
         if (self != b.type) error("can not compare to type");
         auto x = *a.symbol;
         auto y = *b.symbol;
-        return (x == y)?Equal:Unrelated;
+        return (x == y)?Equal:Unordered;
     }
 
     static bangra::Any _real_add(const Type *self,
@@ -2414,7 +2435,7 @@ namespace Types {
         const bangra::Any &a, const bangra::Any &b) {
         auto x = extract_real(a);
         auto y = extract_real(b);
-        if (std::isnan(x + y)) return Unrelated;
+        if (std::isnan(x + y)) return Unordered;
         return (Ordering)((y < x) - (x < y));
     }
 
@@ -2845,6 +2866,7 @@ namespace Types {
         }
         type->eq_type = type_struct_eq;
         type->op2[OP2_At] = type_struct_at;
+        type->cmp = _struct_cmp;
         type->length = _tuple_length;
         return type;
     }
@@ -2927,6 +2949,7 @@ namespace Types {
 
         tmp = Struct("SList", true);
         tmp->op2[OP2_At] = type_slist_at;
+        tmp->cmp = _slist_cmp;
         //tmp->apply_type = _slist_apply_type;
         //tmp->size = sizeof(bangra::SList);
         //tmp->alignment = offsetof(_slist_alignment, s);
