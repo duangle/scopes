@@ -587,9 +587,26 @@ static void set_anchor(const Any &value, const Anchor *anchor) {
 
 //------------------------------------------------------------------------------
 
-static Symbol next_symbol_id = 1;
+enum {
+    SYM_Unnamed = 0,
+    SYM_Parent,
+    SYM_FunctionForm,
+    SYM_QuoteForm,
+    // wildcards
+    SYM_SListWC,
+    SYM_SymbolWC,
+    SYM_ScriptSize,
+    SYM_Count,
+};
+
+static Symbol next_symbol_id = SYM_Count;
 static std::map<Symbol, std::string> map_symbol_name;
 static std::map<std::string, Symbol> map_name_symbol;
+
+static void map_symbol(Symbol id, const std::string &name) {
+    map_name_symbol[name] = id;
+    map_symbol_name[id] = name;
+}
 
 static Symbol get_symbol(const std::string &name) {
     auto it = map_name_symbol.find(name);
@@ -597,14 +614,23 @@ static Symbol get_symbol(const std::string &name) {
         return it->second;
     } else {
         Symbol id = ++next_symbol_id;
-        map_name_symbol[name] = id;
-        map_symbol_name[id] = name;
+        map_symbol(id, name);
         return id;
     }
 }
 
 static std::string get_symbol_name(Symbol id) {
     return map_symbol_name[id];
+}
+
+static void initSymbols() {
+    map_symbol(SYM_Unnamed, "");
+    map_symbol(SYM_Parent, "#parent");
+    map_symbol(SYM_FunctionForm, "form:function");
+    map_symbol(SYM_QuoteForm, "form:quote");
+    map_symbol(SYM_SListWC, "#slist");
+    map_symbol(SYM_SymbolWC, "#symbol");
+    map_symbol(SYM_ScriptSize, "script-size");
 }
 
 //------------------------------------------------------------------------------
@@ -698,7 +724,7 @@ static void error (const char *format, ...);
 //------------------------------------------------------------------------------
 
 struct Table {
-    std::unordered_map<std::string, Any> _;
+    std::unordered_map<Symbol, Any> _;
     Table *meta;
 };
 
@@ -722,7 +748,7 @@ typedef
 
 enum {
     OP1_Neg = 0,
-    OP1_Not,
+    OP1_Not, // bit not (~)
     OP1_BoolNot,
     OP1_Rcp,
 
@@ -806,7 +832,7 @@ struct Type {
     std::vector<int64_t> tags;
     // struct, union: name to types index lookup table
     // enum: name to types & tag index lookup table
-    std::unordered_map<std::string, size_t> name_index_map;
+    std::unordered_map<Symbol, size_t> name_index_map;
 };
 
 static std::string get_name(const Type *self) {
@@ -1115,24 +1141,16 @@ static Table *get_meta(Table &table) {
 }
 */
 
-static void set_key(Table &table, const std::string &key, const Any &value) {
+static void set_key(Table &table, const Symbol &key, const Any &value) {
     table._[key] = value;
 }
 
-static bool has_key(const Table &table, const std::string &key) {
+static bool has_key(const Table &table, const Symbol &key) {
     return table._.find(key) != table._.end();
 }
 
-/*
-static const Any &get_key(Table &table, const std::string &key) {
-    auto it = table._.find(key);
-    assert (it != table._.end());
-    return it->second;
-}
-*/
-
 static const Any &get_key(const Table &table,
-    const std::string &key, const Any &defvalue) {
+    const Symbol &key, const Any &defvalue) {
     auto it = table._.find(key);
     if (it == table._.end())
         return defvalue;
@@ -1204,22 +1222,22 @@ static std::string extract_string(const Any &value) {
     } else if (eq(value.type, Types::String)) {
         return std::string(value.str->ptr, value.str->count);
     } else {
-        error("can not extract string");
+        error("string expected");
         return "";
     }
 }
 
-static std::string extract_any_string(const Any &value) {
-    if (eq(value.type, Types::Rawstring)) {
-        return value.c_str;
-    } else if (eq(value.type, Types::String)) {
-        return std::string(value.str->ptr, value.str->count);
-    } else if (eq(value.type, Types::Symbol)) {
-        return get_symbol_name(*value.symbol);
+static Symbol extract_symbol(const Any &value) {
+    if (eq(value.type, Types::Symbol)) {
+        return *value.symbol;
     } else {
-        error("can not extract string");
-        return "";
+        error("symbol expected");
+        return 0;
     }
+}
+
+static std::string extract_symbol_string(const Any &value) {
+    return get_symbol_name(extract_symbol(value));
 }
 
 static bool extract_bool(const Any &value) {
@@ -1284,8 +1302,12 @@ static T *alloc_uint(uint64_t value) {
     return ptr;
 }
 
+static Any wrap_symbol(const Symbol &s) {
+    return wrap(Types::Symbol, alloc_uint<Symbol>(s));
+}
+
 static Any symbol(const std::string &s) {
-    return wrap(Types::Symbol, alloc_uint<Symbol>(get_symbol(s)));
+    return wrap_symbol(get_symbol(s));
 }
 
 static Any wrap_ptr(const Type *type, const void *ptr) {
@@ -1437,12 +1459,13 @@ struct Parameter {
     Flow *parent;
     size_t index;
     Type *parameter_type;
-    std::string name;
+    Symbol name;
 
     Parameter() :
         parent(nullptr),
         index(-1),
-        parameter_type(nullptr) {
+        parameter_type(nullptr),
+        name(SYM_Unnamed) {
     }
 
     Flow *getParent() const {
@@ -1450,12 +1473,12 @@ struct Parameter {
     }
 
     std::string getReprName() const {
-        if (name.empty()) {
+        if (name == SYM_Unnamed) {
             return format("%s%zu",
                 ansi(ANSI_STYLE_OPERATOR,"@").c_str(),
                 index);
         } else {
-            return name;
+            return get_symbol_name(name);
         }
     }
 
@@ -1470,7 +1493,7 @@ struct Parameter {
 
     std::string getRefRepr () const;
 
-    static Parameter *create(const std::string &name = "") {
+    static Parameter *create(const Symbol &name = SYM_Unnamed) {
         auto value = new Parameter();
         value->index = (size_t)-1;
         value->name = name;
@@ -1712,10 +1735,10 @@ std::string Parameter::getRefRepr () const {
 struct Builtin {
 
     BuiltinFunction handler;
-    std::string name;
+    Symbol name;
 
     static Builtin *create(BuiltinFunction func,
-        const std::string &name) {
+        const Symbol &name) {
         auto result = new Builtin();
         result->handler = func;
         result->name = name;
@@ -1725,7 +1748,7 @@ struct Builtin {
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin");
-        ss << " " << name;
+        ss << " " << get_symbol_name(name);
         ss << ")";
         return ss.str();
     }
@@ -1736,10 +1759,10 @@ struct Builtin {
 struct BuiltinFlow {
 
     BuiltinFlowFunction handler;
-    std::string name;
+    Symbol name;
 
     static BuiltinFlow *create(BuiltinFlowFunction func,
-        const std::string &name) {
+        const Symbol &name) {
         auto result = new BuiltinFlow();
         result->handler = func;
         result->name = name;
@@ -1749,7 +1772,7 @@ struct BuiltinFlow {
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin-cc");
-        ss << " " << name;
+        ss << " " << get_symbol_name(name);
         ss << ")";
         return ss.str();
     }
@@ -1762,10 +1785,10 @@ typedef Any (*SpecialFormFunction)(SListIter);
 struct SpecialForm {
 
     SpecialFormFunction handler;
-    std::string name;
+    Symbol name;
 
     static SpecialForm *create(SpecialFormFunction func,
-        const std::string &name) {
+        const Symbol &name) {
         auto result = new SpecialForm();
         result->handler = func;
         result->name = name;
@@ -1775,7 +1798,7 @@ struct SpecialForm {
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "form");
-        ss << " " << name;
+        ss << " " << get_symbol_name(name);
         ss << ")";
         return ss.str();
     }
@@ -1793,10 +1816,10 @@ typedef Cursor (*MacroBuiltinFunction)(const Table *, SListIter);
 struct BuiltinMacro {
 
     MacroBuiltinFunction handler;
-    std::string name;
+    Symbol name;
 
     static BuiltinMacro *create(MacroBuiltinFunction func,
-        const std::string &name) {
+        const Symbol &name) {
         auto result = new BuiltinMacro();
         result->handler = func;
         result->name = name;
@@ -1806,7 +1829,7 @@ struct BuiltinMacro {
     std::string getRefRepr() const {
         std::stringstream ss;
         ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin-macro");
-        ss << " " << name;
+        ss << " " << get_symbol_name(name);
         ss << ")";
         return ss.str();
     }
@@ -2029,7 +2052,7 @@ static bool is_comment(const Any &expr) {
         if (*expr.pslist) {
             const Any &sym = (*expr.pslist)->at;
             if (eq(sym.type, Types::Symbol)) {
-                auto s = extract_any_string(sym);
+                auto s = extract_symbol_string(sym);
                 if (!memcmp(s.c_str(),"///",3))
                     return true;
             }
@@ -2207,7 +2230,7 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         }
     } else {
         if (e.type == Types::Symbol) {
-            streamString(stream, extract_any_string(e), "[]{}()\"");
+            streamString(stream, extract_symbol_string(e), "[]{}()\"");
         } else if (e.type == Types::String) {
             stream << '"';
             streamString(stream, extract_string(e), "\"");
@@ -2277,12 +2300,12 @@ namespace Types {
     }
 
     static std::string _symbol_tostring(const Type *self, const bangra::Any &value) {
-        return extract_any_string(value);
+        return extract_symbol_string(value);
     }
 
     template<typename T>
     static std::string _named_object_tostring(const Type *self, const bangra::Any &value) {
-        return get_name(self) + ":" + ((T *)value.ptr)->name;
+        return get_name(self) + ":" + get_symbol_name(((T *)value.ptr)->name);
     }
 
     static std::string _integer_tostring(const Type *self, const bangra::Any &value) {
@@ -2353,6 +2376,10 @@ namespace Types {
         auto x = extract_integer(a);
         auto y = extract_integer(b);
         return (Ordering)((y < x) - (x < y));
+    }
+
+    static bangra::Any _bool_not(const Type *self, const bangra::Any &x) {
+        return wrap(!extract_bool(x));
     }
 
     static Ordering value_symbol_cmp(const Type *self,
@@ -2550,12 +2577,12 @@ namespace Types {
 
     static bangra::Any type_struct_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (eq(vindex.type, Types::String) || eq(vindex.type, Types::Symbol)) {
-            auto key = extract_any_string(vindex);
+        if (eq(vindex.type, Types::Symbol)) {
+            auto key = extract_symbol(vindex);
             auto it = self->name_index_map.find(key);
             if (it == self->name_index_map.end()) {
                 error("no such field in struct: %s",
-                    key.c_str());
+                    get_symbol_name(key).c_str());
             }
             return type_tuple_at(self, value, wrap(it->second));
         } else {
@@ -2566,7 +2593,7 @@ namespace Types {
     static bangra::Any type_table_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
         auto table = extract_table(value);
-        auto key = extract_any_string(vindex);
+        auto key = extract_symbol(vindex);
         return get_key(*table, key, const_none);
     }
 
@@ -2649,8 +2676,17 @@ namespace Types {
 
     static void _set_field_names(Type *type, const std::vector<std::string> &names) {
         for (size_t i = 0; i < names.size(); ++i) {
-            auto &name = names[i];
-            if (!name.empty()) {
+            auto name = get_symbol(names[i]);
+            if (name != SYM_Unnamed) {
+                type->name_index_map[name] = i;
+            }
+        }
+    }
+
+    static void _set_field_names(Type *type, const std::vector<bangra::Symbol> &names) {
+        for (size_t i = 0; i < names.size(); ++i) {
+            auto name = names[i];
+            if (name != SYM_Unnamed) {
                 type->name_index_map[name] = i;
             }
         }
@@ -2753,6 +2789,10 @@ namespace Types {
         type->op2[OP2_Sub] = _integer_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
         type->op2[OP2_Div] = _integer_div;
+
+        if (width == 1) {
+            type->op1[OP1_BoolNot] = _bool_not;
+        }
 
         type->cmp = _integer_cmp;
 
@@ -4212,7 +4252,7 @@ public:
     }
 
     void exportType(const std::string &name, const Type *type) {
-        set_key(*dest, name,
+        set_key(*dest, get_symbol(name),
             wrap(type));
     }
 
@@ -4503,7 +4543,7 @@ static Any builtin_tupleof(const std::vector<Any> &args) {
 
 static Any builtin_parameter(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
-    auto name = extract_any_string(args[0]);
+    auto name = extract_symbol(args[0]);
     return wrap_ptr(Types::PParameter, Parameter::create(name));
 }
 
@@ -4518,13 +4558,13 @@ static Any builtin_cons(const std::vector<Any> &args) {
 
 static Any builtin_structof(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
-    std::vector<std::string> names;
+    std::vector<Symbol> names;
     std::vector<Any> values;
     for (size_t i = 0; i < args.size(); ++i) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
             error("tuple must have exactly two elements");
-        auto name = extract_any_string(pair[0]);
+        auto name = extract_symbol(pair[0]);
         names.push_back(name);
         auto value = pair[1];
         values.push_back(value);
@@ -4548,7 +4588,7 @@ static Any builtin_table(const std::vector<Any> &args) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
             error("tuple must have exactly two elements");
-        auto name = extract_any_string(pair[0]);
+        auto name = extract_symbol(pair[0]);
         auto value = pair[1];
         set_key(*t, name, value);
     }
@@ -4653,41 +4693,49 @@ static Table *new_scope() {
 static Table *new_scope(const Table *scope) {
     assert(scope);
     auto subscope = new_table();
-    set_key(*subscope, "#parent", wrap_ptr(Types::PTable, scope));
+    set_key(*subscope, SYM_Parent, wrap_ptr(Types::PTable, scope));
     return subscope;
 }
 
-static void setLocal(Table *scope, const std::string &name, const Any &value) {
+static void setLocal(Table *scope, const Symbol &name, const Any &value) {
     assert(scope);
     set_key(*scope, name, value);
+}
+
+static void setLocalString(Table *scope, const std::string &name, const Any &value) {
+    setLocal(scope, get_symbol(name), value);
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, MacroBuiltinFunction func) {
     assert(scope);
-    setLocal(scope, name,
-        wrap_ptr(Types::PBuiltinMacro, BuiltinMacro::create(func, name)));
+    auto sym = get_symbol(name);
+    setLocal(scope, sym,
+        wrap_ptr(Types::PBuiltinMacro, BuiltinMacro::create(func, sym)));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, SpecialFormFunction func) {
     assert(scope);
-    setLocal(scope, name,
-        wrap_ptr(Types::PSpecialForm, SpecialForm::create(func, name)));
+    auto sym = get_symbol(name);
+    setLocal(scope, sym,
+        wrap_ptr(Types::PSpecialForm, SpecialForm::create(func, sym)));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, BuiltinFunction func) {
     assert(scope);
-    setLocal(scope, name,
-        wrap_ptr(Types::PBuiltin, Builtin::create(func, name)));
+    auto sym = get_symbol(name);
+    setLocal(scope, sym,
+        wrap_ptr(Types::PBuiltin, Builtin::create(func, sym)));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, BuiltinFlowFunction func) {
     assert(scope);
-    setLocal(scope, name,
-        wrap_ptr(Types::PBuiltinFlow, BuiltinFlow::create(func, name)));
+    auto sym = get_symbol(name);
+    setLocal(scope, sym,
+        wrap_ptr(Types::PBuiltinFlow, BuiltinFlow::create(func, sym)));
 }
 
 /*
@@ -4700,13 +4748,13 @@ static bool isLocal(StructValue *scope, const std::string &name) {
 */
 
 static const Table *getParent(const Table *scope) {
-    auto parent = get_key(*scope, "#parent", const_none);
+    auto parent = get_key(*scope, SYM_Parent, const_none);
     if (parent.type == Types::PTable)
         return *parent.ptable;
     return nullptr;
 }
 
-static bool hasLocal(const Table *scope, const std::string &name) {
+static bool hasLocal(const Table *scope, const Symbol &name) {
     assert(scope);
     while (scope) {
         if (has_key(*scope, name)) return true;
@@ -4715,7 +4763,7 @@ static bool hasLocal(const Table *scope, const std::string &name) {
     return false;
 }
 
-static Any getLocal(const Table *scope, const std::string &name) {
+static Any getLocal(const Table *scope, const Symbol &name) {
     assert(scope);
     while (scope) {
         auto result = get_key(*scope, name, const_none);
@@ -4726,11 +4774,15 @@ static Any getLocal(const Table *scope, const std::string &name) {
     return const_none;
 }
 
+static Any getLocalString(const Table *scope, const std::string &name) {
+    return getLocal(scope, get_symbol(name));
+}
+
 //------------------------------------------------------------------------------
 
-static bool isSymbol (const Any &expr, const char *sym) {
+static bool isSymbol (const Any &expr, const Symbol &sym) {
     if (expr.type == Types::Symbol) {
-        return extract_any_string(expr) == sym;
+        return extract_symbol(expr) == sym;
     }
     return false;
 }
@@ -4774,7 +4826,7 @@ static Any toparameter (Table *env, const Any &value) {
     if (eq(value.type, Types::PParameter))
         return value;
     verifyValueKind(Types::Symbol, value);
-    auto key = extract_any_string(value);
+    auto key = extract_symbol(value);
     auto bp = wrap(Parameter::create(key));
     setLocal(env, key, bp);
     return bp;
@@ -4813,7 +4865,7 @@ static Cursor expand_function (const Table *env, SListIter topit) {
     return {
         wrap(
             SList::create(
-                getLocal(globals, "form:function"),
+                getLocal(globals, SYM_FunctionForm),
                 SList::create(
                     wrap(reverse_slist_inplace(outargs)),
                     expand_expr_list(subenv, it),
@@ -4829,7 +4881,7 @@ static Cursor expand_quote (const Table *env, SListIter topit) {
     auto anchor = it.getAnchor();
     it++;
     auto result = SList::create(
-        getLocal(globals, "form:quote"),
+        getLocal(globals, SYM_QuoteForm),
         it.getSList(),
         anchor);
     return { wrap(result), topit };
@@ -4888,7 +4940,7 @@ process:
 
         auto head = (*expr.pslist)->at;
         if (eq(head.type, Types::Symbol)) {
-            head = getLocal(env, extract_any_string(head));
+            head = getLocal(env, extract_symbol(head));
         }
         if (head.type != Types::None) {
             if (eq(head.type, Types::PBuiltinMacro)) {
@@ -4903,7 +4955,7 @@ process:
             }
         }
 
-        auto default_handler = getLocal(env, "#slist");
+        auto default_handler = getLocal(env, SYM_SListWC);
         if (default_handler.type != Types::None) {
             auto result = expand_macro(env, default_handler, topit);
             if (result) {
@@ -4916,9 +4968,9 @@ process:
         result = wrap(expand_expr_list(env, it));
         topit++;
     } else if (eq(expr.type, Types::Symbol)) {
-        auto value = extract_any_string(expr);
+        auto value = extract_symbol(expr);
         if (!hasLocal(env, value)) {
-            auto default_handler = getLocal(env, "#symbol");
+            auto default_handler = getLocal(env, SYM_SymbolWC);
             if (default_handler.type != Types::None) {
                 auto result = expand_macro(env, default_handler, topit);
                 if (result) {
@@ -4926,7 +4978,8 @@ process:
                     goto process;
                 }
             }
-            error("no such symbol in scope: '%s'", value.c_str());
+            error("no such symbol in scope: '%s'",
+                get_symbol_name(value).c_str());
         }
         result = getLocal(env, value);
         topit++;
@@ -5159,7 +5212,7 @@ static void initGlobals () {
     auto env = new_scope();
     globals = env;
 
-    setLocal(env, "globals", wrap(env));
+    setLocalString(env, "globals", wrap(env));
 
     setBuiltin(env, "form:call", compile_call);
     setBuiltin(env, "form:function", compile_function);
@@ -5172,52 +5225,56 @@ static void initGlobals () {
     setBuiltin(env, "escape", expand_escape);
 
     // test
-    setLocal(env, "print-number",
+    setLocalString(env, "print-number",
         wrap_ptr(
             Types::Pointer(
                 Types::CFunction(Types::I32, Types::Tuple({Types::I32}), false)),
             (void *)print_number));
 
-    setLocal(env, "void", wrap(Types::None));
-    setLocal(env, "None", wrap(Types::None));
+    setLocalString(env, "void", wrap(Types::None));
+    setLocalString(env, "None", wrap(Types::None));
 
-    setLocal(env, "bool", wrap(Types::Bool));
+    setLocalString(env, "bool", wrap(Types::Bool));
 
-    setLocal(env, "int8", wrap(Types::I8));
-    setLocal(env, "int16", wrap(Types::I16));
-    setLocal(env, "int32", wrap(Types::I32));
-    setLocal(env, "int64", wrap(Types::I64));
+    setLocalString(env, "int8", wrap(Types::I8));
+    setLocalString(env, "int16", wrap(Types::I16));
+    setLocalString(env, "int32", wrap(Types::I32));
+    setLocalString(env, "int64", wrap(Types::I64));
 
-    setLocal(env, "uint8", wrap(Types::U8));
-    setLocal(env, "uint16", wrap(Types::U16));
-    setLocal(env, "uint32", wrap(Types::U32));
-    setLocal(env, "uint64", wrap(Types::U64));
+    setLocalString(env, "uint8", wrap(Types::U8));
+    setLocalString(env, "uint16", wrap(Types::U16));
+    setLocalString(env, "uint32", wrap(Types::U32));
+    setLocalString(env, "uint64", wrap(Types::U64));
 
-    setLocal(env, "int", wrap(Types::I32));
-    setLocal(env, "uint", wrap(Types::U32));
+    setLocalString(env, "int", wrap(Types::I32));
+    setLocalString(env, "uint", wrap(Types::U32));
 
-    setLocal(env, "real16", wrap(Types::R16));
-    setLocal(env, "real32", wrap(Types::R32));
-    setLocal(env, "real64", wrap(Types::R64));
+    setLocalString(env, "real16", wrap(Types::R16));
+    setLocalString(env, "real32", wrap(Types::R32));
+    setLocalString(env, "real64", wrap(Types::R64));
 
-    setLocal(env, "half", wrap(Types::R16));
-    setLocal(env, "float", wrap(Types::R32));
-    setLocal(env, "double", wrap(Types::R64));
+    setLocalString(env, "half", wrap(Types::R16));
+    setLocalString(env, "float", wrap(Types::R32));
+    setLocalString(env, "double", wrap(Types::R64));
 
-    setLocal(env, "symbol", wrap(Types::Symbol));
-    setLocal(env, "slist", wrap(Types::PSList));
+    setLocalString(env, "symbol", wrap(Types::Symbol));
+    setLocalString(env, "slist", wrap(Types::PSList));
 
-    setLocal(env, "usize_t",
+    setLocalString(env, "scope-parent-symbol", wrap_symbol(SYM_Parent));
+    setLocalString(env, "scope-slist-wildcard-symbol", wrap_symbol(SYM_SListWC));
+    setLocalString(env, "scope-symbol-wildcard-symbol", wrap_symbol(SYM_SymbolWC));
+
+    setLocalString(env, "usize_t",
         wrap(Types::Integer(sizeof(size_t)*8,false)));
 
-    setLocal(env, "rawstring", wrap(Types::Rawstring));
+    setLocalString(env, "rawstring", wrap(Types::Rawstring));
 
-    setLocal(env, "int", getLocal(env, "int32"));
+    setLocalString(env, "int", getLocalString(env, "int32"));
 
-    setLocal(env, "true", wrap(true));
-    setLocal(env, "false", wrap(false));
+    setLocalString(env, "true", wrap(true));
+    setLocalString(env, "false", wrap(false));
 
-    setLocal(env, "none", const_none);
+    setLocalString(env, "none", const_none);
 
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);
@@ -5291,6 +5348,8 @@ static void initGlobals () {
 }
 
 static void init() {
+    initSymbols();
+
     bangra::support_ansi = isatty(fileno(stdout));
 
     Types::initTypes();
@@ -5404,8 +5463,9 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "footer expression does not begin with symbol\n");
         return const_none;
     }
-    if (!isSymbol(head, "script-size"))  {
-        fprintf(stderr, "footer expression does not begin with 'script-size'\n");
+    if (!isSymbol(head, SYM_ScriptSize))  {
+        fprintf(stderr, "footer expression does not begin with '%s'\n",
+            get_symbol_name(SYM_ScriptSize).c_str());
         return const_none;
     }
     if (!it) {
@@ -5519,10 +5579,10 @@ int bangra_main(int argc, char ** argv) {
 
             bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
 
-            bangra::setLocal(const_cast<bangra::Table *>(bangra::globals),
+            bangra::setLocalString(const_cast<bangra::Table *>(bangra::globals),
                 "interpreter-path",
                 bangra::wrap(std::string(bangra_interpreter_path)));
-            bangra::setLocal(const_cast<bangra::Table *>(bangra::globals),
+            bangra::setLocalString(const_cast<bangra::Table *>(bangra::globals),
                 "interpreter-dir",
                 bangra::wrap(std::string(bangra_interpreter_dir)));
 

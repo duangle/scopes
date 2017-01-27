@@ -3,28 +3,35 @@
 # path/to/executable.b and, if found, executes it.
 let-syntax (scope)
     table
-        tupleof "#parent" scope
-        tupleof "symbol?"
+        tupleof scope-parent-symbol scope
+        tupleof
+            quote symbol?
             function (x)
                 == (typeof x) symbol
-        tupleof "slist?"
+        tupleof
+            quote slist?
             function (x)
                 == (typeof x) slist
-        tupleof "none?"
+        tupleof
+            quote none?
             function (x)
                 == x none
-        tupleof "empty?"
+        tupleof
+            quote empty?
             function (x)
                 == x (slist)
-        tupleof "key?"
+        tupleof
+            quote key?
             function (x y)
                 != (@ x y) none
-        tupleof "API"
+        tupleof
+            quote API
             import-c
                 # todo: search path & embedded resources
                 .. interpreter-dir "/bangra.h"
                 tupleof;
-        tupleof "syntax-single-macro"
+        tupleof
+            quote syntax-single-macro
             function (f)
                 syntax-macro
                     function (scope expr)
@@ -32,13 +39,15 @@ let-syntax (scope)
                             f scope
                                 @ expr 0
                             @ expr 1
-        tupleof "call"
+        tupleof
+            quote call
             syntax-macro
                 function (scope expr)
                     cons
                         @ expr 0 1
                         @ expr 1
-        tupleof "dump-syntax"
+        tupleof
+            quote dump-syntax
             syntax-macro
                 function (scope expr)
                     ((function (e)
@@ -52,7 +61,8 @@ let-syntax (scope)
                             (cons
                                 (@ expr 0 1)
                                 (@ expr 1))))
-        tupleof "let"
+        tupleof
+            quote let
             syntax-macro
                 function (scope expr)
                     ((function (param-name)
@@ -61,7 +71,7 @@ let-syntax (scope)
                                 (cons escape
                                     (expand
                                         (table
-                                            (tupleof "#parent" scope)
+                                            (tupleof scope-parent-symbol scope)
                                             (tupleof param-name param))
                                         (slist
                                             (slist
@@ -70,7 +80,8 @@ let-syntax (scope)
                                                         (@ expr 1)))
                                                 (@ expr 0 2 0)))))))
                             (parameter param-name))) (@ expr 0 1 0))
-        tupleof "?"
+        tupleof
+            quote ?
             syntax-macro
                 function (scope expr)
                     cons
@@ -81,7 +92,19 @@ let-syntax (scope)
                             slist function (slist)
                                 @ expr 0 3 0
                         @ expr 1
-        tupleof "syntax-set-globals!"
+        tupleof
+            quote :
+            syntax-macro
+                function (scope expr)
+                    cons
+                        cons tupleof
+                            cons
+                                slist quote
+                                    @ expr 0 1 0
+                                @ expr 0 2
+                        @ expr 1
+        tupleof
+            quote syntax-set-globals!
             syntax-macro
                 function (scope expr)
                     set-globals! scope
@@ -104,26 +127,26 @@ let-syntax (scope)
                 do
                     let head (@ expr 0)
                     ? (symbol? head)
-                        == (string head) name
+                        == head name
                         false
                 false
     table
-        tupleof "#parent" scope
-        tupleof "slist-join" slist-join
-        tupleof "slist-head?" slist-head?
-        tupleof "slist-atom?"
+        tupleof scope-parent-symbol scope
+        : slist-join slist-join
+        : slist-head? slist-head?
+        : slist-atom?
             function (x)
                 ? (slist? x)
                     empty? x
                     true
-        tupleof "assert" # (assert bool-expr [error-message])
+        : assert # (assert bool-expr [error-message])
             syntax-single-macro
                 function (scope expr)
                     slist ? (@ expr 1 0) true
                         slist error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
-        tupleof "::@"
+        : ::@
             syntax-macro
                 function (scope expr)
                     cons
@@ -132,14 +155,14 @@ let-syntax (scope)
                             slist
                                 @ expr 1 0
                         @ expr 2
-        tupleof "::*"
+        : ::*
             syntax-macro
                 function (scope expr)
                     slist
                         slist-join
                             @ expr 0 1
                             @ expr 1
-        tupleof "."
+        : .
             syntax-single-macro
                 function (scope expr)
                     let key
@@ -148,10 +171,10 @@ let-syntax (scope)
                         slist
                             (do @)
                             @ expr 1 0
-                            string key
+                            slist quote key
                         error "symbol expected"
 
-        tupleof "function" # (function [name] (param ...) body ...)
+        : function # (function [name] (param ...) body ...)
             syntax-single-macro
                 function (scope expr)
                     ? (symbol? (@ expr 1 0))
@@ -161,11 +184,12 @@ let-syntax (scope)
                                 @ expr 2
                         cons function
                             @ expr 1
-        tupleof "and"
+        : and
             syntax-single-macro
                 function (scope expr)
                     let tmp
-                        parameter "tmp"
+                        parameter
+                            quote tmp
                     slist
                         slist function (slist tmp)
                             slist branch tmp
@@ -173,11 +197,12 @@ let-syntax (scope)
                                     @ expr 2 0
                                 slist function (slist) tmp
                         @ expr 1 0
-        tupleof "or"
+        : or
             syntax-single-macro
                 function (scope expr)
                     let tmp
-                        parameter "tmp"
+                        parameter
+                            quote tmp
                     slist
                         slist function (slist tmp)
                             slist branch tmp
@@ -185,7 +210,7 @@ let-syntax (scope)
                                 slist function (slist)
                                     @ expr 2 0
                         @ expr 1 0
-        tupleof "loop"
+        : loop
             syntax-single-macro
                 function (scope expr)
                     let param-repeat
@@ -198,37 +223,17 @@ let-syntax (scope)
                                     @ expr 2
                         cons param-repeat
                             @ expr 1 0
-        tupleof "if"
-            let if-rec
-                function (scope expr)
-                    let next-expr
-                        @ expr 1 0
-                    ? (slist-head? next-expr "elseif")
-                        do
-                            let nextif
-                                if-rec scope
-                                    @ expr 1
-                            cons
-                                slist branch
-                                    @ expr 0 1 0
-                                    cons function
-                                        cons (slist)
-                                            @ expr 0 2
-                                    slist function (slist)
-                                        @ nextif 0
-                                @ nextif 1
-                        ? (slist-head? next-expr "else")
-                            cons
-                                slist branch
-                                    @ expr 0 1 0
-                                    cons function
-                                        cons (slist)
-                                            @ expr 0 2
-                                    cons function
-                                        cons (slist)
-                                            @ expr 1 0 1
-                                @ expr 2
+        : if
+            do
+                let if-rec
+                    function (scope expr)
+                        let next-expr
+                            @ expr 1 0
+                        ? (slist-head? next-expr (quote elseif))
                             do
+                                let nextif
+                                    if-rec scope
+                                        @ expr 1
                                 cons
                                     slist branch
                                         @ expr 0 1 0
@@ -236,20 +241,42 @@ let-syntax (scope)
                                             cons (slist)
                                                 @ expr 0 2
                                         slist function (slist)
-                                    @ expr 1
-            syntax-macro if-rec
-        tupleof "syntax-infix-rules"
-            syntax-single-macro
-                function (scope expr)
-                    slist structof
-                        slist tupleof "prec" (@ expr 1 0)
-                        slist tupleof "order" (string (@ expr 2 0))
-                        slist tupleof "name" (@ expr 3 0)
-        tupleof "syntax-infix-op"
+                                            @ nextif 0
+                                    @ nextif 1
+                            ? (slist-head? next-expr (quote else))
+                                cons
+                                    slist branch
+                                        @ expr 0 1 0
+                                        cons function
+                                            cons (slist)
+                                                @ expr 0 2
+                                        cons function
+                                            cons (slist)
+                                                @ expr 1 0 1
+                                    @ expr 2
+                                do
+                                    cons
+                                        slist branch
+                                            @ expr 0 1 0
+                                            cons function
+                                                cons (slist)
+                                                    @ expr 0 2
+                                            slist function (slist)
+                                        @ expr 1
+                syntax-macro if-rec
+        : syntax-infix-rules
+            function (prec order name)
+                structof
+                    tupleof (quote prec) prec
+                    tupleof (quote order) order
+                    tupleof (quote name) name
+        : syntax-infix-op
             syntax-single-macro
                 function (scope expr)
                     slist tupleof
-                        .. "#ifx:" (string (@ expr 1 0))
+                        slist quote
+                            symbol
+                                .. "#ifx:" (string (@ expr 1 0))
                         @ expr 2 0
 
 let-syntax (scope)
@@ -294,24 +321,25 @@ let-syntax (scope)
 
     function get-ifx-op (scope op)
         let key
-            .. "#ifx:" (string op)
+            symbol
+                .. "#ifx:" (string op)
         ? (symbol? op)
             loop (scope)
                 if (key? scope key)
                     @ scope key
-                elseif (key? scope "#parent")
-                    repeat (@ scope "#parent")
+                elseif (key? scope scope-parent-symbol)
+                    repeat (@ scope scope-parent-symbol)
                 else none
             none
     function has-infix-ops (infix-table expr)
-        let word
-            @ expr 1
-        loop (word)
-            if (empty? (@ word 1)) false
-            elseif (!= (get-ifx-op infix-table (@ word 0)) none) true
-            else
-                repeat
-                    @ word 1
+        # any expression whose second argument matches an infix operator
+        # is treated as an infix expression.
+        and
+            not
+                or
+                    empty? (@ expr 1)
+                    empty? (@ expr 2)
+            != (get-ifx-op infix-table (@ expr 1 0)) none
 
     function infix-op (infix-table token prec pred)
         let op
@@ -320,7 +348,7 @@ let-syntax (scope)
             error
                 .. (string token)
                     " is not an infix operator, but embedded in an infix expression"
-        elseif (pred (@ op "prec") prec)
+        elseif (pred (. op prec) prec)
             op
         else none
 
@@ -331,7 +359,10 @@ let-syntax (scope)
             error
                 .. (string token)
                     " is not an infix operator, but embedded in an infix expression"
-        elseif (and (== (@ op "order") "<") (pred (@ op "prec") prec))
+        elseif
+            and
+                == (. op order) <
+                pred (. op prec) prec
             op
         else none
 
@@ -357,10 +388,10 @@ let-syntax (scope)
                                 tupleof rhs state
                             else
                                 let lop
-                                    infix-op infix-table ra (@ op "prec") >
+                                    infix-op infix-table ra (. op prec) >
                                 let nextop
                                     ? (none? lop)
-                                        rtl-infix-op infix-table ra (@ op "prec") ==
+                                        rtl-infix-op infix-table ra (. op prec) ==
                                         lop
                                 if (none? nextop)
                                     tupleof rhs state
@@ -370,35 +401,35 @@ let-syntax (scope)
                                             infix-table
                                             rhs
                                             state
-                                            @ nextop "prec"
+                                            . nextop prec
                                     repeat
                                         @ rhs-state 0
                                         @ rhs-state 1
                     repeat
-                        slist (@ op "name") lhs
+                        slist (. op name) lhs
                             @ rhs-state 0
                         @ rhs-state 1
 
     table
-        tupleof "#parent" scope
-        tupleof "fold" fold
-        tupleof "iter" iter
+        tupleof scope-parent-symbol scope
+        : fold fold
+        : iter iter
         # quasiquote support
         # (qquote expr [...])
-        tupleof "qquote"
+        : qquote
             do
                 function qquote-1 (x)
                     if (slist-atom? x)
                         slist quote x
-                    elseif (slist-head? x "unquote")
+                    elseif (slist-head? x (quote unquote))
                         unwrap-single (@ x 1)
-                    elseif (slist-head? x "qquote")
+                    elseif (slist-head? x (quote qquote))
                         qquote-1 (qquote-1 (@ x 1 0))
                     elseif (slist-atom? (@ x 0))
                         slist cons
                             qquote-1 (@ x 0)
                             qquote-1 (@ x 1)
-                    elseif (slist-head? (@ x 0) "unquote-splice")
+                    elseif (slist-head? (@ x 0) (quote unquote-splice))
                         slist slist-join
                             unwrap-single (@ x 0 1)
                             qquote-1 (@ x 1)
@@ -414,7 +445,7 @@ let-syntax (scope)
                                 qquote-1 (@ expr 0 1)
                             @ expr 1
 
-        tupleof "#slist"
+        tupleof scope-slist-wildcard-symbol
             function (scope topexpr)
                 let expr
                     @ topexpr 0
@@ -431,18 +462,21 @@ let-syntax (scope)
                             == (slice headstr 0 1) "."
 
                     let name
-                        slice headstr 1
+                        symbol
+                            slice headstr 1
                     let self-arg
                         @ expr 1 0
                     let rest
                         @ expr 2
                     let self
-                        parameter "self"
+                        parameter
+                            quote self
                     cons
                         slist
                             slist function (slist self)
                                 cons
-                                    slist (do @) self name
+                                    slist (do @) self
+                                        slist quote name
                                     cons self rest
                             self-arg
                         @ topexpr 1
@@ -454,7 +488,7 @@ let-syntax (scope)
                                 \ (@ expr 0) (@ expr 1) 0
                             0
                         @ topexpr 1
-        tupleof "#symbol"
+        tupleof scope-symbol-wildcard-symbol
             function (scope topexpr)
                 let sym
                     @ topexpr 0
@@ -491,6 +525,7 @@ let-syntax (scope)
                         @ topexpr 1
 
         syntax-infix-op := (syntax-infix-rules 50 < let)
+        syntax-infix-op : (syntax-infix-rules 70 > :)
         syntax-infix-op or (syntax-infix-rules 100 > or)
         syntax-infix-op and (syntax-infix-rules 200 > and)
         syntax-infix-op | (syntax-infix-rules 240 > |)

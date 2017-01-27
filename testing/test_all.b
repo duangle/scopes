@@ -27,7 +27,7 @@ print
 k := 3
 T :=
     structof
-        tupleof "test"
+        : test
             function (self a b)
                 + a b
 
@@ -62,7 +62,7 @@ print "lengths:"
         tupleof 1 2 3
     length
         structof
-            tupleof "key" 123
+            key : 123
 
 print
     1 + 2 * 3 == 7
@@ -74,19 +74,19 @@ let k 1
 
 let V
     structof
-        tupleof "x" 0
-        tupleof "y" 1
-        tupleof "z"
+        x : 0
+        y : 1
+        z :
             structof
-                tupleof "u" 0
-                tupleof "v" 1
-                tupleof "w"
+                u : 0
+                v : 1
+                w :
                     structof
-                        tupleof "red" 0
-                        tupleof "green" 1
-                        tupleof "blue" 2
+                        red : 0
+                        green : 1
+                        blue : 2
 print "dot:"
-    V . z @ "w" . blue
+    V . z @ (quote w) . blue
     V.z.w.blue
 
 print
