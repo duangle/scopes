@@ -1,6 +1,19 @@
 /// print
     require "test_module"
 
+do
+    m :=
+        eval
+            slist-load
+                .. interpreter-dir "/testing/test_module.b"
+            table
+                tupleof scope-parent-symbol
+                    globals;
+                injected-var : 3
+    t := (m)
+    assert
+        7 == (t.compute 4)
+
 qquote-test :=
     qquote
         print

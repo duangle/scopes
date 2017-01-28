@@ -4469,6 +4469,8 @@ static Table *importCModule (
 // BUILTINS
 //------------------------------------------------------------------------------
 
+static const Table *globals = nullptr;
+
 static Any builtin_string(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     return pstring(get_string(args[0]));
@@ -4484,6 +4486,11 @@ static Any builtin_print(const std::vector<Any> &args) {
     }
     std::cout << "\n";
     return const_none;
+}
+
+static Any builtin_globals(const std::vector<Any> &args) {
+    builtin_checkparams(args, 0, 0);
+    return wrap(globals);
 }
 
 static Any builtin_at(const std::vector<Any> &args) {
@@ -4815,8 +4822,6 @@ static bool isSymbol (const Any &expr, const Symbol &sym) {
 //------------------------------------------------------------------------------
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
-
-static const Table *globals = nullptr;
 
 static bool verifyParameterCount (const SList *expr,
     int mincount, int maxcount) {
@@ -5228,6 +5233,10 @@ static Any compile (const Any &expr) {
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
+static Any builtin_loadslist(const std::vector<Any> &args);
+
+static Any builtin_eval(const std::vector<Any> &args);
+
 static int print_number(int value) {
     printf("NUMBER: %i\n", value);
     return value + 1;
@@ -5237,7 +5246,7 @@ static void initGlobals () {
     auto env = new_scope();
     globals = env;
 
-    setLocalString(env, "globals", wrap(env));
+    //setLocalString(env, "globals", wrap(env));
 
     setBuiltin(env, "form:call", compile_call);
     setBuiltin(env, "form:function", compile_function);
@@ -5301,6 +5310,7 @@ static void initGlobals () {
 
     setLocalString(env, "none", const_none);
 
+    setBuiltin(env, "globals", builtin_globals);
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);
     setBuiltin(env, "cdecl", builtin_cdecl);
@@ -5327,6 +5337,8 @@ static void initGlobals () {
     //setBuiltin(env, "key?", builtin_is_key);
     setBuiltin(env, "error", builtin_error);
     setBuiltin(env, "length", builtin_length);
+    setBuiltin(env, "slist-load", builtin_loadslist);
+    setBuiltin(env, "eval", builtin_eval);
 
     setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
 
@@ -5373,9 +5385,9 @@ static void initGlobals () {
 }
 
 static void init() {
-    initSymbols();
-
     bangra::support_ansi = isatty(fileno(stdout));
+
+    initSymbols();
 
     Types::initTypes();
     initConstants();
@@ -5401,7 +5413,7 @@ static void handleException(const Table *env, const Any &expr) {
     error("an exception was raised");
 }
 
-static bool compileRootValueList (const Table *env, const Any &expr) {
+static Any compileFlow (const Table *env, const Any &expr) {
     verifyValueKind(Types::PSList, expr);
     auto rootit = SListIter(expr);
     auto expexpr = expand_expr_list(env, rootit);
@@ -5411,23 +5423,41 @@ static bool compileRootValueList (const Table *env, const Any &expr) {
     auto ret = mainfunc->appendParameter(Parameter::create());
     builder->continueAt(mainfunc);
 
-    compile_expr_list(SListIter(expexpr));
-    builder->br({ wrap(ret) }, anchor);
+    auto result = compile_expr_list(SListIter(expexpr));
+    builder->br({ wrap(ret), result }, anchor);
 
-/*
-#ifdef BANGRA_DEBUG_IL
-    std::cout << env.global.module->getRepr();
-    fflush(stdout);
-#endif
-*/
+    return wrap(mainfunc);
+}
 
-    execute({wrap(mainfunc)});
+static Any loadFile(const std::string &path) {
+    auto file = MappedFile::open(path.c_str());
+    if (file) {
+        // keep a resident copy
+        char *pathcpy = strdup(path.c_str());
+        bangra::Parser parser;
+        return parser.parseMemory(
+            file->strptr(), file->strptr() + file->size(),
+            pathcpy);
+    }
+    return const_none;
+}
 
-    return true;
+static Any builtin_loadslist(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto path = extract_string(args[0]);
+    return loadFile(path);
+}
+
+static Any builtin_eval(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 2);
+    auto expr = args[0];
+    auto scope = (args.size() == 2)?extract_table(args[1]):globals;
+    return compileFlow(scope, expr);
 }
 
 static bool compileMain (Any expr) {
-    return compileRootValueList (globals, expr);
+    execute({compileFlow(globals, expr)});
+    return true;
 }
 
 // This function isn't referenced outside its translation unit, but it
@@ -5521,18 +5551,7 @@ static bool compileStartupScript() {
     std::string path = format("%s.b", base);
     free(base);
 
-    Any expr = const_none;
-    {
-        auto file = MappedFile::open(path.c_str());
-        if (file) {
-            // keep a resident copy
-            char *pathcpy = strdup(path.c_str());
-            bangra::Parser parser;
-            expr = parser.parseMemory(
-                file->strptr(), file->strptr() + file->size(),
-                pathcpy);
-        }
-    }
+    Any expr = loadFile(path);
 
     if (!isnone(expr)) {
         return bangra::compileMain(expr);
