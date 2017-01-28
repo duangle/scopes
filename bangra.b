@@ -29,6 +29,11 @@ let-syntax (scope)
             function (x y)
                 != (@ x y) none
         tupleof
+            quote load
+            function (path)
+                eval
+                    slist-load path
+        tupleof
             quote API
             import-c
                 # todo: search path & embedded resources

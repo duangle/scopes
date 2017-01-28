@@ -13,6 +13,10 @@ do
     t := (m)
     assert
         7 == (t.compute 4)
+do
+    m2 := ((load (.. interpreter-dir "/testing/test_module2.b")))
+    assert
+        7 == (m2.compute 3 4)
 
 qquote-test :=
     qquote
