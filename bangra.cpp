@@ -4625,7 +4625,35 @@ static Any builtin_table(const std::vector<Any> &args) {
         set_key(*t, name, value);
     }
 
-    return wrap_ptr(Types::PTable, t);
+    return wrap(t);
+}
+
+static Any builtin_table_join(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+
+    auto a = extract_table(args[0]);
+    auto b = extract_table(args[1]);
+    auto t = new_table();
+    for (auto it = a->_.begin(); it != a->_.end(); ++it) {
+        set_key(*t, it->first, it->second);
+    }
+    for (auto it = b->_.begin(); it != b->_.end(); ++it) {
+        set_key(*t, it->first, it->second);
+    }
+    return wrap(t);
+}
+
+static Any builtin_set_key(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+
+    auto t = const_cast<Table *>(extract_table(args[0]));
+    auto pair = extract_tuple(args[1]);
+    if (pair.size() != 2)
+        error("tuple must have exactly two elements");
+    auto name = extract_symbol(pair[0]);
+    auto value = pair[1];
+    set_key(*t, name, value);
+    return const_none;
 }
 
 static Any builtin_syntax_macro(const std::vector<Any> &args) {
@@ -5318,6 +5346,8 @@ static void initGlobals () {
     setBuiltin(env, "cons", builtin_cons);
     setBuiltin(env, "structof", builtin_structof);
     setBuiltin(env, "table", builtin_table);
+    setBuiltin(env, "table-join", builtin_table_join);
+    setBuiltin(env, "set-key!", builtin_set_key);
     setBuiltin(env, "typeof", builtin_typeof);
     //setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);

@@ -30,7 +30,8 @@ local function bangra_symbols()
             .. " let-syntax dump slist-join slist-head? if else elseif loop"
             .. " repeat syntax-single-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
-            .. " slist-atom? slist-load load globals"
+            .. " slist-atom? slist-load load globals table-join require"
+            .. " set-key!"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

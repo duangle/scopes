@@ -18,6 +18,24 @@ do
     assert
         7 == (m2.compute 3 4)
 
+do
+    z :=
+        table-join
+            table
+                x : 1
+                y : 2
+            table
+                y : 3
+                z : 4
+                w : 5
+    set-key! z
+        q : 303
+    assert (z.x == 1)
+    assert (z.y == 3)
+    assert (z.z == 4)
+    assert (z.w == 5)
+    assert (z.q == 303)
+
 qquote-test :=
     qquote
         print
