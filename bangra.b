@@ -109,7 +109,13 @@ let-syntax (scope)
                             cons
                                 slist quote
                                     @ expr 0 1 0
-                                @ expr 0 2
+                                branch
+                                    == (@ expr 0 2) (slist)
+                                    function ()
+                                        slist
+                                            @ expr 0 1 0
+                                    function ()
+                                        @ expr 0 2
                         @ expr 1
         tupleof
             quote syntax-set-globals!
@@ -140,8 +146,8 @@ let-syntax (scope)
                 false
     table
         tupleof scope-parent-symbol scope
-        : slist-join slist-join
-        : slist-head? slist-head?
+        : slist-join
+        : slist-head?
         : slist-atom?
             function (x)
                 ? (slist? x)
@@ -420,8 +426,8 @@ let-syntax (scope)
 
     table
         tupleof scope-parent-symbol scope
-        : fold fold
-        : iter iter
+        : fold
+        : iter
         # quasiquote support
         # (qquote expr [...])
         : qquote

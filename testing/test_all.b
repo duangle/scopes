@@ -28,8 +28,8 @@ do
                 y : 3
                 z : 4
                 w : 5
-    set-key! z
-        q : 303
+    q := 303
+    set-key! z (: q)
     assert (z.x == 1)
     assert (z.y == 3)
     assert (z.z == 4)
