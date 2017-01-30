@@ -424,10 +424,69 @@ let-syntax (scope)
                             @ rhs-state 0
                         @ rhs-state 1
 
+    let bangra
+        table
+            : path
+                slist
+                    "./?.b"
+                    .. interpreter-dir "/?.b"
+            : modules
+                table;
+    function make-module-path (pattern name)
+        fold (iter pattern) ""
+            function (out val)
+                slist out val
+                    .. out val
+                .. out
+                    ? (== val "?") name val
+
+    function find-module (name)
+        assert (symbol? name)
+            "module name must be symbol"
+        let content
+            @ (. bangra modules) name
+        if (none? content)
+            let namestr
+                string name
+            let pattern
+                @ bangra
+                    quote path
+            loop (pattern)
+                if (not (empty? pattern))
+                    let module-path
+                        make-module-path
+                            @ pattern 0
+                            namestr
+                    let expr
+                        slist-load module-path
+                    if (not (none? expr))
+                        let fn
+                            eval expr
+                                table
+                                    tupleof scope-parent-symbol
+                                        globals;
+                                    : module-path
+                        let content
+                            fn;
+                        set-key! (. bangra modules)
+                            tupleof name content
+                        content
+                    else
+                        repeat
+                            @ pattern 1
+                else
+                    error
+                        .. "module not found: " namestr
+        else
+            content
+
     table
         tupleof scope-parent-symbol scope
         : fold
         : iter
+        : bangra
+        : require find-module
+
         # quasiquote support
         # (qquote expr [...])
         : qquote

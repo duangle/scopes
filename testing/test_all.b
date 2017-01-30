@@ -1,5 +1,15 @@
-/// print
-    require "test_module"
+set-key! bangra
+    : path
+        cons
+            .. interpreter-dir "/testing/?.b"
+            bangra.path
+
+assert
+    ==
+        require
+            quote test_module2
+        require
+            quote test_module2
 
 do
     m :=
@@ -13,10 +23,6 @@ do
     t := (m)
     assert
         7 == (t.compute 4)
-do
-    m2 := ((load (.. interpreter-dir "/testing/test_module2.b")))
-    assert
-        7 == (m2.compute 3 4)
 
 do
     z :=
