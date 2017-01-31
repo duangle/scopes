@@ -279,7 +279,8 @@ static std::string quoteReprString(const std::string &value) {
 }
 
 /*
-static std::string quoteReprSymbol(const std::string &value) {
+static std::string quoteRepr
+bol(const std::string &value) {
     return quoteString(value, "[]{}()\"\'");
 }
 
@@ -589,12 +590,20 @@ static void set_anchor(const Any &value, const Anchor *anchor) {
 
 enum {
     SYM_Unnamed = 0,
+
     SYM_Parent,
+
     SYM_FunctionForm,
     SYM_QuoteForm,
+
     // wildcards
     SYM_ListWC,
     SYM_SymbolWC,
+
+    // auto-generated flow names
+    SYM_FunctionFlow,
+    SYM_ReturnFlow,
+
     SYM_ScriptSize,
     SYM_Count,
 };
@@ -631,6 +640,8 @@ static void initSymbols() {
     map_symbol(SYM_ListWC, "#list");
     map_symbol(SYM_SymbolWC, "#symbol");
     map_symbol(SYM_ScriptSize, "script-size");
+    map_symbol(SYM_FunctionFlow, "function");
+    map_symbol(SYM_ReturnFlow, "return");
 }
 
 //------------------------------------------------------------------------------
@@ -1676,7 +1687,7 @@ public:
         uid(unique_id_counter++) {
     }
 
-    std::string name;
+    Symbol name;
     std::vector<Parameter *> parameters;
 
     // default path
@@ -1697,7 +1708,7 @@ public:
     std::string getRefRepr () const {
         return format("%s%s%" PRId64,
             ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
-            name.c_str(),
+            get_symbol_name(name).c_str(),
             uid);
     }
 
@@ -1710,7 +1721,7 @@ public:
 
     static Flow *create(
         size_t paramcount = 0,
-        const std::string &name = "") {
+        const Symbol &name = SYM_Unnamed) {
         auto value = new Flow();
         value->name = name;
         for (size_t i = 0; i < paramcount; ++i) {
@@ -5147,7 +5158,7 @@ struct ILBuilder {
 
     Parameter *call(std::vector<Any> values, const Anchor *anchor) {
         assert(anchor);
-        auto next = Flow::create(1, "cret");
+        auto next = Flow::create(1, SYM_ReturnFlow);
         values.push_back(wrap(next));
         insertAndAdvance(values, next, anchor);
         return next->parameters[0];
@@ -5186,7 +5197,7 @@ static Any compile_function (ListIter it) {
 
     auto currentblock = builder->save();
 
-    auto function = Flow::create(0, "func");
+    auto function = Flow::create(0, SYM_FunctionFlow);
     set_anchor(function, anchor);
 
     builder->continueAt(function);
