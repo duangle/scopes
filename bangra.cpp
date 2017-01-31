@@ -2402,7 +2402,15 @@ namespace Types {
 
     static bangra::Any _integer_div(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) / extract_integer(b));
+        return wrap((double)extract_integer(a) / (double)extract_integer(b));
+    }
+
+    static bangra::Any _integer_neg(const Type *self, const bangra::Any &x) {
+        return wrap(-extract_integer(x));
+    }
+
+    static bangra::Any _integer_rcp(const Type *self, const bangra::Any &x) {
+        return wrap(1.0 / (double)extract_integer(x));
     }
 
     static Ordering _integer_cmp(const Type *self,
@@ -2426,22 +2434,30 @@ namespace Types {
 
     static bangra::Any _real_add(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_real(a) + extract_real(b));
+        return real(self, extract_real(a) + extract_real(b));
     }
 
     static bangra::Any _real_sub(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_real(a) - extract_real(b));
+        return real(self, extract_real(a) - extract_real(b));
     }
 
     static bangra::Any _real_mul(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_real(a) * extract_real(b));
+        return real(self, extract_real(a) * extract_real(b));
     }
 
     static bangra::Any _real_div(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_real(a) / extract_real(b));
+        return real(self, extract_real(a) / extract_real(b));
+    }
+
+    static bangra::Any _real_neg(const Type *self, const bangra::Any &x) {
+        return real(self, -extract_real(x));
+    }
+
+    static bangra::Any _real_rcp(const Type *self, const bangra::Any &x) {
+        return real(self, 1.0 / extract_real(x));
     }
 
     static Ordering _real_cmp(const Type *self,
@@ -2823,6 +2839,8 @@ namespace Types {
         type->op2[OP2_Sub] = _integer_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
         type->op2[OP2_Div] = _integer_div;
+        type->op1[OP1_Neg] = _integer_neg;
+        type->op1[OP1_Rcp] = _integer_rcp;
 
         if (width == 1) {
             type->op1[OP1_BoolNot] = _bool_not;
@@ -2855,6 +2873,8 @@ namespace Types {
         type->op2[OP2_Sub] = _real_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _real_mul;
         type->op2[OP2_Div] = _real_div;
+        type->op1[OP1_Neg] = _real_neg;
+        type->op1[OP1_Rcp] = _real_rcp;
 
         type->cmp = _real_cmp;
 
@@ -4760,6 +4780,16 @@ static Any builtin_unary_op(const std::vector<Any> &args) {
     return F(args[0]);
 }
 
+template<Any (*F1)(const Any &), Any (*F2)(const Any &, const Any &)>
+static Any builtin_unary_binary_op(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 2);
+    if (args.size() == 1) {
+        return F1(args[0]);
+    } else {
+        return F2(args[0], args[1]);
+    }
+}
+
 template<Any (*F)(const Any &, const Any &)>
 static Any builtin_binary_op(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
@@ -5408,11 +5438,11 @@ static void initGlobals () {
     setBuiltin(env, "+",
         builtin_variadic_ltr< builtin_binary_op<add> >);
     setBuiltin(env, "-",
-        builtin_binary_op<sub>);
+        builtin_unary_binary_op<neg, sub>);
     setBuiltin(env, "*",
         builtin_variadic_ltr< builtin_binary_op<mul> >);
     setBuiltin(env, "/",
-        builtin_binary_op<div>);
+        builtin_unary_binary_op<rcp, div>);
     setBuiltin(env, "%",
         builtin_binary_op<mod>);
 
