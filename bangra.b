@@ -9,9 +9,9 @@ let-syntax (scope)
             function (x)
                 == (typeof x) symbol
         tupleof
-            quote slist?
+            quote list?
             function (x)
-                == (typeof x) slist
+                == (typeof x) list
         tupleof
             quote none?
             function (x)
@@ -20,9 +20,9 @@ let-syntax (scope)
             quote empty?
             function (x)
                 branch
-                    == (typeof x) slist
+                    == (typeof x) list
                     function ()
-                        == x (slist)
+                        == x (list)
                     function () false
         tupleof
             quote key?
@@ -32,7 +32,7 @@ let-syntax (scope)
             quote load
             function (path)
                 eval
-                    slist-load path
+                    list-load path
         tupleof
             quote API
             import-c
@@ -63,7 +63,7 @@ let-syntax (scope)
                         (dump
                             (@ e 0 0))
                         (cons
-                            (slist escape
+                            (list escape
                                 (@ e 0 0))
                             (@ e 1)))
                         (expand scope
@@ -76,14 +76,14 @@ let-syntax (scope)
                 function (scope expr)
                     ((function (param-name)
                         ((function (param scope-name)
-                            (slist
-                                (slist let-syntax (slist scope-name)
-                                    (slist table
-                                        (slist tupleof (slist quote scope-parent-symbol) scope-name)
-                                        (slist tupleof (slist quote param-name) param)))
-                                (slist
+                            (list
+                                (list let-syntax (list scope-name)
+                                    (list table
+                                        (list tupleof (list quote scope-parent-symbol) scope-name)
+                                        (list tupleof (list quote param-name) param)))
+                                (list
                                     (cons function
-                                        (cons (slist param)
+                                        (cons (list param)
                                                 (@ expr 1)))
                                     (@ expr 0 2 0))))
                             (parameter param-name)
@@ -93,11 +93,11 @@ let-syntax (scope)
             syntax-macro
                 function (scope expr)
                     cons
-                        slist branch
+                        list branch
                             @ expr 0 1 0
-                            slist function (slist)
+                            list function (list)
                                 @ expr 0 2 0
-                            slist function (slist)
+                            list function (list)
                                 @ expr 0 3 0
                         @ expr 1
         tupleof
@@ -107,12 +107,12 @@ let-syntax (scope)
                     cons
                         cons tupleof
                             cons
-                                slist quote
+                                list quote
                                     @ expr 0 1 0
                                 branch
-                                    == (@ expr 0 2) (slist)
+                                    == (@ expr 0 2) (list)
                                     function ()
-                                        slist
+                                        list
                                             @ expr 0 1 0
                                     function ()
                                         @ expr 0 2
@@ -127,17 +127,17 @@ let-syntax (scope)
                         @ expr 1
 
 let-syntax (scope)
-    let slist-join
+    let list-join
         function (a b)
             ? (empty? a) b
                 cons
                     @ a 0
-                    slist-join
+                    list-join
                         @ a 1
                         b
-    let slist-head?
+    let list-head?
         function (expr name)
-            ? (slist? expr)
+            ? (list? expr)
                 do
                     let head (@ expr 0)
                     ? (symbol? head)
@@ -146,34 +146,34 @@ let-syntax (scope)
                 false
     table
         tupleof scope-parent-symbol scope
-        : slist-join
-        : slist-head?
-        : slist-atom?
+        : list-join
+        : list-head?
+        : list-atom?
             function (x)
-                ? (slist? x)
+                ? (list? x)
                     empty? x
                     true
         : assert # (assert bool-expr [error-message])
             syntax-single-macro
                 function (scope expr)
-                    slist ? (@ expr 1 0) true
-                        slist error
+                    list ? (@ expr 1 0) true
+                        list error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
         : ::@
             syntax-macro
                 function (scope expr)
                     cons
-                        slist-join
+                        list-join
                             @ expr 0 1
-                            slist
+                            list
                                 @ expr 1 0
                         @ expr 2
         : ::*
             syntax-macro
                 function (scope expr)
-                    slist
-                        slist-join
+                    list
+                        list-join
                             @ expr 0 1
                             @ expr 1
         : .
@@ -182,17 +182,17 @@ let-syntax (scope)
                     let key
                         @ expr 2 0
                     ? (symbol? key)
-                        slist
+                        list
                             (do @)
                             @ expr 1 0
-                            slist quote key
+                            list quote key
                         error "symbol expected"
 
         : function # (function [name] (param ...) body ...)
             syntax-single-macro
                 function (scope expr)
                     ? (symbol? (@ expr 1 0))
-                        slist let
+                        list let
                             @ expr 1 0
                             cons function
                                 @ expr 2
@@ -204,12 +204,12 @@ let-syntax (scope)
                     let tmp
                         parameter
                             quote tmp
-                    slist
-                        slist function (slist tmp)
-                            slist branch tmp
-                                slist function (slist)
+                    list
+                        list function (list tmp)
+                            list branch tmp
+                                list function (list)
                                     @ expr 2 0
-                                slist function (slist) tmp
+                                list function (list) tmp
                         @ expr 1 0
         : or
             syntax-single-macro
@@ -217,11 +217,11 @@ let-syntax (scope)
                     let tmp
                         parameter
                             quote tmp
-                    slist
-                        slist function (slist tmp)
-                            slist branch tmp
-                                slist function (slist) tmp
-                                slist function (slist)
+                    list
+                        list function (list tmp)
+                            list branch tmp
+                                list function (list) tmp
+                                list function (list)
                                     @ expr 2 0
                         @ expr 1 0
         : loop
@@ -229,8 +229,8 @@ let-syntax (scope)
                 function (scope expr)
                     let param-repeat
                         quote repeat
-                    slist do
-                        slist let param-repeat
+                    list do
+                        list let param-repeat
                             cons function
                                 cons
                                     @ expr 1 0
@@ -243,39 +243,39 @@ let-syntax (scope)
                     function (scope expr)
                         let next-expr
                             @ expr 1 0
-                        ? (slist-head? next-expr (quote elseif))
+                        ? (list-head? next-expr (quote elseif))
                             do
                                 let nextif
                                     if-rec scope
                                         @ expr 1
                                 cons
-                                    slist branch
+                                    list branch
                                         @ expr 0 1 0
                                         cons function
-                                            cons (slist)
+                                            cons (list)
                                                 @ expr 0 2
-                                        slist function (slist)
+                                        list function (list)
                                             @ nextif 0
                                     @ nextif 1
-                            ? (slist-head? next-expr (quote else))
+                            ? (list-head? next-expr (quote else))
                                 cons
-                                    slist branch
+                                    list branch
                                         @ expr 0 1 0
                                         cons function
-                                            cons (slist)
+                                            cons (list)
                                                 @ expr 0 2
                                         cons function
-                                            cons (slist)
+                                            cons (list)
                                                 @ expr 1 0 1
                                     @ expr 2
                                 do
                                     cons
-                                        slist branch
+                                        list branch
                                             @ expr 0 1 0
                                             cons function
-                                                cons (slist)
+                                                cons (list)
                                                     @ expr 0 2
-                                            slist function (slist)
+                                            list function (list)
                                         @ expr 1
                 syntax-macro if-rec
         : syntax-infix-rules
@@ -287,8 +287,8 @@ let-syntax (scope)
         : syntax-infix-op
             syntax-single-macro
                 function (scope expr)
-                    slist tupleof
-                        slist quote
+                    list tupleof
+                        list quote
                             symbol
                                 .. "#ifx:" (string (@ expr 1 0))
                         @ expr 2 0
@@ -420,14 +420,14 @@ let-syntax (scope)
                                         @ rhs-state 0
                                         @ rhs-state 1
                     repeat
-                        slist (. op name) lhs
+                        list (. op name) lhs
                             @ rhs-state 0
                         @ rhs-state 1
 
     let bangra
         table
             : path
-                slist
+                list
                     "./?.b"
                     .. interpreter-dir "/?.b"
             : modules
@@ -435,7 +435,7 @@ let-syntax (scope)
     function make-module-path (pattern name)
         fold (iter pattern) ""
             function (out val)
-                slist out val
+                list out val
                     .. out val
                 .. out
                     ? (== val "?") name val
@@ -458,7 +458,7 @@ let-syntax (scope)
                             @ pattern 0
                             namestr
                     let expr
-                        slist-load module-path
+                        list-load module-path
                     if (not (none? expr))
                         let fn
                             eval expr
@@ -492,22 +492,22 @@ let-syntax (scope)
         : qquote
             do
                 function qquote-1 (x)
-                    if (slist-atom? x)
-                        slist quote x
-                    elseif (slist-head? x (quote unquote))
+                    if (list-atom? x)
+                        list quote x
+                    elseif (list-head? x (quote unquote))
                         unwrap-single (@ x 1)
-                    elseif (slist-head? x (quote qquote))
+                    elseif (list-head? x (quote qquote))
                         qquote-1 (qquote-1 (@ x 1 0))
-                    elseif (slist-atom? (@ x 0))
-                        slist cons
+                    elseif (list-atom? (@ x 0))
+                        list cons
                             qquote-1 (@ x 0)
                             qquote-1 (@ x 1)
-                    elseif (slist-head? (@ x 0) (quote unquote-splice))
-                        slist slist-join
+                    elseif (list-head? (@ x 0) (quote unquote-splice))
+                        list list-join
                             unwrap-single (@ x 0 1)
                             qquote-1 (@ x 1)
                     else
-                        slist cons
+                        list cons
                             qquote-1 (@ x 0)
                             qquote-1 (@ x 1)
                 syntax-macro
@@ -518,7 +518,7 @@ let-syntax (scope)
                                 qquote-1 (@ expr 0 1)
                             @ expr 1
 
-        tupleof scope-slist-wildcard-symbol
+        tupleof scope-list-wildcard-symbol
             function (scope topexpr)
                 let expr
                     @ topexpr 0
@@ -545,11 +545,11 @@ let-syntax (scope)
                         parameter
                             quote self
                     cons
-                        slist
-                            slist function (slist self)
+                        list
+                            list function (list self)
                                 cons
-                                    slist (do @) self
-                                        slist quote name
+                                    list (do @) self
+                                        list quote name
                                     cons self rest
                             self-arg
                         @ topexpr 1
@@ -584,7 +584,7 @@ let-syntax (scope)
                                 else out
                     cons
                         finalize-head
-                            fold it (slist "")
+                            fold it (list "")
                                 function (out k)
                                     if (== k ".")
                                         cons ""

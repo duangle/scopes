@@ -27,10 +27,10 @@ local function bangra_symbols()
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* ::@ syntax-macro syntax-scope cons"
             .. " parameter string expand call escape do empty? dump-syntax"
-            .. " let-syntax dump slist-join slist-head? if else elseif loop"
+            .. " let-syntax dump list-join list-head? if else elseif loop"
             .. " repeat syntax-single-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
-            .. " slist-atom? slist-load load globals table-join require"
+            .. " list-atom? list-load load globals table-join require"
             .. " set-key!"
         ),
 
@@ -42,7 +42,7 @@ local function bangra_symbols()
 
     TYPES = splitstr(getprop("types.bangra_lang") or
         "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void"
-            .. " rawstring opaque half float double symbol slist"
+            .. " rawstring opaque half float double symbol list"
         )
     }
 end

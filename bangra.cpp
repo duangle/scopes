@@ -476,7 +476,7 @@ struct Parameter;
 struct Flow;
 struct Any;
 struct Hash;
-struct SList;
+struct List;
 struct Table;
 struct Closure;
 struct Builtin;
@@ -523,7 +523,7 @@ struct Any {
         const Symbol *symbol;
 
         const void **pptr;
-        const SList **pslist;
+        const List **plist;
         const Type **ptype;
         const Parameter **pparameter;
         const Flow **pflow;
@@ -593,7 +593,7 @@ enum {
     SYM_FunctionForm,
     SYM_QuoteForm,
     // wildcards
-    SYM_SListWC,
+    SYM_ListWC,
     SYM_SymbolWC,
     SYM_ScriptSize,
     SYM_Count,
@@ -628,7 +628,7 @@ static void initSymbols() {
     map_symbol(SYM_Parent, "#parent");
     map_symbol(SYM_FunctionForm, "form:function");
     map_symbol(SYM_QuoteForm, "form:quote");
-    map_symbol(SYM_SListWC, "#slist");
+    map_symbol(SYM_ListWC, "#list");
     map_symbol(SYM_SymbolWC, "#symbol");
     map_symbol(SYM_ScriptSize, "script-size");
 }
@@ -673,9 +673,9 @@ namespace Types {
 
     // opaque internal pointers
     static const Type *_Table;
-    static const Type *_SList;
+    static const Type *_List;
 
-    static const Type *PSList;
+    static const Type *PList;
     static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
@@ -724,7 +724,9 @@ static void error (const char *format, ...);
 //------------------------------------------------------------------------------
 
 struct Table {
-    std::unordered_map<Symbol, Any> _;
+    typedef std::unordered_map<Symbol, Any> map_type;
+
+    map_type _;
     Table *meta;
 };
 
@@ -1504,33 +1506,33 @@ struct Parameter {
 
 //------------------------------------------------------------------------------
 
-static Any wrap(const SList *slist) {
-    return wrap_ptr(Types::PSList, slist);
+static Any wrap(const List *slist) {
+    return wrap_ptr(Types::PList, slist);
 }
-static Any wrap(SList *slist) {
-    return wrap_ptr(Types::PSList, slist);
+static Any wrap(List *slist) {
+    return wrap_ptr(Types::PList, slist);
 }
 
-struct SList {
+struct List {
     Any at;
-    const SList *next;
+    const List *next;
 
-    static SList *create(const Any &at, const SList *next) {
-        auto result = new SList();
+    static List *create(const Any &at, const List *next) {
+        auto result = new List();
         result->at = at;
         result->next = next;
         //set_anchor(result, get_anchor(at));
         return result;
     }
 
-    static SList *create(const Any &at, const SList *next, const Anchor *anchor) {
+    static List *create(const Any &at, const List *next, const Anchor *anchor) {
         auto result = create(at, next);
         set_anchor(result, anchor);
         return result;
     }
 
-    static const SList *create_from_c_array(Any *values, size_t count) {
-        SList *result = nullptr;
+    static const List *create_from_c_array(Any *values, size_t count) {
+        List *result = nullptr;
         while (count) {
             --count;
             result = create(values[count], result);
@@ -1538,7 +1540,7 @@ struct SList {
         return result;
     }
 
-    static const SList *create_from_array(const std::vector<Any> &values) {
+    static const List *create_from_array(const std::vector<Any> &values) {
         return create_from_c_array(const_cast<Any *>(&values[0]), values.size());
     }
 
@@ -1551,7 +1553,7 @@ struct SList {
     /*
     std::string getRefRepr() const {
         std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "slist");
+        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "list");
         auto expr = this;
         get_eox();
         while (expr != EOX) {
@@ -1564,13 +1566,13 @@ struct SList {
     */
 };
 
-static const SList *extract_slist(const Any &value) {
-    if (eq(value.type, Types::PSList)) {
-        return *value.pslist;
-    } else if (eq(value.type, Types::_SList)) {
-        return (const SList *)value.ptr;
+static const List *extract_list(const Any &value) {
+    if (eq(value.type, Types::PList)) {
+        return *value.plist;
+    } else if (eq(value.type, Types::_List)) {
+        return (const List *)value.ptr;
     } else {
-        error("slist expected, not %s", get_name(value.type).c_str());
+        error("list expected, not %s", get_name(value.type).c_str());
     }
     return nullptr;
 }
@@ -1578,10 +1580,10 @@ static const SList *extract_slist(const Any &value) {
 #if 0
 // (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
 // this is the version for immutables; input lists are not modified
-static const SList *reverse_slist(const SList *l, const SList *eol = nullptr) {
-    const SList *next = nullptr;
+static const List *reverse_list(const List *l, const List *eol = nullptr) {
+    const List *next = nullptr;
     while (l != eol) {
-        next = SList::create(l->at, next, get_anchor(l));
+        next = List::create(l->at, next, get_anchor(l));
         l = l->next;
     }
     return next;
@@ -1590,12 +1592,12 @@ static const SList *reverse_slist(const SList *l, const SList *eol = nullptr) {
 
 // (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
 // this is the mutating version; input lists are modified, direction is inverted
-static const SList *reverse_slist_inplace(
-    const SList *l, const SList *eol = nullptr) {
-    const SList *next = nullptr;
+static const List *reverse_list_inplace(
+    const List *l, const List *eol = nullptr) {
+    const List *next = nullptr;
     while (l != eol) {
-        const SList *iternext = l->next;
-        const_cast<SList *>(l)->next = next;
+        const List *iternext = l->next;
+        const_cast<List *>(l)->next = next;
         next = l;
         l = iternext;
     }
@@ -1604,11 +1606,11 @@ static const SList *reverse_slist_inplace(
 
 //------------------------------------------------------------------------------
 
-struct SListIter {
+struct ListIter {
 protected:
-    const SList *expr;
+    const List *expr;
 public:
-    const SList *getSList() const {
+    const List *getList() const {
         return expr;
     }
 
@@ -1616,7 +1618,7 @@ public:
         return get_anchor(expr);
     }
 
-    SListIter(const SList *value, size_t c=0) :
+    ListIter(const List *value, size_t c=0) :
         expr(value) {
         for (size_t i = 0; i < c; ++i) {
             assert(expr);
@@ -1624,22 +1626,22 @@ public:
         }
     }
 
-    SListIter(const Any &value, size_t i=0) :
-        SListIter(extract_slist(value), i)
+    ListIter(const Any &value, size_t i=0) :
+        ListIter(extract_list(value), i)
     {}
 
-    bool operator ==(const SListIter &other) const {
+    bool operator ==(const ListIter &other) const {
         return (expr == other.expr);
     }
-    bool operator !=(const SListIter &other) const {
+    bool operator !=(const ListIter &other) const {
         return (expr != other.expr);
     }
 
-    SListIter operator +(int offset) const {
-        return SListIter(expr, (size_t)offset);
+    ListIter operator +(int offset) const {
+        return ListIter(expr, (size_t)offset);
     }
 
-    SListIter operator ++(int) {
+    ListIter operator ++(int) {
         auto oldself = *this;
         assert (expr);
         expr = expr->next;
@@ -1780,7 +1782,7 @@ struct BuiltinFlow {
 
 //------------------------------------------------------------------------------
 
-typedef Any (*SpecialFormFunction)(SListIter);
+typedef Any (*SpecialFormFunction)(ListIter);
 
 struct SpecialForm {
 
@@ -1808,10 +1810,10 @@ struct SpecialForm {
 
 struct Cursor {
     Any value;
-    SListIter next;
+    ListIter next;
 };
 
-typedef Cursor (*MacroBuiltinFunction)(const Table *, SListIter);
+typedef Cursor (*MacroBuiltinFunction)(const Table *, ListIter);
 
 struct BuiltinMacro {
 
@@ -2048,9 +2050,9 @@ static void unescape(String &s) {
 
 // matches (///...)
 static bool is_comment(const Any &expr) {
-    if (eq(expr.type, Types::PSList)) {
-        if (*expr.pslist) {
-            const Any &sym = (*expr.pslist)->at;
+    if (eq(expr.type, Types::PList)) {
+        if (*expr.plist) {
+            const Any &sym = (*expr.plist)->at;
             if (eq(sym.type, Types::Symbol)) {
                 auto s = extract_symbol_string(sym);
                 if (!memcmp(s.c_str(),"///",3))
@@ -2061,7 +2063,7 @@ static bool is_comment(const Any &expr) {
     return false;
 }
 
-static const Anchor *find_valid_anchor(const SList *l) {
+static const Anchor *find_valid_anchor(const List *l) {
     const Anchor *a = nullptr;
     while (l) {
         a = get_anchor(l);
@@ -2080,31 +2082,31 @@ static const Anchor *find_valid_anchor(const SList *l) {
 static const Anchor *find_valid_anchor(const Any &expr) {
     const Anchor *a = get_anchor(expr);
     if (!a) {
-        if (eq(expr.type, Types::PSList)) {
-            a = find_valid_anchor(*expr.pslist);
+        if (eq(expr.type, Types::PList)) {
+            a = find_valid_anchor(*expr.plist);
         }
     }
     return a;
 }
 
 static Any strip(const Any &expr) {
-    if (eq(expr.type, Types::PSList)) {
-        const SList *l = nullptr;
-        auto it = SListIter(expr);
+    if (eq(expr.type, Types::PList)) {
+        const List *l = nullptr;
+        auto it = ListIter(expr);
         while (it) {
             auto value = strip(*it);
             if (!is_comment(value)) {
-                l = SList::create(value, l, it.getAnchor());
+                l = List::create(value, l, it.getAnchor());
             }
             it++;
         }
-        return wrap(reverse_slist_inplace(l));
+        return wrap(reverse_list_inplace(l));
     }
     return expr;
 }
 
-static size_t getSize(const SList *expr) {
-    SListIter it(expr, 0);
+static size_t getSize(const List *expr) {
+    ListIter it(expr, 0);
     size_t c = 0;
     while (it) {
         c++;
@@ -2143,10 +2145,10 @@ static std::string formatTraceback() {
 #endif
 
 static bool isNested(const Any &e) {
-    if (e.type == Types::PSList) {
-        auto it = SListIter(e);
+    if (e.type == Types::PList) {
+        auto it = ListIter(e);
         while (it) {
-            if ((*it).type == Types::PSList)
+            if ((*it).type == Types::PList)
                 return true;
             it++;
         }
@@ -2174,9 +2176,9 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         streamAnchor(stream, e, depth);
     }
 
-    if (e.type == Types::PSList) {
-        //auto slist = llvm::cast<SListValue>(e);
-        auto it = SListIter(e);
+    if (e.type == Types::PList) {
+        //auto slist = llvm::cast<ListValue>(e);
+        auto it = ListIter(e);
         if (!it) {
             stream << "()";
             if (naked)
@@ -2201,7 +2203,7 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         //print_sparse:
             while (it) {
                 auto value = *it;
-                if ((value.type != Types::PSList) // not a list
+                if ((value.type != Types::PList) // not a list
                     && (offset >= 1) // not first element in list
                     && (it + 1) // not last element in list
                     && !isNested(*(it + 1))) { // next element can be terse packed too
@@ -2323,16 +2325,16 @@ namespace Types {
         return format("%g", extract_real(value));
     }
 
-    static std::string _slist_tostring(const Type *self, const bangra::Any &value) {
+    static std::string _list_tostring(const Type *self, const bangra::Any &value) {
         std::stringstream ss;
         bangra::streamValue(ss, value, 0, false);
         return ss.str();
     }
 
-    static Ordering _slist_cmp(const Type *self,
+    static Ordering _list_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        auto x = extract_slist(a);
-        auto y = extract_slist(b);
+        auto x = extract_list(a);
+        auto y = extract_list(b);
         while (true) {
             if (x == y) return Equal;
             else if (!x) return Less;
@@ -2497,10 +2499,10 @@ namespace Types {
         return symbol(get_string(args[0]));
     }
 
-    static bangra::Any _slist_apply_type(const Type *self,
+    static bangra::Any _list_apply_type(const Type *self,
         const std::vector<bangra::Any> &args) {
         builtin_checkparams(args, 0, -1);
-        auto result = SList::create_from_array(args);
+        auto result = List::create_from_array(args);
         set_anchor(result, get_anchor(handler_frame));
         return wrap(result);
     }
@@ -2618,25 +2620,25 @@ namespace Types {
         return get_key(*table, key, const_none);
     }
 
-    static bangra::Any type_slist_at(const Type *self,
+    static bangra::Any type_list_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        auto slist = extract_slist(value);
+        auto slist = extract_list(value);
         if (!slist) {
-            //error("can not index into empty slist");
-            return wrap((bangra::SList*)nullptr);
+            //error("can not index into empty list");
+            return wrap((bangra::List*)nullptr);
         }
         auto index = (size_t)extract_integer(vindex);
         if (index == 0) {
             return slist->at;
         } else {
-            const bangra::SList *result = slist;
+            const bangra::List *result = slist;
             while ((index != 0) && result) {
                 --index;
                 result = result->next;
             }
             /*
             if (index != 0) {
-                error("index %zu out of slist bounds", index);
+                error("index %zu out of list bounds", index);
             }
             */
             return wrap(result);
@@ -2947,17 +2949,17 @@ namespace Types {
         tmp->alignment = offsetof(_symbol_alignment, s);
         Symbol = tmp;
 
-        tmp = Struct("SList", true);
-        tmp->op2[OP2_At] = type_slist_at;
-        tmp->cmp = _slist_cmp;
-        //tmp->apply_type = _slist_apply_type;
-        //tmp->size = sizeof(bangra::SList);
-        //tmp->alignment = offsetof(_slist_alignment, s);
-        _SList = tmp;
-        tmp = const_cast<Type *>(Pointer(_SList));
-        tmp->apply_type = _slist_apply_type;
-        tmp->tostring = _slist_tostring;
-        PSList = tmp;
+        tmp = Struct("List", true);
+        tmp->op2[OP2_At] = type_list_at;
+        tmp->cmp = _list_cmp;
+        //tmp->apply_type = _list_apply_type;
+        //tmp->size = sizeof(bangra::List);
+        //tmp->alignment = offsetof(_list_alignment, s);
+        _List = tmp;
+        tmp = const_cast<Type *>(Pointer(_List));
+        tmp->apply_type = _list_apply_type;
+        tmp->tostring = _list_tostring;
+        PList = tmp;
 
         tmp = Struct("Table", true);
         tmp->op2[OP2_At] = type_table_at;
@@ -3355,8 +3357,8 @@ struct Parser {
     struct ListBuilder {
     protected:
         Lexer &lexer;
-        const SList *prev;
-        const SList *eol;
+        const List *prev;
+        const List *eol;
         Anchor anchor;
     public:
         ListBuilder(Lexer &lexer_) :
@@ -3371,17 +3373,17 @@ struct Parser {
         }
 
         /*
-        const SList *getPrev() {
+        const List *getPrev() {
             return prev;
         }
 
-        void setPrev(const SList *prev) {
+        void setPrev(const List *prev) {
             this->prev = prev;
         }
         */
 
         void append(const Any &value) {
-            this->prev = SList::create(value, this->prev, get_anchor(value));
+            this->prev = List::create(value, this->prev, get_anchor(value));
         }
 
         void resetStart() {
@@ -3395,8 +3397,8 @@ struct Parser {
             }
             // reverse what we have, up to last split point and wrap result
             // in cell
-            prev = SList::create(
-                wrap(reverse_slist_inplace(prev, eol)), eol, lexer.newAnchor());
+            prev = List::create(
+                wrap(reverse_list_inplace(prev, eol)), eol, lexer.newAnchor());
             resetStart();
             return true;
         }
@@ -3409,13 +3411,13 @@ struct Parser {
             return this->prev?this->prev->at:const_none;
         }
 
-        const SList *getResult() {
-            return reverse_slist_inplace(this->prev);
+        const List *getResult() {
+            return reverse_list_inplace(this->prev);
         }
     };
 
     // parses a list to its terminator and returns a handle to the first cell
-    const SList *parseList(int end_token) {
+    const List *parseList(int end_token) {
         ListBuilder builder(lexer);
         lexer.readToken();
         while (true) {
@@ -3457,15 +3459,15 @@ struct Parser {
         if (lexer.token == token_open) {
             result = wrap(parseList(token_close));
         } else if (lexer.token == token_square_open) {
-            const SList *list = parseList(token_square_close);
+            const List *list = parseList(token_square_close);
             if (errors) return const_none;
             Any sym = symbol("[");
-            result = wrap(SList::create(sym, list, anchor));
+            result = wrap(List::create(sym, list, anchor));
         } else if (lexer.token == token_curly_open) {
-            const SList *list = parseList(token_curly_close);
+            const List *list = parseList(token_curly_close);
             if (errors) return const_none;
             Any sym = symbol("{");
-            result = wrap(SList::create(sym, list, anchor));
+            result = wrap(List::create(sym, list, anchor));
         } else if ((lexer.token == token_close)
             || (lexer.token == token_square_close)
             || (lexer.token == token_curly_close)) {
@@ -4583,8 +4585,8 @@ static Any builtin_cons(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     auto &at = args[0];
     auto next = args[1];
-    verifyValueKind(Types::PSList, next);
-    return wrap(SList::create(at, *next.pslist,
+    verifyValueKind(Types::PList, next);
+    return wrap(List::create(at, *next.plist,
         get_anchor(handler_frame)));
 }
 
@@ -4654,6 +4656,23 @@ static Any builtin_set_key(const std::vector<Any> &args) {
     auto value = pair[1];
     set_key(*t, name, value);
     return const_none;
+}
+
+static Any builtin_next_key(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+
+    auto t = extract_table(args[0]);
+    Table::map_type::const_iterator it;
+    if (is_none_type(args[1].type)) {
+        it = t->_.begin();
+    } else {
+        it = t->_.find(extract_symbol(args[1]));
+        ++it;
+    }
+    if (it == t->_.end())
+        return const_none;
+    std::vector<Any> result = { wrap_symbol(it->first), it->second };
+    return wrap(result);
 }
 
 static Any builtin_syntax_macro(const std::vector<Any> &args) {
@@ -4851,7 +4870,7 @@ static bool isSymbol (const Any &expr, const Symbol &sym) {
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
 
-static bool verifyParameterCount (const SList *expr,
+static bool verifyParameterCount (const List *expr,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
@@ -4868,16 +4887,16 @@ static bool verifyParameterCount (const SList *expr,
     return true;
 }
 
-static bool verifyParameterCount (SListIter topit,
+static bool verifyParameterCount (ListIter topit,
     int mincount, int maxcount) {
     auto val = *topit;
-    verifyValueKind(Types::PSList, val);
-    return verifyParameterCount(*val.pslist, mincount, maxcount);
+    verifyValueKind(Types::PList, val);
+    return verifyParameterCount(*val.plist, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
 
-static Cursor expand (const Table *env, SListIter topit);
+static Cursor expand (const Table *env, ListIter topit);
 static Any compile(const Any &expr);
 
 static Any toparameter (Table *env, const Any &value) {
@@ -4890,67 +4909,67 @@ static Any toparameter (Table *env, const Any &value) {
     return bp;
 }
 
-static const SList *expand_expr_list (const Table *env, SListIter it) {
-    const SList *l = nullptr;
+static const List *expand_expr_list (const Table *env, ListIter it) {
+    const List *l = nullptr;
     while (it) {
         auto cur = expand(env, it);
-        l = SList::create(cur.value, l, it.getAnchor());
+        l = List::create(cur.value, l, it.getAnchor());
         it = cur.next;
     }
-    return reverse_slist_inplace(l);
+    return reverse_list_inplace(l);
 }
 
-static Cursor expand_function (const Table *env, SListIter topit) {
+static Cursor expand_function (const Table *env, ListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
-    SListIter it(*topit++);
+    ListIter it(*topit++);
     auto topanchor = it.getAnchor();
     it++;
     auto expr_parameters = *it++;
 
     auto subenv = new_scope(env);
 
-    const SList *outargs = nullptr;
-    verifyValueKind(Types::PSList, expr_parameters);
-    auto params = *expr_parameters.pslist;
-    SListIter param(params);
+    const List *outargs = nullptr;
+    verifyValueKind(Types::PList, expr_parameters);
+    auto params = *expr_parameters.plist;
+    ListIter param(params);
     while (param) {
-        outargs = SList::create(toparameter(subenv, *param),
+        outargs = List::create(toparameter(subenv, *param),
             outargs, param.getAnchor());
         param++;
     }
 
     return {
         wrap(
-            SList::create(
+            List::create(
                 getLocal(globals, SYM_FunctionForm),
-                SList::create(
-                    wrap(reverse_slist_inplace(outargs)),
+                List::create(
+                    wrap(reverse_list_inplace(outargs)),
                     expand_expr_list(subenv, it),
                     get_anchor(params)),
                 topanchor)),
         topit };
 }
 
-static Cursor expand_quote (const Table *env, SListIter topit) {
+static Cursor expand_quote (const Table *env, ListIter topit) {
     verifyParameterCount(topit, 1, -1);
 
-    SListIter it(*topit++);
+    ListIter it(*topit++);
     auto anchor = it.getAnchor();
     it++;
-    auto result = SList::create(
+    auto result = List::create(
         getLocal(globals, SYM_QuoteForm),
-        it.getSList(),
+        it.getList(),
         anchor);
     return { wrap(result), topit };
 }
 
-static Cursor expand_escape (const Table *env, SListIter topit) {
-    SListIter it(*topit++, 1);
+static Cursor expand_escape (const Table *env, ListIter topit) {
+    ListIter it(*topit++, 1);
     return { *it, topit };
 }
 
-static Cursor expand_let_syntax (const Table *env, SListIter topit) {
+static Cursor expand_let_syntax (const Table *env, ListIter topit) {
     auto cur = expand_function (env, topit++);
     //printValue(cur.value, 0, true);
 
@@ -4968,14 +4987,14 @@ static Cursor expand_let_syntax (const Table *env, SListIter topit) {
     return { rest->at, rest->next };
 }
 
-static const SList *expand_macro(
-    const Table *env, const Any &handler, SListIter topit) {
+static const List *expand_macro(
+    const Table *env, const Any &handler, ListIter topit) {
     auto result = execute({handler,
         wrap(env),
-        wrap(topit.getSList())});
+        wrap(topit.getList())});
     if (isnone(result))
         return nullptr;
-    verifyValueKind(Types::PSList, result);
+    verifyValueKind(Types::PList, result);
     if (!get_anchor(result)) {
         auto head = *topit;
         const Anchor *anchor = get_anchor(head);
@@ -4984,19 +5003,19 @@ static const SList *expand_macro(
         }
         set_anchor(result, anchor);
     }
-    return *result.pslist;
+    return *result.plist;
 }
 
-static Cursor expand (const Table *env, SListIter topit) {
+static Cursor expand (const Table *env, ListIter topit) {
     Any result = const_none;
 process:
     Any expr = *topit;
-    if (eq(expr.type, Types::PSList)) {
-        if (!(*expr.pslist)) {
+    if (eq(expr.type, Types::PList)) {
+        if (!(*expr.plist)) {
             error("expression is empty");
         }
 
-        auto head = (*expr.pslist)->at;
+        auto head = (*expr.plist)->at;
         if (eq(head.type, Types::Symbol)) {
             head = getLocal(env, extract_symbol(head));
         }
@@ -5007,22 +5026,22 @@ process:
                 auto result = expand_macro(env,
                     (*head.pmacro)->value, topit);
                 if (result) {
-                    topit = SListIter(result);
+                    topit = ListIter(result);
                     goto process;
                 }
             }
         }
 
-        auto default_handler = getLocal(env, SYM_SListWC);
+        auto default_handler = getLocal(env, SYM_ListWC);
         if (default_handler.type != Types::None) {
             auto result = expand_macro(env, default_handler, topit);
             if (result) {
-                topit = SListIter(result);
+                topit = ListIter(result);
                 goto process;
             }
         }
 
-        SListIter it(*topit);
+        ListIter it(*topit);
         result = wrap(expand_expr_list(env, it));
         topit++;
     } else if (eq(expr.type, Types::Symbol)) {
@@ -5032,7 +5051,7 @@ process:
             if (default_handler.type != Types::None) {
                 auto result = expand_macro(env, default_handler, topit);
                 if (result) {
-                    topit = SListIter(result);
+                    topit = ListIter(result);
                     goto process;
                 }
             }
@@ -5056,8 +5075,8 @@ static Any builtin_expand(const std::vector<Any> &args) {
 
     auto retval = expand(*scope.ptable, expr_eval);
 
-    auto topexpr = const_cast<SList*>(retval.next.getSList());
-    return wrap(SList::create(retval.value, topexpr));
+    auto topexpr = const_cast<List*>(retval.next.getList());
+    return wrap(List::create(retval.value, topexpr));
 }
 
 static Any builtin_set_globals(const std::vector<Any> &args) {
@@ -5140,7 +5159,7 @@ static ILBuilder *builder;
 
 //------------------------------------------------------------------------------
 
-static Any compile_expr_list (SListIter it) {
+static Any compile_expr_list (ListIter it) {
     Any value = const_none;
     while (it) {
         value = compile(*it);
@@ -5149,15 +5168,15 @@ static Any compile_expr_list (SListIter it) {
     return value;
 }
 
-static Any compile_do (SListIter it) {
+static Any compile_do (ListIter it) {
     it++;
     return compile_expr_list(it);
 }
 
-static Any compile_function (SListIter it) {
-    auto anchor = find_valid_anchor(it.getSList());
+static Any compile_function (ListIter it) {
+    auto anchor = find_valid_anchor(it.getList());
     if (!anchor || !anchor->isValid()) {
-        printValue(wrap(it.getSList()), 0, true);
+        printValue(wrap(it.getList()), 0, true);
         error("function expression not anchored");
     }
 
@@ -5172,8 +5191,8 @@ static Any compile_function (SListIter it) {
 
     builder->continueAt(function);
 
-    verifyValueKind(Types::PSList, expr_parameters);
-    SListIter param(*expr_parameters.pslist);
+    verifyValueKind(Types::PList, expr_parameters);
+    ListIter param(*expr_parameters.plist);
     while (param) {
         auto pparam = *param;
         verifyValueKind(Types::PParameter, pparam);
@@ -5192,12 +5211,12 @@ static Any compile_function (SListIter it) {
     return wrap(function);
 }
 
-static Any compile_implicit_call (SListIter it,
+static Any compile_implicit_call (ListIter it,
     const Anchor *anchor = nullptr) {
     if (!anchor) {
-        anchor = find_valid_anchor(it.getSList());
+        anchor = find_valid_anchor(it.getList());
         if (!anchor || !anchor->isValid()) {
-            printValue(wrap(it.getSList()), 0, true);
+            printValue(wrap(it.getList()), 0, true);
             error("call expression not anchored");
         }
     }
@@ -5215,19 +5234,19 @@ static Any compile_implicit_call (SListIter it,
     return wrap(builder->call(args, anchor));
 }
 
-static Any compile_call (SListIter it) {
-    auto anchor = find_valid_anchor(it.getSList());
+static Any compile_call (ListIter it) {
+    auto anchor = find_valid_anchor(it.getList());
     if (!anchor || !anchor->isValid()) {
-        printValue(wrap(it.getSList()), 0, true);
+        printValue(wrap(it.getList()), 0, true);
         error("call expression not anchored");
     }
     it++;
     return compile_implicit_call(it, anchor);
 }
 
-static Any compile_quote (SListIter it) {
+static Any compile_quote (ListIter it) {
     it++;
-    SList *rest = const_cast<SList*>(it.getSList());
+    List *rest = const_cast<List*>(it.getList());
     if (!rest->next)
         return rest->at;
     else
@@ -5238,17 +5257,17 @@ static Any compile_quote (SListIter it) {
 
 static Any compile (const Any &expr) {
     Any result = const_none;
-    if (eq(expr.type, Types::PSList)) {
-        if (!(*expr.pslist)) {
+    if (eq(expr.type, Types::PList)) {
+        if (!(*expr.plist)) {
             error("empty expression");
         }
-        auto slist = *expr.pslist;
+        auto slist = *expr.plist;
         auto head = slist->at;
         if (eq(head.type, Types::PSpecialForm)) {
             result = (*head.pspecial_form)->handler(
-                SListIter(slist));
+                ListIter(slist));
         } else {
-            result = compile_implicit_call(SListIter(slist));
+            result = compile_implicit_call(ListIter(slist));
         }
         assert(result.type != Types::None);
     } else {
@@ -5261,7 +5280,7 @@ static Any compile (const Any &expr) {
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
-static Any builtin_loadslist(const std::vector<Any> &args);
+static Any builtin_loadlist(const std::vector<Any> &args);
 
 static Any builtin_eval(const std::vector<Any> &args);
 
@@ -5320,10 +5339,10 @@ static void initGlobals () {
     setLocalString(env, "double", wrap(Types::R64));
 
     setLocalString(env, "symbol", wrap(Types::Symbol));
-    setLocalString(env, "slist", wrap(Types::PSList));
+    setLocalString(env, "list", wrap(Types::PList));
 
     setLocalString(env, "scope-parent-symbol", wrap_symbol(SYM_Parent));
-    setLocalString(env, "scope-slist-wildcard-symbol", wrap_symbol(SYM_SListWC));
+    setLocalString(env, "scope-list-wildcard-symbol", wrap_symbol(SYM_ListWC));
     setLocalString(env, "scope-symbol-wildcard-symbol", wrap_symbol(SYM_SymbolWC));
 
     setLocalString(env, "usize_t",
@@ -5348,6 +5367,7 @@ static void initGlobals () {
     setBuiltin(env, "table", builtin_table);
     setBuiltin(env, "table-join", builtin_table_join);
     setBuiltin(env, "set-key!", builtin_set_key);
+    setBuiltin(env, "next-key", builtin_next_key);
     setBuiltin(env, "typeof", builtin_typeof);
     //setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);
@@ -5360,14 +5380,14 @@ static void initGlobals () {
     //setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
     setBuiltin(env, "set-globals!", builtin_set_globals);
-    //setBuiltin(env, "slist?", builtin_is_slist);
+    //setBuiltin(env, "list?", builtin_is_list);
     //setBuiltin(env, "symbol?", builtin_is_symbol);
     //setBuiltin(env, "integer?", builtin_is_integer);
     //setBuiltin(env, "null?", builtin_is_null);
     //setBuiltin(env, "key?", builtin_is_key);
     setBuiltin(env, "error", builtin_error);
     setBuiltin(env, "length", builtin_length);
-    setBuiltin(env, "slist-load", builtin_loadslist);
+    setBuiltin(env, "list-load", builtin_loadlist);
     setBuiltin(env, "eval", builtin_eval);
 
     setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
@@ -5444,16 +5464,16 @@ static void handleException(const Table *env, const Any &expr) {
 }
 
 static Any compileFlow (const Table *env, const Any &expr) {
-    verifyValueKind(Types::PSList, expr);
-    auto rootit = SListIter(expr);
+    verifyValueKind(Types::PList, expr);
+    auto rootit = ListIter(expr);
     auto expexpr = expand_expr_list(env, rootit);
-    auto anchor = find_valid_anchor(rootit.getSList());
+    auto anchor = find_valid_anchor(rootit.getList());
 
     auto mainfunc = Flow::create();
     auto ret = mainfunc->appendParameter(Parameter::create());
     builder->continueAt(mainfunc);
 
-    auto result = compile_expr_list(SListIter(expexpr));
+    auto result = compile_expr_list(ListIter(expexpr));
     builder->br({ wrap(ret), result }, anchor);
 
     return wrap(mainfunc);
@@ -5472,7 +5492,7 @@ static Any loadFile(const std::string &path) {
     return const_none;
 }
 
-static Any builtin_loadslist(const std::vector<Any> &args) {
+static Any builtin_loadlist(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     auto path = extract_string(args[0]);
     return loadFile(path);
@@ -5533,12 +5553,12 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "could not parse footer expression\n");
         return const_none;
     }
-    if (!eq(expr.type, Types::PSList))  {
+    if (!eq(expr.type, Types::PList))  {
         fprintf(stderr, "footer expression is not a symbolic list\n");
         return const_none;
     }
-    auto symlist = *expr.pslist;
-    SListIter it(symlist);
+    auto symlist = *expr.plist;
+    ListIter it(symlist);
     if (!it) {
         fprintf(stderr, "footer expression is empty\n");
         return const_none;

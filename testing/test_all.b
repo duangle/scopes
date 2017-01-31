@@ -14,7 +14,7 @@ assert
 do
     m :=
         eval
-            slist-load
+            list-load
                 .. interpreter-dir "/testing/test_module.b"
             table
                 tupleof scope-parent-symbol
@@ -73,15 +73,15 @@ assert
 
 assert
     <
-        slist 1 2 2
-        slist 1 2 3
+        list 1 2 2
+        list 1 2 3
 
 assert
     ==
-        slist-join
-            slist 1 2 3
-            slist 4 5 6
-        slist 1 2 3 4 5 6
+        list-join
+            list 1 2 3
+            list 4 5 6
+        list 1 2 3 4 5 6
 
 call print "hi"
 
@@ -140,6 +140,20 @@ assert
     == V.z.w.blue
         V . z @ (quote w) . blue
     "accessors failed"
+
+do
+    T := API
+        /// table
+            x : 1
+            y : 2
+            z : 3
+    kv :=
+        next-key T none
+    loop (kv)
+        if (not (none? kv))
+            print kv
+            repeat
+                next-key T (kv @ 0)
 
 assert
     2 * 2 + 1 == 5
