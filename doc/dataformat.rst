@@ -1,6 +1,10 @@
 The Interchange Format
 ======================
 
+*Please excuse the at times misleading syntax highlighting, there isn't
+a working syntax highlighter available yet, so I had to pick the next best
+one available.*
+
 This chapter outlines the syntax of Bangra source code at the data interchange
 format level from the perspective of nesting arbitrary lists. No programming
 happens at this stage, it's just data formatting, which means that the format
@@ -128,17 +132,11 @@ to `Lisp <http://en.wikipedia.org/wiki/Lisp_(programming_language)>`_ and
 `Scheme <http://en.wikipedia.org/wiki/Scheme_(programming_language)>`_ users
 as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>`_::
 
-    (my-lang # A header that selects the interpreter to be invoked
-
     # there must not be any tokens outside the parentheses guarding the
     # top level list.
 
     # nested lists as nested expressions:
-    (print (.. "Hello World"))
-
-    # some languages use the last element as return value.
-    # scripts usually return null.
-    null)
+    (print (.. "Hello" "World") 303)
 
 As a modern alternative, Bangra offers a *naked notation* where the scope of
 lists is implicitly balanced by indentation, an approach used by
@@ -150,8 +148,6 @@ other languages.
 
 This source parses as the same list in the coated example::
 
-    my-lang # a single element on a single line remains unwrapped.
-
     # nesting is implied by indentation.
     # a sub paragraph continues the list.
     print
@@ -160,12 +156,10 @@ This source parses as the same list in the coated example::
 
         # multiple elements on a single line without sub-paragraph are wrapped
         # in a list.
-        .. "Hello World"
+        .. "Hello" "World"
 
         # single arguments are appended to the parent list
         303
-
-    null
 
 Mixing Modes
 ^^^^^^^^^^^^

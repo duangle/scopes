@@ -36,48 +36,27 @@ How to build Bangra on Windows:
 
 There should now be a ``bangra`` executable in your root folder.
 
+You can verify that everything works by running::
+
+    bangra testing/test_all.b
+
 Running
 -------
 
-To compile and execute a Bangra program, pass the source file as first argument
-to the ``bangra`` compiler-interpreter::
+To execute a Bangra program, pass the source file as first argument to the
+``bangra`` interpreter::
 
     bangra <path-to-file.b>
 
 Hello World
 -----------
 
-A simple "Hello World" program in Bangra IR looks as follows::
+A simple "Hello World" program in Bangra looks as follows::
 
-    IR
+    print "Hello world!"
 
-    # include C stdlib definitions
-    include "../libc.b"
-
-    # define global string constant and include
-    # constant bitcast instruction
-    defvalue hello-world
-        bitcast
-            global "" "hello world!\n"
-            rawstring
-
-    # our main function
-    define main ()
-        # the function type of this function
-        function void
-
-        # the first label is always the entry point
-        label ""
-
-            # call printf with argument hello-world
-            call printf hello-world
-
-            # return without argument
-            ret;
-
-    # run the main function
-    run main
-
+*Note that in order to be valid, a Bangra program must not contain any tabs,
+and each sub-block must be indented by four spaces.*
 
 TODO
 

@@ -1,83 +1,65 @@
 About Bangra
 ============
 
-Dear User,
+Bangra is a minimalist, interpreted, mixed functional/imperative general purpose
+programming language inspired by Scheme, Python and C.
 
-Bangra (named after Bhangra, the Punjabi dance and music style) is a programming
-infrastructure built around the idea that statically compiled programs should
-have the ability to extend themselves at both compile- and runtime, and the
-power to define for themselves what runtime actually means.
+The core interpreter is written in under 6k lines of C++ code, and exports the
+fewest features necessary to allow the language to expand itself to a
+comfortable level. These features are:
 
-A Bangra program can compile and launch itself right out of the compiler, or
-generate a new binary that does or does not reuse Bangra's runtime compiler
-services. The idea behind this is that every compiled program should have the
-same generative power as the original compiler, and the ability to locally
-extend and transform this compiler *as it is compiling*, in any way its user
-sees fit.
+* A polymorphic value of type ``Any`` implemented as a 16-byte sized fat pointer.
+* A ``Symbol`` type that maps strings to cached identifiers.
+* An **annotation system** that permits to attach a file name, line number and
+  column index in the form of an ``Anchor`` to any value.
+* A flat, C-compatible **type system** that implements overloadable operations for
+  booleans, all signed and unsigned integer types, floats, doubles, arrays,
+  vectors, tuples, pointers, structs, unions, enums, function pointers, slices,
+  tables, lists and strings.
+* A **lexer and parser** for Bangra-style symbolic expressions, which use whitespace
+  indentation to delimit code blocks, but also support a restricted form of
+  traditional Lisp/Scheme syntax. The parser outputs a tree of cons cells
+  annotated with file, line number and column.
+* A **foreign function interface** (FFI) based on libffi that permits calling into
+  C libraries without requiring any conversions, thanks to the C-compatible
+  type system.
+* A **clang-based C importer** that generates type libraries from include files on
+  the fly.
+* A **fully embedded** build of **LLVM** that can be accessed via FFI.
+* A **programmable macro preprocessor** that expands symbolic expressions and
+  supports only four special forms: ``function``, ``quote``, ``let-syntax``
+  and ``escape``. These are sufficient to bootstrap the rest of the language.
 
-Bangra achieves this with a thin layer implemented on top of LLVM, shipped
-as a shared library, that constructs LLVM IR from symbolic expressions and adds
-the necessary metaprogramming idioms to enable programs
+  The macro preprocessor supports hooks to preprocessing arbitrary lists and
+  symbols. This feature is used to support special syntax without having to
+  expand the parser.
+* A **translator** that generates flow nodes from fully expanded symbolic expressions.
 
-* to execute generated machine code during the compile process,
-* to hook and radically transform the process in which expressions are
-  generated and understood,
-* and to generate and compile new code at runtime.
+  Flow nodes are functions stored in **control flow form** (CFF), a novel intermediate
+  format which requires continuations as its only primitive and eases
+  specialization and optimization considerably.
+  For more information see
+  `A Graph-Based Higher-Order Intermediate Representation <http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf>`_
+  by Leissa et al.
+* A small ``eval-apply`` style **interpreter loop** that executes flow nodes.
+* A small set of built-in functions exported as globals.
+* A loader that permits attaching a payload script to the main executable.
+* Initialization routines for the root environment.
 
-Bangra is intended to be suitable for use cases such as
+As Bangra is in alpha stage, some essential features are still missing. These
+features will be added in future releases:
 
-* System programming of expandable kernels, game engines and other realtime performance
-  dependent programs, a task typically managed with static languages like
-  C, C++ or Rust.
-* Scripting of simple maintenance tools and inhouse utilities, a task typically
-  assigned to dynamic languages like Python, Ruby, Perl or Bash.
-* Rapid prototyping that elegantly scales from an agile, largely type-free
-  context to an optimized statically typed high performance context.
-* Live programming which needs to compile and execute new machine code as the
-  program is running.
-* Designing editors and IDE's that intimately interact with the code being
-  written and edited, offline, during debugging and at runtime.
-* Engineering of plugin and modding systems that give the user full control
-  over a program without having to operate dedicated development and build tools.
-* Development of new static and dynamic languages and idioms, functional or
-  imperative, universal and domain specific, for tinkering and productive use,
-  and for all shades inbetween those extremes, which can be freely mixed to
-  serve the context in which they are required.
-* Development of translation layers for closed language specifications such as
-  Javascript and GLSL, permitting to write shaders or websites with
-  symbolic expressions and metaprogramming idioms.
-* Automated transformation of source code for the purpose of refactoring, porting,
-  annotation or emulation.
+* Exception handling.
+* Better error reporting.
+* An on-demand **specializer** that translates flow nodes to fast machine code
+  using LLVM. The specializer will feature closure elimination and memory tracking.
+* A read-eval-print (REPL) **console** for casual use.
+* A **garbage collection** mechanism for the interpreter. Right now Bangra
+  doesn't free any memory at all.
+* Debugging support for gdb.
 
-Bangra is not
+As designer of Bangra, I hope that, over time, you will find Bangra use- and
+delightful, instructive, sometimes even entertaining, as you experiment with,
+toy around with, learn about, and engineer new programs, utilities, languages,
+infrastructures, games and toys written with and for Bangra.
 
-* A language. Bangra IR is meant as a way to bootstrap languages, and the
-  Bangra language implemented on top of it provides all means for developing
-  new idioms and even completely different syntax. You are not stuck
-  with a one size fits all solution; instead, the design trusts that *only you*
-  know best what you need.
-* A standard runtime. The Bangra core will always be minimal, and the community
-  is encouraged to find its own purpose oriented standards, for which there is
-  certainly more than one optimal solution.
-* A framework that shackles its user to certain principles and guidelines with
-  no means of escape. Instead, it is a tool meant to bootstrap the programming
-  process with the greatest possible freedom, and to aid its user to get to
-  results elegantly, without circumvention or misappropriation.
-
-Bangra is still in early development, so not all promises can be fulfilled
-at this point in time, but it is this authors conviction that the fundament
-is sufficiently clean and fertile enough to permit all stated goals to be reached.
-
-Much thanks is owed to the many developers at Apple who made LLVM and Clang a
-reality, without which this project would have become an insurmountable task.
-The extent to which we owe these people our ongoing happiness will only become
-clear in many productive decades to come.
-
-I hope that you will find Bangra useful, delightful, instructive, sometimes even
-entertaining, as you experiment with, toy around with, learn about, and engineer
-new programs, utilities, languages, infrastructures, games and toys written with
-and for Bangra.
-
-Sincerely,
-
-Leonard Ritter

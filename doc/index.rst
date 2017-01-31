@@ -20,16 +20,15 @@ Contents:
    about
    intro
    dataformat
-   irlang
+   lang
    capi
-   ir-ref
+   bangra-ref
 
 ..
    architecture
    bangralang
    debugging
    meta
-   bangra-ref
 
 
 Indices and tables
