@@ -12,7 +12,7 @@ extern "C" {
 enum {
     // semver style versioning
     BANGRA_VERSION_MAJOR = 0,
-    BANGRA_VERSION_MINOR = 4,
+    BANGRA_VERSION_MINOR = 5,
     BANGRA_VERSION_PATCH = 0,
 };
 
