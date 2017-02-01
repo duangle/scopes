@@ -4758,6 +4758,12 @@ static Any builtin_cdecl(const std::vector<Any> &args) {
     return wrap(Types::CFunction(rettype, Types::Tuple(paramtypes), vararg));
 }
 
+static Any builtin_pointer(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    const Type *type = extract_type(args[0]);
+    return wrap(Types::Pointer(type));
+}
+
 static Any builtin_error(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     std::string msg = extract_string(args[0]);
@@ -4775,6 +4781,19 @@ static Any builtin_import_c(const std::vector<Any> &args) {
         cargs.push_back(extract_string(compile_args[i]));
     }
     return wrap_ptr(Types::PTable, bangra::importCModule(path, cargs));
+}
+
+static Any builtin_external(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    auto sym = extract_symbol(args[0]);
+    auto type = extract_type(args[1]);
+    void *ptr = get_c_symbol(NULL, get_symbol_name(sym).c_str());
+    if (!ptr) return const_none;
+    if (is_cfunction_type(type)) {
+        return wrap_ptr(Types::Pointer(type), ptr);
+    } else {
+        return wrap(type, ptr);
+    }
 }
 
 template<BuiltinFunction F>
@@ -5415,6 +5434,7 @@ static void initGlobals () {
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);
     setBuiltin(env, "cdecl", builtin_cdecl);
+    setBuiltin(env, "pointer", builtin_pointer);
     setBuiltin(env, "tupleof", builtin_tupleof);
     setBuiltin(env, "cons", builtin_cons);
     setBuiltin(env, "structof", builtin_structof);
@@ -5423,7 +5443,7 @@ static void initGlobals () {
     setBuiltin(env, "set-key!", builtin_set_key);
     setBuiltin(env, "next-key", builtin_next_key);
     setBuiltin(env, "typeof", builtin_typeof);
-    //setBuiltin(env, "external", builtin_external);
+    setBuiltin(env, "external", builtin_external);
     setBuiltin(env, "import-c", builtin_import_c);
     setBuiltin(env, "branch", builtin_branch);
     setBuiltin(env, "call/cc", builtin_call_cc);

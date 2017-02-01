@@ -1,7 +1,13 @@
 print
-    cdecl int
-        tupleof int int
-        false
+
+C :=
+    external
+        quote print_number
+        cdecl int
+            tupleof int
+            false
+print
+    C 400
 
 set-key! bangra
     : path
