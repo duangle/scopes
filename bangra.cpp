@@ -4744,7 +4744,7 @@ static Any builtin_typeof(const std::vector<Any> &args) {
     return wrap(args[0].type);
 }
 
-static Any builtin_cdecl(const std::vector<Any> &args) {
+static Any builtin_cfunction(const std::vector<Any> &args) {
     builtin_checkparams(args, 3, 3);
     const Type *rettype = extract_type(args[0]);
     auto params = extract_tuple(args[1]);
@@ -5433,7 +5433,7 @@ static void initGlobals () {
     setBuiltin(env, "globals", builtin_globals);
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);
-    setBuiltin(env, "cdecl", builtin_cdecl);
+    setBuiltin(env, "cfunction", builtin_cfunction);
     setBuiltin(env, "pointer", builtin_pointer);
     setBuiltin(env, "tupleof", builtin_tupleof);
     setBuiltin(env, "cons", builtin_cons);

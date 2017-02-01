@@ -3,7 +3,7 @@ print
 C :=
     external
         quote print_number
-        cdecl int
+        cfunction int
             tupleof int
             false
 print

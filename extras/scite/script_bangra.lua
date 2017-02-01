@@ -23,7 +23,7 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let external cdecl branch function null true false"
+        "bangra let external cfunction branch function null true false"
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* ::@ syntax-macro syntax-scope cons"
             .. " parameter string expand call escape do empty? dump-syntax"
