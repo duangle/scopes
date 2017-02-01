@@ -22,6 +22,7 @@ extern char *bangra_interpreter_path;
 extern char *bangra_interpreter_dir;
 
 int bangra_main(int argc, char ** argv);
+int print_number(int value);
 
 #if defined __cplusplus
 }
@@ -60,6 +61,7 @@ int bangra_main(int argc, char ** argv);
 #include <execinfo.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <dlfcn.h>
 #endif
 #include <stdint.h>
 #include <assert.h>
@@ -68,7 +70,6 @@ int bangra_main(int argc, char ** argv);
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
-//#include <dlfcn.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <libgen.h>
@@ -518,11 +519,11 @@ struct Any {
         const double *p_r64;
 
         const void *ptr;
-        const char *c_str;
         const BuiltinFunction func;
         const String *str;
         const Symbol *symbol;
 
+        const char **pc_str;
         const void **pptr;
         const List **plist;
         const Type **ptype;
@@ -1231,7 +1232,7 @@ static bool is_table_type(const Type *type) {
 
 static std::string extract_string(const Any &value) {
     if (eq(value.type, Types::Rawstring)) {
-        return value.c_str;
+        return *value.pc_str;
     } else if (eq(value.type, Types::String)) {
         return std::string(value.str->ptr, value.str->count);
     } else {
@@ -3954,6 +3955,20 @@ continue_execution:
 }
 
 //------------------------------------------------------------------------------
+// C module utility functions
+//------------------------------------------------------------------------------
+
+static void *open_c_module(const char *name) {
+    // todo: windows
+    return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+}
+
+static void *get_c_symbol(void *handle, const char *name) {
+    // todo: windows
+    return dlsym(handle, name);
+}
+
+//------------------------------------------------------------------------------
 // C BRIDGE (CLANG)
 //------------------------------------------------------------------------------
 
@@ -4316,12 +4331,14 @@ public:
 
     void exportExternal(const std::string &name, const Type *type,
         const Anchor &anchor) {
-        // TODO
-        /*
-        set_key(*dest, name,
-            wrap(type,
-                dlsym(NULL, name.c_str())));
-        */
+        set_key(*dest, get_symbol(name),
+            wrap(type, get_c_symbol(NULL, name.c_str())));
+    }
+
+    void exportExternalPtr(const std::string &name, const Type *type,
+        const Anchor &anchor) {
+        set_key(*dest, get_symbol(name),
+            wrap_ptr(type, get_c_symbol(NULL, name.c_str())));
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
@@ -4401,7 +4418,7 @@ public:
 
         Anchor anchor = anchorFromLocation(f->getSourceRange().getBegin());
 
-        exportExternal(FuncName.c_str(), functype, anchor);
+        exportExternalPtr(FuncName.c_str(), Types::Pointer(functype), anchor);
 
         return true;
     }
@@ -4507,6 +4524,14 @@ static const Table *globals = nullptr;
 static Any builtin_string(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     return pstring(get_string(args[0]));
+}
+
+static Any builtin_cstr(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    if (!eq(args[0].type, Types::Rawstring))
+        error("rawstring expected");
+    const char *str = *args[0].pc_str;
+    return wrap(Types::String, alloc_slice<char>(str, strlen(str)));
 }
 
 static Any builtin_print(const std::vector<Any> &args) {
@@ -5325,11 +5350,6 @@ static Any builtin_loadlist(const std::vector<Any> &args);
 
 static Any builtin_eval(const std::vector<Any> &args);
 
-static int print_number(int value) {
-    printf("NUMBER: %i\n", value);
-    return value + 1;
-}
-
 static void initGlobals () {
     auto env = new_scope();
     globals = env;
@@ -5345,13 +5365,6 @@ static void initGlobals () {
     setBuiltin(env, "quote", expand_quote);
     setBuiltin(env, "let-syntax", expand_let_syntax);
     setBuiltin(env, "escape", expand_escape);
-
-    // test
-    setLocalString(env, "print-number",
-        wrap_ptr(
-            Types::Pointer(
-                Types::CFunction(Types::I32, Types::Tuple({Types::I32}), false)),
-            (void *)print_number));
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));
@@ -5430,6 +5443,7 @@ static void initGlobals () {
     setBuiltin(env, "length", builtin_length);
     setBuiltin(env, "list-load", builtin_loadlist);
     setBuiltin(env, "eval", builtin_eval);
+    setBuiltin(env, "cstr", builtin_cstr);
 
     setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
 
@@ -5803,6 +5817,11 @@ bangra::Any bangra_parse_file(const char *path) {
 
 int main(int argc, char ** argv) {
     return bangra_main(argc, argv);
+}
+
+int print_number(int value) {
+    printf("NUMBER: %i\n", value);
+    return value + 1;
 }
 
 #endif // BANGRA_MAIN_CPP_IMPL

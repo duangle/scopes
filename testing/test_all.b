@@ -1,3 +1,8 @@
+print
+    cdecl int
+        tupleof int int
+        false
+
 set-key! bangra
     : path
         cons
@@ -154,6 +159,13 @@ do
             print kv
             repeat
                 next-key T (kv @ 0)
+
+    print ">"
+        cstr T.bangra_interpreter_dir
+    print ">>"
+        cstr T.bangra_interpreter_path
+    print
+        T.print_number 302
 
 assert
     2 * 2 + 1 == 5
