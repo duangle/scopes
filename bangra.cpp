@@ -486,6 +486,7 @@ struct BuiltinFlow;
 struct BuiltinMacro;
 struct Type;
 struct Macro;
+struct Frame;
 struct SpecialForm;
 
 template<typename T>
@@ -530,6 +531,7 @@ struct Any {
         const Parameter **pparameter;
         const Flow **pflow;
         const Closure **pclosure;
+        const Frame **pframe;
         const Builtin **pbuiltin;
         const BuiltinFlow **pbuiltin_flow;
         const BuiltinMacro **pbuiltin_macro;
@@ -1241,6 +1243,17 @@ static std::string extract_string(const Any &value) {
     }
 }
 
+static const char *extract_cstr(const Any &value) {
+    if (eq(value.type, Types::Rawstring)) {
+        return *value.pc_str;
+    } else if (eq(value.type, Types::String)) {
+        return value.str->ptr;
+    } else {
+        error("string expected");
+        return "";
+    }
+}
+
 static Symbol extract_symbol(const Any &value) {
     if (eq(value.type, Types::Symbol)) {
         return *value.symbol;
@@ -1470,9 +1483,11 @@ static const Table *extract_table(const Any &value) {
 //------------------------------------------------------------------------------
 
 struct Parameter {
+    // changes need to be mirrored to Types::PParameter
+
     Flow *parent;
     size_t index;
-    Type *parameter_type;
+    const Type *parameter_type;
     Symbol name;
 
     Parameter() :
@@ -1511,7 +1526,7 @@ struct Parameter {
         auto value = new Parameter();
         value->index = (size_t)-1;
         value->name = name;
-        value->parameter_type = nullptr;
+        value->parameter_type = Types::Any;
         return value;
     }
 };
@@ -1706,6 +1721,10 @@ public:
         return !arguments.empty();
     }
 
+    int64_t getUID() const {
+        return uid;
+    }
+
     std::string getRefRepr () const {
         return format("%s%s%" PRId64,
             ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
@@ -1734,14 +1753,12 @@ public:
 
 int64_t Flow::unique_id_counter = 1;
 
-std::string Parameter::getRefRepr () const {
-    auto parent = getParent();
-    return format("%s%s%s",
-        parent?
-            (get_string(wrap_ptr(Types::PFlow, parent)).c_str())
-            :ansi(ANSI_STYLE_ERROR, "<unbound>").c_str(),
-        ansi(ANSI_STYLE_OPERATOR,".").c_str(),
-        getReprName().c_str());
+static const Flow *extract_flow(const Any &value) {
+    if (eq(value.type, Types::PFlow)) {
+        return *value.pflow;
+    }
+    error("flow expected");
+    return nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -1896,31 +1913,38 @@ struct Frame {
     }
 };
 
+static const Frame *extract_frame(const Any &value) {
+    if (eq(value.type, Types::PFrame)) {
+        return *value.pframe;
+    }
+    error("frame expected");
+    return nullptr;
+}
+
 //------------------------------------------------------------------------------
 
 struct Closure {
-    const Flow *cont;
+    // changes here must be mirrored to Types::PClosure
+    const Flow *entry;
     Frame *frame;
-
-    static const Closure *create(
-        const Flow *cont,
-        Frame *frame) {
-        auto result = new Closure();
-        result->cont = cont;
-        result->frame = frame;
-        return result;
-    }
-
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "closure");
-        ss << " " << get_string(wrap_ptr(Types::PFlow, cont));
-        ss << " " << get_string(wrap_ptr(Types::PFrame, frame));
-        ss << ")";
-        return ss.str();
-    }
-
 };
+
+static const Closure *create_closure(
+    const Flow *entry,
+    Frame *frame) {
+    auto result = new Closure();
+    result->entry = entry;
+    result->frame = frame;
+    return result;
+}
+
+static const Closure *extract_closure(const Any &value) {
+    if (eq(value.type, Types::PClosure)) {
+        return *value.pclosure;
+    }
+    error("closure expected");
+    return nullptr;
+}
 
 //------------------------------------------------------------------------------
 
@@ -2257,13 +2281,11 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
     }
 }
 
-/*
-static std::string formatValue(Value *e, size_t depth=0, bool naked=false) {
+static std::string formatValue(const Any &e, size_t depth=0, bool naked=false) {
     std::stringstream ss;
     streamValue(ss, e, depth, naked);
     return ss.str();
 }
-*/
 
 static void printValue(const Any &e, size_t depth=0, bool naked=false) {
     streamValue(std::cout, e, depth, naked);
@@ -2533,6 +2555,14 @@ namespace Types {
         auto result = List::create_from_array(args);
         set_anchor(result, get_anchor(handler_frame));
         return wrap(result);
+    }
+
+    static bangra::Any _parameter_apply_type(const Type *self,
+        const std::vector<bangra::Any> &args) {
+        builtin_checkparams(args, 1, 1);
+        auto name = extract_symbol(args[0]);
+        //return wrap_ptr(Types::PParameter, Parameter::create(name));
+        return wrap(Parameter::create(name));
     }
 
     static bangra::Any type_array_at(const Type *self,
@@ -2920,6 +2950,7 @@ namespace Types {
         Type *tmp = Struct("type", true);
         tmp->tostring = _type_tostring;
         TType = tmp;
+        PType = Pointer(TType);
 
         TArray = Struct("array", true);
         TVector = Struct("vector", true);
@@ -2998,25 +3029,50 @@ namespace Types {
         _Table = tmp;
         PTable = Pointer(_Table);
 
-        tmp = Struct("Parameter", true);
-        tmp->tostring = _named_object_tostring<Parameter>;
-        PParameter = Pointer(tmp);
         tmp = Struct("Builtin", true);
         tmp->tostring = _named_object_tostring<Builtin>;
         PBuiltin = Pointer(tmp);
-        PBuiltinFlow = Pointer(Struct("BuiltinFlow", true));
+
+        tmp = Struct("BuiltinFlow", true);
+        tmp->tostring = _named_object_tostring<BuiltinMacro>;
+        PBuiltinFlow = Pointer(tmp);
+
         PFlow = Pointer(Struct("Flow", true));
+
         tmp = Struct("SpecialForm", true);
         tmp->tostring = _named_object_tostring<SpecialForm>;
         PSpecialForm = Pointer(tmp);
+
         tmp = Struct("BuiltinMacro", true);
         tmp->tostring = _named_object_tostring<BuiltinMacro>;
         PBuiltinMacro = Pointer(tmp);
+
         PFrame = Pointer(Struct("Frame", true));
-        PClosure = Pointer(Struct("Closure", true));
+
+        {
+            std::vector<const Type *> types = { PFlow, SizeT, PType, Symbol };
+            std::vector<std::string> names = { "flow", "index", "type", "name" };
+            tmp = Struct("Parameter", true);
+            tmp->tostring = _named_object_tostring<Parameter>;
+            _set_struct_field_types(tmp, types);
+            _set_field_names(tmp, names);
+
+            PParameter = Pointer(tmp);
+            tmp = const_cast<Type *>(PParameter);
+            tmp->apply_type = _parameter_apply_type;
+        }
+
+        {
+            std::vector<const Type *> types = { PFlow, PFrame };
+            std::vector<std::string> names = { "entry", "frame" };
+            tmp = Struct("Closure", true);
+            _set_struct_field_types(tmp, types);
+            _set_field_names(tmp, names);
+            PClosure = Pointer(tmp);
+        }
+
         PMacro = Pointer(Struct("Macro", true));
 
-        PType = Pointer(TType);
         Rawstring = Pointer(I8);
     }
 
@@ -3645,7 +3701,6 @@ struct Parser {
             return const_none;
         }
 
-        //printValue(result, 0, true);
         return strip(result);
     }
 
@@ -3777,16 +3832,17 @@ static FFI *ffi;
 
 typedef std::vector<Any> ILValueArray;
 
-Any evaluate(size_t argindex, Frame *frame, const Any &value) {
+Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     if (eq(value.type, Types::PParameter)) {
         auto param = *value.pparameter;
         auto cont = param->parent;
         if (cont) {
             // parameter is bound - attempt resolve
-            Frame *ptr = frame;
+            const Frame *ptr = frame;
             while (ptr) {
-                if (ptr->map.count(cont)) {
-                    auto &values = ptr->map[cont];
+                auto it = ptr->map.find(cont);
+                if (it != ptr->map.end()) {
+                    auto &values = it->second;
                     assert(param->index < values.size());
                     return values[param->index];
                 }
@@ -3801,9 +3857,8 @@ Any evaluate(size_t argindex, Frame *frame, const Any &value) {
             return value;
         else
             // create closure
-            return wrap_ptr(Types::PClosure, Closure::create(
-                *value.pflow,
-                frame));
+            return wrap_ptr(Types::PClosure,
+                create_closure(*value.pflow, const_cast<Frame *>(frame)));
     }
     return value;
 }
@@ -3858,7 +3913,7 @@ continue_execution:
                 auto closure = *callee.pclosure;
 
                 frame = closure->frame;
-                callee = wrap_ptr(Types::PFlow, closure->cont);
+                callee = wrap_ptr(Types::PFlow, closure->entry);
             }
 
             if (eq(callee.type, Types::PFlow)) {
@@ -4617,7 +4672,7 @@ static std::vector<Any> builtin_call_cc(const std::vector<Any> &args) {
 
 static Any builtin_repr(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
-    return wrap(get_string(args[0]));
+    return wrap(formatValue(args[0], 0, false));
 }
 
 static Any builtin_dump(const std::vector<Any> &args) {
@@ -4629,12 +4684,6 @@ static Any builtin_dump(const std::vector<Any> &args) {
 static Any builtin_tupleof(const std::vector<Any> &args) {
     builtin_checkparams(args, 0, -1);
     return wrap(args);
-}
-
-static Any builtin_parameter(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
-    auto name = extract_symbol(args[0]);
-    return wrap_ptr(Types::PParameter, Parameter::create(name));
 }
 
 static Any builtin_cons(const std::vector<Any> &args) {
@@ -4844,6 +4893,51 @@ template<bool (*F)(const Any &, const Any &)>
 static Any builtin_bool_binary_op(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     return wrap(F(args[0], args[1]));
+}
+
+static Any builtin_flow_parameter_count(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto flow = extract_flow(args[0]);
+    return wrap(flow->parameters.size());
+}
+
+static Any builtin_flow_parameter(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    auto flow = extract_flow(args[0]);
+    auto index = extract_integer(args[1]);
+    return wrap(flow->parameters[index]);
+}
+
+static Any builtin_flow_argument_count(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto flow = extract_flow(args[0]);
+    return wrap(flow->arguments.size());
+}
+
+static Any builtin_flow_argument(const std::vector<Any> &args) {
+    builtin_checkparams(args, 2, 2);
+    auto flow = extract_flow(args[0]);
+    auto index = extract_integer(args[1]);
+    return flow->arguments[index];
+}
+
+static Any builtin_flow_name(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto flow = extract_flow(args[0]);
+    return wrap_symbol(flow->name);
+}
+
+static Any builtin_flow_id(const std::vector<Any> &args) {
+    builtin_checkparams(args, 1, 1);
+    auto flow = extract_flow(args[0]);
+    return wrap(flow->getUID());
+}
+
+static Any builtin_frame_eval(const std::vector<Any> &args) {
+    builtin_checkparams(args, 3, 3);
+    auto frame = extract_frame(args[0]);
+    auto argindex = extract_integer(args[1]);
+    return evaluate(argindex, frame, args[2]);
 }
 
 //------------------------------------------------------------------------------
@@ -5414,6 +5508,8 @@ static void initGlobals () {
     setLocalString(env, "symbol", wrap(Types::Symbol));
     setLocalString(env, "list", wrap(Types::PList));
 
+    setLocalString(env, "parameter", wrap(Types::PParameter));
+
     setLocalString(env, "scope-parent-symbol", wrap_symbol(SYM_Parent));
     setLocalString(env, "scope-list-wildcard-symbol", wrap_symbol(SYM_ListWC));
     setLocalString(env, "scope-symbol-wildcard-symbol", wrap_symbol(SYM_SymbolWC));
@@ -5450,7 +5546,7 @@ static void initGlobals () {
     setBuiltin(env, "dump", builtin_dump);
     setBuiltin(env, "syntax-macro", builtin_syntax_macro);
     setBuiltin(env, "string", builtin_string);
-    setBuiltin(env, "parameter", builtin_parameter);
+
     //setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
     setBuiltin(env, "set-globals!", builtin_set_globals);
@@ -5464,6 +5560,15 @@ static void initGlobals () {
     setBuiltin(env, "list-load", builtin_loadlist);
     setBuiltin(env, "eval", builtin_eval);
     setBuiltin(env, "cstr", builtin_cstr);
+
+    setBuiltin(env, "flow-parameter-count", builtin_flow_parameter_count);
+    setBuiltin(env, "flow-parameter", builtin_flow_parameter);
+    setBuiltin(env, "flow-argument-count", builtin_flow_argument_count);
+    setBuiltin(env, "flow-argument", builtin_flow_argument);
+    setBuiltin(env, "flow-name", builtin_flow_name);
+    setBuiltin(env, "flow-id", builtin_flow_id);
+
+    setBuiltin(env, "frame-eval", builtin_frame_eval);
 
     setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
 
@@ -5538,11 +5643,19 @@ static void handleException(const Table *env, const Any &expr) {
     error("an exception was raised");
 }
 
-static Any compileFlow (const Table *env, const Any &expr) {
+// path must be resident
+static Any compileFlow (const Table *env, const Any &expr,
+    const char *path) {
     verifyValueKind(Types::PList, expr);
+
+    Anchor *anchor = new Anchor();
+    anchor->path = path;
+    anchor->lineno = 1;
+    anchor->column = 1;
+    anchor->offset = 0;
+
     auto rootit = ListIter(expr);
     auto expexpr = expand_expr_list(env, rootit);
-    auto anchor = find_valid_anchor(rootit.getList());
 
     auto mainfunc = Flow::create();
     auto ret = mainfunc->appendParameter(Parameter::create());
@@ -5554,15 +5667,19 @@ static Any compileFlow (const Table *env, const Any &expr) {
     return wrap(mainfunc);
 }
 
-static Any loadFile(const std::string &path) {
-    auto file = MappedFile::open(path.c_str());
+// return a resident copy
+static const char *resident_c_str(const std::string &path) {
+    return strdup(path.c_str());
+}
+
+// path must be resident
+static Any loadFile(const char *path) {
+    auto file = MappedFile::open(path);
     if (file) {
-        // keep a resident copy
-        char *pathcpy = strdup(path.c_str());
         bangra::Parser parser;
         return parser.parseMemory(
             file->strptr(), file->strptr() + file->size(),
-            pathcpy);
+            path);
     }
     return const_none;
 }
@@ -5570,18 +5687,20 @@ static Any loadFile(const std::string &path) {
 static Any builtin_loadlist(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     auto path = extract_string(args[0]);
-    return loadFile(path);
+    return loadFile(resident_c_str(path));
 }
 
 static Any builtin_eval(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 2);
+    builtin_checkparams(args, 1, 3);
     auto expr = args[0];
-    auto scope = (args.size() == 2)?extract_table(args[1]):globals;
-    return compileFlow(scope, expr);
+    auto scope = (args.size() > 1)?extract_table(args[1]):globals;
+    const char *path = (args.size() > 2)?extract_cstr(args[2]):"<eval>";
+
+    return compileFlow(scope, expr, path);
 }
 
-static bool compileMain (Any expr) {
-    execute({compileFlow(globals, expr)});
+static bool compileMain (Any expr, const char *path) {
+    execute({compileFlow(globals, expr, path)});
     return true;
 }
 
@@ -5676,10 +5795,11 @@ static bool compileStartupScript() {
     std::string path = format("%s.b", base);
     free(base);
 
-    Any expr = loadFile(path);
+    const char *cpath = resident_c_str(path);
+    Any expr = loadFile(cpath);
 
     if (!isnone(expr)) {
-        return bangra::compileMain(expr);
+        return bangra::compileMain(expr, cpath);
     }
 
     return true;
@@ -5732,6 +5852,7 @@ int bangra_main(int argc, char ** argv) {
     bangra::init();
 
     bangra::Any expr = bangra::const_none;
+    const char *cpath = "<?>";
 
     try {
 
@@ -5742,6 +5863,7 @@ int bangra_main(int argc, char ** argv) {
                 bangra_interpreter_path = strdup(loader.c_str());
 
                 expr = bangra::parseLoader(bangra_interpreter_path);
+                cpath = "<loader>";
             } else {
                 bangra_interpreter_path = strdup("");
             }
@@ -5801,6 +5923,7 @@ int bangra_main(int argc, char ** argv) {
                 if (sourcepath) {
                     bangra::Parser parser;
                     expr = parser.parseFile(sourcepath);
+                    cpath = sourcepath;
                 }
             }
         }
@@ -5808,7 +5931,7 @@ int bangra_main(int argc, char ** argv) {
         if (isnone(expr)) {
             return 1;
         } else {
-            bangra::compileMain(expr);
+            bangra::compileMain(expr, cpath);
         }
 
     } catch (const bangra::Any &any) {

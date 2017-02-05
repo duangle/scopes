@@ -33,6 +33,8 @@ let-syntax (scope)
             function (path)
                 eval
                     list-load path
+                    globals;
+                    path
         tupleof
             quote API
             import-c
@@ -466,6 +468,7 @@ let-syntax (scope)
                                     tupleof scope-parent-symbol
                                         globals;
                                     : module-path
+                                module-path
                         let content
                             fn;
                         set-key! (. bangra modules)
