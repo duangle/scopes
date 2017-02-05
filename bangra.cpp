@@ -2268,13 +2268,24 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         }
     } else {
         if (e.type == Types::Symbol) {
+            stream << ANSI_STYLE_KEYWORD;
             streamString(stream, extract_symbol_string(e), "[]{}()\"");
+            stream << ANSI_RESET;
         } else if (e.type == Types::String) {
+            stream << ANSI_STYLE_STRING;
             stream << '"';
             streamString(stream, extract_string(e), "\"");
             stream << '"';
+            stream << ANSI_RESET;
         } else {
-            stream << get_string(e);
+            auto s = get_string(e);
+            if (e.type == Types::Bool) {
+                stream << ANSI_STYLE_KEYWORD << s << ANSI_RESET;
+            } else if (is_integer_type(e.type)) {
+                stream << ANSI_STYLE_NUMBER << s << ANSI_RESET;
+            } else {
+                stream << s;
+            }
         }
         if (naked)
             stream << '\n';
@@ -2498,8 +2509,11 @@ namespace Types {
 
     static std::string _pointer_tostring(const Type *self,
         const bangra::Any &value) {
-        return format("(& %s)",
-            get_string(pointer_element(self, value)).c_str());
+        return format("%s%s %s%s",
+            ansi(ANSI_STYLE_COMMENT, "<").c_str(),
+            ansi(ANSI_STYLE_OPERATOR, "&").c_str(),
+            get_string(pointer_element(self, value)).c_str(),
+            ansi(ANSI_STYLE_COMMENT, ">").c_str());
     }
 
     static std::string _type_tostring(
@@ -2645,14 +2659,14 @@ namespace Types {
 
     static std::string _tuple_tostring(const Type *self, const bangra::Any &value) {
         std::stringstream ss;
-        ss << "<";
+        ss << ansi(ANSI_STYLE_COMMENT, "<");
         ss << ansi(ANSI_STYLE_KEYWORD, "tupleof");
         for (size_t i = 0; i < self->types.size(); i++) {
             auto offset = self->offsets[i];
             ss << " " << get_string(
                 wrap(self->types[i], (char *)value.ptr + offset));
         }
-        ss << ">";
+        ss << ansi(ANSI_STYLE_COMMENT, ">");
         return ss.str();
     }
 
@@ -5529,6 +5543,8 @@ static void initGlobals () {
 
     setLocalString(env, "none", const_none);
 
+    setLocalString(env, "support-ANSI?", wrap(support_ansi));
+
     setBuiltin(env, "globals", builtin_globals);
     setBuiltin(env, "print", builtin_print);
     setBuiltin(env, "repr", builtin_repr);
@@ -5550,11 +5566,8 @@ static void initGlobals () {
     setBuiltin(env, "syntax-macro", builtin_syntax_macro);
     setBuiltin(env, "string", builtin_string);
 
-    //setBuiltin(env, "empty?", builtin_is_empty);
     setBuiltin(env, "expand", builtin_expand);
     setBuiltin(env, "set-globals!", builtin_set_globals);
-    //setBuiltin(env, "list?", builtin_is_list);
-    //setBuiltin(env, "symbol?", builtin_is_symbol);
     //setBuiltin(env, "integer?", builtin_is_integer);
     //setBuiltin(env, "null?", builtin_is_null);
     //setBuiltin(env, "key?", builtin_is_key);

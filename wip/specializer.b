@@ -1,6 +1,60 @@
 # specializer: specializes and translates flow graph to LLVM
 
-let LAMBDA_CHAR "λ"
+function ANSI-color (num bright)
+    .. "\x1b["
+        string num
+        ? bright ";1m" "m"
+
+let
+    ANSI_RESET              (ANSI-color 0 false)
+    ANSI_COLOR_BLACK        (ANSI-color 30 false)
+    ANSI_COLOR_RED          (ANSI-color 31 false)
+    ANSI_COLOR_GREEN        (ANSI-color 32 false)
+    ANSI_COLOR_YELLOW       (ANSI-color 33 false)
+    ANSI_COLOR_BLUE         (ANSI-color 34 false)
+    ANSI_COLOR_MAGENTA      (ANSI-color 35 false)
+    ANSI_COLOR_CYAN         (ANSI-color 36 false)
+    ANSI_COLOR_GRAY60       (ANSI-color 37 false)
+
+    ANSI_COLOR_GRAY30       (ANSI-color 30 true)
+    ANSI_COLOR_XRED         (ANSI-color 31 true)
+    ANSI_COLOR_XGREEN       (ANSI-color 32 true)
+    ANSI_COLOR_XYELLOW      (ANSI-color 33 true)
+    ANSI_COLOR_XBLUE        (ANSI-color 34 true)
+    ANSI_COLOR_XMAGENTA     (ANSI-color 35 true)
+    ANSI_COLOR_XCYAN        (ANSI-color 36 true)
+    ANSI_COLOR_WHITE        (ANSI-color 37 true)
+
+let
+    ANSI_STYLE_STRING       ANSI_COLOR_XMAGENTA
+    ANSI_STYLE_NUMBER       ANSI_COLOR_XGREEN
+    ANSI_STYLE_KEYWORD      ANSI_COLOR_XBLUE
+    ANSI_STYLE_OPERATOR     ANSI_COLOR_XCYAN
+    ANSI_STYLE_INSTRUCTION  ANSI_COLOR_YELLOW
+    ANSI_STYLE_TYPE         ANSI_COLOR_XYELLOW
+    ANSI_STYLE_COMMENT      ANSI_COLOR_GRAY30
+    ANSI_STYLE_ERROR        ANSI_COLOR_XRED
+    ANSI_STYLE_LOCATION     ANSI_COLOR_XCYAN
+
+function ANSI-wrapper (code)
+    ? support-ANSI?
+        function (content)
+            .. code content ANSI_RESET
+        function (content) content
+let
+    style-string        (ANSI-wrapper ANSI_COLOR_XMAGENTA)
+    style-number        (ANSI-wrapper ANSI_COLOR_XGREEN)
+    style-keyword       (ANSI-wrapper ANSI_COLOR_XBLUE)
+    style-operator      (ANSI-wrapper ANSI_COLOR_XCYAN)
+    style-instruction   (ANSI-wrapper ANSI_COLOR_YELLOW)
+    style-type          (ANSI-wrapper ANSI_COLOR_XYELLOW)
+    style-comment       (ANSI-wrapper ANSI_COLOR_GRAY30)
+    style-error         (ANSI-wrapper ANSI_COLOR_XRED)
+    style-location      (ANSI-wrapper ANSI_COLOR_XCYAN)
+
+let
+    LAMBDA_CHAR
+        style-keyword "λ"
 
 function flow-label (aflow)
     .. LAMBDA_CHAR
@@ -10,7 +64,10 @@ function flow-label (aflow)
             flow-id aflow
 
 function closure-label (aclosure)
-    .. "<" (flow-label aclosure.entry) ">"
+    ..
+        style-comment "<"
+        flow-label aclosure.entry
+        style-comment ">"
 
 function flow-iter-arguments (aflow aframe)
     let acount
@@ -29,7 +86,7 @@ function flow-iter-arguments (aflow aframe)
         0
 
 function param-label (aparam)
-    .. "%"
+    .. (style-keyword "%")
         string aparam.name
         string aparam.index
 
@@ -41,7 +98,8 @@ function flow-decl-label (aflow aframe)
                     flow-parameter-count aflow
                 idx 0
                 s
-                    .. (flow-label aflow) " ("
+                    .. (flow-label aflow) " "
+                        style-operator "("
             loop (idx s)
                 if (idx < pcount)
                     let param
@@ -53,7 +111,8 @@ function flow-decl-label (aflow aframe)
                             ? (idx == 0) "" " "
                             param-label param
                 else
-                    s .. "):"
+                    .. s
+                        style-operator "):"
         do
             fold (flow-iter-arguments aflow aframe) ""
                 function (out k)
