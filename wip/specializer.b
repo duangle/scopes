@@ -2,67 +2,105 @@
 
 let LAMBDA_CHAR "λ"
 
-function flow-label (flow)
+function flow-label (aflow)
     .. LAMBDA_CHAR
         string
-            flow-name flow
+            flow-name aflow
         string
-            flow-id flow
+            flow-id aflow
 
-function dump-flow (frame flow)
-    print frame
+function closure-label (aclosure)
+    .. "<" (flow-label aclosure.entry) ">"
+
+function flow-iter-arguments (aflow aframe)
+    let acount
+        flow-argument-count aflow
+    tupleof
+        function (i)
+            if (i < acount)
+                tupleof
+                    structof
+                        : index i
+                        : argument
+                            frame-eval aframe i
+                                flow-argument aflow i
+                    i + 1
+            else none
+        0
+
+function param-label (aparam)
+    .. "%"
+        string aparam.name
+        string aparam.index
+
+function flow-decl-label (aflow aframe)
     ..
         do
-            let pcount
-                flow-parameter-count flow
-            let idx 0
-            let s
-                .. (flow-label flow) " ("
+            let
+                pcount
+                    flow-parameter-count aflow
+                idx 0
+                s
+                    .. (flow-label aflow) " ("
             loop (idx s)
                 if (idx < pcount)
                     let param
-                        flow-parameter flow idx
+                        flow-parameter aflow idx
                     # param.flow param.index param.type
                     repeat
                         idx + 1
                         .. s
                             ? (idx == 0) "" " "
-                            \ "%" (string param.index) #":" (string param.type)
+                            param-label param
                 else
                     s .. "):"
         do
-            let acount
-                flow-argument-count flow
-            let idx 0
-            let s ""
-            loop (idx s)
-                if (idx < acount)
-                    let arg
-                        frame-eval frame idx
-                            flow-argument flow idx
-                    repeat
-                        idx + 1
-                        .. s " "
-                            if ((typeof arg) == parameter)
-                                ..
-                                    ? (arg.flow == flow) ""
-                                        .. (flow-label arg.flow) "."
-                                    "%"
-                                    string arg.index
-                            else
-                                repr arg
-                else s
+            fold (flow-iter-arguments aflow aframe) ""
+                function (out k)
+                    let
+                        arg k.argument
+                    let argtype
+                        typeof arg
+                    .. out " "
+                        if (argtype == parameter)
+                            ..
+                                ? (arg.flow == aflow) ""
+                                    .. (flow-label arg.flow) "."
+                                param-label arg
+                        elseif (argtype == closure)
+                            closure-label arg
+                        elseif (argtype == flow)
+                            flow-label arg
+                        else
+                            repr arg
 
-function dump-function (f)
-    dump-flow f.frame f.entry
+function dump-function (aclosure)
+    function dump-flow (aflow aframe)
+        fold (flow-iter-arguments aflow aframe) true
+            function (out k)
+                let arg k.argument
+                let argtype
+                    typeof arg
+                if (argtype == closure)
+                    dump-function arg
+                elseif (argtype == flow)
+                    dump-flow arg aframe
+                out
+        print
+            flow-decl-label aflow aframe
+    dump-flow aclosure.entry aclosure.frame
 
 #### test #####
 
 let HELLO_WORLD
     .. "hello " "world"
 function test1 (x)
+    let
+        k
+            not x
+        t true
     print
-        ? x HELLO_WORLD ""
+        ? k HELLO_WORLD ""
 
 print
     dump-function test1

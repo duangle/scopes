@@ -43,6 +43,7 @@ local function bangra_symbols()
     TYPES = splitstr(getprop("types.bangra_lang") or
         "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void"
             .. " rawstring opaque half float double symbol list parameter"
+            .. " frame closure flow"
         )
     }
 end

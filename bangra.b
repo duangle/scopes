@@ -520,6 +520,59 @@ let-syntax (scope)
                                 qquote-1 (@ expr 0 1 0)
                                 qquote-1 (@ expr 0 1)
                             @ expr 1
+        : let
+            # support for multiple declarations in one let scope
+            syntax-macro
+                function (scope expr)
+                    let args (@ expr 0 1)
+                    if (symbol? (@ args 0))
+                        # regular form
+                        cons
+                            cons let args
+                            @ expr 1
+                    else
+                        # prepare quotable values from declarations
+                        function handle-pairs (pairs)
+                            if (empty? pairs)
+                                tupleof
+                                    list;
+                                    list;
+                                    list;
+                            else
+                                let pair
+                                    @ pairs 0
+                                let name
+                                    @ pair 0
+                                let value
+                                    @ pair 1 0
+                                let param
+                                    parameter name
+                                let cells
+                                    handle-pairs
+                                        @ pairs 1
+                                tupleof
+                                    cons
+                                        list tupleof (list quote name) param
+                                        @ cells 0
+                                    cons param (@ cells 1)
+                                    cons value (@ cells 2)
+
+                        let cells
+                            handle-pairs args
+                        let scope-name
+                            quote scope
+                        list
+                            list let-syntax (list scope-name)
+                                cons table
+                                    cons
+                                        list tupleof (list quote scope-parent-symbol) scope-name
+                                        @ cells 0
+                            cons
+                                cons function
+                                    cons
+                                        @ cells 1
+                                        @ expr 1
+                                @ cells 2
 
         tupleof scope-list-wildcard-symbol
             function (scope topexpr)

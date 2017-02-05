@@ -53,6 +53,19 @@ do
     assert (z.w == 5)
     assert (z.q == 303)
 
+do
+    let
+        x 0
+        y 1
+        z 2
+    assert
+        and
+            and
+                x == 0
+                y == 1
+            z == 2
+        "multideclaration failed"
+
 qquote-test :=
     qquote
         print

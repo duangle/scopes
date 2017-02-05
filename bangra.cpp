@@ -5508,7 +5508,10 @@ static void initGlobals () {
     setLocalString(env, "symbol", wrap(Types::Symbol));
     setLocalString(env, "list", wrap(Types::PList));
 
+    setLocalString(env, "closure", wrap(Types::PClosure));
     setLocalString(env, "parameter", wrap(Types::PParameter));
+    setLocalString(env, "frame", wrap(Types::PFrame));
+    setLocalString(env, "flow", wrap(Types::PFlow));
 
     setLocalString(env, "scope-parent-symbol", wrap_symbol(SYM_Parent));
     setLocalString(env, "scope-list-wildcard-symbol", wrap_symbol(SYM_ListWC));
