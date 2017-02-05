@@ -85,7 +85,7 @@ function dump-function (aclosure)
                     dump-function arg
                 elseif (argtype == flow)
                     dump-flow arg aframe
-                out
+                true
         print
             flow-decl-label aflow aframe
     dump-flow aclosure.entry aclosure.frame

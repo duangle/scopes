@@ -191,14 +191,21 @@ let-syntax (scope)
                         error "symbol expected"
 
         : function # (function [name] (param ...) body ...)
-            syntax-single-macro
+            syntax-macro
                 function (scope expr)
-                    ? (symbol? (@ expr 1 0))
-                        list let
-                            @ expr 1 0
+                    let decl
+                        (@ expr 0 1 0)
+                    ? (symbol? decl)
+                        cons
+                            list let decl
+                                cons function
+                                    @ expr 0 2
+                            ? (empty? (@ expr 1))
+                                list decl
+                                @ expr 1
+                        cons
                             cons function
-                                @ expr 2
-                        cons function
+                                @ expr 0 1
                             @ expr 1
         : and
             syntax-single-macro
@@ -483,13 +490,35 @@ let-syntax (scope)
         else
             content
 
+    function make-expand-multi-op-ltr (op)
+        # (op a b c ...) -> (op (op (op a b) c) ...)
+        syntax-single-macro
+            function (scope expr)
+                let tail
+                    @ expr 1
+                loop (tail)
+                    let rest
+                        @ tail 2
+                    if (empty? rest)
+                        cons op tail
+                    else
+                        repeat
+                            cons
+                                list op
+                                    @ tail 0
+                                    @ tail 1 0
+                                rest
+
     table
         tupleof scope-parent-symbol scope
         : fold
         : iter
         : bangra
         : require find-module
-
+        : and
+            make-expand-multi-op-ltr and
+        : or
+            make-expand-multi-op-ltr or
         # quasiquote support
         # (qquote expr [...])
         : qquote

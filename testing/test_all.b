@@ -66,6 +66,48 @@ do
             z == 2
         "multideclaration failed"
 
+assert
+    ==
+        and
+            do
+                print "and#1"
+                true
+            do
+                print "and#2"
+                true
+            do
+                print "and#3"
+                true
+            do
+                print "and#4"
+                false
+            do
+                error "should never see this"
+                false
+        false
+    "'and' for more than two arguments failed"
+
+assert
+    ==
+        or
+            do
+                print "or#1"
+                false
+            do
+                print "or#2"
+                false
+            do
+                print "or#3"
+                false
+            do
+                print "or#4"
+                true
+            do
+                error "should never see this"
+                true
+        true
+    "'or' for more than two arguments failed"
+
 qquote-test :=
     qquote
         print
