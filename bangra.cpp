@@ -522,7 +522,6 @@ struct Any {
         const String *str;
         const Symbol *symbol;
 
-        const BuiltinFunction *pbuiltin;
         const BuiltinFlowFunction *pbuiltin_flow;
         const BuiltinMacroFunction *pbuiltin_macro;
         const SpecialFormFunction *pspecial_form;
@@ -732,7 +731,6 @@ namespace Types {
     static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
-    static const Type *PBuiltin;
     static const Type *PBuiltinFlow;
     static const Type *PFlow;
     static const Type *PSpecialForm;
@@ -2932,10 +2930,6 @@ namespace Types {
         _Table = tmp;
         PTable = Pointer(_Table);
 
-        tmp = Struct("Builtin", true);
-        tmp->tostring = _named_ptr_tostring;
-        PBuiltin = Pointer(tmp);
-
         tmp = Struct("BuiltinFlow", true);
         tmp->tostring = _named_ptr_tostring;
         PBuiltinFlow = Pointer(tmp);
@@ -3843,19 +3837,6 @@ continue_execution:
                     arguments[i] = evaluate(i, frame,
                         flow->arguments[i]);
                 }
-            } else if (eq(callee.type, Types::PBuiltin)) {
-                auto cb = *callee.pbuiltin;
-                Any closure = arguments.back();
-                arguments.pop_back();
-                arguments.erase(arguments.begin());
-                auto _oldframe = handler_frame;
-                handler_frame = frame;
-                Any result = cb(arguments);
-                handler_frame = _oldframe;
-                // generate fitting resume
-                arguments.resize(2);
-                arguments[0] = closure;
-                arguments[1] = result;
             } else if (eq(callee.type, Types::PBuiltinFlow)) {
                 auto cb = *callee.pbuiltin_flow;
                 auto _oldframe = handler_frame;
@@ -4479,6 +4460,16 @@ static Table *importCModule (
 
 static const Table *globals = nullptr;
 
+template<BuiltinFunction F>
+static std::vector<Any> builtin_call(const std::vector<Any> &args) {
+    std::vector<Any> arguments = args;
+    Any closure = arguments.back();
+    arguments.pop_back();
+    arguments.erase(arguments.begin());
+    Any result = F(arguments);
+    return { closure, result };
+}
+
 static Any builtin_string(const std::vector<Any> &args) {
     builtin_checkparams(args, 1, 1);
     return pstring(get_string(args[0]));
@@ -4867,8 +4858,8 @@ static void setLocalString(Table *scope, const std::string &name, const Any &val
     setLocal(scope, get_symbol(name), value);
 }
 
-static void setBuiltin(
-    Table *scope, const std::string &name, BuiltinMacroFunction func) {
+template<BuiltinMacroFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
     assert(scope);
     auto sym = get_symbol(name);
     set_ptr_symbol((void *)func, sym);
@@ -4876,8 +4867,8 @@ static void setBuiltin(
         wrap_ptr(Types::PBuiltinMacro, (void *)func));
 }
 
-static void setBuiltin(
-    Table *scope, const std::string &name, SpecialFormFunction func) {
+template<SpecialFormFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
     assert(scope);
     auto sym = get_symbol(name);
     set_ptr_symbol((void *)func, sym);
@@ -4885,22 +4876,18 @@ static void setBuiltin(
         wrap_ptr(Types::PSpecialForm, (void *)func));
 }
 
-static void setBuiltin(
-    Table *scope, const std::string &name, BuiltinFunction func) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym,
-        wrap_ptr(Types::PBuiltin, (void *)func));
-}
-
-static void setBuiltin(
-    Table *scope, const std::string &name, BuiltinFlowFunction func) {
+template<BuiltinFlowFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
     assert(scope);
     auto sym = get_symbol(name);
     set_ptr_symbol((void *)func, sym);
     setLocal(scope, sym,
         wrap_ptr(Types::PBuiltinFlow, (void *)func));
+}
+
+template<BuiltinFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    setBuiltin< builtin_call<func> >(scope, name);
 }
 
 /*
@@ -5373,15 +5360,15 @@ static void initGlobals () {
 
     //setLocalString(env, "globals", wrap(env));
 
-    setBuiltin(env, "form:call", compile_call);
-    setBuiltin(env, "form:function", compile_function);
-    setBuiltin(env, "form:quote", compile_quote);
-    setBuiltin(env, "do", compile_do);
+    setBuiltin<compile_call>(env, "form:call");
+    setBuiltin<compile_function>(env, "form:function");
+    setBuiltin<compile_quote>(env, "form:quote");
+    setBuiltin<compile_do>(env, "do");
 
-    setBuiltin(env, "function", expand_function);
-    setBuiltin(env, "quote", expand_quote);
-    setBuiltin(env, "let-syntax", expand_let_syntax);
-    setBuiltin(env, "escape", expand_escape);
+    setBuiltin<expand_function>(env, "function");
+    setBuiltin<expand_quote>(env, "quote");
+    setBuiltin<expand_let_syntax>(env, "let-syntax");
+    setBuiltin<expand_escape>(env, "escape");
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));
@@ -5435,89 +5422,75 @@ static void initGlobals () {
 
     setLocalString(env, "support-ANSI?", wrap(support_ansi));
 
-    setBuiltin(env, "globals", builtin_globals);
-    setBuiltin(env, "print", builtin_print);
-    setBuiltin(env, "repr", builtin_repr);
-    setBuiltin(env, "cfunction", builtin_cfunction);
-    setBuiltin(env, "pointer", builtin_pointer);
-    setBuiltin(env, "tupleof", builtin_tupleof);
-    setBuiltin(env, "cons", builtin_cons);
-    setBuiltin(env, "structof", builtin_structof);
-    setBuiltin(env, "table", builtin_table);
-    setBuiltin(env, "table-join", builtin_table_join);
-    setBuiltin(env, "set-key!", builtin_set_key);
-    setBuiltin(env, "next-key", builtin_next_key);
-    setBuiltin(env, "typeof", builtin_typeof);
-    setBuiltin(env, "external", builtin_external);
-    setBuiltin(env, "import-c", builtin_import_c);
-    setBuiltin(env, "branch", builtin_branch);
-    setBuiltin(env, "call/cc", builtin_call_cc);
-    setBuiltin(env, "dump", builtin_dump);
-    setBuiltin(env, "syntax-macro", builtin_syntax_macro);
-    setBuiltin(env, "string", builtin_string);
+    setBuiltin<builtin_globals>(env, "globals");
+    setBuiltin<builtin_print>(env, "print");
+    setBuiltin<builtin_repr>(env, "repr");
+    setBuiltin<builtin_cfunction>(env, "cfunction");
+    setBuiltin<builtin_pointer>(env, "pointer");
+    setBuiltin<builtin_tupleof>(env, "tupleof");
+    setBuiltin<builtin_cons>(env, "cons");
+    setBuiltin<builtin_structof>(env, "structof");
+    setBuiltin<builtin_table>(env, "table");
+    setBuiltin<builtin_table_join>(env, "table-join");
+    setBuiltin<builtin_set_key>(env, "set-key!");
+    setBuiltin<builtin_next_key>(env, "next-key");
+    setBuiltin<builtin_typeof>(env, "typeof");
+    setBuiltin<builtin_external>(env, "external");
+    setBuiltin<builtin_import_c>(env, "import-c");
+    setBuiltin<builtin_branch>(env, "branch");
+    setBuiltin<builtin_call_cc>(env, "call/cc");
+    setBuiltin<builtin_dump>(env, "dump");
+    setBuiltin<builtin_syntax_macro>(env, "syntax-macro");
+    setBuiltin<builtin_string>(env, "string");
 
-    setBuiltin(env, "expand", builtin_expand);
-    setBuiltin(env, "set-globals!", builtin_set_globals);
-    //setBuiltin(env, "integer?", builtin_is_integer);
-    //setBuiltin(env, "null?", builtin_is_null);
-    //setBuiltin(env, "key?", builtin_is_key);
-    setBuiltin(env, "error", builtin_error);
-    setBuiltin(env, "length", builtin_length);
-    setBuiltin(env, "list-load", builtin_loadlist);
-    setBuiltin(env, "eval", builtin_eval);
-    setBuiltin(env, "cstr", builtin_cstr);
+    setBuiltin<builtin_expand>(env, "expand");
+    setBuiltin<builtin_set_globals>(env, "set-globals!");
+    //setBuiltin<builtin_is_integer>(env, "integer?");
+    //setBuiltin<builtin_is_null>(env, "null?");
+    //setBuiltin<builtin_is_key>(env, "key?");
+    setBuiltin<builtin_error>(env, "error");
+    setBuiltin<builtin_length>(env, "length");
+    setBuiltin<builtin_loadlist>(env, "list-load");
+    setBuiltin<builtin_eval>(env, "eval");
+    setBuiltin<builtin_cstr>(env, "cstr");
 
-    setBuiltin(env, "flow-parameter-count", builtin_flow_parameter_count);
-    setBuiltin(env, "flow-parameter", builtin_flow_parameter);
-    setBuiltin(env, "flow-argument-count", builtin_flow_argument_count);
-    setBuiltin(env, "flow-argument", builtin_flow_argument);
-    setBuiltin(env, "flow-name", builtin_flow_name);
-    setBuiltin(env, "flow-id", builtin_flow_id);
+    setBuiltin<builtin_flow_parameter_count>(env, "flow-parameter-count");
+    setBuiltin<builtin_flow_parameter>(env, "flow-parameter");
+    setBuiltin<builtin_flow_argument_count>(env, "flow-argument-count");
+    setBuiltin<builtin_flow_argument>(env, "flow-argument");
+    setBuiltin<builtin_flow_name>(env, "flow-name");
+    setBuiltin<builtin_flow_id>(env, "flow-id");
 
-    setBuiltin(env, "frame-eval", builtin_frame_eval);
+    setBuiltin<builtin_frame_eval>(env, "frame-eval");
 
-    setBuiltin(env, "@", builtin_variadic_ltr<builtin_at>);
+    setBuiltin< builtin_variadic_ltr<builtin_at> >(env, "@");
 
-    setBuiltin(env, "slice", builtin_slice);
+    setBuiltin<builtin_slice>(env, "slice");
 
-    setBuiltin(env, "+",
-        builtin_variadic_ltr< builtin_binary_op<add> >);
-    setBuiltin(env, "-",
-        builtin_unary_binary_op<neg, sub>);
-    setBuiltin(env, "*",
-        builtin_variadic_ltr< builtin_binary_op<mul> >);
-    setBuiltin(env, "/",
-        builtin_unary_binary_op<rcp, div>);
-    setBuiltin(env, "%",
-        builtin_binary_op<mod>);
+    setBuiltin< builtin_variadic_ltr< builtin_binary_op<add> > >(env, "+");
+    setBuiltin< builtin_unary_binary_op<neg, sub> >(env, "-");
+    setBuiltin< builtin_variadic_ltr< builtin_binary_op<mul> > >(env, "*");
+    setBuiltin< builtin_unary_binary_op<rcp, div> >(env, "/");
+    setBuiltin< builtin_binary_op<mod> >(env, "%");
 
-    setBuiltin(env, "..",
-        builtin_variadic_rtl<builtin_binary_op<concat> >);
+    setBuiltin< builtin_variadic_rtl<builtin_binary_op<concat> > >(env, "..");
 
-    setBuiltin(env, "&",
-        builtin_binary_op<bit_and>);
-    setBuiltin(env, "|",
-        builtin_variadic_ltr< builtin_binary_op<bit_or> >);
-    setBuiltin(env, "^",
-        builtin_binary_op<bit_xor>);
-    setBuiltin(env, "~",
-        builtin_unary_op<bit_not>);
+    setBuiltin< builtin_binary_op<bit_and> >(env, "&");
+    setBuiltin< builtin_variadic_ltr< builtin_binary_op<bit_or> > >(env, "|");
+    setBuiltin< builtin_binary_op<bit_xor> >(env, "^");
+    setBuiltin< builtin_unary_op<bit_not> >(env, "~");
 
-    setBuiltin(env, "<<",
-        builtin_binary_op<lshift>);
-    setBuiltin(env, ">>",
-        builtin_binary_op<rshift>);
+    setBuiltin< builtin_binary_op<lshift> >(env, "<<");
+    setBuiltin< builtin_binary_op<rshift> >(env, ">>");
 
-    setBuiltin(env, "not",
-        builtin_unary_op<bool_not>);
+    setBuiltin< builtin_unary_op<bool_not> >(env, "not");
 
-    setBuiltin(env, "==", builtin_bool_binary_op<eq>);
-    setBuiltin(env, "!=", builtin_bool_binary_op<ne>);
-    setBuiltin(env, ">", builtin_bool_binary_op<gt>);
-    setBuiltin(env, ">=", builtin_bool_binary_op<ge>);
-    setBuiltin(env, "<", builtin_bool_binary_op<lt>);
-    setBuiltin(env, "<=", builtin_bool_binary_op<le>);
-
+    setBuiltin< builtin_bool_binary_op<eq> >(env, "==");
+    setBuiltin< builtin_bool_binary_op<ne> >(env, "!=");
+    setBuiltin< builtin_bool_binary_op<gt> >(env, ">");
+    setBuiltin< builtin_bool_binary_op<ge> >(env, ">=");
+    setBuiltin< builtin_bool_binary_op<lt> >(env, "<");
+    setBuiltin< builtin_bool_binary_op<le> >(env, "<=");
 }
 
 static void init() {
