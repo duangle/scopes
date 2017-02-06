@@ -494,8 +494,9 @@ struct Slice {
 
 typedef Slice<char> String;
 
-typedef Any (*BuiltinFunction)(const std::vector<Any> &args);
-typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
+typedef Any (*BuiltinFunction)(const Any *args, size_t argcount);
+typedef std::vector<Any> (*BuiltinFlowFunction)(
+    const Any *args, size_t argcount);
 typedef Cursor (*BuiltinMacroFunction)(const Table *, const List *);
 typedef Any (*SpecialFormFunction)(const List *);
 
@@ -1885,16 +1886,15 @@ static Any wrap(Table *table) {
     return wrap_ptr(Types::PTable, table);
 }
 
-static Any wrap(
-    const std::vector<Any> &args) {
-
+static Any wrap(const Any *args, size_t argcount) {
     std::vector<const Type *> types;
-    for (auto &arg : args) {
-        types.push_back(arg.type);
+    types.resize(argcount);
+    for (size_t i = 0; i < argcount; ++i) {
+        types[i] = args[i].type;
     }
     const Type *type = Types::Tuple(types);
     char *data = (char *)malloc(get_size(type));
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (size_t i = 0; i < argcount; ++i) {
         auto elemtype = get_type(type, i);
         auto offset = get_offset(type, i);
         auto srcptr = args[i].ptr;
@@ -1910,6 +1910,11 @@ static Any wrap(
     return wrap(type, data);
 }
 
+static Any wrap(
+    const std::vector<Any> &args) {
+    return wrap(&args[0], args.size());
+}
+
 static Any wrap(double value) {
     return real(Types::R64, value);
 }
@@ -1918,12 +1923,12 @@ static Any wrap(const std::string &s) {
     return pstring(s);
 }
 
-static bool builtin_checkparams (const std::vector<Any> &args,
+static bool builtin_checkparams (size_t count,
     int mincount, int maxcount, int skip = 0) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
 
-    int argcount = (int)args.size() - skip;
+    int argcount = (int)count - skip;
 
     if ((maxcount >= 0) && (argcount > maxcount)) {
         error("excess argument. At most %i arguments expected", maxcount);
@@ -1934,6 +1939,11 @@ static bool builtin_checkparams (const std::vector<Any> &args,
         return false;
     }
     return true;
+}
+
+static bool builtin_checkparams (const std::vector<Any> &args,
+    int mincount, int maxcount, int skip = 0) {
+    return builtin_checkparams(args.size(), mincount, maxcount, skip);
 }
 
 static void error (const char *format, ...) {
@@ -3841,7 +3851,7 @@ continue_execution:
                 auto cb = *callee.pbuiltin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                arguments = cb(arguments);
+                arguments = cb(&arguments[0], arguments.size());
                 handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
                 auto cb = *callee.ptype;
@@ -4461,31 +4471,29 @@ static Table *importCModule (
 static const Table *globals = nullptr;
 
 template<BuiltinFunction F>
-static std::vector<Any> builtin_call(const std::vector<Any> &args) {
-    std::vector<Any> arguments = args;
-    Any closure = arguments.back();
-    arguments.pop_back();
-    arguments.erase(arguments.begin());
-    Any result = F(arguments);
-    return { closure, result };
+static std::vector<Any> builtin_call(const Any *args, size_t argcount) {
+    assert(argcount >= 2);
+    // truncate head and continuation tail argument
+    Any result = F(args + 1, argcount - 2);
+    return { args[argcount - 1], result };
 }
 
-static Any builtin_string(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_string(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     return pstring(get_string(args[0]));
 }
 
-static Any builtin_cstr(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_cstr(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     if (!eq(args[0].type, Types::Rawstring))
         error("rawstring expected");
     const char *str = *args[0].pc_str;
     return wrap(Types::String, alloc_slice<char>(str, strlen(str)));
 }
 
-static Any builtin_print(const std::vector<Any> &args) {
-    builtin_checkparams(args, 0, -1);
-    for (size_t i = 0; i < args.size(); ++i) {
+static Any builtin_print(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, -1);
+    for (size_t i = 0; i < argcount; ++i) {
         if (i != 0)
             std::cout << " ";
         auto &arg = args[i];
@@ -4495,35 +4503,23 @@ static Any builtin_print(const std::vector<Any> &args) {
     return const_none;
 }
 
-static Any builtin_globals(const std::vector<Any> &args) {
-    builtin_checkparams(args, 0, 0);
+static Any builtin_globals(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, 0);
     return wrap(globals);
 }
 
-static Any builtin_at(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_at(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     return at(args[0], args[1]);
 }
 
-/*
-static Any builtin_eq(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
-    return wrap(eq(args[0], args[1]));
-}
-
-static Any builtin_ne(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
-    return wrap(ne(args[0], args[1]));
-}
-*/
-
-static Any builtin_length(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_length(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     return wrap(length(args[0]));
 }
 
-static Any builtin_slice(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 3);
+static Any builtin_slice(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 3);
     int64_t i0;
     int64_t i1;
     int64_t l = (int64_t)length(args[0]);
@@ -4534,7 +4530,7 @@ static Any builtin_slice(const std::vector<Any> &args) {
     if (i0 < 0)
         i0 += l;
     i0 = std::min(std::max(i0, (int64_t)0), l);
-    if (args.size() > 2) {
+    if (argcount > 2) {
         if (!is_integer_type(args[2].type)) {
             error("integer expected");
         }
@@ -4549,8 +4545,8 @@ static Any builtin_slice(const std::vector<Any> &args) {
     return slice(args[0], (size_t)i0, (size_t)i1);
 }
 
-static std::vector<Any> builtin_branch(const std::vector<Any> &args) {
-    builtin_checkparams(args, 4, 4, 1);
+static std::vector<Any> builtin_branch(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 4, 4, 1);
     auto cond = extract_bool(args[1]);
     if (cond) {
         return { args[2], args[4] };
@@ -4559,29 +4555,29 @@ static std::vector<Any> builtin_branch(const std::vector<Any> &args) {
     }
 }
 
-static std::vector<Any> builtin_call_cc(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2, 1);
+static std::vector<Any> builtin_call_cc(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2, 1);
     return { args[1], args[2], args[2] };
 }
 
-static Any builtin_repr(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_repr(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     return wrap(formatValue(args[0], 0, false));
 }
 
-static Any builtin_dump(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_dump(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     printValue(args[0], 0, true);
     return args[0];
 }
 
-static Any builtin_tupleof(const std::vector<Any> &args) {
-    builtin_checkparams(args, 0, -1);
-    return wrap(args);
+static Any builtin_tupleof(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, -1);
+    return wrap(args, argcount);
 }
 
-static Any builtin_cons(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_cons(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     auto &at = args[0];
     auto next = args[1];
     verifyValueKind(Types::PList, next);
@@ -4589,18 +4585,18 @@ static Any builtin_cons(const std::vector<Any> &args) {
         get_anchor(handler_frame)));
 }
 
-static Any builtin_structof(const std::vector<Any> &args) {
-    builtin_checkparams(args, 0, -1);
+static Any builtin_structof(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, -1);
     std::vector<Symbol> names;
+    names.resize(argcount);
     std::vector<Any> values;
-    for (size_t i = 0; i < args.size(); ++i) {
+    values.resize(argcount);
+    for (size_t i = 0; i < argcount; ++i) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
             error("tuple must have exactly two elements");
-        auto name = extract_symbol(pair[0]);
-        names.push_back(name);
-        auto value = pair[1];
-        values.push_back(value);
+        names[i] = extract_symbol(pair[0]);
+        values[i] = pair[1];
     }
 
     Any t = wrap(values);
@@ -4612,12 +4608,12 @@ static Any builtin_structof(const std::vector<Any> &args) {
     return wrap(struct_type, t.ptr);
 }
 
-static Any builtin_table(const std::vector<Any> &args) {
-    builtin_checkparams(args, 0, -1);
+static Any builtin_table(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, -1);
 
     auto t = new_table();
 
-    for (size_t i = 0; i < args.size(); ++i) {
+    for (size_t i = 0; i < argcount; ++i) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
             error("tuple must have exactly two elements");
@@ -4629,8 +4625,8 @@ static Any builtin_table(const std::vector<Any> &args) {
     return wrap(t);
 }
 
-static Any builtin_table_join(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_table_join(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
 
     auto a = extract_table(args[0]);
     auto b = extract_table(args[1]);
@@ -4644,8 +4640,8 @@ static Any builtin_table_join(const std::vector<Any> &args) {
     return wrap(t);
 }
 
-static Any builtin_set_key(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_set_key(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
 
     auto t = const_cast<Table *>(extract_table(args[0]));
     auto pair = extract_tuple(args[1]);
@@ -4657,8 +4653,8 @@ static Any builtin_set_key(const std::vector<Any> &args) {
     return const_none;
 }
 
-static Any builtin_next_key(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_next_key(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
 
     auto t = extract_table(args[0]);
     Table::map_type::const_iterator it;
@@ -4674,21 +4670,21 @@ static Any builtin_next_key(const std::vector<Any> &args) {
     return wrap(result);
 }
 
-static Any builtin_syntax_macro(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_syntax_macro(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     verifyValueKind(Types::PClosure, args[0]);
     return wrap_ptr(
         Types::PMacro,
         Macro::create(args[0]));
 }
 
-static Any builtin_typeof(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_typeof(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     return wrap(args[0].type);
 }
 
-static Any builtin_cfunction(const std::vector<Any> &args) {
-    builtin_checkparams(args, 3, 3);
+static Any builtin_cfunction(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 3, 3);
     const Type *rettype = extract_type(args[0]);
     auto params = extract_tuple(args[1]);
     bool vararg = extract_bool(args[2]);
@@ -4701,22 +4697,22 @@ static Any builtin_cfunction(const std::vector<Any> &args) {
     return wrap(Types::CFunction(rettype, Types::Tuple(paramtypes), vararg));
 }
 
-static Any builtin_pointer(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_pointer(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     const Type *type = extract_type(args[0]);
     return wrap(Types::Pointer(type));
 }
 
-static Any builtin_error(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_error(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     std::string msg = extract_string(args[0]);
     error("%s", msg.c_str());
     return const_none;
 }
 
 // (import-c const-path (tupleof const-string ...))
-static Any builtin_import_c(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_import_c(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     std::string path = extract_string(args[0]);
     auto compile_args = extract_tuple(args[1]);
     std::vector<std::string> cargs;
@@ -4726,8 +4722,8 @@ static Any builtin_import_c(const std::vector<Any> &args) {
     return wrap_ptr(Types::PTable, bangra::importCModule(path, cargs));
 }
 
-static Any builtin_external(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_external(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     auto sym = extract_symbol(args[0]);
     auto type = extract_type(args[1]);
     void *ptr = get_c_symbol(NULL, get_symbol_name(sym).c_str());
@@ -4740,37 +4736,38 @@ static Any builtin_external(const std::vector<Any> &args) {
 }
 
 template<BuiltinFunction F>
-static Any builtin_variadic_ltr(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, -1);
-    size_t k = args.size();
-    Any result = F({args[0], args[1]});
-    for (size_t i = 2; i < k; ++i) {
-        result = F({result, args[i]});
+static Any builtin_variadic_ltr(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, -1);
+
+    Any result = F(args, 2);
+    for (size_t i = 2; i < argcount; ++i) {
+        Any subargs[] = { result, args[i] };
+        result = F(subargs, 2);
     }
     return result;
 }
 
 template<BuiltinFunction F>
-static Any builtin_variadic_rtl(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, -1);
-    size_t k = args.size();
-    Any result = args[k - 1];
-    for (size_t i = 2; i <= k; ++i) {
-        result = F({args[k - i], result});
+static Any builtin_variadic_rtl(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, -1);
+    Any result = args[argcount - 1];
+    for (size_t i = 2; i <= argcount; ++i) {
+        Any subargs[] = {args[argcount - i], result};
+        result = F(subargs, 2);
     }
     return result;
 }
 
 template<Any (*F)(const Any &)>
-static Any builtin_unary_op(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_unary_op(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     return F(args[0]);
 }
 
 template<Any (*F1)(const Any &), Any (*F2)(const Any &, const Any &)>
-static Any builtin_unary_binary_op(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 2);
-    if (args.size() == 1) {
+static Any builtin_unary_binary_op(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 2);
+    if (argcount == 1) {
         return F1(args[0]);
     } else {
         return F2(args[0], args[1]);
@@ -4778,57 +4775,57 @@ static Any builtin_unary_binary_op(const std::vector<Any> &args) {
 }
 
 template<Any (*F)(const Any &, const Any &)>
-static Any builtin_binary_op(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_binary_op(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     return F(args[0], args[1]);
 }
 
 template<bool (*F)(const Any &, const Any &)>
-static Any builtin_bool_binary_op(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_bool_binary_op(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     return wrap(F(args[0], args[1]));
 }
 
-static Any builtin_flow_parameter_count(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_flow_parameter_count(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     auto flow = extract_flow(args[0]);
     return wrap(flow->parameters.size());
 }
 
-static Any builtin_flow_parameter(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_flow_parameter(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     auto flow = extract_flow(args[0]);
     auto index = extract_integer(args[1]);
     return wrap(flow->parameters[index]);
 }
 
-static Any builtin_flow_argument_count(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_flow_argument_count(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     auto flow = extract_flow(args[0]);
     return wrap(flow->arguments.size());
 }
 
-static Any builtin_flow_argument(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_flow_argument(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     auto flow = extract_flow(args[0]);
     auto index = extract_integer(args[1]);
     return flow->arguments[index];
 }
 
-static Any builtin_flow_name(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_flow_name(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     auto flow = extract_flow(args[0]);
     return wrap_symbol(flow->name);
 }
 
-static Any builtin_flow_id(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_flow_id(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     auto flow = extract_flow(args[0]);
     return wrap(flow->getUID());
 }
 
-static Any builtin_frame_eval(const std::vector<Any> &args) {
-    builtin_checkparams(args, 3, 3);
+static Any builtin_frame_eval(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 3, 3);
     auto frame = extract_frame(args[0]);
     auto argindex = extract_integer(args[1]);
     return evaluate(argindex, frame, args[2]);
@@ -5137,8 +5134,8 @@ process:
     return { result, topit };
 }
 
-static Any builtin_expand(const std::vector<Any> &args) {
-    builtin_checkparams(args, 2, 2);
+static Any builtin_expand(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
     auto scope = args[0];
     verifyValueKind(Types::PTable, scope);
     auto expr_eval = extract_list(args[1]);
@@ -5148,8 +5145,8 @@ static Any builtin_expand(const std::vector<Any> &args) {
     return wrap(List::create(retval.value, retval.next));
 }
 
-static Any builtin_set_globals(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_set_globals(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     auto scope = args[0];
     verifyValueKind(Types::PTable, scope);
 
@@ -5350,9 +5347,9 @@ static Any compile (const Any &expr) {
 // INITIALIZATION
 //------------------------------------------------------------------------------
 
-static Any builtin_loadlist(const std::vector<Any> &args);
+static Any builtin_loadlist(const Any *args, size_t argcount);
 
-static Any builtin_eval(const std::vector<Any> &args);
+static Any builtin_eval(const Any *args, size_t argcount);
 
 static void initGlobals () {
     auto env = new_scope();
@@ -5563,17 +5560,17 @@ static Any loadFile(const char *path) {
     return const_none;
 }
 
-static Any builtin_loadlist(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 1);
+static Any builtin_loadlist(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
     auto path = extract_string(args[0]);
     return loadFile(resident_c_str(path));
 }
 
-static Any builtin_eval(const std::vector<Any> &args) {
-    builtin_checkparams(args, 1, 3);
+static Any builtin_eval(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 3);
     auto expr = args[0];
-    auto scope = (args.size() > 1)?extract_table(args[1]):globals;
-    const char *path = (args.size() > 2)?extract_cstr(args[2]):"<eval>";
+    auto scope = (argcount > 1)?extract_table(args[1]):globals;
+    const char *path = (argcount > 2)?extract_cstr(args[2]):"<eval>";
 
     return compileFlow(scope, expr, path);
 }
