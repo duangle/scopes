@@ -6,7 +6,7 @@ function ANSI-color (num bright)
         ? bright ";1m" "m"
 
 let
-    ANSI_RESET              (ANSI-color 0 false)
+    ANSI_RESET              (ANSI-color 0  false)
     ANSI_COLOR_BLACK        (ANSI-color 30 false)
     ANSI_COLOR_RED          (ANSI-color 31 false)
     ANSI_COLOR_GREEN        (ANSI-color 32 false)
@@ -36,11 +36,13 @@ let
     ANSI_STYLE_ERROR        ANSI_COLOR_XRED
     ANSI_STYLE_LOCATION     ANSI_COLOR_XCYAN
 
-function ANSI-wrapper (code)
+let ANSI-wrapper
     ? support-ANSI?
-        function (content)
-            .. code content ANSI_RESET
-        function (content) content
+        function (code)
+            function (content)
+                .. code content ANSI_RESET
+        function (code)
+            function (content) content
 let
     style-string        (ANSI-wrapper ANSI_COLOR_XMAGENTA)
     style-number        (ANSI-wrapper ANSI_COLOR_XGREEN)

@@ -1531,6 +1531,15 @@ struct Parameter {
     }
 };
 
+static const Parameter *extract_parameter(const Any &value) {
+    if (eq(value.type, Types::PParameter)) {
+        return *value.pparameter;
+    }
+    error("parameter expected");
+    return nullptr;
+}
+
+
 //------------------------------------------------------------------------------
 
 static Any wrap(const List *slist) {
@@ -1630,65 +1639,6 @@ static const List *reverse_list_inplace(
     }
     return next;
 }
-
-//------------------------------------------------------------------------------
-
-struct ListIter {
-protected:
-    const List *expr;
-public:
-    const List *getList() const {
-        return expr;
-    }
-
-    const Anchor *getAnchor() const {
-        return get_anchor(expr);
-    }
-
-    ListIter(const List *value, size_t c=0) :
-        expr(value) {
-        for (size_t i = 0; i < c; ++i) {
-            assert(expr);
-            expr = expr->next;
-        }
-    }
-
-    ListIter(const Any &value, size_t i=0) :
-        ListIter(extract_list(value), i)
-    {}
-
-    bool operator ==(const ListIter &other) const {
-        return (expr == other.expr);
-    }
-    bool operator !=(const ListIter &other) const {
-        return (expr != other.expr);
-    }
-
-    ListIter operator +(int offset) const {
-        return ListIter(expr, (size_t)offset);
-    }
-
-    ListIter operator ++(int) {
-        auto oldself = *this;
-        assert (expr);
-        expr = expr->next;
-        return oldself;
-    }
-
-    bool isValid() const {
-        return expr != nullptr;
-    }
-
-    operator bool() const {
-        return isValid();
-    }
-
-    const Any &operator *() const {
-        assert(expr);
-        return expr->at;
-    }
-
-};
 
 //------------------------------------------------------------------------------
 
@@ -1811,7 +1761,7 @@ struct BuiltinFlow {
 
 //------------------------------------------------------------------------------
 
-typedef Any (*SpecialFormFunction)(ListIter);
+typedef Any (*SpecialFormFunction)(const List *);
 
 struct SpecialForm {
 
@@ -1839,10 +1789,10 @@ struct SpecialForm {
 
 struct Cursor {
     Any value;
-    ListIter next;
+    const List *next;
 };
 
-typedef Cursor (*MacroBuiltinFunction)(const Table *, ListIter);
+typedef Cursor (*MacroBuiltinFunction)(const Table *, const List *);
 
 struct BuiltinMacro {
 
@@ -2128,13 +2078,13 @@ static const Anchor *find_valid_anchor(const Any &expr) {
 static Any strip(const Any &expr) {
     if (eq(expr.type, Types::PList)) {
         const List *l = nullptr;
-        auto it = ListIter(expr);
+        auto it = extract_list(expr);
         while (it) {
-            auto value = strip(*it);
+            auto value = strip(it->at);
             if (!is_comment(value)) {
-                l = List::create(value, l, it.getAnchor());
+                l = List::create(value, l, get_anchor(it));
             }
-            it++;
+            it = it->next;
         }
         return wrap(reverse_list_inplace(l));
     }
@@ -2142,11 +2092,10 @@ static Any strip(const Any &expr) {
 }
 
 static size_t getSize(const List *expr) {
-    ListIter it(expr, 0);
     size_t c = 0;
-    while (it) {
+    while (expr) {
         c++;
-        it++;
+        expr = expr->next;
     }
     return c;
 }
@@ -2182,11 +2131,11 @@ static std::string formatTraceback() {
 
 static bool isNested(const Any &e) {
     if (e.type == Types::PList) {
-        auto it = ListIter(e);
+        auto it = extract_list(e);
         while (it) {
-            if ((*it).type == Types::PList)
+            if (it->at.type == Types::PList)
                 return true;
-            it++;
+            it = it->next;
         }
     }
     return false;
@@ -2214,7 +2163,7 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
 
     if (e.type == Types::PList) {
         //auto slist = llvm::cast<ListValue>(e);
-        auto it = ListIter(e);
+        auto it = extract_list(e);
         if (!it) {
             stream << "()";
             if (naked)
@@ -2223,34 +2172,35 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         }
         size_t offset = 0;
         if (naked) {
-            bool single = !(it + 1);
+            bool single = !it->next;
         print_terse:
-            streamValue(stream, *it++, depth, false);
+            streamValue(stream, it->at, depth, false);
+            it = it->next;
             offset++;
             while (it) {
-                if (isNested(*it))
+                if (isNested(it->at))
                     break;
                 stream << ' ';
-                streamValue(stream, *it, depth, false);
+                streamValue(stream, it->at, depth, false);
                 offset++;
-                it++;
+                it = it->next;
             }
             stream << (single?";\n":"\n");
         //print_sparse:
             while (it) {
-                auto value = *it;
+                auto value = it->at;
                 if ((value.type != Types::PList) // not a list
                     && (offset >= 1) // not first element in list
-                    && (it + 1) // not last element in list
-                    && !isNested(*(it + 1))) { // next element can be terse packed too
+                    && it->next // not last element in list
+                    && !isNested(it->next->at)) { // next element can be terse packed too
                     single = false;
-                    streamAnchor(stream, *it, depth + 1);
+                    streamAnchor(stream, value, depth + 1);
                     stream << "\\ ";
                     goto print_terse;
                 }
                 streamValue(stream, value, depth + 1);
                 offset++;
-                it++;
+                it = it->next;
             }
 
         } else {
@@ -2258,9 +2208,9 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
             while (it) {
                 if (offset > 0)
                     stream << ' ';
-                streamValue(stream, *it, depth + 1, false);
+                streamValue(stream, it->at, depth + 1, false);
                 offset++;
-                it++;
+                it = it->next;
             }
             stream << ')';
             if (naked)
@@ -2268,21 +2218,21 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
         }
     } else {
         if (e.type == Types::Symbol) {
-            stream << ANSI_STYLE_KEYWORD;
+            if (support_ansi) stream << ANSI_STYLE_KEYWORD;
             streamString(stream, extract_symbol_string(e), "[]{}()\"");
-            stream << ANSI_RESET;
+            if (support_ansi) stream << ANSI_RESET;
         } else if (e.type == Types::String) {
-            stream << ANSI_STYLE_STRING;
+            if (support_ansi) stream << ANSI_STYLE_STRING;
             stream << '"';
             streamString(stream, extract_string(e), "\"");
             stream << '"';
-            stream << ANSI_RESET;
+            if (support_ansi) stream << ANSI_RESET;
         } else {
             auto s = get_string(e);
             if (e.type == Types::Bool) {
-                stream << ANSI_STYLE_KEYWORD << s << ANSI_RESET;
+                stream << ansi(ANSI_STYLE_KEYWORD, s);
             } else if (is_integer_type(e.type)) {
-                stream << ANSI_STYLE_NUMBER << s << ANSI_RESET;
+                stream << ansi(ANSI_STYLE_NUMBER, s);
             } else {
                 stream << s;
             }
@@ -2575,7 +2525,6 @@ namespace Types {
         const std::vector<bangra::Any> &args) {
         builtin_checkparams(args, 1, 1);
         auto name = extract_symbol(args[0]);
-        //return wrap_ptr(Types::PParameter, Parameter::create(name));
         return wrap(Parameter::create(name));
     }
 
@@ -5063,7 +5012,7 @@ static bool isSymbol (const Any &expr, const Symbol &sym) {
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
 
-static bool verifyParameterCount (const List *expr,
+static bool verifyListParameterCount (const List *expr,
     int mincount, int maxcount) {
     if ((mincount <= 0) && (maxcount == -1))
         return true;
@@ -5080,16 +5029,17 @@ static bool verifyParameterCount (const List *expr,
     return true;
 }
 
-static bool verifyParameterCount (ListIter topit,
+static bool verifyAtParameterCount (const List *topit,
     int mincount, int maxcount) {
-    auto val = *topit;
+    assert(topit);
+    auto val = topit->at;
     verifyValueKind(Types::PList, val);
-    return verifyParameterCount(*val.plist, mincount, maxcount);
+    return verifyListParameterCount(*val.plist, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
 
-static Cursor expand (const Table *env, ListIter topit);
+static Cursor expand (const Table *env, const List *topit);
 static Any compile(const Any &expr);
 
 static Any toparameter (Table *env, const Any &value) {
@@ -5102,34 +5052,35 @@ static Any toparameter (Table *env, const Any &value) {
     return bp;
 }
 
-static const List *expand_expr_list (const Table *env, ListIter it) {
+static const List *expand_expr_list (const Table *env, const List *it) {
     const List *l = nullptr;
     while (it) {
         auto cur = expand(env, it);
-        l = List::create(cur.value, l, it.getAnchor());
+        l = List::create(cur.value, l, get_anchor(it));
         it = cur.next;
     }
     return reverse_list_inplace(l);
 }
 
-static Cursor expand_function (const Table *env, ListIter topit) {
-    verifyParameterCount(topit, 1, -1);
+static Cursor expand_function (const Table *env, const List *topit) {
+    verifyAtParameterCount(topit, 1, -1);
 
-    ListIter it(*topit++);
-    auto topanchor = it.getAnchor();
-    it++;
-    auto expr_parameters = *it++;
+    auto it = extract_list(topit->at);
+    auto topanchor = get_anchor(it);
+    it = it->next;
+    auto expr_parameters = it->at;
+    it = it->next;
 
     auto subenv = new_scope(env);
 
     const List *outargs = nullptr;
     verifyValueKind(Types::PList, expr_parameters);
     auto params = *expr_parameters.plist;
-    ListIter param(params);
+    auto param(params);
     while (param) {
-        outargs = List::create(toparameter(subenv, *param),
-            outargs, param.getAnchor());
-        param++;
+        outargs = List::create(toparameter(subenv, param->at),
+            outargs, get_anchor(param));
+        param = param->next;
     }
 
     return {
@@ -5141,30 +5092,26 @@ static Cursor expand_function (const Table *env, ListIter topit) {
                     expand_expr_list(subenv, it),
                     get_anchor(params)),
                 topanchor)),
-        topit };
+        topit->next };
 }
 
-static Cursor expand_quote (const Table *env, ListIter topit) {
-    verifyParameterCount(topit, 1, -1);
+static Cursor expand_quote (const Table *env, const List *topit) {
+    verifyAtParameterCount(topit, 1, -1);
 
-    ListIter it(*topit++);
-    auto anchor = it.getAnchor();
-    it++;
-    auto result = List::create(
-        getLocal(globals, SYM_QuoteForm),
-        it.getList(),
-        anchor);
-    return { wrap(result), topit };
+    auto it = extract_list(topit->at);
+    auto anchor = get_anchor(it);
+    it = it->next;
+    auto result = List::create(getLocal(globals, SYM_QuoteForm), it, anchor);
+    return { wrap(result), topit->next };
 }
 
-static Cursor expand_escape (const Table *env, ListIter topit) {
-    ListIter it(*topit++, 1);
-    return { *it, topit };
+static Cursor expand_escape (const Table *env, const List *topit) {
+    auto it = extract_list(topit->at);
+    return { it->next->at, topit->next };
 }
 
-static Cursor expand_let_syntax (const Table *env, ListIter topit) {
-    auto cur = expand_function (env, topit++);
-    //printValue(cur.value, 0, true);
+static Cursor expand_let_syntax (const Table *env, const List *topit) {
+    auto cur = expand_function (env, topit);
 
     auto fun = compile(cur.value);
 
@@ -5172,7 +5119,7 @@ static Cursor expand_let_syntax (const Table *env, ListIter topit) {
         Types::PTable, env)});
     verifyValueKind(Types::PTable, expr_env);
 
-    auto rest = expand_expr_list(*expr_env.ptable, topit);
+    auto rest = expand_expr_list(*expr_env.ptable, cur.next);
     if (!rest) {
         error("let-syntax: missing subsequent expression");
     }
@@ -5181,28 +5128,27 @@ static Cursor expand_let_syntax (const Table *env, ListIter topit) {
 }
 
 static const List *expand_macro(
-    const Table *env, const Any &handler, ListIter topit) {
-    auto result = execute({handler,
-        wrap(env),
-        wrap(topit.getList())});
+    const Table *env, const Any &handler, const List *topit) {
+    auto result = execute({handler, wrap(env), wrap(topit)});
     if (isnone(result))
         return nullptr;
     verifyValueKind(Types::PList, result);
     if (!get_anchor(result)) {
-        auto head = *topit;
+        auto head = topit->at;
         const Anchor *anchor = get_anchor(head);
         if (!anchor) {
-            anchor = topit.getAnchor();
+            anchor = get_anchor(topit);
         }
         set_anchor(result, anchor);
     }
     return *result.plist;
 }
 
-static Cursor expand (const Table *env, ListIter topit) {
+static Cursor expand (const Table *env, const List *topit) {
     Any result = const_none;
 process:
-    Any expr = *topit;
+    assert(topit);
+    auto expr = topit->at;
     if (eq(expr.type, Types::PList)) {
         if (!(*expr.plist)) {
             error("expression is empty");
@@ -5219,7 +5165,7 @@ process:
                 auto result = expand_macro(env,
                     (*head.pmacro)->value, topit);
                 if (result) {
-                    topit = ListIter(result);
+                    topit = result;
                     goto process;
                 }
             }
@@ -5229,14 +5175,14 @@ process:
         if (default_handler.type != Types::None) {
             auto result = expand_macro(env, default_handler, topit);
             if (result) {
-                topit = ListIter(result);
+                topit = result;
                 goto process;
             }
         }
 
-        ListIter it(*topit);
+        auto it = extract_list(topit->at);
         result = wrap(expand_expr_list(env, it));
-        topit++;
+        topit = topit->next;
     } else if (eq(expr.type, Types::Symbol)) {
         auto value = extract_symbol(expr);
         if (!hasLocal(env, value)) {
@@ -5244,7 +5190,7 @@ process:
             if (default_handler.type != Types::None) {
                 auto result = expand_macro(env, default_handler, topit);
                 if (result) {
-                    topit = ListIter(result);
+                    topit = result;
                     goto process;
                 }
             }
@@ -5252,10 +5198,10 @@ process:
                 get_symbol_name(value).c_str());
         }
         result = getLocal(env, value);
-        topit++;
+        topit = topit->next;
     } else {
         result = expr;
-        topit++;
+        topit = topit->next;
     }
     return { result, topit };
 }
@@ -5264,12 +5210,11 @@ static Any builtin_expand(const std::vector<Any> &args) {
     builtin_checkparams(args, 2, 2);
     auto scope = args[0];
     verifyValueKind(Types::PTable, scope);
-    auto expr_eval = args[1];
+    auto expr_eval = extract_list(args[1]);
 
     auto retval = expand(*scope.ptable, expr_eval);
 
-    auto topexpr = const_cast<List*>(retval.next.getList());
-    return wrap(List::create(retval.value, topexpr));
+    return wrap(List::create(retval.value, retval.next));
 }
 
 static Any builtin_set_globals(const std::vector<Any> &args) {
@@ -5352,30 +5297,32 @@ static ILBuilder *builder;
 
 //------------------------------------------------------------------------------
 
-static Any compile_expr_list (ListIter it) {
+static Any compile_expr_list (const List *it) {
     Any value = const_none;
     while (it) {
-        value = compile(*it);
-        it++;
+        value = compile(it->at);
+        it = it->next;
     }
     return value;
 }
 
-static Any compile_do (ListIter it) {
-    it++;
+static Any compile_do (const List *it) {
+    it = it->next;
     return compile_expr_list(it);
 }
 
-static Any compile_function (ListIter it) {
-    auto anchor = find_valid_anchor(it.getList());
+static Any compile_function (const List *it) {
+    auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
-        printValue(wrap(it.getList()), 0, true);
+        printValue(wrap(it), 0, true);
         error("function expression not anchored");
     }
 
-    it++;
+    it = it->next;
 
-    auto expr_parameters = *it++;
+    assert(it);
+    auto expr_parameters = it->at;
+    it = it->next;
 
     auto currentblock = builder->save();
 
@@ -5384,16 +5331,13 @@ static Any compile_function (ListIter it) {
 
     builder->continueAt(function);
 
-    verifyValueKind(Types::PList, expr_parameters);
-    ListIter param(*expr_parameters.plist);
+    auto param = extract_list(expr_parameters);
     while (param) {
-        auto pparam = *param;
-        verifyValueKind(Types::PParameter, pparam);
-        function->appendParameter(const_cast<Parameter*>(
-            *pparam.pparameter));
-        param++;
+        function->appendParameter(
+            const_cast<Parameter*>(extract_parameter(param->at)));
+        param = param->next;
     }
-    auto ret = function->appendParameter(Parameter::create());
+    auto ret = function->appendParameter(Parameter::create(SYM_ReturnFlow));
 
     auto result = compile_expr_list(it);
 
@@ -5404,46 +5348,49 @@ static Any compile_function (ListIter it) {
     return wrap(function);
 }
 
-static Any compile_implicit_call (ListIter it,
+static Any compile_implicit_call (const List *it,
     const Anchor *anchor = nullptr) {
     if (!anchor) {
-        anchor = find_valid_anchor(it.getList());
+        anchor = find_valid_anchor(it);
         if (!anchor || !anchor->isValid()) {
-            printValue(wrap(it.getList()), 0, true);
+            printValue(wrap(it), 0, true);
             error("call expression not anchored");
         }
     }
 
-    Any callable = compile(*it++);
+    auto callable = compile(it->at);
+    it = it->next;
 
     std::vector<Any> args;
     args.push_back(callable);
 
     while (it) {
-        args.push_back(compile(*it));
-        it++;
+        args.push_back(compile(it->at));
+        it = it->next;
     }
 
     return wrap(builder->call(args, anchor));
 }
 
-static Any compile_call (ListIter it) {
-    auto anchor = find_valid_anchor(it.getList());
+static Any compile_call (const List *it) {
+    auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
-        printValue(wrap(it.getList()), 0, true);
+        printValue(wrap(it), 0, true);
         error("call expression not anchored");
     }
-    it++;
+    it = it->next;
     return compile_implicit_call(it, anchor);
 }
 
-static Any compile_quote (ListIter it) {
-    it++;
-    List *rest = const_cast<List*>(it.getList());
-    if (!rest->next)
-        return rest->at;
+static Any compile_quote (const List *it) {
+    it = it->next;
+    if (!it)
+        error("missing quote argument");
+    assert(it);
+    if (!it->next)
+        return it->at;
     else
-        return wrap(rest);
+        return wrap(it);
 }
 
 //------------------------------------------------------------------------------
@@ -5457,10 +5404,9 @@ static Any compile (const Any &expr) {
         auto slist = *expr.plist;
         auto head = slist->at;
         if (eq(head.type, Types::PSpecialForm)) {
-            result = (*head.pspecial_form)->handler(
-                ListIter(slist));
+            result = (*head.pspecial_form)->handler(slist);
         } else {
-            result = compile_implicit_call(ListIter(slist));
+            result = compile_implicit_call(slist);
         }
         assert(result.type != Types::None);
     } else {
@@ -5670,14 +5616,14 @@ static Any compileFlow (const Table *env, const Any &expr,
     anchor->column = 1;
     anchor->offset = 0;
 
-    auto rootit = ListIter(expr);
+    auto rootit = extract_list(expr);
     auto expexpr = expand_expr_list(env, rootit);
 
     auto mainfunc = Flow::create();
     auto ret = mainfunc->appendParameter(Parameter::create());
     builder->continueAt(mainfunc);
 
-    auto result = compile_expr_list(ListIter(expexpr));
+    auto result = compile_expr_list(expexpr);
     builder->br({ wrap(ret), result }, anchor);
 
     return wrap(mainfunc);
@@ -5768,12 +5714,13 @@ static Any parseLoader(const char *executable_path) {
         return const_none;
     }
     auto symlist = *expr.plist;
-    ListIter it(symlist);
+    auto it = symlist;
     if (!it) {
         fprintf(stderr, "footer expression is empty\n");
         return const_none;
     }
-    auto head = *it++;
+    auto head = it->at;
+    it = it->next;
     if (!eq(head.type, Types::Symbol))  {
         fprintf(stderr, "footer expression does not begin with symbol\n");
         return const_none;
@@ -5787,7 +5734,8 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "footer expression needs two arguments\n");
         return const_none;
     }
-    auto arg = *it++;
+    auto arg = it->at;
+    it = it->next;
     if (!is_integer_type(arg.type))  {
         fprintf(stderr, "script-size argument is not integer\n");
         return const_none;
