@@ -240,6 +240,8 @@ assert
     (tupleof 1 2 3) @ 2 == 3
     "tuple indexing failed"
 
+print typeof
+
 do
     let i 0
     let k "!"

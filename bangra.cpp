@@ -481,13 +481,10 @@ struct Hash;
 struct List;
 struct Table;
 struct Closure;
-struct Builtin;
-struct BuiltinFlow;
-struct BuiltinMacro;
 struct Type;
 struct Macro;
 struct Frame;
-struct SpecialForm;
+struct Cursor;
 
 template<typename T>
 struct Slice {
@@ -499,6 +496,8 @@ typedef Slice<char> String;
 
 typedef Any (*BuiltinFunction)(const std::vector<Any> &args);
 typedef std::vector<Any> (*BuiltinFlowFunction)(const std::vector<Any> &args);
+typedef Cursor (*BuiltinMacroFunction)(const Table *, const List *);
+typedef Any (*SpecialFormFunction)(const List *);
 
 typedef uint64_t Symbol;
 
@@ -520,9 +519,13 @@ struct Any {
         const double *p_r64;
 
         const void *ptr;
-        const BuiltinFunction func;
         const String *str;
         const Symbol *symbol;
+
+        const BuiltinFunction *pbuiltin;
+        const BuiltinFlowFunction *pbuiltin_flow;
+        const BuiltinMacroFunction *pbuiltin_macro;
+        const SpecialFormFunction *pspecial_form;
 
         const char **pc_str;
         const void **pptr;
@@ -532,10 +535,6 @@ struct Any {
         const Flow **pflow;
         const Closure **pclosure;
         const Frame **pframe;
-        const Builtin **pbuiltin;
-        const BuiltinFlow **pbuiltin_flow;
-        const BuiltinMacro **pbuiltin_macro;
-        const SpecialForm **pspecial_form;
         const Macro **pmacro;
         const Table **ptable;
         const Anchor *anchorref;
@@ -556,39 +555,13 @@ static Any make_any(const Type *type) {
     return any;
 }
 
+struct Cursor {
+    Any value;
+    const List *next;
+};
+
 //------------------------------------------------------------------------------
-
-typedef std::unordered_map<const void *, const Anchor *> PtrAnchorMap;
-
-static PtrAnchorMap anchor_map;
-
-static const Anchor *get_anchor(const void *ptr) {
-    auto it = anchor_map.find(ptr);
-    if (it != anchor_map.end()) {
-        return it->second;
-    }
-    return nullptr;
-}
-
-static const Anchor *get_anchor(const Any &value) {
-    return get_anchor(value.ptr);
-}
-
-static void set_anchor(const void *ptr, const Anchor *anchor) {
-    if (anchor) {
-        anchor_map[ptr] = anchor;
-    } else {
-        auto it = anchor_map.find(ptr);
-        if (it != anchor_map.end()) {
-            anchor_map.erase(it);
-        }
-    }
-}
-
-static void set_anchor(const Any &value, const Anchor *anchor) {
-    set_anchor(value.ptr, anchor);
-}
-
+// SYMBOL CACHE
 //------------------------------------------------------------------------------
 
 enum {
@@ -645,6 +618,72 @@ static void initSymbols() {
     map_symbol(SYM_ScriptSize, "script-size");
     map_symbol(SYM_FunctionFlow, "function");
     map_symbol(SYM_ReturnFlow, "return");
+}
+
+//------------------------------------------------------------------------------
+// ANCHORED POINTERS
+//------------------------------------------------------------------------------
+
+typedef std::unordered_map<const void *, const Anchor *> PtrAnchorMap;
+
+static PtrAnchorMap anchor_map;
+
+static const Anchor *get_anchor(const void *ptr) {
+    auto it = anchor_map.find(ptr);
+    if (it != anchor_map.end()) {
+        return it->second;
+    }
+    return nullptr;
+}
+
+static const Anchor *get_anchor(const Any &value) {
+    return get_anchor(value.ptr);
+}
+
+static void set_anchor(const void *ptr, const Anchor *anchor) {
+    if (anchor) {
+        anchor_map[ptr] = anchor;
+    } else {
+        auto it = anchor_map.find(ptr);
+        if (it != anchor_map.end()) {
+            anchor_map.erase(it);
+        }
+    }
+}
+
+static void set_anchor(const Any &value, const Anchor *anchor) {
+    set_anchor(value.ptr, anchor);
+}
+
+//------------------------------------------------------------------------------
+// NAMED POINTERS
+//------------------------------------------------------------------------------
+
+typedef std::unordered_map<const void *, Symbol> PtrSymbolMap;
+
+static PtrSymbolMap ptr_symbol_map;
+
+static Symbol get_ptr_symbol(const void *ptr) {
+    auto it = ptr_symbol_map.find(ptr);
+    if (it != ptr_symbol_map.end()) {
+        return it->second;
+    }
+    return SYM_Unnamed;
+}
+
+static void set_ptr_symbol(const void *ptr, const Symbol &sym) {
+    if (sym) {
+        ptr_symbol_map[ptr] = sym;
+    } else {
+        auto it = ptr_symbol_map.find(ptr);
+        if (it != ptr_symbol_map.end()) {
+            ptr_symbol_map.erase(it);
+        }
+    }
+}
+
+static void set_ptr_symbol(const void *ptr, const std::string &name) {
+    set_ptr_symbol(ptr, get_symbol(name));
 }
 
 //------------------------------------------------------------------------------
@@ -1713,111 +1752,6 @@ static const Flow *extract_flow(const Any &value) {
 
 //------------------------------------------------------------------------------
 
-struct Builtin {
-
-    BuiltinFunction handler;
-    Symbol name;
-
-    static Builtin *create(BuiltinFunction func,
-        const Symbol &name) {
-        auto result = new Builtin();
-        result->handler = func;
-        result->name = name;
-        return result;
-    }
-
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin");
-        ss << " " << get_symbol_name(name);
-        ss << ")";
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct BuiltinFlow {
-
-    BuiltinFlowFunction handler;
-    Symbol name;
-
-    static BuiltinFlow *create(BuiltinFlowFunction func,
-        const Symbol &name) {
-        auto result = new BuiltinFlow();
-        result->handler = func;
-        result->name = name;
-        return result;
-    }
-
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin-cc");
-        ss << " " << get_symbol_name(name);
-        ss << ")";
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-typedef Any (*SpecialFormFunction)(const List *);
-
-struct SpecialForm {
-
-    SpecialFormFunction handler;
-    Symbol name;
-
-    static SpecialForm *create(SpecialFormFunction func,
-        const Symbol &name) {
-        auto result = new SpecialForm();
-        result->handler = func;
-        result->name = name;
-        return result;
-    }
-
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "form");
-        ss << " " << get_symbol_name(name);
-        ss << ")";
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
-struct Cursor {
-    Any value;
-    const List *next;
-};
-
-typedef Cursor (*MacroBuiltinFunction)(const Table *, const List *);
-
-struct BuiltinMacro {
-
-    MacroBuiltinFunction handler;
-    Symbol name;
-
-    static BuiltinMacro *create(MacroBuiltinFunction func,
-        const Symbol &name) {
-        auto result = new BuiltinMacro();
-        result->handler = func;
-        result->name = name;
-        return result;
-    }
-
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "builtin-macro");
-        ss << " " << get_symbol_name(name);
-        ss << ")";
-        return ss.str();
-    }
-};
-
-//------------------------------------------------------------------------------
-
 typedef std::unordered_map<const Flow *, std::vector<Any> >
     FlowValuesMap;
 
@@ -2303,6 +2237,12 @@ namespace Types {
     template<typename T>
     static std::string _named_object_tostring(const Type *self, const bangra::Any &value) {
         return get_name(self) + ":" + get_symbol_name(((T *)value.ptr)->name);
+    }
+
+    static std::string _named_ptr_tostring(const Type *self, const bangra::Any &value) {
+        auto sym = get_ptr_symbol(value.ptr);
+        return get_name(self) + ":" +
+            (sym?get_symbol_name(sym):format("%p", value.ptr));
     }
 
     static std::string _integer_tostring(const Type *self, const bangra::Any &value) {
@@ -2993,21 +2933,21 @@ namespace Types {
         PTable = Pointer(_Table);
 
         tmp = Struct("Builtin", true);
-        tmp->tostring = _named_object_tostring<Builtin>;
+        tmp->tostring = _named_ptr_tostring;
         PBuiltin = Pointer(tmp);
 
         tmp = Struct("BuiltinFlow", true);
-        tmp->tostring = _named_object_tostring<BuiltinMacro>;
+        tmp->tostring = _named_ptr_tostring;
         PBuiltinFlow = Pointer(tmp);
 
         PFlow = Pointer(Struct("Flow", true));
 
         tmp = Struct("SpecialForm", true);
-        tmp->tostring = _named_object_tostring<SpecialForm>;
+        tmp->tostring = _named_ptr_tostring;
         PSpecialForm = Pointer(tmp);
 
         tmp = Struct("BuiltinMacro", true);
-        tmp->tostring = _named_object_tostring<BuiltinMacro>;
+        tmp->tostring = _named_ptr_tostring;
         PBuiltinMacro = Pointer(tmp);
 
         PFrame = Pointer(Struct("Frame", true));
@@ -3910,7 +3850,7 @@ continue_execution:
                 arguments.erase(arguments.begin());
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                Any result = cb->handler(arguments);
+                Any result = cb(arguments);
                 handler_frame = _oldframe;
                 // generate fitting resume
                 arguments.resize(2);
@@ -3920,7 +3860,7 @@ continue_execution:
                 auto cb = *callee.pbuiltin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                arguments = cb->handler(arguments);
+                arguments = cb(arguments);
                 handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
                 auto cb = *callee.ptype;
@@ -4928,35 +4868,39 @@ static void setLocalString(Table *scope, const std::string &name, const Any &val
 }
 
 static void setBuiltin(
-    Table *scope, const std::string &name, MacroBuiltinFunction func) {
+    Table *scope, const std::string &name, BuiltinMacroFunction func) {
     assert(scope);
     auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
     setLocal(scope, sym,
-        wrap_ptr(Types::PBuiltinMacro, BuiltinMacro::create(func, sym)));
+        wrap_ptr(Types::PBuiltinMacro, (void *)func));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, SpecialFormFunction func) {
     assert(scope);
     auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
     setLocal(scope, sym,
-        wrap_ptr(Types::PSpecialForm, SpecialForm::create(func, sym)));
+        wrap_ptr(Types::PSpecialForm, (void *)func));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, BuiltinFunction func) {
     assert(scope);
     auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
     setLocal(scope, sym,
-        wrap_ptr(Types::PBuiltin, Builtin::create(func, sym)));
+        wrap_ptr(Types::PBuiltin, (void *)func));
 }
 
 static void setBuiltin(
     Table *scope, const std::string &name, BuiltinFlowFunction func) {
     assert(scope);
     auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
     setLocal(scope, sym,
-        wrap_ptr(Types::PBuiltinFlow, BuiltinFlow::create(func, sym)));
+        wrap_ptr(Types::PBuiltinFlow, (void *)func));
 }
 
 /*
@@ -5160,7 +5104,7 @@ process:
         }
         if (head.type != Types::None) {
             if (eq(head.type, Types::PBuiltinMacro)) {
-                return (*head.pbuiltin_macro)->handler(env, topit);
+                return (*head.pbuiltin_macro)(env, topit);
             } else if (eq(head.type, Types::PMacro)) {
                 auto result = expand_macro(env,
                     (*head.pmacro)->value, topit);
@@ -5404,7 +5348,7 @@ static Any compile (const Any &expr) {
         auto slist = *expr.plist;
         auto head = slist->at;
         if (eq(head.type, Types::PSpecialForm)) {
-            result = (*head.pspecial_form)->handler(slist);
+            result = (*head.pspecial_form)(slist);
         } else {
             result = compile_implicit_call(slist);
         }
