@@ -33,6 +33,9 @@ int print_number(int value);
 
 //#define BANGRA_DEBUG_IL
 
+// maximum number of arguments to a function
+#define BANGRA_MAX_FUNCARGS 256
+
 //------------------------------------------------------------------------------
 // SHARED LIBRARY IMPLEMENTATION
 //------------------------------------------------------------------------------
@@ -495,8 +498,7 @@ struct Slice {
 typedef Slice<char> String;
 
 typedef Any (*BuiltinFunction)(const Any *args, size_t argcount);
-typedef std::vector<Any> (*BuiltinFlowFunction)(
-    const Any *args, size_t argcount);
+typedef size_t (*BuiltinFlowFunction)(const Any *args, size_t argcount, Any *ret);
 typedef Cursor (*BuiltinMacroFunction)(const Table *, const List *);
 typedef Any (*SpecialFormFunction)(const List *);
 
@@ -849,7 +851,8 @@ struct Type {
     // return range
     Any (*slice)(const Type *self, const Any &value, size_t i0, size_t i1);
     // apply the type
-    Any (*apply_type)(const Type *self, const std::vector<Any> &args);
+    size_t (*apply_type)(const Type *self,
+        const Any *args, size_t argcount, Any *ret);
     // length of value, if any
     size_t (*length)(const Type *self, const Any &value);
 
@@ -969,10 +972,11 @@ static Ordering cmp_default(const Type *self, const Any &a, const Any &b) {
     return Unordered;
 }
 
-static Any type_apply_default(const Type *self, const std::vector<Any> &args) {
+static size_t type_apply_default(const Type *self,
+    const Any *args, size_t argcount, Any *ret) {
     error("type %s has no constructor",
         get_name(self).c_str());
-    return const_none;
+    return 0;
 }
 
 static std::string type_tostring_default(const Type *self, const Any &value) {
@@ -1605,7 +1609,7 @@ struct List {
         return result;
     }
 
-    static const List *create_from_c_array(Any *values, size_t count) {
+    static const List *create_from_c_array(const Any *values, size_t count) {
         List *result = nullptr;
         while (count) {
             --count;
@@ -2455,23 +2459,37 @@ namespace Types {
         return (other == TEnum);
     }
 
+
+    typedef bangra::Any (*ApplyTypeFunction)(const Type *self,
+        const bangra::Any *args, size_t argcount);
+
+    template<ApplyTypeFunction F>
+    static size_t apply_type_call(const Type *self,
+        const bangra::Any *args, size_t argcount, bangra::Any *ret) {
+        assert(argcount >= 2);
+        // truncate head and continuation tail argument
+        ret[0] = args[argcount - 1];
+        ret[1] = F(self, args + 1, argcount - 2);
+        return 2;
+    }
+
     static bangra::Any _symbol_apply_type(const Type *self,
-        const std::vector<bangra::Any> &args) {
-        builtin_checkparams(args, 1, 1);
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
         return symbol(get_string(args[0]));
     }
 
     static bangra::Any _list_apply_type(const Type *self,
-        const std::vector<bangra::Any> &args) {
-        builtin_checkparams(args, 0, -1);
-        auto result = List::create_from_array(args);
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 0, -1);
+        auto result = List::create_from_c_array(args, argcount);
         set_anchor(result, get_anchor(handler_frame));
         return wrap(result);
     }
 
     static bangra::Any _parameter_apply_type(const Type *self,
-        const std::vector<bangra::Any> &args) {
-        builtin_checkparams(args, 1, 1);
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
         auto name = extract_symbol(args[0]);
         return wrap(Parameter::create(name));
     }
@@ -2918,7 +2936,7 @@ namespace Types {
         tmp = Struct("Symbol", true);
         tmp->tostring = _symbol_tostring;
         tmp->cmp = value_symbol_cmp;
-        tmp->apply_type = _symbol_apply_type;
+        tmp->apply_type = apply_type_call<_symbol_apply_type>;
         tmp->size = sizeof(bangra::Symbol);
         tmp->alignment = offsetof(_symbol_alignment, s);
         Symbol = tmp;
@@ -2931,7 +2949,7 @@ namespace Types {
         //tmp->alignment = offsetof(_list_alignment, s);
         _List = tmp;
         tmp = const_cast<Type *>(Pointer(_List));
-        tmp->apply_type = _list_apply_type;
+        tmp->apply_type = apply_type_call<_list_apply_type>;
         tmp->tostring = _list_tostring;
         PList = tmp;
 
@@ -2966,7 +2984,7 @@ namespace Types {
 
             PParameter = Pointer(tmp);
             tmp = const_cast<Type *>(PParameter);
-            tmp->apply_type = _parameter_apply_type;
+            tmp->apply_type = apply_type_call<_parameter_apply_type>;
         }
 
         {
@@ -3685,12 +3703,12 @@ struct FFI {
     }
 
     Any runFunction(
-        const Any &func, const std::vector<Any> &args) {
+        const Any &func, const Any *args, size_t argcount) {
         assert(is_pointer_type(func.type));
         auto ftype = get_element_type(func.type);
         assert(is_cfunction_type(ftype));
         auto count = get_parameter_count(ftype);
-        if (count != args.size()) {
+        if (count != argcount) {
             error("parameter count mismatch");
         }
         if (is_vararg(ftype)) {
@@ -3780,59 +3798,79 @@ void print_stack_frames(Frame *frame) {
 }
 
 static bool trace_arguments = false;
-Any execute(std::vector<Any> arguments) {
+size_t execute(const Any *args, size_t argcount, Any *ret) {
+    size_t retcount = 0;
+
+    // double buffer arguments
+    Any *argbuf[2];
+    for (size_t i = 0; i < 2; ++i) {
+        argbuf[i] = (Any *)malloc(sizeof(Any) * BANGRA_MAX_FUNCARGS);
+    }
+    Any *wbuf = argbuf[0];
+    size_t wcount = argcount;
+    assert(argcount >= 1);
+    assert(argcount <= BANGRA_MAX_FUNCARGS);
+    // track exit_cont so we can leave the loop when it is invoked
+    auto exit_cont = args[argcount - 1];
+    assert(is_pointer_type(exit_cont.type));
+    // init read buffer for arguments
+    for (size_t i = 0; i < argcount; ++i) {
+        wbuf[i] = args[i];
+    }
+
+    Any *rbuf = argbuf[1];
+    size_t rcount = 0;
 
     Frame *frame = Frame::create();
     frame->idx = 0;
 
-    auto retcont = Flow::create(1);
-    // add special flow as return function
-    arguments.push_back(wrap_ptr(Types::PFlow, retcont));
-
-    std::vector<Any> active_arguments;
+    std::vector<Any> tmpargs;
 
 continue_execution:
     try {
         while (true) {
-            active_arguments = arguments;
-
-            assert(arguments.size() >= 1);
-#ifdef BANGRA_DEBUG_IL
-            std::cout << frame->getRefRepr();
-            for (size_t i = 0; i < arguments.size(); ++i) {
-                std::cout << " ";
-                std::cout << getRefRepr(arguments[i]);
+            // flip buffers
+            {
+                Any *xbuf = wbuf;
+                wbuf = rbuf;
+                rbuf = xbuf;
+                rcount = wcount;
+                wcount = 0;
             }
-            std::cout << "\n";
-            fflush(stdout);
-#endif
-            Any callee = arguments[0];
-            if (eq(callee.type, Types::PFlow)
-                && (*callee.pflow == retcont)) {
-                if (arguments.size() >= 2) {
-                    return arguments[1];
-                } else {
-                    return const_none;
+
+            assert(rcount >= 1);
+
+            Any callee = rbuf[0];
+            if (is_pointer_type(callee.type)
+                && (*callee.pptr == *exit_cont.pptr)) {
+                // exit continuation invoked, copy result and break loop
+                for (size_t i = 0; i < rcount; ++i) {
+                    ret[i] = rbuf[i];
                 }
+                retcount = rcount;
+                break;
             }
 
             if (eq(callee.type, Types::PClosure)) {
                 auto closure = *callee.pclosure;
 
                 frame = closure->frame;
-                callee = wrap_ptr(Types::PFlow, closure->entry);
+                callee = wrap(closure->entry);
             }
 
             if (eq(callee.type, Types::PFlow)) {
                 auto flow = *callee.pflow;
                 assert(get_anchor(flow));
 
-                arguments.erase(arguments.begin());
-                if (arguments.size() > 0) {
+                if (rcount > 1) {
                     if (frame->map.count(flow)) {
                         frame = Frame::create(frame);
                     }
-                    frame->map[flow] = arguments;
+                    tmpargs.resize(rcount - 1);
+                    for (size_t i = 1; i < rcount; ++i) {
+                        tmpargs[i - 1] = rbuf[i];
+                    }
+                    frame->map[flow] = tmpargs;
                 }
                 set_anchor(frame, get_anchor(flow));
                 if (trace_arguments) {
@@ -3841,42 +3879,30 @@ continue_execution:
                 }
 
                 assert(!flow->arguments.empty());
-                size_t argcount = flow->arguments.size();
-                arguments.resize(argcount);
-                for (size_t i = 0; i < argcount; ++i) {
-                    arguments[i] = evaluate(i, frame,
-                        flow->arguments[i]);
+                wcount = flow->arguments.size();
+                for (size_t i = 0; i < wcount; ++i) {
+                    wbuf[i] = evaluate(i, frame, flow->arguments[i]);
                 }
             } else if (eq(callee.type, Types::PBuiltinFlow)) {
                 auto cb = *callee.pbuiltin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                arguments = cb(&arguments[0], arguments.size());
+                wcount = cb(rbuf, rcount, wbuf);
+                assert(wcount <= BANGRA_MAX_FUNCARGS);
                 handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
                 auto cb = *callee.ptype;
-                Any closure = arguments.back();
-                arguments.pop_back();
-                arguments.erase(arguments.begin());
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                Any result = cb->apply_type(cb, arguments);
+                wcount = cb->apply_type(cb, rbuf, rcount, wbuf);
                 handler_frame = _oldframe;
-                // generate fitting resume
-                arguments.resize(2);
-                arguments[0] = closure;
-                arguments[1] = result;
             } else if (
                 is_pointer_type(callee.type)
                     && is_cfunction_type(get_element_type(callee.type))) {
-                Any closure = arguments.back();
-                arguments.pop_back();
-                arguments.erase(arguments.begin());
-                Any result = ffi->runFunction(callee, arguments);
-                // generate fitting resume
-                arguments.resize(2);
-                arguments[0] = closure;
-                arguments[1] = result;
+                assert(rcount >= 2);
+                wbuf[0] = rbuf[rcount - 1];
+                wbuf[1] = ffi->runFunction(callee, rbuf + 1, rcount - 2);
+                wcount = 2;
             } else {
                 error("can not apply %s",
                     get_name(callee.type).c_str());
@@ -3884,9 +3910,9 @@ continue_execution:
         }
     } catch (const Any &any) {
         printf("while evaluating arguments:\n");
-        for (size_t i = 0; i < active_arguments.size(); ++i) {
+        for (size_t i = 0; i < rcount; ++i) {
             printf("  #%zu: ", i);
-            printValue(active_arguments[i], 0, true);
+            printValue(rbuf[i], 0, true);
         }
         printf("\n");
 
@@ -3897,10 +3923,37 @@ continue_execution:
         //goto continue_execution;
         fflush(stdout);
 
+        // throwing will leave the buffers dangling, so free them first
+        for (size_t i = 0; i < 2; ++i) {
+            free(argbuf[i]);
+        }
         throw_any(any);
     }
 
-    return const_none;
+    for (size_t i = 0; i < 2; ++i) {
+        free(argbuf[i]);
+    }
+
+    return retcount;
+}
+
+static Any execute(const Any *args, size_t argcount) {
+    assert(argcount <= BANGRA_MAX_FUNCARGS);
+    Any *ret = (Any *)malloc(sizeof(Any) * BANGRA_MAX_FUNCARGS);
+    for (size_t i = 0; i < argcount; ++i) {
+        ret[i] = args[i];
+    }
+    ret[argcount++] = wrap(Flow::create(1));
+    size_t retcount = execute(ret, argcount, ret);
+    Any result;
+    if (retcount == 1)
+        result = const_none;
+    else {
+        assert(retcount == 2);
+        result = ret[1];
+    }
+    free(ret);
+    return result;
 }
 
 //------------------------------------------------------------------------------
@@ -4471,11 +4524,12 @@ static Table *importCModule (
 static const Table *globals = nullptr;
 
 template<BuiltinFunction F>
-static std::vector<Any> builtin_call(const Any *args, size_t argcount) {
+static size_t builtin_call(const Any *args, size_t argcount, Any *ret) {
     assert(argcount >= 2);
     // truncate head and continuation tail argument
-    Any result = F(args + 1, argcount - 2);
-    return { args[argcount - 1], result };
+    ret[0] = args[argcount - 1];
+    ret[1] = F(args + 1, argcount - 2);
+    return 2;
 }
 
 static Any builtin_string(const Any *args, size_t argcount) {
@@ -4545,19 +4599,20 @@ static Any builtin_slice(const Any *args, size_t argcount) {
     return slice(args[0], (size_t)i0, (size_t)i1);
 }
 
-static std::vector<Any> builtin_branch(const Any *args, size_t argcount) {
+static size_t builtin_branch(const Any *args, size_t argcount, Any *ret) {
     builtin_checkparams(argcount, 4, 4, 1);
-    auto cond = extract_bool(args[1]);
-    if (cond) {
-        return { args[2], args[4] };
-    } else {
-        return { args[3], args[4] };
-    }
+    ret[0] = args[extract_bool(args[1])?2:3];
+    ret[1] = args[4];
+    return 2;
 }
 
-static std::vector<Any> builtin_call_cc(const Any *args, size_t argcount) {
+static size_t builtin_call_cc(
+    const Any *args, size_t argcount, Any *ret) {
     builtin_checkparams(argcount, 2, 2, 1);
-    return { args[1], args[2], args[2] };
+    ret[0] = args[1];
+    ret[1] = args[2];
+    ret[2] = args[2];
+    return 3;
 }
 
 static Any builtin_repr(const Any *args, size_t argcount) {
@@ -5043,8 +5098,8 @@ static Cursor expand_let_syntax (const Table *env, const List *topit) {
 
     auto fun = compile(cur.value);
 
-    auto expr_env = execute({fun, wrap_ptr(
-        Types::PTable, env)});
+    Any exec_args[] = {fun, wrap_ptr(Types::PTable, env)};
+    auto expr_env = execute(exec_args, 2);
     verifyValueKind(Types::PTable, expr_env);
 
     auto rest = expand_expr_list(*expr_env.ptable, cur.next);
@@ -5057,7 +5112,8 @@ static Cursor expand_let_syntax (const Table *env, const List *topit) {
 
 static const List *expand_macro(
     const Table *env, const Any &handler, const List *topit) {
-    auto result = execute({handler, wrap(env), wrap(topit)});
+    Any exec_args[] = {handler, wrap(env), wrap(topit)};
+    auto result = execute(exec_args, 3);
     if (isnone(result))
         return nullptr;
     verifyValueKind(Types::PList, result);
@@ -5576,7 +5632,8 @@ static Any builtin_eval(const Any *args, size_t argcount) {
 }
 
 static bool compileMain (Any expr, const char *path) {
-    execute({compileFlow(globals, expr, path)});
+    Any exec_args[] = {compileFlow(globals, expr, path)};
+    execute(exec_args, 1);
     return true;
 }
 
