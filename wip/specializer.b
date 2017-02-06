@@ -88,7 +88,7 @@ function flow-iter-arguments (aflow aframe)
         0
 
 function param-label (aparam)
-    .. (style-keyword "%")
+    .. (style-keyword "@")
         string aparam.name
         string aparam.index
 
@@ -126,7 +126,7 @@ function flow-decl-label (aflow aframe)
                         if (argtype == parameter)
                             ..
                                 ? (arg.flow == aflow) ""
-                                    .. (flow-label arg.flow) "."
+                                    flow-label arg.flow
                                 param-label arg
                         elseif (argtype == closure)
                             closure-label arg

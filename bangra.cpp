@@ -3863,20 +3863,40 @@ continue_execution:
                 auto flow = *callee.pflow;
                 assert(get_anchor(flow));
 
-                if (rcount > 1) {
+                size_t pcount = flow->parameters.size();
+                size_t acount = rcount - 1;
+                if (pcount > 0) {
                     if (frame->map.count(flow)) {
                         frame = Frame::create(frame);
                     }
-                    tmpargs.resize(rcount - 1);
-                    for (size_t i = 1; i < rcount; ++i) {
-                        tmpargs[i - 1] = rbuf[i];
+                    tmpargs.resize(pcount);
+                    if (acount != pcount) {
+                        error("parameter count mismatch (passed %zu, need %zu)",
+                            acount, pcount);
+                    }
+
+                    for (size_t i = 0; i < pcount; ++i) {
+                        size_t k = i + 1;
+                        if (k < rcount) {
+                            Any val = rbuf[k];
+                            if (eq(val.type, Types::PClosure)) {
+                                auto closure = *val.pclosure;
+                                auto sym = get_ptr_symbol(closure);
+                                if (sym == SYM_Unnamed) {
+                                    sym = flow->parameters[i]->name;
+                                    if (sym != SYM_Unnamed) {
+                                        set_ptr_symbol(closure, sym);
+                                    }
+                                }
+                            }
+                            tmpargs[i] = val;
+                        } else {
+                            tmpargs[i] = const_none;
+                        }
                     }
                     frame->map[flow] = tmpargs;
                 }
                 set_anchor(frame, get_anchor(flow));
-
-                size_t acount = rcount - 1;
-                size_t pcount = flow->parameters.size();
 
                 for (int i = 0; i < ((int)std::min(acount, pcount) - 1); ++i) {
                     Any val = rbuf[i + 1];
@@ -3890,11 +3910,6 @@ continue_execution:
                             }
                         }
                     }
-                }
-
-                if (acount != pcount) {
-                    error("parameter count mismatch (passed %zu, need %zu)",
-                        acount, pcount);
                 }
 
                 if (trace_arguments) {
