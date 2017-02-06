@@ -2253,8 +2253,8 @@ namespace Types {
 
     static std::string _named_ptr_tostring(const Type *self, const bangra::Any &value) {
         auto sym = get_ptr_symbol(value.ptr);
-        return get_name(self) + ":" +
-            (sym?get_symbol_name(sym):format("%p", value.ptr));
+        return "<" + get_name(self) + " " +
+            (sym?get_symbol_name(sym):format("%p", value.ptr)) + ">";
     }
 
     static std::string _integer_tostring(const Type *self, const bangra::Any &value) {
@@ -2991,6 +2991,7 @@ namespace Types {
             std::vector<const Type *> types = { PFlow, PFrame };
             std::vector<std::string> names = { "entry", "frame" };
             tmp = Struct("Closure", true);
+            tmp->tostring = _named_ptr_tostring;
             _set_struct_field_types(tmp, types);
             _set_field_names(tmp, names);
             PClosure = Pointer(tmp);
@@ -3873,6 +3874,29 @@ continue_execution:
                     frame->map[flow] = tmpargs;
                 }
                 set_anchor(frame, get_anchor(flow));
+
+                size_t acount = rcount - 1;
+                size_t pcount = flow->parameters.size();
+
+                for (int i = 0; i < ((int)std::min(acount, pcount) - 1); ++i) {
+                    Any val = rbuf[i + 1];
+                    if (eq(val.type, Types::PClosure)) {
+                        auto closure = *val.pclosure;
+                        auto sym = get_ptr_symbol(closure);
+                        if (sym == SYM_Unnamed) {
+                            sym = flow->parameters[i]->name;
+                            if (sym != SYM_Unnamed) {
+                                set_ptr_symbol(closure, sym);
+                            }
+                        }
+                    }
+                }
+
+                if (acount != pcount) {
+                    error("parameter count mismatch (passed %zu, need %zu)",
+                        acount, pcount);
+                }
+
                 if (trace_arguments) {
                     auto anchor = get_anchor(flow);
                     Anchor::printMessage(anchor, "trace");
@@ -4615,6 +4639,14 @@ static size_t builtin_call_cc(
     return 3;
 }
 
+static size_t builtin_return_cc(
+    const Any *args, size_t argcount, Any *ret) {
+    builtin_checkparams(argcount, 3, 3, 1);
+    ret[0] = args[1];
+    ret[1] = args[2];
+    return 2;
+}
+
 static Any builtin_repr(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     return wrap(formatValue(args[0], 0, false));
@@ -4674,6 +4706,13 @@ static Any builtin_table(const Any *args, size_t argcount) {
             error("tuple must have exactly two elements");
         auto name = extract_symbol(pair[0]);
         auto value = pair[1];
+        if (eq(value.type, Types::PClosure)) {
+            auto closure = *value.pclosure;
+            auto sym = get_ptr_symbol(closure);
+            if (sym == SYM_Unnamed) {
+                set_ptr_symbol(closure, name);
+            }
+        }
         set_key(*t, name, value);
     }
 
@@ -5310,7 +5349,7 @@ static Any compile_function (const List *it) {
 
     auto currentblock = builder->save();
 
-    auto function = Flow::create(0, SYM_FunctionFlow);
+    auto function = Flow::create(0);
     set_anchor(function, anchor);
 
     builder->continueAt(function);
@@ -5491,7 +5530,8 @@ static void initGlobals () {
     setBuiltin<builtin_external>(env, "external");
     setBuiltin<builtin_import_c>(env, "import-c");
     setBuiltin<builtin_branch>(env, "branch");
-    setBuiltin<builtin_call_cc>(env, "call/cc");
+    setBuiltin<builtin_call_cc>(env, "__call/cc");
+    setBuiltin<builtin_return_cc>(env, "__return/cc");
     setBuiltin<builtin_dump>(env, "dump");
     setBuiltin<builtin_syntax_macro>(env, "syntax-macro");
     setBuiltin<builtin_string>(env, "string");

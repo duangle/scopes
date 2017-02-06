@@ -519,6 +519,13 @@ let-syntax (scope)
             make-expand-multi-op-ltr and
         : or
             make-expand-multi-op-ltr or
+        : call/cc
+            function (f)
+                __call/cc
+                    function (continuation)
+                        f
+                            function (return-value)
+                                __return/cc continuation return-value
         # quasiquote support
         # (qquote expr [...])
         : qquote

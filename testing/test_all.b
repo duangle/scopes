@@ -242,6 +242,50 @@ assert
 
 print typeof
 
+assert
+    call/cc
+        function (return)
+            print "entered function"
+            return true
+            error "unreachable"
+    "call/cc failed"
+
+do
+    function generator ()
+        let T
+            table;
+        set-key! T
+            : run
+                function (ret)
+                    let G
+                        table
+                            : ret
+                    function yield ()
+                        call/cc
+                            function (cont)
+                                G.ret
+                                    function (ret)
+                                        set-key! G
+                                            : ret
+                                        cont none
+                    print "step 1"
+                    yield;
+                    print "step 2"
+                    yield;
+                    print "step 3"
+                    yield;
+        function step-gen ()
+            set-key! T
+                : run
+                    call/cc T.run
+    let g (generator)
+    print "call 1:" (g)
+    print "call 2:" (g)
+    print "call 3:" (g)
+    print "done"
+
+#(define (process p) (toplevel-exit))
+
 do
     let i 0
     let k "!"

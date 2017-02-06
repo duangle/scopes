@@ -163,5 +163,7 @@ function test1 (x)
     print
         ? k HELLO_WORLD ""
 
+print test1
+
 print
     dump-function test1
