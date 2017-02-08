@@ -27,11 +27,11 @@ local function bangra_symbols()
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* ::@ syntax-macro syntax-scope cons"
             .. " string expand call escape do empty? dump-syntax"
-            .. " let-syntax dump list-join list-head? if else elseif loop"
+            .. " syntax-extend dump list-join list-head? if else elseif loop"
             .. " repeat syntax-single-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
-            .. " set-key! cstr pointer"
+            .. " set-key! cstr pointer return continuation"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

@@ -244,11 +244,25 @@ print typeof
 
 assert
     call/cc
-        function (return)
+        function (cont)
             print "entered function"
-            return true
+            cont true
             error "unreachable"
     "call/cc failed"
+
+do
+    function cont-test (x)
+        print "entered function"
+        let topret return
+        function subf ()
+            print "entered subfunction"
+            # `return x` would just exit subf, but not cont-test
+            topret x
+        subf;
+        error "unreachable"
+    assert
+        cont-test true
+        "continuation failed"
 
 do
     function generator ()

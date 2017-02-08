@@ -1,36 +1,37 @@
 # boot script
 # the bangra executable looks for a boot file at
 # path/to/executable.b and, if found, executes it.
-let-syntax stage-1 (scope)
+
+syntax-extend stage-1 (_ scope)
     table
         tupleof scope-parent-symbol scope
         tupleof
             quote symbol?
-            function symbol? (x)
+            continuation symbol? (_ x)
                 == (typeof x) symbol
         tupleof
             quote list?
-            function list? (x)
+            continuation list? (_ x)
                 == (typeof x) list
         tupleof
             quote none?
-            function none? (x)
+            continuation none? (_ x)
                 == x none
         tupleof
             quote empty?
-            function empty? (x)
+            continuation empty? (_ x)
                 branch
                     == (typeof x) list
-                    function ()
+                    continuation ()
                         == x (list)
-                    function () false
+                    continuation () false
         tupleof
             quote key?
-            function key? (x y)
+            continuation key? (_ x y)
                 != (@ x y) none
         tupleof
             quote load
-            function load (path)
+            continuation load (_ path)
                 eval
                     list-load path
                     globals;
@@ -43,9 +44,9 @@ let-syntax stage-1 (scope)
                 tupleof;
         tupleof
             quote syntax-single-macro
-            function syntax-single-macro (f)
+            continuation syntax-single-macro (_ f)
                 syntax-macro
-                    function (scope expr)
+                    continuation (_ scope expr)
                         cons
                             f scope
                                 @ expr 0
@@ -53,15 +54,15 @@ let-syntax stage-1 (scope)
         tupleof
             quote call
             syntax-macro
-                function call (scope expr)
+                continuation call (_ scope expr)
                     cons
                         @ expr 0 1
                         @ expr 1
         tupleof
             quote dump-syntax
             syntax-macro
-                function dump-syntax (scope expr)
-                    ((function (e)
+                continuation dump-syntax (_ scope expr)
+                    ((continuation (_ e)
                         (dump
                             (@ e 0 0))
                         (cons
@@ -75,17 +76,17 @@ let-syntax stage-1 (scope)
         tupleof
             quote let
             syntax-macro
-                function syntax-macro (scope expr)
-                    ((function (param-name)
-                        ((function (param scope-name)
+                continuation syntax-macro (_ scope expr)
+                    ((continuation (_ param-name)
+                        ((continuation (_ param scope-name)
                             (list
-                                (list let-syntax (list scope-name)
+                                (list syntax-extend (list (parameter (quote _)) scope-name)
                                     (list table
                                         (list tupleof (list quote scope-parent-symbol) scope-name)
                                         (list tupleof (list quote param-name) param)))
                                 (list
-                                    (cons function
-                                        (cons (list param)
+                                    (cons continuation
+                                        (cons (list (parameter (quote _)) param)
                                                 (@ expr 1)))
                                     (@ expr 0 2 0))))
                             (parameter param-name)
@@ -93,19 +94,19 @@ let-syntax stage-1 (scope)
         tupleof
             quote ?
             syntax-macro
-                function ? (scope expr)
+                continuation ? (_ scope expr)
                     cons
                         list branch
                             @ expr 0 1 0
-                            list function (list)
+                            list continuation (list)
                                 @ expr 0 2 0
-                            list function (list)
+                            list continuation (list)
                                 @ expr 0 3 0
                         @ expr 1
         tupleof
             quote :
             syntax-macro
-                function : (scope expr)
+                continuation : (_ scope expr)
                     cons
                         cons tupleof
                             cons
@@ -113,16 +114,16 @@ let-syntax stage-1 (scope)
                                     @ expr 0 1 0
                                 branch
                                     == (@ expr 0 2) (list)
-                                    function ()
+                                    continuation ()
                                         list
                                             @ expr 0 1 0
-                                    function ()
+                                    continuation ()
                                         @ expr 0 2
                         @ expr 1
 
-let-syntax stage-2 (scope)
+syntax-extend stage-2 (_ scope)
     let list-join
-        function list-join (a b)
+        continuation list-join (_ a b)
             ? (empty? a) b
                 cons
                     @ a 0
@@ -130,7 +131,7 @@ let-syntax stage-2 (scope)
                         @ a 1
                         b
     let list-head?
-        function list-head? (expr name)
+        continuation list-head? (_ expr name)
             ? (list? expr)
                 do
                     let head (@ expr 0)
@@ -143,20 +144,20 @@ let-syntax stage-2 (scope)
         : list-join
         : list-head?
         : list-atom?
-            function list-atom? (x)
+            continuation list-atom? (_ x)
                 ? (list? x)
                     empty? x
                     true
         : assert # (assert bool-expr [error-message])
             syntax-single-macro
-                function assert (scope expr)
+                continuation assert (_ scope expr)
                     list ? (@ expr 1 0) true
                         list error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
         : ::@
             syntax-macro
-                function ::@ (scope expr)
+                continuation ::@ (_ scope expr)
                     cons
                         list-join
                             @ expr 0 1
@@ -165,14 +166,14 @@ let-syntax stage-2 (scope)
                         @ expr 2
         : ::*
             syntax-macro
-                function ::* (scope expr)
+                continuation ::* (_ scope expr)
                     list
                         list-join
                             @ expr 0 1
                             @ expr 1
         : .
             syntax-single-macro
-                function . (scope expr)
+                continuation . (_ scope expr)
                     let key
                         @ expr 2 0
                     ? (symbol? key)
@@ -184,64 +185,78 @@ let-syntax stage-2 (scope)
 
         : function # (function [name] (param ...) body ...)
             syntax-macro
-                function function (scope expr)
+                continuation function (_ scope expr)
                     let decl
                         (@ expr 0 1 0)
+                    let retparam
+                        quote return
                     ? (symbol? decl)
                         cons
                             list let decl
-                                cons function
-                                    @ expr 0 1
+                                cons continuation
+                                    cons
+                                        @ expr 0 1 0
+                                        cons
+                                            cons
+                                                retparam
+                                                @ expr 0 2 0
+                                            @ expr 0 3
                             ? (empty? (@ expr 1))
                                 list decl
                                 @ expr 1
                         cons
-                            cons function
-                                @ expr 0 1
+                            cons continuation
+                                cons
+                                    cons
+                                        retparam
+                                        @ expr 0 1 0
+                                    @ expr 0 2
                             @ expr 1
         : and
             syntax-single-macro
-                function and (scope expr)
+                continuation and (_ scope expr)
                     let tmp
                         parameter
                             quote tmp
                     list
-                        list function (list tmp)
+                        list continuation (list (parameter (quote _)) tmp)
                             list branch tmp
-                                list function (list)
+                                list continuation (list)
                                     @ expr 2 0
-                                list function (list) tmp
+                                list continuation (list) tmp
                         @ expr 1 0
         : or
             syntax-single-macro
-                function or (scope expr)
+                continuation or (_ scope expr)
                     let tmp
                         parameter
                             quote tmp
                     list
-                        list function (list tmp)
+                        list continuation (list (parameter (quote _)) tmp)
                             list branch tmp
-                                list function (list) tmp
-                                list function (list)
+                                list continuation (list) tmp
+                                list continuation (list)
                                     @ expr 2 0
                         @ expr 1 0
         : loop
             syntax-single-macro
-                function loop (scope expr)
+                continuation loop (_ scope expr)
                     let param-repeat
                         quote repeat
                     list do
                         list let param-repeat
-                            cons function
+                            cons continuation
                                 cons
-                                    @ expr 1 0
+                                    cons
+                                        parameter (quote _)
+                                        @ expr 1 0
                                     @ expr 2
                         cons param-repeat
                             @ expr 1 0
         : if
             do
                 let if-rec
-                    function if (scope expr)
+                    continuation if (_ scope expr)
                         let next-expr
                             @ expr 1 0
                         ? (list-head? next-expr (quote elseif))
@@ -252,20 +267,20 @@ let-syntax stage-2 (scope)
                                 cons
                                     list branch
                                         @ expr 0 1 0
-                                        cons function
+                                        cons continuation
                                             cons (list)
                                                 @ expr 0 2
-                                        list function (list)
+                                        list continuation (list)
                                             @ nextif 0
                                     @ nextif 1
                             ? (list-head? next-expr (quote else))
                                 cons
                                     list branch
                                         @ expr 0 1 0
-                                        cons function
+                                        cons continuation
                                             cons (list)
                                                 @ expr 0 2
-                                        cons function
+                                        cons continuation
                                             cons (list)
                                                 @ expr 1 0 1
                                     @ expr 2
@@ -273,28 +288,28 @@ let-syntax stage-2 (scope)
                                     cons
                                         list branch
                                             @ expr 0 1 0
-                                            cons function
+                                            cons continuation
                                                 cons (list)
                                                     @ expr 0 2
-                                            list function (list)
+                                            list continuation (list)
                                         @ expr 1
                 syntax-macro if-rec
         : syntax-infix-rules
-            function syntax-infix-rules (prec order name)
+            continuation syntax-infix-rules (_ prec order name)
                 structof
                     tupleof (quote prec) prec
                     tupleof (quote order) order
                     tupleof (quote name) name
         : syntax-infix-op
             syntax-single-macro
-                function syntax-infix-op (scope expr)
+                continuation syntax-infix-op (_ scope expr)
                     list tupleof
                         list quote
                             symbol
                                 .. "#ifx:" (string (@ expr 1 0))
                         @ expr 2 0
 
-let-syntax stage-3 (scope)
+syntax-extend stage-3 (_ scope)
 
     function unwrap-single (expr)
         # unwrap single item from list or prepend 'do' clause to list
@@ -583,15 +598,17 @@ let-syntax stage-3 (scope)
                         let scope-name
                             quote scope
                         list
-                            list let-syntax (list scope-name)
+                            list syntax-extend (list (parameter (quote _)) scope-name)
                                 cons table
                                     cons
                                         list tupleof (list quote scope-parent-symbol) scope-name
                                         @ cells 0
                             cons
-                                cons function
+                                cons continuation
                                     cons
-                                        @ cells 1
+                                        cons
+                                            parameter (quote _)
+                                            @ cells 1
                                         @ expr 1
                                 @ cells 2
 
@@ -623,7 +640,7 @@ let-syntax stage-3 (scope)
                             quote self
                     cons
                         list
-                            list function (list self)
+                            list continuation (list (parameter (quote _)) self)
                                 cons
                                     list (do @) self
                                         list quote name
@@ -704,7 +721,7 @@ let-syntax stage-3 (scope)
         #syntax-infix-op @= (syntax-infix-rules 800 > @=)
         #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
-let-syntax stage-final (scope)
+syntax-extend stage-final (_ scope)
     set-globals! scope
     scope
 

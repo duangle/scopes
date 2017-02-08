@@ -571,7 +571,7 @@ enum {
 
     SYM_Parent,
 
-    SYM_FunctionForm,
+    SYM_ContinuationForm,
     SYM_QuoteForm,
 
     // wildcards
@@ -584,6 +584,9 @@ enum {
     SYM_ExitFlow,
 
     SYM_Continuation,
+    // return keyword
+    SYM_Return,
+    SYM_Result,
 
     SYM_ScriptSize,
     SYM_Count,
@@ -616,7 +619,7 @@ static std::string get_symbol_name(Symbol id) {
 static void initSymbols() {
     map_symbol(SYM_Unnamed, "");
     map_symbol(SYM_Parent, "#parent");
-    map_symbol(SYM_FunctionForm, "form:function");
+    map_symbol(SYM_ContinuationForm, "form:continuation");
     map_symbol(SYM_QuoteForm, "form:quote");
     map_symbol(SYM_ListWC, "#list");
     map_symbol(SYM_SymbolWC, "#symbol");
@@ -624,6 +627,8 @@ static void initSymbols() {
     map_symbol(SYM_FunctionFlow, "function");
     map_symbol(SYM_ReturnFlow, "return");
     map_symbol(SYM_ExitFlow, "exit");
+    map_symbol(SYM_Return, "return");
+    map_symbol(SYM_Result, "result");
     map_symbol(SYM_Continuation, "cont");
 }
 
@@ -1751,6 +1756,14 @@ public:
 
     Parameter *appendParameter(const Symbol &name = SYM_Unnamed) {
         return appendParameter(Parameter::create(name));
+    }
+
+    // an empty function
+    // you have to add the continuation argument manually
+    static Flow *create_empty_function(const Symbol &name) {
+        auto value = new Flow();
+        value->name = name;
+        return value;
     }
 
     // a function that eventually returns
@@ -3936,7 +3949,6 @@ continue_execution:
                 assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
                 size_t pcount = flow->parameters.size();
-                size_t acount = rcount - 1;
 
                 if (frame->map.count(flow)) {
                     frame = Frame::create(frame);
@@ -4047,7 +4059,7 @@ static Any execute(const Any *args, size_t argcount) {
     assert(argcount < BANGRA_MAX_FUNCARGS);
     Any *ret = (Any *)malloc(sizeof(Any) * BANGRA_MAX_FUNCARGS);
     auto exitcont = Flow::create_continuation(SYM_ExitFlow);
-    exitcont->appendParameter(SYM_ReturnFlow);
+    exitcont->appendParameter(SYM_Result);
     ret[ARG_Cont] = wrap(exitcont);
     for (size_t i = 0; i < argcount; ++i) {
         ret[i + ARG_Func] = args[i];
@@ -5136,6 +5148,12 @@ static bool verifyAtParameterCount (const List *topit,
 static Cursor expand (const Table *env, const List *topit);
 static Any compile(const Any &expr);
 
+static Any toparameter (Table *env, const Symbol &key) {
+    auto bp = wrap(Parameter::create(key));
+    setLocal(env, key, bp);
+    return bp;
+}
+
 static Any toparameter (Table *env, const Any &value) {
     if (eq(value.type, Types::PParameter))
         return value;
@@ -5156,7 +5174,7 @@ static const List *expand_expr_list (const Table *env, const List *it) {
     return reverse_list_inplace(l);
 }
 
-static Cursor expand_function (const Table *env, const List *topit) {
+static Cursor expand_continuation (const Table *env, const List *topit) {
     verifyAtParameterCount(topit, 1, -1);
 
     auto it = extract_list(topit->at);
@@ -5192,7 +5210,7 @@ static Cursor expand_function (const Table *env, const List *topit) {
     return {
         wrap(
             List::create(
-                getLocal(globals, SYM_FunctionForm),
+                getLocal(globals, SYM_ContinuationForm),
                 List::create(
                     sym,
                     List::create(
@@ -5219,8 +5237,8 @@ static Cursor expand_escape (const Table *env, const List *topit) {
     return { it->next->at, topit->next };
 }
 
-static Cursor expand_let_syntax (const Table *env, const List *topit) {
-    auto cur = expand_function (env, topit);
+static Cursor expand_syntax_extend (const Table *env, const List *topit) {
+    auto cur = expand_continuation (env, topit);
 
     auto fun = compile(cur.value);
 
@@ -5230,7 +5248,7 @@ static Cursor expand_let_syntax (const Table *env, const List *topit) {
 
     auto rest = expand_expr_list(*expr_env.ptable, cur.next);
     if (!rest) {
-        error("let-syntax: missing subsequent expression");
+        error("syntax-extend: missing subsequent expression");
     }
 
     return { rest->at, rest->next };
@@ -5393,7 +5411,7 @@ struct ILBuilder {
         // these predicates should probably be in a more meaningful
         // function.
         assert(state.flow);
-        /* if (state.prevflow
+        if (state.prevflow
             && (arguments.size() == 3)
             && (eq(Types::PParameter, arguments[ARG_Arg0].type))
             && (*arguments[ARG_Arg0].pparameter
@@ -5402,7 +5420,7 @@ struct ILBuilder {
             && (*(state.prevflow->arguments[ARG_Cont]).pflow
                 == state.flow)) {
             state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
-        } else */ {
+        } else {
             insertAndAdvance(arguments, nullptr, anchor);
         }
     }
@@ -5410,7 +5428,7 @@ struct ILBuilder {
     Parameter *call(std::vector<Any> values, const Anchor *anchor) {
         assert(anchor);
         auto next = Flow::create_continuation(SYM_ReturnFlow);
-        next->appendParameter(SYM_ReturnFlow);
+        next->appendParameter(SYM_Result);
         values.insert(values.begin(), wrap(next));
         insertAndAdvance(values, next, anchor);
         return next->parameters[PARAM_Arg0];
@@ -5436,7 +5454,7 @@ static Any compile_do (const List *it) {
     return compile_expr_list(it);
 }
 
-static Any compile_function (const List *it) {
+static Any compile_continuation (const List *it) {
     auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
         printValue(wrap(it), 0, true);
@@ -5457,9 +5475,8 @@ static Any compile_function (const List *it) {
 
     auto currentblock = builder->save();
 
-    auto function = Flow::create_function(func_name);
+    auto function = Flow::create_empty_function(func_name);
     set_anchor(function, anchor);
-    auto ret = function->parameters[PARAM_Cont];
 
     builder->continueAt(function);
 
@@ -5469,6 +5486,13 @@ static Any compile_function (const List *it) {
             const_cast<Parameter*>(extract_parameter(param->at)));
         param = param->next;
     }
+    if (function->parameters.size() == 0) {
+        // auto-add continuation parameter
+        function->appendParameter(SYM_Return);
+    }
+    auto ret = function->parameters[PARAM_Cont];
+    assert(ret);
+
     auto result = compile_expr_list(it);
 
     builder->br({const_none, wrap(ret), result}, anchor);
@@ -5560,13 +5584,13 @@ static void initGlobals () {
     //setLocalString(env, "globals", wrap(env));
 
     setBuiltin<compile_call>(env, "form:call");
-    setBuiltin<compile_function>(env, "form:function");
+    setBuiltin<compile_continuation>(env, "form:continuation");
     setBuiltin<compile_quote>(env, "form:quote");
     setBuiltin<compile_do>(env, "do");
 
-    setBuiltin<expand_function>(env, "function");
+    setBuiltin<expand_continuation>(env, "continuation");
     setBuiltin<expand_quote>(env, "quote");
-    setBuiltin<expand_let_syntax>(env, "let-syntax");
+    setBuiltin<expand_syntax_extend>(env, "syntax-extend");
     setBuiltin<expand_escape>(env, "escape");
 
     setLocalString(env, "void", wrap(Types::None));
