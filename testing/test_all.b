@@ -264,6 +264,17 @@ do
         cont-test true
         "continuation failed"
 
+    function cont-test2 (x)
+        if x
+            return x
+        else
+            return;
+        error "unreachable"
+    assert
+        (cont-test2 true) == true
+    assert
+        (cont-test2 false) == none
+
 do
     function generator ()
         let T
@@ -342,5 +353,27 @@ test-noparam;
 function test-extraparam ()
     true
 test-extraparam 1 2 3
+
+function test-varargs(x y ...)
+    /// assert
+        ... == ...
+    assert
+        and
+            x == 1
+            y == 2
+    assert
+        (length ...) == 3
+    assert
+        and
+            ... @ 0 == 3
+            ... @ 1 == 4
+            ... @ 2 == 5
+test-varargs 1 2 3 4 5
+
+do
+    let ... 5 6 7
+    print
+        length ...
+        @ ... 0
 
 print "ok"

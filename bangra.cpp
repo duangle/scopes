@@ -488,6 +488,7 @@ struct Type;
 struct Macro;
 struct Frame;
 struct Cursor;
+struct VarArgs;
 
 template<typename T>
 struct Slice {
@@ -534,6 +535,7 @@ struct Any {
         const List **plist;
         const Type **ptype;
         const Parameter **pparameter;
+        const VarArgs **pvarargs;
         const Flow **pflow;
         const Closure **pclosure;
         const Frame **pframe;
@@ -570,6 +572,7 @@ enum {
     SYM_Unnamed = 0,
 
     SYM_Parent,
+    SYM_VarArgs,
 
     SYM_ContinuationForm,
     SYM_QuoteForm,
@@ -619,6 +622,7 @@ static std::string get_symbol_name(Symbol id) {
 static void initSymbols() {
     map_symbol(SYM_Unnamed, "");
     map_symbol(SYM_Parent, "#parent");
+    map_symbol(SYM_VarArgs, "...");
     map_symbol(SYM_ContinuationForm, "form:continuation");
     map_symbol(SYM_QuoteForm, "form:quote");
     map_symbol(SYM_ListWC, "#list");
@@ -744,6 +748,7 @@ namespace Types {
     static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
+    static const Type *PVarArgs;
     static const Type *PBuiltinFlow;
     static const Type *PFlow;
     static const Type *PSpecialForm;
@@ -1595,6 +1600,32 @@ static const Parameter *extract_parameter(const Any &value) {
     return nullptr;
 }
 
+//------------------------------------------------------------------------------
+
+struct VarArgs {
+    const Frame *frame;
+    const Parameter *parameter;
+
+    VarArgs() :
+        frame(nullptr),
+        parameter(nullptr) {
+    }
+
+    static VarArgs *create(const Frame *frame, const Parameter *param) {
+        assert(param->parent);
+        auto value = new VarArgs();
+        value->frame = frame;
+        value->parameter = param;
+        return value;
+    }
+};
+
+static Any wrap(const VarArgs *varargs) {
+    return wrap_ptr(Types::PVarArgs, varargs);
+}
+static Any wrap(VarArgs *varargs) {
+    return wrap_ptr(Types::PVarArgs, varargs);
+}
 
 //------------------------------------------------------------------------------
 
@@ -2271,803 +2302,6 @@ static void verifyValueKind(const Type *type, const Any &expr) {
             get_name(expr.type).c_str());
     }
 }
-
-//------------------------------------------------------------------------------
-// TYPE SETUP
-//------------------------------------------------------------------------------
-
-// set by execute()
-static Frame *handler_frame = nullptr;
-
-namespace Types {
-
-    static std::string _string_tostring(const Type *self, const bangra::Any &value) {
-        return extract_string(value);
-    }
-
-    static std::string _symbol_tostring(const Type *self, const bangra::Any &value) {
-        return extract_symbol_string(value);
-    }
-
-    template<typename T>
-    static std::string _named_object_tostring(const Type *self, const bangra::Any &value) {
-        auto sym = ((T *)value.ptr)->name;
-        return "<" + get_name(self) + " " + get_symbol_name(sym) + format("=%p>", value.ptr);
-    }
-
-    static std::string _parameter_tostring(const Type *self, const bangra::Any &value) {
-        auto param = (Parameter *)value.ptr;
-        auto name = format("@%s%zu", get_symbol_name(param->name).c_str(), param->index);
-        if (param->parent) {
-            name = get_string(wrap(param->parent)) + name;
-        }
-        return "<" + get_name(self) + " " + name + ">";
-    }
-
-    static std::string _closure_tostring(const Type *self, const bangra::Any &value) {
-        auto closure = (Closure *)value.ptr;
-        return "<" + get_name(self)
-            + " entry=" + get_string(wrap(closure->entry))
-            + format(" frame=%p", closure->frame) + ">";
-    }
-
-    static std::string _named_ptr_tostring(const Type *self, const bangra::Any &value) {
-        auto sym = get_ptr_symbol(value.ptr);
-        return "<" + get_name(self) + " " +
-            (sym?get_symbol_name(sym):format("%p", value.ptr)) + ">";
-    }
-
-    static std::string _integer_tostring(const Type *self, const bangra::Any &value) {
-        auto ivalue = extract_integer(value);
-        if (self->width == 1) {
-            return ivalue?"true":"false";
-        }
-        if (self->is_signed)
-            return format("%" PRId64, ivalue);
-        else
-            return format("%" PRIu64, ivalue);
-    }
-
-    static std::string _real_tostring(const Type *self, const bangra::Any &value) {
-        return format("%g", extract_real(value));
-    }
-
-    static std::string _list_tostring(const Type *self, const bangra::Any &value) {
-        std::stringstream ss;
-        bangra::streamValue(ss, value, 0, false);
-        return ss.str();
-    }
-
-    static Ordering _list_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        auto x = extract_list(a);
-        auto y = extract_list(b);
-        while (true) {
-            if (x == y) return Equal;
-            else if (!x) return Less;
-            else if (!y) return Greater;
-            auto result = compare(x->at, y->at);
-            if (result != Equal) return result;
-            x = x->next;
-            y = y->next;
-        }
-    }
-
-    static bangra::Any type_pointer_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &index) {
-        return at(pointer_element(self, value), index);
-    }
-
-    /*
-    static bangra::Any _pointer_apply_type(const Type *self,
-        const std::vector<bangra::Any> &args) {
-    }
-    */
-
-    static Ordering value_pointer_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        auto y = is_pointer_type(b.type)?pointer_element(b.type, b):b;
-        return compare(pointer_element(self, a), y);
-    }
-
-    static Ordering _struct_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        if (!eq(a.type, b.type)) return Unordered;
-        return (a.ptr == b.ptr)?Equal:Unordered;
-    }
-
-    static Ordering value_none_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return (self == b.type)?Equal:Unordered;
-    }
-
-    static bangra::Any _integer_add(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) + extract_integer(b));
-    }
-
-    static bangra::Any _integer_sub(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) - extract_integer(b));
-    }
-
-    static bangra::Any _integer_mul(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) * extract_integer(b));
-    }
-
-    static bangra::Any _integer_div(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return wrap((double)extract_integer(a) / (double)extract_integer(b));
-    }
-
-    static bangra::Any _integer_neg(const Type *self, const bangra::Any &x) {
-        return wrap(-extract_integer(x));
-    }
-
-    static bangra::Any _integer_rcp(const Type *self, const bangra::Any &x) {
-        return wrap(1.0 / (double)extract_integer(x));
-    }
-
-    static Ordering _integer_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        auto x = extract_integer(a);
-        auto y = extract_integer(b);
-        return (Ordering)((y < x) - (x < y));
-    }
-
-    static bangra::Any _bool_not(const Type *self, const bangra::Any &x) {
-        return wrap(!extract_bool(x));
-    }
-
-    static Ordering value_symbol_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        if (self != b.type) error("can not compare to type");
-        auto x = *a.symbol;
-        auto y = *b.symbol;
-        return (x == y)?Equal:Unordered;
-    }
-
-    static bangra::Any _real_add(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return real(self, extract_real(a) + extract_real(b));
-    }
-
-    static bangra::Any _real_sub(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return real(self, extract_real(a) - extract_real(b));
-    }
-
-    static bangra::Any _real_mul(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return real(self, extract_real(a) * extract_real(b));
-    }
-
-    static bangra::Any _real_div(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return real(self, extract_real(a) / extract_real(b));
-    }
-
-    static bangra::Any _real_neg(const Type *self, const bangra::Any &x) {
-        return real(self, -extract_real(x));
-    }
-
-    static bangra::Any _real_rcp(const Type *self, const bangra::Any &x) {
-        return real(self, 1.0 / extract_real(x));
-    }
-
-    static Ordering _real_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        auto x = extract_real(a);
-        auto y = extract_real(b);
-        if (std::isnan(x + y)) return Unordered;
-        return (Ordering)((y < x) - (x < y));
-    }
-
-    static std::string _none_tostring(const Type *self,
-        const bangra::Any &value) {
-        return "none";
-    }
-
-    static std::string _pointer_tostring(const Type *self,
-        const bangra::Any &value) {
-        return format("%s%s %s%s",
-            ansi(ANSI_STYLE_COMMENT, "<").c_str(),
-            ansi(ANSI_STYLE_OPERATOR, "&").c_str(),
-            get_string(pointer_element(self, value)).c_str(),
-            ansi(ANSI_STYLE_COMMENT, ">").c_str());
-    }
-
-    static std::string _type_tostring(
-        const Type *self, const bangra::Any &value) {
-        return "type:" + get_name((const Type *)value.ptr);
-    }
-
-    static bool type_array_eq(const Type *self, const Type *other) {
-        return (other == TArray);
-    }
-
-    static bool type_vector_eq(const Type *self, const Type *other) {
-        return (other == TVector);
-    }
-
-    static bool type_pointer_eq(const Type *self, const Type *other) {
-        return (other == TPointer);
-    }
-
-    static bool type_tuple_eq(const Type *self, const Type *other) {
-        return (other == TTuple);
-    }
-
-    static bool type_cfunction_eq(const Type *self, const Type *other) {
-        return (other == TCFunction);
-    }
-
-    static bool type_integer_eq(const Type *self, const Type *other) {
-        return (other == TInteger);
-    }
-
-    static bool type_real_eq(const Type *self, const Type *other) {
-        return (other == TReal);
-    }
-
-    static bool type_struct_eq(const Type *self, const Type *other) {
-        return (other == TStruct);
-    }
-
-    static bool type_enum_eq(const Type *self, const Type *other) {
-        return (other == TEnum);
-    }
-
-
-    typedef bangra::Any (*ApplyTypeFunction)(const Type *self,
-        const bangra::Any *args, size_t argcount);
-
-    template<ApplyTypeFunction F>
-    static size_t apply_type_call(const Type *self,
-        const bangra::Any *args, size_t argcount, bangra::Any *ret) {
-        assert(argcount >= 2);
-        // truncate head and continuation tail argument
-        ret[ARG_Cont] = const_none;
-        ret[ARG_Func] = args[ARG_Cont];
-        ret[ARG_Arg0] = F(self, args + ARG_Arg0, argcount - 2);
-        return 3;
-    }
-
-    static bangra::Any _symbol_apply_type(const Type *self,
-        const bangra::Any *args, size_t argcount) {
-        builtin_checkparams(argcount, 1, 1);
-        return symbol(get_string(args[0]));
-    }
-
-    static bangra::Any _list_apply_type(const Type *self,
-        const bangra::Any *args, size_t argcount) {
-        builtin_checkparams(argcount, 0, -1);
-        auto result = List::create_from_c_array(args, argcount);
-        set_anchor(result, get_anchor(handler_frame));
-        return wrap(result);
-    }
-
-    static bangra::Any _parameter_apply_type(const Type *self,
-        const bangra::Any *args, size_t argcount) {
-        builtin_checkparams(argcount, 1, 1);
-        auto name = extract_symbol(args[0]);
-        return wrap(Parameter::create(name));
-    }
-
-    static bangra::Any type_array_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto index = (size_t)extract_integer(vindex);
-        auto padded_size = align(
-            get_size(self->element_type), get_alignment(self->element_type));
-        auto offset = padded_size * index;
-        if (offset >= self->size) {
-            error("index %zu out of array bounds (%zu)",
-                index, self->size / padded_size);
-            return const_none;
-        }
-        return wrap(self->element_type, (char *)value.ptr + offset);
-    }
-
-    static Type *__new_array_type(const Type *element, size_t size) {
-        assert(element);
-        Type *type = new_type("");
-        type->count = size;
-        type->op2[OP2_At] = type_array_at;
-        type->element_type = element;
-        auto padded_size = align(get_size(element), get_alignment(element));
-        type->size = padded_size * type->count;
-        type->alignment = element->alignment;
-        return type;
-    }
-
-    static const Type *_new_array_type(const Type *element, size_t size) {
-        assert(element);
-        Type *type = __new_array_type(element, size);
-        type->name = format("(%s %s %s)",
-            ansi(ANSI_STYLE_KEYWORD, "@").c_str(),
-            get_name(element).c_str(),
-            ansi(ANSI_STYLE_NUMBER,
-                format("%zu", size)).c_str());
-        type->eq_type = type_array_eq;
-        return type;
-    }
-
-    static const Type *_new_vector_type(const Type *element, size_t size) {
-        assert(element);
-        Type *type = __new_array_type(element, size);
-        type->name = format("(%s %s %s)",
-            ansi(ANSI_STYLE_KEYWORD, "vector").c_str(),
-            get_name(element).c_str(),
-            ansi(ANSI_STYLE_NUMBER,
-                format("%zu", size)).c_str());
-        type->eq_type = type_vector_eq;
-        return type;
-    }
-
-    static const Type *_new_pointer_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
-                get_name(element).c_str()));
-        type->eq_type = type_pointer_eq;
-        type->op2[OP2_At] = type_pointer_at;
-        type->cmp = value_pointer_cmp;
-        type->tostring = _pointer_tostring;
-        type->element_type = element;
-        type->size = ffi_type_pointer.size;
-        type->alignment = ffi_type_pointer.alignment;
-        return type;
-    }
-
-    static bangra::Any type_tuple_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto index = (size_t)extract_integer(vindex);
-        if (index >= self->types.size()) {
-            error("index %zu out of tuple bounds (%zu)",
-                index, self->types.size());
-            return const_none;
-        }
-        auto offset = self->offsets[index];
-        return wrap(self->types[index], (char *)value.ptr + offset);
-    }
-
-    static std::string _tuple_tostring(const Type *self, const bangra::Any &value) {
-        std::stringstream ss;
-        ss << ansi(ANSI_STYLE_COMMENT, "<");
-        ss << ansi(ANSI_STYLE_KEYWORD, "tupleof");
-        for (size_t i = 0; i < self->types.size(); i++) {
-            auto offset = self->offsets[i];
-            ss << " " << get_string(
-                wrap(self->types[i], (char *)value.ptr + offset));
-        }
-        ss << ansi(ANSI_STYLE_COMMENT, ">");
-        return ss.str();
-    }
-
-    static bangra::Any type_struct_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        if (eq(vindex.type, Types::Symbol)) {
-            auto key = extract_symbol(vindex);
-            auto it = self->name_index_map.find(key);
-            if (it == self->name_index_map.end()) {
-                error("no such field in struct: %s",
-                    get_symbol_name(key).c_str());
-            }
-            return type_tuple_at(self, value, wrap(it->second));
-        } else {
-            return type_tuple_at(self, value, vindex);
-        }
-    }
-
-    static bangra::Any type_table_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto table = extract_table(value);
-        auto key = extract_symbol(vindex);
-        return get_key(*table, key, const_none);
-    }
-
-    static bangra::Any type_list_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto slist = extract_list(value);
-        if (!slist) {
-            //error("can not index into empty list");
-            return wrap((bangra::List*)nullptr);
-        }
-        auto index = (size_t)extract_integer(vindex);
-        if (index == 0) {
-            return slist->at;
-        } else {
-            const bangra::List *result = slist;
-            while ((index != 0) && result) {
-                --index;
-                result = result->next;
-            }
-            /*
-            if (index != 0) {
-                error("index %zu out of list bounds", index);
-            }
-            */
-            return wrap(result);
-        }
-    }
-
-    static size_t _string_length(const Type *self, const bangra::Any &value) {
-        return value.str->count;
-    }
-
-    static bangra::Any _string_slice(
-        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
-        return wrap(Types::String, alloc_string(
-            value.str->ptr + i0, i1 - i0));
-    }
-
-    static bangra::Any _string_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto index = (size_t)extract_integer(vindex);
-        if (index >= value.str->count) {
-            error("index %zu out of string bounds (%zu)",
-                index, value.str->count);
-        }
-        return _string_slice(self, value, index, index + 1);
-    }
-
-    static int zucmp(size_t a, size_t b) {
-        return (b < a) - (a < b);
-    }
-
-    static Ordering value_string_cmp(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        if (b.type != self)
-            error("incomparable values");
-        int c = zucmp(a.str->count, b.str->count);
-        if (!c) {
-            c = memcmp(a.str->ptr, b.str->ptr, a.str->count);
-        }
-        return (Ordering)c;
-    }
-
-    /*
-    static bangra::Any _symbol_slice(
-        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
-        return wrap(Types::Symbol, alloc_string(
-            value.str->ptr + i0, i1 - i0));
-    }
-    */
-
-    static size_t _tuple_length(const Type *self, const bangra::Any &value) {
-        return self->types.size();
-    }
-
-    static bangra::Any _string_concat(const Type *self,
-        const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_string(a) + extract_string(b));
-    }
-
-    static void _set_field_names(Type *type, const std::vector<std::string> &names) {
-        for (size_t i = 0; i < names.size(); ++i) {
-            auto name = get_symbol(names[i]);
-            if (name != SYM_Unnamed) {
-                type->name_index_map[name] = i;
-            }
-        }
-    }
-
-    static void _set_field_names(Type *type, const std::vector<bangra::Symbol> &names) {
-        for (size_t i = 0; i < names.size(); ++i) {
-            auto name = names[i];
-            if (name != SYM_Unnamed) {
-                type->name_index_map[name] = i;
-            }
-        }
-    }
-
-    static void _set_struct_field_types(Type *type, const std::vector<const Type *> &types) {
-        type->types = types;
-        size_t offset = 0;
-        size_t max_alignment = 1;
-        for (auto &element : types) {
-            size_t size = get_size(element);
-            size_t alignment = get_alignment(element);
-            max_alignment = std::max(max_alignment, alignment);
-            offset = align(offset, alignment);
-            type->offsets.push_back(offset);
-            offset += size;
-        }
-        type->size = align(offset, max_alignment);
-        type->alignment = max_alignment;
-    }
-
-    static void _set_union_field_types(Type *type, const std::vector<const Type *> &types) {
-        type->types = types;
-        size_t max_size = 0;
-        size_t max_alignment = 1;
-        for (auto &element : types) {
-            size_t size = get_size(element);
-            size_t alignment = get_alignment(element);
-            max_size = std::max(max_size, size);
-            max_alignment = std::max(max_alignment, alignment);
-        }
-        type->size = align(max_size, max_alignment);
-        type->alignment = max_alignment;
-    }
-
-    static const Type *_new_tuple_type(std::vector<const Type *> types) {
-        std::stringstream ss;
-        ss << "(";
-        ss << ansi(ANSI_STYLE_KEYWORD, "tuple");
-        for (auto &element : types) {
-            ss << " " << get_name(element);
-        }
-        ss << ")";
-        Type *type = new_type(ss.str());
-        type->eq_type = type_tuple_eq;
-        type->op2[OP2_At] = type_tuple_at;
-        type->length = _tuple_length;
-        type->tostring = _tuple_tostring;
-        _set_struct_field_types(type, types);
-        return type;
-    }
-
-    static const Type *_new_cfunction_type(
-        const Type *result, const Type *parameters, bool vararg) {
-        assert(eq(parameters, TTuple));
-        std::stringstream ss;
-        ss << "(";
-        ss << ansi(ANSI_STYLE_KEYWORD, "cfunction");
-        ss << " " << get_name(result);
-        ss << " " << get_name(parameters);
-        ss << " " << ansi(ANSI_STYLE_KEYWORD, vararg?"true":"false") << ")";
-        Type *type = new_type(ss.str());
-        type->eq_type = type_cfunction_eq;
-        type->is_vararg = vararg;
-        type->result_type = result;
-        type->types = { parameters };
-        type->size = ffi_type_pointer.size;
-        type->alignment = ffi_type_pointer.alignment;
-        return type;
-    }
-
-    static const Type *_new_integer_type(size_t width, bool signed_) {
-        ffi_type *itype = nullptr;
-        if (signed_) {
-            switch (width) {
-                case 1: itype = &ffi_type_uint8; break;
-                case 8: itype = &ffi_type_sint8; break;
-                case 16: itype = &ffi_type_sint16; break;
-                case 32: itype = &ffi_type_sint32; break;
-                case 64: itype = &ffi_type_sint64; break;
-                default: assert(false && "invalid width"); break;
-            }
-        } else {
-            switch (width) {
-                case 1: itype = &ffi_type_uint8; break;
-                case 8: itype = &ffi_type_uint8; break;
-                case 16: itype = &ffi_type_uint16; break;
-                case 32: itype = &ffi_type_uint32; break;
-                case 64: itype = &ffi_type_uint64; break;
-                default: assert(false && "invalid width"); break;
-            }
-        }
-
-        Type *type = new_type(
-            (width == 1)?"bool":
-                format("%sint%zu", signed_?"":"u", width));
-        type->eq_type = type_integer_eq;
-
-        type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
-        type->op2[OP2_Sub] = _integer_sub;
-        type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
-        type->op2[OP2_Div] = _integer_div;
-        type->op1[OP1_Neg] = _integer_neg;
-        type->op1[OP1_Rcp] = _integer_rcp;
-
-        if (width == 1) {
-            type->op1[OP1_BoolNot] = _bool_not;
-        }
-
-        type->cmp = _integer_cmp;
-
-        type->width = width;
-        type->tostring = _integer_tostring;
-        type->is_signed = signed_;
-        type->size = itype->size;
-        type->alignment = itype->alignment;
-        return type;
-    }
-
-    static const Type *_new_real_type(size_t width) {
-        ffi_type *itype = nullptr;
-        switch (width) {
-            case 16: itype = &ffi_type_uint16; break;
-            case 32: itype = &ffi_type_float; break;
-            case 64: itype = &ffi_type_double; break;
-            default: assert(false && "invalid width"); break;
-        }
-
-        Type *type = new_type(format("real%zu", width));
-        type->tostring = _real_tostring;
-        type->eq_type = type_real_eq;
-
-        type->op2[OP2_Add] = type->rop2[OP2_Add] = _real_add;
-        type->op2[OP2_Sub] = _real_sub;
-        type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _real_mul;
-        type->op2[OP2_Div] = _real_div;
-        type->op1[OP1_Neg] = _real_neg;
-        type->op1[OP1_Rcp] = _real_rcp;
-
-        type->cmp = _real_cmp;
-
-        type->width = width;
-        type->size = itype->size;
-        type->alignment = itype->alignment;
-        return type;
-    }
-
-    static Type *Struct(const std::string &name, bool builtin = false) {
-        Type *type = new_type("");
-        if (builtin) {
-            type->name = name;
-        } else {
-            std::stringstream ss;
-            ss << "(";
-            ss << ansi(ANSI_STYLE_KEYWORD, "struct");
-            ss << " " << quoteReprString(name);
-            ss << " " << type;
-            ss << ")";
-            type->name = ss.str();
-        }
-        type->eq_type = type_struct_eq;
-        type->op2[OP2_At] = type_struct_at;
-        type->cmp = _struct_cmp;
-        type->length = _tuple_length;
-        return type;
-    }
-
-    static Type *Enum(const std::string &name) {
-        std::stringstream ss;
-        ss << "(";
-        ss << ansi(ANSI_STYLE_KEYWORD, "enum");
-        ss << " " << quoteReprString(name);
-        ss << ")";
-        Type *type = new_type(ss.str());
-        type->eq_type = type_enum_eq;
-        return type;
-    }
-
-    static void initTypes() {
-        Type *tmp = Struct("type", true);
-        tmp->tostring = _type_tostring;
-        TType = tmp;
-        PType = Pointer(TType);
-
-        TArray = Struct("array", true);
-        TVector = Struct("vector", true);
-        TTuple = Struct("tuple", true);
-        TPointer = Struct("pointer", true);
-        TCFunction = Struct("cfunction", true);
-        TInteger = Struct("integer", true);
-        TReal = Struct("real", true);
-        TStruct = Struct("struct", true);
-        TEnum = Struct("enum", true);
-
-        Any = Struct("Any", true);
-        AnchorRef = Struct("Anchor", true);
-
-        tmp = Struct("None", true);
-        tmp->cmp = value_none_cmp;
-        tmp->tostring = _none_tostring;
-        None = tmp;
-        const_none = make_any(Types::None);
-        const_none.ptr = nullptr;
-
-        Bool = Integer(1, true);
-
-        I8 = Integer(8, true);
-        I16 = Integer(16, true);
-        I32 = Integer(32, true);
-        I64 = Integer(64, true);
-
-        U8 = Integer(8, false);
-        U16 = Integer(16, false);
-        U32 = Integer(32, false);
-        U64 = Integer(64, false);
-
-        SizeT = (sizeof(size_t) == 8)?U64:U32;
-
-        R16 = Real(16);
-        R32 = Real(32);
-        R64 = Real(64);
-
-        struct _string_alignment { char c; bangra::String s; };
-        struct _symbol_alignment { char c; bangra::Symbol s; };
-
-        tmp = Struct("String", true);
-        tmp->tostring = _string_tostring;
-        tmp->length = _string_length;
-        tmp->slice = _string_slice;
-        tmp->op2[OP2_At] = _string_at;
-        tmp->op2[OP2_Concat] = _string_concat;
-        tmp->cmp = value_string_cmp;
-        tmp->size = sizeof(bangra::String);
-        tmp->alignment = offsetof(_string_alignment, s);
-        String = tmp;
-
-        tmp = Struct("Symbol", true);
-        tmp->tostring = _symbol_tostring;
-        tmp->cmp = value_symbol_cmp;
-        tmp->apply_type = apply_type_call<_symbol_apply_type>;
-        tmp->size = sizeof(bangra::Symbol);
-        tmp->alignment = offsetof(_symbol_alignment, s);
-        Symbol = tmp;
-
-        tmp = Struct("List", true);
-        tmp->op2[OP2_At] = type_list_at;
-        tmp->cmp = _list_cmp;
-        //tmp->apply_type = _list_apply_type;
-        //tmp->size = sizeof(bangra::List);
-        //tmp->alignment = offsetof(_list_alignment, s);
-        _List = tmp;
-        tmp = const_cast<Type *>(Pointer(_List));
-        tmp->apply_type = apply_type_call<_list_apply_type>;
-        tmp->tostring = _list_tostring;
-        PList = tmp;
-
-        tmp = Struct("Table", true);
-        tmp->op2[OP2_At] = type_table_at;
-        _Table = tmp;
-        PTable = Pointer(_Table);
-
-        tmp = Struct("BuiltinFlow", true);
-        tmp->tostring = _named_ptr_tostring;
-        PBuiltinFlow = Pointer(tmp);
-
-        tmp = Struct("Flow", true);
-        tmp->tostring = _named_object_tostring<Flow>;
-        PFlow = Pointer(tmp);
-
-        tmp = Struct("SpecialForm", true);
-        tmp->tostring = _named_ptr_tostring;
-        PSpecialForm = Pointer(tmp);
-
-        tmp = Struct("BuiltinMacro", true);
-        tmp->tostring = _named_ptr_tostring;
-        PBuiltinMacro = Pointer(tmp);
-
-        PFrame = Pointer(Struct("Frame", true));
-
-        {
-            std::vector<const Type *> types = { PFlow, SizeT, PType, Symbol };
-            std::vector<std::string> names = { "flow", "index", "type", "name" };
-            tmp = Struct("Parameter", true);
-            tmp->tostring = _parameter_tostring;
-            _set_struct_field_types(tmp, types);
-            _set_field_names(tmp, names);
-
-            PParameter = Pointer(tmp);
-            tmp = const_cast<Type *>(PParameter);
-            tmp->apply_type = apply_type_call<_parameter_apply_type>;
-        }
-
-        {
-            std::vector<const Type *> types = { PFlow, PFrame };
-            std::vector<std::string> names = { "entry", "frame" };
-            tmp = Struct("Closure", true);
-            tmp->tostring = _closure_tostring;
-            _set_struct_field_types(tmp, types);
-            _set_field_names(tmp, names);
-            PClosure = Pointer(tmp);
-        }
-
-        PMacro = Pointer(Struct("Macro", true));
-
-        Rawstring = Pointer(I8);
-    }
-
-} // namespace Types
-
-static void initConstants() {}
 
 //------------------------------------------------------------------------------
 // S-EXPR LEXER / TOKENIZER
@@ -3819,27 +3053,57 @@ static FFI *ffi;
 // INTERPRETER
 //------------------------------------------------------------------------------
 
+// set by execute()
+static Frame *handler_frame = nullptr;
+
 typedef std::vector<Any> ILValueArray;
 
-Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
+static const Frame *find_frame_for_flow(const Frame *frame, const Flow *cont) {
+    if (cont) {
+        // parameter is bound - find relevant frame
+        const Frame *ptr = frame;
+        while (ptr) {
+            auto it = ptr->map.find(cont);
+            if (it != ptr->map.end()) {
+                return ptr;
+            }
+            ptr = ptr->parent;
+        }
+    }
+    return nullptr;
+}
+
+static Any evaluate_parameter(
+    const Frame *frame, const Flow *cont, size_t index, const Any &defvalue) {
+    if (cont) {
+        // parameter is bound - attempt resolve
+        const Frame *ptr = frame;
+        while (ptr) {
+            auto it = ptr->map.find(cont);
+            if (it != ptr->map.end()) {
+                auto &values = it->second;
+                if (index >= values.size()) {
+                    return const_none;
+                } else {
+                    return values[index];
+                }
+            }
+            ptr = ptr->parent;
+        }
+    }
+    return defvalue;
+}
+
+static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     if (eq(value.type, Types::PParameter)) {
         auto param = *value.pparameter;
-        auto cont = param->parent;
-        if (cont) {
-            // parameter is bound - attempt resolve
-            const Frame *ptr = frame;
-            while (ptr) {
-                auto it = ptr->map.find(cont);
-                if (it != ptr->map.end()) {
-                    auto &values = it->second;
-                    assert(param->index < values.size());
-                    return values[param->index];
-                }
-                ptr = ptr->parent;
-            }
+        if (param->name == SYM_VarArgs) {
+            const Frame *ptr = find_frame_for_flow(frame, param->parent);
+            if (!ptr) return value;
+            return wrap(VarArgs::create(ptr, param));
+        } else {
+            return evaluate_parameter(frame, param->parent, param->index, value);
         }
-        // return unbound value
-        return value;
     } else if (eq(value.type, Types::PFlow)) {
         if (argindex == ARG_Func)
             // no closure creation required
@@ -3852,7 +3116,7 @@ Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     return value;
 }
 
-void print_stack_frames(Frame *frame) {
+static void print_stack_frames(Frame *frame) {
     if (!frame) return;
     print_stack_frames(frame->parent);
     auto anchor = get_anchor(frame);
@@ -3862,7 +3126,7 @@ void print_stack_frames(Frame *frame) {
 }
 
 static bool trace_arguments = false;
-size_t execute(const Any *args, size_t argcount, Any *ret) {
+static size_t execute(const Any *args, size_t argcount, Any *ret) {
     size_t retcount = 0;
 
     // double buffer arguments
@@ -3948,30 +3212,22 @@ continue_execution:
                 auto flow = *callee.pflow;
                 assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
-                size_t pcount = flow->parameters.size();
 
                 if (frame->map.count(flow)) {
                     frame = Frame::create(frame);
                 }
                 // tmpargs map directly to param indices; that means
                 // the callee is not included.
-                tmpargs.resize(pcount);
-                /*
-                if (acount != pcount) {
-                    error("parameter count mismatch (passed %zu, need %zu)",
-                        acount - 1, pcount - 1);
-                }*/
+                tmpargs.resize(rcount - 1);
+                assert(tmpargs.size() >= 1);
 
                 // copy over continuation argument
                 tmpargs[PARAM_Cont] = rbuf[ARG_Cont];
-                for (size_t i = 0; i < (pcount - PARAM_Arg0); ++i) {
+                for (size_t i = 0; i < (rcount - ARG_Arg0); ++i) {
                     size_t dsti = PARAM_Arg0 + i;
                     size_t srci = ARG_Arg0 + i;
-                    if (srci < rcount) {
-                        tmpargs[dsti] = rbuf[srci];
-                    } else {
-                        tmpargs[dsti] = const_none;
-                    }
+                    assert(dsti < tmpargs.size());
+                    tmpargs[dsti] = rbuf[srci];
                 }
                 frame->map[flow] = tmpargs;
 
@@ -4070,6 +3326,828 @@ static Any execute(const Any *args, size_t argcount) {
     free(ret);
     return result;
 }
+
+//------------------------------------------------------------------------------
+// TYPE SETUP
+//------------------------------------------------------------------------------
+
+namespace Types {
+
+    static std::string _string_tostring(const Type *self, const bangra::Any &value) {
+        return extract_string(value);
+    }
+
+    static std::string _symbol_tostring(const Type *self, const bangra::Any &value) {
+        return extract_symbol_string(value);
+    }
+
+    template<typename T>
+    static std::string _named_object_tostring(const Type *self, const bangra::Any &value) {
+        auto sym = ((T *)value.ptr)->name;
+        return "<" + get_name(self) + " " + get_symbol_name(sym) + format("=%p>", value.ptr);
+    }
+
+    static std::string _parameter_tostring(const Type *self, const bangra::Any &value) {
+        auto param = (Parameter *)value.ptr;
+        auto name = format("@%s", get_symbol_name(param->name).c_str());
+        if (param->parent) {
+            name = get_string(wrap(param->parent)) + name + format("%zu",param->index);
+        }
+        return "<" + get_name(self) + " " + name + ">";
+    }
+
+    static std::string _closure_tostring(const Type *self, const bangra::Any &value) {
+        auto closure = (Closure *)value.ptr;
+        return "<" + get_name(self)
+            + " entry=" + get_string(wrap(closure->entry))
+            + format(" frame=%p", closure->frame) + ">";
+    }
+
+    static std::string _named_ptr_tostring(const Type *self, const bangra::Any &value) {
+        auto sym = get_ptr_symbol(value.ptr);
+        return "<" + get_name(self) + " " +
+            (sym?get_symbol_name(sym):format("%p", value.ptr)) + ">";
+    }
+
+    static std::string _integer_tostring(const Type *self, const bangra::Any &value) {
+        auto ivalue = extract_integer(value);
+        if (self->width == 1) {
+            return ivalue?"true":"false";
+        }
+        if (self->is_signed)
+            return format("%" PRId64, ivalue);
+        else
+            return format("%" PRIu64, ivalue);
+    }
+
+    static std::string _real_tostring(const Type *self, const bangra::Any &value) {
+        return format("%g", extract_real(value));
+    }
+
+    static std::string _list_tostring(const Type *self, const bangra::Any &value) {
+        std::stringstream ss;
+        bangra::streamValue(ss, value, 0, false);
+        return ss.str();
+    }
+
+    static Ordering _list_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto x = extract_list(a);
+        auto y = extract_list(b);
+        while (true) {
+            if (x == y) return Equal;
+            else if (!x) return Less;
+            else if (!y) return Greater;
+            auto result = compare(x->at, y->at);
+            if (result != Equal) return result;
+            x = x->next;
+            y = y->next;
+        }
+    }
+
+    static bangra::Any type_pointer_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &index) {
+        return at(pointer_element(self, value), index);
+    }
+
+    static size_t _pointer_length(const Type *self,
+        const bangra::Any &value) {
+        return length(pointer_element(self, value));
+    }
+
+    /*
+    static bangra::Any _pointer_apply_type(const Type *self,
+        const std::vector<bangra::Any> &args) {
+    }
+    */
+
+    static Ordering value_pointer_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto y = is_pointer_type(b.type)?pointer_element(b.type, b):b;
+        return compare(pointer_element(self, a), y);
+    }
+
+    static Ordering _struct_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (!eq(a.type, b.type)) return Unordered;
+        return (a.ptr == b.ptr)?Equal:Unordered;
+    }
+
+    static Ordering value_none_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return (self == b.type)?Equal:Unordered;
+    }
+
+    static bangra::Any _integer_add(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) + extract_integer(b));
+    }
+
+    static bangra::Any _integer_sub(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) - extract_integer(b));
+    }
+
+    static bangra::Any _integer_mul(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) * extract_integer(b));
+    }
+
+    static bangra::Any _integer_div(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap((double)extract_integer(a) / (double)extract_integer(b));
+    }
+
+    static bangra::Any _integer_neg(const Type *self, const bangra::Any &x) {
+        return wrap(-extract_integer(x));
+    }
+
+    static bangra::Any _integer_rcp(const Type *self, const bangra::Any &x) {
+        return wrap(1.0 / (double)extract_integer(x));
+    }
+
+    static Ordering _integer_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto x = extract_integer(a);
+        auto y = extract_integer(b);
+        return (Ordering)((y < x) - (x < y));
+    }
+
+    static bangra::Any _bool_not(const Type *self, const bangra::Any &x) {
+        return wrap(!extract_bool(x));
+    }
+
+    static Ordering value_symbol_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (self != b.type) error("can not compare to type");
+        auto x = *a.symbol;
+        auto y = *b.symbol;
+        return (x == y)?Equal:Unordered;
+    }
+
+    static bangra::Any _real_add(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return real(self, extract_real(a) + extract_real(b));
+    }
+
+    static bangra::Any _real_sub(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return real(self, extract_real(a) - extract_real(b));
+    }
+
+    static bangra::Any _real_mul(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return real(self, extract_real(a) * extract_real(b));
+    }
+
+    static bangra::Any _real_div(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return real(self, extract_real(a) / extract_real(b));
+    }
+
+    static bangra::Any _real_neg(const Type *self, const bangra::Any &x) {
+        return real(self, -extract_real(x));
+    }
+
+    static bangra::Any _real_rcp(const Type *self, const bangra::Any &x) {
+        return real(self, 1.0 / extract_real(x));
+    }
+
+    static Ordering _real_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto x = extract_real(a);
+        auto y = extract_real(b);
+        if (std::isnan(x + y)) return Unordered;
+        return (Ordering)((y < x) - (x < y));
+    }
+
+    static std::string _none_tostring(const Type *self,
+        const bangra::Any &value) {
+        return "none";
+    }
+
+    static std::string _pointer_tostring(const Type *self,
+        const bangra::Any &value) {
+        return format("%s%s %s%s",
+            ansi(ANSI_STYLE_COMMENT, "<").c_str(),
+            ansi(ANSI_STYLE_OPERATOR, "&").c_str(),
+            get_string(pointer_element(self, value)).c_str(),
+            ansi(ANSI_STYLE_COMMENT, ">").c_str());
+    }
+
+    static std::string _type_tostring(
+        const Type *self, const bangra::Any &value) {
+        return "type:" + get_name((const Type *)value.ptr);
+    }
+
+    static bool type_array_eq(const Type *self, const Type *other) {
+        return (other == TArray);
+    }
+
+    static bool type_vector_eq(const Type *self, const Type *other) {
+        return (other == TVector);
+    }
+
+    static bool type_pointer_eq(const Type *self, const Type *other) {
+        return (other == TPointer);
+    }
+
+    static bool type_tuple_eq(const Type *self, const Type *other) {
+        return (other == TTuple);
+    }
+
+    static bool type_cfunction_eq(const Type *self, const Type *other) {
+        return (other == TCFunction);
+    }
+
+    static bool type_integer_eq(const Type *self, const Type *other) {
+        return (other == TInteger);
+    }
+
+    static bool type_real_eq(const Type *self, const Type *other) {
+        return (other == TReal);
+    }
+
+    static bool type_struct_eq(const Type *self, const Type *other) {
+        return (other == TStruct);
+    }
+
+    static bool type_enum_eq(const Type *self, const Type *other) {
+        return (other == TEnum);
+    }
+
+
+    typedef bangra::Any (*ApplyTypeFunction)(const Type *self,
+        const bangra::Any *args, size_t argcount);
+
+    template<ApplyTypeFunction F>
+    static size_t apply_type_call(const Type *self,
+        const bangra::Any *args, size_t argcount, bangra::Any *ret) {
+        assert(argcount >= 2);
+        // truncate head and continuation tail argument
+        ret[ARG_Cont] = const_none;
+        ret[ARG_Func] = args[ARG_Cont];
+        ret[ARG_Arg0] = F(self, args + ARG_Arg0, argcount - 2);
+        return 3;
+    }
+
+    static bangra::Any _symbol_apply_type(const Type *self,
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        return symbol(get_string(args[0]));
+    }
+
+    static bangra::Any _list_apply_type(const Type *self,
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 0, -1);
+        auto result = List::create_from_c_array(args, argcount);
+        set_anchor(result, get_anchor(handler_frame));
+        return wrap(result);
+    }
+
+    static bangra::Any _parameter_apply_type(const Type *self,
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        auto name = extract_symbol(args[0]);
+        return wrap(Parameter::create(name));
+    }
+
+    static bangra::Any type_array_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        auto index = (size_t)extract_integer(vindex);
+        auto padded_size = align(
+            get_size(self->element_type), get_alignment(self->element_type));
+        auto offset = padded_size * index;
+        if (offset >= self->size) {
+            error("index %zu out of array bounds (%zu)",
+                index, self->size / padded_size);
+            return const_none;
+        }
+        return wrap(self->element_type, (char *)value.ptr + offset);
+    }
+
+    static Type *__new_array_type(const Type *element, size_t size) {
+        assert(element);
+        Type *type = new_type("");
+        type->count = size;
+        type->op2[OP2_At] = type_array_at;
+        type->element_type = element;
+        auto padded_size = align(get_size(element), get_alignment(element));
+        type->size = padded_size * type->count;
+        type->alignment = element->alignment;
+        return type;
+    }
+
+    static const Type *_new_array_type(const Type *element, size_t size) {
+        assert(element);
+        Type *type = __new_array_type(element, size);
+        type->name = format("(%s %s %s)",
+            ansi(ANSI_STYLE_KEYWORD, "@").c_str(),
+            get_name(element).c_str(),
+            ansi(ANSI_STYLE_NUMBER,
+                format("%zu", size)).c_str());
+        type->eq_type = type_array_eq;
+        return type;
+    }
+
+    static const Type *_new_vector_type(const Type *element, size_t size) {
+        assert(element);
+        Type *type = __new_array_type(element, size);
+        type->name = format("(%s %s %s)",
+            ansi(ANSI_STYLE_KEYWORD, "vector").c_str(),
+            get_name(element).c_str(),
+            ansi(ANSI_STYLE_NUMBER,
+                format("%zu", size)).c_str());
+        type->eq_type = type_vector_eq;
+        return type;
+    }
+
+    static const Type *_new_pointer_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
+                get_name(element).c_str()));
+        type->eq_type = type_pointer_eq;
+        type->op2[OP2_At] = type_pointer_at;
+        type->length = _pointer_length;
+        type->cmp = value_pointer_cmp;
+        type->tostring = _pointer_tostring;
+        type->element_type = element;
+        type->size = ffi_type_pointer.size;
+        type->alignment = ffi_type_pointer.alignment;
+        return type;
+    }
+
+    static bangra::Any _varargs_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        auto index = (size_t)extract_integer(vindex);
+        auto varargs = (VarArgs*)value.ptr;
+        return evaluate_parameter(
+            varargs->frame, varargs->parameter->parent,
+            varargs->parameter->index + index, const_none);
+    }
+
+    static size_t _varargs_length(const Type *self, const bangra::Any &value) {
+        auto varargs = (VarArgs*)value.ptr;
+        auto it = varargs->frame->map.find(varargs->parameter->parent);
+        assert(it != varargs->frame->map.end());
+        return it->second.size() - varargs->parameter->index;
+    }
+
+    static bangra::Any type_tuple_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        auto index = (size_t)extract_integer(vindex);
+        if (index >= self->types.size()) {
+            error("index %zu out of tuple bounds (%zu)",
+                index, self->types.size());
+            return const_none;
+        }
+        auto offset = self->offsets[index];
+        return wrap(self->types[index], (char *)value.ptr + offset);
+    }
+
+    static std::string _tuple_tostring(const Type *self, const bangra::Any &value) {
+        std::stringstream ss;
+        ss << ansi(ANSI_STYLE_COMMENT, "<");
+        ss << ansi(ANSI_STYLE_KEYWORD, "tupleof");
+        for (size_t i = 0; i < self->types.size(); i++) {
+            auto offset = self->offsets[i];
+            ss << " " << get_string(
+                wrap(self->types[i], (char *)value.ptr + offset));
+        }
+        ss << ansi(ANSI_STYLE_COMMENT, ">");
+        return ss.str();
+    }
+
+    static bangra::Any type_struct_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        if (eq(vindex.type, Types::Symbol)) {
+            auto key = extract_symbol(vindex);
+            auto it = self->name_index_map.find(key);
+            if (it == self->name_index_map.end()) {
+                error("no such field in struct: %s",
+                    get_symbol_name(key).c_str());
+            }
+            return type_tuple_at(self, value, wrap(it->second));
+        } else {
+            return type_tuple_at(self, value, vindex);
+        }
+    }
+
+    static bangra::Any type_table_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        auto table = extract_table(value);
+        auto key = extract_symbol(vindex);
+        return get_key(*table, key, const_none);
+    }
+
+    static bangra::Any type_list_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        auto slist = extract_list(value);
+        if (!slist) {
+            //error("can not index into empty list");
+            return wrap((bangra::List*)nullptr);
+        }
+        auto index = (size_t)extract_integer(vindex);
+        if (index == 0) {
+            return slist->at;
+        } else {
+            const bangra::List *result = slist;
+            while ((index != 0) && result) {
+                --index;
+                result = result->next;
+            }
+            /*
+            if (index != 0) {
+                error("index %zu out of list bounds", index);
+            }
+            */
+            return wrap(result);
+        }
+    }
+
+    static size_t _string_length(const Type *self, const bangra::Any &value) {
+        return value.str->count;
+    }
+
+    static bangra::Any _string_slice(
+        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
+        return wrap(Types::String, alloc_string(
+            value.str->ptr + i0, i1 - i0));
+    }
+
+    static bangra::Any _string_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        auto index = (size_t)extract_integer(vindex);
+        if (index >= value.str->count) {
+            error("index %zu out of string bounds (%zu)",
+                index, value.str->count);
+        }
+        return _string_slice(self, value, index, index + 1);
+    }
+
+    static int zucmp(size_t a, size_t b) {
+        return (b < a) - (a < b);
+    }
+
+    static Ordering value_string_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (b.type != self)
+            error("incomparable values");
+        int c = zucmp(a.str->count, b.str->count);
+        if (!c) {
+            c = memcmp(a.str->ptr, b.str->ptr, a.str->count);
+        }
+        return (Ordering)c;
+    }
+
+    /*
+    static bangra::Any _symbol_slice(
+        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
+        return wrap(Types::Symbol, alloc_string(
+            value.str->ptr + i0, i1 - i0));
+    }
+    */
+
+    static size_t _tuple_length(const Type *self, const bangra::Any &value) {
+        return self->types.size();
+    }
+
+    static bangra::Any _string_concat(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_string(a) + extract_string(b));
+    }
+
+    static void _set_field_names(Type *type, const std::vector<std::string> &names) {
+        for (size_t i = 0; i < names.size(); ++i) {
+            auto name = get_symbol(names[i]);
+            if (name != SYM_Unnamed) {
+                type->name_index_map[name] = i;
+            }
+        }
+    }
+
+    static void _set_field_names(Type *type, const std::vector<bangra::Symbol> &names) {
+        for (size_t i = 0; i < names.size(); ++i) {
+            auto name = names[i];
+            if (name != SYM_Unnamed) {
+                type->name_index_map[name] = i;
+            }
+        }
+    }
+
+    static void _set_struct_field_types(Type *type, const std::vector<const Type *> &types) {
+        type->types = types;
+        size_t offset = 0;
+        size_t max_alignment = 1;
+        for (auto &element : types) {
+            size_t size = get_size(element);
+            size_t alignment = get_alignment(element);
+            max_alignment = std::max(max_alignment, alignment);
+            offset = align(offset, alignment);
+            type->offsets.push_back(offset);
+            offset += size;
+        }
+        type->size = align(offset, max_alignment);
+        type->alignment = max_alignment;
+    }
+
+    static void _set_union_field_types(Type *type, const std::vector<const Type *> &types) {
+        type->types = types;
+        size_t max_size = 0;
+        size_t max_alignment = 1;
+        for (auto &element : types) {
+            size_t size = get_size(element);
+            size_t alignment = get_alignment(element);
+            max_size = std::max(max_size, size);
+            max_alignment = std::max(max_alignment, alignment);
+        }
+        type->size = align(max_size, max_alignment);
+        type->alignment = max_alignment;
+    }
+
+    static const Type *_new_tuple_type(std::vector<const Type *> types) {
+        std::stringstream ss;
+        ss << "(";
+        ss << ansi(ANSI_STYLE_KEYWORD, "tuple");
+        for (auto &element : types) {
+            ss << " " << get_name(element);
+        }
+        ss << ")";
+        Type *type = new_type(ss.str());
+        type->eq_type = type_tuple_eq;
+        type->op2[OP2_At] = type_tuple_at;
+        type->length = _tuple_length;
+        type->tostring = _tuple_tostring;
+        _set_struct_field_types(type, types);
+        return type;
+    }
+
+    static const Type *_new_cfunction_type(
+        const Type *result, const Type *parameters, bool vararg) {
+        assert(eq(parameters, TTuple));
+        std::stringstream ss;
+        ss << "(";
+        ss << ansi(ANSI_STYLE_KEYWORD, "cfunction");
+        ss << " " << get_name(result);
+        ss << " " << get_name(parameters);
+        ss << " " << ansi(ANSI_STYLE_KEYWORD, vararg?"true":"false") << ")";
+        Type *type = new_type(ss.str());
+        type->eq_type = type_cfunction_eq;
+        type->is_vararg = vararg;
+        type->result_type = result;
+        type->types = { parameters };
+        type->size = ffi_type_pointer.size;
+        type->alignment = ffi_type_pointer.alignment;
+        return type;
+    }
+
+    static const Type *_new_integer_type(size_t width, bool signed_) {
+        ffi_type *itype = nullptr;
+        if (signed_) {
+            switch (width) {
+                case 1: itype = &ffi_type_uint8; break;
+                case 8: itype = &ffi_type_sint8; break;
+                case 16: itype = &ffi_type_sint16; break;
+                case 32: itype = &ffi_type_sint32; break;
+                case 64: itype = &ffi_type_sint64; break;
+                default: assert(false && "invalid width"); break;
+            }
+        } else {
+            switch (width) {
+                case 1: itype = &ffi_type_uint8; break;
+                case 8: itype = &ffi_type_uint8; break;
+                case 16: itype = &ffi_type_uint16; break;
+                case 32: itype = &ffi_type_uint32; break;
+                case 64: itype = &ffi_type_uint64; break;
+                default: assert(false && "invalid width"); break;
+            }
+        }
+
+        Type *type = new_type(
+            (width == 1)?"bool":
+                format("%sint%zu", signed_?"":"u", width));
+        type->eq_type = type_integer_eq;
+
+        type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
+        type->op2[OP2_Sub] = _integer_sub;
+        type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
+        type->op2[OP2_Div] = _integer_div;
+        type->op1[OP1_Neg] = _integer_neg;
+        type->op1[OP1_Rcp] = _integer_rcp;
+
+        if (width == 1) {
+            type->op1[OP1_BoolNot] = _bool_not;
+        }
+
+        type->cmp = _integer_cmp;
+
+        type->width = width;
+        type->tostring = _integer_tostring;
+        type->is_signed = signed_;
+        type->size = itype->size;
+        type->alignment = itype->alignment;
+        return type;
+    }
+
+    static const Type *_new_real_type(size_t width) {
+        ffi_type *itype = nullptr;
+        switch (width) {
+            case 16: itype = &ffi_type_uint16; break;
+            case 32: itype = &ffi_type_float; break;
+            case 64: itype = &ffi_type_double; break;
+            default: assert(false && "invalid width"); break;
+        }
+
+        Type *type = new_type(format("real%zu", width));
+        type->tostring = _real_tostring;
+        type->eq_type = type_real_eq;
+
+        type->op2[OP2_Add] = type->rop2[OP2_Add] = _real_add;
+        type->op2[OP2_Sub] = _real_sub;
+        type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _real_mul;
+        type->op2[OP2_Div] = _real_div;
+        type->op1[OP1_Neg] = _real_neg;
+        type->op1[OP1_Rcp] = _real_rcp;
+
+        type->cmp = _real_cmp;
+
+        type->width = width;
+        type->size = itype->size;
+        type->alignment = itype->alignment;
+        return type;
+    }
+
+    static Type *Struct(const std::string &name, bool builtin = false) {
+        Type *type = new_type("");
+        if (builtin) {
+            type->name = name;
+        } else {
+            std::stringstream ss;
+            ss << "(";
+            ss << ansi(ANSI_STYLE_KEYWORD, "struct");
+            ss << " " << quoteReprString(name);
+            ss << " " << type;
+            ss << ")";
+            type->name = ss.str();
+        }
+        type->eq_type = type_struct_eq;
+        type->op2[OP2_At] = type_struct_at;
+        type->cmp = _struct_cmp;
+        type->length = _tuple_length;
+        return type;
+    }
+
+    static Type *Enum(const std::string &name) {
+        std::stringstream ss;
+        ss << "(";
+        ss << ansi(ANSI_STYLE_KEYWORD, "enum");
+        ss << " " << quoteReprString(name);
+        ss << ")";
+        Type *type = new_type(ss.str());
+        type->eq_type = type_enum_eq;
+        return type;
+    }
+
+    static void initTypes() {
+        Type *tmp = Struct("type", true);
+        tmp->tostring = _type_tostring;
+        TType = tmp;
+        PType = Pointer(TType);
+
+        TArray = Struct("array", true);
+        TVector = Struct("vector", true);
+        TTuple = Struct("tuple", true);
+        TPointer = Struct("pointer", true);
+        TCFunction = Struct("cfunction", true);
+        TInteger = Struct("integer", true);
+        TReal = Struct("real", true);
+        TStruct = Struct("struct", true);
+        TEnum = Struct("enum", true);
+
+        Any = Struct("Any", true);
+        AnchorRef = Struct("Anchor", true);
+
+        tmp = Struct("None", true);
+        tmp->cmp = value_none_cmp;
+        tmp->tostring = _none_tostring;
+        None = tmp;
+        const_none = make_any(Types::None);
+        const_none.ptr = nullptr;
+
+        Bool = Integer(1, true);
+
+        I8 = Integer(8, true);
+        I16 = Integer(16, true);
+        I32 = Integer(32, true);
+        I64 = Integer(64, true);
+
+        U8 = Integer(8, false);
+        U16 = Integer(16, false);
+        U32 = Integer(32, false);
+        U64 = Integer(64, false);
+
+        SizeT = (sizeof(size_t) == 8)?U64:U32;
+
+        R16 = Real(16);
+        R32 = Real(32);
+        R64 = Real(64);
+
+        struct _string_alignment { char c; bangra::String s; };
+        struct _symbol_alignment { char c; bangra::Symbol s; };
+
+        tmp = Struct("String", true);
+        tmp->tostring = _string_tostring;
+        tmp->length = _string_length;
+        tmp->slice = _string_slice;
+        tmp->op2[OP2_At] = _string_at;
+        tmp->op2[OP2_Concat] = _string_concat;
+        tmp->cmp = value_string_cmp;
+        tmp->size = sizeof(bangra::String);
+        tmp->alignment = offsetof(_string_alignment, s);
+        String = tmp;
+
+        tmp = Struct("Symbol", true);
+        tmp->tostring = _symbol_tostring;
+        tmp->cmp = value_symbol_cmp;
+        tmp->apply_type = apply_type_call<_symbol_apply_type>;
+        tmp->size = sizeof(bangra::Symbol);
+        tmp->alignment = offsetof(_symbol_alignment, s);
+        Symbol = tmp;
+
+        tmp = Struct("List", true);
+        tmp->op2[OP2_At] = type_list_at;
+        tmp->cmp = _list_cmp;
+        //tmp->apply_type = _list_apply_type;
+        //tmp->size = sizeof(bangra::List);
+        //tmp->alignment = offsetof(_list_alignment, s);
+        _List = tmp;
+        tmp = const_cast<Type *>(Pointer(_List));
+        tmp->apply_type = apply_type_call<_list_apply_type>;
+        tmp->tostring = _list_tostring;
+        PList = tmp;
+
+        tmp = Struct("Table", true);
+        tmp->op2[OP2_At] = type_table_at;
+        _Table = tmp;
+        PTable = Pointer(_Table);
+
+        tmp = Struct("BuiltinFlow", true);
+        tmp->tostring = _named_ptr_tostring;
+        PBuiltinFlow = Pointer(tmp);
+
+        tmp = Struct("Flow", true);
+        tmp->tostring = _named_object_tostring<Flow>;
+        PFlow = Pointer(tmp);
+
+        tmp = Struct("SpecialForm", true);
+        tmp->tostring = _named_ptr_tostring;
+        PSpecialForm = Pointer(tmp);
+
+        tmp = Struct("BuiltinMacro", true);
+        tmp->tostring = _named_ptr_tostring;
+        PBuiltinMacro = Pointer(tmp);
+
+        PFrame = Pointer(Struct("Frame", true));
+
+        {
+            std::vector<const Type *> types = { PFlow, SizeT, PType, Symbol };
+            std::vector<std::string> names = { "flow", "index", "type", "name" };
+            tmp = Struct("Parameter", true);
+            tmp->tostring = _parameter_tostring;
+            _set_struct_field_types(tmp, types);
+            _set_field_names(tmp, names);
+
+            PParameter = Pointer(tmp);
+            tmp = const_cast<Type *>(PParameter);
+            tmp->apply_type = apply_type_call<_parameter_apply_type>;
+        }
+
+        tmp = Struct("VarArgs", true);
+        tmp->tostring = _named_ptr_tostring;
+        tmp->op2[OP2_At] = _varargs_at;
+        tmp->length = _varargs_length;
+        PVarArgs = Pointer(tmp);
+
+        {
+            std::vector<const Type *> types = { PFlow, PFrame };
+            std::vector<std::string> names = { "entry", "frame" };
+            tmp = Struct("Closure", true);
+            tmp->tostring = _closure_tostring;
+            _set_struct_field_types(tmp, types);
+            _set_field_names(tmp, names);
+            PClosure = Pointer(tmp);
+        }
+
+        PMacro = Pointer(Struct("Macro", true));
+
+        Rawstring = Pointer(I8);
+    }
+
+} // namespace Types
+
+static void initConstants() {}
 
 //------------------------------------------------------------------------------
 // C module utility functions

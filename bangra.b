@@ -349,17 +349,24 @@ syntax-extend stage-3 (_ scope)
                 else none
             length s
 
+    function get-scope-symbol (scope key)
+        loop (scope)
+            let result
+                @ scope key
+            if (none? result)
+                let parent
+                    @ scope scope-parent-symbol
+                if (none? parent) none
+                else
+                    repeat parent
+            else result
+
     function get-ifx-op (scope op)
         let key
             symbol
                 .. "#ifx:" (string op)
         ? (symbol? op)
-            loop (scope)
-                if (key? scope key)
-                    @ scope key
-                elseif (key? scope scope-parent-symbol)
-                    repeat (@ scope scope-parent-symbol)
-                else none
+            get-scope-symbol scope key
             none
     function has-infix-ops (infix-table expr)
         # any expression whose second argument matches an infix operator
@@ -625,7 +632,7 @@ syntax-extend stage-3 (_ scope)
                     and
                         symbol? head
                         and
-                            != headstr ".."
+                            none? (get-scope-symbol scope head)
                             == (slice headstr 0 1) "."
 
                     let name
@@ -671,7 +678,7 @@ syntax-extend stage-3 (_ scope)
                 # and it's not the concat operator
                 if
                     and
-                        != sym (quote ..)
+                        none? (get-scope-symbol scope sym)
                         fold it false
                             function (out k)
                                 if (== k ".") true
