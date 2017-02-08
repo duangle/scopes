@@ -488,7 +488,6 @@ struct Type;
 struct Macro;
 struct Frame;
 struct Cursor;
-struct VarArgs;
 
 template<typename T>
 struct Slice {
@@ -535,7 +534,6 @@ struct Any {
         const List **plist;
         const Type **ptype;
         const Parameter **pparameter;
-        const VarArgs **pvarargs;
         const Flow **pflow;
         const Closure **pclosure;
         const Frame **pframe;
@@ -748,7 +746,6 @@ namespace Types {
     static const Type *PType;
     static const Type *PTable;
     static const Type *PParameter;
-    static const Type *PVarArgs;
     static const Type *PBuiltinFlow;
     static const Type *PFlow;
     static const Type *PSpecialForm;
@@ -1598,33 +1595,6 @@ static const Parameter *extract_parameter(const Any &value) {
     }
     error("parameter expected");
     return nullptr;
-}
-
-//------------------------------------------------------------------------------
-
-struct VarArgs {
-    const Frame *frame;
-    const Parameter *parameter;
-
-    VarArgs() :
-        frame(nullptr),
-        parameter(nullptr) {
-    }
-
-    static VarArgs *create(const Frame *frame, const Parameter *param) {
-        assert(param->parent);
-        auto value = new VarArgs();
-        value->frame = frame;
-        value->parameter = param;
-        return value;
-    }
-};
-
-static Any wrap(const VarArgs *varargs) {
-    return wrap_ptr(Types::PVarArgs, varargs);
-}
-static Any wrap(VarArgs *varargs) {
-    return wrap_ptr(Types::PVarArgs, varargs);
 }
 
 //------------------------------------------------------------------------------
@@ -3082,11 +3052,8 @@ static Any evaluate_parameter(
             auto it = ptr->map.find(cont);
             if (it != ptr->map.end()) {
                 auto &values = it->second;
-                if (index >= values.size()) {
-                    return const_none;
-                } else {
-                    return values[index];
-                }
+                assert (index < values.size());
+                return values[index];
             }
             ptr = ptr->parent;
         }
@@ -3097,13 +3064,7 @@ static Any evaluate_parameter(
 static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     if (eq(value.type, Types::PParameter)) {
         auto param = *value.pparameter;
-        if (param->name == SYM_VarArgs) {
-            const Frame *ptr = find_frame_for_flow(frame, param->parent);
-            if (!ptr) return value;
-            return wrap(VarArgs::create(ptr, param));
-        } else {
-            return evaluate_parameter(frame, param->parent, param->index, value);
-        }
+        return evaluate_parameter(frame, param->parent, param->index, value);
     } else if (eq(value.type, Types::PFlow)) {
         if (argindex == ARG_Func)
             // no closure creation required
@@ -3218,34 +3179,27 @@ continue_execution:
                 }
                 // tmpargs map directly to param indices; that means
                 // the callee is not included.
-                tmpargs.resize(rcount - 1);
-                assert(tmpargs.size() >= 1);
+                auto pcount = flow->parameters.size();
+                tmpargs.resize(pcount);
 
                 // copy over continuation argument
                 tmpargs[PARAM_Cont] = rbuf[ARG_Cont];
-                for (size_t i = 0; i < (rcount - ARG_Arg0); ++i) {
+                for (size_t i = 0; i < (pcount - PARAM_Arg0); ++i) {
                     size_t dsti = PARAM_Arg0 + i;
                     size_t srci = ARG_Arg0 + i;
-                    assert(dsti < tmpargs.size());
-                    tmpargs[dsti] = rbuf[srci];
+                    auto param = flow->parameters[dsti];
+                    if (param->name == SYM_VarArgs) {
+                        tmpargs[dsti] = wrap(&rbuf[srci], rcount - srci);
+                    } else if (srci < rcount) {
+                        tmpargs[dsti] = rbuf[srci];
+                    } else {
+                        tmpargs[dsti] = const_none;
+                    }
                 }
+
                 frame->map[flow] = tmpargs;
 
                 set_anchor(frame, get_anchor(flow));
-
-                /*
-                if (trace_arguments) {
-                    printf("flow arguments:\n");
-                    for (size_t i = 0; i < flow->arguments.size(); ++i) {
-                        if (i == ARG_Cont)
-                            printf("  -> ");
-                        else if (i == ARG_Func)
-                            printf("  Callee: ");
-                        else if (i >= ARG_Arg0)
-                            printf("  Argument #%zu: ", i - ARG_Arg0);
-                        printValue(flow->arguments[i], 0, true);
-                    }
-                }*/
 
                 assert(!flow->arguments.empty());
                 wcount = flow->arguments.size();
@@ -3679,22 +3633,6 @@ namespace Types {
         return type;
     }
 
-    static bangra::Any _varargs_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto index = (size_t)extract_integer(vindex);
-        auto varargs = (VarArgs*)value.ptr;
-        return evaluate_parameter(
-            varargs->frame, varargs->parameter->parent,
-            varargs->parameter->index + index, const_none);
-    }
-
-    static size_t _varargs_length(const Type *self, const bangra::Any &value) {
-        auto varargs = (VarArgs*)value.ptr;
-        auto it = varargs->frame->map.find(varargs->parameter->parent);
-        assert(it != varargs->frame->map.end());
-        return it->second.size() - varargs->parameter->index;
-    }
-
     static bangra::Any type_tuple_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
         auto index = (size_t)extract_integer(vindex);
@@ -4123,12 +4061,6 @@ namespace Types {
             tmp = const_cast<Type *>(PParameter);
             tmp->apply_type = apply_type_call<_parameter_apply_type>;
         }
-
-        tmp = Struct("VarArgs", true);
-        tmp->tostring = _named_ptr_tostring;
-        tmp->op2[OP2_At] = _varargs_at;
-        tmp->length = _varargs_length;
-        PVarArgs = Pointer(tmp);
 
         {
             std::vector<const Type *> types = { PFlow, PFrame };

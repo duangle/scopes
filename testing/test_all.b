@@ -354,9 +354,7 @@ function test-extraparam ()
     true
 test-extraparam 1 2 3
 
-function test-varargs(x y ...)
-    /// assert
-        ... == ...
+function test-varargs (x y ...)
     assert
         and
             x == 1
