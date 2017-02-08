@@ -77,12 +77,16 @@ function flow-iter-arguments (aflow aframe)
     tupleof
         function (i)
             if (i < acount)
+                let arg
+                    flow-argument aflow i
                 tupleof
                     structof
                         : index i
                         : argument
-                            frame-eval aframe i
-                                flow-argument aflow i
+                            ? ((typeof arg) == parameter)
+                                frame-eval aframe i arg
+                                arg
+
                     i + 1
             else none
         0

@@ -1,24 +1,24 @@
 # boot script
 # the bangra executable looks for a boot file at
 # path/to/executable.b and, if found, executes it.
-let-syntax (scope)
+let-syntax stage-1 (scope)
     table
         tupleof scope-parent-symbol scope
         tupleof
             quote symbol?
-            function (x)
+            function symbol? (x)
                 == (typeof x) symbol
         tupleof
             quote list?
-            function (x)
+            function list? (x)
                 == (typeof x) list
         tupleof
             quote none?
-            function (x)
+            function none? (x)
                 == x none
         tupleof
             quote empty?
-            function (x)
+            function empty? (x)
                 branch
                     == (typeof x) list
                     function ()
@@ -26,11 +26,11 @@ let-syntax (scope)
                     function () false
         tupleof
             quote key?
-            function (x y)
+            function key? (x y)
                 != (@ x y) none
         tupleof
             quote load
-            function (path)
+            function load (path)
                 eval
                     list-load path
                     globals;
@@ -43,7 +43,7 @@ let-syntax (scope)
                 tupleof;
         tupleof
             quote syntax-single-macro
-            function (f)
+            function syntax-single-macro (f)
                 syntax-macro
                     function (scope expr)
                         cons
@@ -53,14 +53,14 @@ let-syntax (scope)
         tupleof
             quote call
             syntax-macro
-                function (scope expr)
+                function call (scope expr)
                     cons
                         @ expr 0 1
                         @ expr 1
         tupleof
             quote dump-syntax
             syntax-macro
-                function (scope expr)
+                function dump-syntax (scope expr)
                     ((function (e)
                         (dump
                             (@ e 0 0))
@@ -75,7 +75,7 @@ let-syntax (scope)
         tupleof
             quote let
             syntax-macro
-                function (scope expr)
+                function syntax-macro (scope expr)
                     ((function (param-name)
                         ((function (param scope-name)
                             (list
@@ -93,7 +93,7 @@ let-syntax (scope)
         tupleof
             quote ?
             syntax-macro
-                function (scope expr)
+                function ? (scope expr)
                     cons
                         list branch
                             @ expr 0 1 0
@@ -105,7 +105,7 @@ let-syntax (scope)
         tupleof
             quote :
             syntax-macro
-                function (scope expr)
+                function : (scope expr)
                     cons
                         cons tupleof
                             cons
@@ -119,18 +119,10 @@ let-syntax (scope)
                                     function ()
                                         @ expr 0 2
                         @ expr 1
-        tupleof
-            quote syntax-set-globals!
-            syntax-macro
-                function (scope expr)
-                    set-globals! scope
-                    cons
-                        none
-                        @ expr 1
 
-let-syntax (scope)
+let-syntax stage-2 (scope)
     let list-join
-        function (a b)
+        function list-join (a b)
             ? (empty? a) b
                 cons
                     @ a 0
@@ -138,7 +130,7 @@ let-syntax (scope)
                         @ a 1
                         b
     let list-head?
-        function (expr name)
+        function list-head? (expr name)
             ? (list? expr)
                 do
                     let head (@ expr 0)
@@ -151,20 +143,20 @@ let-syntax (scope)
         : list-join
         : list-head?
         : list-atom?
-            function (x)
+            function list-atom? (x)
                 ? (list? x)
                     empty? x
                     true
         : assert # (assert bool-expr [error-message])
             syntax-single-macro
-                function (scope expr)
+                function assert (scope expr)
                     list ? (@ expr 1 0) true
                         list error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
         : ::@
             syntax-macro
-                function (scope expr)
+                function ::@ (scope expr)
                     cons
                         list-join
                             @ expr 0 1
@@ -173,14 +165,14 @@ let-syntax (scope)
                         @ expr 2
         : ::*
             syntax-macro
-                function (scope expr)
+                function ::* (scope expr)
                     list
                         list-join
                             @ expr 0 1
                             @ expr 1
         : .
             syntax-single-macro
-                function (scope expr)
+                function . (scope expr)
                     let key
                         @ expr 2 0
                     ? (symbol? key)
@@ -192,14 +184,14 @@ let-syntax (scope)
 
         : function # (function [name] (param ...) body ...)
             syntax-macro
-                function (scope expr)
+                function function (scope expr)
                     let decl
                         (@ expr 0 1 0)
                     ? (symbol? decl)
                         cons
                             list let decl
                                 cons function
-                                    @ expr 0 2
+                                    @ expr 0 1
                             ? (empty? (@ expr 1))
                                 list decl
                                 @ expr 1
@@ -209,7 +201,7 @@ let-syntax (scope)
                             @ expr 1
         : and
             syntax-single-macro
-                function (scope expr)
+                function and (scope expr)
                     let tmp
                         parameter
                             quote tmp
@@ -222,7 +214,7 @@ let-syntax (scope)
                         @ expr 1 0
         : or
             syntax-single-macro
-                function (scope expr)
+                function or (scope expr)
                     let tmp
                         parameter
                             quote tmp
@@ -235,7 +227,7 @@ let-syntax (scope)
                         @ expr 1 0
         : loop
             syntax-single-macro
-                function (scope expr)
+                function loop (scope expr)
                     let param-repeat
                         quote repeat
                     list do
@@ -249,7 +241,7 @@ let-syntax (scope)
         : if
             do
                 let if-rec
-                    function (scope expr)
+                    function if (scope expr)
                         let next-expr
                             @ expr 1 0
                         ? (list-head? next-expr (quote elseif))
@@ -288,21 +280,21 @@ let-syntax (scope)
                                         @ expr 1
                 syntax-macro if-rec
         : syntax-infix-rules
-            function (prec order name)
+            function syntax-infix-rules (prec order name)
                 structof
                     tupleof (quote prec) prec
                     tupleof (quote order) order
                     tupleof (quote name) name
         : syntax-infix-op
             syntax-single-macro
-                function (scope expr)
+                function syntax-infix-op (scope expr)
                     list tupleof
                         list quote
                             symbol
                                 .. "#ifx:" (string (@ expr 1 0))
                         @ expr 2 0
 
-let-syntax (scope)
+let-syntax stage-3 (scope)
 
     function unwrap-single (expr)
         # unwrap single item from list or prepend 'do' clause to list
@@ -519,13 +511,6 @@ let-syntax (scope)
             make-expand-multi-op-ltr and
         : or
             make-expand-multi-op-ltr or
-        : call/cc
-            function (f)
-                __call/cc
-                    function (continuation)
-                        f
-                            function (return-value)
-                                __return/cc continuation return-value
         # quasiquote support
         # (qquote expr [...])
         : qquote
@@ -719,5 +704,8 @@ let-syntax (scope)
         #syntax-infix-op @= (syntax-infix-rules 800 > @=)
         #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
-syntax-set-globals!;
+let-syntax stage-final (scope)
+    set-globals! scope
+    scope
+
 none

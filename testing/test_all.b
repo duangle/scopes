@@ -318,4 +318,15 @@ assert
         ::@ 5 +
         1 + 3
 
+function test-noparam (x y)
+    assert
+        x == none
+    assert
+        y == none
+    true
+test-noparam;
+function test-extraparam ()
+    true
+test-extraparam 1 2 3
+
 print "ok"

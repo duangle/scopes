@@ -581,6 +581,9 @@ enum {
     // auto-generated flow names
     SYM_FunctionFlow,
     SYM_ReturnFlow,
+    SYM_ExitFlow,
+
+    SYM_Continuation,
 
     SYM_ScriptSize,
     SYM_Count,
@@ -620,6 +623,8 @@ static void initSymbols() {
     map_symbol(SYM_ScriptSize, "script-size");
     map_symbol(SYM_FunctionFlow, "function");
     map_symbol(SYM_ReturnFlow, "return");
+    map_symbol(SYM_ExitFlow, "exit");
+    map_symbol(SYM_Continuation, "cont");
 }
 
 //------------------------------------------------------------------------------
@@ -1256,6 +1261,10 @@ static bool is_tuple_type(const Type *type) {
     return eq(type, Types::TTuple);
 }
 
+static bool is_symbol_type(const Type *type) {
+    return eq(type, Types::Symbol);
+}
+
 /*
 static bool is_array_type(Type *type) {
     return eq(type, Types::TArray);
@@ -1684,6 +1693,15 @@ static const List *reverse_list_inplace(
 
 //------------------------------------------------------------------------------
 
+enum {
+    ARG_Cont = 0,
+    ARG_Func = 1,
+    ARG_Arg0 = 2,
+
+    PARAM_Cont = 0,
+    PARAM_Arg0 = 1,
+};
+
 struct Flow {
 private:
     static int64_t unique_id_counter;
@@ -1731,14 +1749,26 @@ public:
         return param;
     }
 
-    static Flow *create(
-        size_t paramcount = 0,
-        const Symbol &name = SYM_Unnamed) {
+    Parameter *appendParameter(const Symbol &name = SYM_Unnamed) {
+        return appendParameter(Parameter::create(name));
+    }
+
+    // a function that eventually returns
+    static Flow *create_function(const Symbol &name) {
         auto value = new Flow();
         value->name = name;
-        for (size_t i = 0; i < paramcount; ++i) {
-            value->appendParameter(Parameter::create());
-        }
+        // continuation is always first argument
+        // this argument will be called when the function is done
+        value->appendParameter(get_symbol("return-" + get_symbol_name(name)));
+        return value;
+    }
+
+    // a continuation that never returns
+    static Flow *create_continuation(const Symbol &name) {
+        auto value = new Flow();
+        value->name = name;
+        // first argument is present, but unused
+        value->appendParameter(SYM_Unnamed);
         return value;
     }
 };
@@ -2248,7 +2278,24 @@ namespace Types {
 
     template<typename T>
     static std::string _named_object_tostring(const Type *self, const bangra::Any &value) {
-        return get_name(self) + ":" + get_symbol_name(((T *)value.ptr)->name);
+        auto sym = ((T *)value.ptr)->name;
+        return "<" + get_name(self) + " " + get_symbol_name(sym) + format("=%p>", value.ptr);
+    }
+
+    static std::string _parameter_tostring(const Type *self, const bangra::Any &value) {
+        auto param = (Parameter *)value.ptr;
+        auto name = format("@%s%zu", get_symbol_name(param->name).c_str(), param->index);
+        if (param->parent) {
+            name = get_string(wrap(param->parent)) + name;
+        }
+        return "<" + get_name(self) + " " + name + ">";
+    }
+
+    static std::string _closure_tostring(const Type *self, const bangra::Any &value) {
+        auto closure = (Closure *)value.ptr;
+        return "<" + get_name(self)
+            + " entry=" + get_string(wrap(closure->entry))
+            + format(" frame=%p", closure->frame) + ">";
     }
 
     static std::string _named_ptr_tostring(const Type *self, const bangra::Any &value) {
@@ -2468,9 +2515,10 @@ namespace Types {
         const bangra::Any *args, size_t argcount, bangra::Any *ret) {
         assert(argcount >= 2);
         // truncate head and continuation tail argument
-        ret[0] = args[argcount - 1];
-        ret[1] = F(self, args + 1, argcount - 2);
-        return 2;
+        ret[ARG_Cont] = const_none;
+        ret[ARG_Func] = args[ARG_Cont];
+        ret[ARG_Arg0] = F(self, args + ARG_Arg0, argcount - 2);
+        return 3;
     }
 
     static bangra::Any _symbol_apply_type(const Type *self,
@@ -2962,7 +3010,9 @@ namespace Types {
         tmp->tostring = _named_ptr_tostring;
         PBuiltinFlow = Pointer(tmp);
 
-        PFlow = Pointer(Struct("Flow", true));
+        tmp = Struct("Flow", true);
+        tmp->tostring = _named_object_tostring<Flow>;
+        PFlow = Pointer(tmp);
 
         tmp = Struct("SpecialForm", true);
         tmp->tostring = _named_ptr_tostring;
@@ -2978,7 +3028,7 @@ namespace Types {
             std::vector<const Type *> types = { PFlow, SizeT, PType, Symbol };
             std::vector<std::string> names = { "flow", "index", "type", "name" };
             tmp = Struct("Parameter", true);
-            tmp->tostring = _named_object_tostring<Parameter>;
+            tmp->tostring = _parameter_tostring;
             _set_struct_field_types(tmp, types);
             _set_field_names(tmp, names);
 
@@ -2991,7 +3041,7 @@ namespace Types {
             std::vector<const Type *> types = { PFlow, PFrame };
             std::vector<std::string> names = { "entry", "frame" };
             tmp = Struct("Closure", true);
-            tmp->tostring = _named_ptr_tostring;
+            tmp->tostring = _closure_tostring;
             _set_struct_field_types(tmp, types);
             _set_field_names(tmp, names);
             PClosure = Pointer(tmp);
@@ -3778,7 +3828,7 @@ Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
         // return unbound value
         return value;
     } else if (eq(value.type, Types::PFlow)) {
-        if (argindex == 0)
+        if (argindex == ARG_Func)
             // no closure creation required
             return value;
         else
@@ -3809,10 +3859,10 @@ size_t execute(const Any *args, size_t argcount, Any *ret) {
     }
     Any *wbuf = argbuf[0];
     size_t wcount = argcount;
-    assert(argcount >= 1);
+    assert(argcount >= 2);
     assert(argcount <= BANGRA_MAX_FUNCARGS);
     // track exit_cont so we can leave the loop when it is invoked
-    auto exit_cont = args[argcount - 1];
+    auto exit_cont = args[ARG_Cont];
     assert(is_pointer_type(exit_cont.type));
     // init read buffer for arguments
     for (size_t i = 0; i < argcount; ++i) {
@@ -3827,6 +3877,11 @@ size_t execute(const Any *args, size_t argcount, Any *ret) {
 
     std::vector<Any> tmpargs;
 
+    if (trace_arguments) {
+        printf("TRACE: execute enter (exit = %s)\n",
+            get_string(exit_cont).c_str());
+    }
+
 continue_execution:
     try {
         while (true) {
@@ -3839,9 +3894,23 @@ continue_execution:
                 wcount = 0;
             }
 
-            assert(rcount >= 1);
+            if (trace_arguments) {
+                printf("TRACE: executing:\n");
+                for (size_t i = 0; i < rcount; ++i) {
+                    if (i == ARG_Cont)
+                        printf("  -> ");
+                    else if (i == ARG_Func)
+                        printf("  Callee: ");
+                    else if (i >= ARG_Arg0)
+                        printf("  Argument #%zu: ", i - ARG_Arg0);
+                    printValue(rbuf[i], 0, false);
+                    printf("\n");
+                }
+            }
 
-            Any callee = rbuf[0];
+            assert(rcount >= 2);
+
+            Any callee = rbuf[ARG_Func];
             if (is_pointer_type(callee.type)
                 && (*callee.pptr == *exit_cont.pptr)) {
                 // exit continuation invoked, copy result and break loop
@@ -3849,6 +3918,9 @@ continue_execution:
                     ret[i] = rbuf[i];
                 }
                 retcount = rcount;
+                if (trace_arguments) {
+                    printf("TRACE: execute leave\n");
+                }
                 break;
             }
 
@@ -3862,65 +3934,60 @@ continue_execution:
             if (eq(callee.type, Types::PFlow)) {
                 auto flow = *callee.pflow;
                 assert(get_anchor(flow));
-
+                assert(flow->parameters.size() >= 1);
                 size_t pcount = flow->parameters.size();
                 size_t acount = rcount - 1;
-                if (pcount > 0) {
-                    if (frame->map.count(flow)) {
-                        frame = Frame::create(frame);
-                    }
-                    tmpargs.resize(pcount);
-                    if (acount != pcount) {
-                        error("parameter count mismatch (passed %zu, need %zu)",
-                            acount, pcount);
-                    }
 
-                    for (size_t i = 0; i < pcount; ++i) {
-                        size_t k = i + 1;
-                        if (k < rcount) {
-                            Any val = rbuf[k];
-                            if (eq(val.type, Types::PClosure)) {
-                                auto closure = *val.pclosure;
-                                auto sym = get_ptr_symbol(closure);
-                                if (sym == SYM_Unnamed) {
-                                    sym = flow->parameters[i]->name;
-                                    if (sym != SYM_Unnamed) {
-                                        set_ptr_symbol(closure, sym);
-                                    }
-                                }
-                            }
-                            tmpargs[i] = val;
-                        } else {
-                            tmpargs[i] = const_none;
-                        }
-                    }
-                    frame->map[flow] = tmpargs;
+                if (frame->map.count(flow)) {
+                    frame = Frame::create(frame);
                 }
+                // tmpargs map directly to param indices; that means
+                // the callee is not included.
+                tmpargs.resize(pcount);
+                /*
+                if (acount != pcount) {
+                    error("parameter count mismatch (passed %zu, need %zu)",
+                        acount - 1, pcount - 1);
+                }*/
+
+                // copy over continuation argument
+                tmpargs[PARAM_Cont] = rbuf[ARG_Cont];
+                for (size_t i = 0; i < (pcount - PARAM_Arg0); ++i) {
+                    size_t dsti = PARAM_Arg0 + i;
+                    size_t srci = ARG_Arg0 + i;
+                    if (srci < rcount) {
+                        tmpargs[dsti] = rbuf[srci];
+                    } else {
+                        tmpargs[dsti] = const_none;
+                    }
+                }
+                frame->map[flow] = tmpargs;
+
                 set_anchor(frame, get_anchor(flow));
 
-                for (int i = 0; i < ((int)std::min(acount, pcount) - 1); ++i) {
-                    Any val = rbuf[i + 1];
-                    if (eq(val.type, Types::PClosure)) {
-                        auto closure = *val.pclosure;
-                        auto sym = get_ptr_symbol(closure);
-                        if (sym == SYM_Unnamed) {
-                            sym = flow->parameters[i]->name;
-                            if (sym != SYM_Unnamed) {
-                                set_ptr_symbol(closure, sym);
-                            }
-                        }
-                    }
-                }
-
+                /*
                 if (trace_arguments) {
-                    auto anchor = get_anchor(flow);
-                    Anchor::printMessage(anchor, "trace");
-                }
+                    printf("flow arguments:\n");
+                    for (size_t i = 0; i < flow->arguments.size(); ++i) {
+                        if (i == ARG_Cont)
+                            printf("  -> ");
+                        else if (i == ARG_Func)
+                            printf("  Callee: ");
+                        else if (i >= ARG_Arg0)
+                            printf("  Argument #%zu: ", i - ARG_Arg0);
+                        printValue(flow->arguments[i], 0, true);
+                    }
+                }*/
 
                 assert(!flow->arguments.empty());
                 wcount = flow->arguments.size();
                 for (size_t i = 0; i < wcount; ++i) {
                     wbuf[i] = evaluate(i, frame, flow->arguments[i]);
+                }
+
+                if (trace_arguments) {
+                    auto anchor = get_anchor(flow);
+                    Anchor::printMessage(anchor, "trace");
                 }
             } else if (eq(callee.type, Types::PBuiltinFlow)) {
                 auto cb = *callee.pbuiltin_flow;
@@ -3938,10 +4005,10 @@ continue_execution:
             } else if (
                 is_pointer_type(callee.type)
                     && is_cfunction_type(get_element_type(callee.type))) {
-                assert(rcount >= 2);
-                wbuf[0] = rbuf[rcount - 1];
-                wbuf[1] = ffi->runFunction(callee, rbuf + 1, rcount - 2);
-                wcount = 2;
+                wbuf[ARG_Cont] = const_none;
+                wbuf[ARG_Func] = rbuf[ARG_Cont];
+                wbuf[ARG_Arg0] = ffi->runFunction(callee, rbuf + ARG_Arg0, rcount - 2);
+                wcount = 3;
             } else {
                 error("can not apply %s",
                     get_name(callee.type).c_str());
@@ -3977,20 +4044,17 @@ continue_execution:
 }
 
 static Any execute(const Any *args, size_t argcount) {
-    assert(argcount <= BANGRA_MAX_FUNCARGS);
+    assert(argcount < BANGRA_MAX_FUNCARGS);
     Any *ret = (Any *)malloc(sizeof(Any) * BANGRA_MAX_FUNCARGS);
+    auto exitcont = Flow::create_continuation(SYM_ExitFlow);
+    exitcont->appendParameter(SYM_ReturnFlow);
+    ret[ARG_Cont] = wrap(exitcont);
     for (size_t i = 0; i < argcount; ++i) {
-        ret[i] = args[i];
+        ret[i + ARG_Func] = args[i];
     }
-    ret[argcount++] = wrap(Flow::create(1));
-    size_t retcount = execute(ret, argcount, ret);
-    Any result;
-    if (retcount == 1)
-        result = const_none;
-    else {
-        assert(retcount == 2);
-        result = ret[1];
-    }
+    size_t retcount = execute(ret, argcount + 1, ret);
+    assert(retcount >= 3);
+    Any result = ret[ARG_Arg0];
     free(ret);
     return result;
 }
@@ -4566,9 +4630,10 @@ template<BuiltinFunction F>
 static size_t builtin_call(const Any *args, size_t argcount, Any *ret) {
     assert(argcount >= 2);
     // truncate head and continuation tail argument
-    ret[0] = args[argcount - 1];
-    ret[1] = F(args + 1, argcount - 2);
-    return 2;
+    ret[ARG_Cont] = const_none;
+    ret[ARG_Func] = args[ARG_Cont];
+    ret[ARG_Arg0] = F(args + ARG_Arg0, argcount - 2);
+    return 3;
 }
 
 static Any builtin_string(const Any *args, size_t argcount) {
@@ -4640,26 +4705,18 @@ static Any builtin_slice(const Any *args, size_t argcount) {
 
 static size_t builtin_branch(const Any *args, size_t argcount, Any *ret) {
     builtin_checkparams(argcount, 4, 4, 1);
-    ret[0] = args[extract_bool(args[1])?2:3];
-    ret[1] = args[4];
+    ret[ARG_Cont] = args[ARG_Cont];
+    ret[ARG_Func] = args[ARG_Arg0 + (extract_bool(args[ARG_Arg0])?1:2)];
     return 2;
 }
 
 static size_t builtin_call_cc(
     const Any *args, size_t argcount, Any *ret) {
     builtin_checkparams(argcount, 2, 2, 1);
-    ret[0] = args[1];
-    ret[1] = args[2];
-    ret[2] = args[2];
+    ret[ARG_Cont] = args[ARG_Cont];
+    ret[ARG_Func] = args[ARG_Arg0];
+    ret[ARG_Arg0] = args[ARG_Cont];
     return 3;
-}
-
-static size_t builtin_return_cc(
-    const Any *args, size_t argcount, Any *ret) {
-    builtin_checkparams(argcount, 3, 3, 1);
-    ret[0] = args[1];
-    ret[1] = args[2];
-    return 2;
 }
 
 static Any builtin_repr(const Any *args, size_t argcount) {
@@ -5105,6 +5162,18 @@ static Cursor expand_function (const Table *env, const List *topit) {
     auto it = extract_list(topit->at);
     auto topanchor = get_anchor(it);
     it = it->next;
+
+    Any sym;
+
+    assert(it);
+    if (is_symbol_type(it->at.type)) {
+        sym = it->at;
+        it = it->next;
+        assert(it);
+    } else {
+        sym = wrap_symbol(SYM_Unnamed);
+    }
+
     auto expr_parameters = it->at;
     it = it->next;
 
@@ -5125,9 +5194,12 @@ static Cursor expand_function (const Table *env, const List *topit) {
             List::create(
                 getLocal(globals, SYM_FunctionForm),
                 List::create(
-                    wrap(reverse_list_inplace(outargs)),
-                    expand_expr_list(subenv, it),
-                    get_anchor(params)),
+                    sym,
+                    List::create(
+                        wrap(reverse_list_inplace(outargs)),
+                        expand_expr_list(subenv, it),
+                        get_anchor(params)),
+                    get_anchor(sym)),
                 topanchor)),
         topit->next };
 }
@@ -5303,30 +5375,45 @@ struct ILBuilder {
         state.flow = next;
     }
 
+    // arguments must include continuation
     void br(const std::vector<Any> &arguments, const Anchor *anchor) {
+        assert(arguments.size() >= 2);
         // patch previous flow destination to jump right to
-        // continuation when possible
+        // continuation when the arguments are forwarded as-is
+        //
+        // works for this situation:
+        // prevflow (...): flow <- ...
+        // flow (@0 <- @1): # empty
+        //     arguments = { ?, some-func, flow@1 }
+        //
+        // after operation:
+        // prevflow (...): some-func <- ...
+        // flow (@0 <- @1): # empty, unused
+        //
+        // these predicates should probably be in a more meaningful
+        // function.
         assert(state.flow);
-        if (state.prevflow
-            && (arguments.size() == 2)
-            && (eq(Types::PParameter, arguments[1].type))
-            && (*arguments[1].pparameter
-                == state.flow->parameters[0])
-            && (eq(Types::PFlow, state.prevflow->arguments.back().type))
-            && (*(state.prevflow->arguments.back()).pflow
+        /* if (state.prevflow
+            && (arguments.size() == 3)
+            && (eq(Types::PParameter, arguments[ARG_Arg0].type))
+            && (*arguments[ARG_Arg0].pparameter
+                == state.flow->parameters[PARAM_Arg0])
+            && (eq(Types::PFlow, state.prevflow->arguments[ARG_Cont].type))
+            && (*(state.prevflow->arguments[ARG_Cont]).pflow
                 == state.flow)) {
-            state.prevflow->arguments.back() = arguments[0];
-        } else {
+            state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
+        } else */ {
             insertAndAdvance(arguments, nullptr, anchor);
         }
     }
 
     Parameter *call(std::vector<Any> values, const Anchor *anchor) {
         assert(anchor);
-        auto next = Flow::create(1, SYM_ReturnFlow);
-        values.push_back(wrap(next));
+        auto next = Flow::create_continuation(SYM_ReturnFlow);
+        next->appendParameter(SYM_ReturnFlow);
+        values.insert(values.begin(), wrap(next));
         insertAndAdvance(values, next, anchor);
-        return next->parameters[0];
+        return next->parameters[PARAM_Arg0];
     }
 
 };
@@ -5359,13 +5446,20 @@ static Any compile_function (const List *it) {
     it = it->next;
 
     assert(it);
+    auto func_name = extract_symbol(it->at);
+
+    it = it->next;
+
+    assert(it);
     auto expr_parameters = it->at;
+
     it = it->next;
 
     auto currentblock = builder->save();
 
-    auto function = Flow::create(0);
+    auto function = Flow::create_function(func_name);
     set_anchor(function, anchor);
+    auto ret = function->parameters[PARAM_Cont];
 
     builder->continueAt(function);
 
@@ -5375,11 +5469,9 @@ static Any compile_function (const List *it) {
             const_cast<Parameter*>(extract_parameter(param->at)));
         param = param->next;
     }
-    auto ret = function->appendParameter(Parameter::create(SYM_ReturnFlow));
-
     auto result = compile_expr_list(it);
 
-    builder->br({wrap(ret), result}, anchor);
+    builder->br({const_none, wrap(ret), result}, anchor);
 
     builder->restore(currentblock);
 
@@ -5545,8 +5637,7 @@ static void initGlobals () {
     setBuiltin<builtin_external>(env, "external");
     setBuiltin<builtin_import_c>(env, "import-c");
     setBuiltin<builtin_branch>(env, "branch");
-    setBuiltin<builtin_call_cc>(env, "__call/cc");
-    setBuiltin<builtin_return_cc>(env, "__return/cc");
+    setBuiltin<builtin_call_cc>(env, "call/cc");
     setBuiltin<builtin_dump>(env, "dump");
     setBuiltin<builtin_syntax_macro>(env, "syntax-macro");
     setBuiltin<builtin_string>(env, "string");
@@ -5644,12 +5735,12 @@ static Any compileFlow (const Table *env, const Any &expr,
     auto rootit = extract_list(expr);
     auto expexpr = expand_expr_list(env, rootit);
 
-    auto mainfunc = Flow::create();
-    auto ret = mainfunc->appendParameter(Parameter::create());
+    auto mainfunc = Flow::create_function(get_symbol(path));
+    auto ret = mainfunc->parameters[PARAM_Cont];
     builder->continueAt(mainfunc);
 
     auto result = compile_expr_list(expexpr);
-    builder->br({ wrap(ret), result }, anchor);
+    builder->br({ const_none, wrap(ret), result }, anchor);
 
     return wrap(mainfunc);
 }
