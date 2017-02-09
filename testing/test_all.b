@@ -372,11 +372,6 @@ assert
         test-varargs 1 2 3 4 5
         list 1 2 3 4 5 6
 
-do
-    let ... 1 2 3
-    assert
-        ... == (tupleof 1 2 3)
-
 assert
     ==
         list 1 2
@@ -390,7 +385,37 @@ assert
         list 1 2 3 4 5 6 7 8
 
 do
-    let-from x y z
+    # single assignment.
+    # names are always bound for the remainder of this scope.
+    let p-value
+        1 + 2
+
+    # single assignment, recursive access for functions.
+    let q-func
+        function (x)
+            ? (x <= 0)
+                1
+                x * (q-func (x - 1))
+
+    # multiple assignments in one block, must not depend on each other,
+    # but permits recursive access for functions.
+    let
+        button-type-yes     0
+        button-type-no      1
+        button-type-cancel  2
+
+        b-func
+            function (x)
+                ? (x <= 0)
+                    1
+                    x * (b-func (x - 1))
+
+    # multiple assignments by unpacking a tuple or other spliceable type,
+    # no recursion.
+    let x y z
+        tupleof 1.0 1.5 2.0
+
+    let x y z
         tupleof 1 2 3
     print "HALLO" x y z
     assert

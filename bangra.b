@@ -524,72 +524,9 @@ syntax-extend stage-3 (_ scope)
                                     @ tail 1 0
                                 rest
 
-    let let-macro
-        # support for multiple declarations in one let scope
-        syntax-macro
-            function (scope expr)
-                let args (@ expr 0 1)
-                let argtype (typeof (@ args 0))
-                if (== argtype symbol)
-                    # regular form
-                    cons
-                        cons let args
-                        @ expr 1
-                elseif (== argtype parameter)
-                    # regular form, hidden parameter
-                    cons
-                        cons continuation
-                            cons
-                                list
-                                    parameter (quote _)
-                                    @ args 0
-                                @ expr 1
-                        @ args 1
-                else
-                    # prepare quotable values from declarations
-                    function handle-pairs (pairs)
-                        if (empty? pairs)
-                            tupleof
-                                list;
-                                list;
-                                list;
-                        else
-                            let pair
-                                @ pairs 0
-                            let name
-                                @ pair 0
-                            let value
-                                @ pair 1 0
-                            let param
-                                parameter name
-                            let cells
-                                handle-pairs
-                                    @ pairs 1
-                            tupleof
-                                cons
-                                    list tupleof (list quote name) param
-                                    @ cells 0
-                                cons param (@ cells 1)
-                                cons value (@ cells 2)
-
-                    let cells
-                        handle-pairs args
-                    let scope-name
-                        quote scope
-                    list
-                        list syntax-extend (list (parameter (quote _)) scope-name)
-                            cons table
-                                cons
-                                    list tupleof (list quote scope-parent-symbol) scope-name
-                                    @ cells 0
-                        cons
-                            cons continuation
-                                cons
-                                    cons
-                                        parameter (quote _)
-                                        @ cells 1
-                                    @ expr 1
-                            @ cells 2
+    function symbol-or-parameter (x)
+        let t (typeof x)
+        (t == symbol) or (t == parameter)
 
     table
         tupleof scope-parent-symbol scope
@@ -631,33 +568,102 @@ syntax-extend stage-3 (_ scope)
                                 qquote-1 (@ expr 0 1 0)
                                 qquote-1 (@ expr 0 1)
                             @ expr 1
-        : let let-macro
-        : let-from
+        : let
+            # support for multiple declarations in one let scope
             syntax-macro
-                function let-from (scope topexpr)
-                    # iterate until we hit the last cell,
-                    # which is the body
-                    function find-body (expr)
-                        if (not (empty? (@ expr 1)))
-                            let out
-                                find-body (@ expr 1)
-                            tupleof
-                                cons (@ expr 0) (@ out 0)
-                                @ out 1
+                function (scope expr)
+                    let args (@ expr 0 1)
+                    let argtype (typeof (@ args 0))
+                    if (== argtype symbol)
+                        if (empty? (@ args 2))
+                            # regular form with support for recursion
+                            cons
+                                cons let args
+                                @ expr 1
                         else
-                            tupleof (list)
-                                @ expr 0
-                    let args
-                        find-body
-                            @ topexpr 0 1
-                    list
-                        list
+                            # unpacking multiple variables, without recursion
+
+                            # iterate until we hit the last cell,
+                            # which is the body
+                            function find-body (expr)
+                                if (not (empty? (@ expr 1)))
+                                    let out
+                                        find-body (@ expr 1)
+                                    tupleof
+                                        cons (@ expr 0) (@ out 0)
+                                        @ out 1
+                                else
+                                    tupleof (list)
+                                        @ expr 0
+                            let cells
+                                find-body args
+                            list
+                                list
+                                    cons continuation
+                                        cons
+                                            cons (parameter (quote _)) (@ cells 0)
+                                            @ expr 1
+                                    list splice
+                                        @ cells 1
+
+                    elseif (== argtype parameter)
+                        # regular form, hidden parameter
+                        cons
                             cons continuation
                                 cons
-                                    cons (parameter (quote _)) (@ args 0)
-                                    @ topexpr 1
-                            list splice
-                                @ args 1
+                                    list
+                                        parameter (quote _)
+                                        @ args 0
+                                    @ expr 1
+                            @ args 1
+                    else
+                        # multiple variables with support for recursion,
+                        # but no cross dependency
+
+                        # prepare quotable values from declarations
+                        function handle-pairs (pairs)
+                            if (empty? pairs)
+                                tupleof
+                                    list;
+                                    list;
+                                    list;
+                            else
+                                let pair
+                                    @ pairs 0
+                                let name
+                                    @ pair 0
+                                let value
+                                    @ pair 1 0
+                                let param
+                                    parameter name
+                                let cells
+                                    handle-pairs
+                                        @ pairs 1
+                                tupleof
+                                    cons
+                                        list tupleof (list quote name) param
+                                        @ cells 0
+                                    cons param (@ cells 1)
+                                    cons value (@ cells 2)
+
+                        let cells
+                            handle-pairs args
+                        let scope-name
+                            quote scope
+                        list
+                            list syntax-extend (list (parameter (quote _)) scope-name)
+                                cons table
+                                    cons
+                                        list tupleof (list quote scope-parent-symbol) scope-name
+                                        @ cells 0
+                            cons
+                                cons continuation
+                                    cons
+                                        cons
+                                            parameter (quote _)
+                                            @ cells 1
+                                        @ expr 1
+                                @ cells 2
 
         tupleof scope-list-wildcard-symbol
             function (scope topexpr)

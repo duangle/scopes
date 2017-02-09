@@ -1559,6 +1559,11 @@ static const Table *extract_table(const Any &value) {
 
 //------------------------------------------------------------------------------
 
+enum {
+    CaptureAll = 0,
+    CaptureOne = 1,
+};
+
 struct Parameter {
     // changes need to be mirrored to Types::PParameter
 
@@ -1566,6 +1571,11 @@ struct Parameter {
     size_t index;
     const Type *parameter_type;
     Symbol name;
+    // CaptureOne: capture a single variable
+    // CaptureAll: capture all right-hand variables
+    // < 0: capture all right-hand variables up to a tail element
+    // > 1: capture exactly N variables
+    int capture;
 
     Parameter() :
         parent(nullptr),
