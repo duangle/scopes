@@ -3399,6 +3399,19 @@ namespace Types {
         }
     }
 
+    static size_t _list_splice(
+        const Type *self, const bangra::Any &value,
+        bangra::Any *ret, size_t retsize) {
+        auto it = extract_list(value);
+        size_t count = 0;
+        while (it && (count < retsize)) {
+            ret[count] = it->at;
+            it = it->next;
+            ++count;
+        }
+        return count;
+    }
+
     static bangra::Any type_pointer_at(const Type *self,
         const bangra::Any &value, const bangra::Any &index) {
         return at(pointer_element(self, value), index);
@@ -4119,6 +4132,7 @@ namespace Types {
         tmp = const_cast<Type *>(Pointer(_List));
         tmp->apply_type = apply_type_call<_list_apply_type>;
         tmp->tostring = _list_tostring;
+        tmp->splice = _list_splice;
         PList = tmp;
 
         tmp = Struct("Table", true);
