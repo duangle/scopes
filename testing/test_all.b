@@ -415,6 +415,16 @@ do
     let x y z
         tupleof 1.0 1.5 2.0
 
+    # since let is implemented using vararg function parameters,
+    # simple vararg matching can also be performed
+    let start center... end
+        tupleof "(" 1 2 3 ")"
+    assert
+        and
+            start == "("
+            end == ")"
+            center... == (tupleof 1 2 3)
+
     let x y z
         tupleof 1 2 3
     print "HALLO" x y z

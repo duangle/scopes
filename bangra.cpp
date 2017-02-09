@@ -301,7 +301,10 @@ static size_t align(size_t offset, size_t align) {
     return (offset + align - 1) & ~(align - 1);
 }
 
-
+bool endswith(const std::string &str, const std::string &suffix) {
+    return str.size() >= suffix.size() &&
+           str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
 
 //------------------------------------------------------------------------------
 // FILE I/O
@@ -1559,11 +1562,6 @@ static const Table *extract_table(const Any &value) {
 
 //------------------------------------------------------------------------------
 
-enum {
-    CaptureAll = 0,
-    CaptureOne = 1,
-};
-
 struct Parameter {
     // changes need to be mirrored to Types::PParameter
 
@@ -1571,17 +1569,14 @@ struct Parameter {
     size_t index;
     const Type *parameter_type;
     Symbol name;
-    // CaptureOne: capture a single variable
-    // CaptureAll: capture all right-hand variables
-    // < 0: capture all right-hand variables up to a tail element
-    // > 1: capture exactly N variables
-    int capture;
+    bool vararg;
 
     Parameter() :
         parent(nullptr),
         index(-1),
         parameter_type(nullptr),
-        name(SYM_Unnamed) {
+        name(SYM_Unnamed),
+        vararg(false) {
     }
 
     Flow *getParent() const {
@@ -1614,6 +1609,8 @@ struct Parameter {
         value->index = (size_t)-1;
         value->name = name;
         value->parameter_type = Types::Any;
+        if (endswith(get_symbol_name(name), "..."))
+            value->vararg = true;
         return value;
     }
 };
@@ -3213,14 +3210,20 @@ continue_execution:
 
                 // copy over continuation argument
                 tmpargs[PARAM_Cont] = rbuf[ARG_Cont];
-                for (size_t i = 0; i < (pcount - PARAM_Arg0); ++i) {
+                size_t tcount = pcount - PARAM_Arg0;
+                size_t srci = ARG_Arg0;
+                for (size_t i = 0; i < tcount; ++i) {
                     size_t dsti = PARAM_Arg0 + i;
-                    size_t srci = ARG_Arg0 + i;
                     auto param = flow->parameters[dsti];
-                    if (param->name == SYM_VarArgs) {
-                        tmpargs[dsti] = wrap(&rbuf[srci], rcount - srci);
+                    if (param->vararg) {
+                        // how many parameters after this one
+                        int remparams = (int)tcount - (int)i - 1;
+                        // how many varargs to capture
+                        int vargsize = std::max(0, (int)rcount - (int)srci - remparams);
+                        tmpargs[dsti] = wrap(&rbuf[srci], vargsize);
+                        srci += vargsize;
                     } else if (srci < rcount) {
-                        tmpargs[dsti] = rbuf[srci];
+                        tmpargs[dsti] = rbuf[srci++];
                     } else {
                         tmpargs[dsti] = const_none;
                     }
