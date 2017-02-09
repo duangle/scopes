@@ -509,24 +509,27 @@ typedef uint64_t Symbol;
 
 struct Any {
     union {
-        const bool *p_i1;
+        // embedded data can also be copied from/to this array
+        uint8_t embedded[8];
 
-        const int8_t *p_i8;
-        const int16_t *p_i16;
-        const int32_t *p_i32;
-        const int64_t *p_i64;
+        bool i1;
 
-        const uint8_t *p_u8;
-        const uint16_t *p_u16;
-        const uint32_t *p_u32;
-        const uint64_t *p_u64;
+        int8_t i8;
+        int16_t i16;
+        int32_t i32;
+        int64_t i64;
 
-        const float *p_r32;
-        const double *p_r64;
+        uint8_t u8;
+        uint16_t u16;
+        uint32_t u32;
+        uint64_t u64;
+
+        float r32;
+        double r64;
 
         const void *ptr;
         const String *str;
-        const Symbol *symbol;
+        Symbol symbol;
 
         const BuiltinFlowFunction *pbuiltin_flow;
         const BuiltinMacroFunction *pbuiltin_macro;
@@ -878,6 +881,9 @@ struct Type {
 
     size_t size;
     size_t alignment;
+    // value is directly stored in Any struct, rather than in a pointer
+    // the value is then by definition immutable.
+    bool is_embedded;
 
     union {
         // integer: is type signed?
@@ -1025,6 +1031,7 @@ static Type *new_type(const std::string &name) {
     auto result = new Type();
     result->size = 0;
     result->alignment = 1;
+    result->is_embedded = false;
     result->name = name;
     result->eq_type = type_eq_type_default;
     result->apply_type = type_apply_default;
@@ -1336,7 +1343,7 @@ static const char *extract_cstr(const Any &value) {
 
 static Symbol extract_symbol(const Any &value) {
     if (eq(value.type, Types::Symbol)) {
-        return *value.symbol;
+        return value.symbol;
     } else {
         error("symbol expected");
         return 0;
@@ -1349,7 +1356,7 @@ static std::string extract_symbol_string(const Any &value) {
 
 static bool extract_bool(const Any &value) {
     if (eq(value.type, Types::Bool)) {
-        return *value.p_i1;
+        return value.i1;
     }
     error("boolean expected");
     return false;
@@ -1380,7 +1387,11 @@ static String *alloc_string(const char *ptr, size_t count) {
 
 static Any wrap(const Type *type, const void *ptr) {
     Any any = make_any(type);
-    any.ptr = const_cast<void *>(ptr);
+    if (type->is_embedded) {
+        memcpy(any.embedded, ptr, type->size);
+    } else {
+        any.ptr = const_cast<void *>(ptr);
+    }
     return any;
 }
 
@@ -1395,22 +1406,8 @@ static T **alloc_ptr(T *value) {
     return ptr;
 }
 
-template <typename T>
-static T *alloc_int(int64_t value) {
-    T *ptr = (T *)malloc(sizeof(T));
-    *ptr = (T)value;
-    return ptr;
-}
-
-template <typename T>
-static T *alloc_uint(uint64_t value) {
-    T *ptr = (T *)malloc(sizeof(T));
-    *ptr = (T)value;
-    return ptr;
-}
-
 static Any wrap_symbol(const Symbol &s) {
-    return wrap(Types::Symbol, alloc_uint<Symbol>(s));
+    return wrap(Types::Symbol, &s);
 }
 
 static Any symbol(const std::string &s) {
@@ -1426,23 +1423,23 @@ static Any wrap_ptr(const Type *type, const void *ptr) {
 static Any integer(const Type *type, int64_t value) {
     Any any = make_any(type);
     if (type == Types::Bool) {
-        any.p_i1 = alloc_int<bool>(value);
+        any.i1 = (bool)value;
     } else if (type == Types::I8) {
-        any.p_i8 = alloc_int<int8_t>(value);
+        any.i8 = (int8_t)value;
     } else if (type == Types::I16) {
-        any.p_i16 = alloc_int<int16_t>(value);
+        any.i16 = (int16_t)value;
     } else if (type == Types::I32) {
-        any.p_i32 = alloc_int<int32_t>(value);
+        any.i32 = (int32_t)value;
     } else if (type == Types::I64) {
-        any.p_i64 = alloc_int<int64_t>(value);
+        any.i64 = value;
     } else if (type == Types::U8) {
-        any.p_u8 = alloc_uint<uint8_t>((uint64_t)value);
+        any.u8 = (uint8_t)((uint64_t)value);
     } else if (type == Types::U16) {
-        any.p_u16 = alloc_uint<uint16_t>((uint64_t)value);
+        any.u16 = (uint16_t)((uint64_t)value);
     } else if (type == Types::U32) {
-        any.p_u32 = alloc_uint<uint32_t>((uint64_t)value);
+        any.u32 = (uint32_t)((uint64_t)value);
     } else if (type == Types::U64) {
-        any.p_u64 = alloc_uint<uint64_t>((uint64_t)value);
+        any.u64 = ((uint64_t)value);
     } else {
         assert(false && "not an integer type");
     }
@@ -1452,42 +1449,35 @@ static Any integer(const Type *type, int64_t value) {
 static int64_t extract_integer(const Any &value) {
     auto type = value.type;
     if (type == Types::Bool) {
-        return (int64_t)*value.p_i1;
+        return (int64_t)value.i1;
     } else if (type == Types::I8) {
-        return (int64_t)*value.p_i8;
+        return (int64_t)value.i8;
     } else if (type == Types::I16) {
-        return (int64_t)*value.p_i16;
+        return (int64_t)value.i16;
     } else if (type == Types::I32) {
-        return (int64_t)*value.p_i32;
+        return (int64_t)value.i32;
     } else if (type == Types::I64) {
-        return *value.p_i64;
+        return value.i64;
     } else if (type == Types::U8) {
-        return (int64_t)*value.p_u8;
+        return (int64_t)value.u8;
     } else if (type == Types::U16) {
-        return (int64_t)*value.p_u16;
+        return (int64_t)value.u16;
     } else if (type == Types::U32) {
-        return (int64_t)*value.p_u32;
+        return (int64_t)value.u32;
     } else if (type == Types::U64) {
-        return (int64_t)*value.p_u64;
+        return (int64_t)value.u64;
     } else {
         error("integer expected, not %s", get_name(type).c_str());
         return 0;
     }
 }
 
-template <typename T>
-static T *alloc_real(double value) {
-    T *ptr = (T *)malloc(sizeof(T));
-    *ptr = (T)value;
-    return ptr;
-}
-
 static Any real(const Type *type, double value) {
     Any any = make_any(type);
     if (type == Types::R32) {
-        any.p_r32 = alloc_real<float>(value);
+        any.r32 = (float)value;
     } else if (type == Types::R64) {
-        any.p_r64 = alloc_real<double>(value);
+        any.r64 = value;
     } else {
         assert(false && "not a real type");
     }
@@ -1497,9 +1487,9 @@ static Any real(const Type *type, double value) {
 static double extract_real(const Any &value) {
     auto type = value.type;
     if (type == Types::R32) {
-        return (double)*value.p_r32;
+        return (double)value.r32;
     } else if (type == Types::R64) {
-        return (double)*value.p_r64;
+        return value.r64;
     } else {
         error("real expected, not %s", get_name(type).c_str());
         return 0;
@@ -1508,6 +1498,7 @@ static double extract_real(const Any &value) {
 
 template<typename T>
 static T *extract_ptr(const bangra::Any &value) {
+    assert(!value.type->is_embedded);
     return *(T **)value.ptr;
 }
 
@@ -1971,9 +1962,10 @@ static Any wrap(const Any *args, size_t argcount) {
     for (size_t i = 0; i < argcount; ++i) {
         auto elemtype = get_type(type, i);
         auto offset = get_offset(type, i);
-        auto srcptr = args[i].ptr;
         auto size = get_size(elemtype);
         if (size) {
+            const void *srcptr =
+                elemtype->is_embedded?args[i].embedded:args[i].ptr;
             memcpy(data + offset, srcptr, size);
         } else if (!isnone(args[i])) {
             error("attempting to pack opaque type %s in tuple",
@@ -3028,12 +3020,19 @@ struct FFI {
 
         Any result = make_any(rtype);
         // TODO: align properly
-        void *rvalue = malloc(get_size(rtype));
-        result.ptr = rvalue;
+        void *rvalue;
+        if (rtype->is_embedded) {
+            rvalue = result.embedded;
+        } else {
+            rvalue = malloc(get_size(rtype));
+            result.ptr = rvalue;
+        }
 
         void *avalues[count];
         for (size_t i = 0; i < count; ++i) {
-            avalues[i] = const_cast<void *>(args[i].ptr);
+            avalues[i] = args[i].type->is_embedded?
+                const_cast<uint8_t *>(args[i].embedded)
+                :const_cast<void *>(args[i].ptr);
         }
 
         ffi_call(&cif, FFI_FN(extract_ptr<void>(func)), rvalue, avalues);
@@ -3487,8 +3486,8 @@ namespace Types {
     static Ordering value_symbol_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         if (self != b.type) error("can not compare to type");
-        auto x = *a.symbol;
-        auto y = *b.symbol;
+        auto x = a.symbol;
+        auto y = b.symbol;
         return (x == y)?Equal:Unordered;
     }
 
@@ -3974,7 +3973,7 @@ namespace Types {
             (width == 1)?"bool":
                 format("%sint%zu", signed_?"":"u", width));
         type->eq_type = type_integer_eq;
-
+        type->is_embedded = true;
         type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
         type->op2[OP2_Sub] = _integer_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
@@ -4008,6 +4007,7 @@ namespace Types {
         Type *type = new_type(format("real%zu", width));
         type->tostring = _real_tostring;
         type->eq_type = type_real_eq;
+        type->is_embedded = true;
 
         type->op2[OP2_Add] = type->rop2[OP2_Add] = _real_add;
         type->op2[OP2_Sub] = _real_sub;
@@ -4115,6 +4115,7 @@ namespace Types {
         String = tmp;
 
         tmp = Struct("Symbol", true);
+        tmp->is_embedded = true;
         tmp->tostring = _symbol_tostring;
         tmp->cmp = value_symbol_cmp;
         tmp->apply_type = apply_type_call<_symbol_apply_type>;
