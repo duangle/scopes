@@ -23,7 +23,7 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let external cfunction branch function null true false"
+        "bangra let external cfunction branch function true false"
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* ::@ syntax-macro syntax-scope cons"
             .. " string expand call escape do empty? dump-syntax"
@@ -31,7 +31,7 @@ local function bangra_symbols()
             .. " repeat syntax-single-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
-            .. " set-key! cstr pointer return continuation splice let-unpack"
+            .. " set-key! cstr pointer return continuation splice let-from"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

@@ -390,7 +390,9 @@ assert
         list 1 2 3 4 5 6 7 8
 
 do
-    let-unpack (tupleof 1 2 3) x y z
+    let-from x y z
+        tupleof 1 2 3
+    print "HALLO" x y z
     assert
         ==
             list x y z

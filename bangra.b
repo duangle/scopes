@@ -632,33 +632,32 @@ syntax-extend stage-3 (_ scope)
                                 qquote-1 (@ expr 0 1)
                             @ expr 1
         : let let-macro
-        : let-unpack
+        : let-from
             syntax-macro
-                function let-unpack (scope topexpr)
-                    let expr
-                        @ topexpr 0
-                    let data
-                        @ expr 1 0
-                    let params
-                        @ expr 2
-                    let tmp
-                        parameter (quote let@tmp)
-                    let k 0
-                    cons
-                        list let-macro tmp data
-                        cons
-                            cons let-macro
-                                loop (params k)
-                                    if (empty? params) (list)
-                                    else
-                                        cons
-                                            list
-                                                @ params 0
-                                                list (do @) tmp k
-                                            repeat
-                                                @ params 1
-                                                + k 1
-                            @ topexpr 1
+                function let-from (scope topexpr)
+                    # iterate until we hit the last cell,
+                    # which is the body
+                    function find-body (expr)
+                        if (not (empty? (@ expr 1)))
+                            let out
+                                find-body (@ expr 1)
+                            tupleof
+                                cons (@ expr 0) (@ out 0)
+                                @ out 1
+                        else
+                            tupleof (list)
+                                @ expr 0
+                    let args
+                        find-body
+                            @ topexpr 0 1
+                    list
+                        list
+                            cons continuation
+                                cons
+                                    cons (parameter (quote _)) (@ args 0)
+                                    @ topexpr 1
+                            list splice
+                                @ args 1
 
         tupleof scope-list-wildcard-symbol
             function (scope topexpr)
