@@ -329,14 +329,13 @@ assert
         if (k == 0)
             1
         elseif (k == 1)
-            q := 2
+            let q 2
             q
         elseif (k == 2)
             3
         else
             4
     "if-tree failed"
-print;
 
 assert
     == 9
@@ -354,6 +353,7 @@ function test-extraparam ()
     true
 test-extraparam 1 2 3
 
+
 function test-varargs (x y ...)
     assert
         and
@@ -366,12 +366,22 @@ function test-varargs (x y ...)
             ... @ 0 == 3
             ... @ 1 == 4
             ... @ 2 == 5
-test-varargs 1 2 3 4 5
+    list 1 2 (splice ...) 6
+assert
+    ==
+        test-varargs 1 2 3 4 5
+        list 1 2 3 4 5 6
 
-do
-    let ... 5 6 7
-    print
-        length ...
-        @ ... 0
+assert
+    ==
+        list 1 2
+            splice
+                tupleof 3
+                    splice
+                        tupleof 4 5
+            splice
+                tupleof 6 7
+            8
+        list 1 2 3 4 5 6 7 8
 
 print "ok"

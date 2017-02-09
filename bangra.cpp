@@ -713,6 +713,7 @@ namespace Types {
     static const Type *TReal;
     static const Type *TStruct;
     static const Type *TEnum;
+    static const Type *TSplice;
 
     static const Type *Bool;
     static const Type *I8;
@@ -762,12 +763,14 @@ namespace Types {
     static const Type *_new_pointer_type(const Type *element);
     static const Type *_new_integer_type(size_t width, bool signed_);
     static const Type *_new_real_type(size_t width);
+    static const Type *_new_splice_type(const Type *element);
 
     static auto Array = memo(_new_array_type);
     static auto Vector = memo(_new_vector_type);
     static auto Tuple = memo(_new_tuple_type);
     static auto CFunction = memo(_new_cfunction_type);
     static auto Pointer = memo(_new_pointer_type);
+    static auto Splice = memo(_new_splice_type);
     static auto Integer = memo(_new_integer_type);
     static auto Real = memo(_new_real_type);
 
@@ -865,6 +868,8 @@ struct Type {
     // apply the type
     size_t (*apply_type)(const Type *self,
         const Any *args, size_t argcount, Any *ret);
+    // splice value into argument list
+    size_t (*splice)(const Type *self, const Any &value, Any *ret, size_t retsize);
     // length of value, if any
     size_t (*length)(const Type *self, const Any &value);
 
@@ -1006,6 +1011,10 @@ static Any type_slice_default(
     return const_none;
 }
 
+static size_t type_splice_default(
+    const Type *self, const Any &value, Any *ret, size_t retsize) {
+    error("type %s not spliceable", get_name(self).c_str());
+}
 
 static Type *new_type(const std::string &name) {
     //assert(!name.empty());
@@ -1018,6 +1027,7 @@ static Type *new_type(const std::string &name) {
     result->tostring = type_tostring_default;
     result->length = type_length_default;
     result->slice = type_slice_default;
+    result->splice = type_splice_default;
     for (size_t i = 0; i < OP1_Count; ++i) {
         result->op1[i] = op1_default;
     }
@@ -1185,6 +1195,10 @@ static Any slice(const Any &value, size_t i0, size_t i1) {
     return value.type->slice(value.type, value, i0, i1);
 }
 
+static size_t splice(const Any &value, Any *ret, size_t retsize) {
+    return value.type->splice(value.type, value, ret, retsize);
+}
+
 static size_t length(const Any &value) {
     auto s = value.type->length(value.type, value);
     if (s == (size_t)-1) {
@@ -1237,6 +1251,10 @@ static Any call(const Any &what, const std::vector<Any> &args) {
     return const_none;
 }
 */
+
+static bool is_splice_type(const Type *type) {
+    return eq(type, Types::TSplice);
+}
 
 static bool is_typeref_type(const Type *type) {
     return eq(type, Types::PType);
@@ -3202,10 +3220,18 @@ continue_execution:
                 set_anchor(frame, get_anchor(flow));
 
                 assert(!flow->arguments.empty());
-                wcount = flow->arguments.size();
-                for (size_t i = 0; i < wcount; ++i) {
-                    wbuf[i] = evaluate(i, frame, flow->arguments[i]);
+                size_t idx = 0;
+                for (size_t i = 0; i < flow->arguments.size(); ++i) {
+                    Any arg = flow->arguments[i];
+                    if (is_splice_type(arg.type)) {
+                        arg.type = get_element_type(arg.type);
+                        idx += splice(evaluate(i, frame, arg),
+                            &wbuf[idx], BANGRA_MAX_FUNCARGS - idx);
+                    } else {
+                        wbuf[idx++] = evaluate(i, frame, arg);
+                    }
                 }
+                wcount = idx;
 
                 if (trace_arguments) {
                     auto anchor = get_anchor(flow);
@@ -3506,6 +3532,10 @@ namespace Types {
         return (other == TPointer);
     }
 
+    static bool type_splice_eq(const Type *self, const Type *other) {
+        return (other == TSplice);
+    }
+
     static bool type_tuple_eq(const Type *self, const Type *other) {
         return (other == TTuple);
     }
@@ -3633,6 +3663,17 @@ namespace Types {
         return type;
     }
 
+    static const Type *_new_splice_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
+                get_name(element).c_str()));
+        type->element_type = element;
+        type->eq_type = type_splice_eq;
+        return type;
+    }
+
     static bangra::Any type_tuple_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
         auto index = (size_t)extract_integer(vindex);
@@ -3643,6 +3684,17 @@ namespace Types {
         }
         auto offset = self->offsets[index];
         return wrap(self->types[index], (char *)value.ptr + offset);
+    }
+
+    static size_t _tuple_splice(
+        const Type *self, const bangra::Any &value,
+        bangra::Any *ret, size_t retsize) {
+        size_t count = std::min(retsize, self->types.size());
+        for (size_t i = 0; i < count; ++i) {
+            auto offset = self->offsets[i];
+            ret[i] = wrap(self->types[i], (char *)value.ptr + offset);
+        }
+        return count;
     }
 
     static std::string _tuple_tostring(const Type *self, const bangra::Any &value) {
@@ -3818,6 +3870,7 @@ namespace Types {
         type->op2[OP2_At] = type_tuple_at;
         type->length = _tuple_length;
         type->tostring = _tuple_tostring;
+        type->splice = _tuple_splice;
         _set_struct_field_types(type, types);
         return type;
     }
@@ -3958,6 +4011,7 @@ namespace Types {
         TVector = Struct("vector", true);
         TTuple = Struct("tuple", true);
         TPointer = Struct("pointer", true);
+        TSplice = Struct("splice", true);
         TCFunction = Struct("cfunction", true);
         TInteger = Struct("integer", true);
         TReal = Struct("real", true);
@@ -5512,6 +5566,14 @@ static Any compile_continuation (const List *it) {
     return wrap(function);
 }
 
+static Any compile_splice (const List *it) {
+    it = it->next;
+    assert(it);
+    Any value = compile(it->at);
+    value.type = Types::Splice(value.type);
+    return value;
+}
+
 static Any compile_implicit_call (const List *it,
     const Anchor *anchor = nullptr) {
     if (!anchor) {
@@ -5596,6 +5658,7 @@ static void initGlobals () {
     setBuiltin<compile_call>(env, "form:call");
     setBuiltin<compile_continuation>(env, "form:continuation");
     setBuiltin<compile_quote>(env, "form:quote");
+    setBuiltin<compile_splice>(env, "splice");
     setBuiltin<compile_do>(env, "do");
 
     setBuiltin<expand_continuation>(env, "continuation");
