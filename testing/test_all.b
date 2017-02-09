@@ -372,6 +372,11 @@ assert
         test-varargs 1 2 3 4 5
         list 1 2 3 4 5 6
 
+do
+    let ... 1 2 3
+    assert
+        ... == (tupleof 1 2 3)
+
 assert
     ==
         list 1 2
@@ -383,5 +388,12 @@ assert
                 tupleof 6 7
             8
         list 1 2 3 4 5 6 7 8
+
+do
+    let-unpack (tupleof 1 2 3) x y z
+    assert
+        ==
+            list x y z
+            list 1 2 3
 
 print "ok"

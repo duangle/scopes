@@ -1014,6 +1014,7 @@ static Any type_slice_default(
 static size_t type_splice_default(
     const Type *self, const Any &value, Any *ret, size_t retsize) {
     error("type %s not spliceable", get_name(self).c_str());
+    return 0;
 }
 
 static Type *new_type(const std::string &name) {
@@ -3674,9 +3675,8 @@ namespace Types {
         return type;
     }
 
-    static bangra::Any type_tuple_at(const Type *self,
-        const bangra::Any &value, const bangra::Any &vindex) {
-        auto index = (size_t)extract_integer(vindex);
+    static bangra::Any _tuple_get(const Type *self,
+        const bangra::Any &value, size_t index) {
         if (index >= self->types.size()) {
             error("index %zu out of tuple bounds (%zu)",
                 index, self->types.size());
@@ -3686,13 +3686,40 @@ namespace Types {
         return wrap(self->types[index], (char *)value.ptr + offset);
     }
 
+    static bangra::Any type_tuple_at(const Type *self,
+        const bangra::Any &value, const bangra::Any &vindex) {
+        return _tuple_get(self, value, (size_t)extract_integer(vindex));
+    }
+
+    static Ordering _tuple_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto atype = a.type;
+        auto btype = b.type;
+        if (!bangra::is_tuple_type(btype))
+            error("tuple type expected");
+        auto asize = atype->types.size();
+        auto bsize = btype->types.size();
+        if (asize == bsize) {
+            for (size_t i = 0; i < asize; ++i) {
+                auto x = _tuple_get(atype, a, i);
+                auto y = _tuple_get(btype, b, i);
+                auto result = compare(x, y);
+                if (result != Equal) return result;
+            }
+            return Equal;
+        } else if (asize < bsize) {
+            return Less;
+        } else {
+            return Greater;
+        }
+    }
+
     static size_t _tuple_splice(
         const Type *self, const bangra::Any &value,
         bangra::Any *ret, size_t retsize) {
         size_t count = std::min(retsize, self->types.size());
         for (size_t i = 0; i < count; ++i) {
-            auto offset = self->offsets[i];
-            ret[i] = wrap(self->types[i], (char *)value.ptr + offset);
+            ret[i] = _tuple_get(self, value, i);
         }
         return count;
     }
@@ -3867,6 +3894,7 @@ namespace Types {
         ss << ")";
         Type *type = new_type(ss.str());
         type->eq_type = type_tuple_eq;
+        type->cmp = _tuple_cmp;
         type->op2[OP2_At] = type_tuple_at;
         type->length = _tuple_length;
         type->tostring = _tuple_tostring;
