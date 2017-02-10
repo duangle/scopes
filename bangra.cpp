@@ -531,20 +531,19 @@ struct Any {
         const String *str;
         Symbol symbol;
 
-        const BuiltinFlowFunction *pbuiltin_flow;
-        const BuiltinMacroFunction *pbuiltin_macro;
-        const SpecialFormFunction *pspecial_form;
+        const BuiltinFlowFunction pbuiltin_flow;
+        const BuiltinMacroFunction pbuiltin_macro;
+        const SpecialFormFunction pspecial_form;
 
-        const char **pc_str;
-        const void **pptr;
-        const List **plist;
-        const Type **ptype;
-        const Parameter **pparameter;
-        const Flow **pflow;
-        const Closure **pclosure;
-        const Frame **pframe;
-        const Macro **pmacro;
-        const Table **ptable;
+        const char *c_str;
+        const List *plist;
+        const Type *ptype;
+        const Parameter *pparameter;
+        const Flow *pflow;
+        const Closure *pclosure;
+        const Frame *pframe;
+        const Macro *pmacro;
+        const Table *ptable;
         const Anchor *anchorref;
     };
     const Type *type;
@@ -1065,8 +1064,13 @@ template<int OP>
 static Any op2(const Any &a, const Any &b) {
     try {
         return a.type->op2[OP](a.type, a, b);
-    } catch (const Any &any) {
-        return b.type->rop2[OP](b.type, b, a);
+    } catch (const Any &any1) {
+        try {
+            return b.type->rop2[OP](b.type, b, a);
+        } catch (const Any &any2) {
+            // raise original error
+            throw any1;
+        }
     }
 }
 
@@ -1321,7 +1325,7 @@ static bool is_table_type(const Type *type) {
 
 static std::string extract_string(const Any &value) {
     if (eq(value.type, Types::Rawstring)) {
-        return *value.pc_str;
+        return value.c_str;
     } else if (eq(value.type, Types::String)) {
         return std::string(value.str->ptr, value.str->count);
     } else {
@@ -1332,7 +1336,7 @@ static std::string extract_string(const Any &value) {
 
 static const char *extract_cstr(const Any &value) {
     if (eq(value.type, Types::Rawstring)) {
-        return *value.pc_str;
+        return value.c_str;
     } else if (eq(value.type, Types::String)) {
         return value.str->ptr;
     } else {
@@ -1364,7 +1368,7 @@ static bool extract_bool(const Any &value) {
 
 static const Type *extract_type(const Any &value) {
     if (is_typeref_type(value.type)) {
-        return *value.ptype;
+        return value.ptype;
     }
     error("type constant expected");
     return nullptr;
@@ -1390,7 +1394,7 @@ static Any wrap(const Type *type, const void *ptr) {
     if (type->is_embedded) {
         memcpy(any.embedded, ptr, type->size);
     } else {
-        any.ptr = const_cast<void *>(ptr);
+        any.ptr = ptr;
     }
     return any;
 }
@@ -1416,7 +1420,11 @@ static Any symbol(const std::string &s) {
 
 static Any wrap_ptr(const Type *type, const void *ptr) {
     Any any = make_any(type);
-    any.ptr = alloc_ptr(ptr);
+    if (type->is_embedded) {
+        any.ptr = ptr;
+    } else {
+        any.ptr = alloc_ptr(ptr);
+    }
     return any;
 }
 
@@ -1498,8 +1506,8 @@ static double extract_real(const Any &value) {
 
 template<typename T>
 static T *extract_ptr(const bangra::Any &value) {
-    assert(!value.type->is_embedded);
-    return *(T **)value.ptr;
+    assert(value.type->is_embedded);
+    return (T *)value.ptr;
 }
 
 static Any wrap(bool value) {
@@ -1538,14 +1546,12 @@ static std::vector<Any> extract_tuple(const Any &value) {
 
 static bangra::Any pointer_element(
     const Type *self, const bangra::Any &value) {
-    return wrap(get_element_type(self), *(char **)value.ptr);
+    return wrap(get_element_type(self), value.ptr);
 }
 
 static const Table *extract_table(const Any &value) {
     if (is_table_type(value.type)) {
-        return *value.ptable;
-    } else if (eq(value.type, Types::_Table)) {
-        return (Table *)value.ptr;
+        return value.ptable;
     }
     error("table expected, not %s", get_name(value.type).c_str());
     return nullptr;
@@ -1608,7 +1614,7 @@ struct Parameter {
 
 static const Parameter *extract_parameter(const Any &value) {
     if (eq(value.type, Types::PParameter)) {
-        return *value.pparameter;
+        return value.pparameter;
     }
     error("parameter expected");
     return nullptr;
@@ -1678,9 +1684,7 @@ struct List {
 
 static const List *extract_list(const Any &value) {
     if (eq(value.type, Types::PList)) {
-        return *value.plist;
-    } else if (eq(value.type, Types::_List)) {
-        return (const List *)value.ptr;
+        return value.plist;
     } else {
         error("list expected, not %s", get_name(value.type).c_str());
     }
@@ -1808,7 +1812,7 @@ int64_t Flow::unique_id_counter = 1;
 
 static const Flow *extract_flow(const Any &value) {
     if (eq(value.type, Types::PFlow)) {
-        return *value.pflow;
+        return value.pflow;
     }
     error("flow expected");
     return nullptr;
@@ -1863,7 +1867,7 @@ struct Frame {
 
 static const Frame *extract_frame(const Any &value) {
     if (eq(value.type, Types::PFrame)) {
-        return *value.pframe;
+        return value.pframe;
     }
     error("frame expected");
     return nullptr;
@@ -1888,7 +1892,7 @@ static const Closure *create_closure(
 
 static const Closure *extract_closure(const Any &value) {
     if (eq(value.type, Types::PClosure)) {
-        return *value.pclosure;
+        return value.pclosure;
     }
     error("closure expected");
     return nullptr;
@@ -2045,8 +2049,8 @@ static void unescape(String &s) {
 // matches (///...)
 static bool is_comment(const Any &expr) {
     if (eq(expr.type, Types::PList)) {
-        if (*expr.plist) {
-            const Any &sym = (*expr.plist)->at;
+        if (expr.plist) {
+            const Any &sym = expr.plist->at;
             if (eq(sym.type, Types::Symbol)) {
                 auto s = extract_symbol_string(sym);
                 if (!memcmp(s.c_str(),"///",3))
@@ -2077,7 +2081,7 @@ static const Anchor *find_valid_anchor(const Any &expr) {
     const Anchor *a = get_anchor(expr);
     if (!a) {
         if (eq(expr.type, Types::PList)) {
-            a = find_valid_anchor(*expr.plist);
+            a = find_valid_anchor(expr.plist);
         }
     }
     return a;
@@ -3088,7 +3092,7 @@ static Any evaluate_parameter(
 
 static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     if (eq(value.type, Types::PParameter)) {
-        auto param = *value.pparameter;
+        auto param = value.pparameter;
         return evaluate_parameter(frame, param->parent, param->index, value);
     } else if (eq(value.type, Types::PFlow)) {
         if (argindex == ARG_Func)
@@ -3097,7 +3101,7 @@ static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
         else
             // create closure
             return wrap_ptr(Types::PClosure,
-                create_closure(*value.pflow, const_cast<Frame *>(frame)));
+                create_closure(value.pflow, const_cast<Frame *>(frame)));
     }
     return value;
 }
@@ -3175,7 +3179,7 @@ continue_execution:
 
             Any callee = rbuf[ARG_Func];
             if (is_pointer_type(callee.type)
-                && (*callee.pptr == *exit_cont.pptr)) {
+                && (callee.ptr == exit_cont.ptr)) {
                 // exit continuation invoked, copy result and break loop
                 for (size_t i = 0; i < rcount; ++i) {
                     ret[i] = rbuf[i];
@@ -3188,14 +3192,14 @@ continue_execution:
             }
 
             if (eq(callee.type, Types::PClosure)) {
-                auto closure = *callee.pclosure;
+                auto closure = callee.pclosure;
 
                 frame = closure->frame;
                 callee = wrap(closure->entry);
             }
 
             if (eq(callee.type, Types::PFlow)) {
-                auto flow = *callee.pflow;
+                auto flow = callee.pflow;
                 assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
 
@@ -3251,14 +3255,14 @@ continue_execution:
                     Anchor::printMessage(anchor, "trace");
                 }
             } else if (eq(callee.type, Types::PBuiltinFlow)) {
-                auto cb = *callee.pbuiltin_flow;
+                auto cb = callee.pbuiltin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
                 wcount = cb(rbuf, rcount, wbuf);
                 assert(wcount <= BANGRA_MAX_FUNCARGS);
                 handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
-                auto cb = *callee.ptype;
+                auto cb = callee.ptype;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
                 wcount = cb->apply_type(cb, rbuf, rcount, wbuf);
@@ -3385,8 +3389,8 @@ namespace Types {
 
     static Ordering _list_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        auto x = extract_list(a);
-        auto y = extract_list(b);
+        auto x = a.plist;
+        auto y = b.plist;
         while (true) {
             if (x == y) return Equal;
             else if (!x) return Less;
@@ -3401,7 +3405,7 @@ namespace Types {
     static size_t _list_splice(
         const Type *self, const bangra::Any &value,
         bangra::Any *ret, size_t retsize) {
-        auto it = extract_list(value);
+        auto it = value.plist;
         size_t count = 0;
         while (it && (count < retsize)) {
             ret[count] = it->at;
@@ -3678,6 +3682,7 @@ namespace Types {
             format("(%s %s)",
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
+        type->is_embedded = true;
         type->eq_type = type_pointer_eq;
         type->op2[OP2_At] = type_pointer_at;
         type->length = _pointer_length;
@@ -3779,14 +3784,14 @@ namespace Types {
 
     static bangra::Any type_table_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        auto table = extract_table(value);
+        auto table = value.ptable;
         auto key = extract_symbol(vindex);
         return get_key(*table, key, const_none);
     }
 
     static bangra::Any type_list_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        auto slist = extract_list(value);
+        auto slist = value.plist;
         if (!slist) {
             //error("can not index into empty list");
             return wrap((bangra::List*)nullptr);
@@ -4777,7 +4782,7 @@ static Any builtin_cstr(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     if (!eq(args[0].type, Types::Rawstring))
         error("rawstring expected");
-    const char *str = *args[0].pc_str;
+    const char *str = args[0].c_str;
     return wrap(Types::String, alloc_slice<char>(str, strlen(str)));
 }
 
@@ -4872,7 +4877,7 @@ static Any builtin_cons(const Any *args, size_t argcount) {
     auto &at = args[0];
     auto next = args[1];
     verifyValueKind(Types::PList, next);
-    return wrap(List::create(at, *next.plist,
+    return wrap(List::create(at, next.plist,
         get_anchor(handler_frame)));
 }
 
@@ -4911,7 +4916,7 @@ static Any builtin_table(const Any *args, size_t argcount) {
         auto name = extract_symbol(pair[0]);
         auto value = pair[1];
         if (eq(value.type, Types::PClosure)) {
-            auto closure = *value.pclosure;
+            auto closure = value.pclosure;
             auto sym = get_ptr_symbol(closure);
             if (sym == SYM_Unnamed) {
                 set_ptr_symbol(closure, name);
@@ -5197,7 +5202,7 @@ static bool isLocal(StructValue *scope, const std::string &name) {
 static const Table *getParent(const Table *scope) {
     auto parent = get_key(*scope, SYM_Parent, const_none);
     if (parent.type == Types::PTable)
-        return *parent.ptable;
+        return parent.ptable;
     return nullptr;
 }
 
@@ -5260,7 +5265,7 @@ static bool verifyAtParameterCount (const List *topit,
     assert(topit);
     auto val = topit->at;
     verifyValueKind(Types::PList, val);
-    return verifyListParameterCount(*val.plist, mincount, maxcount);
+    return verifyListParameterCount(val.plist, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
@@ -5319,7 +5324,7 @@ static Cursor expand_continuation (const Table *env, const List *topit) {
 
     const List *outargs = nullptr;
     verifyValueKind(Types::PList, expr_parameters);
-    auto params = *expr_parameters.plist;
+    auto params = expr_parameters.plist;
     auto param(params);
     while (param) {
         outargs = List::create(toparameter(subenv, param->at),
@@ -5366,7 +5371,7 @@ static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto expr_env = execute(exec_args, 2);
     verifyValueKind(Types::PTable, expr_env);
 
-    auto rest = expand_expr_list(*expr_env.ptable, cur.next);
+    auto rest = expand_expr_list(expr_env.ptable, cur.next);
     if (!rest) {
         error("syntax-extend: missing subsequent expression");
     }
@@ -5389,7 +5394,7 @@ static const List *expand_macro(
         }
         set_anchor(result, anchor);
     }
-    return *result.plist;
+    return result.plist;
 }
 
 static Cursor expand (const Table *env, const List *topit) {
@@ -5398,20 +5403,20 @@ process:
     assert(topit);
     auto expr = topit->at;
     if (eq(expr.type, Types::PList)) {
-        if (!(*expr.plist)) {
+        if (!expr.plist) {
             error("expression is empty");
         }
 
-        auto head = (*expr.plist)->at;
+        auto head = expr.plist->at;
         if (eq(head.type, Types::Symbol)) {
             head = getLocal(env, extract_symbol(head));
         }
         if (head.type != Types::None) {
             if (eq(head.type, Types::PBuiltinMacro)) {
-                return (*head.pbuiltin_macro)(env, topit);
+                return head.pbuiltin_macro(env, topit);
             } else if (eq(head.type, Types::PMacro)) {
                 auto result = expand_macro(env,
-                    (*head.pmacro)->value, topit);
+                    head.pmacro->value, topit);
                 if (result) {
                     topit = result;
                     goto process;
@@ -5460,7 +5465,7 @@ static Any builtin_expand(const Any *args, size_t argcount) {
     verifyValueKind(Types::PTable, scope);
     auto expr_eval = extract_list(args[1]);
 
-    auto retval = expand(*scope.ptable, expr_eval);
+    auto retval = expand(scope.ptable, expr_eval);
 
     return wrap(List::create(retval.value, retval.next));
 }
@@ -5470,7 +5475,7 @@ static Any builtin_set_globals(const Any *args, size_t argcount) {
     auto scope = args[0];
     verifyValueKind(Types::PTable, scope);
 
-    globals = *scope.ptable;
+    globals = scope.ptable;
     return const_none;
 }
 
@@ -5534,10 +5539,10 @@ struct ILBuilder {
         if (state.prevflow
             && (arguments.size() == 3)
             && (eq(Types::PParameter, arguments[ARG_Arg0].type))
-            && (*arguments[ARG_Arg0].pparameter
-                == state.flow->parameters[PARAM_Arg0])
+            && (arguments[ARG_Arg0].pparameter
+                    == state.flow->parameters[PARAM_Arg0])
             && (eq(Types::PFlow, state.prevflow->arguments[ARG_Cont].type))
-            && (*(state.prevflow->arguments[ARG_Cont]).pflow
+            && (state.prevflow->arguments[ARG_Cont].pflow
                 == state.flow)) {
             state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
         } else {
@@ -5680,13 +5685,13 @@ static Any compile_quote (const List *it) {
 static Any compile (const Any &expr) {
     Any result = const_none;
     if (eq(expr.type, Types::PList)) {
-        if (!(*expr.plist)) {
+        if (!expr.plist) {
             error("empty expression");
         }
-        auto slist = *expr.plist;
+        auto slist = expr.plist;
         auto head = slist->at;
         if (eq(head.type, Types::PSpecialForm)) {
-            result = (*head.pspecial_form)(slist);
+            result = head.pspecial_form(slist);
         } else {
             result = compile_implicit_call(slist);
         }
@@ -5983,7 +5988,7 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "footer expression is not a symbolic list\n");
         return const_none;
     }
-    auto symlist = *expr.plist;
+    auto symlist = expr.plist;
     auto it = symlist;
     if (!it) {
         fprintf(stderr, "footer expression is empty\n");
