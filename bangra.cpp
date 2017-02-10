@@ -531,19 +531,19 @@ struct Any {
         const String *str;
         Symbol symbol;
 
-        const BuiltinFlowFunction pbuiltin_flow;
-        const BuiltinMacroFunction pbuiltin_macro;
-        const SpecialFormFunction pspecial_form;
+        const BuiltinFlowFunction builtin_flow;
+        const BuiltinMacroFunction builtin_macro;
+        const SpecialFormFunction special_form;
 
         const char *c_str;
-        const List *plist;
-        const Type *ptype;
-        const Parameter *pparameter;
-        const Flow *pflow;
-        const Closure *pclosure;
-        const Frame *pframe;
-        const Macro *pmacro;
-        const Table *ptable;
+        const List *list;
+        const Type *typeref;
+        const Parameter *parameter;
+        const Flow *flow;
+        const Closure *closure;
+        const Frame *frame;
+        const Macro *macro;
+        const Table *table;
         const Anchor *anchorref;
     };
     const Type *type;
@@ -1368,7 +1368,7 @@ static bool extract_bool(const Any &value) {
 
 static const Type *extract_type(const Any &value) {
     if (is_typeref_type(value.type)) {
-        return value.ptype;
+        return value.typeref;
     }
     error("type constant expected");
     return nullptr;
@@ -1551,7 +1551,7 @@ static bangra::Any pointer_element(
 
 static const Table *extract_table(const Any &value) {
     if (is_table_type(value.type)) {
-        return value.ptable;
+        return value.table;
     }
     error("table expected, not %s", get_name(value.type).c_str());
     return nullptr;
@@ -1614,7 +1614,7 @@ struct Parameter {
 
 static const Parameter *extract_parameter(const Any &value) {
     if (eq(value.type, Types::PParameter)) {
-        return value.pparameter;
+        return value.parameter;
     }
     error("parameter expected");
     return nullptr;
@@ -1684,7 +1684,7 @@ struct List {
 
 static const List *extract_list(const Any &value) {
     if (eq(value.type, Types::PList)) {
-        return value.plist;
+        return value.list;
     } else {
         error("list expected, not %s", get_name(value.type).c_str());
     }
@@ -1812,7 +1812,7 @@ int64_t Flow::unique_id_counter = 1;
 
 static const Flow *extract_flow(const Any &value) {
     if (eq(value.type, Types::PFlow)) {
-        return value.pflow;
+        return value.flow;
     }
     error("flow expected");
     return nullptr;
@@ -1867,7 +1867,7 @@ struct Frame {
 
 static const Frame *extract_frame(const Any &value) {
     if (eq(value.type, Types::PFrame)) {
-        return value.pframe;
+        return value.frame;
     }
     error("frame expected");
     return nullptr;
@@ -1892,7 +1892,7 @@ static const Closure *create_closure(
 
 static const Closure *extract_closure(const Any &value) {
     if (eq(value.type, Types::PClosure)) {
-        return value.pclosure;
+        return value.closure;
     }
     error("closure expected");
     return nullptr;
@@ -2049,8 +2049,8 @@ static void unescape(String &s) {
 // matches (///...)
 static bool is_comment(const Any &expr) {
     if (eq(expr.type, Types::PList)) {
-        if (expr.plist) {
-            const Any &sym = expr.plist->at;
+        if (expr.list) {
+            const Any &sym = expr.list->at;
             if (eq(sym.type, Types::Symbol)) {
                 auto s = extract_symbol_string(sym);
                 if (!memcmp(s.c_str(),"///",3))
@@ -2081,7 +2081,7 @@ static const Anchor *find_valid_anchor(const Any &expr) {
     const Anchor *a = get_anchor(expr);
     if (!a) {
         if (eq(expr.type, Types::PList)) {
-            a = find_valid_anchor(expr.plist);
+            a = find_valid_anchor(expr.list);
         }
     }
     return a;
@@ -3092,7 +3092,7 @@ static Any evaluate_parameter(
 
 static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     if (eq(value.type, Types::PParameter)) {
-        auto param = value.pparameter;
+        auto param = value.parameter;
         return evaluate_parameter(frame, param->parent, param->index, value);
     } else if (eq(value.type, Types::PFlow)) {
         if (argindex == ARG_Func)
@@ -3101,7 +3101,7 @@ static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
         else
             // create closure
             return wrap_ptr(Types::PClosure,
-                create_closure(value.pflow, const_cast<Frame *>(frame)));
+                create_closure(value.flow, const_cast<Frame *>(frame)));
     }
     return value;
 }
@@ -3192,14 +3192,14 @@ continue_execution:
             }
 
             if (eq(callee.type, Types::PClosure)) {
-                auto closure = callee.pclosure;
+                auto closure = callee.closure;
 
                 frame = closure->frame;
                 callee = wrap(closure->entry);
             }
 
             if (eq(callee.type, Types::PFlow)) {
-                auto flow = callee.pflow;
+                auto flow = callee.flow;
                 assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
 
@@ -3255,14 +3255,14 @@ continue_execution:
                     Anchor::printMessage(anchor, "trace");
                 }
             } else if (eq(callee.type, Types::PBuiltinFlow)) {
-                auto cb = callee.pbuiltin_flow;
+                auto cb = callee.builtin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
                 wcount = cb(rbuf, rcount, wbuf);
                 assert(wcount <= BANGRA_MAX_FUNCARGS);
                 handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
-                auto cb = callee.ptype;
+                auto cb = callee.typeref;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
                 wcount = cb->apply_type(cb, rbuf, rcount, wbuf);
@@ -3389,8 +3389,8 @@ namespace Types {
 
     static Ordering _list_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        auto x = a.plist;
-        auto y = b.plist;
+        auto x = a.list;
+        auto y = b.list;
         while (true) {
             if (x == y) return Equal;
             else if (!x) return Less;
@@ -3405,7 +3405,7 @@ namespace Types {
     static size_t _list_splice(
         const Type *self, const bangra::Any &value,
         bangra::Any *ret, size_t retsize) {
-        auto it = value.plist;
+        auto it = value.list;
         size_t count = 0;
         while (it && (count < retsize)) {
             ret[count] = it->at;
@@ -3784,14 +3784,14 @@ namespace Types {
 
     static bangra::Any type_table_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        auto table = value.ptable;
+        auto table = value.table;
         auto key = extract_symbol(vindex);
         return get_key(*table, key, const_none);
     }
 
     static bangra::Any type_list_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        auto slist = value.plist;
+        auto slist = value.list;
         if (!slist) {
             //error("can not index into empty list");
             return wrap((bangra::List*)nullptr);
@@ -4877,7 +4877,7 @@ static Any builtin_cons(const Any *args, size_t argcount) {
     auto &at = args[0];
     auto next = args[1];
     verifyValueKind(Types::PList, next);
-    return wrap(List::create(at, next.plist,
+    return wrap(List::create(at, next.list,
         get_anchor(handler_frame)));
 }
 
@@ -4916,7 +4916,7 @@ static Any builtin_table(const Any *args, size_t argcount) {
         auto name = extract_symbol(pair[0]);
         auto value = pair[1];
         if (eq(value.type, Types::PClosure)) {
-            auto closure = value.pclosure;
+            auto closure = value.closure;
             auto sym = get_ptr_symbol(closure);
             if (sym == SYM_Unnamed) {
                 set_ptr_symbol(closure, name);
@@ -5202,7 +5202,7 @@ static bool isLocal(StructValue *scope, const std::string &name) {
 static const Table *getParent(const Table *scope) {
     auto parent = get_key(*scope, SYM_Parent, const_none);
     if (parent.type == Types::PTable)
-        return parent.ptable;
+        return parent.table;
     return nullptr;
 }
 
@@ -5265,7 +5265,7 @@ static bool verifyAtParameterCount (const List *topit,
     assert(topit);
     auto val = topit->at;
     verifyValueKind(Types::PList, val);
-    return verifyListParameterCount(val.plist, mincount, maxcount);
+    return verifyListParameterCount(val.list, mincount, maxcount);
 }
 
 //------------------------------------------------------------------------------
@@ -5324,7 +5324,7 @@ static Cursor expand_continuation (const Table *env, const List *topit) {
 
     const List *outargs = nullptr;
     verifyValueKind(Types::PList, expr_parameters);
-    auto params = expr_parameters.plist;
+    auto params = expr_parameters.list;
     auto param(params);
     while (param) {
         outargs = List::create(toparameter(subenv, param->at),
@@ -5371,7 +5371,7 @@ static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto expr_env = execute(exec_args, 2);
     verifyValueKind(Types::PTable, expr_env);
 
-    auto rest = expand_expr_list(expr_env.ptable, cur.next);
+    auto rest = expand_expr_list(expr_env.table, cur.next);
     if (!rest) {
         error("syntax-extend: missing subsequent expression");
     }
@@ -5394,7 +5394,7 @@ static const List *expand_macro(
         }
         set_anchor(result, anchor);
     }
-    return result.plist;
+    return result.list;
 }
 
 static Cursor expand (const Table *env, const List *topit) {
@@ -5403,20 +5403,20 @@ process:
     assert(topit);
     auto expr = topit->at;
     if (eq(expr.type, Types::PList)) {
-        if (!expr.plist) {
+        if (!expr.list) {
             error("expression is empty");
         }
 
-        auto head = expr.plist->at;
+        auto head = expr.list->at;
         if (eq(head.type, Types::Symbol)) {
             head = getLocal(env, extract_symbol(head));
         }
         if (head.type != Types::None) {
             if (eq(head.type, Types::PBuiltinMacro)) {
-                return head.pbuiltin_macro(env, topit);
+                return head.builtin_macro(env, topit);
             } else if (eq(head.type, Types::PMacro)) {
                 auto result = expand_macro(env,
-                    head.pmacro->value, topit);
+                    head.macro->value, topit);
                 if (result) {
                     topit = result;
                     goto process;
@@ -5465,7 +5465,7 @@ static Any builtin_expand(const Any *args, size_t argcount) {
     verifyValueKind(Types::PTable, scope);
     auto expr_eval = extract_list(args[1]);
 
-    auto retval = expand(scope.ptable, expr_eval);
+    auto retval = expand(scope.table, expr_eval);
 
     return wrap(List::create(retval.value, retval.next));
 }
@@ -5475,7 +5475,7 @@ static Any builtin_set_globals(const Any *args, size_t argcount) {
     auto scope = args[0];
     verifyValueKind(Types::PTable, scope);
 
-    globals = scope.ptable;
+    globals = scope.table;
     return const_none;
 }
 
@@ -5539,10 +5539,10 @@ struct ILBuilder {
         if (state.prevflow
             && (arguments.size() == 3)
             && (eq(Types::PParameter, arguments[ARG_Arg0].type))
-            && (arguments[ARG_Arg0].pparameter
+            && (arguments[ARG_Arg0].parameter
                     == state.flow->parameters[PARAM_Arg0])
             && (eq(Types::PFlow, state.prevflow->arguments[ARG_Cont].type))
-            && (state.prevflow->arguments[ARG_Cont].pflow
+            && (state.prevflow->arguments[ARG_Cont].flow
                 == state.flow)) {
             state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
         } else {
@@ -5685,13 +5685,13 @@ static Any compile_quote (const List *it) {
 static Any compile (const Any &expr) {
     Any result = const_none;
     if (eq(expr.type, Types::PList)) {
-        if (!expr.plist) {
+        if (!expr.list) {
             error("empty expression");
         }
-        auto slist = expr.plist;
+        auto slist = expr.list;
         auto head = slist->at;
         if (eq(head.type, Types::PSpecialForm)) {
-            result = head.pspecial_form(slist);
+            result = head.special_form(slist);
         } else {
             result = compile_implicit_call(slist);
         }
@@ -5988,7 +5988,7 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "footer expression is not a symbolic list\n");
         return const_none;
     }
-    auto symlist = expr.plist;
+    auto symlist = expr.list;
     auto it = symlist;
     if (!it) {
         fprintf(stderr, "footer expression is empty\n");
