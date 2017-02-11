@@ -491,6 +491,7 @@ struct Type;
 struct Macro;
 struct Frame;
 struct Cursor;
+struct State;
 
 template<typename T>
 struct Slice {
@@ -500,8 +501,27 @@ struct Slice {
 
 typedef Slice<char> String;
 
+struct State {
+    const Any *rargs;
+    Any *wargs;
+    size_t rcount;
+    size_t wcount;
+};
+
+#define B_FUNC(X) void X(bangra::State *S)
+#define B_ARGCOUNT(S) ((S)->rcount)
+#define B_GETCONT(S) ((S)->rargs[bangra::ARG_Cont])
+#define B_GETFUNC(S) ((S)->rargs[bangra::ARG_Func])
+#define B_GETARG(S, N) ((S)->rargs[bangra::ARG_Arg0 + (N)])
+#define B_CALL(S, ...) { \
+    const bangra::Any _args[] = { __VA_ARGS__ }; \
+    const size_t _count = sizeof(_args) / sizeof(bangra::Any); \
+    for (size_t i = 0; i < _count; ++i) { (S)->wargs[i] = _args[i]; } \
+    (S)->wcount = _count; \
+    }
+
 typedef Any (*BuiltinFunction)(const Any *args, size_t argcount);
-typedef size_t (*BuiltinFlowFunction)(const Any *args, size_t argcount, Any *ret);
+typedef B_FUNC((*BuiltinFlowFunction));
 typedef Cursor (*BuiltinMacroFunction)(const Table *, const List *);
 typedef Any (*SpecialFormFunction)(const List *);
 
@@ -806,6 +826,16 @@ struct Table {
 
 //------------------------------------------------------------------------------
 
+enum {
+    ARG_Cont = 0,
+    ARG_Func = 1,
+    ARG_Arg0 = 2,
+
+    PARAM_Cont = 0,
+    PARAM_Arg0 = 1,
+};
+
+
 enum Ordering {
     Less = -1,
     Equal = 0,
@@ -871,8 +901,7 @@ struct Type {
     // return range
     Any (*slice)(const Type *self, const Any &value, size_t i0, size_t i1);
     // apply the type
-    size_t (*apply_type)(const Type *self,
-        const Any *args, size_t argcount, Any *ret);
+    B_FUNC((*apply_type));
     // splice value into argument list
     size_t (*splice)(const Type *self, const Any &value, Any *ret, size_t retsize);
     // length of value, if any
@@ -997,11 +1026,9 @@ static Ordering cmp_default(const Type *self, const Any &a, const Any &b) {
     return Unordered;
 }
 
-static size_t type_apply_default(const Type *self,
-    const Any *args, size_t argcount, Any *ret) {
+static B_FUNC(type_apply_default) {
     error("type %s has no constructor",
-        get_name(self).c_str());
-    return 0;
+        get_name(B_GETFUNC(S).typeref).c_str());
 }
 
 static std::string type_tostring_default(const Type *self, const Any &value) {
@@ -1719,15 +1746,6 @@ static const List *reverse_list_inplace(
 }
 
 //------------------------------------------------------------------------------
-
-enum {
-    ARG_Cont = 0,
-    ARG_Func = 1,
-    ARG_Arg0 = 2,
-
-    PARAM_Cont = 0,
-    PARAM_Arg0 = 1,
-};
 
 struct Flow {
 private:
@@ -3159,6 +3177,8 @@ static size_t execute(const Any *args, size_t argcount, Any *ret) {
             get_string(exit_cont).c_str());
     }
 
+    State S;
+
 continue_execution:
     try {
         while (true) {
@@ -3169,6 +3189,11 @@ continue_execution:
                 rbuf = xbuf;
                 rcount = wcount;
                 wcount = 0;
+
+                S.rargs = rbuf;
+                S.rcount = rcount;
+                S.wargs = wbuf;
+                S.wcount = wcount;
             }
 
             if (trace_arguments) {
@@ -3268,14 +3293,16 @@ continue_execution:
                 auto cb = callee.builtin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                wcount = cb(rbuf, rcount, wbuf);
+                cb(&S);
+                wcount = S.wcount;
                 assert(wcount <= BANGRA_MAX_FUNCARGS);
                 handler_frame = _oldframe;
             } else if (eq(callee.type, Types::PType)) {
                 auto cb = callee.typeref;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
-                wcount = cb->apply_type(cb, rbuf, rcount, wbuf);
+                cb->apply_type(&S);
+                wcount = S.wcount;
                 handler_frame = _oldframe;
             } else if (
                 is_pointer_type(callee.type)
@@ -3616,14 +3643,11 @@ namespace Types {
         const bangra::Any *args, size_t argcount);
 
     template<ApplyTypeFunction F>
-    static size_t apply_type_call(const Type *self,
-        const bangra::Any *args, size_t argcount, bangra::Any *ret) {
-        assert(argcount >= 2);
+    static B_FUNC(apply_type_call) {
+        assert(B_ARGCOUNT(S) >= 2);
         // truncate head and continuation tail argument
-        ret[ARG_Cont] = const_none;
-        ret[ARG_Func] = args[ARG_Cont];
-        ret[ARG_Arg0] = F(self, args + ARG_Arg0, argcount - 2);
-        return 3;
+        B_CALL(S, const_none, B_GETCONT(S),
+            F(B_GETFUNC(S).typeref, S->rargs + ARG_Arg0, B_ARGCOUNT(S) - 2));
     }
 
     static bangra::Any _symbol_apply_type(const Type *self,
@@ -4794,27 +4818,26 @@ static Any builtin_exit(const Any *args, size_t argcount) {
 }
 
 template<BuiltinFunction F>
-static size_t builtin_call(const Any *args, size_t argcount, Any *ret) {
-    assert(argcount >= 2);
-    // truncate head and continuation tail argument
-    ret[ARG_Cont] = const_none;
-    ret[ARG_Func] = args[ARG_Cont];
-    ret[ARG_Arg0] = F(args + ARG_Arg0, argcount - 2);
-    return 3;
+static B_FUNC(builtin_call) {
+    assert(B_ARGCOUNT(S) >= 2);
+    B_CALL(S, const_none, B_GETCONT(S),
+        F(S->rargs + ARG_Arg0, B_ARGCOUNT(S) - 2));
 }
 
-static size_t builtin_flowcall(const Any *args, size_t argcount, Any *ret) {
-    builtin_checkparams(argcount, 2, -1, 1);
-    ret[ARG_Cont] = args[ARG_Cont];
-    auto func = args[ARG_Arg0];
-    if (eq(func.type, Types::PClosure)) {
-        func = wrap(func.closure->entry);
+static B_FUNC(builtin_flowcall) {
+    builtin_checkparams(B_ARGCOUNT(S), 2, -1, 1);
+    S->wargs[ARG_Cont] = B_GETCONT(S);
+    {
+        auto func = B_GETARG(S,0);
+        if (eq(func.type, Types::PClosure)) {
+            func = wrap(func.closure->entry);
+        }
+        S->wargs[ARG_Func] = func;
     }
-    ret[ARG_Func] = func;
-    for (size_t i = (ARG_Arg0 + 1); i < argcount; ++i) {
-        ret[i] = args[i];
+    for (size_t i = (ARG_Arg0 + 1); i < B_ARGCOUNT(S); ++i) {
+        S->wargs[i] = S->rargs[i];
     }
-    return argcount - 1;
+    S->wcount = B_ARGCOUNT(S) - 1;
 }
 
 static Any builtin_string(const Any *args, size_t argcount) {
@@ -4884,11 +4907,11 @@ static Any builtin_slice(const Any *args, size_t argcount) {
     return slice(args[0], (size_t)i0, (size_t)i1);
 }
 
-static size_t builtin_branch(const Any *args, size_t argcount, Any *ret) {
-    builtin_checkparams(argcount, 4, 4, 1);
-    ret[ARG_Cont] = args[ARG_Cont];
-    ret[ARG_Func] = args[ARG_Arg0 + (extract_bool(args[ARG_Arg0])?1:2)];
-    return 2;
+static B_FUNC(builtin_branch) {
+    builtin_checkparams(B_ARGCOUNT(S), 4, 4, 1);
+    B_CALL(S,
+        B_GETCONT(S),
+        B_GETARG(S, extract_bool(B_GETARG(S, 0))?1:2));
 }
 
 static Any builtin_repr(const Any *args, size_t argcount) {
