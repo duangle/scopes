@@ -528,8 +528,25 @@ syntax-extend stage-3 (_ scope)
         let t (typeof x)
         (t == symbol) or (t == parameter)
 
+    function xpcall (func xfunc)
+        let old_handler
+            get-exception-handler;
+        function cleanup ()
+            set-exception-handler! old_handler
+        function try ()
+            let finally return
+            function except (exc aframe args)
+                cleanup;
+                xfunc exc
+                finally;
+            set-exception-handler! except
+            flowcall func
+            cleanup;
+        try;
+
     table
         tupleof scope-parent-symbol scope
+        : xpcall
         : fold
         : iter
         : bangra
@@ -538,6 +555,25 @@ syntax-extend stage-3 (_ scope)
             make-expand-multi-op-ltr and
         : or
             make-expand-multi-op-ltr or
+        : try
+            syntax-macro
+                function (scope expr)
+                    if (not (list-head? (@ expr 1 0) (quote except)))
+                        error "except block missing"
+                    print "----"
+                    cons
+                        ::@ dump
+                        list xpcall
+                            cons continuation
+                                cons (list)
+                                    @ expr 0 1
+                            cons continuation
+                                cons
+                                    cons (parameter (quote _))
+                                        @ expr 1 0 1 0
+                                    @ expr 1 0 2
+                        @ expr 2
+
         # quasiquote support
         # (qquote expr [...])
         : qquote

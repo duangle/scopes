@@ -31,7 +31,8 @@ local function bangra_symbols()
             .. " repeat syntax-single-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
-            .. " set-key! cstr pointer return continuation splice"
+            .. " set-key! cstr pointer return continuation splice exit"
+            .. " try except flowcall"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

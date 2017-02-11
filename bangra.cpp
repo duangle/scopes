@@ -1873,6 +1873,14 @@ static const Frame *extract_frame(const Any &value) {
     return nullptr;
 }
 
+static Any wrap(const Frame *frame) {
+    return wrap_ptr(Types::PFrame, frame);
+}
+
+static Any wrap(Frame *frame) {
+    return wrap_ptr(Types::PFrame, frame);
+}
+
 //------------------------------------------------------------------------------
 
 struct Closure {
@@ -3115,6 +3123,8 @@ static void print_stack_frames(Frame *frame) {
     }
 }
 
+static Any exception_handler;
+
 static bool trace_arguments = false;
 static size_t execute(const Any *args, size_t argcount, Any *ret) {
     size_t retcount = 0;
@@ -3280,6 +3290,17 @@ continue_execution:
             }
         }
     } catch (const Any &any) {
+        if (!isnone(exception_handler)) {
+            wbuf[ARG_Cont] = const_none;
+            wbuf[ARG_Func] = exception_handler;
+            wbuf[ARG_Arg0 + 0] = any;
+            wbuf[ARG_Arg0 + 1] = wrap(frame);
+            wbuf[ARG_Arg0 + 2] = wrap(rbuf, rcount);
+            wcount = 5;
+            exception_handler = const_none;
+            goto continue_execution;
+        }
+
         printf("while evaluating arguments:\n");
         for (size_t i = 0; i < rcount; ++i) {
             printf("  #%zu: ", i);
@@ -4763,6 +4784,15 @@ static Table *importCModule (
 
 static const Table *globals = nullptr;
 
+static Any builtin_exit(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, 1);
+    int exit_code = 0;
+    if (argcount)
+        exit_code = extract_integer(args[0]);
+    exit(exit_code);
+    return const_none;
+}
+
 template<BuiltinFunction F>
 static size_t builtin_call(const Any *args, size_t argcount, Any *ret) {
     assert(argcount >= 2);
@@ -4771,6 +4801,20 @@ static size_t builtin_call(const Any *args, size_t argcount, Any *ret) {
     ret[ARG_Func] = args[ARG_Cont];
     ret[ARG_Arg0] = F(args + ARG_Arg0, argcount - 2);
     return 3;
+}
+
+static size_t builtin_flowcall(const Any *args, size_t argcount, Any *ret) {
+    builtin_checkparams(argcount, 2, -1, 1);
+    ret[ARG_Cont] = args[ARG_Cont];
+    auto func = args[ARG_Arg0];
+    if (eq(func.type, Types::PClosure)) {
+        func = wrap(func.closure->entry);
+    }
+    ret[ARG_Func] = func;
+    for (size_t i = (ARG_Arg0 + 1); i < argcount; ++i) {
+        ret[i] = args[i];
+    }
+    return argcount - 1;
 }
 
 static Any builtin_string(const Any *args, size_t argcount) {
@@ -4845,15 +4889,6 @@ static size_t builtin_branch(const Any *args, size_t argcount, Any *ret) {
     ret[ARG_Cont] = args[ARG_Cont];
     ret[ARG_Func] = args[ARG_Arg0 + (extract_bool(args[ARG_Arg0])?1:2)];
     return 2;
-}
-
-static size_t builtin_call_cc(
-    const Any *args, size_t argcount, Any *ret) {
-    builtin_checkparams(argcount, 2, 2, 1);
-    ret[ARG_Cont] = args[ARG_Cont];
-    ret[ARG_Func] = args[ARG_Arg0];
-    ret[ARG_Arg0] = args[ARG_Cont];
-    return 3;
 }
 
 static Any builtin_repr(const Any *args, size_t argcount) {
@@ -5479,6 +5514,23 @@ static Any builtin_set_globals(const Any *args, size_t argcount) {
     return const_none;
 }
 
+static Any builtin_set_exception_handler(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    auto old_exception_handler = exception_handler;
+    auto func = args[0];
+    if (eq(func.type, Types::PClosure)) {
+        // strip the frame
+        func = wrap(func.closure->entry);
+    }
+    exception_handler = func;
+    return old_exception_handler;
+}
+
+static Any builtin_get_exception_handler(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 0, 0);
+    return exception_handler;
+}
+
 //------------------------------------------------------------------------------
 // COMPILER
 //------------------------------------------------------------------------------
@@ -5779,6 +5831,7 @@ static void initGlobals () {
 
     setLocalString(env, "support-ANSI?", wrap(support_ansi));
 
+    setBuiltin<builtin_exit>(env, "exit");
     setBuiltin<builtin_globals>(env, "globals");
     setBuiltin<builtin_print>(env, "print");
     setBuiltin<builtin_repr>(env, "repr");
@@ -5795,7 +5848,6 @@ static void initGlobals () {
     setBuiltin<builtin_external>(env, "external");
     setBuiltin<builtin_import_c>(env, "import-c");
     setBuiltin<builtin_branch>(env, "branch");
-    setBuiltin<builtin_call_cc>(env, "call/cc");
     setBuiltin<builtin_dump>(env, "dump");
     setBuiltin<builtin_syntax_macro>(env, "syntax-macro");
     setBuiltin<builtin_string>(env, "string");
@@ -5810,6 +5862,11 @@ static void initGlobals () {
     setBuiltin<builtin_loadlist>(env, "list-load");
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_cstr>(env, "cstr");
+
+    setBuiltin<builtin_set_exception_handler>(env, "set-exception-handler!");
+    setBuiltin<builtin_get_exception_handler>(env, "get-exception-handler");
+
+    setBuiltin<builtin_flowcall>(env, "flowcall");
 
     setBuiltin<builtin_flow_parameter_count>(env, "flow-parameter-count");
     setBuiltin<builtin_flow_parameter>(env, "flow-parameter");
@@ -5868,6 +5925,8 @@ static void init() {
 
     ffi = new FFI();
     builder = new ILBuilder();
+
+    exception_handler = const_none;
 
     initGlobals();
 }

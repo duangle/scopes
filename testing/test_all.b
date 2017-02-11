@@ -242,6 +242,10 @@ assert
 
 print typeof
 
+let call/cc
+    continuation call/cc (cont func)
+        func cont
+
 assert
     call/cc
         function (cont)
@@ -432,5 +436,19 @@ do
         ==
             list x y z
             list 1 2 3
+
+try
+    print "enter #1"
+    try
+        print "enter #2"
+        error "raise #2.1"
+        print "leave #2"
+    except (e)
+        print "exception #2:" e
+        error ("reraise #2: " .. e)
+    print "leave #1"
+except (e)
+    print "exception #1:" e
+    error ("reraise #1: " .. e)
 
 print "done."
