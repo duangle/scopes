@@ -1,6 +1,6 @@
 print
 
-C :=
+let C
     external
         quote print_number
         cfunction int
@@ -23,7 +23,7 @@ assert
             quote test_module2
 
 do
-    m :=
+    let m
         eval
             list-load
                 .. interpreter-dir "/testing/test_module.b"
@@ -31,12 +31,12 @@ do
                 tupleof scope-parent-symbol
                     globals;
                 injected-var : 3
-    t := (m)
+    let t (m)
     assert
         7 == (t.compute 4)
 
 do
-    z :=
+    let z
         table-join
             table
                 x : 1
@@ -45,7 +45,7 @@ do
                 y : 3
                 z : 4
                 w : 5
-    q := 303
+    let q 303
     set-key! z (: q)
     assert (z.x == 1)
     assert (z.y == 3)
@@ -108,14 +108,14 @@ assert
         true
     "'or' for more than two arguments failed"
 
-qquote-test :=
+let qquote-test
     qquote
         print
             unquote
-                k := 1
+                let k 1
                 k + 2
         unquote-splice
-            k := 2
+            let k 2
             qquote
                 print
                     unquote k
@@ -127,8 +127,8 @@ assert
             print 2
             print 1
 
-k := 3
-T :=
+let k 3
+let T
     structof
         test :
             function (self a b)
@@ -208,12 +208,12 @@ assert
     "accessors failed"
 
 do
-    T := API
+    let T API
         /// table
             x : 1
             y : 2
             z : 3
-    kv :=
+    let kv
         next-key T none
     loop (kv)
         if (not (none? kv))

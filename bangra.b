@@ -780,7 +780,6 @@ syntax-extend stage-3 (_ scope)
                                             @ out 1
                         @ topexpr 1
 
-        syntax-infix-op := (syntax-infix-rules 50 < let)
         syntax-infix-op : (syntax-infix-rules 70 > :)
         syntax-infix-op or (syntax-infix-rules 100 > or)
         syntax-infix-op and (syntax-infix-rules 200 > and)
