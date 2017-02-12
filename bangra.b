@@ -560,9 +560,7 @@ syntax-extend stage-3 (_ scope)
                 function (scope expr)
                     if (not (list-head? (@ expr 1 0) (quote except)))
                         error "except block missing"
-                    print "----"
                     cons
-                        ::@ dump
                         list xpcall
                             cons continuation
                                 cons (list)
