@@ -522,7 +522,6 @@ struct State {
 
 typedef Any (*BuiltinFunction)(const Any *args, size_t argcount);
 typedef B_FUNC((*BuiltinFlowFunction));
-typedef Cursor (*BuiltinMacroFunction)(const Table *, const List *);
 typedef Any (*SpecialFormFunction)(const List *);
 
 typedef uint64_t Symbol;
@@ -552,7 +551,6 @@ struct Any {
         Symbol symbol;
 
         const BuiltinFlowFunction builtin_flow;
-        const BuiltinMacroFunction builtin_macro;
         const SpecialFormFunction special_form;
 
         const char *c_str;
@@ -596,6 +594,7 @@ enum {
 
     SYM_Parent,
     SYM_VarArgs,
+    SYM_Escape,
 
     SYM_ContinuationForm,
     SYM_QuoteForm,
@@ -646,6 +645,7 @@ static void initSymbols() {
     map_symbol(SYM_Unnamed, "");
     map_symbol(SYM_Parent, "#parent");
     map_symbol(SYM_VarArgs, "...");
+    map_symbol(SYM_Escape, "escape");
     map_symbol(SYM_ContinuationForm, "form:continuation");
     map_symbol(SYM_QuoteForm, "form:quote");
     map_symbol(SYM_ListWC, "#list");
@@ -1955,6 +1955,13 @@ static Any tuple(const std::vector<Any> &values) {
     Type *tuple_type = Types::Tuple(types);
 }
 */
+
+static Any wrap(const Macro *macro) {
+    return wrap_ptr(Types::PMacro, macro);
+}
+static Any wrap(Macro *macro) {
+    return wrap_ptr(Types::PMacro, macro);
+}
 
 static Any wrap(const Flow *flow) {
     return wrap_ptr(Types::PFlow, flow);
@@ -5216,13 +5223,14 @@ static void setLocalString(Table *scope, const std::string &name, const Any &val
     setLocal(scope, get_symbol(name), value);
 }
 
-template<BuiltinMacroFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
+template<BuiltinFlowFunction func>
+static void setBuiltinMacro(Table *scope, const std::string &name) {
     assert(scope);
     auto sym = get_symbol(name);
     set_ptr_symbol((void *)func, sym);
     setLocal(scope, sym,
-        wrap_ptr(Types::PBuiltinMacro, (void *)func));
+        wrap(Macro::create(
+            wrap_ptr(Types::PBuiltinFlow, (void *)func))));
 }
 
 template<SpecialFormFunction func>
@@ -5357,6 +5365,21 @@ static const List *expand_expr_list (const Table *env, const List *it) {
     return reverse_list_inplace(l);
 }
 
+template <Cursor (*ExpandFunc)(const Table *, const List *)>
+B_FUNC(wrap_expand_call) {
+    builtin_checkparams(B_ARGCOUNT(S), 2, 2, 2);
+    auto env = extract_table(B_GETARG(S, 0));
+    auto topit = extract_list(B_GETARG(S, 1));
+    auto cur = ExpandFunc(env, topit);
+    B_CALL(S,
+        const_none,
+        B_GETCONT(S),
+        wrap(List::create(
+            wrap(List::create(wrap_symbol(SYM_Escape),
+                List::create(cur.value, nullptr))),
+            cur.next)));
+}
+
 static Cursor expand_continuation (const Table *env, const List *topit) {
     verifyAtParameterCount(topit, 1, -1);
 
@@ -5415,11 +5438,6 @@ static Cursor expand_quote (const Table *env, const List *topit) {
     return { wrap(result), topit->next };
 }
 
-static Cursor expand_escape (const Table *env, const List *topit) {
-    auto it = extract_list(topit->at);
-    return { it->next->at, topit->next };
-}
-
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto cur = expand_continuation (env, topit);
 
@@ -5466,19 +5484,19 @@ process:
         }
 
         auto head = expr.list->at;
+        // resolve symbol
         if (eq(head.type, Types::Symbol)) {
+            if (head.symbol == SYM_Escape) {
+                return { expr.list->next->at, topit->next };
+            }
             head = getLocal(env, extract_symbol(head));
         }
-        if (head.type != Types::None) {
-            if (eq(head.type, Types::PBuiltinMacro)) {
-                return head.builtin_macro(env, topit);
-            } else if (eq(head.type, Types::PMacro)) {
-                auto result = expand_macro(env,
-                    head.macro->value, topit);
-                if (result) {
-                    topit = result;
-                    goto process;
-                }
+
+        if (eq(head.type, Types::PMacro)) {
+            auto result = expand_macro(env, head.macro->value, topit);
+            if (result) {
+                topit = result;
+                goto process;
             }
         }
 
@@ -5791,16 +5809,15 @@ static void initGlobals () {
 
     //setLocalString(env, "globals", wrap(env));
 
-    setBuiltin<compile_call>(env, "form:call");
+    setBuiltin<compile_call>(env, "call");
     setBuiltin<compile_continuation>(env, "form:continuation");
     setBuiltin<compile_quote>(env, "form:quote");
     setBuiltin<compile_splice>(env, "splice");
     setBuiltin<compile_do>(env, "do");
 
-    setBuiltin<expand_continuation>(env, "continuation");
-    setBuiltin<expand_quote>(env, "quote");
-    setBuiltin<expand_syntax_extend>(env, "syntax-extend");
-    setBuiltin<expand_escape>(env, "escape");
+    setBuiltinMacro< wrap_expand_call<expand_continuation> >(env, "continuation");
+    setBuiltinMacro< wrap_expand_call<expand_quote> >(env, "quote");
+    setBuiltinMacro< wrap_expand_call<expand_syntax_extend> >(env, "syntax-extend");
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));

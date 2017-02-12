@@ -62,36 +62,40 @@ syntax-extend stage-1 (_ scope)
             quote dump-syntax
             syntax-macro
                 continuation dump-syntax (_ scope expr)
-                    ((continuation (_ e)
-                        (dump
-                            (@ e 0 0))
-                        (cons
-                            (list escape
-                                (@ e 0 0))
-                            (@ e 1)))
-                        (expand scope
-                            (cons
-                                (@ expr 0 1)
-                                (@ expr 1))))
+                    call
+                        continuation (_ e)
+                            dump
+                                @ e 0 0
+                            cons
+                                list (quote escape)
+                                    @ e 0 0
+                                @ e 1
+                        expand scope
+                            cons
+                                @ expr 0 1
+                                @ expr 1
         tupleof
             # a lofi version of let so we get some sugar early
             quote let
             syntax-macro
                 continuation syntax-macro (_ scope expr)
-                    ((continuation (_ param-name)
-                        ((continuation (_ param scope-name)
-                            (list
-                                (list syntax-extend (list (parameter (quote _)) scope-name)
-                                    (list table
-                                        (list tupleof (list quote scope-parent-symbol) scope-name)
-                                        (list tupleof (list quote param-name) param)))
-                                (cons
-                                    (cons continuation
-                                        (cons (list (parameter (quote _)) param)
-                                                (@ expr 1)))
-                                    (@ expr 0 2))))
-                            (parameter param-name)
-                            (quote scope))) (@ expr 0 1 0))
+                    call
+                        continuation (_ param-name)
+                            call
+                                continuation (_ param scope-name)
+                                    list
+                                        list syntax-extend (list (parameter (quote _)) scope-name)
+                                            list table
+                                                list tupleof (list quote scope-parent-symbol) scope-name
+                                                list tupleof (list quote param-name) param
+                                        cons
+                                            cons continuation
+                                                cons (list (parameter (quote _)) param)
+                                                    @ expr 1
+                                            @ expr 0 2
+                                parameter param-name
+                                quote scope
+                        @ expr 0 1 0
         tupleof
             quote ?
             syntax-macro
