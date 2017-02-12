@@ -67,7 +67,7 @@ syntax-extend stage-1 (_ scope)
                             dump
                                 @ e 0 0
                             cons
-                                list (quote escape)
+                                escape
                                     @ e 0 0
                                 @ e 1
                         expand scope

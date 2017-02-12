@@ -437,6 +437,11 @@ do
             list x y z
             list 1 2 3
 
+dump-syntax
+    do
+        let k "hello world"
+        print k
+
 try
     print "enter #1"
     try

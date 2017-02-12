@@ -739,6 +739,7 @@ namespace Types {
     static const Type *TStruct;
     static const Type *TEnum;
     static const Type *TSplice;
+    static const Type *TQuote;
 
     static const Type *Bool;
     static const Type *I8;
@@ -789,6 +790,7 @@ namespace Types {
     static const Type *_new_integer_type(size_t width, bool signed_);
     static const Type *_new_real_type(size_t width);
     static const Type *_new_splice_type(const Type *element);
+    static const Type *_new_quote_type(const Type *element);
 
     static auto Array = memo(_new_array_type);
     static auto Vector = memo(_new_vector_type);
@@ -796,6 +798,7 @@ namespace Types {
     static auto CFunction = memo(_new_cfunction_type);
     static auto Pointer = memo(_new_pointer_type);
     static auto Splice = memo(_new_splice_type);
+    static auto Quote = memo(_new_quote_type);
     static auto Integer = memo(_new_integer_type);
     static auto Real = memo(_new_real_type);
 
@@ -1296,6 +1299,10 @@ static Any call(const Any &what, const std::vector<Any> &args) {
 
 static bool is_splice_type(const Type *type) {
     return eq(type, Types::TSplice);
+}
+
+static bool is_quote_type(const Type *type) {
+    return eq(type, Types::TQuote);
 }
 
 static bool is_typeref_type(const Type *type) {
@@ -3621,6 +3628,10 @@ namespace Types {
         return (other == TSplice);
     }
 
+    static bool type_quote_eq(const Type *self, const Type *other) {
+        return (other == TQuote);
+    }
+
     static bool type_tuple_eq(const Type *self, const Type *other) {
         return (other == TTuple);
     }
@@ -3754,6 +3765,17 @@ namespace Types {
                 get_name(element).c_str()));
         type->element_type = element;
         type->eq_type = type_splice_eq;
+        return type;
+    }
+
+    static const Type *_new_quote_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "quote").c_str(),
+                get_name(element).c_str()));
+        type->element_type = element;
+        type->eq_type = type_quote_eq;
         return type;
     }
 
@@ -4123,6 +4145,7 @@ namespace Types {
         TTuple = Struct("tuple", true);
         TPointer = Struct("pointer", true);
         TSplice = Struct("splice", true);
+        TQuote = Struct("quote", true);
         TCFunction = Struct("cfunction", true);
         TInteger = Struct("integer", true);
         TReal = Struct("real", true);
@@ -4847,6 +4870,13 @@ static B_FUNC(builtin_flowcall) {
     S->wcount = B_ARGCOUNT(S) - 1;
 }
 
+static Any builtin_escape(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    Any result = args[0];
+    result.type = Types::Quote(result.type);
+    return result;
+}
+
 static Any builtin_string(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     return pstring(get_string(args[0]));
@@ -5355,6 +5385,12 @@ static Any toparameter (Table *env, const Any &value) {
     return bp;
 }
 
+static Any quote(const Any &value) {
+    Any result = value;
+    result.type = Types::Quote(result.type);
+    return result;
+}
+
 static const List *expand_expr_list (const Table *env, const List *it) {
     const List *l = nullptr;
     while (it) {
@@ -5375,8 +5411,7 @@ B_FUNC(wrap_expand_call) {
         const_none,
         B_GETCONT(S),
         wrap(List::create(
-            wrap(List::create(wrap_symbol(SYM_Escape),
-                List::create(cur.value, nullptr))),
+            quote(cur.value),
             cur.next)));
 }
 
@@ -5432,10 +5467,14 @@ static Cursor expand_quote (const Table *env, const List *topit) {
     verifyAtParameterCount(topit, 1, -1);
 
     auto it = extract_list(topit->at);
-    auto anchor = get_anchor(it);
     it = it->next;
-    auto result = List::create(getLocal(globals, SYM_QuoteForm), it, anchor);
-    return { wrap(result), topit->next };
+    assert(it);
+    Any result;
+    if (!it->next)
+        result = it->at;
+    else
+        result = wrap(it);
+    return { quote(result), topit->next };
 }
 
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
@@ -5478,17 +5517,19 @@ static Cursor expand (const Table *env, const List *topit) {
 process:
     assert(topit);
     auto expr = topit->at;
-    if (eq(expr.type, Types::PList)) {
+    if (is_quote_type(expr.type)) {
+        // remove qualifier and return as-is
+        expr.type = get_element_type(expr.type);
+        return { expr, topit->next };
+    } else if (eq(expr.type, Types::PList)) {
         if (!expr.list) {
             error("expression is empty");
         }
 
         auto head = expr.list->at;
+
         // resolve symbol
         if (eq(head.type, Types::Symbol)) {
-            if (head.symbol == SYM_Escape) {
-                return { expr.list->next->at, topit->next };
-            }
             head = getLocal(env, extract_symbol(head));
         }
 
@@ -5762,22 +5803,16 @@ static Any compile_call (const List *it) {
     return compile_implicit_call(it, anchor);
 }
 
-static Any compile_quote (const List *it) {
-    it = it->next;
-    if (!it)
-        error("missing quote argument");
-    assert(it);
-    if (!it->next)
-        return it->at;
-    else
-        return wrap(it);
-}
-
 //------------------------------------------------------------------------------
 
 static Any compile (const Any &expr) {
     Any result = const_none;
-    if (eq(expr.type, Types::PList)) {
+    if (is_quote_type(expr.type)) {
+        result = expr;
+        // remove qualifier and return as-is
+        result.type = get_element_type(expr.type);
+        return result;
+    } else if (eq(expr.type, Types::PList)) {
         if (!expr.list) {
             error("empty expression");
         }
@@ -5811,13 +5846,14 @@ static void initGlobals () {
 
     setBuiltin<compile_call>(env, "call");
     setBuiltin<compile_continuation>(env, "form:continuation");
-    setBuiltin<compile_quote>(env, "form:quote");
     setBuiltin<compile_splice>(env, "splice");
     setBuiltin<compile_do>(env, "do");
 
     setBuiltinMacro< wrap_expand_call<expand_continuation> >(env, "continuation");
     setBuiltinMacro< wrap_expand_call<expand_quote> >(env, "quote");
     setBuiltinMacro< wrap_expand_call<expand_syntax_extend> >(env, "syntax-extend");
+
+    setBuiltin< builtin_escape >(env, "escape");
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));
