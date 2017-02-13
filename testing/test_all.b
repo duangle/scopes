@@ -4,8 +4,9 @@ let C
     external
         quote print_number
         cfunction int
-            tupleof int
+            tuple int
             false
+
 print
     C 400
 
@@ -451,6 +452,7 @@ assert
         integer >= int8
         not (int8 < real)
         not (int8 > real)
+        (pointer int) < pointer
 
 dump-syntax
     do

@@ -4201,6 +4201,37 @@ namespace Types {
         return type;
     }
 
+    static bangra::Any _cfunction_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 3, 3);
+        const Type *rettype = extract_type(args[0]);
+        auto paramtype = extract_type(args[1]);
+        if (!is_tuple_type(paramtype)) {
+            error("tuple type expected");
+        }
+        bool vararg = extract_bool(args[2]);
+
+        return wrap(Types::CFunction(rettype, paramtype, vararg));
+    }
+
+    static bangra::Any _pointer_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        const Type *type = extract_type(args[0]);
+        return wrap(Types::Pointer(type));
+    }
+
+    static bangra::Any _tuple_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 0, -1);
+        std::vector<const Type *> types;
+        types.resize(argcount);
+        for (size_t i = 0; i < argcount; ++i) {
+            types[i] = extract_type(args[i]);
+        }
+        return wrap(Types::Tuple(types));
+    }
+
     static void initTypes() {
         Type *tmp = Struct("type", true);
         tmp->tostring = _type_tostring;
@@ -4212,11 +4243,22 @@ namespace Types {
 
         TArray = Supertype("array");
         TVector = Supertype("vector");
-        TTuple = Supertype("tuple");
-        TPointer = Supertype("pointer");
+
+        tmp = Supertype("tuple");
+        tmp->apply_type = apply_type_call<_tuple_apply_type>;
+        TTuple = tmp;
+
+        tmp = Supertype("pointer");
+        tmp->apply_type = apply_type_call<_pointer_apply_type>;
+        TPointer = tmp;
+
         TSplice = Supertype("splice");
         TQuote = Supertype("quote");
-        TCFunction = Supertype("cfunction");
+
+        tmp = Supertype("cfunction");
+        tmp->apply_type = apply_type_call<_cfunction_apply_type>;
+        TCFunction = tmp;
+
         TInteger = Supertype("integer");
         TReal = Supertype("real");
         TStruct = Supertype("struct");
@@ -5151,26 +5193,6 @@ static Any builtin_typeof(const Any *args, size_t argcount) {
     return wrap(args[0].type);
 }
 
-static Any builtin_cfunction(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 3, 3);
-    const Type *rettype = extract_type(args[0]);
-    auto params = extract_tuple(args[1]);
-    bool vararg = extract_bool(args[2]);
-
-    std::vector<const Type *> paramtypes;
-    size_t paramcount = params.size();
-    for (size_t i = 0; i < paramcount; ++i) {
-        paramtypes.push_back(extract_type(params[i]));
-    }
-    return wrap(Types::CFunction(rettype, Types::Tuple(paramtypes), vararg));
-}
-
-static Any builtin_pointer(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 1, 1);
-    const Type *type = extract_type(args[0]);
-    return wrap(Types::Pointer(type));
-}
-
 static Any builtin_error(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     std::string msg = extract_string(args[0]);
@@ -5927,6 +5949,13 @@ static void initGlobals () {
 
     setLocalString(env, "integer", wrap(Types::TInteger));
     setLocalString(env, "real", wrap(Types::TReal));
+    setLocalString(env, "cfunction", wrap(Types::TCFunction));
+    setLocalString(env, "array", wrap(Types::TArray));
+    setLocalString(env, "tuple", wrap(Types::TTuple));
+    setLocalString(env, "vector", wrap(Types::TVector));
+    setLocalString(env, "pointer", wrap(Types::TPointer));
+    setLocalString(env, "struct", wrap(Types::TStruct));
+    setLocalString(env, "enum", wrap(Types::TEnum));
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));
@@ -5984,8 +6013,6 @@ static void initGlobals () {
     setBuiltin<builtin_globals>(env, "globals");
     setBuiltin<builtin_print>(env, "print");
     setBuiltin<builtin_repr>(env, "repr");
-    setBuiltin<builtin_cfunction>(env, "cfunction");
-    setBuiltin<builtin_pointer>(env, "pointer");
     setBuiltin<builtin_tupleof>(env, "tupleof");
     setBuiltin<builtin_cons>(env, "cons");
     setBuiltin<builtin_structof>(env, "structof");

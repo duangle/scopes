@@ -23,7 +23,7 @@ end
 local function bangra_symbols()
     return {
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let external cfunction branch function true false"
+        "bangra let external branch function true false"
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* ::@ syntax-macro syntax-scope cons"
             .. " string expand call escape do empty? dump-syntax"
@@ -31,7 +31,7 @@ local function bangra_symbols()
             .. " repeat syntax-single-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
-            .. " set-key! cstr pointer return continuation splice exit"
+            .. " set-key! cstr return continuation splice exit"
             .. " try except flowcall"
         ),
 
@@ -44,7 +44,8 @@ local function bangra_symbols()
     TYPES = splitstr(getprop("types.bangra_lang") or
         "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void"
             .. " rawstring opaque half float double symbol list parameter"
-            .. " frame closure flow integer real"
+            .. " frame closure flow integer real cfunction array tuple vector"
+            .. " pointer struct enum"
         )
     }
 end
