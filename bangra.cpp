@@ -854,6 +854,8 @@ typedef
     bool (*BoolBinaryOpFunction)(const Type *self, const Any &a, const Any &b);
 typedef
     Ordering (*CompareFunction)(const Type *self, const Any &a, const Any &b);
+typedef
+    Ordering (*CompareTypeFunction)(const Type *self, const Type *other);
 
 enum {
     OP1_Neg = 0,
@@ -897,8 +899,8 @@ struct Type {
     BinaryOpFunction rop2[OP2_Count];
     // implementation of comparison
     CompareFunction cmp;
-    // return true if self supports the interface of other
-    bool (*eq_type)(const Type *self, const Type *other);
+    // return subtype relationship of type to other
+    CompareTypeFunction cmp_type;
     // short string representation
     std::string (*tostring)(const Type *self, const Any &value);
     // return range
@@ -1006,11 +1008,6 @@ static const Type *get_result_type(const Type *self) {
     return self->result_type;
 }
 
-static bool type_eq_type_default(const Type *self, const Type *other) {
-    assert(self && other);
-    return false;
-}
-
 static Any op1_default(const Type *self, const Any &value) {
     error("unary operator not applicable to type %s",
         get_name(self).c_str());
@@ -1026,6 +1023,13 @@ static Any op2_default(const Type *self, const Any &a, const Any &b) {
 static Ordering cmp_default(const Type *self, const Any &a, const Any &b) {
     error("comparison not applicable to type %s",
         get_name(self).c_str());
+    return Unordered;
+}
+
+static Ordering cmp_type_default(const Type *self, const Type *other) {
+    error("comparison not applicable to types %s and %s",
+        get_name(self).c_str(),
+        get_name(other).c_str());
     return Unordered;
 }
 
@@ -1062,7 +1066,6 @@ static Type *new_type(const std::string &name) {
     result->alignment = 1;
     result->is_embedded = false;
     result->name = name;
-    result->eq_type = type_eq_type_default;
     result->apply_type = type_apply_default;
     result->tostring = type_tostring_default;
     result->length = type_length_default;
@@ -1076,18 +1079,13 @@ static Type *new_type(const std::string &name) {
         result->rop2[i] = op2_default;
     }
     result->cmp = cmp_default;
+    result->cmp_type = cmp_type_default;
     result->is_signed = false;
     result->is_vararg = false;
     result->width = 0;
     result->count = 0;
     //result->ctype = nullptr;
     return result;
-}
-
-static bool eq(const Type *self, const Type *other) {
-    if (self == other) return true;
-    assert(self && other);
-    return self->eq_type(self, other) || other->eq_type(other, self);
 }
 
 template<int OP>
@@ -1166,6 +1164,36 @@ static bool le(const Any &a, const Any &b) {
     //} catch (const Any &any) {
     //    return false;
     //}
+}
+
+template <typename T>
+static T **alloc_ptr(T *value) {
+    T **ptr = (T **)malloc(sizeof(T *));
+    *ptr = value;
+    return ptr;
+}
+
+static Any wrap_ptr(const Type *type, const void *ptr) {
+    Any any = make_any(type);
+    if (type->is_embedded) {
+        any.ptr = ptr;
+    } else {
+        any.ptr = alloc_ptr(ptr);
+    }
+    return any;
+}
+
+static Any wrap(const Type *type) {
+    return wrap_ptr(Types::PType, type);
+}
+
+static bool is_subtype_or_type(const Type *subtype, const Type *supertype) {
+    if (subtype == supertype) return true;
+    return le(wrap(subtype), wrap(supertype));
+}
+
+static bool is_subtype(const Type *subtype, const Type *supertype) {
+    return lt(wrap(subtype), wrap(supertype));
 }
 
 static Any add(const Any &a, const Any &b) {
@@ -1298,69 +1326,101 @@ static Any call(const Any &what, const std::vector<Any> &args) {
 */
 
 static bool is_splice_type(const Type *type) {
-    return eq(type, Types::TSplice);
+    return is_subtype(type, Types::TSplice);
 }
 
 static bool is_quote_type(const Type *type) {
-    return eq(type, Types::TQuote);
+    return is_subtype(type, Types::TQuote);
 }
 
 static bool is_typeref_type(const Type *type) {
-    return eq(type, Types::PType);
+    return is_subtype_or_type(type, Types::PType);
 }
 
 static bool is_none_type(const Type *type) {
-    return eq(type, Types::None);
+    return is_subtype_or_type(type, Types::None);
 }
 
 static bool is_bool_type(const Type *type) {
-    return eq(type, Types::Bool);
+    return is_subtype_or_type(type, Types::Bool);
 }
 
 static bool is_integer_type(const Type *type) {
-    return eq(type, Types::TInteger);
+    return is_subtype(type, Types::TInteger);
 }
 
 static bool is_real_type(const Type *type) {
-    return eq(type, Types::TReal);
+    return is_subtype(type, Types::TReal);
 }
 
 /*
 static bool is_struct_type(Type *type) {
-    return eq(type, Types::TStruct);
+    return is_subtype(type, Types::TStruct);
 }
 */
 
 static bool is_tuple_type(const Type *type) {
-    return eq(type, Types::TTuple);
+    return is_subtype(type, Types::TTuple);
 }
 
 static bool is_symbol_type(const Type *type) {
-    return eq(type, Types::Symbol);
+    return is_subtype_or_type(type, Types::Symbol);
 }
 
 /*
 static bool is_array_type(Type *type) {
-    return eq(type, Types::TArray);
+    return is_subtype(type, Types::TArray);
 }
 */
 
 static bool is_cfunction_type(const Type *type) {
-    return eq(type, Types::TCFunction);
+    return is_subtype(type, Types::TCFunction);
+}
+
+static bool is_parameter_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PParameter);
+}
+
+static bool is_flow_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PFlow);
+}
+
+static bool is_builtin_flow_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PBuiltinFlow);
+}
+
+static bool is_frame_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PFrame);
+}
+
+static bool is_closure_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PClosure);
+}
+
+static bool is_macro_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PMacro);
+}
+
+static bool is_list_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PList);
+}
+
+static bool is_special_form_type(const Type *type) {
+    return is_subtype_or_type(type, Types::PSpecialForm);
 }
 
 static bool is_pointer_type(const Type *type) {
-    return eq(type, Types::TPointer);
+    return is_subtype(type, Types::TPointer);
 }
 
 static bool is_table_type(const Type *type) {
-    return eq(type, Types::PTable);
+    return is_subtype_or_type(type, Types::PTable);
 }
 
 static std::string extract_string(const Any &value) {
-    if (eq(value.type, Types::Rawstring)) {
+    if (is_subtype_or_type(value.type, Types::Rawstring)) {
         return value.c_str;
-    } else if (eq(value.type, Types::String)) {
+    } else if (is_subtype_or_type(value.type, Types::String)) {
         return std::string(value.str->ptr, value.str->count);
     } else {
         error("string expected");
@@ -1369,9 +1429,9 @@ static std::string extract_string(const Any &value) {
 }
 
 static const char *extract_cstr(const Any &value) {
-    if (eq(value.type, Types::Rawstring)) {
+    if (is_subtype_or_type(value.type, Types::Rawstring)) {
         return value.c_str;
-    } else if (eq(value.type, Types::String)) {
+    } else if (is_subtype_or_type(value.type, Types::String)) {
         return value.str->ptr;
     } else {
         error("string expected");
@@ -1380,7 +1440,7 @@ static const char *extract_cstr(const Any &value) {
 }
 
 static Symbol extract_symbol(const Any &value) {
-    if (eq(value.type, Types::Symbol)) {
+    if (is_symbol_type(value.type)) {
         return value.symbol;
     } else {
         error("symbol expected");
@@ -1393,7 +1453,7 @@ static std::string extract_symbol_string(const Any &value) {
 }
 
 static bool extract_bool(const Any &value) {
-    if (eq(value.type, Types::Bool)) {
+    if (is_bool_type(value.type)) {
         return value.i1;
     }
     error("boolean expected");
@@ -1437,29 +1497,12 @@ static Any pstring(const std::string &s) {
     return wrap(Types::String, alloc_string(s.c_str(), s.size()));
 }
 
-template <typename T>
-static T **alloc_ptr(T *value) {
-    T **ptr = (T **)malloc(sizeof(T *));
-    *ptr = value;
-    return ptr;
-}
-
 static Any wrap_symbol(const Symbol &s) {
     return wrap(Types::Symbol, &s);
 }
 
 static Any symbol(const std::string &s) {
     return wrap_symbol(get_symbol(s));
-}
-
-static Any wrap_ptr(const Type *type, const void *ptr) {
-    Any any = make_any(type);
-    if (type->is_embedded) {
-        any.ptr = ptr;
-    } else {
-        any.ptr = alloc_ptr(ptr);
-    }
-    return any;
 }
 
 static Any integer(const Type *type, int64_t value) {
@@ -1647,7 +1690,7 @@ struct Parameter {
 };
 
 static const Parameter *extract_parameter(const Any &value) {
-    if (eq(value.type, Types::PParameter)) {
+    if (is_parameter_type(value.type)) {
         return value.parameter;
     }
     error("parameter expected");
@@ -1717,7 +1760,7 @@ struct List {
 };
 
 static const List *extract_list(const Any &value) {
-    if (eq(value.type, Types::PList)) {
+    if (is_list_type(value.type)) {
         return value.list;
     } else {
         error("list expected, not %s", get_name(value.type).c_str());
@@ -1836,7 +1879,7 @@ public:
 int64_t Flow::unique_id_counter = 1;
 
 static const Flow *extract_flow(const Any &value) {
-    if (eq(value.type, Types::PFlow)) {
+    if (is_flow_type(value.type)) {
         return value.flow;
     }
     error("flow expected");
@@ -1891,7 +1934,7 @@ struct Frame {
 };
 
 static const Frame *extract_frame(const Any &value) {
-    if (eq(value.type, Types::PFrame)) {
+    if (is_frame_type(value.type)) {
         return value.frame;
     }
     error("frame expected");
@@ -1924,7 +1967,7 @@ static const Closure *create_closure(
 }
 
 static const Closure *extract_closure(const Any &value) {
-    if (eq(value.type, Types::PClosure)) {
+    if (is_closure_type(value.type)) {
         return value.closure;
     }
     error("closure expected");
@@ -1982,10 +2025,6 @@ static Any wrap(const Parameter *param) {
 }
 static Any wrap(Parameter *param) {
     return wrap_ptr(Types::PParameter, param);
-}
-
-static Any wrap(const Type *type) {
-    return wrap_ptr(Types::PType, type);
 }
 
 static Any wrap(const Table *table) {
@@ -2088,10 +2127,10 @@ static void unescape(String &s) {
 
 // matches (///...)
 static bool is_comment(const Any &expr) {
-    if (eq(expr.type, Types::PList)) {
+    if (is_list_type(expr.type)) {
         if (expr.list) {
             const Any &sym = expr.list->at;
-            if (eq(sym.type, Types::Symbol)) {
+            if (is_symbol_type(sym.type)) {
                 auto s = extract_symbol_string(sym);
                 if (!memcmp(s.c_str(),"///",3))
                     return true;
@@ -2120,7 +2159,7 @@ static const Anchor *find_valid_anchor(const List *l) {
 static const Anchor *find_valid_anchor(const Any &expr) {
     const Anchor *a = get_anchor(expr);
     if (!a) {
-        if (eq(expr.type, Types::PList)) {
+        if (is_list_type(expr.type)) {
             a = find_valid_anchor(expr.list);
         }
     }
@@ -2128,7 +2167,7 @@ static const Anchor *find_valid_anchor(const Any &expr) {
 }
 
 static Any strip(const Any &expr) {
-    if (eq(expr.type, Types::PList)) {
+    if (is_list_type(expr.type)) {
         const List *l = nullptr;
         auto it = extract_list(expr);
         while (it) {
@@ -2328,7 +2367,7 @@ void valueErrorV (const Any &expr, const char *fmt, va_list args) {
 }
 
 static void verifyValueKind(const Type *type, const Any &expr) {
-    if (!eq(expr.type, type)) {
+    if (!is_subtype_or_type(expr.type, type)) {
         valueError(expr, "%s expected, not %s",
             get_name(type).c_str(),
             get_name(expr.type).c_str());
@@ -3051,7 +3090,7 @@ struct FFI {
         ffi_type *argtypes[count];
         for (size_t i = 0; i < count; ++i) {
             auto ptype = get_parameter_type(ftype, i);
-            if (!eq(ptype, args[i].type)) {
+            if (!is_subtype_or_type(args[i].type, ptype)) {
                 error("%s type expected, %s provided",
                     get_name(ptype).c_str(),
                     get_name(args[i].type).c_str());
@@ -3131,10 +3170,10 @@ static Any evaluate_parameter(
 }
 
 static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
-    if (eq(value.type, Types::PParameter)) {
+    if (is_parameter_type(value.type)) {
         auto param = value.parameter;
         return evaluate_parameter(frame, param->parent, param->index, value);
-    } else if (eq(value.type, Types::PFlow)) {
+    } else if (is_flow_type(value.type)) {
         if (argindex == ARG_Func)
             // no closure creation required
             return value;
@@ -3240,14 +3279,14 @@ continue_execution:
                 break;
             }
 
-            if (eq(callee.type, Types::PClosure)) {
+            if (is_closure_type(callee.type)) {
                 auto closure = callee.closure;
 
                 frame = closure->frame;
                 callee = wrap(closure->entry);
             }
 
-            if (eq(callee.type, Types::PFlow)) {
+            if (is_flow_type(callee.type)) {
                 auto flow = callee.flow;
                 assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
@@ -3303,7 +3342,7 @@ continue_execution:
                     auto anchor = get_anchor(flow);
                     Anchor::printMessage(anchor, "trace");
                 }
-            } else if (eq(callee.type, Types::PBuiltinFlow)) {
+            } else if (is_builtin_flow_type(callee.type)) {
                 auto cb = callee.builtin_flow;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
@@ -3311,7 +3350,7 @@ continue_execution:
                 wcount = S.wcount;
                 assert(wcount <= BANGRA_MAX_FUNCARGS);
                 handler_frame = _oldframe;
-            } else if (eq(callee.type, Types::PType)) {
+            } else if (is_typeref_type(callee.type)) {
                 auto cb = callee.typeref;
                 auto _oldframe = handler_frame;
                 handler_frame = frame;
@@ -3499,9 +3538,31 @@ namespace Types {
         return compare(pointer_element(self, a), y);
     }
 
+    static Ordering _typeref_cmp(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        if (self != b.type) {
+            error("type comparison expected");
+        }
+        if (a.typeref == b.typeref) return Equal;
+        try {
+            return a.typeref->cmp_type(a.typeref, b.typeref);
+        } catch (const bangra::Any &e1) {
+            try {
+                auto result = b.typeref->cmp_type(b.typeref, a.typeref);
+                switch(result) {
+                    case Less: return Greater;
+                    case Greater: return Less;
+                    default: return result;
+                }
+            } catch (const bangra::Any &e2) {
+                return Unordered;
+            }
+        }
+    }
+
     static Ordering _struct_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        if (!eq(a.type, b.type)) return Unordered;
+        if (!eq(wrap(a.type), wrap(b.type))) return Unordered;
         return (a.ptr == b.ptr)?Equal:Unordered;
     }
 
@@ -3612,48 +3673,48 @@ namespace Types {
         return "type:" + get_name((const Type *)value.ptr);
     }
 
-    static bool type_array_eq(const Type *self, const Type *other) {
-        return (other == TArray);
+    static Ordering type_array_eq(const Type *self, const Type *other) {
+        return (other == TArray)?Less:Unordered;
     }
 
-    static bool type_vector_eq(const Type *self, const Type *other) {
-        return (other == TVector);
+    static Ordering type_vector_eq(const Type *self, const Type *other) {
+        return (other == TVector)?Less:Unordered;
     }
 
-    static bool type_pointer_eq(const Type *self, const Type *other) {
-        return (other == TPointer);
+    static Ordering type_pointer_eq(const Type *self, const Type *other) {
+        return (other == TPointer)?Less:Unordered;
     }
 
-    static bool type_splice_eq(const Type *self, const Type *other) {
-        return (other == TSplice);
+    static Ordering type_splice_eq(const Type *self, const Type *other) {
+        return (other == TSplice)?Less:Unordered;
     }
 
-    static bool type_quote_eq(const Type *self, const Type *other) {
-        return (other == TQuote);
+    static Ordering type_quote_eq(const Type *self, const Type *other) {
+        return (other == TQuote)?Less:Unordered;
     }
 
-    static bool type_tuple_eq(const Type *self, const Type *other) {
-        return (other == TTuple);
+    static Ordering type_tuple_eq(const Type *self, const Type *other) {
+        return (other == TTuple)?Less:Unordered;
     }
 
-    static bool type_cfunction_eq(const Type *self, const Type *other) {
-        return (other == TCFunction);
+    static Ordering type_cfunction_eq(const Type *self, const Type *other) {
+        return (other == TCFunction)?Less:Unordered;
     }
 
-    static bool type_integer_eq(const Type *self, const Type *other) {
-        return (other == TInteger);
+    static Ordering type_integer_eq(const Type *self, const Type *other) {
+        return (other == TInteger)?Less:Unordered;
     }
 
-    static bool type_real_eq(const Type *self, const Type *other) {
-        return (other == TReal);
+    static Ordering type_real_eq(const Type *self, const Type *other) {
+        return (other == TReal)?Less:Unordered;
     }
 
-    static bool type_struct_eq(const Type *self, const Type *other) {
-        return (other == TStruct);
+    static Ordering type_struct_eq(const Type *self, const Type *other) {
+        return (other == TStruct)?Less:Unordered;
     }
 
-    static bool type_enum_eq(const Type *self, const Type *other) {
-        return (other == TEnum);
+    static Ordering type_enum_eq(const Type *self, const Type *other) {
+        return (other == TEnum)?Less:Unordered;
     }
 
 
@@ -3723,7 +3784,7 @@ namespace Types {
             get_name(element).c_str(),
             ansi(ANSI_STYLE_NUMBER,
                 format("%zu", size)).c_str());
-        type->eq_type = type_array_eq;
+        type->cmp_type = type_array_eq;
         return type;
     }
 
@@ -3735,7 +3796,7 @@ namespace Types {
             get_name(element).c_str(),
             ansi(ANSI_STYLE_NUMBER,
                 format("%zu", size)).c_str());
-        type->eq_type = type_vector_eq;
+        type->cmp_type = type_vector_eq;
         return type;
     }
 
@@ -3746,7 +3807,7 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
                 get_name(element).c_str()));
         type->is_embedded = true;
-        type->eq_type = type_pointer_eq;
+        type->cmp_type = type_pointer_eq;
         type->op2[OP2_At] = type_pointer_at;
         type->length = _pointer_length;
         type->cmp = value_pointer_cmp;
@@ -3764,7 +3825,7 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
                 get_name(element).c_str()));
         type->element_type = element;
-        type->eq_type = type_splice_eq;
+        type->cmp_type = type_splice_eq;
         return type;
     }
 
@@ -3775,7 +3836,7 @@ namespace Types {
                 ansi(ANSI_STYLE_KEYWORD, "quote").c_str(),
                 get_name(element).c_str()));
         type->element_type = element;
-        type->eq_type = type_quote_eq;
+        type->cmp_type = type_quote_eq;
         return type;
     }
 
@@ -3843,7 +3904,7 @@ namespace Types {
 
     static bangra::Any type_struct_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        if (eq(vindex.type, Types::Symbol)) {
+        if (is_symbol_type(vindex.type)) {
             auto key = extract_symbol(vindex);
             auto it = self->name_index_map.find(key);
             if (it == self->name_index_map.end()) {
@@ -3997,7 +4058,7 @@ namespace Types {
         }
         ss << ")";
         Type *type = new_type(ss.str());
-        type->eq_type = type_tuple_eq;
+        type->cmp_type = type_tuple_eq;
         type->cmp = _tuple_cmp;
         type->op2[OP2_At] = type_tuple_at;
         type->length = _tuple_length;
@@ -4009,7 +4070,7 @@ namespace Types {
 
     static const Type *_new_cfunction_type(
         const Type *result, const Type *parameters, bool vararg) {
-        assert(eq(parameters, TTuple));
+        assert(is_tuple_type(parameters));
         std::stringstream ss;
         ss << "(";
         ss << ansi(ANSI_STYLE_KEYWORD, "cfunction");
@@ -4017,7 +4078,7 @@ namespace Types {
         ss << " " << get_name(parameters);
         ss << " " << ansi(ANSI_STYLE_KEYWORD, vararg?"true":"false") << ")";
         Type *type = new_type(ss.str());
-        type->eq_type = type_cfunction_eq;
+        type->cmp_type = type_cfunction_eq;
         type->is_vararg = vararg;
         type->result_type = result;
         type->types = { parameters };
@@ -4051,7 +4112,7 @@ namespace Types {
         Type *type = new_type(
             (width == 1)?"bool":
                 format("%sint%zu", signed_?"":"u", width));
-        type->eq_type = type_integer_eq;
+        type->cmp_type = type_integer_eq;
         type->is_embedded = true;
         type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
         type->op2[OP2_Sub] = _integer_sub;
@@ -4085,7 +4146,7 @@ namespace Types {
 
         Type *type = new_type(format("real%zu", width));
         type->tostring = _real_tostring;
-        type->eq_type = type_real_eq;
+        type->cmp_type = type_real_eq;
         type->is_embedded = true;
 
         type->op2[OP2_Add] = type->rop2[OP2_Add] = _real_add;
@@ -4116,7 +4177,7 @@ namespace Types {
             ss << ")";
             type->name = ss.str();
         }
-        type->eq_type = type_struct_eq;
+        type->cmp_type = type_struct_eq;
         type->op2[OP2_At] = type_struct_at;
         type->cmp = _struct_cmp;
         type->length = _tuple_length;
@@ -4130,7 +4191,13 @@ namespace Types {
         ss << " " << quoteReprString(name);
         ss << ")";
         Type *type = new_type(ss.str());
-        type->eq_type = type_enum_eq;
+        type->cmp_type = type_enum_eq;
+        return type;
+    }
+
+    static Type *Supertype(const std::string &name) {
+        auto type = Struct(name, true);
+        type->cmp_type = cmp_type_default;
         return type;
     }
 
@@ -4139,18 +4206,21 @@ namespace Types {
         tmp->tostring = _type_tostring;
         TType = tmp;
         PType = Pointer(TType);
+        tmp = const_cast<Type *>(PType);
+        // need custom comparison operator to prevent infinite recursion
+        tmp->cmp = _typeref_cmp;
 
-        TArray = Struct("array", true);
-        TVector = Struct("vector", true);
-        TTuple = Struct("tuple", true);
-        TPointer = Struct("pointer", true);
-        TSplice = Struct("splice", true);
-        TQuote = Struct("quote", true);
-        TCFunction = Struct("cfunction", true);
-        TInteger = Struct("integer", true);
-        TReal = Struct("real", true);
-        TStruct = Struct("struct", true);
-        TEnum = Struct("enum", true);
+        TArray = Supertype("array");
+        TVector = Supertype("vector");
+        TTuple = Supertype("tuple");
+        TPointer = Supertype("pointer");
+        TSplice = Supertype("splice");
+        TQuote = Supertype("quote");
+        TCFunction = Supertype("cfunction");
+        TInteger = Supertype("integer");
+        TReal = Supertype("real");
+        TStruct = Supertype("struct");
+        TEnum = Supertype("enum");
 
         Any = Struct("Any", true);
         AnchorRef = Struct("Anchor", true);
@@ -4859,7 +4929,7 @@ static B_FUNC(builtin_flowcall) {
     S->wargs[ARG_Cont] = B_GETCONT(S);
     {
         auto func = B_GETARG(S,0);
-        if (eq(func.type, Types::PClosure)) {
+        if (is_closure_type(func.type)) {
             func = wrap(func.closure->entry);
         }
         S->wargs[ARG_Func] = func;
@@ -4884,7 +4954,7 @@ static Any builtin_string(const Any *args, size_t argcount) {
 
 static Any builtin_cstr(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
-    if (!eq(args[0].type, Types::Rawstring))
+    if (!is_subtype_or_type(args[0].type, Types::Rawstring))
         error("rawstring expected");
     const char *str = args[0].c_str;
     return wrap(Types::String, alloc_slice<char>(str, strlen(str)));
@@ -5010,7 +5080,7 @@ static Any builtin_table(const Any *args, size_t argcount) {
             error("tuple must have exactly two elements");
         auto name = extract_symbol(pair[0]);
         auto value = pair[1];
-        if (eq(value.type, Types::PClosure)) {
+        if (is_closure_type(value.type)) {
             auto closure = value.closure;
             auto sym = get_ptr_symbol(closure);
             if (sym == SYM_Unnamed) {
@@ -5376,7 +5446,7 @@ static Any toparameter (Table *env, const Symbol &key) {
 }
 
 static Any toparameter (Table *env, const Any &value) {
-    if (eq(value.type, Types::PParameter))
+    if (is_parameter_type(value.type))
         return value;
     verifyValueKind(Types::Symbol, value);
     auto key = extract_symbol(value);
@@ -5521,7 +5591,7 @@ process:
         // remove qualifier and return as-is
         expr.type = get_element_type(expr.type);
         return { expr, topit->next };
-    } else if (eq(expr.type, Types::PList)) {
+    } else if (is_list_type(expr.type)) {
         if (!expr.list) {
             error("expression is empty");
         }
@@ -5529,11 +5599,11 @@ process:
         auto head = expr.list->at;
 
         // resolve symbol
-        if (eq(head.type, Types::Symbol)) {
+        if (is_symbol_type(head.type)) {
             head = getLocal(env, extract_symbol(head));
         }
 
-        if (eq(head.type, Types::PMacro)) {
+        if (is_macro_type(head.type)) {
             auto result = expand_macro(env, head.macro->value, topit);
             if (result) {
                 topit = result;
@@ -5553,7 +5623,7 @@ process:
         auto it = extract_list(topit->at);
         result = wrap(expand_expr_list(env, it));
         topit = topit->next;
-    } else if (eq(expr.type, Types::Symbol)) {
+    } else if (is_symbol_type(expr.type)) {
         auto value = extract_symbol(expr);
         if (!hasLocal(env, value)) {
             auto default_handler = getLocal(env, SYM_SymbolWC);
@@ -5600,7 +5670,7 @@ static Any builtin_set_exception_handler(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     auto old_exception_handler = exception_handler;
     auto func = args[0];
-    if (eq(func.type, Types::PClosure)) {
+    if (is_closure_type(func.type)) {
         // strip the frame
         func = wrap(func.closure->entry);
     }
@@ -5672,10 +5742,10 @@ struct ILBuilder {
         assert(state.flow);
         if (state.prevflow
             && (arguments.size() == 3)
-            && (eq(Types::PParameter, arguments[ARG_Arg0].type))
+            && (is_parameter_type(arguments[ARG_Arg0].type))
             && (arguments[ARG_Arg0].parameter
                     == state.flow->parameters[PARAM_Arg0])
-            && (eq(Types::PFlow, state.prevflow->arguments[ARG_Cont].type))
+            && (is_flow_type(state.prevflow->arguments[ARG_Cont].type))
             && (state.prevflow->arguments[ARG_Cont].flow
                 == state.flow)) {
             state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
@@ -5812,13 +5882,13 @@ static Any compile (const Any &expr) {
         // remove qualifier and return as-is
         result.type = get_element_type(expr.type);
         return result;
-    } else if (eq(expr.type, Types::PList)) {
+    } else if (is_list_type(expr.type)) {
         if (!expr.list) {
             error("empty expression");
         }
         auto slist = expr.list;
         auto head = slist->at;
-        if (eq(head.type, Types::PSpecialForm)) {
+        if (is_special_form_type(head.type)) {
             result = head.special_form(slist);
         } else {
             result = compile_implicit_call(slist);
@@ -5854,6 +5924,9 @@ static void initGlobals () {
     setBuiltinMacro< wrap_expand_call<expand_syntax_extend> >(env, "syntax-extend");
 
     setBuiltin< builtin_escape >(env, "escape");
+
+    setLocalString(env, "integer", wrap(Types::TInteger));
+    setLocalString(env, "real", wrap(Types::TReal));
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));
@@ -6119,7 +6192,7 @@ static Any parseLoader(const char *executable_path) {
         fprintf(stderr, "could not parse footer expression\n");
         return const_none;
     }
-    if (!eq(expr.type, Types::PList))  {
+    if (!is_list_type(expr.type))  {
         fprintf(stderr, "footer expression is not a symbolic list\n");
         return const_none;
     }
@@ -6131,7 +6204,7 @@ static Any parseLoader(const char *executable_path) {
     }
     auto head = it->at;
     it = it->next;
-    if (!eq(head.type, Types::Symbol))  {
+    if (!is_symbol_type(head.type))  {
         fprintf(stderr, "footer expression does not begin with symbol\n");
         return const_none;
     }

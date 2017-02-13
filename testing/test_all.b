@@ -437,6 +437,21 @@ do
             list x y z
             list 1 2 3
 
+assert
+    and
+        int8 == int8
+        int8 <= int8
+        int8 != int16
+        not (int8 < int8)
+        not (int8 < int16)
+        not (int8 > int16)
+        int8 < integer
+        int8 <= integer
+        integer > int8
+        integer >= int8
+        not (int8 < real)
+        not (int8 > real)
+
 dump-syntax
     do
         let k "hello world"
