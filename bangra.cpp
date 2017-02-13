@@ -90,6 +90,7 @@ int print_number(int value);
 #include <ffi.h>
 
 #include <llvm-c/Core.h>
+/*
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Target.h>
 #include <llvm-c/Analysis.h>
@@ -97,11 +98,14 @@ int print_number(int value);
 #include <llvm-c/ErrorHandling.h>
 
 #include "llvm/IR/LLVMContext.h"
+*/
 #include "llvm/IR/Module.h"
+/*
 #include "llvm/IR/IRBuilder.h"
 //#include "llvm/IR/DebugInfoMetadata.h"
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/Support/Casting.h"
+*/
 
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -6123,13 +6127,13 @@ static void init() {
     Types::initTypes();
     initConstants();
 
-    LLVMEnablePrettyStackTrace();
-    LLVMLinkInMCJIT();
-    //LLVMLinkInInterpreter();
-    LLVMInitializeNativeTarget();
-    LLVMInitializeNativeAsmParser();
-    LLVMInitializeNativeAsmPrinter();
-    LLVMInitializeNativeDisassembler();
+    //LLVMEnablePrettyStackTrace();
+    //LLVMLinkInMCJIT();
+    ////LLVMLinkInInterpreter();
+    //LLVMInitializeNativeTarget();
+    //LLVMInitializeNativeAsmParser();
+    //LLVMInitializeNativeAsmPrinter();
+    //LLVMInitializeNativeDisassembler();
 
     ffi = new FFI();
     builder = new ILBuilder();
