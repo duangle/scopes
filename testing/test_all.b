@@ -453,6 +453,13 @@ assert
         not (int8 < real)
         not (int8 > real)
         (pointer int) < pointer
+        (integer 8 true) == int8
+        (array int 8) < array
+        (vector float 4) < vector
+    "type operators failed"
+
+print
+    struct (quote MyCustomType)
 
 dump-syntax
     do

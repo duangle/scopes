@@ -4232,6 +4232,45 @@ namespace Types {
         return wrap(Types::Tuple(types));
     }
 
+    static bangra::Any _array_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 2, 2);
+        auto type = extract_type(args[0]);
+        auto count = extract_integer(args[1]);
+        return wrap(Types::Array(type, count));
+    }
+
+    static bangra::Any _vector_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 2, 2);
+        auto type = extract_type(args[0]);
+        auto count = extract_integer(args[1]);
+        return wrap(Types::Vector(type, count));
+    }
+
+    static bangra::Any _integer_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 2, 2);
+        auto width = extract_integer(args[0]);
+        auto is_signed = extract_bool(args[1]);
+        return wrap(Types::Integer(width, is_signed));
+    }
+
+    static bangra::Any _real_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        auto width = extract_integer(args[0]);
+        return wrap(Types::Real(width));
+    }
+
+    static bangra::Any _struct_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        auto name = extract_symbol(args[0]);
+        const Type *result = Types::Struct(get_symbol_name(name), false);
+        return wrap(result);
+    }
+
     static void initTypes() {
         Type *tmp = Struct("type", true);
         tmp->tostring = _type_tostring;
@@ -4241,8 +4280,13 @@ namespace Types {
         // need custom comparison operator to prevent infinite recursion
         tmp->cmp = _typeref_cmp;
 
-        TArray = Supertype("array");
-        TVector = Supertype("vector");
+        tmp = Supertype("array");
+        tmp->apply_type = apply_type_call<_array_apply_type>;
+        TArray = tmp;
+
+        tmp = Supertype("vector");
+        tmp->apply_type = apply_type_call<_vector_apply_type>;
+        TVector = tmp;
 
         tmp = Supertype("tuple");
         tmp->apply_type = apply_type_call<_tuple_apply_type>;
@@ -4259,10 +4303,21 @@ namespace Types {
         tmp->apply_type = apply_type_call<_cfunction_apply_type>;
         TCFunction = tmp;
 
-        TInteger = Supertype("integer");
-        TReal = Supertype("real");
-        TStruct = Supertype("struct");
-        TEnum = Supertype("enum");
+        tmp = Supertype("integer");
+        tmp->apply_type = apply_type_call<_integer_apply_type>;
+        TInteger = tmp;
+
+        tmp = Supertype("real");
+        tmp->apply_type = apply_type_call<_real_apply_type>;
+        TReal = tmp;
+
+        tmp = Supertype("struct");
+        tmp->apply_type = apply_type_call<_struct_apply_type>;
+        TStruct = tmp;
+
+        tmp = Supertype("enum");
+        tmp->apply_type = apply_type_call<_enum_apply_type>;
+        TEnum = tmp;
 
         Any = Struct("Any", true);
         AnchorRef = Struct("Anchor", true);
