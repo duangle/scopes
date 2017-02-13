@@ -478,6 +478,5 @@ try
     print "leave #1"
 except (e)
     print "exception #1:" e
-    error ("reraise #1: " .. e)
 
 print "done."

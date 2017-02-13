@@ -146,6 +146,27 @@ syntax-extend stage-2 (_ scope)
                 false
     table
         tupleof scope-parent-symbol scope
+        : bool (integer 1 false)
+        : int8 (integer 8 true)
+        : int16 (integer 16 true)
+        : int32 (integer 32 true)
+        : int64 (integer 64 true)
+        : uint8 (integer 8 false)
+        : uint16 (integer 16 false)
+        : uint32 (integer 32 false)
+        : uint64 (integer 64 false)
+
+        : int (integer 32 true)
+        : uint (integer 32 false)
+
+        : real16 (real 16)
+        : real32 (real 32)
+        : real64 (real 64)
+
+        : half (real 16)
+        : float (real 32)
+        : double (real 64)
+
         : list-join
         : list-head?
         : list-atom?

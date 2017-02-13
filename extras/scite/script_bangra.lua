@@ -45,7 +45,7 @@ local function bangra_symbols()
         "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void"
             .. " rawstring opaque half float double symbol list parameter"
             .. " frame closure flow integer real cfunction array tuple vector"
-            .. " pointer struct enum"
+            .. " pointer struct enum bool uint real16 real32 real64"
         )
     }
 end

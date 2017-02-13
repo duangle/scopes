@@ -4316,7 +4316,7 @@ namespace Types {
         TStruct = tmp;
 
         tmp = Supertype("enum");
-        tmp->apply_type = apply_type_call<_enum_apply_type>;
+        //tmp->apply_type = apply_type_call<_enum_apply_type>;
         TEnum = tmp;
 
         Any = Struct("Any", true);
@@ -4329,7 +4329,7 @@ namespace Types {
         const_none = make_any(Types::None);
         const_none.ptr = nullptr;
 
-        Bool = Integer(1, true);
+        Bool = Integer(1, false);
 
         I8 = Integer(8, true);
         I16 = Integer(16, true);
@@ -6014,29 +6014,6 @@ static void initGlobals () {
 
     setLocalString(env, "void", wrap(Types::None));
     setLocalString(env, "None", wrap(Types::None));
-
-    setLocalString(env, "bool", wrap(Types::Bool));
-
-    setLocalString(env, "int8", wrap(Types::I8));
-    setLocalString(env, "int16", wrap(Types::I16));
-    setLocalString(env, "int32", wrap(Types::I32));
-    setLocalString(env, "int64", wrap(Types::I64));
-
-    setLocalString(env, "uint8", wrap(Types::U8));
-    setLocalString(env, "uint16", wrap(Types::U16));
-    setLocalString(env, "uint32", wrap(Types::U32));
-    setLocalString(env, "uint64", wrap(Types::U64));
-
-    setLocalString(env, "int", wrap(Types::I32));
-    setLocalString(env, "uint", wrap(Types::U32));
-
-    setLocalString(env, "real16", wrap(Types::R16));
-    setLocalString(env, "real32", wrap(Types::R32));
-    setLocalString(env, "real64", wrap(Types::R64));
-
-    setLocalString(env, "half", wrap(Types::R16));
-    setLocalString(env, "float", wrap(Types::R32));
-    setLocalString(env, "double", wrap(Types::R64));
 
     setLocalString(env, "symbol", wrap(Types::Symbol));
     setLocalString(env, "list", wrap(Types::PList));
