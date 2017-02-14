@@ -115,8 +115,16 @@ syntax-extend stage-1 (_ scope)
                     cons
                         cons tupleof
                             cons
-                                list quote
-                                    @ expr 0 1 0
+                                branch
+                                    ==
+                                        typeof
+                                            @ expr 0 1 0
+                                        symbol
+                                    continuation ()
+                                        list quote
+                                            @ expr 0 1 0
+                                    continuation ()
+                                        @ expr 0 1 0
                                 branch
                                     == (@ expr 0 2) (list)
                                     continuation ()

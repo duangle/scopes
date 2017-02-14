@@ -113,6 +113,8 @@ int print_number(int value);
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 
+#include "external/cityhash/city.cpp"
+
 namespace bangra {
 
 //------------------------------------------------------------------------------
@@ -824,8 +826,26 @@ static void error (const char *format, ...);
 
 //------------------------------------------------------------------------------
 
+static uint64_t hash(const Any &value);
+struct AnyHash {
+    std::size_t operator()(const Any & s) const {
+        return hash(s);
+    }
+};
+
+static bool eq(const Any &a, const Any &b);
+struct AnyEqualTo {
+    bool operator()(const Any &a, const Any &b) const {
+        try {
+            return eq(a, b);
+        } catch (Any &v) {
+            return false;
+        }
+    }
+};
+
 struct Table {
-    typedef std::unordered_map<Symbol, Any> map_type;
+    typedef std::unordered_map<Any, Any, AnyHash, AnyEqualTo> map_type;
 
     map_type _;
     Table *meta;
@@ -907,6 +927,8 @@ struct Type {
     CompareTypeFunction cmp_type;
     // short string representation
     std::string (*tostring)(const Type *self, const Any &value);
+    // hash representation
+    uint64_t (*hash)(const Type *self, const Any &value);
     // return range
     Any (*slice)(const Type *self, const Any &value, size_t i0, size_t i1);
     // apply the type
@@ -1012,6 +1034,12 @@ static const Type *get_result_type(const Type *self) {
     return self->result_type;
 }
 
+static uint64_t type_hash_default(const Type *self, const Any &value) {
+    error("type %s not hashable",
+        get_name(self).c_str());
+    return 0;
+}
+
 static Any op1_default(const Type *self, const Any &value) {
     error("unary operator not applicable to type %s",
         get_name(self).c_str());
@@ -1071,6 +1099,7 @@ static Type *new_type(const std::string &name) {
     result->is_embedded = false;
     result->name = name;
     result->apply_type = type_apply_default;
+    result->hash = type_hash_default;
     result->tostring = type_tostring_default;
     result->length = type_length_default;
     result->slice = type_slice_default;
@@ -1264,6 +1293,10 @@ static Any rcp(const Any &value) {
     return value.type->op1[OP1_Rcp](value.type, value);
 }
 
+static uint64_t hash(const Any &value) {
+    return value.type->hash(value.type, value);
+}
+
 static std::string get_string(const Any &value) {
     return value.type->tostring(value.type, value);
 }
@@ -1286,48 +1319,9 @@ static size_t length(const Any &value) {
 
 //------------------------------------------------------------------------------
 
-static Table *new_table() {
-    auto result = new Table();
-    result->meta = nullptr;
-    return result;
-}
-
-/*
-static void set_meta(Table &table, Table *meta) {
-    table.meta = meta;
-}
-
-static Table *get_meta(Table &table) {
-    return table.meta;
-}
-*/
-
-static void set_key(Table &table, const Symbol &key, const Any &value) {
-    table._[key] = value;
-}
-
-static bool has_key(const Table &table, const Symbol &key) {
-    return table._.find(key) != table._.end();
-}
-
-static const Any &get_key(const Table &table,
-    const Symbol &key, const Any &defvalue) {
-    auto it = table._.find(key);
-    if (it == table._.end())
-        return defvalue;
-    else
-        return it->second;
-}
-
 static bool isnone(const Any &value) {
     return (value.type == Types::None);
 }
-
-/*
-static Any call(const Any &what, const std::vector<Any> &args) {
-    return const_none;
-}
-*/
 
 static bool is_splice_type(const Type *type) {
     return is_subtype(type, Types::TSplice);
@@ -2918,7 +2912,6 @@ struct Parser {
                 }
                 if (column != subcolumn) {
                     if ((column + 4) != subcolumn) {
-                        //printf("%i %i\n", column, subcolumn);
                         error("indentations must nest by 4 spaces.");
                         return const_none;
                     }
@@ -3430,10 +3423,53 @@ static Any execute(const Any *args, size_t argcount) {
 }
 
 //------------------------------------------------------------------------------
+// TABLES
+//------------------------------------------------------------------------------
+
+static Table *new_table() {
+    auto result = new Table();
+    result->meta = nullptr;
+    return result;
+}
+
+static void set_key(Table &table, const Any &key, const Any &value) {
+    table._[key] = value;
+}
+
+static void set_key(Table &table, const Symbol &key, const Any &value) {
+    set_key(table, wrap_symbol(key), value);
+}
+
+static bool has_key(const Table &table, const Any &key) {
+    return table._.find(key) != table._.end();
+}
+
+static bool has_key(const Table &table, const Symbol &key) {
+    return has_key(table, wrap_symbol(key));
+}
+
+static const Any &get_key(const Table &table,
+    const Any &key, const Any &defvalue) {
+    auto it = table._.find(key);
+    if (it == table._.end())
+        return defvalue;
+    else
+        return it->second;
+}
+
+static const Any &get_key(const Table &table,
+    const Symbol &key, const Any &defvalue) {
+    return get_key(table, wrap_symbol(key), defvalue);
+}
+
+//------------------------------------------------------------------------------
 // TYPE SETUP
 //------------------------------------------------------------------------------
 
 namespace Types {
+
+    // STRING CONVERSION
+    //--------------------------------------------------------------------------
 
     static std::string _string_tostring(const Type *self, const bangra::Any &value) {
         return extract_string(value);
@@ -3768,71 +3804,6 @@ namespace Types {
         return wrap(self->element_type, (char *)value.ptr + offset);
     }
 
-    static Type *__new_array_type(const Type *element, size_t size) {
-        assert(element);
-        Type *type = new_type("");
-        type->count = size;
-        type->op2[OP2_At] = type_array_at;
-        type->element_type = element;
-        auto padded_size = align(get_size(element), get_alignment(element));
-        type->size = padded_size * type->count;
-        type->alignment = element->alignment;
-        return type;
-    }
-
-    static const Type *_new_array_type(const Type *element, size_t size) {
-        assert(element);
-        Type *type = __new_array_type(element, size);
-        type->name = format("(%s %s %s)",
-            ansi(ANSI_STYLE_KEYWORD, "@").c_str(),
-            get_name(element).c_str(),
-            ansi(ANSI_STYLE_NUMBER,
-                format("%zu", size)).c_str());
-        type->cmp_type = type_array_eq;
-        return type;
-    }
-
-    static const Type *_new_vector_type(const Type *element, size_t size) {
-        assert(element);
-        Type *type = __new_array_type(element, size);
-        type->name = format("(%s %s %s)",
-            ansi(ANSI_STYLE_KEYWORD, "vector").c_str(),
-            get_name(element).c_str(),
-            ansi(ANSI_STYLE_NUMBER,
-                format("%zu", size)).c_str());
-        type->cmp_type = type_vector_eq;
-        return type;
-    }
-
-    static const Type *_new_pointer_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
-                get_name(element).c_str()));
-        type->is_embedded = true;
-        type->cmp_type = type_pointer_eq;
-        type->op2[OP2_At] = type_pointer_at;
-        type->length = _pointer_length;
-        type->cmp = value_pointer_cmp;
-        type->tostring = _pointer_tostring;
-        type->element_type = element;
-        type->size = ffi_type_pointer.size;
-        type->alignment = ffi_type_pointer.alignment;
-        return type;
-    }
-
-    static const Type *_new_splice_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
-                get_name(element).c_str()));
-        type->element_type = element;
-        type->cmp_type = type_splice_eq;
-        return type;
-    }
-
     static const Type *_new_quote_type(const Type *element) {
         assert(element);
         Type *type = new_type(
@@ -3923,9 +3894,7 @@ namespace Types {
 
     static bangra::Any type_table_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
-        auto table = value.table;
-        auto key = extract_symbol(vindex);
-        return get_key(*table, key, const_none);
+        return get_key(*value.table, vindex, const_none);
     }
 
     static bangra::Any type_list_at(const Type *self,
@@ -4053,6 +4022,126 @@ namespace Types {
         type->alignment = max_alignment;
     }
 
+    // HASHING
+    //--------------------------------------------------------------------------
+
+    static uint64_t _integer_hash(const Type *self, const bangra::Any &value) {
+        auto val = extract_integer(value);
+        return *(uint64_t *)&val;
+    }
+
+    static uint64_t _symbol_hash(const Type *self, const bangra::Any &value) {
+        return value.symbol;
+    }
+
+    static uint64_t _real_hash(const Type *self, const bangra::Any &value) {
+        auto val = extract_real(value);
+        return *(uint64_t *)&val;
+    }
+
+    static uint64_t _string_hash(const Type *self, const bangra::Any &value) {
+        return CityHash64(value.str->ptr, value.str->count);
+    }
+
+    static uint64_t _embedded_hash(const Type *self, const bangra::Any &value) {
+        assert(self->size && "implementation error: opaque type can't be hashed");
+        assert(self->is_embedded);
+        return CityHash64((const char *)value.embedded, self->size);
+    }
+
+    static uint64_t _buffer_hash(const Type *self, const bangra::Any &value) {
+        assert(self->size && "implementation error: opaque type can't be hashed");
+        assert(!self->is_embedded);
+        return CityHash64((const char *)value.ptr, self->size);
+    }
+
+    static uint64_t _pointer_hash(const Type *self, const bangra::Any &value) {
+        auto etype = get_element_type(self);
+        if (etype->hash != type_hash_default) {
+            return hash(pointer_element(self, value));
+        }
+        return *(uint64_t *)&value.ptr;
+    }
+
+    static uint64_t _tuple_hash(const Type *self, const bangra::Any &value) {
+        size_t tsize = self->types.size();
+        size_t sum = CityHash64(nullptr, 0);
+        for (size_t i = 0; i < tsize; ++i) {
+            uint64_t h = hash(_tuple_get(self, value, i));
+            sum = HashLen16(h, sum);
+        }
+        return sum;
+    }
+
+    // TYPE CONSTRUCTORS
+    //--------------------------------------------------------------------------
+
+    static Type *__new_array_type(const Type *element, size_t size) {
+        assert(element);
+        Type *type = new_type("");
+        type->count = size;
+        type->op2[OP2_At] = type_array_at;
+        type->element_type = element;
+        auto padded_size = align(get_size(element), get_alignment(element));
+        type->size = padded_size * type->count;
+        type->alignment = element->alignment;
+        return type;
+    }
+
+    static const Type *_new_array_type(const Type *element, size_t size) {
+        assert(element);
+        Type *type = __new_array_type(element, size);
+        type->name = format("(%s %s %s)",
+            ansi(ANSI_STYLE_KEYWORD, "@").c_str(),
+            get_name(element).c_str(),
+            ansi(ANSI_STYLE_NUMBER,
+                format("%zu", size)).c_str());
+        type->cmp_type = type_array_eq;
+        return type;
+    }
+
+    static const Type *_new_vector_type(const Type *element, size_t size) {
+        assert(element);
+        Type *type = __new_array_type(element, size);
+        type->name = format("(%s %s %s)",
+            ansi(ANSI_STYLE_KEYWORD, "vector").c_str(),
+            get_name(element).c_str(),
+            ansi(ANSI_STYLE_NUMBER,
+                format("%zu", size)).c_str());
+        type->cmp_type = type_vector_eq;
+        return type;
+    }
+
+    static const Type *_new_pointer_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "&").c_str(),
+                get_name(element).c_str()));
+        type->is_embedded = true;
+        type->cmp_type = type_pointer_eq;
+        type->hash = _pointer_hash;
+        type->op2[OP2_At] = type_pointer_at;
+        type->length = _pointer_length;
+        type->cmp = value_pointer_cmp;
+        type->tostring = _pointer_tostring;
+        type->element_type = element;
+        type->size = ffi_type_pointer.size;
+        type->alignment = ffi_type_pointer.alignment;
+        return type;
+    }
+
+    static const Type *_new_splice_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
+                get_name(element).c_str()));
+        type->element_type = element;
+        type->cmp_type = type_splice_eq;
+        return type;
+    }
+
     static const Type *_new_tuple_type(std::vector<const Type *> types) {
         std::stringstream ss;
         ss << "(";
@@ -4064,6 +4153,7 @@ namespace Types {
         Type *type = new_type(ss.str());
         type->cmp_type = type_tuple_eq;
         type->cmp = _tuple_cmp;
+        type->hash = _tuple_hash;
         type->op2[OP2_At] = type_tuple_at;
         type->length = _tuple_length;
         type->tostring = _tuple_tostring;
@@ -4124,6 +4214,7 @@ namespace Types {
         type->op2[OP2_Div] = _integer_div;
         type->op1[OP1_Neg] = _integer_neg;
         type->op1[OP1_Rcp] = _integer_rcp;
+        type->hash = _integer_hash;
 
         if (width == 1) {
             type->op1[OP1_BoolNot] = _bool_not;
@@ -4159,6 +4250,7 @@ namespace Types {
         type->op2[OP2_Div] = _real_div;
         type->op1[OP1_Neg] = _real_neg;
         type->op1[OP1_Rcp] = _real_rcp;
+        type->hash = _real_hash;
 
         type->cmp = _real_cmp;
 
@@ -4204,6 +4296,9 @@ namespace Types {
         type->cmp_type = cmp_type_default;
         return type;
     }
+
+    // TYPE FACTORIES
+    //--------------------------------------------------------------------------
 
     static bangra::Any _cfunction_apply_type(
         const Type *self, const bangra::Any *args, size_t argcount) {
@@ -4274,6 +4369,9 @@ namespace Types {
         const Type *result = Types::Struct(get_symbol_name(name), false);
         return wrap(result);
     }
+
+    // TYPE INIT
+    //--------------------------------------------------------------------------
 
     static void initTypes() {
         Type *tmp = Struct("type", true);
@@ -4358,6 +4456,7 @@ namespace Types {
         tmp->tostring = _string_tostring;
         tmp->length = _string_length;
         tmp->slice = _string_slice;
+        tmp->hash = _string_hash;
         tmp->op2[OP2_At] = _string_at;
         tmp->op2[OP2_Concat] = _string_concat;
         tmp->cmp = value_string_cmp;
@@ -4369,6 +4468,7 @@ namespace Types {
         tmp->is_embedded = true;
         tmp->tostring = _symbol_tostring;
         tmp->cmp = value_symbol_cmp;
+        tmp->hash = _symbol_hash;
         tmp->apply_type = apply_type_call<_symbol_apply_type>;
         tmp->size = sizeof(bangra::Symbol);
         tmp->alignment = offsetof(_symbol_alignment, s);
@@ -5127,6 +5227,11 @@ static Any builtin_repr(const Any *args, size_t argcount) {
     return wrap(formatValue(args[0], 0, false));
 }
 
+static Any builtin_hash(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    return wrap(hash(args[0]));
+}
+
 static Any builtin_dump(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     printValue(args[0], 0, true);
@@ -5179,16 +5284,7 @@ static Any builtin_table(const Any *args, size_t argcount) {
         auto pair = extract_tuple(args[i]);
         if (pair.size() != 2)
             error("tuple must have exactly two elements");
-        auto name = extract_symbol(pair[0]);
-        auto value = pair[1];
-        if (is_closure_type(value.type)) {
-            auto closure = value.closure;
-            auto sym = get_ptr_symbol(closure);
-            if (sym == SYM_Unnamed) {
-                set_ptr_symbol(closure, name);
-            }
-        }
-        set_key(*t, name, value);
+        set_key(*t, pair[0], pair[1]);
     }
 
     return wrap(t);
@@ -5210,16 +5306,19 @@ static Any builtin_table_join(const Any *args, size_t argcount) {
 }
 
 static Any builtin_set_key(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 2, 2);
+    builtin_checkparams(argcount, 2, 3);
 
     auto t = const_cast<Table *>(extract_table(args[0]));
-    auto pair = extract_tuple(args[1]);
-    if (pair.size() != 2)
-        error("tuple must have exactly two elements");
-    auto name = extract_symbol(pair[0]);
-    auto value = pair[1];
-    set_key(*t, name, value);
-    return const_none;
+    if (argcount == 2) {
+        auto pair = extract_tuple(args[1]);
+        if (pair.size() != 2)
+            error("tuple must have exactly two elements");
+        set_key(*t, pair[0], pair[1]);
+        return const_none;
+    } else {
+        set_key(*t, args[1], args[2]);
+        return const_none;
+    }
 }
 
 static Any builtin_next_key(const Any *args, size_t argcount) {
@@ -5230,12 +5329,12 @@ static Any builtin_next_key(const Any *args, size_t argcount) {
     if (is_none_type(args[1].type)) {
         it = t->_.begin();
     } else {
-        it = t->_.find(extract_symbol(args[1]));
+        it = t->_.find(args[1]);
         ++it;
     }
     if (it == t->_.end())
         return const_none;
-    std::vector<Any> result = { wrap_symbol(it->first), it->second };
+    std::vector<Any> result = { it->first, it->second };
     return wrap(result);
 }
 
@@ -6074,6 +6173,7 @@ static void initGlobals () {
     setBuiltin<builtin_loadlist>(env, "list-load");
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_cstr>(env, "cstr");
+    setBuiltin<builtin_hash>(env, "hash");
 
     setBuiltin<builtin_set_exception_handler>(env, "set-exception-handler!");
     setBuiltin<builtin_get_exception_handler>(env, "get-exception-handler");

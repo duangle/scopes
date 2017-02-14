@@ -1,4 +1,9 @@
-print
+do
+    let T
+        table
+            : (do print) 404
+    print
+        @ T print
 
 let C
     external
@@ -313,6 +318,50 @@ do
     print "call 2:" (g)
     print "call 3:" (g)
     print "done"
+
+print
+    hash "this string, hashed"
+    hash print
+    hash true
+    hash false
+    hash 0
+    hash int8
+print
+    hash 303
+    hash -303
+print
+    hash 0.0
+    hash 1.0
+    hash 1.5
+    hash
+        print
+
+assert
+    ==
+        hash "hello world"
+        hash
+            .. "hello" " " "world"
+
+do
+    let S "the quick brown fox jumped over the lazy dog"
+    print
+        ==
+            hash
+                tupleof S
+            hash S
+
+print
+    hash
+        tupleof
+            tupleof 1 2 3
+            tupleof 3 2 1
+    hash
+        tupleof 1 2 3 3 2 1
+
+print
+    hash
+        tupleof 3 5
+    hash 0x0000000500000003
 
 #(define (process p) (toplevel-exit))
 
