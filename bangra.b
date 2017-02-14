@@ -46,22 +46,23 @@ syntax-extend stage-1 (_ scope)
             quote syntax-single-macro
             continuation syntax-single-macro (_ f)
                 syntax-macro
-                    continuation (_ scope expr)
+                    continuation (_ expr scope)
                         cons
-                            f scope
+                            f
                                 @ expr 0
+                                scope
                             @ expr 1
         tupleof
             quote call
             syntax-macro
-                continuation call (_ scope expr)
+                continuation call (_ expr)
                     cons
                         @ expr 0 1
                         @ expr 1
         tupleof
             quote dump-syntax
             syntax-macro
-                continuation dump-syntax (_ scope expr)
+                continuation dump-syntax (_ expr scope)
                     call
                         continuation (_ e)
                             dump
@@ -78,7 +79,7 @@ syntax-extend stage-1 (_ scope)
             # a lofi version of let so we get some sugar early
             quote let
             syntax-macro
-                continuation syntax-macro (_ scope expr)
+                continuation syntax-macro (_ expr scope)
                     branch
                         == (typeof (@ expr 0 2 0)) symbol
                         continuation () none
@@ -109,7 +110,7 @@ syntax-extend stage-1 (_ scope)
         tupleof
             quote ?
             syntax-macro
-                continuation ? (_ scope expr)
+                continuation ? (_ expr)
                     cons
                         list branch
                             @ expr 0 1 0
@@ -121,7 +122,7 @@ syntax-extend stage-1 (_ scope)
         tupleof
             quote :
             syntax-macro
-                continuation : (_ scope expr)
+                continuation : (_ expr scope)
                     cons
                         cons tupleof
                             cons
@@ -194,14 +195,14 @@ syntax-extend stage-2 (_ scope)
                     true
         : assert # (assert bool-expr [error-message])
             syntax-single-macro
-                continuation assert (_ scope expr)
+                continuation assert (_ expr)
                     list ? (@ expr 1 0) true
                         list error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
         : ::@
             syntax-macro
-                continuation ::@ (_ scope expr)
+                continuation ::@ (_ expr)
                     cons
                         list-join
                             @ expr 0 1
@@ -210,14 +211,14 @@ syntax-extend stage-2 (_ scope)
                         @ expr 2
         : ::*
             syntax-macro
-                continuation ::* (_ scope expr)
+                continuation ::* (_ expr)
                     list
                         list-join
                             @ expr 0 1
                             @ expr 1
         : .
             syntax-single-macro
-                continuation . (_ scope expr)
+                continuation . (_ expr)
                     let key =
                         @ expr 2 0
                     ? (symbol? key)
@@ -229,7 +230,7 @@ syntax-extend stage-2 (_ scope)
 
         : function # (function [name] (param ...) body ...)
             syntax-macro
-                continuation function (_ scope expr)
+                continuation function (_ expr)
                     let decl =
                         (@ expr 0 1 0)
                     let retparam =
@@ -258,7 +259,7 @@ syntax-extend stage-2 (_ scope)
                             @ expr 1
         : and
             syntax-single-macro
-                continuation and (_ scope expr)
+                continuation and (_ expr)
                     let tmp =
                         parameter
                             quote tmp
@@ -271,7 +272,7 @@ syntax-extend stage-2 (_ scope)
                         @ expr 1 0
         : or
             syntax-single-macro
-                continuation or (_ scope expr)
+                continuation or (_ expr)
                     let tmp =
                         parameter
                             quote tmp
@@ -284,7 +285,7 @@ syntax-extend stage-2 (_ scope)
                         @ expr 1 0
         : loop
             syntax-single-macro
-                continuation loop (_ scope expr)
+                continuation loop (_ expr)
                     let param-repeat =
                         quote repeat
                     list do
@@ -300,21 +301,17 @@ syntax-extend stage-2 (_ scope)
         : if
             do
                 let if-rec =
-                    continuation if (_ scope expr)
+                    continuation if (_ expr)
                         let next-expr =
                             @ expr 1 0
                         let cond =
-                            @
-                                expand scope
-                                    list
-                                        @ expr 0 1 0
-                                0
+                            @ expr 0 1 0
                         let then-exprlist =
                             @ expr 0 2
                         let make-branch =
                             continuation (_ else-exprlist)
                                 list branch
-                                    escape cond
+                                    cond
                                     cons continuation
                                         cons (list) then-exprlist
                                     cons continuation
@@ -323,7 +320,7 @@ syntax-extend stage-2 (_ scope)
                         ? (list-head? next-expr (quote elseif))
                             do
                                 let nextif =
-                                    if-rec scope
+                                    if-rec
                                         @ expr 1
                                 cons
                                     make-branch
@@ -347,7 +344,7 @@ syntax-extend stage-2 (_ scope)
                     tupleof (quote name) name
         : syntax-infix-op
             syntax-single-macro
-                continuation syntax-infix-op (_ scope expr)
+                continuation syntax-infix-op (_ expr)
                     list tupleof
                         list quote
                             symbol
@@ -552,7 +549,7 @@ syntax-extend stage-3 (_ scope)
     function make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
         syntax-single-macro
-            function (scope expr)
+            function (expr)
                 let tail =
                     @ expr 1
                 loop (tail)
@@ -601,7 +598,7 @@ syntax-extend stage-3 (_ scope)
             make-expand-multi-op-ltr or
         : try
             syntax-macro
-                function (scope expr)
+                function (expr scope)
                     if (not (list-head? (@ expr 1 0) (quote except)))
                         error "except block missing"
                     cons
@@ -640,7 +637,7 @@ syntax-extend stage-3 (_ scope)
                             qquote-1 (@ x 0)
                             qquote-1 (@ x 1)
                 syntax-macro
-                    function (scope expr)
+                    function (expr)
                         cons
                             ? (empty? (@ expr 0 2))
                                 qquote-1 (@ expr 0 1 0)
@@ -649,7 +646,7 @@ syntax-extend stage-3 (_ scope)
 
         : define
             syntax-macro
-                function (scope expr)
+                function (expr scope)
                     let name =
                         @ expr 0 1 0
                     let exprlist =
@@ -672,7 +669,7 @@ syntax-extend stage-3 (_ scope)
 
             # support for multiple declarations in one let scope
             syntax-macro
-                function (scope expr)
+                function (expr scope)
                     let args = (@ expr 0 1)
                     let argtype = (typeof (@ args 0))
                     if (== argtype symbol)
@@ -774,7 +771,7 @@ syntax-extend stage-3 (_ scope)
                                 @ cells 2
 
         tupleof scope-list-wildcard-symbol
-            function (scope topexpr)
+            function (topexpr scope)
                 let expr =
                     @ topexpr 0
                 let head =
@@ -817,7 +814,7 @@ syntax-extend stage-3 (_ scope)
                             0
                         @ topexpr 1
         tupleof scope-symbol-wildcard-symbol
-            function (scope topexpr)
+            function (topexpr scope)
                 let sym =
                     @ topexpr 0
                 let it =

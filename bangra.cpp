@@ -589,6 +589,7 @@ static Any make_any(const Type *type) {
 struct Cursor {
     Any value;
     const List *next;
+    const Table *scope;
 };
 
 //------------------------------------------------------------------------------
@@ -5660,12 +5661,15 @@ static Any quote(const Any &value) {
     return result;
 }
 
+
+
 static const List *expand_expr_list (const Table *env, const List *it) {
     const List *l = nullptr;
     while (it) {
         auto cur = expand(env, it);
         l = List::create(cur.value, l, get_anchor(it));
         it = cur.next;
+        env = cur.scope;
     }
     return reverse_list_inplace(l);
 }
@@ -5673,8 +5677,8 @@ static const List *expand_expr_list (const Table *env, const List *it) {
 template <Cursor (*ExpandFunc)(const Table *, const List *)>
 B_FUNC(wrap_expand_call) {
     builtin_checkparams(B_ARGCOUNT(S), 2, 2, 2);
-    auto env = extract_table(B_GETARG(S, 0));
-    auto topit = extract_list(B_GETARG(S, 1));
+    auto topit = extract_list(B_GETARG(S, 0));
+    auto env = extract_table(B_GETARG(S, 1));
     auto cur = ExpandFunc(env, topit);
     B_CALL(S,
         const_none,
@@ -5729,7 +5733,8 @@ static Cursor expand_continuation (const Table *env, const List *topit) {
                         get_anchor(params)),
                     get_anchor(sym)),
                 topanchor)),
-        topit->next };
+        topit->next,
+        env };
 }
 
 static Cursor expand_quote (const Table *env, const List *topit) {
@@ -5743,7 +5748,7 @@ static Cursor expand_quote (const Table *env, const List *topit) {
         result = it->at;
     else
         result = wrap(it);
-    return { quote(result), topit->next };
+    return { quote(result), topit->next, env };
 }
 
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
@@ -5769,12 +5774,13 @@ static Cursor expand_syntax_extend (const Table *env, const List *topit) {
 
     return {
         result,
-        nullptr };
+        nullptr,
+        env };
 }
 
 static const List *expand_macro(
     const Table *env, const Any &handler, const List *topit) {
-    Any exec_args[] = {handler, wrap(env), wrap(topit)};
+    Any exec_args[] = {handler,  wrap(topit), wrap(env)};
     auto result = execute(exec_args, 3);
     if (isnone(result))
         return nullptr;
@@ -5798,7 +5804,7 @@ process:
     if (is_quote_type(expr.type)) {
         // remove qualifier and return as-is
         expr.type = get_element_type(expr.type);
-        return { expr, topit->next };
+        return { expr, topit->next, env };
     } else if (is_list_type(expr.type)) {
         if (!expr.list) {
             error("expression is empty");
@@ -5851,7 +5857,7 @@ process:
         result = expr;
         topit = topit->next;
     }
-    return { result, topit };
+    return { result, topit, env };
 }
 
 static Any builtin_expand(const Any *args, size_t argcount) {
