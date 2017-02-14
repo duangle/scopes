@@ -1,12 +1,12 @@
 
 do
-    let T
+    let T =
         table
             : (do print) 404
     print
         @ T print
 
-let C
+let C =
     external
         quote print_number
         cfunction int
@@ -30,7 +30,7 @@ assert
             quote test_module2
 
 do
-    let m
+    let m =
         eval
             list-load
                 .. interpreter-dir "/testing/test_module.b"
@@ -38,12 +38,12 @@ do
                 tupleof scope-parent-symbol
                     globals;
                 injected-var : 3
-    let t (m)
+    let t = (m)
     assert
         7 == (t.compute 4)
 
 do
-    let z
+    let z =
         table-join
             table
                 x : 1
@@ -52,7 +52,7 @@ do
                 y : 3
                 z : 4
                 w : 5
-    let q 303
+    let q = 303
     set-key! z (: q)
     assert (z.x == 1)
     assert (z.y == 3)
@@ -62,9 +62,9 @@ do
 
 do
     let
-        x 0
-        y 1
-        z 2
+        x = 0
+        y = 1
+        z = 2
     assert
         and
             and
@@ -115,14 +115,14 @@ assert
         true
     "'or' for more than two arguments failed"
 
-let qquote-test
+let qquote-test =
     qquote
         print
             unquote
-                let k 1
+                let k = 1
                 k + 2
         unquote-splice
-            let k 2
+            let k = 2
             qquote
                 print
                     unquote k
@@ -134,8 +134,8 @@ assert
             print 2
             print 1
 
-let k 3
-let T
+let k = 3
+let T =
     structof
         test :
             function (self a b)
@@ -191,12 +191,12 @@ assert
 assert
     1 + 2 * 3 == 7
 
-let x 5
+let x = 5
 print (+ x 1)
 print x
-let k 1
+let k = 1
 
-let V
+let V =
     structof
         x : 0
         y : 1
@@ -215,12 +215,12 @@ assert
     "accessors failed"
 
 do
-    let T API
+    let T = API
         /// table
             x : 1
             y : 2
             z : 3
-    let kv
+    let kv =
         next-key T none
     loop (kv)
         if (not (none? kv))
@@ -249,7 +249,7 @@ assert
 
 print typeof
 
-let call/cc
+let call/cc =
     continuation call/cc (cont func)
         func cont
 
@@ -264,7 +264,7 @@ assert
 do
     function cont-test (x)
         print "entered function"
-        let topret return
+        let topret = return
         function subf ()
             print "entered subfunction"
             # `return x` would just exit subf, but not cont-test
@@ -288,12 +288,12 @@ do
 
 do
     function generator ()
-        let T
+        let T =
             table;
         set-key! T
             : run
                 function (ret)
-                    let G
+                    let G =
                         table
                             : ret
                     function yield ()
@@ -314,7 +314,7 @@ do
             set-key! T
                 : run
                     call/cc T.run
-    let g (generator)
+    let g = (generator)
     print "call 1:" (g)
     print "call 2:" (g)
     print "call 3:" (g)
@@ -344,7 +344,7 @@ assert
             .. "hello" " " "world"
 
 do
-    let S "the quick brown fox jumped over the lazy dog"
+    let S = "the quick brown fox jumped over the lazy dog"
     print
         ==
             hash
@@ -367,8 +367,8 @@ print
 #(define (process p) (toplevel-exit))
 
 do
-    let i 0
-    let k "!"
+    let i = 0
+    let k = "!"
     assert
         == "!!!!!!!!!!!"
             loop (i k)
@@ -384,7 +384,7 @@ assert
         if (k == 0)
             1
         elseif (k == 1)
-            let q 2
+            let q = 2
             q
         elseif (k == 2)
             3
@@ -442,11 +442,11 @@ assert
 do
     # single assignment.
     # names are always bound for the remainder of this scope.
-    let p-value
+    let p-value =
         1 + 2
 
     # single assignment, recursive access for functions.
-    let q-func
+    let q-func =
         function (x)
             ? (x <= 0)
                 1
@@ -455,11 +455,11 @@ do
     # multiple assignments in one block, must not depend on each other,
     # but permits recursive access for functions.
     let
-        button-type-yes     0
-        button-type-no      1
-        button-type-cancel  2
+        button-type-yes     = 0
+        button-type-no      = 1
+        button-type-cancel  = 2
 
-        b-func
+        b-func =
             function (x)
                 ? (x <= 0)
                     1
@@ -467,12 +467,13 @@ do
 
     # multiple assignments by unpacking a tuple or other spliceable type,
     # no recursion.
-    let x y z
+    let x y z =
+        print "tuple unpacking!"
         tupleof 1.0 1.5 2.0
 
     # since let is implemented using vararg function parameters,
     # simple vararg matching can also be performed
-    let start center... end
+    let start center... end =
         list "(" 1 2 3 ")"
     assert
         and
@@ -480,7 +481,7 @@ do
             end == ")"
             center... == (tupleof 1 2 3)
 
-    let x y z
+    let x y z =
         tupleof 1 2 3
     print "HALLO" x y z
     assert
@@ -518,7 +519,7 @@ print
 
 dump-syntax
     do
-        let k "hello world"
+        let k = "hello world"
         print k
 
 try

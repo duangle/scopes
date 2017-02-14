@@ -766,7 +766,7 @@ namespace Types {
     static const Type *SizeT;
 
     static const Type *Rawstring;
-    static const Type *None;
+    static const Type *Void;
     static const Type *String; // Slice<char>
     static const Type *Symbol; // Symbol token (uint64_t)
 
@@ -1327,7 +1327,7 @@ static size_t length(const Any &value) {
 //------------------------------------------------------------------------------
 
 static bool isnone(const Any &value) {
-    return (value.type == Types::None);
+    return (value.type == Types::Void);
 }
 
 static bool is_splice_type(const Type *type) {
@@ -1343,7 +1343,7 @@ static bool is_typeref_type(const Type *type) {
 }
 
 static bool is_none_type(const Type *type) {
-    return is_subtype_or_type(type, Types::None);
+    return is_subtype_or_type(type, Types::Void);
 }
 
 static bool is_bool_type(const Type *type) {
@@ -4443,11 +4443,11 @@ namespace Types {
         Any = Struct("Any", true);
         AnchorRef = Struct("Anchor", true);
 
-        tmp = Struct("None", true);
+        tmp = Struct("Void", true);
         tmp->cmp = value_none_cmp;
         tmp->tostring = _none_tostring;
-        None = tmp;
-        const_none = make_any(Types::None);
+        Void = tmp;
+        const_none = make_any(Types::Void);
         const_none.ptr = nullptr;
 
         Bool = Integer(1, false);
@@ -4754,7 +4754,7 @@ public:
 
                 names.push_back(it->getName().data());
                 tags.push_back(val.getExtValue());
-                types.push_back(Types::None);
+                types.push_back(Types::Void);
                 //anchors->push_back(anchor);
             }
 
@@ -4802,7 +4802,7 @@ public:
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
             case clang::BuiltinType::Void: {
-                return Types::None;
+                return Types::Void;
             } break;
             case clang::BuiltinType::Bool: {
                 return Types::Bool;
@@ -5584,7 +5584,7 @@ static Any getLocal(const Table *scope, const Symbol &name) {
     assert(scope);
     while (scope) {
         auto result = get_key(*scope, name, const_none);
-        if (result.type != Types::None)
+        if (result.type != Types::Void)
             return result;
         scope = getParent(scope);
     }
@@ -5820,7 +5820,7 @@ process:
         }
 
         auto default_handler = getLocal(env, SYM_ListWC);
-        if (default_handler.type != Types::None) {
+        if (default_handler.type != Types::Void) {
             auto result = expand_macro(env, default_handler, topit);
             if (result) {
                 topit = result;
@@ -5835,7 +5835,7 @@ process:
         auto value = extract_symbol(expr);
         if (!hasLocal(env, value)) {
             auto default_handler = getLocal(env, SYM_SymbolWC);
-            if (default_handler.type != Types::None) {
+            if (default_handler.type != Types::Void) {
                 auto result = expand_macro(env, default_handler, topit);
                 if (result) {
                     topit = result;
@@ -6142,8 +6142,7 @@ static void initGlobals () {
     setLocalString(env, "struct", wrap(Types::TStruct));
     setLocalString(env, "enum", wrap(Types::TEnum));
 
-    setLocalString(env, "void", wrap(Types::None));
-    setLocalString(env, "None", wrap(Types::None));
+    setLocalString(env, "void", wrap(Types::Void));
 
     setLocalString(env, "symbol", wrap(Types::Symbol));
     setLocalString(env, "list", wrap(Types::PList));

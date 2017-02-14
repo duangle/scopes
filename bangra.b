@@ -79,6 +79,16 @@ syntax-extend stage-1 (_ scope)
             quote let
             syntax-macro
                 continuation syntax-macro (_ scope expr)
+                    branch
+                        == (typeof (@ expr 0 2 0)) symbol
+                        continuation () none
+                        continuation ()
+                            error "syntax: let <var> = <expr>"
+                    branch
+                        == (@ expr 0 2 0) (quote =)
+                        continuation () none
+                        continuation ()
+                            error "syntax: let <var> = <expr>"
                     call
                         continuation (_ param-name)
                             call
@@ -92,7 +102,7 @@ syntax-extend stage-1 (_ scope)
                                             cons continuation
                                                 cons (list (parameter (quote _)) param)
                                                     @ expr 1
-                                            @ expr 0 2
+                                            @ expr 0 3
                                 parameter param-name
                                 quote scope
                         @ expr 0 1 0
@@ -135,7 +145,7 @@ syntax-extend stage-1 (_ scope)
                         @ expr 1
 
 syntax-extend stage-2 (_ scope)
-    let list-join
+    let list-join =
         continuation list-join (_ a b)
             ? (empty? a) b
                 cons
@@ -143,11 +153,11 @@ syntax-extend stage-2 (_ scope)
                     list-join
                         @ a 1
                         b
-    let list-head?
+    let list-head? =
         continuation list-head? (_ expr name)
             ? (list? expr)
                 do
-                    let head (@ expr 0)
+                    let head = (@ expr 0)
                     ? (symbol? head)
                         == head name
                         false
@@ -208,7 +218,7 @@ syntax-extend stage-2 (_ scope)
         : .
             syntax-single-macro
                 continuation . (_ scope expr)
-                    let key
+                    let key =
                         @ expr 2 0
                     ? (symbol? key)
                         list
@@ -220,13 +230,13 @@ syntax-extend stage-2 (_ scope)
         : function # (function [name] (param ...) body ...)
             syntax-macro
                 continuation function (_ scope expr)
-                    let decl
+                    let decl =
                         (@ expr 0 1 0)
-                    let retparam
+                    let retparam =
                         quote return
                     ? (symbol? decl)
                         cons
-                            list let decl
+                            list let decl (quote =)
                                 cons continuation
                                     cons
                                         @ expr 0 1 0
@@ -249,7 +259,7 @@ syntax-extend stage-2 (_ scope)
         : and
             syntax-single-macro
                 continuation and (_ scope expr)
-                    let tmp
+                    let tmp =
                         parameter
                             quote tmp
                     list
@@ -262,7 +272,7 @@ syntax-extend stage-2 (_ scope)
         : or
             syntax-single-macro
                 continuation or (_ scope expr)
-                    let tmp
+                    let tmp =
                         parameter
                             quote tmp
                     list
@@ -275,10 +285,10 @@ syntax-extend stage-2 (_ scope)
         : loop
             syntax-single-macro
                 continuation loop (_ scope expr)
-                    let param-repeat
+                    let param-repeat =
                         quote repeat
                     list do
-                        list let param-repeat
+                        list let param-repeat (quote =)
                             cons continuation
                                 cons
                                     cons
@@ -289,19 +299,19 @@ syntax-extend stage-2 (_ scope)
                             @ expr 1 0
         : if
             do
-                let if-rec
+                let if-rec =
                     continuation if (_ scope expr)
-                        let next-expr
+                        let next-expr =
                             @ expr 1 0
-                        let cond
+                        let cond =
                             @
                                 expand scope
                                     list
                                         @ expr 0 1 0
                                 0
-                        let then-exprlist
+                        let then-exprlist =
                             @ expr 0 2
-                        let make-branch
+                        let make-branch =
                             continuation (_ else-exprlist)
                                 list branch
                                     escape cond
@@ -312,7 +322,7 @@ syntax-extend stage-2 (_ scope)
 
                         ? (list-head? next-expr (quote elseif))
                             do
-                                let nextif
+                                let nextif =
                                     if-rec scope
                                         @ expr 1
                                 cons
@@ -353,11 +363,11 @@ syntax-extend stage-3 (_ scope)
             cons do expr
 
     function fold (it init f)
-        let next
+        let next =
             @ it 0
-        let st
+        let st =
             next (@ it 1)
-        let out init
+        let out = init
         loop (out st)
             if (none? st) out
             else
@@ -366,7 +376,7 @@ syntax-extend stage-3 (_ scope)
                     next (@ st 1)
 
     function iter (s)
-        let ls
+        let ls =
             length s
         tupleof
             function (i)
@@ -379,17 +389,17 @@ syntax-extend stage-3 (_ scope)
         tupleof
             function (i)
                 if (> i 0)
-                    let k (- i 1)
+                    let k = (- i 1)
                     tupleof (@ s k) k
                 else none
             length s
 
     function get-scope-symbol (scope key)
         loop (scope)
-            let result
+            let result =
                 @ scope key
             if (none? result)
-                let parent
+                let parent =
                     @ scope scope-parent-symbol
                 if (none? parent) none
                 else
@@ -397,7 +407,7 @@ syntax-extend stage-3 (_ scope)
             else result
 
     function get-ifx-op (scope op)
-        let key
+        let key =
             symbol
                 .. "#ifx:" (string op)
         ? (symbol? op)
@@ -414,7 +424,7 @@ syntax-extend stage-3 (_ scope)
             != (get-ifx-op infix-table (@ expr 1 0)) none
 
     function infix-op (infix-table token prec pred)
-        let op
+        let op =
             get-ifx-op infix-table token
         if (none? op)
             error
@@ -425,7 +435,7 @@ syntax-extend stage-3 (_ scope)
         else none
 
     function rtl-infix-op (infix-table token prec pred)
-        let op
+        let op =
             get-ifx-op infix-table token
         if (none? op)
             error
@@ -440,35 +450,35 @@ syntax-extend stage-3 (_ scope)
 
     function parse-infix-expr (infix-table lhs state mprec)
         loop (lhs state)
-            let la (@ state 0)
+            let la = (@ state 0)
             if (empty? la)
                 tupleof lhs state
             else
-                let op
+                let op =
                     infix-op infix-table la mprec >=
                 if (none? op)
                     tupleof lhs state
                 else
-                    let next-state (@ state 1)
-                    let rhs (@ next-state 0)
-                    let state (@ next-state 1)
-                    let rhs-state
+                    let next-state = (@ state 1)
+                    let rhs = (@ next-state 0)
+                    let state = (@ next-state 1)
+                    let rhs-state =
                         loop (rhs state)
-                            let ra
+                            let ra =
                                 @ state 0
                             if (empty? ra)
                                 tupleof rhs state
                             else
-                                let lop
+                                let lop =
                                     infix-op infix-table ra (. op prec) >
-                                let nextop
+                                let nextop =
                                     ? (none? lop)
                                         rtl-infix-op infix-table ra (. op prec) ==
                                         lop
                                 if (none? nextop)
                                     tupleof rhs state
                                 else
-                                    let rhs-state
+                                    let rhs-state =
                                         parse-infix-expr
                                             infix-table
                                             rhs
@@ -482,7 +492,7 @@ syntax-extend stage-3 (_ scope)
                             @ rhs-state 0
                         @ rhs-state 1
 
-    let bangra
+    let bangra =
         table
             : path
                 list
@@ -501,31 +511,31 @@ syntax-extend stage-3 (_ scope)
     function find-module (name)
         assert (symbol? name)
             "module name must be symbol"
-        let content
+        let content =
             @ (. bangra modules) name
         if (none? content)
-            let namestr
+            let namestr =
                 string name
-            let pattern
+            let pattern =
                 @ bangra
                     quote path
             loop (pattern)
                 if (not (empty? pattern))
-                    let module-path
+                    let module-path =
                         make-module-path
                             @ pattern 0
                             namestr
-                    let expr
+                    let expr =
                         list-load module-path
                     if (not (none? expr))
-                        let fn
+                        let fn =
                             eval expr
                                 table
                                     tupleof scope-parent-symbol
                                         globals;
                                     : module-path
                                 module-path
-                        let content
+                        let content =
                             fn;
                         set-key! (. bangra modules)
                             tupleof name content
@@ -543,10 +553,10 @@ syntax-extend stage-3 (_ scope)
         # (op a b c ...) -> (op (op (op a b) c) ...)
         syntax-single-macro
             function (scope expr)
-                let tail
+                let tail =
                     @ expr 1
                 loop (tail)
-                    let rest
+                    let rest =
                         @ tail 2
                     if (empty? rest)
                         cons op tail
@@ -559,16 +569,16 @@ syntax-extend stage-3 (_ scope)
                                 rest
 
     function symbol-or-parameter (x)
-        let t (typeof x)
+        let t = (typeof x)
         (t == symbol) or (t == parameter)
 
     function xpcall (func xfunc)
-        let old_handler
+        let old_handler =
             get-exception-handler;
         function cleanup ()
             set-exception-handler! old_handler
         function try ()
-            let finally return
+            let finally = return
             function except (exc aframe args)
                 cleanup;
                 xfunc exc
@@ -640,11 +650,11 @@ syntax-extend stage-3 (_ scope)
         : define
             syntax-macro
                 function (scope expr)
-                    let name
+                    let name =
                         @ expr 0 1 0
-                    let exprlist
+                    let exprlist =
                         @ expr 0 2
-                    let subscope
+                    let subscope =
                         parameter (quote scope)
                     cons
                         list syntax-extend (list (parameter (quote _)) subscope)
@@ -655,13 +665,18 @@ syntax-extend stage-3 (_ scope)
                                         cons do exprlist
                         @ expr 1
         : let
+            function =? (x)
+                and
+                    == (typeof x) symbol
+                    == x (quote =)
+
             # support for multiple declarations in one let scope
             syntax-macro
                 function (scope expr)
-                    let args (@ expr 0 1)
-                    let argtype (typeof (@ args 0))
+                    let args = (@ expr 0 1)
+                    let argtype = (typeof (@ args 0))
                     if (== argtype symbol)
-                        if (empty? (@ args 2))
+                        if (=? (@ args 1 0))
                             # regular form with support for recursion
                             cons
                                 cons let args
@@ -669,19 +684,21 @@ syntax-extend stage-3 (_ scope)
                         else
                             # unpacking multiple variables, without recursion
 
-                            # iterate until we hit the last cell,
-                            # which is the body
+                            # iterate until we hit the = symbol, after which
+                            # the body follows
                             function find-body (expr)
-                                if (not (empty? (@ expr 1)))
-                                    let out
+                                if (=? (@ expr 0))
+                                    tupleof (list)
+                                        @ expr 1
+                                elseif (empty? expr)
+                                    error "syntax: let <name> ... = <expression>"
+                                else
+                                    let out =
                                         find-body (@ expr 1)
                                     tupleof
                                         cons (@ expr 0) (@ out 0)
                                         @ out 1
-                                else
-                                    tupleof (list)
-                                        @ expr 0
-                            let cells
+                            let cells =
                                 find-body args
                             list
                                 list
@@ -690,9 +707,12 @@ syntax-extend stage-3 (_ scope)
                                             cons (parameter (quote _)) (@ cells 0)
                                             @ expr 1
                                     list splice
-                                        @ cells 1
+                                        cons do
+                                            @ cells 1
 
                     elseif (== argtype parameter)
+                        assert (=? (@ args 1))
+                            "syntax: let <parameter> = <expression>"
                         # regular form, hidden parameter
                         cons
                             cons continuation
@@ -701,7 +721,7 @@ syntax-extend stage-3 (_ scope)
                                         parameter (quote _)
                                         @ args 0
                                     @ expr 1
-                            @ args 1
+                            @ args 2
                     else
                         # multiple variables with support for recursion,
                         # but no cross dependency
@@ -714,15 +734,17 @@ syntax-extend stage-3 (_ scope)
                                     list;
                                     list;
                             else
-                                let pair
+                                let pair =
                                     @ pairs 0
-                                let name
+                                assert (=? (@ pair 1 0))
+                                    "syntax: let (<name> = <expression>) ..."
+                                let name =
                                     @ pair 0
-                                let value
-                                    @ pair 1 0
-                                let param
+                                let value =
+                                    @ pair 2 0
+                                let param =
                                     parameter name
-                                let cells
+                                let cells =
                                     handle-pairs
                                         @ pairs 1
                                 tupleof
@@ -732,9 +754,9 @@ syntax-extend stage-3 (_ scope)
                                     cons param (@ cells 1)
                                     cons value (@ cells 2)
 
-                        let cells
+                        let cells =
                             handle-pairs args
-                        let scope-name
+                        let scope-name =
                             quote scope
                         list
                             list syntax-extend (list (parameter (quote _)) scope-name)
@@ -753,11 +775,11 @@ syntax-extend stage-3 (_ scope)
 
         tupleof scope-list-wildcard-symbol
             function (scope topexpr)
-                let expr
+                let expr =
                     @ topexpr 0
-                let head
+                let head =
                     @ expr 0
-                let headstr
+                let headstr =
                     string head
                 # method call syntax
                 if
@@ -767,14 +789,14 @@ syntax-extend stage-3 (_ scope)
                             none? (get-scope-symbol scope head)
                             == (slice headstr 0 1) "."
 
-                    let name
+                    let name =
                         symbol
                             slice headstr 1
-                    let self-arg
+                    let self-arg =
                         @ expr 1 0
-                    let rest
+                    let rest =
                         @ expr 2
-                    let self
+                    let self =
                         parameter
                             quote self
                     cons
@@ -796,9 +818,9 @@ syntax-extend stage-3 (_ scope)
                         @ topexpr 1
         tupleof scope-symbol-wildcard-symbol
             function (scope topexpr)
-                let sym
+                let sym =
                     @ topexpr 0
-                let it
+                let it =
                     iter-r
                         string sym
                 function finalize-head (out)
