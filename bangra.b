@@ -646,7 +646,6 @@ syntax-extend stage-3 (_ scope)
                         @ expr 0 2
                     let subscope
                         parameter (quote scope)
-                    ::@ dump
                     cons
                         list syntax-extend (list (parameter (quote _)) subscope)
                             cons table

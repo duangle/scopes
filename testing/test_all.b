@@ -509,6 +509,9 @@ assert
     "type operators failed"
 
 define TEST 5
+define TEST2
+    TEST + 1
+#print TEST TEST2
 
 print
     struct (quote MyCustomType)
