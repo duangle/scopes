@@ -1,3 +1,4 @@
+
 do
     let T
         table
@@ -507,6 +508,8 @@ assert
         (vector float 4) < vector
     "type operators failed"
 
+define TEST 5
+
 print
     struct (quote MyCustomType)
 
@@ -529,3 +532,4 @@ except (e)
     print "exception #1:" e
 
 print "done."
+

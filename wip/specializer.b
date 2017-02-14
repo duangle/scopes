@@ -83,7 +83,8 @@ function flow-iter-arguments (aflow aframe)
                     structof
                         : index i
                         : argument
-                            ? ((typeof arg) == parameter)
+                            arg
+                            /// ? ((typeof arg) == parameter)
                                 frame-eval aframe i arg
                                 arg
 
@@ -120,54 +121,64 @@ function flow-decl-label (aflow aframe)
                     .. s
                         style-operator "):"
         do
-            fold (flow-iter-arguments aflow aframe) ""
-                function (out k)
-                    let
-                        arg k.argument
-                    let argtype
-                        typeof arg
-                    .. out " "
-                        if (argtype == parameter)
-                            ..
-                                ? (arg.flow == aflow) ""
-                                    flow-label arg.flow
-                                param-label arg
-                        elseif (argtype == closure)
-                            closure-label arg
-                        elseif (argtype == flow)
-                            flow-label arg
-                        else
-                            repr arg
+            @
+                fold (flow-iter-arguments aflow aframe) (tupleof "" 0)
+                    function (out k)
+                        let arg k.argument
+                        let argtype
+                            typeof arg
+                        let i (out @ 1)
+                        tupleof
+                            .. (out @ 0)
+                                ? (i == 1) " <- " " "
+                                if (argtype == parameter)
+                                    ..
+                                        ? (arg.flow == aflow) ""
+                                            flow-label arg.flow
+                                        param-label arg
+                                elseif (argtype == closure)
+                                    closure-label arg
+                                elseif (argtype == flow)
+                                    flow-label arg
+                                else
+                                    repr arg
+                            i + 1
+                0
 
-function dump-function (aclosure)
-    function dump-flow (aflow aframe)
-        fold (flow-iter-arguments aflow aframe) true
-            function (out k)
-                let arg k.argument
-                let argtype
-                    typeof arg
-                if (argtype == closure)
-                    dump-function arg
-                elseif (argtype == flow)
-                    dump-flow arg aframe
-                true
-        print
-            flow-decl-label aflow aframe
-    dump-flow aclosure.entry aclosure.frame
+function dump-function (afunc)
+    let visited (table)
+    function dump-closure (aclosure)
+        function dump-flow (aflow aframe)
+            if (none? (visited @ aflow))
+                print
+                    flow-decl-label aflow aframe
+                set-key! visited aflow true
+                fold (flow-iter-arguments aflow aframe) true
+                    function (out k)
+                        let arg k.argument
+                        let argtype
+                            typeof arg
+                        if (argtype == closure)
+                            dump-closure arg
+                        elseif (argtype == flow)
+                            dump-flow arg aframe
+                        true
+        dump-flow aclosure.entry aclosure.frame
+    dump-closure afunc
 
 #### test #####
 
-let HELLO_WORLD
-    .. "hello " "world"
-function test1 (x)
-    let
-        k
-            not x
-        t true
-    print
-        ? k HELLO_WORLD ""
+function pow2 (x)
+    * x x
 
-print test1
+function pow (x n)
+    if (n == 0) 1
+    elseif ((n % 2) == 0) (pow2 (pow x (n // 2)))
+    else
+        x * (pow x (n - 1))
 
 print
-    dump-function test1
+    pow 2 5
+
+dump-function pow
+

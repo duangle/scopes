@@ -604,6 +604,7 @@ enum {
 
     SYM_ContinuationForm,
     SYM_QuoteForm,
+    SYM_Do,
 
     // wildcards
     SYM_ListWC,
@@ -649,6 +650,7 @@ static std::string get_symbol_name(Symbol id) {
 
 static void initSymbols() {
     map_symbol(SYM_Unnamed, "");
+    map_symbol(SYM_Do, "do");
     map_symbol(SYM_Parent, "#parent");
     map_symbol(SYM_VarArgs, "...");
     map_symbol(SYM_Escape, "escape");
@@ -895,6 +897,7 @@ enum {
     OP2_Sub,
     OP2_Mul,
     OP2_Div,
+    OP2_FloorDiv,
     OP2_Mod,
     OP2_And,
     OP2_Or,
@@ -1243,6 +1246,10 @@ static Any mul(const Any &a, const Any &b) {
 
 static Any div(const Any &a, const Any &b) {
     return op2<OP2_Div>(a, b);
+}
+
+static Any floordiv(const Any &a, const Any &b) {
+    return op2<OP2_FloorDiv>(a, b);
 }
 
 static Any mod(const Any &a, const Any &b) {
@@ -3631,6 +3638,16 @@ namespace Types {
         return wrap((double)extract_integer(a) / (double)extract_integer(b));
     }
 
+    static bangra::Any _integer_floordiv(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) / extract_integer(b));
+    }
+
+    static bangra::Any _integer_mod(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(extract_integer(a) % extract_integer(b));
+    }
+
     static bangra::Any _integer_neg(const Type *self, const bangra::Any &x) {
         return wrap(-extract_integer(x));
     }
@@ -4208,12 +4225,14 @@ namespace Types {
                 format("%sint%zu", signed_?"":"u", width));
         type->cmp_type = type_integer_eq;
         type->is_embedded = true;
+        type->op1[OP1_Neg] = _integer_neg;
+        type->op1[OP1_Rcp] = _integer_rcp;
         type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
         type->op2[OP2_Sub] = _integer_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
         type->op2[OP2_Div] = _integer_div;
-        type->op1[OP1_Neg] = _integer_neg;
-        type->op1[OP1_Rcp] = _integer_rcp;
+        type->op2[OP2_FloorDiv] = _integer_floordiv;
+        type->op2[OP2_Mod] = _integer_mod;
         type->hash = _integer_hash;
 
         if (width == 1) {
@@ -5741,7 +5760,16 @@ static Cursor expand_syntax_extend (const Table *env, const List *topit) {
         error("syntax-extend: missing subsequent expression");
     }
 
-    return { rest->at, rest->next };
+    auto result =
+        (!rest)?wrap(rest):
+            wrap(
+                List::create(
+                    getLocal(globals, SYM_Do),
+                    rest));
+
+    return {
+        result,
+        nullptr };
 }
 
 static const List *expand_macro(
@@ -6073,7 +6101,6 @@ static Any compile (const Any &expr) {
         } else {
             result = compile_implicit_call(slist);
         }
-        assert(result.type != Types::None);
     } else {
         result = expr;
     }
@@ -6197,6 +6224,7 @@ static void initGlobals () {
     setBuiltin< builtin_unary_binary_op<neg, sub> >(env, "-");
     setBuiltin< builtin_variadic_ltr< builtin_binary_op<mul> > >(env, "*");
     setBuiltin< builtin_unary_binary_op<rcp, div> >(env, "/");
+    setBuiltin< builtin_binary_op<floordiv> >(env, "//");
     setBuiltin< builtin_binary_op<mod> >(env, "%");
 
     setBuiltin< builtin_variadic_rtl<builtin_binary_op<concat> > >(env, "..");

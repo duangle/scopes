@@ -293,40 +293,41 @@ syntax-extend stage-2 (_ scope)
                     continuation if (_ scope expr)
                         let next-expr
                             @ expr 1 0
+                        let cond
+                            @
+                                expand scope
+                                    list
+                                        @ expr 0 1 0
+                                0
+                        let then-exprlist
+                            @ expr 0 2
+                        let make-branch
+                            continuation (_ else-exprlist)
+                                list branch
+                                    escape cond
+                                    cons continuation
+                                        cons (list) then-exprlist
+                                    cons continuation
+                                        cons (list) else-exprlist
+
                         ? (list-head? next-expr (quote elseif))
                             do
                                 let nextif
                                     if-rec scope
                                         @ expr 1
                                 cons
-                                    list branch
-                                        @ expr 0 1 0
-                                        cons continuation
-                                            cons (list)
-                                                @ expr 0 2
-                                        list continuation (list)
-                                            @ nextif 0
+                                    make-branch
+                                        list (@ nextif 0)
                                     @ nextif 1
                             ? (list-head? next-expr (quote else))
                                 cons
-                                    list branch
-                                        @ expr 0 1 0
-                                        cons continuation
-                                            cons (list)
-                                                @ expr 0 2
-                                        cons continuation
-                                            cons (list)
-                                                @ expr 1 0 1
+                                    make-branch
+                                        @ expr 1 0 1
                                     @ expr 2
-                                do
-                                    cons
-                                        list branch
-                                            @ expr 0 1 0
-                                            cons continuation
-                                                cons (list)
-                                                    @ expr 0 2
-                                            list continuation (list)
-                                        @ expr 1
+                                cons
+                                    make-branch
+                                        list;
+                                    @ expr 1
                 syntax-macro if-rec
         : syntax-infix-rules
             continuation syntax-infix-rules (_ prec order name)
@@ -635,6 +636,25 @@ syntax-extend stage-3 (_ scope)
                                 qquote-1 (@ expr 0 1 0)
                                 qquote-1 (@ expr 0 1)
                             @ expr 1
+
+        : define
+            syntax-macro
+                function (scope expr)
+                    let name
+                        @ expr 0 1 0
+                    let exprlist
+                        @ expr 0 2
+                    let subscope
+                        parameter (quote scope)
+                    ::@ dump
+                    cons
+                        list syntax-extend (list (parameter (quote _)) subscope)
+                            cons table
+                                list
+                                    list tupleof (list quote scope-parent-symbol) subscope
+                                    list tupleof (list quote name)
+                                        cons do exprlist
+                        @ expr 1
         : let
             # support for multiple declarations in one let scope
             syntax-macro
@@ -829,9 +849,9 @@ syntax-extend stage-3 (_ scope)
         #syntax-infix-op >> (syntax-infix-rules 450 > >>)
         syntax-infix-op - (syntax-infix-rules 500 > -)
         syntax-infix-op + (syntax-infix-rules 500 > +)
-        syntax-infix-op % (syntax-infix-rules 600 > &)
+        syntax-infix-op % (syntax-infix-rules 600 > %)
         syntax-infix-op / (syntax-infix-rules 600 > /)
-        #syntax-infix-op // (syntax-infix-rules 600 > //)
+        syntax-infix-op // (syntax-infix-rules 600 > //)
         syntax-infix-op * (syntax-infix-rules 600 > *)
         #syntax-infix-op ** (syntax-infix-rules 700 < **)
         syntax-infix-op . (syntax-infix-rules 800 > .)
@@ -845,3 +865,4 @@ syntax-extend stage-final (_ scope)
     scope
 
 none
+
