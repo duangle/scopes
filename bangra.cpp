@@ -587,8 +587,7 @@ static Any make_any(const Type *type) {
 }
 
 struct Cursor {
-    Any value;
-    const List *next;
+    const List *list;
     const Table *scope;
 };
 
@@ -789,6 +788,9 @@ namespace Types {
     static const Type *PFrame;
     static const Type *PClosure;
     static const Type *PMacro;
+
+    // tuple list table
+    static const Type *ListTableTuple;
 
     static const Type *_new_array_type(const Type *element, size_t size);
     static const Type *_new_vector_type(const Type *element, size_t size);
@@ -2252,66 +2254,108 @@ static void streamAnchor(T &stream, const Any &e, size_t depth=0) {
         stream << "    ";
 }
 
+enum {
+    STRV_Naked = (1<<0),
+};
+
+struct StreamValueFormat {
+    size_t depth;
+    uint32_t flags;
+    size_t maxdepth;
+
+    StreamValueFormat(size_t depth, bool naked) :
+        maxdepth((size_t)-1) {
+        this->depth = depth;
+        this->flags = naked?STRV_Naked:0;
+    }
+
+    StreamValueFormat() :
+        depth(0),
+        flags(STRV_Naked),
+        maxdepth((size_t)-1) {
+    }
+};
+
 template<typename T>
-static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true) {
+static void streamValue(T &stream, const Any &e,
+    const StreamValueFormat &format) {
+    size_t depth = format.depth;
+    size_t maxdepth = format.maxdepth;
+    bool naked = format.flags & STRV_Naked;
+
     if (naked) {
         streamAnchor(stream, e, depth);
     }
 
     if (e.type == Types::PList) {
-        //auto slist = llvm::cast<ListValue>(e);
-        auto it = extract_list(e);
-        if (!it) {
-            stream << "()";
+        if (!maxdepth) {
+            stream << "([...])";
             if (naked)
                 stream << '\n';
-            return;
-        }
-        size_t offset = 0;
-        if (naked) {
-            bool single = !it->next;
-        print_terse:
-            streamValue(stream, it->at, depth, false);
-            it = it->next;
-            offset++;
-            while (it) {
-                if (isNested(it->at))
-                    break;
-                stream << ' ';
-                streamValue(stream, it->at, depth, false);
-                offset++;
-                it = it->next;
-            }
-            stream << (single?";\n":"\n");
-        //print_sparse:
-            while (it) {
-                auto value = it->at;
-                if ((value.type != Types::PList) // not a list
-                    && (offset >= 1) // not first element in list
-                    && it->next // not last element in list
-                    && !isNested(it->next->at)) { // next element can be terse packed too
-                    single = false;
-                    streamAnchor(stream, value, depth + 1);
-                    stream << "\\ ";
-                    goto print_terse;
-                }
-                streamValue(stream, value, depth + 1);
-                offset++;
-                it = it->next;
-            }
-
         } else {
-            stream << '(';
-            while (it) {
-                if (offset > 0)
-                    stream << ' ';
-                streamValue(stream, it->at, depth + 1, false);
-                offset++;
-                it = it->next;
+            StreamValueFormat subfmt(format);
+            subfmt.maxdepth = subfmt.maxdepth - 1;
+
+            //auto slist = llvm::cast<ListValue>(e);
+            auto it = extract_list(e);
+            if (!it) {
+                stream << "()";
+                if (naked)
+                    stream << '\n';
+                return;
             }
-            stream << ')';
-            if (naked)
-                stream << '\n';
+            size_t offset = 0;
+            if (naked) {
+                bool single = !it->next;
+            print_terse:
+                subfmt.depth = depth;
+                subfmt.flags &= ~STRV_Naked;
+                streamValue(stream, it->at, subfmt);
+                it = it->next;
+                offset++;
+                while (it) {
+                    if (isNested(it->at))
+                        break;
+                    stream << ' ';
+                    streamValue(stream, it->at, subfmt);
+                    offset++;
+                    it = it->next;
+                }
+                stream << (single?";\n":"\n");
+            //print_sparse:
+                while (it) {
+                    subfmt.depth = depth + 1;
+                    subfmt.flags |= STRV_Naked;
+                    auto value = it->at;
+                    if ((value.type != Types::PList) // not a list
+                        && (offset >= 1) // not first element in list
+                        && it->next // not last element in list
+                        && !isNested(it->next->at)) { // next element can be terse packed too
+                        single = false;
+                        streamAnchor(stream, value, depth + 1);
+                        stream << "\\ ";
+                        goto print_terse;
+                    }
+                    streamValue(stream, value, subfmt);
+                    offset++;
+                    it = it->next;
+                }
+
+            } else {
+                subfmt.depth = depth + 1;
+                subfmt.flags &= ~STRV_Naked;
+                stream << '(';
+                while (it) {
+                    if (offset > 0)
+                        stream << ' ';
+                    streamValue(stream, it->at, subfmt);
+                    offset++;
+                    it = it->next;
+                }
+                stream << ')';
+                if (naked)
+                    stream << '\n';
+            }
         }
     } else {
         if (e.type == Types::Symbol) {
@@ -2339,14 +2383,24 @@ static void streamValue(T &stream, const Any &e, size_t depth=0, bool naked=true
     }
 }
 
-static std::string formatValue(const Any &e, size_t depth=0, bool naked=false) {
+static std::string formatValue(const Any &e, const StreamValueFormat &fmt) {
     std::stringstream ss;
-    streamValue(ss, e, depth, naked);
+    streamValue(ss, e, fmt);
     return ss.str();
 }
 
+static std::string formatValue(const Any &e, size_t depth=0, bool naked=false) {
+    std::stringstream ss;
+    streamValue(ss, e, StreamValueFormat(depth, naked));
+    return ss.str();
+}
+
+static void printValue(const Any &e, const StreamValueFormat &fmt) {
+    streamValue(std::cout, e, fmt);
+}
+
 static void printValue(const Any &e, size_t depth=0, bool naked=false) {
-    streamValue(std::cout, e, depth, naked);
+    printValue(e, StreamValueFormat(depth, naked));
 }
 
 void valueError (const Any &expr, const char *format, ...) {
@@ -3532,7 +3586,7 @@ namespace Types {
 
     static std::string _list_tostring(const Type *self, const bangra::Any &value) {
         std::stringstream ss;
-        bangra::streamValue(ss, value, 0, false);
+        bangra::streamValue(ss, value, StreamValueFormat(0, false));
         return ss.str();
     }
 
@@ -4556,6 +4610,8 @@ namespace Types {
         PMacro = Pointer(Struct("Macro", true));
 
         Rawstring = Pointer(I8);
+
+        ListTableTuple = Tuple({PList, PTable});
     }
 
 } // namespace Types
@@ -5358,7 +5414,7 @@ static Any builtin_next_key(const Any *args, size_t argcount) {
     return wrap(result);
 }
 
-static Any builtin_syntax_macro(const Any *args, size_t argcount) {
+static Any builtin_block_scope_macro(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     verifyValueKind(Types::PClosure, args[0]);
     return wrap_ptr(
@@ -5667,8 +5723,9 @@ static const List *expand_expr_list (const Table *env, const List *it) {
     const List *l = nullptr;
     while (it) {
         auto cur = expand(env, it);
-        l = List::create(cur.value, l, get_anchor(it));
-        it = cur.next;
+        if (!cur.list) break;
+        l = List::create(cur.list->at, l, get_anchor(it));
+        it = cur.list->next;
         env = cur.scope;
     }
     return reverse_list_inplace(l);
@@ -5680,12 +5737,11 @@ B_FUNC(wrap_expand_call) {
     auto topit = extract_list(B_GETARG(S, 0));
     auto env = extract_table(B_GETARG(S, 1));
     auto cur = ExpandFunc(env, topit);
+    Any out[] = { wrap(cur.list), wrap(cur.scope) };
     B_CALL(S,
         const_none,
         B_GETCONT(S),
-        wrap(List::create(
-            quote(cur.value),
-            cur.next)));
+        wrap(out, 2));
 }
 
 static Cursor expand_continuation (const Table *env, const List *topit) {
@@ -5722,18 +5778,19 @@ static Cursor expand_continuation (const Table *env, const List *topit) {
     }
 
     return {
-        wrap(
-            List::create(
-                getLocal(globals, SYM_ContinuationForm),
+        List::create(
+            quote(wrap(
                 List::create(
-                    sym,
+                    getLocal(globals, SYM_ContinuationForm),
                     List::create(
-                        wrap(reverse_list_inplace(outargs)),
-                        expand_expr_list(subenv, it),
-                        get_anchor(params)),
-                    get_anchor(sym)),
-                topanchor)),
-        topit->next,
+                        sym,
+                        List::create(
+                            wrap(reverse_list_inplace(outargs)),
+                            expand_expr_list(subenv, it),
+                            get_anchor(params)),
+                        get_anchor(sym)),
+                    topanchor))),
+            topit->next),
         env };
 }
 
@@ -5748,19 +5805,19 @@ static Cursor expand_quote (const Table *env, const List *topit) {
         result = it->at;
     else
         result = wrap(it);
-    return { quote(result), topit->next, env };
+    return { List::create(quote(quote(result)), topit->next), env };
 }
 
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto cur = expand_continuation (env, topit);
 
-    auto fun = compile(cur.value);
+    auto fun = compile(cur.list->at);
 
     Any exec_args[] = {fun, wrap_ptr(Types::PTable, env)};
     auto expr_env = execute(exec_args, 2);
     verifyValueKind(Types::PTable, expr_env);
 
-    auto rest = expand_expr_list(expr_env.table, cur.next);
+    auto rest = expand_expr_list(expr_env.table, cur.list->next);
     if (!rest) {
         error("syntax-extend: missing subsequent expression");
     }
@@ -5772,10 +5829,7 @@ static Cursor expand_syntax_extend (const Table *env, const List *topit) {
                     getLocal(globals, SYM_Do),
                     rest));
 
-    return {
-        result,
-        nullptr,
-        env };
+    return { List::create(quote(result), nullptr), env };
 }
 
 static const List *expand_macro(
@@ -5784,16 +5838,19 @@ static const List *expand_macro(
     auto result = execute(exec_args, 3);
     if (isnone(result))
         return nullptr;
-    verifyValueKind(Types::PList, result);
-    if (!get_anchor(result)) {
+    verifyValueKind(Types::ListTableTuple, result);
+    printValue(result, 0, true);
+    auto result_list = at(result, wrap(0));
+    auto result_scope = at(result, wrap(1));
+    if (!get_anchor(result_list.list)) {
         auto head = topit->at;
         const Anchor *anchor = get_anchor(head);
         if (!anchor) {
             anchor = get_anchor(topit);
         }
-        set_anchor(result, anchor);
+        set_anchor(result_list.list, anchor);
     }
-    return result.list;
+    return result_list.list;
 }
 
 static Cursor expand (const Table *env, const List *topit) {
@@ -5801,10 +5858,11 @@ static Cursor expand (const Table *env, const List *topit) {
 process:
     assert(topit);
     auto expr = topit->at;
+    printf("expanding:"); printValue(expr, StreamValueFormat(0, false)); printf("\n");
     if (is_quote_type(expr.type)) {
         // remove qualifier and return as-is
         expr.type = get_element_type(expr.type);
-        return { expr, topit->next, env };
+        return { List::create(expr, topit->next), env };
     } else if (is_list_type(expr.type)) {
         if (!expr.list) {
             error("expression is empty");
@@ -5857,7 +5915,7 @@ process:
         result = expr;
         topit = topit->next;
     }
-    return { result, topit, env };
+    return { List::create(result, topit), env };
 }
 
 static Any builtin_expand(const Any *args, size_t argcount) {
@@ -5867,8 +5925,8 @@ static Any builtin_expand(const Any *args, size_t argcount) {
     auto expr_eval = extract_list(args[1]);
 
     auto retval = expand(scope.table, expr_eval);
-
-    return wrap(List::create(retval.value, retval.next));
+    Any out[] = {wrap(retval.list), wrap(retval.scope)};
+    return wrap(out, 2);
 }
 
 static Any builtin_set_globals(const Any *args, size_t argcount) {
@@ -6192,7 +6250,7 @@ static void initGlobals () {
     setBuiltin<builtin_import_c>(env, "import-c");
     setBuiltin<builtin_branch>(env, "branch");
     setBuiltin<builtin_dump>(env, "dump");
-    setBuiltin<builtin_syntax_macro>(env, "syntax-macro");
+    setBuiltin<builtin_block_scope_macro>(env, "block-scope-macro");
     setBuiltin<builtin_string>(env, "string");
 
     setBuiltin<builtin_expand>(env, "expand");
@@ -6279,7 +6337,7 @@ static void init() {
 //------------------------------------------------------------------------------
 
 static void handleException(const Table *env, const Any &expr) {
-    streamValue(std::cerr, expr, 0, true);
+    streamValue(std::cerr, expr, StreamValueFormat(0, true));
     error("an exception was raised");
 }
 

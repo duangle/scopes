@@ -43,42 +43,52 @@ syntax-extend stage-1 (_ scope)
                 .. interpreter-dir "/bangra.h"
                 tupleof;
         tupleof
-            quote syntax-single-macro
-            continuation syntax-single-macro (_ f)
-                syntax-macro
+            quote macro
+            continuation macro (_ f)
+                block-scope-macro
                     continuation (_ expr scope)
-                        cons
-                            f
-                                @ expr 0
-                                scope
-                            @ expr 1
+                        tupleof
+                            cons
+                                f (@ expr 0) scope
+                                @ expr 1
+                            scope
+        tupleof
+            quote block-macro
+            continuation macro (_ f)
+                block-scope-macro
+                    continuation (_ expr scope)
+                        tupleof
+                            f expr scope
+                            scope
         tupleof
             quote call
-            syntax-macro
+            block-scope-macro
                 continuation call (_ expr)
                     cons
                         @ expr 0 1
                         @ expr 1
         tupleof
             quote dump-syntax
-            syntax-macro
+            block-scope-macro
                 continuation dump-syntax (_ expr scope)
-                    call
-                        continuation (_ e)
-                            dump
-                                @ e 0 0
-                            cons
-                                escape
+                    tupleof
+                        call
+                            continuation (_ e)
+                                dump
                                     @ e 0 0
-                                @ e 1
-                        expand scope
-                            cons
-                                @ expr 0 1
-                                @ expr 1
+                                cons
+                                    escape
+                                        @ e 0 0
+                                    @ e 1
+                            expand scope
+                                cons
+                                    @ expr 0 1
+                                    @ expr 1
+                        scope
         tupleof
             # a lofi version of let so we get some sugar early
             quote let
-            syntax-macro
+            block-scope-macro
                 continuation syntax-macro (_ expr scope)
                     branch
                         == (typeof (@ expr 0 2 0)) symbol
@@ -90,60 +100,66 @@ syntax-extend stage-1 (_ scope)
                         continuation () none
                         continuation ()
                             error "syntax: let <var> = <expr>"
-                    call
-                        continuation (_ param-name)
-                            call
-                                continuation (_ param scope-name)
-                                    list
-                                        list syntax-extend (list (parameter (quote _)) scope-name)
-                                            list table
-                                                list tupleof (list quote scope-parent-symbol) scope-name
-                                                list tupleof (list quote param-name) param
-                                        cons
-                                            cons continuation
-                                                cons (list (parameter (quote _)) param)
-                                                    @ expr 1
-                                            @ expr 0 3
-                                parameter param-name
-                                quote scope
-                        @ expr 0 1 0
+                    tupleof
+                        call
+                            continuation (_ param-name)
+                                call
+                                    continuation (_ param scope-name)
+                                        list
+                                            list syntax-extend (list (parameter (quote _)) scope-name)
+                                                list table
+                                                    list tupleof (list quote scope-parent-symbol) scope-name
+                                                    list tupleof (list quote param-name) param
+                                            cons
+                                                cons continuation
+                                                    cons (list (parameter (quote _)) param)
+                                                        @ expr 1
+                                                @ expr 0 3
+                                    parameter param-name
+                                    quote scope
+                            @ expr 0 1 0
+                        scope
         tupleof
             quote ?
-            syntax-macro
-                continuation ? (_ expr)
-                    cons
-                        list branch
-                            @ expr 0 1 0
-                            list continuation (list)
-                                @ expr 0 2 0
-                            list continuation (list)
-                                @ expr 0 3 0
-                        @ expr 1
+            block-scope-macro
+                continuation ? (_ expr scope)
+                    tupleof
+                        cons
+                            list branch
+                                @ expr 0 1 0
+                                list continuation (list)
+                                    @ expr 0 2 0
+                                list continuation (list)
+                                    @ expr 0 3 0
+                            @ expr 1
+                        scope
         tupleof
             quote :
-            syntax-macro
+            block-scope-macro
                 continuation : (_ expr scope)
-                    cons
-                        cons tupleof
-                            cons
-                                branch
-                                    ==
-                                        typeof
+                    tupleof
+                        cons
+                            cons tupleof
+                                cons
+                                    branch
+                                        ==
+                                            typeof
+                                                @ expr 0 1 0
+                                            symbol
+                                        continuation ()
+                                            list quote
+                                                @ expr 0 1 0
+                                        continuation ()
                                             @ expr 0 1 0
-                                        symbol
-                                    continuation ()
-                                        list quote
-                                            @ expr 0 1 0
-                                    continuation ()
-                                        @ expr 0 1 0
-                                branch
-                                    == (@ expr 0 2) (list)
-                                    continuation ()
-                                        list
-                                            @ expr 0 1 0
-                                    continuation ()
-                                        @ expr 0 2
-                        @ expr 1
+                                    branch
+                                        == (@ expr 0 2) (list)
+                                        continuation ()
+                                            list
+                                                @ expr 0 1 0
+                                        continuation ()
+                                            @ expr 0 2
+                            @ expr 1
+                        scope
 
 syntax-extend stage-2 (_ scope)
     let list-join =
@@ -194,14 +210,14 @@ syntax-extend stage-2 (_ scope)
                     empty? x
                     true
         : assert # (assert bool-expr [error-message])
-            syntax-single-macro
+            macro
                 continuation assert (_ expr)
                     list ? (@ expr 1 0) true
                         list error
                             ? (empty? (@ expr 2)) "assertion failed"
                                 @ expr 2 0
         : ::@
-            syntax-macro
+            block-macro
                 continuation ::@ (_ expr)
                     cons
                         list-join
@@ -210,14 +226,14 @@ syntax-extend stage-2 (_ scope)
                                 @ expr 1 0
                         @ expr 2
         : ::*
-            syntax-macro
+            block-macro
                 continuation ::* (_ expr)
                     list
                         list-join
                             @ expr 0 1
                             @ expr 1
         : .
-            syntax-single-macro
+            macro
                 continuation . (_ expr)
                     let key =
                         @ expr 2 0
@@ -229,7 +245,7 @@ syntax-extend stage-2 (_ scope)
                         error "symbol expected"
 
         : function # (function [name] (param ...) body ...)
-            syntax-macro
+            block-macro
                 continuation function (_ expr)
                     let decl =
                         (@ expr 0 1 0)
@@ -258,7 +274,7 @@ syntax-extend stage-2 (_ scope)
                                     @ expr 0 2
                             @ expr 1
         : and
-            syntax-single-macro
+            macro
                 continuation and (_ expr)
                     let tmp =
                         parameter
@@ -271,7 +287,7 @@ syntax-extend stage-2 (_ scope)
                                 list continuation (list) tmp
                         @ expr 1 0
         : or
-            syntax-single-macro
+            macro
                 continuation or (_ expr)
                     let tmp =
                         parameter
@@ -284,7 +300,7 @@ syntax-extend stage-2 (_ scope)
                                     @ expr 2 0
                         @ expr 1 0
         : loop
-            syntax-single-macro
+            macro
                 continuation loop (_ expr)
                     let param-repeat =
                         quote repeat
@@ -335,7 +351,7 @@ syntax-extend stage-2 (_ scope)
                                     make-branch
                                         list;
                                     @ expr 1
-                syntax-macro if-rec
+                block-macro if-rec
         : syntax-infix-rules
             continuation syntax-infix-rules (_ prec order name)
                 structof
@@ -343,7 +359,7 @@ syntax-extend stage-2 (_ scope)
                     tupleof (quote order) order
                     tupleof (quote name) name
         : syntax-infix-op
-            syntax-single-macro
+            macro
                 continuation syntax-infix-op (_ expr)
                     list tupleof
                         list quote
@@ -548,7 +564,7 @@ syntax-extend stage-3 (_ scope)
 
     function make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
-        syntax-single-macro
+        macro
             function (expr)
                 let tail =
                     @ expr 1
@@ -597,7 +613,7 @@ syntax-extend stage-3 (_ scope)
         : or
             make-expand-multi-op-ltr or
         : try
-            syntax-macro
+            block-macro
                 function (expr scope)
                     if (not (list-head? (@ expr 1 0) (quote except)))
                         error "except block missing"
@@ -636,7 +652,7 @@ syntax-extend stage-3 (_ scope)
                         list cons
                             qquote-1 (@ x 0)
                             qquote-1 (@ x 1)
-                syntax-macro
+                block-macro
                     function (expr)
                         cons
                             ? (empty? (@ expr 0 2))
@@ -645,7 +661,7 @@ syntax-extend stage-3 (_ scope)
                             @ expr 1
 
         : define
-            syntax-macro
+            block-macro
                 function (expr scope)
                     let name =
                         @ expr 0 1 0
@@ -668,7 +684,7 @@ syntax-extend stage-3 (_ scope)
                     == x (quote =)
 
             # support for multiple declarations in one let scope
-            syntax-macro
+            block-macro
                 function (expr scope)
                     let args = (@ expr 0 1)
                     let argtype = (typeof (@ args 0))

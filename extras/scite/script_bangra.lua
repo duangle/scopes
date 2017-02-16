@@ -25,10 +25,10 @@ local function bangra_symbols()
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
         "bangra let external branch function true false"
             .. " print repr tupleof import-c quote eval structof"
-            .. " typeof letrec with ::* ::@ syntax-macro syntax-scope cons"
+            .. " typeof letrec with ::* ::@ block-scope-macro cons"
             .. " string expand call escape do empty? dump-syntax"
             .. " syntax-extend dump list-join list-head? if else elseif loop"
-            .. " repeat syntax-single-macro length foreach kindof"
+            .. " repeat macro block-macro length foreach kindof"
             .. " table none slice null? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
             .. " set-key! cstr return continuation splice exit"
