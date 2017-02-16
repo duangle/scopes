@@ -59,6 +59,7 @@ int print_number(int value);
 #ifdef _WIN32
 #include "mman.h"
 #include "stdlib_ex.h"
+#include "dlfcn.h"
 #else
 // for backtrace
 #include <execinfo.h>

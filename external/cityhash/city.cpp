@@ -99,6 +99,12 @@ inline uint64 Hash128to64(const uint128& x) {
 #define bswap_64(x) bswap64(x)
 #endif
 
+#elif defined(_WIN32)
+
+#include <stdlib.h>
+#define bswap_32(x) _byteswap_ulong(x)
+#define bswap_64(x) _byteswap_uint64(x)
+
 #else
 
 #include <byteswap.h>

@@ -13,7 +13,9 @@ gcc -c -o mman.o %DIR%win32\mman.c -O2 -Wno-shift-count-overflow
 if errorlevel 1 goto :fail
 gcc -c -o realpath.o %DIR%win32\realpath.c -O2
 if errorlevel 1 goto :fail
-g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
+gcc -c -o dlfcn.o %DIR%win32\dlfcn.c -O2
+if errorlevel 1 goto :fail
+g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o dlfcn.o ^
     -I%DIR%win32 ^
     -I%MINGWPATH%/lib/libffi-3.2.1/include -I%MINGWPATH%/include ^
     -Wno-vla -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL ^
@@ -44,7 +46,7 @@ g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o ^
     -lLLVMBitReader -lLLVMAnalysis -lLLVMCore -lLLVMSupport ^
     -Wl,--no-whole-archive ^
     -lLLVMInterpreter ^
-    -lffi -lole32 -luuid -lversion ^
+    -lffi -lole32 -luuid -lversion -lpsapi ^
     -fexceptions
 if errorlevel 1 goto :fail
 %DIR%bangra.exe %DIR%testing\test_all.b
