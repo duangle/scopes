@@ -2,6 +2,33 @@
 # the bangra executable looks for a boot file at
 # path/to/executable.b and, if found, executes it.
 
+syntax-extend stage-0 (_ scope)
+    table
+        tupleof scope-parent-symbol scope
+        tupleof
+            symbol "quote"
+            block-scope-macro
+                continuation quote (_ expr scope)
+                    call
+                        continuation (_ args)
+                            tupleof
+                                cons
+                                    # stop compiler expansion
+                                    escape
+                                        # stop macro expansion
+                                        escape
+                                            # keep wrapped in list
+                                            # if multiple arguments
+                                            branch
+                                                == (@ args 1) (list)
+                                                continuation ()
+                                                    @ args 0
+                                                continuation ()
+                                                    args
+                                    @ expr 1
+                                scope
+                        @ expr 0 1
+
 syntax-extend stage-1 (_ scope)
     table
         tupleof scope-parent-symbol scope

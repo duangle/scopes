@@ -27,8 +27,8 @@ comfortable level. These features are:
   the fly.
 * A **fully embedded** build of **LLVM** that can be accessed via FFI.
 * A **programmable macro preprocessor** that expands symbolic expressions and
-  supports only four special forms: ``function``, ``quote``, ``let-syntax``
-  and ``escape``. These are sufficient to bootstrap the rest of the language.
+  requires only two builtin macros: ``continuation`` and ``syntax-extend``.
+  These are sufficient to bootstrap the rest of the language.
 
   The macro preprocessor supports hooks to preprocessing arbitrary lists and
   symbols. This feature is used to support special syntax without having to

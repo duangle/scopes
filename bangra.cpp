@@ -5801,20 +5801,6 @@ static Cursor expand_continuation (const Table *env, const List *topit) {
         env };
 }
 
-static Cursor expand_quote (const Table *env, const List *topit) {
-    verifyAtParameterCount(topit, 1, -1);
-
-    auto it = extract_list(topit->at);
-    it = it->next;
-    assert(it);
-    Any result;
-    if (!it->next)
-        result = it->at;
-    else
-        result = wrap(it);
-    return { List::create(quote(quote(result)), topit->next), env };
-}
-
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto cur = expand_continuation (env, topit);
 
@@ -6207,7 +6193,6 @@ static void initGlobals () {
     setBuiltin<compile_do>(env, "do");
 
     setBuiltinMacro< wrap_expand_call<expand_continuation> >(env, "continuation");
-    setBuiltinMacro< wrap_expand_call<expand_quote> >(env, "quote");
     setBuiltinMacro< wrap_expand_call<expand_syntax_extend> >(env, "syntax-extend");
 
     setBuiltin< builtin_escape >(env, "escape");
