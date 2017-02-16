@@ -5717,6 +5717,12 @@ static Any quote(const Any &value) {
     return result;
 }
 
+static Any unquote(const Any &value) {
+    assert(is_quote_type(value.type));
+    Any result = value;
+    result.type = get_element_type(value.type);
+    return result;
+}
 
 
 static const List *expand_expr_list (const Table *env, const List *it) {
@@ -5811,35 +5817,45 @@ static Cursor expand_quote (const Table *env, const List *topit) {
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto cur = expand_continuation (env, topit);
 
-    auto fun = compile(cur.list->at);
+    auto fun = compile(unquote(cur.list->at));
 
     Any exec_args[] = {fun, wrap_ptr(Types::PTable, env)};
     auto expr_env = execute(exec_args, 2);
     verifyValueKind(Types::PTable, expr_env);
 
-    auto rest = expand_expr_list(expr_env.table, cur.list->next);
+    auto rest = cur.list->next;
     if (!rest) {
         error("syntax-extend: missing subsequent expression");
     }
 
-    auto result =
-        (!rest)?wrap(rest):
-            wrap(
-                List::create(
-                    getLocal(globals, SYM_Do),
-                    rest));
-
-    return { List::create(quote(result), nullptr), env };
+    return { rest, expr_env.table };
 }
 
-static const List *expand_macro(
+static const List *expand_wildcard(
     const Table *env, const Any &handler, const List *topit) {
     Any exec_args[] = {handler,  wrap(topit), wrap(env)};
     auto result = execute(exec_args, 3);
     if (isnone(result))
         return nullptr;
+    verifyValueKind(Types::PList, result);
+    if (!get_anchor(result.list)) {
+        auto head = topit->at;
+        const Anchor *anchor = get_anchor(head);
+        if (!anchor) {
+            anchor = get_anchor(topit);
+        }
+        set_anchor(result.list, anchor);
+    }
+    return result.list;
+}
+
+static Cursor expand_macro(
+    const Table *env, const Any &handler, const List *topit) {
+    Any exec_args[] = {handler,  wrap(topit), wrap(env)};
+    auto result = execute(exec_args, 3);
+    if (isnone(result))
+        return { nullptr, nullptr };
     verifyValueKind(Types::ListTableTuple, result);
-    printValue(result, 0, true);
     auto result_list = at(result, wrap(0));
     auto result_scope = at(result, wrap(1));
     if (!get_anchor(result_list.list)) {
@@ -5850,7 +5866,7 @@ static const List *expand_macro(
         }
         set_anchor(result_list.list, anchor);
     }
-    return result_list.list;
+    return { result_list.list, result_scope.table };
 }
 
 static Cursor expand (const Table *env, const List *topit) {
@@ -5858,11 +5874,9 @@ static Cursor expand (const Table *env, const List *topit) {
 process:
     assert(topit);
     auto expr = topit->at;
-    printf("expanding:"); printValue(expr, StreamValueFormat(0, false)); printf("\n");
     if (is_quote_type(expr.type)) {
         // remove qualifier and return as-is
-        expr.type = get_element_type(expr.type);
-        return { List::create(expr, topit->next), env };
+        return { List::create(unquote(expr), topit->next), env };
     } else if (is_list_type(expr.type)) {
         if (!expr.list) {
             error("expression is empty");
@@ -5877,15 +5891,16 @@ process:
 
         if (is_macro_type(head.type)) {
             auto result = expand_macro(env, head.macro->value, topit);
-            if (result) {
-                topit = result;
+            if (result.list) {
+                topit = result.list;
+                env = result.scope;
                 goto process;
             }
         }
 
         auto default_handler = getLocal(env, SYM_ListWC);
         if (default_handler.type != Types::Void) {
-            auto result = expand_macro(env, default_handler, topit);
+            auto result = expand_wildcard(env, default_handler, topit);
             if (result) {
                 topit = result;
                 goto process;
@@ -5900,7 +5915,7 @@ process:
         if (!hasLocal(env, value)) {
             auto default_handler = getLocal(env, SYM_SymbolWC);
             if (default_handler.type != Types::Void) {
-                auto result = expand_macro(env, default_handler, topit);
+                auto result = expand_wildcard(env, default_handler, topit);
                 if (result) {
                     topit = result;
                     goto process;
@@ -5920,9 +5935,9 @@ process:
 
 static Any builtin_expand(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 2);
-    auto scope = args[0];
+    auto expr_eval = extract_list(args[0]);
+    auto scope = args[1];
     verifyValueKind(Types::PTable, scope);
-    auto expr_eval = extract_list(args[1]);
 
     auto retval = expand(scope.table, expr_eval);
     Any out[] = {wrap(retval.list), wrap(retval.scope)};

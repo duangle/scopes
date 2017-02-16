@@ -60,13 +60,15 @@ syntax-extend stage-1 (_ scope)
                         tupleof
                             f expr scope
                             scope
-        tupleof
+        /// tupleof
             quote call
             block-scope-macro
-                continuation call (_ expr)
-                    cons
-                        @ expr 0 1
-                        @ expr 1
+                continuation call (_ expr scope)
+                    tupleof
+                        cons
+                            @ expr 0 1
+                            @ expr 1
+                        scope
         tupleof
             quote dump-syntax
             block-scope-macro
@@ -80,10 +82,13 @@ syntax-extend stage-1 (_ scope)
                                     escape
                                         @ e 0 0
                                     @ e 1
-                            expand scope
-                                cons
-                                    @ expr 0 1
-                                    @ expr 1
+                            @
+                                expand
+                                    cons
+                                        @ expr 0 1
+                                        @ expr 1
+                                    scope
+                                0
                         scope
         tupleof
             # a lofi version of let so we get some sugar early
@@ -104,19 +109,17 @@ syntax-extend stage-1 (_ scope)
                         call
                             continuation (_ param-name)
                                 call
-                                    continuation (_ param scope-name)
+                                    continuation (_ param)
+                                        # since the scope covers the remaining
+                                        # block, we can mutate it directly
+                                        set-key! scope param-name param
                                         list
-                                            list syntax-extend (list (parameter (quote _)) scope-name)
-                                                list table
-                                                    list tupleof (list quote scope-parent-symbol) scope-name
-                                                    list tupleof (list quote param-name) param
                                             cons
                                                 cons continuation
                                                     cons (list (parameter (quote _)) param)
                                                         @ expr 1
                                                 @ expr 0 3
                                     parameter param-name
-                                    quote scope
                             @ expr 0 1 0
                         scope
         tupleof
@@ -671,11 +674,10 @@ syntax-extend stage-3 (_ scope)
                         parameter (quote scope)
                     cons
                         list syntax-extend (list (parameter (quote _)) subscope)
-                            cons table
-                                list
-                                    list tupleof (list quote scope-parent-symbol) subscope
-                                    list tupleof (list quote name)
-                                        cons do exprlist
+                            list let (quote name) (quote =)
+                                cons do exprlist
+                            list set-key! subscope (list quote name) (quote name)
+                            subscope
                         @ expr 1
         : let
             function =? (x)
@@ -737,54 +739,23 @@ syntax-extend stage-3 (_ scope)
                             @ args 2
                     else
                         # multiple variables with support for recursion,
-                        # but no cross dependency
+                        # and later variables can depend on earlier ones
 
                         # prepare quotable values from declarations
                         function handle-pairs (pairs)
                             if (empty? pairs)
-                                tupleof
-                                    list;
-                                    list;
-                                    list;
+                                @ expr 1
                             else
                                 let pair =
                                     @ pairs 0
                                 assert (=? (@ pair 1 0))
                                     "syntax: let (<name> = <expression>) ..."
-                                let name =
-                                    @ pair 0
-                                let value =
-                                    @ pair 2 0
-                                let param =
-                                    parameter name
-                                let cells =
+                                cons
+                                    cons let pair
                                     handle-pairs
                                         @ pairs 1
-                                tupleof
-                                    cons
-                                        list tupleof (list quote name) param
-                                        @ cells 0
-                                    cons param (@ cells 1)
-                                    cons value (@ cells 2)
 
-                        let cells =
-                            handle-pairs args
-                        let scope-name =
-                            quote scope
-                        list
-                            list syntax-extend (list (parameter (quote _)) scope-name)
-                                cons table
-                                    cons
-                                        list tupleof (list quote scope-parent-symbol) scope-name
-                                        @ cells 0
-                            cons
-                                cons continuation
-                                    cons
-                                        cons
-                                            parameter (quote _)
-                                            @ cells 1
-                                        @ expr 1
-                                @ cells 2
+                        handle-pairs args
 
         tupleof scope-list-wildcard-symbol
             function (topexpr scope)

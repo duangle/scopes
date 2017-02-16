@@ -25,7 +25,6 @@ let
     ANSI_COLOR_XCYAN        = (ANSI-color 36 true)
     ANSI_COLOR_WHITE        = (ANSI-color 37 true)
 
-let
     ANSI_STYLE_STRING       = ANSI_COLOR_XMAGENTA
     ANSI_STYLE_NUMBER       = ANSI_COLOR_XGREEN
     ANSI_STYLE_KEYWORD      = ANSI_COLOR_XBLUE
@@ -36,14 +35,14 @@ let
     ANSI_STYLE_ERROR        = ANSI_COLOR_XRED
     ANSI_STYLE_LOCATION     = ANSI_COLOR_XCYAN
 
-let ANSI-wrapper =
-    ? support-ANSI?
-        function (code)
-            function (content)
-                .. code content ANSI_RESET
-        function (code)
-            function (content) content
-let
+    ANSI-wrapper =
+        ? support-ANSI?
+            function (code)
+                function (content)
+                    .. code content ANSI_RESET
+            function (code)
+                function (content) content
+
     style-string        = (ANSI-wrapper ANSI_COLOR_XMAGENTA)
     style-number        = (ANSI-wrapper ANSI_COLOR_XGREEN)
     style-keyword       = (ANSI-wrapper ANSI_COLOR_XBLUE)
@@ -54,7 +53,6 @@ let
     style-error         = (ANSI-wrapper ANSI_COLOR_XRED)
     style-location      = (ANSI-wrapper ANSI_COLOR_XCYAN)
 
-let
     LAMBDA_CHAR =
         style-keyword "λ"
 

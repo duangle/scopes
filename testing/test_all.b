@@ -364,8 +364,6 @@ print
         tupleof 3 5
     hash 0x0000000500000003
 
-#(define (process p) (toplevel-exit))
-
 do
     let i = 0
     let k = "!"
@@ -440,6 +438,12 @@ assert
         list 1 2 3 4 5 6 7 8
 
 do
+    let
+        a = 1
+        b = (a + 1)
+    print a b
+
+do
     # single assignment.
     # names are always bound for the remainder of this scope.
     let p-value =
@@ -452,12 +456,12 @@ do
                 1
                 x * (q-func (x - 1))
 
-    # multiple assignments in one block, must not depend on each other,
-    # but permits recursive access for functions.
+    # multiple assignments in one block; later assignments can depend on
+    # earlier ones, and functions can access themselves recursively.
     let
         button-type-yes     = 0
         button-type-no      = 1
-        button-type-cancel  = 2
+        button-type-cancel  = (button-type-no + 1)
 
         b-func =
             function (x)
@@ -512,7 +516,14 @@ assert
 define TEST 5
 define TEST2
     TEST + 1
-#print TEST TEST2
+define TEST3
+    function (x)
+        x * 2
+assert
+    and
+        TEST == 5
+        TEST2 == 6
+        (TEST3 6) == 12
 
 print
     struct (quote MyCustomType)
