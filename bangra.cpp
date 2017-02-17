@@ -1776,8 +1776,8 @@ static const List *reverse_list(const List *l, const List *eol = nullptr) {
 // this is the mutating version; input lists are modified, direction is inverted
 static const List *reverse_list_inplace(
     const List *l, const List *eol = nullptr) {
-    const List *next = nullptr;
-    size_t count = 0;
+    const List *next = eol;
+    size_t count = eol?eol->count:0;
     while (l != eol) {
         ++count;
         const List *iternext = l->next;
@@ -4069,6 +4069,18 @@ namespace Types {
         return wrap(t);
     }
 
+    static bangra::Any _list_join(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto la = a.list;
+        auto lb = extract_list(b);
+        const List *l = lb;
+        while (la) {
+            l = List::create(la->at, l, get_anchor(la));
+            la = la->next;
+        }
+        return wrap(reverse_list_inplace(l, lb));
+    }
+
     template<int op_name>
     static bangra::Any _pointer_fwd_op2(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
@@ -4581,6 +4593,7 @@ namespace Types {
 
         tmp = Struct("List", true);
         tmp->op2[OP2_At] = type_list_at;
+        tmp->op2[OP2_Join] = _list_join;
         tmp->cmp = _list_cmp;
         //tmp->apply_type = _list_apply_type;
         //tmp->size = sizeof(bangra::List);

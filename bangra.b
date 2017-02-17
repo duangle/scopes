@@ -191,14 +191,6 @@ syntax-extend stage-1 (_ scope)
                         scope
 
 syntax-extend stage-2 (_ scope)
-    let list-join =
-        continuation list-join (_ a b)
-            ? (empty? a) b
-                cons
-                    @ a 0
-                    list-join
-                        slice a 1
-                        b
     let list-head? =
         continuation list-head? (_ expr name)
             ? (list? expr)
@@ -231,7 +223,6 @@ syntax-extend stage-2 (_ scope)
         : float (real 32)
         : double (real 64)
 
-        : list-join
         : list-head?
         : list-atom?
             continuation list-atom? (_ x)
@@ -249,7 +240,7 @@ syntax-extend stage-2 (_ scope)
             block-macro
                 continuation ::@ (_ expr)
                     cons
-                        list-join
+                        ..
                             slice (@ expr 0) 1
                             list
                                 @ expr 1
@@ -258,7 +249,7 @@ syntax-extend stage-2 (_ scope)
             block-macro
                 continuation ::* (_ expr)
                     list
-                        list-join
+                        ..
                             slice (@ expr 0) 1
                             slice expr 1
         : .
@@ -678,7 +669,7 @@ syntax-extend stage-3 (_ scope)
                             qquote-1 (@ x 0)
                             qquote-1 (slice x 1)
                     elseif (list-head? (@ x 0) (quote unquote-splice))
-                        list list-join
+                        list (do ..)
                             unwrap-single (slice (@ x 0) 1)
                             qquote-1 (slice x 1)
                     else
