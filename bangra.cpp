@@ -746,6 +746,8 @@ namespace Types {
     static const Type *TReal;
     static const Type *TStruct;
     static const Type *TEnum;
+    static const Type *TTag;
+    static const Type *TQualifier;
     static const Type *TSplice;
     static const Type *TQuote;
     static const Type *TMacro;
@@ -800,21 +802,20 @@ namespace Types {
     static const Type *_new_pointer_type(const Type *element);
     static const Type *_new_integer_type(size_t width, bool signed_);
     static const Type *_new_real_type(size_t width);
-    static const Type *_new_splice_type(const Type *element);
-    static const Type *_new_quote_type(const Type *element);
-    static const Type *_new_macro_type(const Type *element);
+    static const Type *_new_qualifier_type(const Type *tag, const Type *element);
 
     static auto Array = memo(_new_array_type);
     static auto Vector = memo(_new_vector_type);
     static auto Tuple = memo(_new_tuple_type);
     static auto CFunction = memo(_new_cfunction_type);
     static auto Pointer = memo(_new_pointer_type);
-    static auto Splice = memo(_new_splice_type);
-    static auto Quote = memo(_new_quote_type);
-    static auto Macro = memo(_new_macro_type);
     static auto Integer = memo(_new_integer_type);
     static auto Real = memo(_new_real_type);
+    static auto Qualifier = memo(_new_qualifier_type);
 
+    static const Type *Quote(const Type *element);
+    static const Type *Splice(const Type *element);
+    static const Type *Macro(const Type *element);
 } // namespace Types
 
 //------------------------------------------------------------------------------
@@ -920,7 +921,6 @@ struct Type {
     Table table;
 
     // bootstrapped attributes
-
     std::string name;
 
     // implementation of unary operators
@@ -946,6 +946,9 @@ struct Type {
     // count of value, if any
     size_t (*countof)(const Type *self, const Any &value);
 
+    // if set, specifies the supertype of this type
+    const Type *supertype;
+
     size_t size;
     size_t alignment;
     // value is directly stored in Any struct, rather than in a pointer
@@ -964,6 +967,7 @@ struct Type {
         // array, vector: number of elements
         size_t count;
     };
+
     union {
         // array, vector, pointer: type of element
         const Type *element_type;
@@ -1103,6 +1107,7 @@ static Type *new_type(const std::string &name) {
     //assert(!name.empty());
     auto result = new Type();
     result->size = 0;
+    result->supertype = nullptr;
     result->alignment = 1;
     result->is_embedded = false;
     result->name = name;
@@ -3590,12 +3595,6 @@ namespace Types {
         return countof(pointer_element(self, value));
     }
 
-    /*
-    static bangra::Any _pointer_apply_type(const Type *self,
-        const std::vector<bangra::Any> &args) {
-    }
-    */
-
     static Ordering value_pointer_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         auto y = is_pointer_type(b.type)?pointer_element(b.type, b):b;
@@ -3771,6 +3770,12 @@ namespace Types {
         return (other == TMacro)?Less:Unordered;
     }
 
+    static Ordering type_qualifier_eq(const Type *self, const Type *other) {
+        assert(self->supertype);
+        return ((other == TQualifier)
+            || (other == self->supertype))?Less:Unordered;
+    }
+
     static Ordering type_tuple_eq(const Type *self, const Type *other) {
         return (other == TTuple)?Less:Unordered;
     }
@@ -3795,6 +3800,9 @@ namespace Types {
         return (other == TEnum)?Less:Unordered;
     }
 
+    static Ordering type_tag_eq(const Type *self, const Type *other) {
+        return (other == TTag)?Less:Unordered;
+    }
 
     typedef bangra::Any (*ApplyTypeFunction)(const Type *self,
         const bangra::Any *args, size_t argcount);
@@ -4335,39 +4343,19 @@ namespace Types {
         return type;
     }
 
-    static const Type *_new_quote_type(const Type *element) {
+    static const Type *_new_qualifier_type(const Type *tag, const Type *element) {
+        assert(tag);
         assert(element);
         Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "quote").c_str(),
+            format("<qualifier %s %s>",
+                get_name(tag).c_str(),
                 get_name(element).c_str()));
-        type->element_type = element;
-        type->cmp_type = type_quote_eq;
-        return type;
-    }
-
-    static const Type *_new_splice_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
-                get_name(element).c_str()));
-        type->element_type = element;
-        type->cmp_type = type_splice_eq;
-        return type;
-    }
-
-    static const Type *_new_macro_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "macro").c_str(),
-                get_name(element).c_str()));
+        type->supertype = tag;
         type->is_embedded = element->is_embedded;
         type->size = element->size;
         type->alignment = element->alignment;
         type->element_type = element;
-        type->cmp_type = type_macro_eq;
+        type->cmp_type = type_qualifier_eq;
         return type;
     }
 
@@ -4406,6 +4394,35 @@ namespace Types {
         auto type = Struct(name, true);
         type->cmp_type = cmp_type_default;
         return type;
+    }
+
+    static bangra::Any _qualifier_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        const Type *type = extract_type(args[0]);
+        return wrap(Qualifier(self, type));
+    }
+
+    static Type *Tag(const bangra::Symbol &name) {
+        Type *type = new_type(
+            format("<%s %s>",
+                ansi(ANSI_STYLE_KEYWORD, "tag").c_str(),
+                get_symbol_name(name).c_str()));
+        type->apply_type = apply_type_call<_qualifier_apply_type>;
+        type->cmp_type = type_tag_eq;
+        return type;
+    }
+
+    static const Type *Quote(const Type *element) {
+        return Qualifier(TQuote, element);
+    }
+
+    static const Type *Splice(const Type *element) {
+        return Qualifier(TSplice, element);
+    }
+
+    static const Type *Macro(const Type *element) {
+        return Qualifier(TMacro, element);
     }
 
     // TYPE FACTORIES
@@ -4481,6 +4498,14 @@ namespace Types {
         return wrap(result);
     }
 
+    static bangra::Any _tag_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        auto name = extract_symbol(args[0]);
+        const Type *tag = Types::Tag(name);
+        return wrap(tag);
+    }
+
     // TYPE INIT
     //--------------------------------------------------------------------------
 
@@ -4509,8 +4534,15 @@ namespace Types {
         tmp->apply_type = apply_type_call<_pointer_apply_type>;
         TPointer = tmp;
 
-        TSplice = Supertype("splice");
-        TQuote = Supertype("quote");
+        tmp = Supertype("tag");
+        tmp->apply_type = apply_type_call<_tag_apply_type>;
+        TTag = tmp;
+
+        TQualifier = Supertype("qualifier");
+
+        TSplice = Tag(get_symbol("splice"));
+        TQuote = Tag(get_symbol("quote"));
+        TMacro = Tag(get_symbol("macro"));
 
         tmp = Supertype("cfunction");
         tmp->apply_type = apply_type_call<_cfunction_apply_type>;
@@ -6225,6 +6257,8 @@ static void initGlobals () {
     setLocalString(env, "pointer", wrap(Types::TPointer));
     setLocalString(env, "struct", wrap(Types::TStruct));
     setLocalString(env, "enum", wrap(Types::TEnum));
+    setLocalString(env, "tag", wrap(Types::TTag));
+    setLocalString(env, "qualifier", wrap(Types::TQualifier));
 
     setLocalString(env, "void", wrap(Types::Void));
 

@@ -4,6 +4,13 @@ print
     max 3 4 5
 
 do
+    let test-qualifier =
+        tag (quote test)
+    print
+        (test-qualifier int) < qualifier
+
+
+do
     let T =
         table
             : (do print) 404
