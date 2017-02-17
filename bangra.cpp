@@ -496,7 +496,6 @@ struct List;
 struct Table;
 struct Closure;
 struct Type;
-struct Macro;
 struct Frame;
 struct Cursor;
 struct State;
@@ -568,7 +567,6 @@ struct Any {
         const Flow *flow;
         const Closure *closure;
         const Frame *frame;
-        const Macro *macro;
         const Table *table;
         const Anchor *anchorref;
     };
@@ -750,6 +748,7 @@ namespace Types {
     static const Type *TEnum;
     static const Type *TSplice;
     static const Type *TQuote;
+    static const Type *TMacro;
 
     static const Type *Bool;
     static const Type *I8;
@@ -789,7 +788,6 @@ namespace Types {
     static const Type *PBuiltinMacro;
     static const Type *PFrame;
     static const Type *PClosure;
-    static const Type *PMacro;
 
     // tuple list table
     static const Type *ListTableTuple;
@@ -804,6 +802,7 @@ namespace Types {
     static const Type *_new_real_type(size_t width);
     static const Type *_new_splice_type(const Type *element);
     static const Type *_new_quote_type(const Type *element);
+    static const Type *_new_macro_type(const Type *element);
 
     static auto Array = memo(_new_array_type);
     static auto Vector = memo(_new_vector_type);
@@ -812,6 +811,7 @@ namespace Types {
     static auto Pointer = memo(_new_pointer_type);
     static auto Splice = memo(_new_splice_type);
     static auto Quote = memo(_new_quote_type);
+    static auto Macro = memo(_new_macro_type);
     static auto Integer = memo(_new_integer_type);
     static auto Real = memo(_new_real_type);
 
@@ -1343,6 +1343,10 @@ static bool is_quote_type(const Type *type) {
     return is_subtype(type, Types::TQuote);
 }
 
+static bool is_macro_type(const Type *type) {
+    return is_subtype(type, Types::TMacro);
+}
+
 static bool is_typeref_type(const Type *type) {
     return is_subtype_or_type(type, Types::PType);
 }
@@ -1405,10 +1409,6 @@ static bool is_frame_type(const Type *type) {
 
 static bool is_closure_type(const Type *type) {
     return is_subtype_or_type(type, Types::PClosure);
-}
-
-static bool is_macro_type(const Type *type) {
-    return is_subtype_or_type(type, Types::PMacro);
 }
 
 static bool is_list_type(const Type *type) {
@@ -1970,41 +1970,17 @@ static const Closure *extract_closure(const Any &value) {
 
 //------------------------------------------------------------------------------
 
-struct Macro {
-
-    Any value;
-
-    static Macro *create(const Any &value) {
-        auto result = new Macro();
-        result->value = value;
-        return result;
-    }
-
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "macro");
-        ss << " " << get_string(value);
-        ss << ")";
-        return ss.str();
-    }
-};
-
-/*
-static Any tuple(const std::vector<Any> &values) {
-    std::vector<Type *> types;
-    size_t size;
-    for (auto &v : values) {
-        types.push_back(v.type);
-    }
-    Type *tuple_type = Types::Tuple(types);
+static Any macro(const Any &value) {
+    Any result = value;
+    result.type = Types::Macro(value.type);
+    return result;
 }
-*/
 
-static Any wrap(const Macro *macro) {
-    return wrap_ptr(Types::PMacro, macro);
-}
-static Any wrap(Macro *macro) {
-    return wrap_ptr(Types::PMacro, macro);
+static Any unmacro(const Any &value) {
+    assert(is_macro_type(value.type));
+    Any result = value;
+    result.type = get_element_type(value.type);
+    return result;
 }
 
 static Any wrap(const Flow *flow) {
@@ -3791,6 +3767,10 @@ namespace Types {
         return (other == TQuote)?Less:Unordered;
     }
 
+    static Ordering type_macro_eq(const Type *self, const Type *other) {
+        return (other == TMacro)?Less:Unordered;
+    }
+
     static Ordering type_tuple_eq(const Type *self, const Type *other) {
         return (other == TTuple)?Less:Unordered;
     }
@@ -3860,17 +3840,6 @@ namespace Types {
             return const_none;
         }
         return wrap(self->element_type, (char *)value.ptr + offset);
-    }
-
-    static const Type *_new_quote_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "quote").c_str(),
-                get_name(element).c_str()));
-        type->element_type = element;
-        type->cmp_type = type_quote_eq;
-        return type;
     }
 
     static bangra::Any _tuple_get(const Type *self,
@@ -4246,17 +4215,6 @@ namespace Types {
         return type;
     }
 
-    static const Type *_new_splice_type(const Type *element) {
-        assert(element);
-        Type *type = new_type(
-            format("(%s %s)",
-                ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
-                get_name(element).c_str()));
-        type->element_type = element;
-        type->cmp_type = type_splice_eq;
-        return type;
-    }
-
     static const Type *_new_tuple_type(std::vector<const Type *> types) {
         std::stringstream ss;
         ss << "(";
@@ -4374,6 +4332,42 @@ namespace Types {
         type->width = width;
         type->size = itype->size;
         type->alignment = itype->alignment;
+        return type;
+    }
+
+    static const Type *_new_quote_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "quote").c_str(),
+                get_name(element).c_str()));
+        type->element_type = element;
+        type->cmp_type = type_quote_eq;
+        return type;
+    }
+
+    static const Type *_new_splice_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "splice").c_str(),
+                get_name(element).c_str()));
+        type->element_type = element;
+        type->cmp_type = type_splice_eq;
+        return type;
+    }
+
+    static const Type *_new_macro_type(const Type *element) {
+        assert(element);
+        Type *type = new_type(
+            format("(%s %s)",
+                ansi(ANSI_STYLE_KEYWORD, "macro").c_str(),
+                get_name(element).c_str()));
+        type->is_embedded = element->is_embedded;
+        type->size = element->size;
+        type->alignment = element->alignment;
+        type->element_type = element;
+        type->cmp_type = type_macro_eq;
         return type;
     }
 
@@ -4653,8 +4647,6 @@ namespace Types {
             _set_field_names(tmp, names);
             PClosure = Pointer(tmp);
         }
-
-        PMacro = Pointer(Struct("Macro", true));
 
         Rawstring = Pointer(I8);
 
@@ -5449,9 +5441,7 @@ static Any builtin_next_key(const Any *args, size_t argcount) {
 static Any builtin_block_scope_macro(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     verifyValueKind(Types::PClosure, args[0]);
-    return wrap_ptr(
-        Types::PMacro,
-        Macro::create(args[0]));
+    return macro(args[0]);
 }
 
 static Any builtin_typeof(const Any *args, size_t argcount) {
@@ -5616,9 +5606,7 @@ static void setBuiltinMacro(Table *scope, const std::string &name) {
     assert(scope);
     auto sym = get_symbol(name);
     set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym,
-        wrap(Macro::create(
-            wrap_ptr(Types::PBuiltinFlow, (void *)func))));
+    setLocal(scope, sym, macro(wrap_ptr(Types::PBuiltinFlow, (void *)func)));
 }
 
 template<SpecialFormFunction func>
@@ -5908,7 +5896,7 @@ process:
         }
 
         if (is_macro_type(head.type)) {
-            auto result = expand_macro(env, head.macro->value, topit);
+            auto result = expand_macro(env, unmacro(head), topit);
             if (result.list) {
                 topit = result.list;
                 env = result.scope;
