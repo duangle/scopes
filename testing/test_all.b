@@ -174,17 +174,17 @@ assert
 
 assert
     == 3
-        length "hi!"
+        countof "hi!"
 assert
     == 0
-        length ""
+        countof ""
 assert
     == 3
-        length
+        countof
             tupleof 1 2 3
 assert
     == 1
-        length
+        countof
             structof
                 key : 123
 
@@ -413,7 +413,7 @@ function test-varargs (x y ...)
             x == 1
             y == 2
     assert
-        (length ...) == 3
+        (countof ...) == 3
     assert
         and
             ... @ 0 == 3

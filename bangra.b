@@ -422,7 +422,7 @@ syntax-extend stage-3 (_ scope)
 
     function iter (s)
         let ls =
-            length s
+            countof s
         tupleof
             function (i)
                 if (< i ls)
@@ -437,7 +437,7 @@ syntax-extend stage-3 (_ scope)
                     let k = (- i 1)
                     tupleof (@ s k) k
                 else none
-            length s
+            countof s
 
     function get-scope-symbol (scope key)
         loop (scope)

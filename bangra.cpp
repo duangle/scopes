@@ -942,8 +942,8 @@ struct Type {
     B_FUNC((*apply_type));
     // splice value into argument list
     size_t (*splice)(const Type *self, const Any &value, Any *ret, size_t retsize);
-    // length of value, if any
-    size_t (*length)(const Type *self, const Any &value);
+    // count of value, if any
+    size_t (*countof)(const Type *self, const Any &value);
 
     size_t size;
     size_t alignment;
@@ -1082,7 +1082,7 @@ static std::string type_tostring_default(const Type *self, const Any &value) {
     return format("<value of %s>", get_name(self).c_str());
 }
 
-static size_t type_length_default(const Type *self, const Any &value) {
+static size_t type_countof_default(const Type *self, const Any &value) {
     return (size_t)-1;
 }
 
@@ -1108,7 +1108,7 @@ static Type *new_type(const std::string &name) {
     result->apply_type = type_apply_default;
     result->hash = type_hash_default;
     result->tostring = type_tostring_default;
-    result->length = type_length_default;
+    result->countof = type_countof_default;
     result->slice = type_slice_default;
     result->splice = type_splice_default;
     for (size_t i = 0; i < OP1_Count; ++i) {
@@ -1320,10 +1320,10 @@ static size_t splice(const Any &value, Any *ret, size_t retsize) {
     return value.type->splice(value.type, value, ret, retsize);
 }
 
-static size_t length(const Any &value) {
-    auto s = value.type->length(value.type, value);
+static size_t countof(const Any &value) {
+    auto s = value.type->countof(value.type, value);
     if (s == (size_t)-1) {
-        error("length operator not applicable");
+        error("countof operator not applicable");
     }
     return s;
 }
@@ -3608,9 +3608,9 @@ namespace Types {
         return at(pointer_element(self, value), index);
     }
 
-    static size_t _pointer_length(const Type *self,
+    static size_t _pointer_countof(const Type *self,
         const bangra::Any &value) {
-        return length(pointer_element(self, value));
+        return countof(pointer_element(self, value));
     }
 
     /*
@@ -3973,7 +3973,7 @@ namespace Types {
         return result->at;
     }
 
-    static size_t _string_length(const Type *self, const bangra::Any &value) {
+    static size_t _string_countof(const Type *self, const bangra::Any &value) {
         return value.str->count;
     }
 
@@ -3983,7 +3983,7 @@ namespace Types {
             value.str->ptr + i0, i1 - i0));
     }
 
-    static size_t _list_length(const Type *self, const bangra::Any &value) {
+    static size_t _list_countof(const Type *self, const bangra::Any &value) {
         return value.list?value.list->count:0;
     }
 
@@ -4045,7 +4045,7 @@ namespace Types {
     }
     */
 
-    static size_t _tuple_length(const Type *self, const bangra::Any &value) {
+    static size_t _tuple_countof(const Type *self, const bangra::Any &value) {
         return self->types.size();
     }
 
@@ -4202,7 +4202,7 @@ namespace Types {
         type->cmp_type = type_pointer_eq;
         type->hash = _pointer_hash;
         type->op2[OP2_At] = type_pointer_at;
-        type->length = _pointer_length;
+        type->countof = _pointer_countof;
         type->cmp = value_pointer_cmp;
         type->tostring = _pointer_tostring;
         type->element_type = element;
@@ -4235,7 +4235,7 @@ namespace Types {
         type->cmp = _tuple_cmp;
         type->hash = _tuple_hash;
         type->op2[OP2_At] = type_tuple_at;
-        type->length = _tuple_length;
+        type->countof = _tuple_countof;
         type->tostring = _tuple_tostring;
         type->splice = _tuple_splice;
         _set_struct_field_types(type, types);
@@ -4358,7 +4358,7 @@ namespace Types {
         type->cmp_type = type_struct_eq;
         type->op2[OP2_At] = type_struct_at;
         type->cmp = _struct_cmp;
-        type->length = _tuple_length;
+        type->countof = _tuple_countof;
         return type;
     }
 
@@ -4536,7 +4536,7 @@ namespace Types {
 
         tmp = Struct("String", true);
         tmp->tostring = _string_tostring;
-        tmp->length = _string_length;
+        tmp->countof = _string_countof;
         tmp->slice = _string_slice;
         tmp->hash = _string_hash;
         tmp->op2[OP2_At] = _string_at;
@@ -4567,7 +4567,7 @@ namespace Types {
         tmp->apply_type = apply_type_call<_list_apply_type>;
         tmp->tostring = _list_tostring;
         tmp->splice = _list_splice;
-        tmp->length = _list_length;
+        tmp->countof = _list_countof;
         tmp->slice = _list_slice;
         PList = tmp;
 
@@ -5269,16 +5269,16 @@ static Any builtin_at(const Any *args, size_t argcount) {
     return at(args[0], args[1]);
 }
 
-static Any builtin_length(const Any *args, size_t argcount) {
+static Any builtin_countof(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
-    return wrap(length(args[0]));
+    return wrap(countof(args[0]));
 }
 
 static Any builtin_slice(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 3);
     int64_t i0;
     int64_t i1;
-    int64_t l = (int64_t)length(args[0]);
+    int64_t l = (int64_t)countof(args[0]);
     if (!is_integer_type(args[1].type)) {
         error("integer expected");
     }
@@ -6269,7 +6269,7 @@ static void initGlobals () {
     //setBuiltin<builtin_is_null>(env, "null?");
     //setBuiltin<builtin_is_key>(env, "key?");
     setBuiltin<builtin_error>(env, "error");
-    setBuiltin<builtin_length>(env, "length");
+    setBuiltin<builtin_countof>(env, "countof");
     setBuiltin<builtin_loadlist>(env, "list-load");
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_cstr>(env, "cstr");
