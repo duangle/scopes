@@ -49,7 +49,6 @@ comfortable level. These features are:
 As Bangra is in alpha stage, some essential features are still missing. These
 features will be added in future releases:
 
-* Exception handling.
 * Better error reporting.
 * An on-demand **specializer** that translates flow nodes to fast machine code
   using LLVM. The specializer will feature closure elimination and memory tracking.

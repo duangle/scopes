@@ -1718,11 +1718,13 @@ static Any wrap(List *slist) {
 struct List {
     Any at;
     const List *next;
+    size_t count;
 
     static List *create(const Any &at, const List *next) {
         auto result = new List();
         result->at = at;
         result->next = next;
+        result->count = next?(next->count + 1):1;
         //set_anchor(result, get_anchor(at));
         return result;
     }
@@ -1745,27 +1747,6 @@ struct List {
     static const List *create_from_array(const std::vector<Any> &values) {
         return create_from_c_array(const_cast<Any *>(&values[0]), values.size());
     }
-
-    /*
-    std::string getRepr () const {
-        return bangra::getRefRepr(this);
-    }
-    */
-
-    /*
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "(" << ansi(ANSI_STYLE_KEYWORD, "list");
-        auto expr = this;
-        get_eox();
-        while (expr != EOX) {
-            ss << " " << bangra::getRefRepr(expr->at);
-            expr = expr->next;
-        }
-        ss << ")";
-        return ss.str();
-    }
-    */
 };
 
 static const List *extract_list(const Any &value) {
@@ -1795,9 +1776,12 @@ static const List *reverse_list(const List *l, const List *eol = nullptr) {
 static const List *reverse_list_inplace(
     const List *l, const List *eol = nullptr) {
     const List *next = nullptr;
+    size_t count = 0;
     while (l != eol) {
+        ++count;
         const List *iternext = l->next;
         const_cast<List *>(l)->next = next;
+        const_cast<List *>(l)->count = count;
         next = l;
         l = iternext;
     }
@@ -4005,6 +3989,35 @@ namespace Types {
             value.str->ptr + i0, i1 - i0));
     }
 
+    static size_t _list_length(const Type *self, const bangra::Any &value) {
+        return value.list?value.list->count:0;
+    }
+
+    static bangra::Any _list_slice(
+        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
+        const List *list = value.list;
+        size_t i = 0;
+        while (i < i0) {
+            assert(list);
+            list = list->next;
+            ++i;
+        }
+        size_t count = list?list->count:0;
+        if (count != (i1 - i0)) {
+            // need to chop off tail, which requires creating a new list
+            assert(list);
+            const List *outlist = nullptr;
+            while (i < i1) {
+                assert(list);
+                outlist = List::create(list->at, outlist, get_anchor(list));
+                list = list->next;
+                ++i;
+            }
+            list = reverse_list_inplace(outlist);
+        }
+        return wrap(list);
+    }
+
     static bangra::Any _string_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
         auto index = (size_t)extract_integer(vindex);
@@ -4560,6 +4573,8 @@ namespace Types {
         tmp->apply_type = apply_type_call<_list_apply_type>;
         tmp->tostring = _list_tostring;
         tmp->splice = _list_splice;
+        tmp->length = _list_length;
+        tmp->slice = _list_slice;
         PList = tmp;
 
         tmp = Struct("Table", true);
