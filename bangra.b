@@ -86,15 +86,6 @@ syntax-extend stage-1 (_ scope)
                         tupleof
                             f expr scope
                             scope
-        /// tupleof
-            quote call
-            block-scope-macro
-                continuation call (_ expr scope)
-                    tupleof
-                        cons
-                            slice (@ expr 0) 1
-                            slice expr 1
-                        scope
         tupleof
             quote dump-syntax
             block-scope-macro
@@ -103,10 +94,10 @@ syntax-extend stage-1 (_ scope)
                         call
                             continuation (_ e)
                                 dump
-                                    @ e 0 0
+                                    @ (@ e 0) 0
                                 cons
                                     escape
-                                        @ e 0 0
+                                        @ (@ e 0) 0
                                     slice e 1
                             @
                                 expand
@@ -122,12 +113,12 @@ syntax-extend stage-1 (_ scope)
             block-scope-macro
                 continuation syntax-macro (_ expr scope)
                     branch
-                        == (typeof (@ expr 0 2)) symbol
+                        == (typeof (@ (@ expr 0) 2)) symbol
                         continuation () none
                         continuation ()
                             error "syntax: let <var> = <expr>"
                     branch
-                        == (@ expr 0 2) (quote =)
+                        == (@ (@ expr 0) 2) (quote =)
                         continuation () none
                         continuation ()
                             error "syntax: let <var> = <expr>"
@@ -146,7 +137,7 @@ syntax-extend stage-1 (_ scope)
                                                         slice expr 1
                                                 slice (@ expr 0) 3
                                     parameter param-name
-                            @ expr 0 1
+                            @ (@ expr 0) 1
                         scope
         tupleof
             quote ?
@@ -155,11 +146,11 @@ syntax-extend stage-1 (_ scope)
                     tupleof
                         cons
                             list branch
-                                @ expr 0 1
+                                @ (@ expr 0) 1
                                 list continuation (list)
-                                    @ expr 0 2
+                                    @ (@ expr 0) 2
                                 list continuation (list)
-                                    @ expr 0 3
+                                    @ (@ expr 0) 3
                             slice expr 1
                         scope
         tupleof
@@ -173,18 +164,18 @@ syntax-extend stage-1 (_ scope)
                                     branch
                                         ==
                                             typeof
-                                                @ expr 0 1
+                                                @ (@ expr 0) 1
                                             symbol
                                         continuation ()
                                             list quote
-                                                @ expr 0 1
+                                                @ (@ expr 0) 1
                                         continuation ()
-                                            @ expr 0 1
+                                            @ (@ expr 0) 1
                                     branch
                                         == (slice (@ expr 0) 2) (list)
                                         continuation ()
                                             list
-                                                @ expr 0 1
+                                                @ (@ expr 0) 1
                                         continuation ()
                                             slice (@ expr 0) 2
                             slice expr 1
@@ -268,7 +259,7 @@ syntax-extend stage-2 (_ scope)
             block-macro
                 continuation function (_ expr)
                     let decl =
-                        (@ expr 0 1)
+                        @ (@ expr 0) 1
                     let retparam =
                         quote return
                     ? (symbol? decl)
@@ -276,11 +267,11 @@ syntax-extend stage-2 (_ scope)
                             list let decl (quote =)
                                 cons continuation
                                     cons
-                                        @ expr 0 1
+                                        @ (@ expr 0) 1
                                         cons
                                             cons
                                                 retparam
-                                                @ expr 0 2
+                                                @ (@ expr 0) 2
                                             slice (@ expr 0) 3
                             ? (empty? (slice expr 1))
                                 list decl
@@ -290,7 +281,7 @@ syntax-extend stage-2 (_ scope)
                                 cons
                                     cons
                                         retparam
-                                        @ expr 0 1
+                                        @ (@ expr 0) 1
                                     slice (@ expr 0) 2
                             slice expr 1
         : and
@@ -339,7 +330,7 @@ syntax-extend stage-2 (_ scope)
                 let if-rec =
                     continuation if (_ expr)
                         let cond =
-                            @ expr 0 1
+                            @ (@ expr 0) 1
                         let then-exprlist =
                             slice (@ expr 0) 2
                         let make-branch =
@@ -636,6 +627,8 @@ syntax-extend stage-3 (_ scope)
             make-expand-multi-op-ltr
                 function (a b)
                     ? (< b a) b a
+        : @
+            make-expand-multi-op-ltr @
         : try
             block-macro
                 function (expr scope)
@@ -649,7 +642,7 @@ syntax-extend stage-3 (_ scope)
                             cons continuation
                                 cons
                                     cons (parameter (quote _))
-                                        @ expr 1 1
+                                        @ (@ expr 1) 1
                                     slice (@ expr 1) 2
                         slice expr 2
 
@@ -680,7 +673,7 @@ syntax-extend stage-3 (_ scope)
                     function (expr)
                         cons
                             ? (empty? (slice (@ expr 0) 2))
-                                qquote-1 (@ expr 0 1)
+                                qquote-1 (@ (@ expr 0) 1)
                                 qquote-1 (slice (@ expr 0) 1)
                             slice expr 1
 
@@ -688,7 +681,7 @@ syntax-extend stage-3 (_ scope)
             block-macro
                 function (expr scope)
                     let name =
-                        @ expr 0 1
+                        @ (@ expr 0) 1
                     let exprlist =
                         slice (@ expr 0) 2
                     let subscope =

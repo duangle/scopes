@@ -4658,8 +4658,8 @@ namespace Types {
         PFrame = Pointer(Struct("Frame", true));
 
         {
-            std::vector<const Type *> types = { PFlow, SizeT, PType, Symbol };
-            std::vector<std::string> names = { "flow", "index", "type", "name" };
+            std::vector<const Type *> types = { PFlow, SizeT, PType, Symbol, Bool };
+            std::vector<std::string> names = { "flow", "index", "type", "name", "vararg" };
             tmp = Struct("Parameter", true);
             tmp->tostring = _parameter_tostring;
             _set_struct_field_types(tmp, types);
@@ -5323,11 +5323,6 @@ static Any builtin_print(const Any *args, size_t argcount) {
 static Any builtin_globals(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 0, 0);
     return wrap(globals);
-}
-
-static Any builtin_at(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 2, 2);
-    return at(args[0], args[1]);
 }
 
 static Any builtin_countof(const Any *args, size_t argcount) {
@@ -6329,7 +6324,8 @@ static void initGlobals () {
 
     setBuiltin<builtin_frame_eval>(env, "frame-eval");
 
-    setBuiltin< builtin_variadic_ltr<builtin_at> >(env, "@");
+    //setBuiltin< builtin_variadic_ltr<builtin_at> >(env, "@");
+    setBuiltin< builtin_binary_op<at> >(env, "@");
 
     setBuiltin<builtin_slice>(env, "slice");
 

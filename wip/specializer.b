@@ -60,6 +60,7 @@ function flow-label (aflow)
     .. LAMBDA_CHAR
         string
             flow-name aflow
+        style-operator "$"
         string
             flow-id aflow
 
@@ -93,6 +94,7 @@ function flow-iter-arguments (aflow aframe)
 function param-label (aparam)
     .. (style-keyword "@")
         string aparam.name
+        style-operator "$"
         string aparam.index
 
 function flow-decl-label (aflow aframe)
@@ -123,12 +125,15 @@ function flow-decl-label (aflow aframe)
             @
                 fold (flow-iter-arguments aflow aframe) (tupleof "" 0)
                     function (out k)
-                        let arg = k.argument
-                        let argtype =
-                            typeof arg
-                        let i = (out @ 1)
+                        let
+                            arg = k.argument
+                            argtype =
+                                typeof arg
+                            i =
+                                out @ 1
                         tupleof
-                            .. (out @ 0)
+                            ..
+                                out @ 0
                                 ? (i == 1)
                                     style-operator " <- "
                                     " "
@@ -178,8 +183,8 @@ function pow (x n)
     else
         x * (pow x (n - 1))
 
-print
-    pow 2 5
+assert
+    (pow 2 5) == 32
 
 dump-function pow
 

@@ -225,6 +225,11 @@ assert
         V . z @ (quote w) . blue
     "accessors failed"
 
+assert
+    and
+        4 == (list 0 (list 1 2 (list 3 4) 5) 6) @ 1 @ 2 @ 1
+        4 == (@ (list 0 (list 1 2 (list 3 4) 5) 6) 1 2 1)
+
 do
     let T = API
         /// table
