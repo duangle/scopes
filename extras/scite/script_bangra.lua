@@ -29,7 +29,7 @@ local function bangra_symbols()
             .. " string expand call escape do empty? dump-syntax"
             .. " syntax-extend dump list-join list-head? if else elseif loop"
             .. " repeat macro block-macro length foreach kindof"
-            .. " table none slice null? assert qquote unquote unquote-splice"
+            .. " table none slice none? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
             .. " set-key! cstr return continuation splice exit"
             .. " try except flowcall hash define"

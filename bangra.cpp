@@ -3957,26 +3957,20 @@ namespace Types {
     static bangra::Any type_list_at(const Type *self,
         const bangra::Any &value, const bangra::Any &vindex) {
         auto slist = value.list;
-        if (!slist) {
-            //error("can not index into empty list");
-            return wrap((bangra::List*)nullptr);
-        }
+        auto count = (size_t)slist?slist->count:0;
         auto index = (size_t)extract_integer(vindex);
-        if (index == 0) {
-            return slist->at;
-        } else {
-            const bangra::List *result = slist;
-            while ((index != 0) && result) {
-                --index;
-                result = result->next;
-            }
-            /*
-            if (index != 0) {
-                error("index %zu out of list bounds", index);
-            }
-            */
-            return wrap(result);
+        if (index >= count) {
+            error("index %zu out of list bounds (%zu)",
+                index, count);
+            return const_none;
         }
+        const bangra::List *result = slist;
+        while ((index != 0) && result) {
+            --index;
+            result = result->next;
+        }
+        assert(result);
+        return result->at;
     }
 
     static size_t _string_length(const Type *self, const bangra::Any &value) {
