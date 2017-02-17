@@ -1,0 +1,134 @@
+# Bangra Release 0.5 #
+
+## Changelog ##
+
+* Renamed `slist` type to `list`. [6ad64176795e]
+* Added builtin function `next-key` to permit iterating keys and values of tables. [6ad64176795e]
+* Flow objects can be declared with symbolic names to help with debugging. [98f0ebc48c96] [5fea178a13de] [c38752764396]
+* Integer division results are of type `double`. Use `//` (floordiv) to do integer division. [5bab3242405e]
+* `-` and `/` operators support single argument, perform negation and reciprocal respectively. [5bab3242405e]
+* Fixed `import-c` not importing library symbols [200880063f7f]
+* Builtin function `cstr` converts `rawstring` to `string` type. [200880063f7f]
+* Added builtin function `external` to declare and import C library symbols. [c0c224b724ae]
+* Added type constructor for `pointer`. [c0c224b724ae]
+* Renamed builtin function `cdecl` to `cfunction`. [bba6f473f2eb]
+* Added reflection API for closures, frames, flows and parameters. [f56d34a83c0a]
+* Support for three or more arguments to `and` and `or` operators. [d4aa8862690a]
+* Improved ANSI color support in interpreter. [819806e14a26]
+* Fixed ANSI always on for certain types. [bb0eb0868ef6]
+* Pointer values can be associated with a name. [3ba626edfa2f]
+* Improved copy elision by using a double buffering scheme for execution. [4c695972f41b]
+* Excess function arguments are truncated from calls, missing arguments default to `none`. [ff993790b15c] [c38752764396]
+* Internally, the continuation argument is always at index zero. [c38752764396]
+* Improved debug output for trace mode. [c38752764396]
+* Replaced special form `function` with `continuation` that takes a continuation as explicit first parameter when any parameters are defined. [ca7126d88bbd]
+* `function` is now implemented as a macro. [ca7126d88bbd]
+* An auto-defined `return` continuation in functions allows to return to the calling function from any point in the function. [ca7126d88bbd]
+* Support for variable arguments and trailing argument matching. A parameter name that trails with `...` captures all remaining arguments in a tuple, minus any explicit arguments defined after it. [469574e18eee] [4ed0825305c2] [09cd1d4126ea]
+* Added argument splicing for tuples and lists. When performing a call, wrapping a tuple or list value with a `(splice ...)` type modifier splices its elements into call arguments. Any type can support splicing. [8aabe779a511] [74020eb9dd48]
+* Added support for ordered comparison of tuples. [cf0d61d35863]
+* Changed `let` syntax: `let name value` is now written as `let name = value`, to make bindings more readable and fit better with contemporary declarative styles.
+* New additional syntax for `let`: `let name1 ... nameN = expression` unpacks a tuple into multiple variables. Variable arguments work as expected. [cf0d61d35863] [222eccfad724] [2416a3180b0a]
+* All immutable types that fit into 8 bytes or less are now directly embedded in fat pointers, which saves a ton of temporary allocations. [ecd20d54636e] [3fb88c755452]
+* Removed `call/cc`, as continuations are now accessible from the language. [78653eff3890]
+* Added exception handling support via `try`/`except` block macro. [78653eff3890]
+* Added `flowcall` to permit calling continuations without a return closure. [78653eff3890]
+
+
+2017-02-12  Leonard Ritter  <contact@leonard-ritter.com>
+
+* bangra.cpp:
+- store in/out args in state object
+- added helper macros to write continuation functions
+[01cb334f61f6]
+
+* bangra.b, testing/test_all.b:
+- removed := because `let` is the better, easier to expand keyword
+[e053c43092be]
+
+* bangra.b:
+removed debug output
+[023ee51f3d6d]
+
+* bangra.b, bangra.cpp:
+- removed BuiltinMacro
+[a2ff3d85321e]
+
+* bangra.b, bangra.cpp, testing/test_all.b:
+- quote type qualifier is used to quote/escape expanded expressions
+[f3099dc528a8]
+
+2017-02-13  Leonard Ritter  <contact@leonard-ritter.com>
+
+* bangra.cpp, extras/scite/script_bangra.lua, testing/test_all.b:
+- implemented subtype checks via equality operators
+[a1d25d288173]
+
+* bangra.cpp, extras/scite/script_bangra.lua, testing/test_all.b:
+- exposed all supertypes
+- cfunction and pointer are now type constructors
+[eab3b5b1a15b]
+
+* bangra.cpp, testing/test_all.b:
+- more type constructors
+[bf8d7b7495db]
+
+* bangra.b, bangra.cpp, extras/scite/script_bangra.lua,
+testing/test_all.b:
+- moved shortcuts for numeric types to bangra bootstrap script
+[da9fac470522]
+
+* bangra.cpp:
+commented out unused code
+[0d48d342d741]
+
+2017-02-14  Leonard Ritter  <contact@leonard-ritter.com>
+
+* bangra.b, bangra.cpp, external/cityhash/city.cpp,
+external/cityhash/city.h, extras/scite/script_bangra.lua,
+testing/test_all.b:
+- initial support for type-defined hashing
+- tables permit any hashable key element
+[69f522827502]
+
+* bangra.b, bangra.cpp, extras/scite/script_bangra.lua,
+testing/test_all.b, wip/specializer.b:
+- new define keyword to declare macro symbols
+- fixed mod infix operator
+- fixed syntax-extend failing after one successive statement
+[1c54e73476de]
+
+* bangra.b, testing/test_all.b:
+removed debug messages
+[020252db8cb8]
+
+* bangra.b, bangra.cpp, testing/test_all.b, wip/specializer.b:
+- `None` type is now `void`
+- `let` syntax changed to include assignment token to match common
+expectations
+[0835a02abe10]
+
+* bangra.b, bangra.cpp:
+- changed macro argument order from (scope expr) to (expr scope)
+[6ea4cedbfc72]
+
+2017-02-16  Leonard Ritter  <contact@leonard-ritter.com>
+
+* bangra.b, bangra.cpp, extras/scite/script_bangra.lua:
+- better parameter configuration for streamValue and its wrappers
+- macro keywords have been renamed
+- incomplete work on block-scope-macro
+[ca1fe1d61cb5]
+
+* bangra.b, bangra.cpp, testing/test_all.b, wip/specializer.b:
+- block-scope-macro is finished
+- removed excess recursions in syntax-extend
+[5c27b0c3424d]
+
+2017-02-16  Leonard Ritter  <leonard.ritter@duangle.com>
+
+* bangra.cpp, external/cityhash/city.cpp, makebangra.bat,
+win32/dlfcn.c, win32/dlfcn.h:
+- win32 specific build fixes
+[e714e5215c88] [tip]
+

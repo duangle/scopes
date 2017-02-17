@@ -8,8 +8,8 @@ Order  Stage        Through                  To
 =====  ===========  =======================  ====================
 1      Parsing      Data Interchange Format  S-Expression Tree
 2      Expansion    Bangra Language          Special Forms Only
-3      Translation  IR Language              LLVM Module
-4      Execution    JIT Generated Functions  Program Output
+3      Translation  Expanded Tree            Control Flow Graph
+4      Execution    Control Flow Form        Program Output
 =====  ===========  =======================  ====================
 
 TODO

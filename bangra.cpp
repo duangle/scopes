@@ -6265,9 +6265,6 @@ static void initGlobals () {
 
     setBuiltin<builtin_expand>(env, "expand");
     setBuiltin<builtin_set_globals>(env, "set-globals!");
-    //setBuiltin<builtin_is_integer>(env, "integer?");
-    //setBuiltin<builtin_is_null>(env, "null?");
-    //setBuiltin<builtin_is_key>(env, "key?");
     setBuiltin<builtin_error>(env, "error");
     setBuiltin<builtin_countof>(env, "countof");
     setBuiltin<builtin_loadlist>(env, "list-load");

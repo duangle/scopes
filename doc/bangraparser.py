@@ -272,8 +272,6 @@ def tokennaked(expr):
         if s is None:
             s, e = 0, len(expr)
         return expr[:e], expr.subtoken(e), expr
-    elif ch == "@":
-        return "@", expr.subtoken(1), expr
     elif ch == "\\":
         return "\\", expr.subtoken(1), expr
     elif nakedreserved.get(ch,False):
@@ -359,8 +357,6 @@ def parseany(tokens, t, anchor):
         return tok_eof
     elif t[0] == "\"":
         return '"' + t[1:].decode('string_escape')
-    elif t == "@":
-        anchor_error(anchor, 'stray wrap operator')
     else:
         if not t.startswith("0x"):
             try:

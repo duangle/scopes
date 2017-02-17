@@ -113,17 +113,17 @@ class BangraObject(ObjectDescription):
 
         paramlist = addnodes.desc_parameterlist()
         paramlist.child_text_separator = ' '
-        if self.objtype in ('infix-macro','ir-infix-macro'):
+        if self.objtype in ('infix-macro',):
             name = expr[1]
             parse_arg(paramlist, expr[0])
             paramlist += addnodes.desc_name(name, ' ' + name)
             parse_arg(paramlist, expr[2])
-        elif self.objtype in ('symbol-prefix','ir-symbol-prefix'):
+        elif self.objtype in ('symbol-prefix',):
             name = expr[0]
             rest = expr[1]
             signode += addnodes.desc_name(name, name)
             paramlist = addnodes.desc_parameter(rest, rest)
-        elif self.objtype in ('var','ir-type'):
+        elif self.objtype in ('define','type'):
             name = expr
             paramlist = addnodes.desc_name(name, name)
         else:
@@ -191,14 +191,9 @@ class BangraDomain(Domain):
         'infix-macro':    ObjType(l_('infix-macro'), 'infix-macro'),
         'symbol-prefix':    ObjType(l_('symbol-prefix'), 'symbol-prefix'),
         'function': ObjType(l_('function'), 'function'),
-        'var': ObjType(l_('var'), 'var'),
-        'ir-global': ObjType(l_('ir-global'), 'ir-global'),
-        'ir-special': ObjType(l_('ir-special'), 'ir-special'),
-        'ir-macro':    ObjType(l_('ir-macro'),    'ir-macro'),
-        'ir-infix-macro':    ObjType(l_('ir-infix-macro'), 'ir-infix-macro'),
-        'ir-symbol-prefix':    ObjType(l_('ir-symbol-prefix'), 'ir-symbol-prefix'),
-        'ir-function': ObjType(l_('ir-function'), 'ir-function'),
-        'ir-type': ObjType(l_('ir-type'), 'ir-type'),
+        'define': ObjType(l_('define'), 'define'),
+        'type': ObjType(l_('type'), 'type'),
+        'type-factory': ObjType(l_('type-factory'), 'type-factory'),
     }
 
     directives = {
@@ -207,15 +202,9 @@ class BangraDomain(Domain):
         'infix-macro':    BangraObject,
         'symbol-prefix':    BangraObject,
         'function': BangraObject,
-        'var': BangraObject,
-
-        'ir-global': BangraObject,
-        'ir-special': BangraObject,
-        'ir-macro': BangraObject,
-        'ir-infix-macro': BangraObject,
-        'ir-symbol-prefix': BangraObject,
-        'ir-function': BangraObject,
-        'ir-type': BangraObject,
+        'define': BangraObject,
+        'type': BangraObject,
+        'type-factory': BangraObject,
     }
     roles = {
         'func' :  BangraXRefRole(),
@@ -223,16 +212,10 @@ class BangraDomain(Domain):
         'macro' :  BangraXRefRole(),
         'infix-macro' :  BangraXRefRole(),
         'symbol-prefix':    BangraXRefRole(),
-        'var':    BangraXRefRole(),
+        'define':    BangraXRefRole(),
         'obj':    BangraXRefRole(),
-
-        'ir-global': BangraXRefRole(),
-        'ir-special': BangraXRefRole(),
-        'ir-macro': BangraXRefRole(),
-        'ir-infix-macro': BangraXRefRole(),
-        'ir-symbol-prefix': BangraXRefRole(),
-        'ir-function': BangraXRefRole(),
-        'ir-type': BangraXRefRole(),
+        'type':    BangraXRefRole(),
+        'type-factory':    BangraXRefRole(),
     }
 
     role_map = {
@@ -240,11 +223,13 @@ class BangraDomain(Domain):
     }
 
     search_roles = [
-        'var',
+        'define',
         'macro',
         'infix-macro',
         'function',
         'special',
+        'type',
+        'type-factory',
     ]
 
     initial_data = {
