@@ -907,7 +907,7 @@ enum {
     OP2_And,
     OP2_Or,
     OP2_Xor,
-    OP2_Concat,
+    OP2_Join,
     OP2_At,
     OP2_LShift,
     OP2_RShift,
@@ -1273,8 +1273,8 @@ static Any bit_xor(const Any &a, const Any &b) {
     return op2<OP2_Xor>(a, b);
 }
 
-static Any concat(const Any &a, const Any &b) {
-    return op2<OP2_Concat>(a, b);
+static Any join(const Any &a, const Any &b) {
+    return op2<OP2_Join>(a, b);
 }
 
 static Any at(const Any &value, const Any &index) {
@@ -4050,9 +4050,30 @@ namespace Types {
         return self->types.size();
     }
 
-    static bangra::Any _string_concat(const Type *self,
+    static bangra::Any _string_join(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         return wrap(extract_string(a) + extract_string(b));
+    }
+
+    static bangra::Any _table_join(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto ta = a.table;
+        auto tb = extract_table(b);
+        auto t = new_table();
+        for (auto it = ta->_.begin(); it != ta->_.end(); ++it) {
+            set_key(*t, it->first, it->second);
+        }
+        for (auto it = tb->_.begin(); it != tb->_.end(); ++it) {
+            set_key(*t, it->first, it->second);
+        }
+        return wrap(t);
+    }
+
+    template<int op_name>
+    static bangra::Any _pointer_fwd_op2(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        auto x = pointer_element(self, a);
+        return op2<op_name>(x, b);
     }
 
     static void _set_field_names(Type *type, const std::vector<std::string> &names) {
@@ -4203,6 +4224,7 @@ namespace Types {
         type->cmp_type = type_pointer_eq;
         type->hash = _pointer_hash;
         type->op2[OP2_At] = type_pointer_at;
+        type->op2[OP2_Join] = _pointer_fwd_op2<OP2_Join>;
         type->countof = _pointer_countof;
         type->cmp = value_pointer_cmp;
         type->tostring = _pointer_tostring;
@@ -4541,7 +4563,7 @@ namespace Types {
         tmp->slice = _string_slice;
         tmp->hash = _string_hash;
         tmp->op2[OP2_At] = _string_at;
-        tmp->op2[OP2_Concat] = _string_concat;
+        tmp->op2[OP2_Join] = _string_join;
         tmp->cmp = value_string_cmp;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
@@ -4574,6 +4596,7 @@ namespace Types {
 
         tmp = Struct("Table", true);
         tmp->op2[OP2_At] = type_table_at;
+        tmp->op2[OP2_Join] = _table_join;
         _Table = tmp;
         PTable = Pointer(_Table);
 
@@ -5374,21 +5397,6 @@ static Any builtin_table(const Any *args, size_t argcount) {
         set_key(*t, pair[0], pair[1]);
     }
 
-    return wrap(t);
-}
-
-static Any builtin_table_join(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 2, 2);
-
-    auto a = extract_table(args[0]);
-    auto b = extract_table(args[1]);
-    auto t = new_table();
-    for (auto it = a->_.begin(); it != a->_.end(); ++it) {
-        set_key(*t, it->first, it->second);
-    }
-    for (auto it = b->_.begin(); it != b->_.end(); ++it) {
-        set_key(*t, it->first, it->second);
-    }
     return wrap(t);
 }
 
@@ -6253,7 +6261,6 @@ static void initGlobals () {
     setBuiltin<builtin_cons>(env, "cons");
     setBuiltin<builtin_structof>(env, "structof");
     setBuiltin<builtin_table>(env, "table");
-    setBuiltin<builtin_table_join>(env, "table-join");
     setBuiltin<builtin_set_key>(env, "set-key!");
     setBuiltin<builtin_next_key>(env, "next-key");
     setBuiltin<builtin_typeof>(env, "typeof");
@@ -6298,7 +6305,7 @@ static void initGlobals () {
     setBuiltin< builtin_binary_op<floordiv> >(env, "//");
     setBuiltin< builtin_binary_op<mod> >(env, "%");
 
-    setBuiltin< builtin_variadic_rtl<builtin_binary_op<concat> > >(env, "..");
+    setBuiltin< builtin_variadic_rtl<builtin_binary_op<join> > >(env, "..");
 
     setBuiltin< builtin_binary_op<bit_and> >(env, "&");
     setBuiltin< builtin_variadic_ltr< builtin_binary_op<bit_or> > >(env, "|");

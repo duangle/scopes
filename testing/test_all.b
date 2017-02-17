@@ -1,4 +1,8 @@
 
+print
+    min integer int8
+    max 3 4 5
+
 do
     let T =
         table
@@ -44,7 +48,7 @@ do
 
 do
     let z =
-        table-join
+        ..
             table
                 x : 1
                 y : 2

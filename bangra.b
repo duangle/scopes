@@ -637,6 +637,14 @@ syntax-extend stage-3 (_ scope)
             make-expand-multi-op-ltr and
         : or
             make-expand-multi-op-ltr or
+        : max
+            make-expand-multi-op-ltr
+                function (a b)
+                    ? (> b a) b a
+        : min
+            make-expand-multi-op-ltr
+                function (a b)
+                    ? (< b a) b a
         : try
             block-macro
                 function (expr scope)
