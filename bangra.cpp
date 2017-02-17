@@ -57,6 +57,7 @@ int print_number(int value);
 #undef NDEBUG
 #include <sys/types.h>
 #ifdef _WIN32
+#include <windows.h>
 #include "mman.h"
 #include "stdlib_ex.h"
 #include "dlfcn.h"
@@ -6556,6 +6557,20 @@ void print_help(const char *exename) {
 int bangra_main(int argc, char ** argv) {
     bangra_argc = argc;
     bangra_argv = argv;
+
+#ifdef _WIN32
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+    // turn on ANSI processing
+    auto hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    auto hStdErr = GetStdHandle(STD_ERROR_HANDLE);
+    DWORD mode;
+    GetConsoleMode(hStdOut, &mode);
+    SetConsoleMode(hStdOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    GetConsoleMode(hStdErr, &mode);
+    SetConsoleMode(hStdErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#endif
 
     bangra::init();
 
