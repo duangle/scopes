@@ -3893,6 +3893,18 @@ namespace Types {
         return _tuple_get(self, value, (size_t)extract_integer(vindex));
     }
 
+    static bangra::Any _tuple_slice(
+        const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
+        size_t count = i1 - i0;
+        std::vector<const Type *> types;
+        types.resize(count);
+        for (size_t i = 0; i < count; ++i) {
+            types[i] = self->types[i0 + i];
+        }
+        const Type *newtype = Tuple(types);
+        return wrap(newtype, (char *)value.ptr + self->offsets[i0]);
+    }
+
     static Ordering _tuple_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         auto atype = a.type;
@@ -4273,6 +4285,7 @@ namespace Types {
         type->countof = _tuple_countof;
         type->tostring = _tuple_tostring;
         type->splice = _tuple_splice;
+        type->slice = _tuple_slice;
         _set_struct_field_types(type, types);
         return type;
     }

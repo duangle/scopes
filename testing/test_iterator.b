@@ -66,7 +66,7 @@ function comp (funcs... final)
         let tail =
             @ funcs... (count - 1)
         comp
-            splice (slice (list (splice funcs...)) 0 -1)
+            splice (slice funcs... 0 -1)
             tail final
 
 let pipeline =
