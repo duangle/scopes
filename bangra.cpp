@@ -6019,10 +6019,6 @@ static Any builtin_set_exception_handler(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     auto old_exception_handler = exception_handler;
     auto func = args[0];
-    if (is_closure_type(func.type)) {
-        // strip the frame
-        func = wrap(func.closure->entry);
-    }
     exception_handler = func;
     return old_exception_handler;
 }

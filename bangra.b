@@ -601,11 +601,13 @@ syntax-extend stage-3 (_ scope)
             let finally = return
             function except (exc aframe args)
                 cleanup;
-                xfunc exc
-                finally;
+                finally
+                    xfunc exc
             set-exception-handler! except
-            flowcall func
+            let result =
+                func;
             cleanup;
+            result
         try;
 
     table
