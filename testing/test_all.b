@@ -178,10 +178,16 @@ assert
                 else
                     .. out k k
 
-assert
-    == "xyz"
-        slice "abcdefghijklmnopqrstuvwxyz" -3
-    "slice failed"
+do
+    let k = "abcdefghijklmnopqrstuvwxyz"
+    assert
+        == "xyz"
+            slice k -3
+        "slice failed"
+    assert
+        == "bcd"
+            slice k 1 4
+        "slice failed"
 
 assert
     == 3

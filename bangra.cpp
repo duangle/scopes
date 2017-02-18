@@ -3972,8 +3972,15 @@ namespace Types {
 
     static bangra::Any _string_slice(
         const Type *self, const bangra::Any &value, size_t i0, size_t i1) {
-        return wrap(Types::String, alloc_string(
-            value.str->ptr + i0, i1 - i0));
+        const bangra::String *str;
+        if (i1 < value.str->count) {
+            // allocate a new one, since we need the string to be always
+            // zero-terminated.
+            str = alloc_string(value.str->ptr + i0, i1 - i0);
+        } else {
+            str = alloc_slice(value.str->ptr + i0, i1 - i0);
+        }
+        return wrap(Types::String, str);
     }
 
     static size_t _list_countof(const Type *self, const bangra::Any &value) {
