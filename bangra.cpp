@@ -6105,7 +6105,9 @@ struct ILBuilder {
         if (!state.flow) {
             error("can not break: continuation already exited.");
         }
-        if (state.prevflow
+        // FIXME: this simple tail call hack messes situations up where
+        // contcall has a complex last parameter
+        /*if (state.prevflow
             && (arguments.size() == 3)
             && (is_parameter_type(arguments[ARG_Arg0].type))
             && (arguments[ARG_Arg0].parameter
@@ -6114,7 +6116,7 @@ struct ILBuilder {
             && (state.prevflow->arguments[ARG_Cont].flow
                 == state.flow)) {
             state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
-        } else {
+        } else*/ {
             insertAndAdvance(arguments, nullptr, anchor);
         }
     }
@@ -6246,6 +6248,7 @@ static Any compile_contcall (const List *it) {
         printValue(wrap(it), 0, true);
         error("call expression not anchored");
     }
+
     it = it->next;
     if (!it)
         error("continuation expected");
@@ -6262,6 +6265,7 @@ static Any compile_contcall (const List *it) {
     }
 
     builder->br(args, anchor);
+
     return const_none;
 }
 

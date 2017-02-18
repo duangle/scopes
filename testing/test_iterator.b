@@ -9,70 +9,93 @@ call
     "hi"
 
 function iter-list (alist)
-    function (init)
-        init
-            function (process k)
-                if (not (empty? k))
-                    process
-                        function (repeat)
-                            repeat (slice k 1)
+    continuation (init)
+        contcall
+            continuation (break process k)
+                if ((countof k) > 0)
+                    contcall
+                        continuation post-process (repeat)
+                            contcall none repeat (slice k 1)
+                        process
                         @ k 0
+                else
+                    contcall none break true
+            init
             alist
 
 function range (N)
-    function (init)
-        init
-            function (process i)
+    continuation (init)
+        contcall
+            continuation (break process i)
                 if (i < N)
-                    process
-                        function (repeat)
-                            repeat (i + 1)
+                    contcall
+                        continuation (repeat)
+                            contcall none repeat (i + 1)
+                        process
                         i
+                else
+                    contcall none break true
+            init
             0
 
 function zip (gen-a gen-b)
-    function (init)
-        gen-a
-            function (a-nextfunc a-init-state...)
-                gen-b
-                    function (b-nextfunc b-init-state...)
-                        init
-                            function (process a-state b-state)
-                                a-nextfunc
-                                    function (a-cont a-value...)
-                                        b-nextfunc
-                                            function (b-cont b-value...)
-                                                process
-                                                    function (repeat)
-                                                        a-cont
-                                                            function (a-next-state...)
-                                                                b-cont
-                                                                    function (b-next-state...)
-                                                                        repeat
-                                                                            a-next-state...
-                                                                            b-next-state...
-                                                    splice a-value...
-                                                    splice b-value...
-                                            splice b-state
-                                    splice a-state
-                            a-init-state...
-                            b-init-state...
+    continuation (init)
+        contcall
+            continuation (a-nextfunc a-init-state)
+                contcall
+                    continuation (b-nextfunc b-init-state)
+                        contcall
+                            continuation (break process ab-state)
+                                contcall
+                                    break
+                                    a-nextfunc
+                                    continuation (a-cont a-value)
+                                        contcall
+                                            break
+                                            b-nextfunc
+                                            continuation (b-cont b-value)
+                                                contcall
+                                                    continuation (repeat)
+                                                        contcall
+                                                            continuation (_ a-next-state)
+                                                                contcall
+                                                                    continuation (_ b-next-state)
+                                                                        contcall none repeat
+                                                                            tupleof
+                                                                                a-next-state
+                                                                                b-next-state
+                                                                    b-cont
+                                                            a-cont
+                                                    process
+                                                    tupleof a-value b-value
+                                            @ ab-state 1
+                                    @ ab-state 0
+                            init
+                            tupleof a-init-state b-init-state
+                    gen-b
+            gen-a
 
-function foreach (gen f)
-    gen
-        function (nextfunc init-state...)
-            function step (cont value...)
-                f (splice value...)
-                cont
-                    function (state...)
-                        nextfunc step (splice state...)
-            nextfunc step (splice init-state...)
+let foreach =
+    continuation foreach (break gen f)
+        contcall
+            continuation init-loop (nextfunc init-state)
+                let step =
+                    continuation step-loop (cont value)
+                        f value
+                        contcall
+                            continuation process-element (_ state)
+                                contcall break nextfunc step state
+                            cont
+                contcall break nextfunc step init-state
+            gen
 
 foreach
+    #range 10
+    #iter-list (quote A B C D E F)
     zip
-        range 10
+        range 30
         zip
             iter-list (quote U X S)
             iter-list (quote V Y T)
-    function (values...)
-        print "#" values...
+    function (value)
+        print "#" value
