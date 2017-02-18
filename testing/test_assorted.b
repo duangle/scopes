@@ -281,15 +281,15 @@ assert
     "call/cc failed"
 
 do
-    function cont-test (x)
-        print "entered function"
-        let topret = return
-        function subf ()
-            print "entered subfunction"
-            # `return x` would just exit subf, but not cont-test
-            topret x
-        subf;
-        error "unreachable"
+    let cont-test =
+        continuation cont-test (topret x)
+            print "entered function"
+            function subf ()
+                print "entered subfunction"
+                # `return x` would just exit subf, but not cont-test
+                contcall none topret x
+            subf;
+            error "unreachable"
     assert
         cont-test true
         "continuation failed"

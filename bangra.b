@@ -257,33 +257,34 @@ syntax-extend stage-2 (_ scope)
 
         : function # (function [name] (param ...) body ...)
             block-macro
-                continuation function (_ expr)
+                continuation function (_ topexpr)
+                    let expr =
+                        @ topexpr 0
                     let decl =
-                        @ (@ expr 0) 1
+                        @ (@ topexpr 0) 1
                     let retparam =
                         quote return
+                    let make-params-body =
+                        continuation (_ param-idx)
+                            cons
+                                cons
+                                    retparam
+                                    @ expr param-idx
+                                slice expr (+ param-idx 1)
                     ? (symbol? decl)
                         cons
                             list let decl (quote =)
                                 cons continuation
                                     cons
-                                        @ (@ expr 0) 1
-                                        cons
-                                            cons
-                                                retparam
-                                                @ (@ expr 0) 2
-                                            slice (@ expr 0) 3
-                            ? (empty? (slice expr 1))
+                                        @ expr 1
+                                        make-params-body 2
+                            ? (empty? (slice topexpr 1))
                                 list decl
-                                slice expr 1
+                                slice topexpr 1
                         cons
                             cons continuation
-                                cons
-                                    cons
-                                        retparam
-                                        @ (@ expr 0) 1
-                                    slice (@ expr 0) 2
-                            slice expr 1
+                                make-params-body 1
+                            slice topexpr 1
         : and
             macro
                 continuation and (_ expr)
@@ -597,18 +598,17 @@ syntax-extend stage-3 (_ scope)
             get-exception-handler;
         function cleanup ()
             set-exception-handler! old_handler
-        function try ()
-            let finally = return
-            function except (exc aframe args)
+        call
+            continuation try (finally)
+                function except (exc aframe args)
+                    cleanup;
+                    finally
+                        xfunc exc
+                set-exception-handler! except
+                let result =
+                    func;
                 cleanup;
-                finally
-                    xfunc exc
-            set-exception-handler! except
-            let result =
-                func;
-            cleanup;
-            result
-        try;
+                result
 
     table
         tupleof scope-parent-symbol scope

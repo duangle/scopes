@@ -32,7 +32,7 @@ local function bangra_symbols()
             .. " table none slice none? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
             .. " set-key! cstr return continuation splice exit"
-            .. " try except flowcall hash define min max"
+            .. " try except flowcall contcall hash define min max"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

@@ -103,19 +103,24 @@ function flow-decl-label (aflow aframe)
             let
                 pcount =
                     flow-parameter-count aflow
-                idx = 0
+                idx = 1
                 s =
-                    .. (flow-label aflow) " "
+                    ..
+                        param-label
+                            flow-parameter aflow 0
+                        style-operator " <- "
+                        flow-label aflow
+                        " "
                         style-operator "("
+
             loop (idx s)
                 if (idx < pcount)
                     let param =
                         flow-parameter aflow idx
-                    # param.flow param.index param.type
                     repeat
                         idx + 1
                         .. s
-                            ? (idx == 0) "" " "
+                            ? (idx == 1) "" " "
                             param-label param
                 else
                     .. s
@@ -187,4 +192,5 @@ assert
     (pow 2 5) == 32
 
 dump-function pow
+#dump-function testfunc
 

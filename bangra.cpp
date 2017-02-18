@@ -3669,9 +3669,21 @@ namespace Types {
         return wrap(extract_integer(a) % extract_integer(b));
     }
 
+    // thx to fabian for this one
+    template<typename T>
+    T ipow(T base, T exponent) {
+        T result = 1, cur = base;
+        while (exponent) {
+            if (exponent & 1) result *= cur;
+            cur *= cur;
+            exponent >>= 1;
+        }
+        return result;
+    }
+
     static bangra::Any _integer_pow(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(std::pow(extract_integer(a), extract_integer(b)));
+        return wrap(ipow(extract_integer(a), extract_integer(b)));
     }
 
     static bangra::Any _integer_neg(const Type *self, const bangra::Any &x) {
@@ -6059,12 +6071,18 @@ struct ILBuilder {
         const std::vector<Any> &values,
         Flow *next,
         const Anchor *anchor) {
-        assert(state.flow);
+        if (!state.flow) {
+            error("can not insert call: continuation already exited.");
+        }
         assert(!state.flow->hasArguments());
         state.flow->arguments = values;
         set_anchor(state.flow, anchor);
         state.prevflow = state.flow;
         state.flow = next;
+    }
+
+    Flow *getActiveFlow() const {
+        return state.flow;
     }
 
     // arguments must include continuation
@@ -6084,7 +6102,9 @@ struct ILBuilder {
         //
         // these predicates should probably be in a more meaningful
         // function.
-        assert(state.flow);
+        if (!state.flow) {
+            error("can not break: continuation already exited.");
+        }
         if (state.prevflow
             && (arguments.size() == 3)
             && (is_parameter_type(arguments[ARG_Arg0].type))
@@ -6169,7 +6189,9 @@ static Any compile_continuation (const List *it) {
 
     auto result = compile_expr_list(it);
 
-    builder->br({const_none, wrap(ret), result}, anchor);
+    if (builder->getActiveFlow()) {
+        builder->br({const_none, wrap(ret), result}, anchor);
+    }
 
     builder->restore(currentblock);
 
@@ -6218,6 +6240,31 @@ static Any compile_call (const List *it) {
     return compile_implicit_call(it, anchor);
 }
 
+static Any compile_contcall (const List *it) {
+    auto anchor = find_valid_anchor(it);
+    if (!anchor || !anchor->isValid()) {
+        printValue(wrap(it), 0, true);
+        error("call expression not anchored");
+    }
+    it = it->next;
+    if (!it)
+        error("continuation expected");
+    std::vector<Any> args;
+    args.push_back(compile(it->at));
+    it = it->next;
+    if (!it)
+        error("callable expected");
+    args.push_back(compile(it->at));
+    it = it->next;
+    while (it) {
+        args.push_back(compile(it->at));
+        it = it->next;
+    }
+
+    builder->br(args, anchor);
+    return const_none;
+}
+
 //------------------------------------------------------------------------------
 
 static Any compile (const Any &expr) {
@@ -6259,6 +6306,7 @@ static void initGlobals () {
     //setLocalString(env, "globals", wrap(env));
 
     setBuiltin<compile_call>(env, "call");
+    setBuiltin<compile_contcall>(env, "contcall");
     setBuiltin<compile_continuation>(env, "form:continuation");
     setBuiltin<compile_splice>(env, "splice");
     setBuiltin<compile_do>(env, "do");
