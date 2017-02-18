@@ -226,6 +226,9 @@ assert
     "accessors failed"
 
 assert
+    2.0 ** 5.0 == 32.0
+
+assert
     and
         4 == (list 0 (list 1 2 (list 3 4) 5) 6) @ 1 @ 2 @ 1
         4 == (@ (list 0 (list 1 2 (list 3 4) 5) 6) 1 2 1)

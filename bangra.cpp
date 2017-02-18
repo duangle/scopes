@@ -912,6 +912,7 @@ enum {
     OP2_At,
     OP2_LShift,
     OP2_RShift,
+    OP2_Pow,
 
     OP2_Count,
 };
@@ -1264,6 +1265,10 @@ static Any floordiv(const Any &a, const Any &b) {
 
 static Any mod(const Any &a, const Any &b) {
     return op2<OP2_Mod>(a, b);
+}
+
+static Any pow(const Any &a, const Any &b) {
+    return op2<OP2_Pow>(a, b);
 }
 
 static Any bit_and(const Any &a, const Any &b) {
@@ -3664,6 +3669,11 @@ namespace Types {
         return wrap(extract_integer(a) % extract_integer(b));
     }
 
+    static bangra::Any _integer_pow(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return wrap(std::pow(extract_integer(a), extract_integer(b)));
+    }
+
     static bangra::Any _integer_neg(const Type *self, const bangra::Any &x) {
         return wrap(-extract_integer(x));
     }
@@ -3717,6 +3727,11 @@ namespace Types {
 
     static bangra::Any _real_rcp(const Type *self, const bangra::Any &x) {
         return real(self, 1.0 / extract_real(x));
+    }
+
+    static bangra::Any _real_pow(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return real(self, std::pow(extract_real(a), extract_real(b)));
     }
 
     static Ordering _real_cmp(const Type *self,
@@ -4289,14 +4304,18 @@ namespace Types {
                 format("%sint%zu", signed_?"":"u", width));
         type->cmp_type = type_integer_eq;
         type->is_embedded = true;
+
         type->op1[OP1_Neg] = _integer_neg;
         type->op1[OP1_Rcp] = _integer_rcp;
+
         type->op2[OP2_Add] = type->rop2[OP2_Add] = _integer_add;
         type->op2[OP2_Sub] = _integer_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _integer_mul;
         type->op2[OP2_Div] = _integer_div;
         type->op2[OP2_FloorDiv] = _integer_floordiv;
         type->op2[OP2_Mod] = _integer_mod;
+        type->op2[OP2_Pow] = _integer_pow;
+
         type->hash = _integer_hash;
 
         if (width == 1) {
@@ -4331,8 +4350,11 @@ namespace Types {
         type->op2[OP2_Sub] = _real_sub;
         type->op2[OP2_Mul] = type->rop2[OP2_Mul] = _real_mul;
         type->op2[OP2_Div] = _real_div;
+        type->op2[OP2_Pow] = _real_pow;
+
         type->op1[OP1_Neg] = _real_neg;
         type->op1[OP1_Rcp] = _real_rcp;
+
         type->hash = _real_hash;
 
         type->cmp = _real_cmp;
@@ -6345,6 +6367,8 @@ static void initGlobals () {
 
     setBuiltin< builtin_binary_op<lshift> >(env, "<<");
     setBuiltin< builtin_binary_op<rshift> >(env, ">>");
+
+    setBuiltin< builtin_binary_op<pow> >(env, "**");
 
     setBuiltin< builtin_unary_op<bool_not> >(env, "not");
 
