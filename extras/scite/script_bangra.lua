@@ -33,6 +33,7 @@ local function bangra_symbols()
             .. " list-atom? list-load load globals table-join require"
             .. " set-key! cstr return continuation splice exit"
             .. " try except flowcall contcall hash define min max"
+            .. " va-arg va-countof"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or

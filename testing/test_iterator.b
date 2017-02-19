@@ -1,93 +1,9 @@
 
-function filter (pred)
-    function filter-init (nextf)
-        function xf (x nextf)
-            if (pred x)
-                let nextff =
-                    nextf x
-                function (x)
-                    xf x nextff
-            else
-                function (x)
-                    xf x nextf
-        function filter-first (x)
-            xf x nextf
+function bleh (args... rest)
+    print rest
+        list args...
 
-function map (mapf)
-    function map-init (nextf)
-        function xf (x nextf)
-            let nextff =
-                nextf (mapf x)
-            function (x)
-                xf x nextff
-        function map-first (x)
-            xf x nextf
-
-function limit (n)
-    function limit-init (nextf)
-        function done ()
-            done
-        function xf (i x nextf)
-            if (i < n)
-                let nextff =
-                    nextf x
-                function (x)
-                    xf (i + 1) x nextff
-            else
-                done
-        function limit-first (x)
-            xf 0 x nextf
-
-function iter (l)
-    function iter-init (nextf)
-        function done ()
-            done
-        function xf (l nextf)
-            if (empty? l)
-                done
-            else
-                let nextff =
-                    nextf (@ l 0)
-                function (x)
-                    xf (slice l 1) nextff
-        function iter-first ()
-            xf l nextf
-
-function printer ()
-    function xf (x)
-        print x
-        xf
-
-function comp (funcs... final)
-    let count = (countof funcs...)
-    if (count == 0)
-        final
-    else
-        let tail =
-            @ funcs... (count - 1)
-        comp
-            splice (slice funcs... 0 -1)
-            tail final
-
-let pipeline =
-    comp
-        iter
-            list 1 2 3 4 5 6 7 8 9 10
-        filter
-            function (x)
-                (x % 2) == 0
-        map
-            function (x)
-                x + 1
-        limit 3
-        printer;
-
-let i = 0
-loop (pipeline i)
-    if (i < 30)
-        repeat
-            pipeline;
-            i + 1
+bleh 1 2 3
 
 call
     continuation (_ x)
@@ -97,6 +13,47 @@ call
                 contcall none _
             x
     "hi"
+
+print
+    quote
+        loop
+            1 2; 3;
+            test;
+
+let done =
+    tag (quote done)
+
+function ilist (alist)
+    function (xf)
+        function step (xf l)
+            if (not (empty? l))
+                let xff = (xf (@ l 0))
+                function ()
+                    step xff (slice l 1)
+            else
+                xf;
+        function ()
+            step xf alist
+
+do
+    let l =
+        list "yes" "this" "is" "dog"
+    let k = 0
+    loop (l k)
+        let _repeat =
+            repeat
+        function repeat (values...)
+            _repeat
+                slice l 1
+                values...
+
+        if (not (empty? l))
+            print k (@ l 0)
+
+            repeat (k + 1)
+
+
+
 
 function iter-list (alist)
     continuation (init)

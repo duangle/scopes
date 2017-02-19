@@ -7,8 +7,10 @@ set-key! bangra
 let
     modules =
         quote
-            test_iterator
             test_assorted
+            test_iterator
+            test_batchfold
+            test_semicolon
     total =
         countof modules
     failed = 0

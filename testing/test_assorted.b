@@ -432,13 +432,13 @@ function test-varargs (x y ...)
             x == 1
             y == 2
     assert
-        (countof ...) == 3
+        (va-countof ...) == 3
     assert
         and
-            ... @ 0 == 3
-            ... @ 1 == 4
-            ... @ 2 == 5
-    list 1 2 (splice ...) 6
+            (va-arg 0 ...) == 3
+            (va-arg 1 ...) == 4
+            (va-arg 2 ...) == 5
+    list 1 2 ... 6
 assert
     ==
         test-varargs 1 2 3 4 5
@@ -502,7 +502,7 @@ do
         and
             start == "("
             end == ")"
-            center... == (tupleof 1 2 3)
+            (tupleof center...) == (tupleof 1 2 3)
 
     let x y z =
         tupleof 1 2 3

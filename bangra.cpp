@@ -3342,7 +3342,9 @@ continue_execution:
                         int remparams = (int)tcount - (int)i - 1;
                         // how many varargs to capture
                         int vargsize = std::max(0, (int)rcount - (int)srci - remparams);
-                        tmpargs[dsti] = wrap(&rbuf[srci], vargsize);
+                        auto arg = wrap(&rbuf[srci], vargsize);
+                        arg.type = Types::Splice(arg.type);
+                        tmpargs[dsti] = arg;
                         srci += vargsize;
                     } else if (srci < rcount) {
                         tmpargs[dsti] = rbuf[srci++];
@@ -3358,13 +3360,13 @@ continue_execution:
                 assert(!flow->arguments.empty());
                 size_t idx = 0;
                 for (size_t i = 0; i < flow->arguments.size(); ++i) {
-                    Any arg = flow->arguments[i];
+                    Any arg = evaluate(i, frame, flow->arguments[i]);
                     if (is_splice_type(arg.type)) {
                         arg.type = get_element_type(arg.type);
                         idx += splice(evaluate(i, frame, arg),
                             &wbuf[idx], BANGRA_MAX_FUNCARGS - idx);
                     } else {
-                        wbuf[idx++] = evaluate(i, frame, arg);
+                        wbuf[idx++] = arg;
                     }
                 }
                 wcount = idx;
@@ -5658,6 +5660,18 @@ static Any builtin_frame_eval(const Any *args, size_t argcount) {
     return evaluate(argindex, frame, args[2]);
 }
 
+static Any builtin_va_count(const Any *args, size_t argcount) {
+    return wrap(argcount);
+}
+
+static Any builtin_va_arg(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, -1);
+    auto idx = extract_integer(args[0]) + 1;
+    if ((size_t)idx >= argcount)
+        return const_none;
+    return args[idx];
+}
+
 //------------------------------------------------------------------------------
 // TRANSLATION
 //------------------------------------------------------------------------------
@@ -6399,6 +6413,9 @@ static void initGlobals () {
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_cstr>(env, "cstr");
     setBuiltin<builtin_hash>(env, "hash");
+
+    setBuiltin<builtin_va_count>(env, "va-countof");
+    setBuiltin<builtin_va_arg>(env, "va-arg");
 
     setBuiltin<builtin_set_exception_handler>(env, "set-exception-handler!");
     setBuiltin<builtin_get_exception_handler>(env, "get-exception-handler");

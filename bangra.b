@@ -718,11 +718,12 @@ syntax-extend stage-3 (_ scope)
                             # iterate until we hit the = symbol, after which
                             # the body follows
                             function find-body (expr)
-                                if (=? (@ expr 0))
+
+                                if (empty? expr)
+                                    error "syntax: let <name> ... = <expression>"
+                                elseif (=? (@ expr 0))
                                     tupleof (list)
                                         slice expr 1
-                                elseif (empty? expr)
-                                    error "syntax: let <name> ... = <expression>"
                                 else
                                     let out =
                                         find-body (slice expr 1)
