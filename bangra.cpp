@@ -4143,7 +4143,8 @@ namespace Types {
             type->offsets.push_back(offset);
             offset += size;
         }
-        type->size = align(offset, max_alignment);
+        // struct has to have at least 1 byte size
+        type->size = align(std::min(offset, (size_t)1), max_alignment);
         type->alignment = max_alignment;
     }
 
@@ -6151,7 +6152,7 @@ struct ILBuilder {
     Parameter *call(std::vector<Any> values, const Anchor *anchor) {
         assert(anchor);
         auto next = Flow::create_continuation(SYM_ReturnFlow);
-        next->appendParameter(SYM_Result);
+        next->appendParameter(SYM_Result)->vararg = true;
         values.insert(values.begin(), wrap(next));
         insertAndAdvance(values, next, anchor);
         return next->parameters[PARAM_Arg0];

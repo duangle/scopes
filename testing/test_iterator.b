@@ -52,9 +52,6 @@ do
 
             repeat (k + 1)
 
-
-
-
 function iter-list (alist)
     continuation (init)
         contcall
