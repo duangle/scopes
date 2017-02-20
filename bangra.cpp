@@ -1109,7 +1109,7 @@ static Type *new_type(const std::string &name) {
     auto result = new Type();
     result->size = 0;
     result->supertype = nullptr;
-    result->alignment = 1;
+    result->alignment = 0;
     result->is_embedded = false;
     result->name = name;
     result->apply_type = type_apply_default;
@@ -2026,11 +2026,11 @@ static Any wrap(const Any *args, size_t argcount) {
         auto elemtype = get_type(type, i);
         auto offset = get_offset(type, i);
         auto size = get_size(elemtype);
-        if (size) {
+        if (get_alignment(elemtype)) {
             const void *srcptr =
                 elemtype->is_embedded?args[i].embedded:args[i].ptr;
             memcpy(data + offset, srcptr, size);
-        } else if (!isnone(args[i])) {
+        } else {
             error("attempting to pack opaque type %s in tuple",
                 get_name(args[i].type).c_str());
         }
@@ -4144,7 +4144,7 @@ namespace Types {
             offset += size;
         }
         // struct has to have at least 1 byte size
-        type->size = align(std::min(offset, (size_t)1), max_alignment);
+        type->size = align(offset, max_alignment);
         type->alignment = max_alignment;
     }
 
@@ -4184,13 +4184,13 @@ namespace Types {
     }
 
     static uint64_t _embedded_hash(const Type *self, const bangra::Any &value) {
-        assert(self->size && "implementation error: opaque type can't be hashed");
+        assert(self->alignment && "implementation error: opaque type can't be hashed");
         assert(self->is_embedded);
         return CityHash64((const char *)value.embedded, self->size);
     }
 
     static uint64_t _buffer_hash(const Type *self, const bangra::Any &value) {
-        assert(self->size && "implementation error: opaque type can't be hashed");
+        assert(self->alignment && "implementation error: opaque type can't be hashed");
         assert(!self->is_embedded);
         return CityHash64((const char *)value.ptr, self->size);
     }
@@ -4625,6 +4625,7 @@ namespace Types {
         AnchorRef = Struct("Anchor", true);
 
         tmp = Struct("Void", true);
+        tmp->alignment = 1;
         tmp->cmp = value_none_cmp;
         tmp->tostring = _none_tostring;
         Void = tmp;
@@ -6152,7 +6153,7 @@ struct ILBuilder {
     Parameter *call(std::vector<Any> values, const Anchor *anchor) {
         assert(anchor);
         auto next = Flow::create_continuation(SYM_ReturnFlow);
-        next->appendParameter(SYM_Result)->vararg = true;
+        next->appendParameter(SYM_Result); //->vararg = true;
         values.insert(values.begin(), wrap(next));
         insertAndAdvance(values, next, anchor);
         return next->parameters[PARAM_Arg0];

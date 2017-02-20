@@ -36,21 +36,80 @@ function ilist (alist)
             step xf alist
 
 do
-    let l =
+    # this iterator function returns the next element for a list
+    function next (l)
+        slice l 1
+    # this function returns the current element
+    function at (l)
+        l @ 0
+    # this predicate indicates if there are more elements to read
+    function more? (l)
+        (countof l) != 0
+
+    function atnext (l)
+        if (more? l)
+            tupleof (at l) (next l)
+
+    # this loop prints the number of elements and returns the number
+    # of elements counted.
+
+    # loop init variables:
+    let l = # the list we're going to iterate
+        tupleof "yes" "this" "is" "dog"
+    let i = 0 # a custom counter
+    # store return value of loop in `total_elements`
+    let total_elements =
+        loop (l i) # initialize loop state from scope
+            let v = (atnext l)
+            if (not (none? v))
+                # get current element
+                let x = (v @ 0)
+                do
+                    # custom processing block
+                    print i x
+                    # repeat the loop explicitly
+                    repeat
+                        (v @ 1) # advance the iterator
+                        i + 1 # increase the counter
+            else
+                # a custom return block
+                # this one returns the counter
+                i
+
+    print total_elements "element(s) counted."
+
+/// do
+    # this iterator function returns the next element for a list
+    function next (l)
+        slice l 1
+    # this function returns the current element
+    function at (l)
+        l @ 0
+    # this predicate indicates if there are more elements to read
+    function more? (l)
+        not (empty? l)
+
+    # this loop prints the number of elements and returns the number
+    # of elements counted.
+
+    # loop init variables:
+    let l = # the list we're going to iterate
         list "yes" "this" "is" "dog"
-    let k = 0
-    loop (l k)
-        let _repeat =
+    let i = 0 # a custom counter
+    # store return value of loop in `total_elements`
+    let total_elements =
+        loop (i) for (x in l) # initialize loop state from scope
+            # custom processing block
+            print i x
+            # repeat the loop explicitly
             repeat
-        function repeat (values...)
-            _repeat
-                slice l 1
-                values...
+                i + 1 # increase the counter
+        else # one or more iterators exhausted
+            # a custom return block
+            # this one returns the counter
+            i
 
-        if (not (empty? l))
-            print k (@ l 0)
-
-            repeat (k + 1)
+    print total_elements "element(s) counted."
 
 function iter-list (alist)
     continuation (init)
