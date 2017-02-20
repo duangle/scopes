@@ -3398,8 +3398,8 @@ continue_execution:
                 wbuf[ARG_Arg0] = ffi->runFunction(callee, rbuf + ARG_Arg0, rcount - 2);
                 wcount = 3;
             } else {
-                error("can not apply %s",
-                    get_name(callee.type).c_str());
+                error("can not apply value of type %s",
+                    get_string(wrap(callee.type)).c_str());
             }
         }
     } catch (const Any &any) {
@@ -3615,19 +3615,20 @@ namespace Types {
         }
         if (a.typeref == b.typeref) return Equal;
         try {
-            return a.typeref->cmp_type(a.typeref, b.typeref);
+            auto result = a.typeref->cmp_type(a.typeref, b.typeref);
+            if (result != Unordered) return result;
         } catch (const bangra::Any &e1) {
-            try {
-                auto result = b.typeref->cmp_type(b.typeref, a.typeref);
-                switch(result) {
-                    case Less: return Greater;
-                    case Greater: return Less;
-                    default: return result;
-                }
-            } catch (const bangra::Any &e2) {
-                return Unordered;
-            }
         }
+        try {
+            auto result = b.typeref->cmp_type(b.typeref, a.typeref);
+            switch(result) {
+                case Less: return Greater;
+                case Greater: return Less;
+                default: return result;
+            }
+        } catch (const bangra::Any &e2) {
+        }
+        return Unordered;
     }
 
     static Ordering _struct_cmp(const Type *self,
@@ -3848,6 +3849,12 @@ namespace Types {
         const bangra::Any *args, size_t argcount) {
         builtin_checkparams(argcount, 1, 1);
         return symbol(get_string(args[0]));
+    }
+
+    static bangra::Any _string_apply_type(const Type *self,
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        return pstring(get_string(args[0]));
     }
 
     static bangra::Any _list_apply_type(const Type *self,
@@ -4400,6 +4407,18 @@ namespace Types {
         return type;
     }
 
+    static bangra::Any _qualified_type_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        bangra::Any value = args[0];
+        if (value.type != get_element_type(self))
+            error("cannot qualify %s with %s.",
+                get_name(value.type).c_str(),
+                get_name(self).c_str());
+        value.type = self;
+        return value;
+    }
+
     static const Type *_new_qualifier_type(const Type *tag, const Type *element) {
         assert(tag);
         assert(element);
@@ -4413,6 +4432,7 @@ namespace Types {
         type->alignment = element->alignment;
         type->element_type = element;
         type->cmp_type = type_qualifier_eq;
+        type->apply_type = apply_type_call<_qualified_type_apply_type>;
         return type;
     }
 
@@ -4663,6 +4683,7 @@ namespace Types {
         tmp->cmp = value_string_cmp;
         tmp->size = sizeof(bangra::String);
         tmp->alignment = offsetof(_string_alignment, s);
+        tmp->apply_type = apply_type_call<_string_apply_type>;
         String = tmp;
 
         tmp = Struct("Symbol", true);
@@ -5353,11 +5374,6 @@ static Any builtin_escape(const Any *args, size_t argcount) {
     return result;
 }
 
-static Any builtin_string(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 1, 1);
-    return pstring(get_string(args[0]));
-}
-
 static Any builtin_cstr(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     if (!is_subtype_or_type(args[0].type, Types::Rawstring))
@@ -5430,6 +5446,28 @@ static Any builtin_repr(const Any *args, size_t argcount) {
 static Any builtin_hash(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     return wrap(hash(args[0]));
+}
+
+static Any builtin_bitcast(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
+    auto type = extract_type(args[0]);
+    Any value = args[1];
+    if (type->is_embedded != value.type->is_embedded)
+        error("cannot bitcast %s to %s: incompatible storage method.",
+            get_name(value.type).c_str(), get_name(type).c_str());
+    else if (type->size > value.type->size)
+        error("cannot bitcast %s to %s: target type size too large.",
+            get_name(value.type).c_str(), get_name(type).c_str());
+    else if ((value.type->alignment % type->alignment) != 0)
+        error("cannot bitcast %s to %s: incompatible alignment.",
+            get_name(value.type).c_str(), get_name(type).c_str());
+    value.type = type;
+    return value;
+}
+
+static Any builtin_element_type(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    return wrap(get_element_type(extract_type(args[0])));
 }
 
 static Any builtin_dump(const Any *args, size_t argcount) {
@@ -6360,6 +6398,8 @@ static void initGlobals () {
     setLocalString(env, "enum", wrap(Types::TEnum));
     setLocalString(env, "tag", wrap(Types::TTag));
     setLocalString(env, "qualifier", wrap(Types::TQualifier));
+    setLocalString(env, "type", wrap(Types::PType));
+    setLocalString(env, "string", wrap(Types::String));
 
     setLocalString(env, "void", wrap(Types::Void));
 
@@ -6405,7 +6445,6 @@ static void initGlobals () {
     setBuiltin<builtin_branch>(env, "branch");
     setBuiltin<builtin_dump>(env, "dump");
     setBuiltin<builtin_block_scope_macro>(env, "block-scope-macro");
-    setBuiltin<builtin_string>(env, "string");
 
     setBuiltin<builtin_expand>(env, "expand");
     setBuiltin<builtin_set_globals>(env, "set-globals!");
@@ -6415,6 +6454,9 @@ static void initGlobals () {
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_cstr>(env, "cstr");
     setBuiltin<builtin_hash>(env, "hash");
+
+    setBuiltin<builtin_bitcast>(env, "bitcast");
+    setBuiltin<builtin_element_type>(env, "element-type");
 
     setBuiltin<builtin_va_count>(env, "va-countof");
     setBuiltin<builtin_va_arg>(env, "va-arg");

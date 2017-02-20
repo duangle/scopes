@@ -229,7 +229,8 @@ syntax-extend stage-2 (_ scope)
                     continuation assert (_ expr)
                         list ? (@ expr 1) true
                             list error
-                                ? (empty? (slice expr 2)) "assertion failed"
+                                ? (empty? (slice expr 2))
+                                    .. "assertion failed: " (string (@ expr 1))
                                     @ expr 2
             : ::@
                 block-macro
@@ -618,9 +619,31 @@ syntax-extend stage-3 (_ scope)
         table
             : xpcall
             : fold
-            : iter
             : bangra
             : require find-module
+            : generator
+                tag (quote generator)
+            : qualify
+                function qualify (tag-type value)
+                    assert (== (typeof tag-type) type)
+                        error "type argument expected."
+                    bitcast
+                        tag-type (typeof value)
+                        value
+
+            : disqualify
+                function disqualify (tag-type value)
+                    assert (== (typeof tag-type) type)
+                        error "type argument expected."
+                    let t = (typeof value)
+                    if (not (< t tag-type))
+                        error
+                            .. "can not unqualify value of type " (string t)
+                                \ "; type not related to " (string tag-type) "."
+                    bitcast
+                        element-type t
+                        value
+
             : and
                 make-expand-multi-op-ltr and
             : or
@@ -889,44 +912,78 @@ syntax-extend stage-3 (_ scope)
 
 syntax-extend stage-4 (_ scope)
 
+    function generator? (x)
+        (typeof x) < generator
+
+    function countable-rslice-iter (l)
+        if ((countof l) != 0)
+            tupleof (@ l 0) (slice l 1)
+
+    function countable-iter (x)
+        let c i = x
+        if (i < (countof c))
+            tupleof (@ c i) (tupleof c (i + 1))
+
+    function iter (x)
+        if (generator? x) x
+        else
+            let t = (typeof x)
+            if (<= t list)
+                qualify generator
+                    tupleof countable-rslice-iter x
+            elseif (< t tuple)
+                qualify generator
+                    tupleof countable-iter (tupleof x 0)
+            elseif (<= t string)
+                qualify generator
+                    tupleof countable-iter (tupleof x 0)
+            else
+                error
+                    .. "don't know how to iterate " (string x)
+
     function range (a b c)
         let step = (? (none? c) 1 c)
         let from = (? (none? b) 0 a)
         let to = (? (none? b) a b)
-        tupleof
-            function (x)
-                if (< x to)
-                    tupleof x (+ x step)
-            from
+        qualify generator
+            tupleof
+                function (x)
+                    if (< x to)
+                        tupleof x (+ x step)
+                from
 
     function zip (a b)
-        let iter-a init-a = a
-        let iter-b init-b = b
-        tupleof
-            function (x)
-                let state-a = (iter-a (@ x 0))
-                let state-b = (iter-b (@ x 1))
-                if (not (or (none? state-a) (none? state-b)))
-                    let at-a next-a = state-a
-                    let at-b next-b = state-b
-                    tupleof
-                        tupleof at-a at-b
-                        tupleof next-a next-b
-            tupleof init-a init-b
+        let iter-a init-a = (disqualify generator (iter a))
+        let iter-b init-b = (disqualify generator (iter b))
+        qualify generator
+            tupleof
+                function (x)
+                    let state-a = (iter-a (@ x 0))
+                    let state-b = (iter-b (@ x 1))
+                    if (not (or (none? state-a) (none? state-b)))
+                        let at-a next-a = state-a
+                        let at-b next-b = state-b
+                        tupleof
+                            tupleof at-a at-b
+                            tupleof next-a next-b
+                tupleof init-a init-b
 
     function infrange (a b)
         let step = (? (none? b) 1 b)
         let from = (? (none? a) 0 a)
-        tupleof
-            function (x)
-                tupleof x (+ x step)
-            from
+        qualify generator
+            tupleof
+                function (x)
+                    tupleof x (+ x step)
+                from
 
     function enumerate (x from step)
-        zip (infrange from step) x
+        zip (infrange from step) (iter x)
 
     .. scope
         table
+            : iter
+            : generator?
             : range
             : zip
             : enumerate
@@ -996,7 +1053,8 @@ syntax-extend stage-4 (_ scope)
                                                         let (unquote-splice dest-names) =
                                                             @ (unquote param-at-next) 0
                                                         unquote-splice body
-                                        (unquote param-for) (splice (unquote src-expr))
+                                        (unquote param-for)
+                                            splice (disqualify generator (iter (unquote src-expr)))
                                             unquote-splice extra-args
                                 block-rest
 

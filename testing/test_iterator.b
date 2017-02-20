@@ -69,25 +69,26 @@ do
     print total_elements "element(s) counted."
 
 do
-
     let z = (list)
+    let zipped-lists =
+        for x y in (zip (range 5 10 2) (range 10)) loop (z)
+            print x y
+            repeat
+                cons (list x y) z
+        else
+            z
+    print zipped-lists
     assert
         ==
             quote ((9 2) (7 1) (5 0))
-            for x y in (zip (range 5 10 2) (range 10)) loop (z)
-                print x y
-                repeat
-                    cons (list x y) z
-            else
-                z
-
+            zipped-lists
     function atnext (l)
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
     function iter-list (l)
         tupleof atnext l
 
-    for i c in (enumerate (iter-list "the quick brown fox"))
+    for i c in (enumerate "the quick brown fox")
         if (c != " ")
             repeat;
         else
@@ -102,7 +103,7 @@ do
     let i = 0 # a custom counter
     # store return value of loop in `total_elements`
     let total_elements =
-        for x in (tupleof atnext l) loop (i) # initialize loop state from scope
+        for x in l loop (i) # initialize loop state from scope
             # custom processing block
             print i x
             # repeat the loop explicitly

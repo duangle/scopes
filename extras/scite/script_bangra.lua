@@ -26,14 +26,15 @@ local function bangra_symbols()
         "bangra let external branch function true false"
             .. " print repr tupleof import-c quote eval structof"
             .. " typeof letrec with ::* ::@ block-scope-macro cons"
-            .. " string expand call escape do empty? dump-syntax"
+            .. " expand call escape do empty? dump-syntax"
             .. " syntax-extend dump list-join list-head? if else elseif loop"
             .. " repeat macro block-macro countof foreach kindof"
             .. " table none slice none? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
             .. " set-key! cstr return continuation splice exit"
             .. " try except flowcall contcall hash define min max"
-            .. " va-arg va-countof in for range zip enumerate"
+            .. " va-arg va-countof in for range zip enumerate bitcast"
+            .. " element-type qualify disqualify iter generator?"
         ),
 
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
@@ -43,10 +44,11 @@ local function bangra_symbols()
 
 
     TYPES = splitstr(getprop("types.bangra_lang") or
-        "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void"
+        "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void string"
             .. " rawstring opaque half float double symbol list parameter"
             .. " frame closure flow integer real cfunction array tuple vector"
             .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
+            .. " generator type"
         )
     }
 end
