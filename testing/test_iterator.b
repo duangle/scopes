@@ -36,6 +36,17 @@ function ilist (alist)
             step xf alist
 
 do
+    let T =
+        tableof
+            : a 1
+            : b 2
+            : c 3
+            tupleof (list 1 2 3) true
+
+    for k v in T
+        print ">" k v
+        repeat;
+
     function atnext (l)
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
@@ -94,24 +105,24 @@ do
         else
             print "space at index" i
 
-    # this loop prints the number of elements and returns the number
-    # of elements counted.
+    # this loop prints each element of a list and returns the number
+    # of elements counted, without involving any mutable variables.
 
-    # loop init variables:
     let l = # the list we're going to iterate
         list "yes" "this" "is" "dog"
     let i = 0 # a custom counter
     # store return value of loop in `total_elements`
     let total_elements =
-        for x in l loop (i) # initialize loop state from scope
-            # custom processing block
+        for x in l loop (i) # loop (...) is optional.
+                            # in this case, we'll use it to keep state for
+                            # a custom counter.
+            # print element and our custom index
             print i x
-            # repeat the loop explicitly
+            # repeat the loop (must always be done explicitly)
             repeat
                 i + 1 # increase the counter
-        else # one or more iterators exhausted
-            # a custom return block
-            # this one returns the counter
+        else # list iterator exhausted before we exited the loop
+            # return the counter
             i
 
     print total_elements "element(s) counted."

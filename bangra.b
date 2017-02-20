@@ -30,7 +30,7 @@ syntax-extend stage-0 (_ scope)
 
 syntax-extend stage-1 (_ scope)
     .. scope
-        table
+        tableof
             tupleof
                 quote symbol?
                 continuation symbol? (_ x)
@@ -192,7 +192,7 @@ syntax-extend stage-2 (_ scope)
                         false
                 false
     .. scope
-        table
+        tableof
 
             : empty-list (list)
             : empty-tuple (tuple)
@@ -523,13 +523,13 @@ syntax-extend stage-3 (_ scope)
                         @ rhs-state 1
 
     let bangra =
-        table
+        tableof
             : path
                 list
                     "./?.b"
                     .. interpreter-dir "/?.b"
             : modules
-                table;
+                tableof;
     function make-module-path (pattern name)
         fold (iter pattern) ""
             function (out val)
@@ -560,7 +560,7 @@ syntax-extend stage-3 (_ scope)
                     if (not (none? expr))
                         let fn =
                             eval expr
-                                table
+                                tableof
                                     tupleof scope-parent-symbol
                                         globals;
                                     : module-path
@@ -616,7 +616,7 @@ syntax-extend stage-3 (_ scope)
                 result
 
     .. scope
-        table
+        tableof
             : xpcall
             : fold
             : bangra
@@ -924,6 +924,15 @@ syntax-extend stage-4 (_ scope)
         if (i < (countof c))
             tupleof (@ c i) (tupleof c (i + 1))
 
+    function table-iter (x)
+        let t = (@ x 0)
+        let key-value =
+            next-key t
+                @ x 1
+        if (not (none? key-value))
+            tupleof key-value
+                tupleof t (@ key-value 0)
+
     function iter (x)
         if (generator? x) x
         else
@@ -934,6 +943,9 @@ syntax-extend stage-4 (_ scope)
             elseif (< t tuple)
                 qualify generator
                     tupleof countable-iter (tupleof x 0)
+            elseif (<= t table)
+                qualify generator
+                    tupleof table-iter (tupleof x none)
             elseif (<= t string)
                 qualify generator
                     tupleof countable-iter (tupleof x 0)
@@ -981,7 +993,7 @@ syntax-extend stage-4 (_ scope)
         zip (infrange from step) (iter x)
 
     .. scope
-        table
+        tableof
             : iter
             : generator?
             : range

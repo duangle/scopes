@@ -29,7 +29,7 @@ local function bangra_symbols()
             .. " expand call escape do empty? dump-syntax"
             .. " syntax-extend dump list-join list-head? if else elseif loop"
             .. " repeat macro block-macro countof foreach kindof"
-            .. " table none slice none? assert qquote unquote unquote-splice"
+            .. " tableof none slice none? assert qquote unquote unquote-splice"
             .. " list-atom? list-load load globals table-join require"
             .. " set-key! cstr return continuation splice exit"
             .. " try except flowcall contcall hash define min max"
@@ -48,7 +48,7 @@ local function bangra_symbols()
             .. " rawstring opaque half float double symbol list parameter"
             .. " frame closure flow integer real cfunction array tuple vector"
             .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
-            .. " generator type"
+            .. " generator type table"
         )
     }
 end

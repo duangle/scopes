@@ -5513,7 +5513,7 @@ static Any builtin_structof(const Any *args, size_t argcount) {
     return wrap(struct_type, t.ptr);
 }
 
-static Any builtin_table(const Any *args, size_t argcount) {
+static Any builtin_tableof(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 0, -1);
 
     auto t = new_table();
@@ -6400,6 +6400,7 @@ static void initGlobals () {
     setLocalString(env, "qualifier", wrap(Types::TQualifier));
     setLocalString(env, "type", wrap(Types::PType));
     setLocalString(env, "string", wrap(Types::String));
+    setLocalString(env, "table", wrap(Types::PTable));
 
     setLocalString(env, "void", wrap(Types::Void));
 
@@ -6436,7 +6437,7 @@ static void initGlobals () {
     setBuiltin<builtin_tupleof>(env, "tupleof");
     setBuiltin<builtin_cons>(env, "cons");
     setBuiltin<builtin_structof>(env, "structof");
-    setBuiltin<builtin_table>(env, "table");
+    setBuiltin<builtin_tableof>(env, "tableof");
     setBuiltin<builtin_set_key>(env, "set-key!");
     setBuiltin<builtin_next_key>(env, "next-key");
     setBuiltin<builtin_typeof>(env, "typeof");
