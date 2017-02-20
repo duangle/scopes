@@ -29,157 +29,157 @@ syntax-extend stage-0 (_ scope)
     scope
 
 syntax-extend stage-1 (_ scope)
-    table
-        tupleof scope-parent-symbol scope
-        tupleof
-            quote symbol?
-            continuation symbol? (_ x)
-                == (typeof x) symbol
-        tupleof
-            quote list?
-            continuation list? (_ x)
-                == (typeof x) list
-        tupleof
-            quote none?
-            continuation none? (_ x)
-                == x none
-        tupleof
-            quote empty?
-            continuation empty? (_ x)
-                branch
+    .. scope
+        table
+            tupleof
+                quote symbol?
+                continuation symbol? (_ x)
+                    == (typeof x) symbol
+            tupleof
+                quote list?
+                continuation list? (_ x)
                     == (typeof x) list
-                    continuation ()
-                        == x (list)
-                    continuation () false
-        tupleof
-            quote key?
-            continuation key? (_ x y)
-                != (@ x y) none
-        tupleof
-            quote load
-            continuation load (_ path)
-                eval
-                    list-load path
-                    globals;
-                    path
-        tupleof
-            quote API
-            import-c
-                # todo: search path & embedded resources
-                .. interpreter-dir "/bangra.h"
-                tupleof;
-        tupleof
-            quote macro
-            continuation macro (_ f)
+            tupleof
+                quote none?
+                continuation none? (_ x)
+                    == x none
+            tupleof
+                quote empty?
+                continuation empty? (_ x)
+                    branch
+                        == (typeof x) list
+                        continuation ()
+                            == x (list)
+                        continuation () false
+            tupleof
+                quote key?
+                continuation key? (_ x y)
+                    != (@ x y) none
+            tupleof
+                quote load
+                continuation load (_ path)
+                    eval
+                        list-load path
+                        globals;
+                        path
+            tupleof
+                quote API
+                import-c
+                    # todo: search path & embedded resources
+                    .. interpreter-dir "/bangra.h"
+                    tupleof;
+            tupleof
+                quote macro
+                continuation macro (_ f)
+                    block-scope-macro
+                        continuation (_ expr scope)
+                            tupleof
+                                cons
+                                    f (@ expr 0) scope
+                                    slice expr 1
+                                scope
+            tupleof
+                quote block-macro
+                continuation macro (_ f)
+                    block-scope-macro
+                        continuation (_ expr scope)
+                            tupleof
+                                f expr scope
+                                scope
+            tupleof
+                quote dump-syntax
                 block-scope-macro
-                    continuation (_ expr scope)
+                    continuation dump-syntax (_ expr scope)
+                        tupleof
+                            call
+                                continuation (_ e)
+                                    dump
+                                        @ (@ e 0) 0
+                                    cons
+                                        escape
+                                            @ (@ e 0) 0
+                                        slice e 1
+                                @
+                                    expand
+                                        cons
+                                            slice (@ expr 0) 1
+                                            slice expr 1
+                                        scope
+                                    0
+                            scope
+            tupleof
+                # a lofi version of let so we get some sugar early
+                quote let
+                block-scope-macro
+                    continuation syntax-macro (_ expr scope)
+                        branch
+                            == (typeof (@ (@ expr 0) 2)) symbol
+                            continuation () none
+                            continuation ()
+                                error "syntax: let <var> = <expr>"
+                        branch
+                            == (@ (@ expr 0) 2) (quote =)
+                            continuation () none
+                            continuation ()
+                                error "syntax: let <var> = <expr>"
+                        tupleof
+                            call
+                                continuation (_ param-name)
+                                    call
+                                        continuation (_ param)
+                                            # since the scope covers the remaining
+                                            # block, we can mutate it directly
+                                            set-key! scope param-name param
+                                            list
+                                                cons
+                                                    cons continuation
+                                                        cons (list (parameter (quote _)) param)
+                                                            slice expr 1
+                                                    slice (@ expr 0) 3
+                                        parameter param-name
+                                @ (@ expr 0) 1
+                            scope
+            tupleof
+                quote ?
+                block-scope-macro
+                    continuation ? (_ expr scope)
                         tupleof
                             cons
-                                f (@ expr 0) scope
+                                list branch
+                                    @ (@ expr 0) 1
+                                    list continuation (list)
+                                        @ (@ expr 0) 2
+                                    list continuation (list)
+                                        @ (@ expr 0) 3
                                 slice expr 1
                             scope
-        tupleof
-            quote block-macro
-            continuation macro (_ f)
+            tupleof
+                quote :
                 block-scope-macro
-                    continuation (_ expr scope)
+                    continuation : (_ expr scope)
                         tupleof
-                            f expr scope
-                            scope
-        tupleof
-            quote dump-syntax
-            block-scope-macro
-                continuation dump-syntax (_ expr scope)
-                    tupleof
-                        call
-                            continuation (_ e)
-                                dump
-                                    @ (@ e 0) 0
-                                cons
-                                    escape
-                                        @ (@ e 0) 0
-                                    slice e 1
-                            @
-                                expand
+                            cons
+                                cons tupleof
                                     cons
-                                        slice (@ expr 0) 1
-                                        slice expr 1
-                                    scope
-                                0
-                        scope
-        tupleof
-            # a lofi version of let so we get some sugar early
-            quote let
-            block-scope-macro
-                continuation syntax-macro (_ expr scope)
-                    branch
-                        == (typeof (@ (@ expr 0) 2)) symbol
-                        continuation () none
-                        continuation ()
-                            error "syntax: let <var> = <expr>"
-                    branch
-                        == (@ (@ expr 0) 2) (quote =)
-                        continuation () none
-                        continuation ()
-                            error "syntax: let <var> = <expr>"
-                    tupleof
-                        call
-                            continuation (_ param-name)
-                                call
-                                    continuation (_ param)
-                                        # since the scope covers the remaining
-                                        # block, we can mutate it directly
-                                        set-key! scope param-name param
-                                        list
-                                            cons
-                                                cons continuation
-                                                    cons (list (parameter (quote _)) param)
-                                                        slice expr 1
-                                                slice (@ expr 0) 3
-                                    parameter param-name
-                            @ (@ expr 0) 1
-                        scope
-        tupleof
-            quote ?
-            block-scope-macro
-                continuation ? (_ expr scope)
-                    tupleof
-                        cons
-                            list branch
-                                @ (@ expr 0) 1
-                                list continuation (list)
-                                    @ (@ expr 0) 2
-                                list continuation (list)
-                                    @ (@ expr 0) 3
-                            slice expr 1
-                        scope
-        tupleof
-            quote :
-            block-scope-macro
-                continuation : (_ expr scope)
-                    tupleof
-                        cons
-                            cons tupleof
-                                cons
-                                    branch
-                                        ==
-                                            typeof
+                                        branch
+                                            ==
+                                                typeof
+                                                    @ (@ expr 0) 1
+                                                symbol
+                                            continuation ()
+                                                list quote
+                                                    @ (@ expr 0) 1
+                                            continuation ()
                                                 @ (@ expr 0) 1
-                                            symbol
-                                        continuation ()
-                                            list quote
-                                                @ (@ expr 0) 1
-                                        continuation ()
-                                            @ (@ expr 0) 1
-                                    branch
-                                        == (slice (@ expr 0) 2) (list)
-                                        continuation ()
-                                            list
-                                                @ (@ expr 0) 1
-                                        continuation ()
-                                            slice (@ expr 0) 2
-                            slice expr 1
-                        scope
+                                        branch
+                                            == (slice (@ expr 0) 2) (list)
+                                            continuation ()
+                                                list
+                                                    @ (@ expr 0) 1
+                                            continuation ()
+                                                slice (@ expr 0) 2
+                                slice expr 1
+                            scope
 
 syntax-extend stage-2 (_ scope)
     let list-head? =
@@ -191,196 +191,200 @@ syntax-extend stage-2 (_ scope)
                         == head name
                         false
                 false
-    table
-        tupleof scope-parent-symbol scope
-        : bool (integer 1 false)
-        : int8 (integer 8 true)
-        : int16 (integer 16 true)
-        : int32 (integer 32 true)
-        : int64 (integer 64 true)
-        : uint8 (integer 8 false)
-        : uint16 (integer 16 false)
-        : uint32 (integer 32 false)
-        : uint64 (integer 64 false)
+    .. scope
+        table
 
-        : int (integer 32 true)
-        : uint (integer 32 false)
+            : empty-list (list)
+            : empty-tuple (tuple)
 
-        : real16 (real 16)
-        : real32 (real 32)
-        : real64 (real 64)
+            : bool (integer 1 false)
+            : int8 (integer 8 true)
+            : int16 (integer 16 true)
+            : int32 (integer 32 true)
+            : int64 (integer 64 true)
+            : uint8 (integer 8 false)
+            : uint16 (integer 16 false)
+            : uint32 (integer 32 false)
+            : uint64 (integer 64 false)
 
-        : half (real 16)
-        : float (real 32)
-        : double (real 64)
+            : int (integer 32 true)
+            : uint (integer 32 false)
 
-        : list-head?
-        : list-atom?
-            continuation list-atom? (_ x)
-                ? (list? x)
-                    empty? x
-                    true
-        : assert # (assert bool-expr [error-message])
-            macro
-                continuation assert (_ expr)
-                    list ? (@ expr 1) true
-                        list error
-                            ? (empty? (slice expr 2)) "assertion failed"
-                                @ expr 2
-        : ::@
-            block-macro
-                continuation ::@ (_ expr)
-                    cons
-                        ..
-                            slice (@ expr 0) 1
-                            list
-                                @ expr 1
-                        slice expr 2
-        : ::*
-            block-macro
-                continuation ::* (_ expr)
-                    list
-                        ..
-                            slice (@ expr 0) 1
-                            slice expr 1
-        : .
-            macro
-                continuation . (_ expr)
-                    let key =
-                        @ expr 2
-                    ? (symbol? key)
-                        list
-                            (do @)
-                            @ expr 1
-                            list quote key
-                        error "symbol expected"
+            : real16 (real 16)
+            : real32 (real 32)
+            : real64 (real 64)
 
-        : function # (function [name] (param ...) body ...)
-            block-macro
-                continuation function (_ topexpr)
-                    let expr =
-                        @ topexpr 0
-                    let decl =
-                        @ (@ topexpr 0) 1
-                    let retparam =
-                        quote return
-                    let make-params-body =
-                        continuation (_ param-idx)
-                            cons
-                                cons
-                                    retparam
-                                    @ expr param-idx
-                                slice expr (+ param-idx 1)
-                    ? (symbol? decl)
+            : half (real 16)
+            : float (real 32)
+            : double (real 64)
+
+            : list-head?
+            : list-atom?
+                continuation list-atom? (_ x)
+                    ? (list? x)
+                        empty? x
+                        true
+            : assert # (assert bool-expr [error-message])
+                macro
+                    continuation assert (_ expr)
+                        list ? (@ expr 1) true
+                            list error
+                                ? (empty? (slice expr 2)) "assertion failed"
+                                    @ expr 2
+            : ::@
+                block-macro
+                    continuation ::@ (_ expr)
                         cons
-                            list let decl (quote =)
+                            ..
+                                slice (@ expr 0) 1
+                                list
+                                    @ expr 1
+                            slice expr 2
+            : ::*
+                block-macro
+                    continuation ::* (_ expr)
+                        list
+                            ..
+                                slice (@ expr 0) 1
+                                slice expr 1
+            : .
+                macro
+                    continuation . (_ expr)
+                        let key =
+                            @ expr 2
+                        ? (symbol? key)
+                            list
+                                (do @)
+                                @ expr 1
+                                list quote key
+                            error "symbol expected"
+
+            : function # (function [name] (param ...) body ...)
+                block-macro
+                    continuation function (_ topexpr)
+                        let expr =
+                            @ topexpr 0
+                        let decl =
+                            @ (@ topexpr 0) 1
+                        let retparam =
+                            quote return
+                        let make-params-body =
+                            continuation (_ param-idx)
+                                cons
+                                    cons
+                                        retparam
+                                        @ expr param-idx
+                                    slice expr (+ param-idx 1)
+                        ? (symbol? decl)
+                            cons
+                                list let decl (quote =)
+                                    cons continuation
+                                        cons
+                                            @ expr 1
+                                            make-params-body 2
+                                ? (empty? (slice topexpr 1))
+                                    list decl
+                                    slice topexpr 1
+                            cons
+                                cons continuation
+                                    make-params-body 1
+                                slice topexpr 1
+            : and
+                macro
+                    continuation and (_ expr)
+                        let tmp =
+                            parameter
+                                quote tmp
+                        list
+                            list continuation (list (parameter (quote _)) tmp)
+                                list branch tmp
+                                    list continuation (list)
+                                        @ expr 2
+                                    list continuation (list) tmp
+                            @ expr 1
+            : or
+                macro
+                    continuation or (_ expr)
+                        let tmp =
+                            parameter
+                                quote tmp
+                        list
+                            list continuation (list (parameter (quote _)) tmp)
+                                list branch tmp
+                                    list continuation (list) tmp
+                                    list continuation (list)
+                                        @ expr 2
+                            @ expr 1
+            : loop
+                macro
+                    continuation loop (_ expr)
+                        let param-repeat =
+                            quote repeat
+                        list do
+                            list let param-repeat (quote =)
                                 cons continuation
                                     cons
-                                        @ expr 1
-                                        make-params-body 2
-                            ? (empty? (slice topexpr 1))
-                                list decl
-                                slice topexpr 1
-                        cons
-                            cons continuation
-                                make-params-body 1
-                            slice topexpr 1
-        : and
-            macro
-                continuation and (_ expr)
-                    let tmp =
-                        parameter
-                            quote tmp
-                    list
-                        list continuation (list (parameter (quote _)) tmp)
-                            list branch tmp
-                                list continuation (list)
-                                    @ expr 2
-                                list continuation (list) tmp
-                        @ expr 1
-        : or
-            macro
-                continuation or (_ expr)
-                    let tmp =
-                        parameter
-                            quote tmp
-                    list
-                        list continuation (list (parameter (quote _)) tmp)
-                            list branch tmp
-                                list continuation (list) tmp
-                                list continuation (list)
-                                    @ expr 2
-                        @ expr 1
-        : loop
-            macro
-                continuation loop (_ expr)
-                    let param-repeat =
-                        quote repeat
-                    list do
-                        list let param-repeat (quote =)
-                            cons continuation
-                                cons
+                                        cons
+                                            parameter (quote _)
+                                            @ expr 1
+                                        slice expr 2
+                            cons param-repeat
+                                @ expr 1
+            : if
+                do
+                    let if-rec =
+                        continuation if (_ expr)
+                            let cond =
+                                @ (@ expr 0) 1
+                            let then-exprlist =
+                                slice (@ expr 0) 2
+                            let make-branch =
+                                continuation (_ else-exprlist)
+                                    list branch
+                                        cond
+                                        cons continuation
+                                            cons (list) then-exprlist
+                                        cons continuation
+                                            cons (list) else-exprlist
+                            let rest-expr =
+                                slice expr 1
+                            let next-expr =
+                                ? (empty? rest-expr)
+                                    none
+                                    @ rest-expr 0
+                            ? (list-head? next-expr (quote elseif))
+                                do
+                                    let nextif =
+                                        if-rec
+                                            slice expr 1
                                     cons
-                                        parameter (quote _)
-                                        @ expr 1
-                                    slice expr 2
-                        cons param-repeat
-                            @ expr 1
-        : if
-            do
-                let if-rec =
-                    continuation if (_ expr)
-                        let cond =
-                            @ (@ expr 0) 1
-                        let then-exprlist =
-                            slice (@ expr 0) 2
-                        let make-branch =
-                            continuation (_ else-exprlist)
-                                list branch
-                                    cond
-                                    cons continuation
-                                        cons (list) then-exprlist
-                                    cons continuation
-                                        cons (list) else-exprlist
-                        let rest-expr =
-                            slice expr 1
-                        let next-expr =
-                            ? (empty? rest-expr)
-                                none
-                                @ rest-expr 0
-                        ? (list-head? next-expr (quote elseif))
-                            do
-                                let nextif =
-                                    if-rec
+                                        make-branch
+                                            list (@ nextif 0)
+                                        slice nextif 1
+                                ? (list-head? next-expr (quote else))
+                                    cons
+                                        make-branch
+                                            slice (@ expr 1) 1
+                                        slice expr 2
+                                    cons
+                                        make-branch
+                                            list;
                                         slice expr 1
-                                cons
-                                    make-branch
-                                        list (@ nextif 0)
-                                    slice nextif 1
-                            ? (list-head? next-expr (quote else))
-                                cons
-                                    make-branch
-                                        slice (@ expr 1) 1
-                                    slice expr 2
-                                cons
-                                    make-branch
-                                        list;
-                                    slice expr 1
-                block-macro if-rec
-        : syntax-infix-rules
-            continuation syntax-infix-rules (_ prec order name)
-                structof
-                    tupleof (quote prec) prec
-                    tupleof (quote order) order
-                    tupleof (quote name) name
-        : syntax-infix-op
-            macro
-                continuation syntax-infix-op (_ expr)
-                    list tupleof
-                        list quote
-                            symbol
-                                .. "#ifx:" (string (@ expr 1))
-                        @ expr 2
+                    block-macro if-rec
+            : syntax-infix-rules
+                continuation syntax-infix-rules (_ prec order name)
+                    structof
+                        tupleof (quote prec) prec
+                        tupleof (quote order) order
+                        tupleof (quote name) name
+            : syntax-infix-op
+                macro
+                    continuation syntax-infix-op (_ expr)
+                        list tupleof
+                            list quote
+                                symbol
+                                    .. "#ifx:" (string (@ expr 1))
+                            @ expr 2
 
 syntax-extend stage-3 (_ scope)
 
@@ -610,277 +614,401 @@ syntax-extend stage-3 (_ scope)
                 cleanup;
                 result
 
-    table
-        tupleof scope-parent-symbol scope
-        : xpcall
-        : fold
-        : iter
-        : bangra
-        : require find-module
-        : and
-            make-expand-multi-op-ltr and
-        : or
-            make-expand-multi-op-ltr or
-        : max
-            make-expand-multi-op-ltr
-                function (a b)
-                    ? (> b a) b a
-        : min
-            make-expand-multi-op-ltr
-                function (a b)
-                    ? (< b a) b a
-        : @
-            make-expand-multi-op-ltr @
-        : try
-            block-macro
-                function (expr scope)
-                    if (not (list-head? (@ expr 1) (quote except)))
-                        error "except block missing"
-                    cons
-                        list xpcall
-                            cons continuation
-                                cons (list)
-                                    slice (@ expr 0) 1
-                            cons continuation
-                                cons
-                                    cons (parameter (quote _))
-                                        @ (@ expr 1) 1
-                                    slice (@ expr 1) 2
-                        slice expr 2
-
-        # quasiquote support
-        # (qquote expr [...])
-        : qquote
-            do
-                function qquote-1 (x)
-                    if (list-atom? x)
-                        list quote x
-                    elseif (list-head? x (quote unquote))
-                        unwrap-single (slice x 1)
-                    elseif (list-head? x (quote qquote))
-                        qquote-1 (qquote-1 (@ x 1))
-                    elseif (list-atom? (@ x 0))
-                        list cons
-                            qquote-1 (@ x 0)
-                            qquote-1 (slice x 1)
-                    elseif (list-head? (@ x 0) (quote unquote-splice))
-                        list (do ..)
-                            unwrap-single (slice (@ x 0) 1)
-                            qquote-1 (slice x 1)
-                    else
-                        list cons
-                            qquote-1 (@ x 0)
-                            qquote-1 (slice x 1)
+    .. scope
+        table
+            : xpcall
+            : fold
+            : iter
+            : bangra
+            : require find-module
+            : and
+                make-expand-multi-op-ltr and
+            : or
+                make-expand-multi-op-ltr or
+            : max
+                make-expand-multi-op-ltr
+                    function (a b)
+                        ? (> b a) b a
+            : min
+                make-expand-multi-op-ltr
+                    function (a b)
+                        ? (< b a) b a
+            : @
+                make-expand-multi-op-ltr @
+            : try
                 block-macro
-                    function (expr)
+                    function (expr scope)
+                        if (not (list-head? (@ expr 1) (quote except)))
+                            error "except block missing"
                         cons
-                            ? (empty? (slice (@ expr 0) 2))
-                                qquote-1 (@ (@ expr 0) 1)
-                                qquote-1 (slice (@ expr 0) 1)
-                            slice expr 1
+                            list xpcall
+                                cons continuation
+                                    cons (list)
+                                        slice (@ expr 0) 1
+                                cons continuation
+                                    cons
+                                        cons (parameter (quote _))
+                                            @ (@ expr 1) 1
+                                        slice (@ expr 1) 2
+                            slice expr 2
 
-        : define
-            block-macro
-                function (expr scope)
-                    let name =
-                        @ (@ expr 0) 1
-                    let exprlist =
-                        slice (@ expr 0) 2
-                    let subscope =
-                        parameter (quote scope)
-                    cons
-                        list syntax-extend (list (parameter (quote _)) subscope)
-                            list let (quote name) (quote =)
-                                cons do exprlist
-                            list set-key! subscope (list quote name) (quote name)
-                            subscope
-                        slice expr 1
-        : let
-            function =? (x)
-                and
-                    == (typeof x) symbol
-                    == x (quote =)
-
-            # support for multiple declarations in one let scope
-            block-macro
-                function (expr scope)
-                    let args = (slice (@ expr 0) 1)
-                    let argtype = (typeof (@ args 0))
-                    if (== argtype symbol)
-                        if (=? (@ args 1))
-                            # regular form with support for recursion
-                            cons
-                                cons let args
-                                slice expr 1
+            # quasiquote support
+            # (qquote expr [...])
+            : qquote
+                do
+                    function qquote-1 (x)
+                        if (list-atom? x)
+                            list quote x
+                        elseif (list-head? x (quote unquote))
+                            unwrap-single (slice x 1)
+                        elseif (list-head? x (quote qquote))
+                            qquote-1 (qquote-1 (@ x 1))
+                        elseif (list-atom? (@ x 0))
+                            list cons
+                                qquote-1 (@ x 0)
+                                qquote-1 (slice x 1)
+                        elseif (list-head? (@ x 0) (quote unquote-splice))
+                            list (do ..)
+                                unwrap-single (slice (@ x 0) 1)
+                                qquote-1 (slice x 1)
                         else
-                            # unpacking multiple variables, without recursion
+                            list cons
+                                qquote-1 (@ x 0)
+                                qquote-1 (slice x 1)
+                    block-macro
+                        function (expr)
+                            cons
+                                ? (empty? (slice (@ expr 0) 2))
+                                    qquote-1 (@ (@ expr 0) 1)
+                                    qquote-1 (slice (@ expr 0) 1)
+                                slice expr 1
 
-                            # iterate until we hit the = symbol, after which
-                            # the body follows
-                            function find-body (expr)
+            : define
+                block-macro
+                    function (expr scope)
+                        let name =
+                            @ (@ expr 0) 1
+                        let exprlist =
+                            slice (@ expr 0) 2
+                        let subscope =
+                            parameter (quote scope)
+                        cons
+                            list syntax-extend (list (parameter (quote _)) subscope)
+                                list let (quote name) (quote =)
+                                    cons do exprlist
+                                list set-key! subscope (list quote name) (quote name)
+                                subscope
+                            slice expr 1
+            : let
+                function =? (x)
+                    and
+                        == (typeof x) symbol
+                        == x (quote =)
 
-                                if (empty? expr)
-                                    error "syntax: let <name> ... = <expression>"
-                                elseif (=? (@ expr 0))
-                                    tupleof (list)
-                                        slice expr 1
-                                else
-                                    let out =
-                                        find-body (slice expr 1)
-                                    tupleof
-                                        cons (@ expr 0) (@ out 0)
-                                        @ out 1
-                            let cells =
-                                find-body args
-                            list
+                # support for multiple declarations in one let scope
+                block-macro
+                    function (expr scope)
+                        let args = (slice (@ expr 0) 1)
+                        let argtype = (typeof (@ args 0))
+                        if (== argtype symbol)
+                            if (=? (@ args 1))
+                                # regular form with support for recursion
+                                cons
+                                    cons let args
+                                    slice expr 1
+                            else
+                                # unpacking multiple variables, without recursion
+
+                                # iterate until we hit the = symbol, after which
+                                # the body follows
+                                function find-body (expr)
+
+                                    if (empty? expr)
+                                        error "syntax: let <name> ... = <expression>"
+                                    elseif (=? (@ expr 0))
+                                        tupleof (list)
+                                            slice expr 1
+                                    else
+                                        let out =
+                                            find-body (slice expr 1)
+                                        tupleof
+                                            cons (@ expr 0) (@ out 0)
+                                            @ out 1
+                                let cells =
+                                    find-body args
                                 list
+                                    list
+                                        cons continuation
+                                            cons
+                                                cons (parameter (quote _)) (@ cells 0)
+                                                slice expr 1
+                                        list splice
+                                            cons do
+                                                @ cells 1
+
+                        elseif (== argtype parameter)
+                            assert (=? (@ args 1))
+                                "syntax: let <parameter> = <expression>"
+                            # regular form, hidden parameter
+                            list
+                                cons
                                     cons continuation
                                         cons
-                                            cons (parameter (quote _)) (@ cells 0)
+                                            list
+                                                parameter (quote _)
+                                                @ args 0
                                             slice expr 1
-                                    list splice
-                                        cons do
-                                            @ cells 1
+                                    slice args 2
+                        else
+                            # multiple variables with support for recursion,
+                            # and later variables can depend on earlier ones
 
-                    elseif (== argtype parameter)
-                        assert (=? (@ args 1))
-                            "syntax: let <parameter> = <expression>"
-                        # regular form, hidden parameter
-                        cons
-                            cons continuation
-                                cons
-                                    list
-                                        parameter (quote _)
-                                        @ args 0
+                            # prepare quotable values from declarations
+                            function handle-pairs (pairs)
+                                if (empty? pairs)
                                     slice expr 1
-                            slice args 2
-                    else
-                        # multiple variables with support for recursion,
-                        # and later variables can depend on earlier ones
+                                else
+                                    let pair =
+                                        @ pairs 0
+                                    assert (=? (@ pair 1))
+                                        "syntax: let (<name> = <expression>) ..."
+                                    cons
+                                        cons let pair
+                                        handle-pairs
+                                            slice pairs 1
 
-                        # prepare quotable values from declarations
-                        function handle-pairs (pairs)
-                            if (empty? pairs)
-                                slice expr 1
-                            else
-                                let pair =
-                                    @ pairs 0
-                                assert (=? (@ pair 1))
-                                    "syntax: let (<name> = <expression>) ..."
-                                cons
-                                    cons let pair
-                                    handle-pairs
-                                        slice pairs 1
+                            handle-pairs args
 
-                        handle-pairs args
-
-        tupleof scope-list-wildcard-symbol
-            function (topexpr scope)
-                let expr =
-                    @ topexpr 0
-                let head =
-                    @ expr 0
-                let headstr =
-                    string head
-                # method call syntax
-                if
-                    and
-                        symbol? head
+            tupleof scope-list-wildcard-symbol
+                function (topexpr scope)
+                    let expr =
+                        @ topexpr 0
+                    let head =
+                        @ expr 0
+                    let headstr =
+                        string head
+                    # method call syntax
+                    if
                         and
-                            none? (get-scope-symbol scope head)
-                            == (slice headstr 0 1) "."
+                            symbol? head
+                            and
+                                none? (get-scope-symbol scope head)
+                                == (slice headstr 0 1) "."
 
-                    let name =
-                        symbol
-                            slice headstr 1
-                    let self-arg =
-                        @ expr 1
-                    let rest =
-                        slice expr 2
-                    let self =
-                        parameter
-                            quote self
-                    cons
-                        list
-                            list continuation (list (parameter (quote _)) self)
-                                cons
-                                    list (do @) self
-                                        list quote name
-                                    cons self rest
-                            self-arg
-                        slice topexpr 1
-                # infix operator support
-                elseif (has-infix-ops scope expr)
-                    cons
-                        @
-                            parse-infix-expr scope
-                                \ (@ expr 0) (slice expr 1) 0
-                            0
-                        slice topexpr 1
-        tupleof scope-symbol-wildcard-symbol
-            function (topexpr scope)
-                let sym =
-                    @ topexpr 0
-                let it =
-                    iter-r
-                        string sym
-                function finalize-head (out)
-                    cons
-                        symbol
-                            @ out 0
-                        slice out 1
-                # return tokenized list if string contains a dot
-                # and it's not the concat operator
-                if
-                    and
-                        none? (get-scope-symbol scope sym)
-                        fold it false
-                            function (out k)
-                                if (== k ".") true
-                                else out
-                    cons
-                        finalize-head
-                            fold it (list "")
+                        let name =
+                            symbol
+                                slice headstr 1
+                        let self-arg =
+                            @ expr 1
+                        let rest =
+                            slice expr 2
+                        let self =
+                            parameter
+                                quote self
+                        cons
+                            list
+                                list continuation (list (parameter (quote _)) self)
+                                    cons
+                                        list (do @) self
+                                            list quote name
+                                        cons self rest
+                                self-arg
+                            slice topexpr 1
+                    # infix operator support
+                    elseif (has-infix-ops scope expr)
+                        cons
+                            @
+                                parse-infix-expr scope
+                                    \ (@ expr 0) (slice expr 1) 0
+                                0
+                            slice topexpr 1
+            tupleof scope-symbol-wildcard-symbol
+                function (topexpr scope)
+                    let sym =
+                        @ topexpr 0
+                    let it =
+                        iter-r
+                            string sym
+                    function finalize-head (out)
+                        cons
+                            symbol
+                                @ out 0
+                            slice out 1
+                    # return tokenized list if string contains a dot
+                    # and it's not the concat operator
+                    if
+                        and
+                            none? (get-scope-symbol scope sym)
+                            fold it false
                                 function (out k)
-                                    if (== k ".")
-                                        cons ""
+                                    if (== k ".") true
+                                    else out
+                        cons
+                            finalize-head
+                                fold it (list "")
+                                    function (out k)
+                                        if (== k ".")
+                                            cons ""
+                                                cons
+                                                    quote .
+                                                    finalize-head out
+                                        else
                                             cons
-                                                quote .
-                                                finalize-head out
-                                    else
-                                        cons
-                                            .. k (@ out 0)
-                                            slice out 1
-                        slice topexpr 1
+                                                .. k (@ out 0)
+                                                slice out 1
+                            slice topexpr 1
 
-        syntax-infix-op : (syntax-infix-rules 70 > :)
-        syntax-infix-op or (syntax-infix-rules 100 > or)
-        syntax-infix-op and (syntax-infix-rules 200 > and)
-        syntax-infix-op | (syntax-infix-rules 240 > |)
-        syntax-infix-op ^ (syntax-infix-rules 250 > ^)
-        syntax-infix-op & (syntax-infix-rules 260 > &)
-        syntax-infix-op < (syntax-infix-rules 300 > <)
-        syntax-infix-op > (syntax-infix-rules 300 > >)
-        syntax-infix-op <= (syntax-infix-rules 300 > <=)
-        syntax-infix-op >= (syntax-infix-rules 300 > >=)
-        syntax-infix-op != (syntax-infix-rules 300 > !=)
-        syntax-infix-op == (syntax-infix-rules 300 > ==)
-        #syntax-infix-op is (syntax-infix-rules 300 > is)
-        syntax-infix-op .. (syntax-infix-rules 400 < ..)
-        syntax-infix-op << (syntax-infix-rules 450 > <<)
-        syntax-infix-op >> (syntax-infix-rules 450 > >>)
-        syntax-infix-op - (syntax-infix-rules 500 > -)
-        syntax-infix-op + (syntax-infix-rules 500 > +)
-        syntax-infix-op % (syntax-infix-rules 600 > %)
-        syntax-infix-op / (syntax-infix-rules 600 > /)
-        syntax-infix-op // (syntax-infix-rules 600 > //)
-        syntax-infix-op * (syntax-infix-rules 600 > *)
-        syntax-infix-op ** (syntax-infix-rules 700 < **)
-        syntax-infix-op . (syntax-infix-rules 800 > .)
-        syntax-infix-op @ (syntax-infix-rules 800 > @)
-        #syntax-infix-op .= (syntax-infix-rules 800 > .=)
-        #syntax-infix-op @= (syntax-infix-rules 800 > @=)
-        #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
+            syntax-infix-op : (syntax-infix-rules 70 > :)
+            syntax-infix-op or (syntax-infix-rules 100 > or)
+            syntax-infix-op and (syntax-infix-rules 200 > and)
+            syntax-infix-op | (syntax-infix-rules 240 > |)
+            syntax-infix-op ^ (syntax-infix-rules 250 > ^)
+            syntax-infix-op & (syntax-infix-rules 260 > &)
+            syntax-infix-op < (syntax-infix-rules 300 > <)
+            syntax-infix-op > (syntax-infix-rules 300 > >)
+            syntax-infix-op <= (syntax-infix-rules 300 > <=)
+            syntax-infix-op >= (syntax-infix-rules 300 > >=)
+            syntax-infix-op != (syntax-infix-rules 300 > !=)
+            syntax-infix-op == (syntax-infix-rules 300 > ==)
+            #syntax-infix-op is (syntax-infix-rules 300 > is)
+            syntax-infix-op .. (syntax-infix-rules 400 < ..)
+            syntax-infix-op << (syntax-infix-rules 450 > <<)
+            syntax-infix-op >> (syntax-infix-rules 450 > >>)
+            syntax-infix-op - (syntax-infix-rules 500 > -)
+            syntax-infix-op + (syntax-infix-rules 500 > +)
+            syntax-infix-op % (syntax-infix-rules 600 > %)
+            syntax-infix-op / (syntax-infix-rules 600 > /)
+            syntax-infix-op // (syntax-infix-rules 600 > //)
+            syntax-infix-op * (syntax-infix-rules 600 > *)
+            syntax-infix-op ** (syntax-infix-rules 700 < **)
+            syntax-infix-op . (syntax-infix-rules 800 > .)
+            syntax-infix-op @ (syntax-infix-rules 800 > @)
+            #syntax-infix-op .= (syntax-infix-rules 800 > .=)
+            #syntax-infix-op @= (syntax-infix-rules 800 > @=)
+            #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
+
+syntax-extend stage-4 (_ scope)
+
+    function range (a b c)
+        let step = (? (none? c) 1 c)
+        let from = (? (none? b) 0 a)
+        let to = (? (none? b) a b)
+        tupleof
+            function (x)
+                if (< x to)
+                    tupleof x (+ x step)
+            from
+
+    function zip (a b)
+        let iter-a init-a = a
+        let iter-b init-b = b
+        tupleof
+            function (x)
+                let state-a = (iter-a (@ x 0))
+                let state-b = (iter-b (@ x 1))
+                if (not (or (none? state-a) (none? state-b)))
+                    let at-a next-a = state-a
+                    let at-b next-b = state-b
+                    tupleof
+                        tupleof at-a at-b
+                        tupleof next-a next-b
+            tupleof init-a init-b
+
+    function infrange (a b)
+        let step = (? (none? b) 1 b)
+        let from = (? (none? a) 0 a)
+        tupleof
+            function (x)
+                tupleof x (+ x step)
+            from
+
+    function enumerate (x from step)
+        zip (infrange from step) x
+
+    .. scope
+        table
+            : range
+            : zip
+            : enumerate
+            : for
+                block-macro
+                    function (block-expr)
+                        function iter-expr (expr)
+                            assert (not (empty? expr))
+                                "syntax: (for let-name ... in iter-expr body-expr ...)"
+                            if (list-head? expr (quote in))
+                                tupleof
+                                    list;
+                                    slice expr 1
+                            else
+                                let names rest =
+                                    iter-expr
+                                        slice expr 1
+                                tupleof
+                                    cons
+                                        @ expr 0
+                                        names
+                                    rest
+
+                        let expr = (@ block-expr 0)
+                        let dest-names rest =
+                            iter-expr (slice expr 1)
+                        let src-expr = (@ rest 0)
+                        let block-rest else-block =
+                            let remainder =
+                                (slice block-expr 1)
+                            if
+                                and
+                                    not (empty? remainder)
+                                    list-head? (@ remainder 0) (quote else)
+                                tupleof (slice remainder 1) (slice (@ remainder 0) 1)
+                            else
+                                tupleof remainder (list none)
+
+                        function generate-template (body extra-args)
+                            let param-iter = (parameter (quote iter))
+                            let param-state = (parameter (quote state))
+                            let param-for = (parameter (quote for-loop))
+                            let param-at-next = (parameter (quote at-next))
+                            cons
+                                qquote
+                                    do
+                                        let (unquote param-for) =
+                                            continuation (
+                                                (unquote (parameter (quote _)))
+                                                (unquote param-iter)
+                                                (unquote param-state)
+                                                (unquote-splice extra-args))
+                                                let (unquote param-at-next) =
+                                                    (unquote param-iter) (unquote param-state)
+                                                ? (== (unquote param-at-next) none)
+                                                    do
+                                                        unquote-splice else-block
+                                                    do
+                                                        let repeat =
+                                                            continuation (
+                                                                (unquote (parameter (quote _)))
+                                                                (unquote-splice extra-args))
+                                                                (unquote param-for)
+                                                                    unquote param-iter
+                                                                    @ (unquote param-at-next) 1
+                                                                    unquote-splice extra-args
+                                                        let (unquote-splice dest-names) =
+                                                            @ (unquote param-at-next) 0
+                                                        unquote-splice body
+                                        (unquote param-for) (splice (unquote src-expr))
+                                            unquote-splice extra-args
+                                block-rest
+
+                        let body = (slice rest 1)
+                        if (list-head? body (quote loop))
+                            # read extra state params
+                            generate-template
+                                slice body 2
+                                @ body 1
+                        else
+                            # no extra state params
+                            generate-template body (list)
 
 syntax-extend stage-final (_ scope)
     set-globals! scope

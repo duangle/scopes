@@ -36,19 +36,9 @@ function ilist (alist)
             step xf alist
 
 do
-    # this iterator function returns the next element for a list
-    function next (l)
-        slice l 1
-    # this function returns the current element
-    function at (l)
-        l @ 0
-    # this predicate indicates if there are more elements to read
-    function more? (l)
-        (countof l) != 0
-
     function atnext (l)
-        if (more? l)
-            tupleof (at l) (next l)
+        if ((countof l) != 0)
+            tupleof (@ l 0) (slice l 1)
 
     # this loop prints the number of elements and returns the number
     # of elements counted.
@@ -78,16 +68,30 @@ do
 
     print total_elements "element(s) counted."
 
-/// do
-    # this iterator function returns the next element for a list
-    function next (l)
-        slice l 1
-    # this function returns the current element
-    function at (l)
-        l @ 0
-    # this predicate indicates if there are more elements to read
-    function more? (l)
-        not (empty? l)
+do
+
+    let z = (list)
+    assert
+        ==
+            quote ((9 2) (7 1) (5 0))
+            for x y in (zip (range 5 10 2) (range 10)) loop (z)
+                print x y
+                repeat
+                    cons (list x y) z
+            else
+                z
+
+    function atnext (l)
+        if ((countof l) != 0)
+            tupleof (@ l 0) (slice l 1)
+    function iter-list (l)
+        tupleof atnext l
+
+    for i c in (enumerate (iter-list "the quick brown fox"))
+        if (c != " ")
+            repeat;
+        else
+            print "space at index" i
 
     # this loop prints the number of elements and returns the number
     # of elements counted.
@@ -98,7 +102,7 @@ do
     let i = 0 # a custom counter
     # store return value of loop in `total_elements`
     let total_elements =
-        loop (i) for (x in l) # initialize loop state from scope
+        for x in (tupleof atnext l) loop (i) # initialize loop state from scope
             # custom processing block
             print i x
             # repeat the loop explicitly

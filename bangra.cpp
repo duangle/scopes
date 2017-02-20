@@ -3567,7 +3567,7 @@ namespace Types {
     static Ordering _list_cmp(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
         auto x = a.list;
-        auto y = b.list;
+        auto y = extract_list(b);
         while (true) {
             if (x == y) return Equal;
             else if (!x) return Less;
@@ -4678,7 +4678,6 @@ namespace Types {
         tmp = Struct("List", true);
         tmp->op2[OP2_At] = type_list_at;
         tmp->op2[OP2_Join] = _list_join;
-        tmp->cmp = _list_cmp;
         //tmp->apply_type = _list_apply_type;
         //tmp->size = sizeof(bangra::List);
         //tmp->alignment = offsetof(_list_alignment, s);
@@ -4689,6 +4688,7 @@ namespace Types {
         tmp->splice = _list_splice;
         tmp->countof = _list_countof;
         tmp->slice = _list_slice;
+        tmp->cmp = _list_cmp;
         PList = tmp;
 
         tmp = Struct("Table", true);
