@@ -51,16 +51,23 @@ do
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
 
+    loop
+        (i = 0) (j = 2)
+        if (i < 10)
+            print i j
+            repeat (i + 1) (j + 2)
+
     # this loop prints the number of elements and returns the number
     # of elements counted.
 
     # loop init variables:
     let l = # the list we're going to iterate
         tupleof "yes" "this" "is" "dog"
-    let i = 0 # a custom counter
     # store return value of loop in `total_elements`
     let total_elements =
-        loop (l i) # initialize loop state from scope
+        loop
+            l (i = 0) # initialize loop state from scope
+
             let v = (atnext l)
             if (not (none? v))
                 # get current element
@@ -110,12 +117,11 @@ do
 
     let l = # the list we're going to iterate
         list "yes" "this" "is" "dog"
-    let i = 0 # a custom counter
     # store return value of loop in `total_elements`
     let total_elements =
-        for x in l loop (i) # loop (...) is optional.
-                            # in this case, we'll use it to keep state for
-                            # a custom counter.
+        for x in l loop # loop (...) is optional.
+            (i = 0);    # in this case, we'll use it to keep state for
+                        # a custom counter.
             # print element and our custom index
             print i x
             # repeat the loop (must always be done explicitly)

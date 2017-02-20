@@ -316,7 +316,7 @@ syntax-extend stage-2 (_ scope)
                                     list continuation (list)
                                         @ expr 2
                             @ expr 1
-            : loop
+            : loop # bootstrap loop, better version in stage 4
                 macro
                     continuation loop (_ expr)
                         let param-repeat =
@@ -992,6 +992,35 @@ syntax-extend stage-4 (_ scope)
     function enumerate (x from step)
         zip (infrange from step) (iter x)
 
+    function =? (x)
+        and
+            == (typeof x) symbol
+            == x (quote =)
+
+    function parse-loop-args (expr)
+        if (empty? expr)
+            tupleof
+                list;
+                list;
+        else
+            let args names =
+                parse-loop-args (slice expr 1)
+            let elem = (@ expr 0)
+            if (symbol? elem)
+                tupleof
+                    cons elem args
+                    cons elem names
+            else
+                # initializer
+                assert
+                    and
+                        list? elem
+                        (countof elem) >= 3
+                        =? (@ elem 1)
+                    error "illegal initializer"
+                tupleof
+                    cons (cons do (slice elem 2)) args
+                    cons (@ elem 0) names
     .. scope
         tableof
             : iter
@@ -999,6 +1028,22 @@ syntax-extend stage-4 (_ scope)
             : range
             : zip
             : enumerate
+            : loop # better loop with support for initializers
+                macro
+                    function loop (expr)
+                        let param-repeat = (quote repeat)
+                        let args names =
+                            parse-loop-args (@ expr 1)
+                        list do
+                            list let param-repeat (quote =)
+                                cons continuation
+                                    cons
+                                        cons
+                                            parameter (quote _)
+                                            names
+                                        slice expr 2
+                            cons param-repeat
+                                args
             : for
                 block-macro
                     function (block-expr)
@@ -1034,7 +1079,7 @@ syntax-extend stage-4 (_ scope)
                             else
                                 tupleof remainder (list none)
 
-                        function generate-template (body extra-args)
+                        function generate-template (body extra-args extra-names)
                             let param-iter = (parameter (quote iter))
                             let param-state = (parameter (quote state))
                             let param-for = (parameter (quote for-loop))
@@ -1047,7 +1092,7 @@ syntax-extend stage-4 (_ scope)
                                                 (unquote (parameter (quote _)))
                                                 (unquote param-iter)
                                                 (unquote param-state)
-                                                (unquote-splice extra-args))
+                                                (unquote-splice extra-names))
                                                 let (unquote param-at-next) =
                                                     (unquote param-iter) (unquote param-state)
                                                 ? (== (unquote param-at-next) none)
@@ -1057,11 +1102,11 @@ syntax-extend stage-4 (_ scope)
                                                         let repeat =
                                                             continuation (
                                                                 (unquote (parameter (quote _)))
-                                                                (unquote-splice extra-args))
+                                                                (unquote-splice extra-names))
                                                                 (unquote param-for)
                                                                     unquote param-iter
                                                                     @ (unquote param-at-next) 1
-                                                                    unquote-splice extra-args
+                                                                    unquote-splice extra-names
                                                         let (unquote-splice dest-names) =
                                                             @ (unquote param-at-next) 0
                                                         unquote-splice body
@@ -1072,13 +1117,15 @@ syntax-extend stage-4 (_ scope)
 
                         let body = (slice rest 1)
                         if (list-head? body (quote loop))
+                            let args names =
+                                parse-loop-args (@ body 1)
                             # read extra state params
                             generate-template
                                 slice body 2
-                                @ body 1
+                                \ args names
                         else
                             # no extra state params
-                            generate-template body (list)
+                            generate-template body (list) (list)
 
 syntax-extend stage-final (_ scope)
     set-globals! scope
