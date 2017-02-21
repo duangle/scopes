@@ -22,21 +22,25 @@ end
 
 local function bangra_symbols()
     return {
+    -- keywords and macros
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "bangra let external branch function true false"
-            .. " print repr tupleof import-c quote eval structof"
-            .. " typeof letrec with ::* ::@ block-scope-macro cons"
-            .. " expand call escape do empty? dump-syntax"
-            .. " syntax-extend dump list-join list-head? if else elseif loop"
-            .. " repeat macro block-macro countof foreach kindof"
-            .. " tableof none slice none? assert qquote unquote unquote-splice"
-            .. " list-atom? list-load load globals table-join require"
-            .. " set-key! cstr return continuation splice exit"
-            .. " try except flowcall contcall hash define min max"
-            .. " va-arg va-countof in for range zip enumerate bitcast"
-            .. " element-type qualify disqualify iter generator?"
+        "let true false function quote with ::* ::@ call escape do dump-syntax"
+            .. " syntax-extend if else elseif loop repeat none assert qquote"
+            .. " unquote unquote-splice globals return splice continuation"
+            .. " try except contcall define in for"
         ),
 
+    -- builtin and global functions
+    FUNCTIONS = splitstr(getprop("functions.bangra_lang") or
+        "external branch print repr tupleof import-c eval structof typeof"
+            .. " macro block-macro block-scope-macro cons expand empty?"
+            .. " dump list-head? countof tableof slice none? list-atom?"
+            .. " list-load load require set-key! cstr exit hash min max"
+            .. " va-arg va-countof range zip enumerate bitcast element-type"
+            .. " qualify disqualify iter generator?"
+        ),
+
+    -- builtin operator functions that can also be used as infix
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
         "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
             .. " *= /= %= ^= &= |= ~= <- ? := // << >>"
@@ -352,6 +356,7 @@ function OnStyle(styler)
     S_LINECOMMENT = 1
     S_NUMBER = 2
     S_KEYWORD = 3
+    S_FUNCTION = 4
     S_STRING = 6
     S_BLOCKCOMMENT = 7
     S_UNCLOSEDLINE = 8
@@ -389,6 +394,8 @@ function OnStyle(styler)
             local sym = lexer.string()
             if (symbols.KEYWORDS[sym]) then
                 editor:SetStyling(length, S_KEYWORD)
+            elseif (symbols.FUNCTIONS[sym]) then
+                editor:SetStyling(length, S_FUNCTION)
             elseif (symbols.OPERATORS[sym]) then
                 editor:SetStyling(length, S_OPERATOR)
             elseif (symbols.TYPES[sym]) then
