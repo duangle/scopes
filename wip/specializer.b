@@ -73,23 +73,23 @@ function closure-label (aclosure)
 function flow-iter-arguments (aflow aframe)
     let acount =
         flow-argument-count aflow
-    tupleof
-        function (i)
-            if (i < acount)
-                let arg =
-                    flow-argument aflow i
-                tupleof
-                    structof
-                        : index i
-                        : argument
-                            arg
-                            /// ? ((typeof arg) == parameter)
-                                frame-eval aframe i arg
+    qualify generator
+        tupleof
+            function (i)
+                if (i < acount)
+                    let arg =
+                        flow-argument aflow i
+                    tupleof
+                        structof
+                            : index i
+                            : argument
                                 arg
+                                /// ? ((typeof arg) == parameter)
+                                    frame-eval aframe i arg
+                                    arg
 
-                    i + 1
-            else none
-        0
+                        i + 1
+            0
 
 function param-label (aparam)
     .. (style-keyword "@")
@@ -113,7 +113,8 @@ function flow-decl-label (aflow aframe)
                         " "
                         style-operator "("
 
-            loop (idx s)
+            loop
+                with idx s
                 if (idx < pcount)
                     let param =
                         flow-parameter aflow idx
@@ -127,53 +128,52 @@ function flow-decl-label (aflow aframe)
                         style-operator "):"
         "\n    "
         do
-            @
-                fold (flow-iter-arguments aflow aframe) (tupleof "" 0)
-                    function (out k)
-                        let
-                            arg = k.argument
-                            argtype =
-                                typeof arg
-                            i =
-                                out @ 1
-                        tupleof
+            for k in (flow-iter-arguments aflow aframe)
+                with
+                    i = 0
+                    str = ""
+                let
+                    arg = k.argument
+                    argtype =
+                        typeof arg
+                repeat
+                    i + 1
+                    ..
+                        str
+                        ? (i == 1)
+                            style-operator " <- "
+                            " "
+                        if (argtype == parameter)
                             ..
-                                out @ 0
-                                ? (i == 1)
-                                    style-operator " <- "
-                                    " "
-                                if (argtype == parameter)
-                                    ..
-                                        ? (arg.flow == aflow) ""
-                                            flow-label arg.flow
-                                        param-label arg
-                                elseif (argtype == closure)
-                                    closure-label arg
-                                elseif (argtype == flow)
-                                    flow-label arg
-                                else
-                                    repr arg
-                            i + 1
-                0
+                                ? (arg.flow == aflow) ""
+                                    flow-label arg.flow
+                                param-label arg
+                        elseif (argtype == closure)
+                            closure-label arg
+                        elseif (argtype == flow)
+                            flow-label arg
+                        else
+                            repr arg
+            else
+                str
 
 function dump-function (afunc)
-    let visited = (table)
+    let visited = (tableof)
     function dump-closure (aclosure)
         function dump-flow (aflow aframe)
             if (none? (visited @ aflow))
                 print
                     flow-decl-label aflow aframe
                 set-key! visited aflow true
-                fold (flow-iter-arguments aflow aframe) true
-                    function (out k)
-                        let arg = k.argument
-                        let argtype =
-                            typeof arg
-                        if (argtype == closure)
-                            dump-closure arg
-                        elseif (argtype == flow)
-                            dump-flow arg aframe
-                        true
+                for k in (flow-iter-arguments aflow aframe)
+                    let arg = k.argument
+                    let argtype =
+                        typeof arg
+                    if (argtype == closure)
+                        dump-closure arg
+                    elseif (argtype == flow)
+                        dump-flow arg aframe
+                    repeat;
         dump-flow aclosure.entry aclosure.frame
     dump-closure afunc
 
