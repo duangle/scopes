@@ -5578,6 +5578,12 @@ static Any builtin_error(const Any *args, size_t argcount) {
     return const_none;
 }
 
+static Any builtin_raise(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    throw args[0];
+    return const_none;
+}
+
 // (import-c const-path (tupleof const-string ...))
 static Any builtin_import_c(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 2);
@@ -6449,6 +6455,7 @@ static void initGlobals () {
     setBuiltin<builtin_expand>(env, "expand");
     setBuiltin<builtin_set_globals>(env, "set-globals!");
     setBuiltin<builtin_error>(env, "error");
+    setBuiltin<builtin_raise>(env, "raise");
     setBuiltin<builtin_countof>(env, "countof");
     setBuiltin<builtin_loadlist>(env, "list-load");
     setBuiltin<builtin_eval>(env, "eval");

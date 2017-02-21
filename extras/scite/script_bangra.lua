@@ -27,7 +27,7 @@ local function bangra_symbols()
         "let true false function quote with ::* ::@ call escape do dump-syntax"
             .. " syntax-extend if else elseif loop repeat none assert qquote"
             .. " unquote unquote-splice globals return splice continuation"
-            .. " try except contcall define in for empty-list empty-tuple"
+            .. " try except contcall define in for empty-list empty-tuple raise"
         ),
 
     -- builtin and global functions
@@ -38,12 +38,12 @@ local function bangra_symbols()
             .. " list-load load require cstr exit hash min max"
             .. " va-arg va-countof range zip enumerate bitcast element-type"
             .. " qualify disqualify iter generator? list? symbol?"
-            .. " get-exception-handler xpcall"
+            .. " get-exception-handler xpcall error"
         ),
 
     -- builtin and global functions with side effects
     SFXFUNCTIONS = splitstr(getprop("sfxfunctions.bangra_lang") or
-        "set-key! set-globals! set-exception-handler! error"
+        "set-key! set-globals! set-exception-handler!"
         ),
 
     -- builtin operator functions that can also be used as infix

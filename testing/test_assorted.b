@@ -560,11 +560,11 @@ try
     print "enter #1"
     try
         print "enter #2"
-        error "raise #2.1"
+        raise "raise #2.1"
         print "leave #2"
     except (e)
         print "exception #2:" e
-        error ("reraise #2: " .. e)
+        raise ("reraise #2: " .. e)
     print "leave #1"
 except (e)
     print "exception #1:" e
