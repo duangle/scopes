@@ -51,8 +51,7 @@ do
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
 
-    loop
-        (i = 0) (j = 2)
+    loop ((i = 0) (j = 2))
         if (i < 10)
             print i j
             repeat (i + 1) (j + 2)

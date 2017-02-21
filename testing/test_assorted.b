@@ -19,7 +19,7 @@ do
 
 do
     let T =
-        table
+        tableof
             : (do print) 404
     print
         @ T print
@@ -39,7 +39,7 @@ do
         eval
             list-load
                 .. interpreter-dir "/testing/test_module.b"
-            table
+            tableof
                 tupleof scope-parent-symbol
                     globals;
                 injected-var : 3
@@ -50,10 +50,10 @@ do
 do
     let z =
         ..
-            table
+            tableof
                 x : 1
                 y : 2
-            table
+            tableof
                 y : 3
                 z : 4
                 w : 5
@@ -165,12 +165,14 @@ call print "hi"
 
 assert
     == "hheellll  wwrrlldd"
-        fold (iter "hello world") ""
-            function (out k)
+        for k in "hello world" loop (out = "";)
+            repeat
                 if (k == "o")
                     out
                 else
                     .. out k k
+        else
+            out
 
 do
     let k = "abcdefghijklmnopqrstuvwxyz"
@@ -235,7 +237,7 @@ assert
 
 do
     let T = API
-        /// table
+        /// tableof
             x : 1
             y : 2
             z : 3
@@ -308,12 +310,12 @@ do
 do
     function generator ()
         let T =
-            table;
+            tableof;
         set-key! T
             : run
                 function (ret)
                     let G =
-                        table
+                        tableof
                             : ret
                     function yield ()
                         call/cc

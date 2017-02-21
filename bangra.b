@@ -618,7 +618,6 @@ syntax-extend stage-3 (_ scope)
     .. scope
         tableof
             : xpcall
-            : fold
             : bangra
             : require find-module
             : generator

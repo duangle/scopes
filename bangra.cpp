@@ -1785,9 +1785,9 @@ static const List *reverse_list(const List *l, const List *eol = nullptr) {
 // (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
 // this is the mutating version; input lists are modified, direction is inverted
 static const List *reverse_list_inplace(
-    const List *l, const List *eol = nullptr) {
-    const List *next = eol;
-    size_t count = eol?eol->count:0;
+    const List *l, const List *eol = nullptr, const List *cat_to = nullptr) {
+    const List *next = cat_to;
+    size_t count = cat_to?cat_to->count:0;
     while (l != eol) {
         ++count;
         const List *iternext = l->next;
@@ -2969,8 +2969,7 @@ struct Parser {
                     return const_none;
                 }
                 lexer.readToken();
-                // if we are in the same line and there was no preceding ":",
-                // continue in parent
+                // if we are in the same line, continue in parent
                 if (lexer.lineno == lineno)
                     break;
             } else {
@@ -4110,7 +4109,7 @@ namespace Types {
             l = List::create(la->at, l, get_anchor(la));
             la = la->next;
         }
-        return wrap(reverse_list_inplace(l, lb));
+        return wrap(reverse_list_inplace(l, lb, lb));
     }
 
     template<int op_name>

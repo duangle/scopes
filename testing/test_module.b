@@ -6,7 +6,7 @@ assert
             list 4 5 6
         list 1 2 3 4 5 6
 
-table
+tableof
     compute :
         function (x)
             injected-var + x

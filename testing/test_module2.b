@@ -13,7 +13,7 @@ assert
 set-key! bangra
     : test_module2 true
 
-table
+tableof
     compute :
         function (x y)
             x + y
