@@ -14,12 +14,6 @@ call
             x
     "hi"
 
-print
-    quote
-        loop
-            1 2; 3;
-            test;
-
 let done =
     tag (quote done)
 
@@ -51,7 +45,11 @@ do
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
 
-    loop ((i = 0) (j = 2))
+    loop
+        with
+            i = 0
+            j = 2
+
         if (i < 10)
             print i j
             repeat (i + 1) (j + 2)
@@ -65,8 +63,8 @@ do
     # store return value of loop in `total_elements`
     let total_elements =
         loop
-            l (i = 0) # initialize loop state from scope
-
+            with l
+                i = 0 # initialize loop state from scope
             let v = (atnext l)
             if (not (none? v))
                 # get current element
@@ -88,7 +86,9 @@ do
 do
     let z = (list)
     let zipped-lists =
-        for x y in (zip (range 5 10 2) (range 10)) loop (z)
+        for x y in (zip (range 5 10 2) (range 10))
+            with z
+
             print x y
             repeat
                 cons (list x y) z
@@ -114,12 +114,11 @@ do
     # this loop prints each element of a list and returns the number
     # of elements counted, without involving any mutable variables.
 
-    let l = # the list we're going to iterate
-        list "yes" "this" "is" "dog"
     # store return value of loop in `total_elements`
     let total_elements =
-        for x in l loop # loop (...) is optional.
-            (i = 0);    # in this case, we'll use it to keep state for
+        for x in (list "yes" "this" "is" "dog")
+            with        # (with ...) is optional.
+                i = 0   # in this case, we'll use it to keep state for
                         # a custom counter.
             # print element and our custom index
             print i x

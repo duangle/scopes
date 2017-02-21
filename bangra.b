@@ -996,30 +996,35 @@ syntax-extend stage-4 (_ scope)
             == (typeof x) symbol
             == x (quote =)
 
-    function parse-loop-args (expr)
-        if (empty? expr)
-            tupleof
-                list;
-                list;
-        else
-            let args names =
-                parse-loop-args (slice expr 1)
-            let elem = (@ expr 0)
-            if (symbol? elem)
+    function parse-loop-args (fullexpr)
+        let expr =
+            ? (list-head? fullexpr (quote with))
+                slice fullexpr 1
+                fullexpr
+        loop (expr)
+            if (empty? expr)
                 tupleof
-                    cons elem args
-                    cons elem names
+                    list;
+                    list;
             else
-                # initializer
-                assert
-                    and
-                        list? elem
-                        (countof elem) >= 3
-                        =? (@ elem 1)
-                    error "illegal initializer"
-                tupleof
-                    cons (cons do (slice elem 2)) args
-                    cons (@ elem 0) names
+                let args names =
+                    repeat (slice expr 1)
+                let elem = (@ expr 0)
+                if (symbol? elem)
+                    tupleof
+                        cons elem args
+                        cons elem names
+                else
+                    # initializer
+                    assert
+                        and
+                            list? elem
+                            (countof elem) >= 3
+                            =? (@ elem 1)
+                        error "illegal initializer"
+                    tupleof
+                        cons (cons do (slice elem 2)) args
+                        cons (@ elem 0) names
     .. scope
         tableof
             : iter
@@ -1115,12 +1120,12 @@ syntax-extend stage-4 (_ scope)
                                 block-rest
 
                         let body = (slice rest 1)
-                        if (list-head? body (quote loop))
+                        if (list-head? (@ body 0) (quote with))
                             let args names =
-                                parse-loop-args (@ body 1)
+                                parse-loop-args (@ body 0)
                             # read extra state params
                             generate-template
-                                slice body 2
+                                slice body 1
                                 \ args names
                         else
                             # no extra state params
