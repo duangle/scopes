@@ -932,6 +932,14 @@ syntax-extend stage-4 (_ scope)
             tupleof key-value
                 tupleof t (@ key-value 0)
 
+    function yield-iter (f)
+        contcall
+            continuation (nextf result)
+                return
+                    if (not (none? nextf))
+                        tupleof result nextf
+            f
+
     function iter (x)
         if (generator? x) x
         else
@@ -948,6 +956,9 @@ syntax-extend stage-4 (_ scope)
             elseif (<= t string)
                 qualify generator
                     tupleof countable-iter (tupleof x 0)
+            elseif (<= t closure)
+                qualify generator
+                    tupleof yield-iter x
             else
                 error
                     .. "don't know how to iterate " (string x)
@@ -1032,6 +1043,18 @@ syntax-extend stage-4 (_ scope)
             : range
             : zip
             : enumerate
+            : yield
+                block-macro
+                    function yield (topexpr)
+                        list
+                            cons contcall
+                                cons
+                                    cons continuation
+                                        cons (list (quote return))
+                                            slice topexpr 1
+                                    cons
+                                        quote return
+                                        slice (@ topexpr 0) 1
             : loop # better loop with support for initializers
                 macro
                     function loop (expr)

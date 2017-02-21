@@ -1,4 +1,30 @@
 
+# we define a generator function that yields multiple values from a loop,
+# enclosed by a special first value and a configurable tail element
+function generator-func (tail)
+    function ()
+        # yield the first value individually
+        yield "hello?!"
+        # now yield all items of a list
+        for x in (list "yes" "this" "is" "dog")
+            # return one element from this list
+            yield x
+            # function continues here...
+            repeat;
+        else
+            # and yield custom tail element
+            yield tail
+        # actual return value will be ignored
+        true
+
+# now iterate through the values in this function
+for x in (generator-func "what's up?")
+    # print each value
+    print x
+    # run until generator is out of values
+    repeat;
+print "done."
+
 function bleh (args... rest)
     print rest
         list args...
