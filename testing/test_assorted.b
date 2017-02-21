@@ -165,7 +165,9 @@ call print "hi"
 
 assert
     == "hheellll  wwrrlldd"
-        for k in "hello world" loop (out = "";)
+        for k in "hello world"
+            with
+                out = ""
             repeat
                 if (k == "o")
                     out

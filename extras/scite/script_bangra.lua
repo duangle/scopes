@@ -27,7 +27,7 @@ local function bangra_symbols()
         "let true false function quote with ::* ::@ call escape do dump-syntax"
             .. " syntax-extend if else elseif loop repeat none assert qquote"
             .. " unquote unquote-splice globals return splice continuation"
-            .. " try except contcall define in for"
+            .. " try except contcall define in for empty-list empty-tuple"
         ),
 
     -- builtin and global functions
@@ -35,9 +35,15 @@ local function bangra_symbols()
         "external branch print repr tupleof import-c eval structof typeof"
             .. " macro block-macro block-scope-macro cons expand empty?"
             .. " dump list-head? countof tableof slice none? list-atom?"
-            .. " list-load load require set-key! cstr exit hash min max"
+            .. " list-load load require cstr exit hash min max"
             .. " va-arg va-countof range zip enumerate bitcast element-type"
-            .. " qualify disqualify iter generator?"
+            .. " qualify disqualify iter generator? list? symbol?"
+            .. " get-exception-handler xpcall"
+        ),
+
+    -- builtin and global functions with side effects
+    SFXFUNCTIONS = splitstr(getprop("sfxfunctions.bangra_lang") or
+        "set-key! set-globals! set-exception-handler! error"
         ),
 
     -- builtin operator functions that can also be used as infix
@@ -357,6 +363,8 @@ function OnStyle(styler)
     S_NUMBER = 2
     S_KEYWORD = 3
     S_FUNCTION = 4
+    S_SFXFUNCTION = 5
+    S_MUTATOR = 5
     S_STRING = 6
     S_BLOCKCOMMENT = 7
     S_UNCLOSEDLINE = 8
@@ -396,6 +404,8 @@ function OnStyle(styler)
                 editor:SetStyling(length, S_KEYWORD)
             elseif (symbols.FUNCTIONS[sym]) then
                 editor:SetStyling(length, S_FUNCTION)
+            elseif (symbols.SFXFUNCTIONS[sym]) then
+                editor:SetStyling(length, S_SFXFUNCTION)
             elseif (symbols.OPERATORS[sym]) then
                 editor:SetStyling(length, S_OPERATOR)
             elseif (symbols.TYPES[sym]) then

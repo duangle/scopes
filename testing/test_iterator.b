@@ -17,6 +17,10 @@ call
 let done =
     tag (quote done)
 
+print
+    quote
+        (1 2; 3 4;)
+
 function ilist (alist)
     function (xf)
         function step (xf l)
