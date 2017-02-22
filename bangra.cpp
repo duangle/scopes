@@ -513,10 +513,12 @@ struct State {
     Any *wargs;
     size_t rcount;
     size_t wcount;
+    Frame *frame;
 };
 
 #define B_FUNC(X) void X(bangra::State *S)
 #define B_ARGCOUNT(S) ((S)->rcount)
+#define B_GETFRAME(S) ((S)->frame)
 #define B_GETCONT(S) ((S)->rargs[bangra::ARG_Cont])
 #define B_GETFUNC(S) ((S)->rargs[bangra::ARG_Func])
 #define B_GETARG(S, N) ((S)->rargs[bangra::ARG_Arg0 + (N)])
@@ -1713,7 +1715,8 @@ static const Parameter *extract_parameter(const Any &value) {
     if (is_parameter_type(value.type)) {
         return value.parameter;
     }
-    error("parameter expected");
+    error("parameter type expected, not %s.",
+        get_name(value.type).c_str());
     return nullptr;
 }
 
@@ -3181,6 +3184,23 @@ static const Frame *find_frame_for_flow(const Frame *frame, const Flow *cont) {
     return nullptr;
 }
 
+static void rebind_parameter(
+    Frame *frame, const Flow *cont, size_t index, const Any &value) {
+    assert(cont);
+    // parameter is bound - attempt resolve
+    Frame *ptr = frame;
+    while (ptr) {
+        auto it = ptr->map.find(cont);
+        if (it != ptr->map.end()) {
+            auto &values = it->second;
+            assert (index < values.size());
+            values[index] = value;
+            return;
+        }
+        ptr = ptr->parent;
+    }
+}
+
 static Any evaluate_parameter(
     const Frame *frame, const Flow *cont, size_t index, const Any &defvalue) {
     if (cont) {
@@ -3250,8 +3270,12 @@ static size_t execute(const Any *args, size_t argcount, Any *ret) {
     Any *rbuf = argbuf[1];
     size_t rcount = 0;
 
-    Frame *frame = Frame::create();
-    frame->idx = 0;
+    State S;
+    {
+        Frame *frame = Frame::create();
+        frame->idx = 0;
+        S.frame = frame;
+    }
 
     std::vector<Any> tmpargs;
 
@@ -3259,8 +3283,6 @@ static size_t execute(const Any *args, size_t argcount, Any *ret) {
         printf("TRACE: execute enter (exit = %s)\n",
             get_string(exit_cont).c_str());
     }
-
-    State S;
 
 continue_execution:
     try {
@@ -3312,7 +3334,7 @@ continue_execution:
             if (is_closure_type(callee.type)) {
                 auto closure = callee.closure;
 
-                frame = closure->frame;
+                S.frame = closure->frame;
                 callee = wrap(closure->entry);
             }
 
@@ -3321,8 +3343,8 @@ continue_execution:
                 assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
 
-                if (frame->map.count(flow)) {
-                    frame = Frame::create(frame);
+                if (S.frame->map.count(flow)) {
+                    S.frame = Frame::create(S.frame);
                 }
                 // tmpargs map directly to param indices; that means
                 // the callee is not included.
@@ -3352,17 +3374,17 @@ continue_execution:
                     }
                 }
 
-                frame->map[flow] = tmpargs;
+                S.frame->map[flow] = tmpargs;
 
-                set_anchor(frame, get_anchor(flow));
+                set_anchor(S.frame, get_anchor(flow));
 
                 assert(!flow->arguments.empty());
                 size_t idx = 0;
                 for (size_t i = 0; i < flow->arguments.size(); ++i) {
-                    Any arg = evaluate(i, frame, flow->arguments[i]);
+                    Any arg = evaluate(i, S.frame, flow->arguments[i]);
                     if (is_splice_type(arg.type)) {
                         arg.type = get_element_type(arg.type);
-                        idx += splice(evaluate(i, frame, arg),
+                        idx += splice(evaluate(i, S.frame, arg),
                             &wbuf[idx], BANGRA_MAX_FUNCARGS - idx);
                     } else {
                         wbuf[idx++] = arg;
@@ -3377,7 +3399,7 @@ continue_execution:
             } else if (is_builtin_flow_type(callee.type)) {
                 auto cb = callee.builtin_flow;
                 auto _oldframe = handler_frame;
-                handler_frame = frame;
+                handler_frame = S.frame;
                 cb(&S);
                 wcount = S.wcount;
                 assert(wcount <= BANGRA_MAX_FUNCARGS);
@@ -3385,7 +3407,7 @@ continue_execution:
             } else if (is_typeref_type(callee.type)) {
                 auto cb = callee.typeref;
                 auto _oldframe = handler_frame;
-                handler_frame = frame;
+                handler_frame = S.frame;
                 cb->apply_type(&S);
                 wcount = S.wcount;
                 handler_frame = _oldframe;
@@ -3406,7 +3428,7 @@ continue_execution:
             wbuf[ARG_Cont] = const_none;
             wbuf[ARG_Func] = exception_handler;
             wbuf[ARG_Arg0 + 0] = any;
-            wbuf[ARG_Arg0 + 1] = wrap(frame);
+            wbuf[ARG_Arg0 + 1] = wrap(S.frame);
             wbuf[ARG_Arg0 + 2] = wrap(rbuf, rcount);
             wcount = 5;
             exception_handler = const_none;
@@ -3420,7 +3442,7 @@ continue_execution:
         }
         printf("\n");
 
-        print_stack_frames(frame);
+        print_stack_frames(S.frame);
 
         std::cout << ansi(ANSI_STYLE_ERROR, "error:") << " " << get_string(any) << "\n";
 
@@ -5437,6 +5459,35 @@ static B_FUNC(builtin_branch) {
         B_GETARG(S, extract_bool(B_GETARG(S, 0))?1:2));
 }
 
+static Any quote(const Any &value) {
+    Any result = value;
+    result.type = Types::Quote(result.type);
+    return result;
+}
+
+static Any unquote(const Any &value) {
+    assert(is_quote_type(value.type));
+    Any result = value;
+    result.type = get_element_type(value.type);
+    return result;
+}
+
+static B_FUNC(builtin_bind) {
+    builtin_checkparams(B_ARGCOUNT(S), 3, 3, 1);
+    auto arg0 = B_GETARG(S, 0);
+    if (is_quote_type(arg0.type))
+        arg0 = unquote(arg0);
+    auto param = extract_parameter(arg0);
+    if (!param->parent)
+        error("can't rebind unbound parameter");
+    rebind_parameter(B_GETFRAME(S),
+        param->parent, param->index, B_GETARG(S, 1));
+    B_CALL(S,
+        const_none,
+        B_GETCONT(S),
+        const_none);
+}
+
 static Any builtin_repr(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     return wrap(formatValue(args[0], 0, false));
@@ -5870,20 +5921,6 @@ static Any toparameter (Table *env, const Any &value) {
     setLocal(env, key, bp);
     return bp;
 }
-
-static Any quote(const Any &value) {
-    Any result = value;
-    result.type = Types::Quote(result.type);
-    return result;
-}
-
-static Any unquote(const Any &value) {
-    assert(is_quote_type(value.type));
-    Any result = value;
-    result.type = get_element_type(value.type);
-    return result;
-}
-
 
 static const List *expand_expr_list (const Table *env, const List *it) {
     const List *l = nullptr;
@@ -6444,6 +6481,7 @@ static void initGlobals () {
     setBuiltin<builtin_structof>(env, "structof");
     setBuiltin<builtin_tableof>(env, "tableof");
     setBuiltin<builtin_set_key>(env, "set-key!");
+    setBuiltin<builtin_bind>(env, "bind!");
     setBuiltin<builtin_next_key>(env, "next-key");
     setBuiltin<builtin_typeof>(env, "typeof");
     setBuiltin<builtin_external>(env, "external");

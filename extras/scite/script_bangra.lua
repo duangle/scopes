@@ -44,7 +44,7 @@ local function bangra_symbols()
 
     -- builtin and global functions with side effects
     SFXFUNCTIONS = splitstr(getprop("sfxfunctions.bangra_lang") or
-        "set-key! set-globals! set-exception-handler!"
+        "set-key! set-globals! set-exception-handler! bind!"
         ),
 
     -- builtin operator functions that can also be used as infix

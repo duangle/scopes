@@ -427,7 +427,7 @@ syntax-extend stage-3 (_ scope)
                 else none
             countof s
 
-    function get-scope-symbol (scope key)
+    function find-scope-symbol (scope key)
         loop (scope)
             let result =
                 @ scope key
@@ -444,7 +444,7 @@ syntax-extend stage-3 (_ scope)
             symbol
                 .. "#ifx:" (string op)
         ? (symbol? op)
-            get-scope-symbol scope key
+            find-scope-symbol scope key
             none
     function has-infix-ops (infix-table expr)
         # any expression whose second argument matches an infix operator
@@ -617,6 +617,7 @@ syntax-extend stage-3 (_ scope)
 
     .. scope
         tableof
+            : find-scope-symbol
             : xpcall
             : bangra
             : require find-module
@@ -814,7 +815,7 @@ syntax-extend stage-3 (_ scope)
                         and
                             symbol? head
                             and
-                                none? (get-scope-symbol scope head)
+                                none? (find-scope-symbol scope head)
                                 == (slice headstr 0 1) "."
 
                         let name =
@@ -860,7 +861,7 @@ syntax-extend stage-3 (_ scope)
                     # and it's not the concat operator
                     if
                         and
-                            none? (get-scope-symbol scope sym)
+                            none? (find-scope-symbol scope sym)
                             fold it false
                                 function (out k)
                                     if (== k ".") true
@@ -1045,16 +1046,34 @@ syntax-extend stage-4 (_ scope)
             : enumerate
             : yield
                 block-macro
-                    function yield (topexpr)
-                        list
-                            cons contcall
-                                cons
-                                    cons continuation
-                                        cons (list (quote return))
-                                            slice topexpr 1
-                                    cons
-                                        quote return
-                                        slice (@ topexpr 0) 1
+                    function yield (topexpr scope)
+                        let oparam =
+                            find-scope-symbol scope (quote return)
+                        assert (not (none? oparam))
+                            "no return closure in scope"
+                        let rparam =
+                            parameter (quote return)
+                        let lparam =
+                            parameter (quote local-return)
+                        cons
+                            list
+                                list continuation (list lparam)
+                                    cons contcall
+                                        cons
+                                            list continuation (list rparam)
+                                                list bind!
+                                                    # 3rd: ignore in interpreter
+                                                    escape
+                                                        # 2nd: ignore in compiler
+                                                        escape
+                                                            # 1st: ignore in macro
+                                                            escape oparam
+                                                    rparam
+                                                list contcall none lparam none
+                                            cons
+                                                oparam
+                                                slice (@ topexpr 0) 1
+                            slice topexpr 1
             : loop # better loop with support for initializers
                 macro
                     function loop (expr)
