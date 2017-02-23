@@ -531,7 +531,7 @@ struct State {
 
 typedef Any (*BuiltinFunction)(const Any *args, size_t argcount);
 typedef B_FUNC((*BuiltinFlowFunction));
-typedef Any (*SpecialFormFunction)(const List *);
+typedef Any (*SpecialFormFunction)(const List *, const Any &dest);
 
 typedef uint64_t Symbol;
 
@@ -615,6 +615,7 @@ enum {
     // auto-generated flow names
     SYM_FunctionFlow,
     SYM_ReturnFlow,
+    SYM_StoreArgFlow,
     SYM_ExitFlow,
 
     SYM_Continuation,
@@ -663,6 +664,7 @@ static void initSymbols() {
     map_symbol(SYM_ScriptSize, "script-size");
     map_symbol(SYM_FunctionFlow, "function");
     map_symbol(SYM_ReturnFlow, "return");
+    map_symbol(SYM_StoreArgFlow, "store-arg");
     map_symbol(SYM_ExitFlow, "exit");
     map_symbol(SYM_Return, "return");
     map_symbol(SYM_Result, "result");
@@ -2237,9 +2239,11 @@ struct StreamValueFormat {
     size_t depth;
     uint32_t flags;
     size_t maxdepth;
+    size_t maxlength;
 
     StreamValueFormat(size_t depth, bool naked) :
-        maxdepth((size_t)-1) {
+        maxdepth((size_t)-1),
+        maxlength((size_t)-1) {
         this->depth = depth;
         this->flags = naked?STRV_Naked:0;
     }
@@ -2247,7 +2251,8 @@ struct StreamValueFormat {
     StreamValueFormat() :
         depth(0),
         flags(STRV_Naked),
-        maxdepth((size_t)-1) {
+        maxdepth((size_t)-1),
+        maxlength((size_t)-1) {
     }
 };
 
@@ -2264,7 +2269,7 @@ static void streamValue(T &stream, const Any &e,
 
     if (e.type == Types::PList) {
         if (!maxdepth) {
-            stream << "([...])";
+            stream << "(<...>)";
             if (naked)
                 stream << '\n';
         } else {
@@ -2311,6 +2316,11 @@ static void streamValue(T &stream, const Any &e,
                         stream << "\\ ";
                         goto print_terse;
                     }
+                    if (offset >= subfmt.maxlength) {
+                        streamAnchor(stream, value, depth + 1);
+                        stream << "<...>\n";
+                        return;
+                    }
                     streamValue(stream, value, subfmt);
                     offset++;
                     it = it->next;
@@ -2323,6 +2333,10 @@ static void streamValue(T &stream, const Any &e,
                 while (it) {
                     if (offset > 0)
                         stream << ' ';
+                    if (offset >= subfmt.maxlength) {
+                        stream << "...";
+                        break;
+                    }
                     streamValue(stream, it->at, subfmt);
                     offset++;
                     it = it->next;
@@ -3340,7 +3354,7 @@ continue_execution:
 
             if (is_flow_type(callee.type)) {
                 auto flow = callee.flow;
-                assert(get_anchor(flow));
+                // TODO: assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
 
                 if (S.frame->map.count(flow)) {
@@ -3436,9 +3450,12 @@ continue_execution:
         }
 
         printf("while evaluating arguments:\n");
+        StreamValueFormat fmt(0, true);
+        fmt.maxdepth = 2;
+        fmt.maxlength = 5;
         for (size_t i = 0; i < rcount; ++i) {
             printf("  #%zu: ", i);
-            printValue(rbuf[i], 0, true);
+            printValue(rbuf[i], fmt);
         }
         printf("\n");
 
@@ -5903,8 +5920,12 @@ static bool verifyAtParameterCount (const List *topit,
 
 //------------------------------------------------------------------------------
 
+// new descending approach for compiler to optimize tail calls:
+// 1. each function is called with a flow node as target argument; it represents
+//    a continuation that should be called with the resulting value.
+
 static Cursor expand (const Table *env, const List *topit);
-static Any compile(const Any &expr);
+static Any compile (const Any &expr, const Any &dest);
 
 static Any toparameter (Table *env, const Symbol &key) {
     auto bp = wrap(Parameter::create(key));
@@ -5997,10 +6018,11 @@ static Cursor expand_continuation (const Table *env, const List *topit) {
         env };
 }
 
+
 static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     auto cur = expand_continuation (env, topit);
 
-    auto fun = compile(unquote(cur.list->at));
+    auto fun = compile(unquote(cur.list->at), const_none);
 
     Any exec_args[] = {fun, wrap_ptr(Types::PTable, env)};
     auto expr_env = execute(exec_args, 2);
@@ -6150,13 +6172,12 @@ static Any builtin_get_exception_handler(const Any *args, size_t argcount) {
 }
 
 //------------------------------------------------------------------------------
-// COMPILER
+// IL BUILDER
 //------------------------------------------------------------------------------
 
 struct ILBuilder {
     struct State {
         Flow *flow;
-        Flow *prevflow;
     };
 
     State state;
@@ -6173,7 +6194,7 @@ struct ILBuilder {
     }
 
     void continueAt(Flow *flow) {
-        restore({flow,nullptr});
+        restore({flow});
     }
 
     void insertAndAdvance(
@@ -6186,7 +6207,6 @@ struct ILBuilder {
         assert(!state.flow->hasArguments());
         state.flow->arguments = values;
         set_anchor(state.flow, anchor);
-        state.prevflow = state.flow;
         state.flow = next;
     }
 
@@ -6197,40 +6217,14 @@ struct ILBuilder {
     // arguments must include continuation
     void br(const std::vector<Any> &arguments, const Anchor *anchor) {
         assert(arguments.size() >= 2);
-        // patch previous flow destination to jump right to
-        // continuation when the arguments are forwarded as-is
-        //
-        // works for this situation:
-        // prevflow (...): flow <- ...
-        // flow (@0 <- @1): # empty
-        //     arguments = { ?, some-func, flow@1 }
-        //
-        // after operation:
-        // prevflow (...): some-func <- ...
-        // flow (@0 <- @1): # empty, unused
-        //
-        // these predicates should probably be in a more meaningful
-        // function.
         if (!state.flow) {
             error("can not break: continuation already exited.");
         }
-        // FIXME: this simple tail call hack messes situations up where
-        // contcall has a complex last parameter
-        /*if (state.prevflow
-            && (arguments.size() == 3)
-            && (is_parameter_type(arguments[ARG_Arg0].type))
-            && (arguments[ARG_Arg0].parameter
-                    == state.flow->parameters[PARAM_Arg0])
-            && (is_flow_type(state.prevflow->arguments[ARG_Cont].type))
-            && (state.prevflow->arguments[ARG_Cont].flow
-                == state.flow)) {
-            state.prevflow->arguments[ARG_Cont] = arguments[ARG_Func];
-        } else*/ {
-            insertAndAdvance(arguments, nullptr, anchor);
-        }
+        insertAndAdvance(arguments, nullptr, anchor);
     }
 
-    Parameter *call(std::vector<Any> values, const Anchor *anchor) {
+    /*
+    Parameter *call(std::vector<Any> values, const Any &dest, const Anchor *anchor) {
         assert(anchor);
         auto next = Flow::create_continuation(SYM_ReturnFlow);
         next->appendParameter(SYM_Result); //->vararg = true;
@@ -6238,28 +6232,80 @@ struct ILBuilder {
         insertAndAdvance(values, next, anchor);
         return next->parameters[PARAM_Arg0];
     }
+    */
 
 };
 
 static ILBuilder *builder;
 
 //------------------------------------------------------------------------------
+// COMPILER
+//------------------------------------------------------------------------------
 
-static Any compile_expr_list (const List *it) {
-    Any value = const_none;
-    while (it) {
-        value = compile(it->at);
-        it = it->next;
+static Any compile (const Any &expr, const Any &dest);
+
+static Any compile_to_parameter (const Any &value, const Anchor *anchor) {
+    //assert(anchor);
+    if (is_list_type(value.type)) {
+        // complex expression
+        return compile(value, wrap_symbol(SYM_Result));
+    } else {
+        // constant value - can be inserted directly
+        return compile(value, const_none);
+    }
+}
+
+// for return values that don't need to be stored
+static void compile_to_none (const Any &value, const Anchor *anchor) {
+    //assert(anchor);
+    if (is_list_type(value.type)) {
+        // complex expression
+        auto next = Flow::create_continuation(SYM_StoreArgFlow);
+        compile(value, wrap(next));
+        builder->continueAt(next);
+    } else {
+        // constant value - technically we could just ignore it
+        compile(value, const_none);
+    }
+}
+
+static Any write_dest(const Any &dest, const Any &value) {
+    if (!isnone(dest)) {
+        if (is_symbol_type(dest.type)) {
+            // a known value is returned - no need to generate code
+            return value;
+        } else {
+            builder->br({const_none, dest, value}, get_anchor(value));
+        }
     }
     return value;
 }
 
-static Any compile_do (const List *it) {
-    it = it->next;
-    return compile_expr_list(it);
+static Any compile_expr_list (const List *it, const Any &dest) {
+    if (!it) {
+        return write_dest(dest, const_none);
+    } else {
+        while (it) {
+            auto next = it->next;
+            if (!next) { // last element goes to dest
+                return compile(it->at, dest);
+            } else {
+                // write to unused parameter
+                compile_to_none(it->at, get_anchor(it));
+            }
+            it = next;
+        }
+    }
+    assert(false && "unreachable branch");
+    return const_none;
 }
 
-static Any compile_continuation (const List *it) {
+static Any compile_do (const List *it, const Any &dest) {
+    it = it->next;
+    return compile_expr_list(it, dest);
+}
+
+static Any compile_continuation (const List *it, const Any &dest) {
     auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
         printValue(wrap(it), 0, true);
@@ -6298,27 +6344,26 @@ static Any compile_continuation (const List *it) {
     auto ret = function->parameters[PARAM_Cont];
     assert(ret);
 
-    auto result = compile_expr_list(it);
-
-    if (builder->getActiveFlow()) {
-        builder->br({const_none, wrap(ret), result}, anchor);
-    }
+    compile_expr_list(it, wrap(ret));
 
     builder->restore(currentblock);
 
-    return wrap(function);
+    return write_dest(dest, wrap(function));
 }
 
-static Any compile_splice (const List *it) {
+static Any compile_splice (const List *it, const Any &dest) {
     it = it->next;
     assert(it);
-    Any value = compile(it->at);
+
+    // spliced values are always returned directly
+    Any value = compile_to_parameter(it->at, get_anchor(it));
     value.type = Types::Splice(value.type);
     return value;
 }
 
-static Any compile_implicit_call (const List *it,
+static Any compile_implicit_call (const List *it, const Any &dest,
     const Anchor *anchor = nullptr) {
+
     if (!anchor) {
         anchor = find_valid_anchor(it);
         if (!anchor || !anchor->isValid()) {
@@ -6327,31 +6372,42 @@ static Any compile_implicit_call (const List *it,
         }
     }
 
-    auto callable = compile(it->at);
+    auto callable = compile_to_parameter(it->at, anchor);
     it = it->next;
 
-    std::vector<Any> args;
-    args.push_back(callable);
-
+    std::vector<Any> args = { dest, callable };
     while (it) {
-        args.push_back(compile(it->at));
+        args.push_back(compile_to_parameter(it->at, anchor));
         it = it->next;
     }
 
-    return wrap(builder->call(args, anchor));
+    if (is_symbol_type(dest.type)) {
+        auto next = Flow::create_continuation(SYM_StoreArgFlow);
+        next->appendParameter(dest.symbol);
+        // patch dest to an actual function
+        args[0] = wrap(next);
+        builder->br(args, anchor);
+        builder->continueAt(next);
+        return wrap(next->parameters[PARAM_Arg0]);
+    } else {
+        builder->br(args, anchor);
+        return const_none;
+    }
 }
 
-static Any compile_call (const List *it) {
+static Any compile_call (const List *it, const Any &dest) {
     auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
         printValue(wrap(it), 0, true);
         error("call expression not anchored");
     }
     it = it->next;
-    return compile_implicit_call(it, anchor);
+    return compile_implicit_call(it, dest, anchor);
 }
 
-static Any compile_contcall (const List *it) {
+static Any compile_contcall (const List *it, const Any &dest) {
+    assert(!isnone(dest));
+
     auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
         printValue(wrap(it), 0, true);
@@ -6362,46 +6418,43 @@ static Any compile_contcall (const List *it) {
     if (!it)
         error("continuation expected");
     std::vector<Any> args;
-    args.push_back(compile(it->at));
+    args.push_back(compile_to_parameter(it->at, anchor));
     it = it->next;
     if (!it)
         error("callable expected");
-    args.push_back(compile(it->at));
+    args.push_back(compile_to_parameter(it->at, anchor));
     it = it->next;
     while (it) {
-        args.push_back(compile(it->at));
+        args.push_back(compile_to_parameter(it->at, anchor));
         it = it->next;
     }
 
     builder->br(args, anchor);
-
     return const_none;
 }
 
 //------------------------------------------------------------------------------
 
-static Any compile (const Any &expr) {
-    Any result = const_none;
-    if (is_quote_type(expr.type)) {
-        result = expr;
-        // remove qualifier and return as-is
-        result.type = get_element_type(expr.type);
-        return result;
-    } else if (is_list_type(expr.type)) {
+static Any compile (const Any &expr, const Any &dest) {
+    if (is_list_type(expr.type)) {
         if (!expr.list) {
             error("empty expression");
         }
         auto slist = expr.list;
         auto head = slist->at;
         if (is_special_form_type(head.type)) {
-            result = head.special_form(slist);
+            return head.special_form(slist, dest);
         } else {
-            result = compile_implicit_call(slist);
+            return compile_implicit_call(slist, dest);
         }
     } else {
-        result = expr;
+        Any result = expr;
+        if (is_quote_type(expr.type)) {
+            // remove qualifier and return as-is
+            result.type = get_element_type(expr.type);
+        }
+        return write_dest(dest, result);
     }
-    return result;
 }
 
 //------------------------------------------------------------------------------
@@ -6603,8 +6656,7 @@ static Any compileFlow (const Table *env, const Any &expr,
     auto ret = mainfunc->parameters[PARAM_Cont];
     builder->continueAt(mainfunc);
 
-    auto result = compile_expr_list(expexpr);
-    builder->br({ const_none, wrap(ret), result }, anchor);
+    compile_expr_list(expexpr, wrap(ret));
 
     return wrap(mainfunc);
 }

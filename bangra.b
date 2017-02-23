@@ -1178,4 +1178,3 @@ syntax-extend stage-final (_ scope)
     scope
 
 none
-
