@@ -57,12 +57,17 @@ let
         style-keyword "λ"
 
 function flow-label (aflow)
+    let name =
+        string (flow-name aflow)
     .. LAMBDA_CHAR
         string
-            flow-name aflow
-        style-operator "$"
-        string
             flow-id aflow
+        ? (empty? name) ""
+            style-string
+                .. "\""
+                    string
+                        flow-name aflow
+                    "\""
 
 function closure-label (aclosure)
     ..
@@ -92,10 +97,14 @@ function flow-iter-arguments (aflow aframe)
             0
 
 function param-label (aparam)
-    .. (style-keyword "@")
+    let name =
         string aparam.name
-        style-operator "$"
-        string aparam.index
+    ..
+        style-keyword "@"
+        ? (empty? name)
+            string aparam.index
+            style-instruction
+                string aparam.name
 
 function flow-decl-label (aflow aframe)
     ..
@@ -108,7 +117,7 @@ function flow-decl-label (aflow aframe)
                     ..
                         param-label
                             flow-parameter aflow 0
-                        style-operator " <- "
+                        style-operator " ⮕ "
                         flow-label aflow
                         " "
                         style-operator "("
@@ -141,7 +150,7 @@ function flow-decl-label (aflow aframe)
                     ..
                         str
                         ? (i == 1)
-                            style-operator " <- "
+                            style-operator " ←  ["
                             " "
                         if (argtype == parameter)
                             ..
@@ -156,6 +165,7 @@ function flow-decl-label (aflow aframe)
                             repr arg
             else
                 str
+        style-operator "]"
 
 function dump-function (afunc)
     let visited = (tableof)

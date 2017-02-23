@@ -46,11 +46,7 @@ syntax-extend stage-1 (_ scope)
             tupleof
                 quote empty?
                 continuation empty? (_ x)
-                    branch
-                        == (typeof x) list
-                        continuation ()
-                            == x (list)
-                        continuation () false
+                    == (countof x) 0
             tupleof
                 quote key?
                 continuation key? (_ x y)

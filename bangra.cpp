@@ -615,7 +615,6 @@ enum {
     // auto-generated flow names
     SYM_FunctionFlow,
     SYM_ReturnFlow,
-    SYM_StoreArgFlow,
     SYM_ExitFlow,
 
     SYM_Continuation,
@@ -664,7 +663,6 @@ static void initSymbols() {
     map_symbol(SYM_ScriptSize, "script-size");
     map_symbol(SYM_FunctionFlow, "function");
     map_symbol(SYM_ReturnFlow, "return");
-    map_symbol(SYM_StoreArgFlow, "store-arg");
     map_symbol(SYM_ExitFlow, "exit");
     map_symbol(SYM_Return, "return");
     map_symbol(SYM_Result, "result");
@@ -6248,7 +6246,7 @@ static Any compile_to_parameter (const Any &value, const Anchor *anchor) {
     //assert(anchor);
     if (is_list_type(value.type)) {
         // complex expression
-        return compile(value, wrap_symbol(SYM_Result));
+        return compile(value, wrap_symbol(SYM_Unnamed));
     } else {
         // constant value - can be inserted directly
         return compile(value, const_none);
@@ -6260,7 +6258,7 @@ static void compile_to_none (const Any &value, const Anchor *anchor) {
     //assert(anchor);
     if (is_list_type(value.type)) {
         // complex expression
-        auto next = Flow::create_continuation(SYM_StoreArgFlow);
+        auto next = Flow::create_continuation(SYM_Unnamed);
         compile(value, wrap(next));
         builder->continueAt(next);
     } else {
@@ -6339,7 +6337,7 @@ static Any compile_continuation (const List *it, const Any &dest) {
     }
     if (function->parameters.size() == 0) {
         // auto-add continuation parameter
-        function->appendParameter(SYM_Return);
+        function->appendParameter(SYM_Unnamed);
     }
     auto ret = function->parameters[PARAM_Cont];
     assert(ret);
@@ -6382,7 +6380,7 @@ static Any compile_implicit_call (const List *it, const Any &dest,
     }
 
     if (is_symbol_type(dest.type)) {
-        auto next = Flow::create_continuation(SYM_StoreArgFlow);
+        auto next = Flow::create_continuation(dest.symbol);
         next->appendParameter(dest.symbol);
         // patch dest to an actual function
         args[0] = wrap(next);
