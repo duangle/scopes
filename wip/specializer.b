@@ -191,7 +191,8 @@ function dump-function (afunc)
                 print
                     flow-decl-label aflow aframe
                 set-key! visited aflow true
-                for i arg in (flow-iter-arguments aflow aframe)
+                for i args in (flow-iter-eval-arguments aflow aframe)
+                    let oarg arg = args
                     let argtype =
                         typeof arg
                     if (argtype == closure)
@@ -211,8 +212,6 @@ function pow (x n)
     if (n == 0) 1
     elseif ((n % 2) == 0) (pow2 (pow x (n // 2)))
     else (x * (pow x (n - 1)))
-
-let x = 1
 
 assert
     (pow 2 5) == 32
