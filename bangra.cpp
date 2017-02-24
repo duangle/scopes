@@ -1899,9 +1899,12 @@ typedef std::unordered_map<const Flow *, std::vector<Any> >
     FlowValuesMap;
 
 struct Frame {
+protected:
     size_t idx;
     Frame *parent;
     FlowValuesMap map;
+
+public:
 
     std::string getRefRepr() const {
         std::stringstream ss;
@@ -1921,6 +1924,57 @@ struct Frame {
             ss << "\n";
         }
         return ss.str();
+    }
+
+    Frame *bind(const Flow *flow, const std::vector<Any> &values) {
+        Frame *frame = this;
+        if (frame->map.count(flow)) {
+            frame = Frame::create(frame);
+        }
+        frame->map[flow] = values;
+        return frame;
+    }
+
+    void rebind(const Flow *cont, size_t index, const Any &value) {
+        assert(cont);
+        // parameter is bound - attempt resolve
+        Frame *ptr = this;
+        while (ptr) {
+            auto it = ptr->map.find(cont);
+            if (it != ptr->map.end()) {
+                auto &values = it->second;
+                assert (index < values.size());
+                values[index] = value;
+                return;
+            }
+            ptr = ptr->parent;
+        }
+    }
+
+    Any get(const Flow *cont, size_t index, const Any &defvalue) const {
+        if (cont) {
+            // parameter is bound - attempt resolve
+            const Frame *ptr = this;
+            while (ptr) {
+                auto it = ptr->map.find(cont);
+                if (it != ptr->map.end()) {
+                    auto &values = it->second;
+                    assert (index < values.size());
+                    return values[index];
+                }
+                ptr = ptr->parent;
+            }
+        }
+        return defvalue;
+    }
+
+    static void print_stack(const Frame *frame) {
+        if (!frame) return;
+        print_stack(frame->parent);
+        auto anchor = get_anchor(frame);
+        if (anchor) {
+            Anchor::printMessage(anchor, "while evaluating");
+        }
     }
 
     static Frame *create() {
@@ -3181,60 +3235,10 @@ static Frame *handler_frame = nullptr;
 
 typedef std::vector<Any> ILValueArray;
 
-static const Frame *find_frame_for_flow(const Frame *frame, const Flow *cont) {
-    if (cont) {
-        // parameter is bound - find relevant frame
-        const Frame *ptr = frame;
-        while (ptr) {
-            auto it = ptr->map.find(cont);
-            if (it != ptr->map.end()) {
-                return ptr;
-            }
-            ptr = ptr->parent;
-        }
-    }
-    return nullptr;
-}
-
-static void rebind_parameter(
-    Frame *frame, const Flow *cont, size_t index, const Any &value) {
-    assert(cont);
-    // parameter is bound - attempt resolve
-    Frame *ptr = frame;
-    while (ptr) {
-        auto it = ptr->map.find(cont);
-        if (it != ptr->map.end()) {
-            auto &values = it->second;
-            assert (index < values.size());
-            values[index] = value;
-            return;
-        }
-        ptr = ptr->parent;
-    }
-}
-
-static Any evaluate_parameter(
-    const Frame *frame, const Flow *cont, size_t index, const Any &defvalue) {
-    if (cont) {
-        // parameter is bound - attempt resolve
-        const Frame *ptr = frame;
-        while (ptr) {
-            auto it = ptr->map.find(cont);
-            if (it != ptr->map.end()) {
-                auto &values = it->second;
-                assert (index < values.size());
-                return values[index];
-            }
-            ptr = ptr->parent;
-        }
-    }
-    return defvalue;
-}
-
 static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
     if (is_parameter_type(value.type)) {
         auto param = value.parameter;
-        return evaluate_parameter(frame, param->parent, param->index, value);
+        return frame->get(param->parent, param->index, value);
     } else if (is_flow_type(value.type)) {
         if (argindex == ARG_Func)
             // no closure creation required
@@ -3245,15 +3249,6 @@ static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
                 create_closure(value.flow, const_cast<Frame *>(frame)));
     }
     return value;
-}
-
-static void print_stack_frames(Frame *frame) {
-    if (!frame) return;
-    print_stack_frames(frame->parent);
-    auto anchor = get_anchor(frame);
-    if (anchor) {
-        Anchor::printMessage(anchor, "while evaluating");
-    }
 }
 
 static Any exception_handler;
@@ -3283,11 +3278,7 @@ static size_t execute(const Any *args, size_t argcount, Any *ret) {
     size_t rcount = 0;
 
     State S;
-    {
-        Frame *frame = Frame::create();
-        frame->idx = 0;
-        S.frame = frame;
-    }
+    S.frame = Frame::create();
 
     std::vector<Any> tmpargs;
 
@@ -3355,9 +3346,6 @@ continue_execution:
                 // TODO: assert(get_anchor(flow));
                 assert(flow->parameters.size() >= 1);
 
-                if (S.frame->map.count(flow)) {
-                    S.frame = Frame::create(S.frame);
-                }
                 // tmpargs map directly to param indices; that means
                 // the callee is not included.
                 auto pcount = flow->parameters.size();
@@ -3386,7 +3374,7 @@ continue_execution:
                     }
                 }
 
-                S.frame->map[flow] = tmpargs;
+                S.frame = S.frame->bind(flow, tmpargs);
 
                 set_anchor(S.frame, get_anchor(flow));
 
@@ -3457,7 +3445,7 @@ continue_execution:
         }
         printf("\n");
 
-        print_stack_frames(S.frame);
+        Frame::print_stack(S.frame);
 
         std::cout << ansi(ANSI_STYLE_ERROR, "error:") << " " << get_string(any) << "\n";
 
@@ -5366,6 +5354,117 @@ static Table *importCModule (
 }
 
 //------------------------------------------------------------------------------
+// TRANSLATION
+//------------------------------------------------------------------------------
+
+static Table *new_scope() {
+    return new_table();
+}
+
+static Table *new_scope(const Table *scope) {
+    assert(scope);
+    auto subscope = new_table();
+    set_key(*subscope, SYM_Parent, wrap_ptr(Types::PTable, scope));
+    return subscope;
+}
+
+static void setLocal(Table *scope, const Symbol &name, const Any &value) {
+    assert(scope);
+    set_key(*scope, name, value);
+}
+
+static void setLocalString(Table *scope, const std::string &name, const Any &value) {
+    setLocal(scope, get_symbol(name), value);
+}
+
+template<BuiltinFlowFunction func>
+static void setBuiltinMacro(Table *scope, const std::string &name) {
+    assert(scope);
+    auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
+    setLocal(scope, sym, macro(wrap_ptr(Types::PBuiltinFlow, (void *)func)));
+}
+
+template<SpecialFormFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    assert(scope);
+    auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
+    setLocal(scope, sym,
+        wrap_ptr(Types::PSpecialForm, (void *)func));
+}
+
+template<BuiltinFlowFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    assert(scope);
+    auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
+    setLocal(scope, sym,
+        wrap_ptr(Types::PBuiltinFlow, (void *)func));
+}
+
+template<BuiltinFunction F>
+static B_FUNC(builtin_call) {
+    assert(B_ARGCOUNT(S) >= 2);
+    B_CALL(S, const_none, B_GETCONT(S),
+        F(S->rargs + ARG_Arg0, B_ARGCOUNT(S) - 2));
+}
+
+template<BuiltinFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    setBuiltin< builtin_call<func> >(scope, name);
+}
+
+/*
+static bool isLocal(StructValue *scope, const std::string &name) {
+    assert(scope);
+    size_t idx = scope->struct_type->getFieldIndex(name);
+    if (idx == (size_t)-1) return false;
+    return true;
+}
+*/
+
+static const Table *getParent(const Table *scope) {
+    auto parent = get_key(*scope, SYM_Parent, const_none);
+    if (parent.type == Types::PTable)
+        return parent.table;
+    return nullptr;
+}
+
+static bool hasLocal(const Table *scope, const Symbol &name) {
+    assert(scope);
+    while (scope) {
+        if (has_key(*scope, name)) return true;
+        scope = getParent(scope);
+    }
+    return false;
+}
+
+static Any getLocal(const Table *scope, const Symbol &name) {
+    assert(scope);
+    while (scope) {
+        auto result = get_key(*scope, name, const_none);
+        if (result.type != Types::Void)
+            return result;
+        scope = getParent(scope);
+    }
+    return const_none;
+}
+
+static Any getLocalString(const Table *scope, const std::string &name) {
+    return getLocal(scope, get_symbol(name));
+}
+
+//------------------------------------------------------------------------------
+
+static bool isSymbol (const Any &expr, const Symbol &sym) {
+    if (expr.type == Types::Symbol) {
+        return extract_symbol(expr) == sym;
+    }
+    return false;
+}
+
+//------------------------------------------------------------------------------
 // BUILTINS
 //------------------------------------------------------------------------------
 
@@ -5378,13 +5477,6 @@ static Any builtin_exit(const Any *args, size_t argcount) {
         exit_code = extract_integer(args[0]);
     exit(exit_code);
     return const_none;
-}
-
-template<BuiltinFunction F>
-static B_FUNC(builtin_call) {
-    assert(B_ARGCOUNT(S) >= 2);
-    B_CALL(S, const_none, B_GETCONT(S),
-        F(S->rargs + ARG_Arg0, B_ARGCOUNT(S) - 2));
 }
 
 static B_FUNC(builtin_flowcall) {
@@ -5495,8 +5587,7 @@ static B_FUNC(builtin_bind) {
     auto param = extract_parameter(arg0);
     if (!param->parent)
         error("can't rebind unbound parameter");
-    rebind_parameter(B_GETFRAME(S),
-        param->parent, param->index, B_GETARG(S, 1));
+    B_GETFRAME(S)->rebind(param->parent, param->index, B_GETARG(S, 1));
     B_CALL(S,
         const_none,
         B_GETCONT(S),
@@ -5539,6 +5630,25 @@ static Any builtin_dump(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     printValue(args[0], 0, true);
     return args[0];
+}
+
+static Any builtin_find_scope_symbol(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 3);
+
+    auto scope = extract_table(args[0]);
+    auto key = args[1];
+
+    while (scope) {
+        auto result = get_key(*scope, key, const_none);
+        if (result.type != Types::Void)
+            return result;
+        scope = getParent(scope);
+    }
+
+    if (argcount == 3)
+        return args[2];
+    else
+        return const_none;
 }
 
 static Any builtin_tupleof(const Any *args, size_t argcount) {
@@ -5780,110 +5890,6 @@ static Any builtin_va_arg(const Any *args, size_t argcount) {
     if ((size_t)idx >= argcount)
         return const_none;
     return args[idx];
-}
-
-//------------------------------------------------------------------------------
-// TRANSLATION
-//------------------------------------------------------------------------------
-
-static Table *new_scope() {
-    return new_table();
-}
-
-static Table *new_scope(const Table *scope) {
-    assert(scope);
-    auto subscope = new_table();
-    set_key(*subscope, SYM_Parent, wrap_ptr(Types::PTable, scope));
-    return subscope;
-}
-
-static void setLocal(Table *scope, const Symbol &name, const Any &value) {
-    assert(scope);
-    set_key(*scope, name, value);
-}
-
-static void setLocalString(Table *scope, const std::string &name, const Any &value) {
-    setLocal(scope, get_symbol(name), value);
-}
-
-template<BuiltinFlowFunction func>
-static void setBuiltinMacro(Table *scope, const std::string &name) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym, macro(wrap_ptr(Types::PBuiltinFlow, (void *)func)));
-}
-
-template<SpecialFormFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym,
-        wrap_ptr(Types::PSpecialForm, (void *)func));
-}
-
-template<BuiltinFlowFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym,
-        wrap_ptr(Types::PBuiltinFlow, (void *)func));
-}
-
-template<BuiltinFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
-    setBuiltin< builtin_call<func> >(scope, name);
-}
-
-/*
-static bool isLocal(StructValue *scope, const std::string &name) {
-    assert(scope);
-    size_t idx = scope->struct_type->getFieldIndex(name);
-    if (idx == (size_t)-1) return false;
-    return true;
-}
-*/
-
-static const Table *getParent(const Table *scope) {
-    auto parent = get_key(*scope, SYM_Parent, const_none);
-    if (parent.type == Types::PTable)
-        return parent.table;
-    return nullptr;
-}
-
-static bool hasLocal(const Table *scope, const Symbol &name) {
-    assert(scope);
-    while (scope) {
-        if (has_key(*scope, name)) return true;
-        scope = getParent(scope);
-    }
-    return false;
-}
-
-static Any getLocal(const Table *scope, const Symbol &name) {
-    assert(scope);
-    while (scope) {
-        auto result = get_key(*scope, name, const_none);
-        if (result.type != Types::Void)
-            return result;
-        scope = getParent(scope);
-    }
-    return const_none;
-}
-
-static Any getLocalString(const Table *scope, const std::string &name) {
-    return getLocal(scope, get_symbol(name));
-}
-
-//------------------------------------------------------------------------------
-
-static bool isSymbol (const Any &expr, const Symbol &sym) {
-    if (expr.type == Types::Symbol) {
-        return extract_symbol(expr) == sym;
-    }
-    return false;
 }
 
 //------------------------------------------------------------------------------
@@ -6539,6 +6545,8 @@ static void initGlobals () {
     setBuiltin<builtin_branch>(env, "branch");
     setBuiltin<builtin_dump>(env, "dump");
     setBuiltin<builtin_block_scope_macro>(env, "block-scope-macro");
+
+    setBuiltin<builtin_find_scope_symbol>(env, "find-scope-symbol");
 
     setBuiltin<builtin_expand>(env, "expand");
     setBuiltin<builtin_set_globals>(env, "set-globals!");

@@ -83,13 +83,26 @@ function iter-f (f arange args...)
                     f args... i
             repeat;
 
+function flow-iter-eval-arguments (aflow aframe)
+    let acount =
+        flow-argument-count aflow
+    iter-f
+        function (aflow index)
+            let arg =
+                flow-argument aflow index
+            ? ((typeof arg) == parameter)
+                tupleof arg
+                    frame-eval aframe index arg
+                tupleof arg arg
+        range acount
+        aflow
+
 function flow-iter-arguments (aflow aframe)
     let acount =
         flow-argument-count aflow
-    iter-f flow-argument (range acount) aflow
-    /// ? ((typeof arg) == parameter)
-        frame-eval aframe i arg
-        arg
+    iter-f flow-argument
+        range acount
+        aflow
 
 function param-label (aparam)
     let name =
@@ -132,9 +145,15 @@ function flow-decl-label (aflow aframe)
                         style-operator "):"
         "\n    "
         do
-            for i arg in (flow-iter-arguments aflow aframe)
+            function is (a b)
+                and
+                    (typeof a) == (typeof b)
+                    a == b
+
+            for i args in (flow-iter-eval-arguments aflow aframe)
                 with
                     str = ""
+                let arg exp-arg = args
                 let
                     argtype =
                         typeof arg
@@ -149,6 +168,11 @@ function flow-decl-label (aflow aframe)
                                 ? (arg.flow == aflow) ""
                                     flow-label arg.flow
                                 param-label arg
+                                ? (is arg exp-arg)
+                                    ""
+                                    ..
+                                        style-operator "="
+                                        string exp-arg
                         elseif (argtype == closure)
                             closure-label arg
                         elseif (argtype == flow)

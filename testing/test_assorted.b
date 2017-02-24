@@ -472,25 +472,29 @@ do
     let p-value =
         1 + 2
 
-    # single assignment, recursive access for functions.
-    let q-func =
-        function (x)
-            ? (x <= 0)
-                1
-                x * (q-func (x - 1))
+    # function declarations support recursion.
+    function q-func (x)
+        ? (x <= 0)
+            1
+            x * (q-func (x - 1))
+
+    print
+        q-func 5
 
     # multiple assignments in one block; later assignments can depend on
-    # earlier ones, and functions can access themselves recursively.
+    # earlier ones. no support for recursion.
     let
         button-type-yes     = 0
         button-type-no      = 1
         button-type-cancel  = (button-type-no + 1)
 
-        b-func =
-            function (x)
-                ? (x <= 0)
-                    1
-                    x * (b-func (x - 1))
+    function b-func (x)
+        ? (x <= 0)
+            1
+            x * (b-func (x - 1))
+
+    print
+        b-func 5
 
     # multiple assignments by unpacking a tuple or other spliceable type,
     # no recursion.

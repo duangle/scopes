@@ -26,6 +26,34 @@ syntax-extend stage-0 (_ scope)
                                 slice expr 1
                             scope
                     slice (@ expr 0) 1
+    set-key! scope
+        symbol "set!"
+        block-scope-macro
+            continuation set! (_ expr scope)
+                call
+                    continuation (_ name)
+                        call
+                            continuation (_ param)
+                                branch
+                                    == (typeof param) parameter
+                                    continuation () none
+                                    continuation ()
+                                        error "set! requires parameter argument"
+                                tupleof
+                                    cons
+                                        cons bind!
+                                            cons
+                                                # stop interpreter from expanding parameter
+                                                escape
+                                                    # stop compiler expansion
+                                                    escape
+                                                        # stop macro expansion
+                                                        escape param
+                                                slice (@ expr 0) 2
+                                        slice expr 1
+                                    scope
+                            find-scope-symbol scope name name
+                    @ (@ expr 0) 1
     scope
 
 syntax-extend stage-1 (_ scope)
@@ -120,20 +148,23 @@ syntax-extend stage-1 (_ scope)
                                 error "syntax: let <var> = <expr>"
                         tupleof
                             call
-                                continuation (_ param-name)
-                                    call
-                                        continuation (_ param)
-                                            # since the scope covers the remaining
-                                            # block, we can mutate it directly
-                                            set-key! scope param-name param
-                                            list
+                                continuation (_ param-name rest)
+                                    list
+                                        cons
+                                            cons continuation
                                                 cons
-                                                    cons continuation
-                                                        cons (list (parameter (quote _)) param)
+                                                    list
+                                                        parameter (quote _)
+                                                        param-name
+                                                    branch
+                                                        == (countof rest) 0
+                                                        continuation ()
+                                                            list param-name
+                                                        continuation ()
                                                             slice expr 1
-                                                    slice (@ expr 0) 3
-                                        parameter param-name
+                                            slice (@ expr 0) 3
                                 @ (@ expr 0) 1
+                                slice expr 1
                             scope
             tupleof
                 quote ?
@@ -189,7 +220,6 @@ syntax-extend stage-2 (_ scope)
                 false
     .. scope
         tableof
-
             : empty-list (list)
             : empty-tuple (tuple)
 
@@ -272,20 +302,24 @@ syntax-extend stage-2 (_ scope)
                                         retparam
                                         @ expr param-idx
                                     slice expr (+ param-idx 1)
+                        let rest =
+                            slice topexpr 1
                         ? (symbol? decl)
                             cons
-                                list let decl (quote =)
-                                    cons continuation
-                                        cons
-                                            @ expr 1
-                                            make-params-body 2
-                                ? (empty? (slice topexpr 1))
-                                    list decl
-                                    slice topexpr 1
+                                list let decl (quote =) none
+                                cons
+                                    list set! decl
+                                        cons continuation
+                                            cons
+                                                @ expr 1
+                                                make-params-body 2
+                                    ? (empty? rest)
+                                        list decl
+                                        rest
                             cons
                                 cons continuation
                                     make-params-body 1
-                                slice topexpr 1
+                                rest
             : and
                 macro
                     continuation and (_ expr)
@@ -318,7 +352,8 @@ syntax-extend stage-2 (_ scope)
                         let param-repeat =
                             quote repeat
                         list do
-                            list let param-repeat (quote =)
+                            list let param-repeat (quote =) none
+                            list set! param-repeat
                                 cons continuation
                                     cons
                                         cons
@@ -329,7 +364,8 @@ syntax-extend stage-2 (_ scope)
                                 @ expr 1
             : if
                 do
-                    let if-rec =
+                    let if-rec = none
+                    set! if-rec
                         continuation if (_ expr)
                             let cond =
                                 @ (@ expr 0) 1
@@ -423,18 +459,6 @@ syntax-extend stage-3 (_ scope)
                 else none
             countof s
 
-    function find-scope-symbol (scope key)
-        loop (scope)
-            let result =
-                @ scope key
-            if (none? result)
-                let parent =
-                    @ scope scope-parent-symbol
-                if (none? parent) none
-                else
-                    repeat parent
-            else result
-
     function get-ifx-op (scope op)
         let key =
             symbol
@@ -442,6 +466,7 @@ syntax-extend stage-3 (_ scope)
         ? (symbol? op)
             find-scope-symbol scope key
             none
+
     function has-infix-ops (infix-table expr)
         # any expression whose second argument matches an infix operator
         # is treated as an infix expression.
@@ -613,7 +638,6 @@ syntax-extend stage-3 (_ scope)
 
     .. scope
         tableof
-            : find-scope-symbol
             : xpcall
             : bangra
             : require find-module
@@ -1081,36 +1105,6 @@ syntax-extend stage-5 (_ scope)
             : range
             : zip
             : enumerate
-            : yieldx
-                block-macro
-                    function yield (topexpr scope)
-                        let oparam =
-                            find-scope-symbol scope (quote return)
-                        assert (not (none? oparam))
-                            "no return closure in scope"
-                        let rparam =
-                            parameter (quote return)
-                        let lparam =
-                            parameter (quote local-return)
-                        cons
-                            list
-                                list continuation (list lparam)
-                                    cons contcall
-                                        cons
-                                            list continuation (list rparam)
-                                                list bind!
-                                                    # 3rd: ignore in interpreter
-                                                    escape
-                                                        # 2nd: ignore in compiler
-                                                        escape
-                                                            # 1st: ignore in macro
-                                                            escape oparam
-                                                    rparam
-                                                list contcall none lparam none
-                                            cons
-                                                oparam
-                                                slice (@ topexpr 0) 1
-                            slice topexpr 1
             : loop # better loop with support for initializers
                 macro
                     function loop (expr)
@@ -1118,7 +1112,8 @@ syntax-extend stage-5 (_ scope)
                         let args names =
                             parse-loop-args (@ expr 1)
                         list do
-                            list let param-repeat (quote =)
+                            list let param-repeat (quote =) none
+                            list set! param-repeat
                                 cons continuation
                                     cons
                                         cons
@@ -1170,7 +1165,8 @@ syntax-extend stage-5 (_ scope)
                             cons
                                 qquote
                                     do
-                                        let (unquote param-for) =
+                                        let (unquote param-for) = none
+                                        set! (unquote param-for)
                                             continuation (
                                                 (unquote (parameter (quote _)))
                                                 (unquote param-iter)
@@ -1182,7 +1178,8 @@ syntax-extend stage-5 (_ scope)
                                                     do
                                                         unquote-splice else-block
                                                     do
-                                                        let repeat =
+                                                        let repeat = none
+                                                        set! repeat
                                                             continuation (
                                                                 (unquote (parameter (quote _)))
                                                                 (unquote-splice extra-names))
