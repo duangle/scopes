@@ -1895,43 +1895,35 @@ static const Flow *extract_flow(const Any &value) {
 
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<const Flow *, std::vector<Any> >
+// flow -> {frame-idx, {values}}
+typedef std::unordered_map<const Flow *,
+    std::pair< size_t, std::vector<Any> > >
     FlowValuesMap;
 
 struct Frame {
 protected:
     size_t idx;
     Frame *parent;
-    FlowValuesMap map;
+    Frame *owner;
+    FlowValuesMap *_map;
+
+    FlowValuesMap &map() {
+        return *_map;
+    }
+
+    const FlowValuesMap &map() const {
+        return *_map;
+    }
 
 public:
 
-    std::string getRefRepr() const {
-        std::stringstream ss;
-        ss << "#" << idx << ":" << this;
-        return ss.str();
-    }
-
-    std::string getRepr() const {
-        std::stringstream ss;
-        ss << "#" << idx << ":" << this << ":\n";
-        for (auto &entry : map) {
-            ss << "  " << get_string(wrap_ptr(Types::PFlow, entry.first));
-            auto &value = entry.second;
-            for (size_t i = 0; i < value.size(); ++i) {
-                ss << " " << get_string(value[i]);
-            }
-            ss << "\n";
-        }
-        return ss.str();
-    }
-
     Frame *bind(const Flow *flow, const std::vector<Any> &values) {
-        Frame *frame = this;
-        if (frame->map.count(flow)) {
-            frame = Frame::create(frame);
+        Frame *frame = Frame::create(this);
+        if (frame->map().count(flow)) {
+            frame->_map = new FlowValuesMap();
+            frame->owner = frame;
         }
-        frame->map[flow] = values;
+        frame->map()[flow] = { frame->idx, values };
         return frame;
     }
 
@@ -1940,9 +1932,10 @@ public:
         // parameter is bound - attempt resolve
         Frame *ptr = this;
         while (ptr) {
-            auto it = ptr->map.find(cont);
-            if (it != ptr->map.end()) {
-                auto &values = it->second;
+            auto it = ptr->map().find(cont);
+            if (it != ptr->map().end()) {
+                auto &entry = it->second;
+                auto &values = entry.second;
                 assert (index < values.size());
                 values[index] = value;
                 return;
@@ -1956,11 +1949,15 @@ public:
             // parameter is bound - attempt resolve
             const Frame *ptr = this;
             while (ptr) {
-                auto it = ptr->map.find(cont);
-                if (it != ptr->map.end()) {
-                    auto &values = it->second;
+                ptr = ptr->owner;
+                auto it = ptr->map().find(cont);
+                if (it != ptr->map().end()) {
+                    auto &entry = it->second;
+                    auto &values = entry.second;
                     assert (index < values.size());
-                    return values[index];
+                    if (this->idx >= entry.first) {
+                        return values[index];
+                    }
                 }
                 ptr = ptr->parent;
             }
@@ -1981,6 +1978,8 @@ public:
         // create closure
         Frame *newframe = new Frame();
         newframe->parent = nullptr;
+        newframe->owner = newframe;
+        newframe->_map = new FlowValuesMap();
         newframe->idx = 0;
         return newframe;
     }
@@ -1989,7 +1988,9 @@ public:
         // create closure
         Frame *newframe = new Frame();
         newframe->parent = frame;
+        newframe->owner = frame->owner;
         newframe->idx = frame->idx + 1;
+        newframe->_map = frame->_map;
         return newframe;
     }
 };

@@ -212,6 +212,8 @@ function pow (x n)
     elseif ((n % 2) == 0) (pow2 (pow x (n // 2)))
     else (x * (pow x (n - 1)))
 
+let x = 1
+
 assert
     (pow 2 5) == 32
 
