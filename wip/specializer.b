@@ -75,26 +75,21 @@ function closure-label (aclosure)
         flow-label aclosure.entry
         style-comment ">"
 
+function iter-f (f arange args...)
+    function (yield)
+        for i in arange
+            yield
+                tupleof i
+                    f args... i
+            repeat;
+
 function flow-iter-arguments (aflow aframe)
     let acount =
         flow-argument-count aflow
-    qualify generator
-        tupleof
-            function (i)
-                if (i < acount)
-                    let arg =
-                        flow-argument aflow i
-                    tupleof
-                        structof
-                            : index i
-                            : argument
-                                arg
-                                /// ? ((typeof arg) == parameter)
-                                    frame-eval aframe i arg
-                                    arg
-
-                        i + 1
-            0
+    iter-f flow-argument (range acount) aflow
+    /// ? ((typeof arg) == parameter)
+        frame-eval aframe i arg
+        arg
 
 function param-label (aparam)
     let name =
@@ -137,16 +132,13 @@ function flow-decl-label (aflow aframe)
                         style-operator "):"
         "\n    "
         do
-            for k in (flow-iter-arguments aflow aframe)
+            for i arg in (flow-iter-arguments aflow aframe)
                 with
-                    i = 0
                     str = ""
                 let
-                    arg = k.argument
                     argtype =
                         typeof arg
                 repeat
-                    i + 1
                     ..
                         str
                         ? (i == 1)
@@ -175,8 +167,7 @@ function dump-function (afunc)
                 print
                     flow-decl-label aflow aframe
                 set-key! visited aflow true
-                for k in (flow-iter-arguments aflow aframe)
-                    let arg = k.argument
+                for i arg in (flow-iter-arguments aflow aframe)
                     let argtype =
                         typeof arg
                     if (argtype == closure)

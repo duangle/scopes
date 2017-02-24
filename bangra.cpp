@@ -3897,7 +3897,7 @@ namespace Types {
         const bangra::Any *args, size_t argcount) {
         builtin_checkparams(argcount, 0, -1);
         auto result = List::create_from_c_array(args, argcount);
-        set_anchor(result, get_anchor(handler_frame));
+        //set_anchor(result, get_anchor(handler_frame));
         return wrap(result);
     }
 
@@ -5551,8 +5551,7 @@ static Any builtin_cons(const Any *args, size_t argcount) {
     auto &at = args[0];
     auto next = args[1];
     verifyValueKind(Types::PList, next);
-    return wrap(List::create(at, next.list,
-        get_anchor(handler_frame)));
+    return wrap(List::create(at, next.list /*, get_anchor(handler_frame)*/));
 }
 
 static Any builtin_structof(const Any *args, size_t argcount) {
@@ -6306,8 +6305,8 @@ static Any compile_do (const List *it, const Any &dest) {
 static Any compile_continuation (const List *it, const Any &dest) {
     auto anchor = find_valid_anchor(it);
     if (!anchor || !anchor->isValid()) {
-        printValue(wrap(it), 0, true);
-        error("function expression not anchored");
+        //printValue(wrap(it), 0, true);
+        //error("continuation expression not anchored");
     }
 
     it = it->next;
@@ -6365,8 +6364,8 @@ static Any compile_implicit_call (const List *it, const Any &dest,
     if (!anchor) {
         anchor = find_valid_anchor(it);
         if (!anchor || !anchor->isValid()) {
-            printValue(wrap(it), 0, true);
-            error("call expression not anchored");
+            //printValue(wrap(it), 0, true);
+            //error("call expression not anchored");
         }
     }
 

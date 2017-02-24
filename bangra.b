@@ -107,7 +107,7 @@ syntax-extend stage-1 (_ scope)
                 # a lofi version of let so we get some sugar early
                 quote let
                 block-scope-macro
-                    continuation syntax-macro (_ expr scope)
+                    continuation let (_ expr scope)
                         branch
                             == (typeof (@ (@ expr 0) 2)) symbol
                             continuation () none
@@ -617,8 +617,8 @@ syntax-extend stage-3 (_ scope)
             : xpcall
             : bangra
             : require find-module
-            : generator
-                tag (quote generator)
+            : iterator
+                tag (quote iterator)
             : qualify
                 function qualify (tag-type value)
                     assert (== (typeof tag-type) type)
@@ -654,6 +654,31 @@ syntax-extend stage-3 (_ scope)
                         ? (< b a) b a
             : @
                 make-expand-multi-op-ltr @
+            ///
+                # a mid-fi version of let that avoids creating continuations when
+                # all values are constants
+                : let
+                    block-scope-macro
+                        function (topexpr scope)
+                            let expr = (@ topexpr 0)
+                            let rest = (slice topexpr 1)
+                            if (!= (typeof (@ expr 2)) symbol)
+                                error "syntax: let <var> = <expr>"
+                            if (!= (@ expr 2) (quote =))
+                                error "syntax: let <var> = <expr>"
+                            let param-name = (@ expr 1)
+                            let value-expr = (slice expr 3)
+                            let param = (parameter param-name)
+                            set-key! scope param-name param
+                            tupleof
+                                do
+                                    list
+                                        cons
+                                            cons continuation
+                                                cons (list (parameter (quote _)) param)
+                                                    rest
+                                            value-expr
+                                @ expanded 1
             : try
                 block-macro
                     function (expr scope)
@@ -718,85 +743,6 @@ syntax-extend stage-3 (_ scope)
                                 list set-key! subscope (list quote name) (quote name)
                                 subscope
                             slice expr 1
-            : let
-                function =? (x)
-                    and
-                        == (typeof x) symbol
-                        == x (quote =)
-
-                # support for multiple declarations in one let scope
-                block-macro
-                    function (expr scope)
-                        let args = (slice (@ expr 0) 1)
-                        let argtype = (typeof (@ args 0))
-                        if (== argtype symbol)
-                            if (=? (@ args 1))
-                                # regular form with support for recursion
-                                cons
-                                    cons let args
-                                    slice expr 1
-                            else
-                                # unpacking multiple variables, without recursion
-
-                                # iterate until we hit the = symbol, after which
-                                # the body follows
-                                function find-body (expr)
-
-                                    if (empty? expr)
-                                        error "syntax: let <name> ... = <expression>"
-                                    elseif (=? (@ expr 0))
-                                        tupleof (list)
-                                            slice expr 1
-                                    else
-                                        let out =
-                                            find-body (slice expr 1)
-                                        tupleof
-                                            cons (@ expr 0) (@ out 0)
-                                            @ out 1
-                                let cells =
-                                    find-body args
-                                list
-                                    list
-                                        cons continuation
-                                            cons
-                                                cons (parameter (quote _)) (@ cells 0)
-                                                slice expr 1
-                                        list splice
-                                            cons do
-                                                @ cells 1
-
-                        elseif (== argtype parameter)
-                            assert (=? (@ args 1))
-                                "syntax: let <parameter> = <expression>"
-                            # regular form, hidden parameter
-                            list
-                                cons
-                                    cons continuation
-                                        cons
-                                            list
-                                                parameter (quote _)
-                                                @ args 0
-                                            slice expr 1
-                                    slice args 2
-                        else
-                            # multiple variables with support for recursion,
-                            # and later variables can depend on earlier ones
-
-                            # prepare quotable values from declarations
-                            function handle-pairs (pairs)
-                                if (empty? pairs)
-                                    slice expr 1
-                                else
-                                    let pair =
-                                        @ pairs 0
-                                    assert (=? (@ pair 1))
-                                        "syntax: let (<name> = <expression>) ..."
-                                    cons
-                                        cons let pair
-                                        handle-pairs
-                                            slice pairs 1
-
-                            handle-pairs args
 
             tupleof scope-list-wildcard-symbol
                 function (topexpr scope)
@@ -907,9 +853,92 @@ syntax-extend stage-3 (_ scope)
             #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
 syntax-extend stage-4 (_ scope)
+    .. scope
+        tableof
+            : let
+                function =? (x)
+                    and
+                        == (typeof x) symbol
+                        == x (quote =)
 
-    function generator? (x)
-        (typeof x) < generator
+                # support for multiple declarations in one let scope
+                block-macro
+                    function (expr scope)
+                        let args = (slice (@ expr 0) 1)
+                        let argtype = (typeof (@ args 0))
+                        if (== argtype symbol)
+                            if (=? (@ args 1))
+                                # regular form with support for recursion
+                                cons
+                                    cons let args
+                                    slice expr 1
+                            else
+                                # unpacking multiple variables, without recursion
+
+                                # iterate until we hit the = symbol, after which
+                                # the body follows
+                                function find-body (expr)
+
+                                    if (empty? expr)
+                                        error "syntax: let <name> ... = <expression>"
+                                    elseif (=? (@ expr 0))
+                                        tupleof (list)
+                                            slice expr 1
+                                    else
+                                        let out =
+                                            find-body (slice expr 1)
+                                        tupleof
+                                            cons (@ expr 0) (@ out 0)
+                                            @ out 1
+                                let cells =
+                                    find-body args
+                                list
+                                    list
+                                        cons continuation
+                                            cons
+                                                cons (parameter (quote _)) (@ cells 0)
+                                                slice expr 1
+                                        list splice
+                                            cons do
+                                                @ cells 1
+
+                        elseif (== argtype parameter)
+                            assert (=? (@ args 1))
+                                "syntax: let <parameter> = <expression>"
+                            # regular form, hidden parameter
+                            list
+                                cons
+                                    cons continuation
+                                        cons
+                                            list
+                                                parameter (quote _)
+                                                @ args 0
+                                            slice expr 1
+                                    slice args 2
+                        else
+                            # multiple variables with support for recursion,
+                            # and later variables can depend on earlier ones
+
+                            # prepare quotable values from declarations
+                            function handle-pairs (pairs)
+                                if (empty? pairs)
+                                    slice expr 1
+                                else
+                                    let pair =
+                                        @ pairs 0
+                                    assert (=? (@ pair 1))
+                                        "syntax: let (<name> = <expression>) ..."
+                                    cons
+                                        cons let pair
+                                        handle-pairs
+                                            slice pairs 1
+
+                            handle-pairs args
+
+syntax-extend stage-5 (_ scope)
+
+    function iterator? (x)
+        (typeof x) < iterator
 
     function countable-rslice-iter (l)
         if ((countof l) != 0)
@@ -929,33 +958,45 @@ syntax-extend stage-4 (_ scope)
             tupleof key-value
                 tupleof t (@ key-value 0)
 
-    function yield-iter (f)
-        contcall
-            continuation (nextf result)
-                return
-                    if (not (none? nextf))
-                        tupleof result nextf
-            f
+    function gen-yield-iter (callee)
+        let state = (tableof)
+        function yield-iter (ret)
+            # store caller continuation in state
+            set-key! state (: return)
+            if (none? ret) # first invocation
+                # invoke callee with yield function as first argument
+                callee
+                    continuation (ret value)
+                        # continue caller
+                        state.return
+                            tupleof value ret
+                # callee has returned for good
+                # resume caller - we're done here.
+                contcall none state.return none
+            else # continue callee
+                contcall none ret
+
+        qualify iterator
+            tupleof yield-iter none
 
     function iter (x)
-        if (generator? x) x
+        if (iterator? x) x
         else
             let t = (typeof x)
             if (<= t list)
-                qualify generator
+                qualify iterator
                     tupleof countable-rslice-iter x
             elseif (< t tuple)
-                qualify generator
+                qualify iterator
                     tupleof countable-iter (tupleof x 0)
             elseif (<= t table)
-                qualify generator
+                qualify iterator
                     tupleof table-iter (tupleof x none)
             elseif (<= t string)
-                qualify generator
+                qualify iterator
                     tupleof countable-iter (tupleof x 0)
             elseif (<= t closure)
-                qualify generator
-                    tupleof yield-iter x
+                gen-yield-iter x
             else
                 error
                     .. "don't know how to iterate " (string x)
@@ -964,7 +1005,7 @@ syntax-extend stage-4 (_ scope)
         let step = (? (none? c) 1 c)
         let from = (? (none? b) 0 a)
         let to = (? (none? b) a b)
-        qualify generator
+        qualify iterator
             tupleof
                 function (x)
                     if (< x to)
@@ -972,9 +1013,9 @@ syntax-extend stage-4 (_ scope)
                 from
 
     function zip (a b)
-        let iter-a init-a = (disqualify generator (iter a))
-        let iter-b init-b = (disqualify generator (iter b))
-        qualify generator
+        let iter-a init-a = (disqualify iterator (iter a))
+        let iter-b init-b = (disqualify iterator (iter b))
+        qualify iterator
             tupleof
                 function (x)
                     let state-a = (iter-a (@ x 0))
@@ -990,7 +1031,7 @@ syntax-extend stage-4 (_ scope)
     function infrange (a b)
         let step = (? (none? b) 1 b)
         let from = (? (none? a) 0 a)
-        qualify generator
+        qualify iterator
             tupleof
                 function (x)
                     tupleof x (+ x step)
@@ -1036,11 +1077,11 @@ syntax-extend stage-4 (_ scope)
     .. scope
         tableof
             : iter
-            : generator?
+            : iterator?
             : range
             : zip
             : enumerate
-            : yield
+            : yieldx
                 block-macro
                     function yield (topexpr scope)
                         let oparam =
@@ -1153,7 +1194,7 @@ syntax-extend stage-4 (_ scope)
                                                             @ (unquote param-at-next) 0
                                                         unquote-splice body
                                         (unquote param-for)
-                                            splice (disqualify generator (iter (unquote src-expr)))
+                                            splice (disqualify iterator (iter (unquote src-expr)))
                                             unquote-splice extra-args
                                 block-rest
 
