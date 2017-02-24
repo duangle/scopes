@@ -1932,6 +1932,7 @@ public:
         // parameter is bound - attempt resolve
         Frame *ptr = this;
         while (ptr) {
+            ptr = ptr->owner;
             auto it = ptr->map().find(cont);
             if (it != ptr->map().end()) {
                 auto &entry = it->second;

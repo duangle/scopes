@@ -983,20 +983,20 @@ syntax-extend stage-5 (_ scope)
                 tupleof t (@ key-value 0)
 
     function gen-yield-iter (callee)
-        let state = (tableof)
+        let caller-return = none
         function yield-iter (ret)
             # store caller continuation in state
-            set-key! state (: return)
+            set! caller-return return
             if (none? ret) # first invocation
                 # invoke callee with yield function as first argument
                 callee
                     continuation (ret value)
                         # continue caller
-                        state.return
+                        caller-return
                             tupleof value ret
                 # callee has returned for good
                 # resume caller - we're done here.
-                contcall none state.return none
+                contcall none caller-return none
             else # continue callee
                 contcall none ret
 
