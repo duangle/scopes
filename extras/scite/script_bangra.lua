@@ -28,7 +28,7 @@ local function bangra_symbols()
             .. " syntax-extend if else elseif loop repeat none assert qquote"
             .. " unquote unquote-splice globals return splice continuation"
             .. " try except contcall define in for empty-list empty-tuple raise"
-            .. " yield"
+            .. " yield xlet"
         ),
 
     -- builtin and global functions

@@ -65,6 +65,11 @@ do
     assert (z.w == 5)
     assert (z.q == 303)
 
+let
+    a = 1
+    a = (a + 1)
+assert (a == 2)
+
 do
     let
         x = 0

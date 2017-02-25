@@ -11,31 +11,28 @@ let
             test_iterator
             test_batchfold
             test_semicolon
+            test_xlet
     total =
         countof modules
-    failed = 0
-loop (modules failed)
-    if (not (empty? modules))
-        let
-            module =
-                @ modules 0
-            next-modules =
-                slice modules 1
 
-        print;
-        print "* running:" module
-        print "***********************************************"
-        let ok =
-            try
-                require module
-                true
-            except (e)
-                print "error running module:" e
-                false
-        repeat next-modules
-            ? ok failed (failed + 1)
-    else
-        print;
-        print total "tests executed," (total - failed) "succeeded," failed "failed."
+for module in modules
+    with
+        failed = 0
+
+    print;
+    print "* running:" module
+    print "***********************************************"
+    let ok =
+        try
+            require module
+            true
+        except (e)
+            print "error running module:" e
+            false
+    repeat
+        ? ok failed (failed + 1)
+else
+    print;
+    print total "tests executed," (total - failed) "succeeded," failed "failed."
 
 print "done."

@@ -156,12 +156,7 @@ syntax-extend stage-1 (_ scope)
                                                     list
                                                         parameter (quote _)
                                                         param-name
-                                                    branch
-                                                        == (countof rest) 0
-                                                        continuation ()
-                                                            list param-name
-                                                        continuation ()
-                                                            slice expr 1
+                                                    slice expr 1
                                             slice (@ expr 0) 3
                                 @ (@ expr 0) 1
                                 slice expr 1
@@ -877,14 +872,14 @@ syntax-extend stage-3 (_ scope)
             #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
 syntax-extend stage-4 (_ scope)
+    function =? (x)
+        and
+            == (typeof x) symbol
+            == x (quote =)
+
     .. scope
         tableof
             : let
-                function =? (x)
-                    and
-                        == (typeof x) symbol
-                        == x (quote =)
-
                 # support for multiple declarations in one let scope
                 block-macro
                     function (expr scope)
@@ -892,12 +887,12 @@ syntax-extend stage-4 (_ scope)
                         let argtype = (typeof (@ args 0))
                         if (== argtype symbol)
                             if (=? (@ args 1))
-                                # regular form with support for recursion
+                                # regular form
                                 cons
                                     cons let args
                                     slice expr 1
                             else
-                                # unpacking multiple variables, without recursion
+                                # unpacking multiple variables
 
                                 # iterate until we hit the = symbol, after which
                                 # the body follows
@@ -940,8 +935,7 @@ syntax-extend stage-4 (_ scope)
                                             slice expr 1
                                     slice args 2
                         else
-                            # multiple variables with support for recursion,
-                            # and later variables can depend on earlier ones
+                            # multiple variables
 
                             # prepare quotable values from declarations
                             function handle-pairs (pairs)
@@ -958,6 +952,61 @@ syntax-extend stage-4 (_ scope)
                                             slice pairs 1
 
                             handle-pairs args
+            : xlet
+                block-macro
+                    # a late-binding let with support for recursion and
+                    # function-level cross dependencies. comparable to letrec.
+                    function (expr scope)
+                        let args = (slice (@ expr 0) 1)
+                        let name = (@ args 0)
+                        let argtype = (typeof name)
+                        if (or (== argtype symbol) (== argtype parameter))
+                            assert (=? (@ args 1))
+                                "syntax: xlet <parameter> = <expression>"
+                            # regular form with support for recursion
+                            cons
+                                list let name (quote =) none
+                                cons
+                                    list set! name
+                                        cons do
+                                            slice args 2
+                                    slice expr 1
+                        else
+                            assert (== argtype list)
+                                "syntax: xlet (<name> = <expression>) ..."
+                            # multiple variables with support for recursion
+                            # and circular dependencies
+
+                            # prepare quotable values from declarations
+                            function handle-pairs (pairs)
+                                if (empty? pairs)
+                                    tupleof
+                                        list;
+                                        slice expr 1
+                                else
+                                    let result =
+                                        handle-pairs
+                                            slice pairs 1
+                                    let pair =
+                                        @ pairs 0
+                                    assert (=? (@ pair 1))
+                                        "syntax: xlet (<name> = <expression>) ..."
+                                    let name = (@ pair 0)
+                                    tupleof
+                                        cons name (@ result 0)
+                                        cons
+                                            list set! name (@ pair 2)
+                                            (@ result 1)
+
+                            let entries =
+                                handle-pairs args
+
+                            list
+                                list
+                                    cons continuation
+                                        cons
+                                            cons (parameter (quote _)) (@ entries 0)
+                                            @ entries 1
 
 syntax-extend stage-5 (_ scope)
 

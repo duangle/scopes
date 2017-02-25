@@ -1,24 +1,34 @@
 
 # we define a generator function that yields multiple values from a loop,
 # enclosed by a special first value and a configurable tail element
-function generator-func (tail)
+
+# generator functions can be composed to flatten the iteration
+
+function list-generator (l)
     function (yield)
-        if true
-            # yield the first value individually
-            yield "hello?!"
-        # now yield all items of a list
-        for x in (list "yes" "this" "is" "dog")
+        for x in l
             # return one element from this list
             yield x
-            # function continues here...
+            # and repeat until depleted
             repeat;
-        # and yield custom tail element
+
+function dog-generator (greeting words tail)
+    function (yield)
+        # yield the first value conditionally
+        if greeting
+            yield "hello?!"
+        else
+            yield "yeeees?"
+        # now yield all items of a list;
+        # we continue in a different generator and pass on the yield function
+        (list-generator words) yield
+        # finally, yield a custom tail element
         yield tail
-        # actual return value will be ignored
+        # any return value will be ignored
         true
 
 # now iterate through the values in this function
-for x in (generator-func "what's up?")
+for x in (dog-generator true (list "yes" "this" "is" "dog") "what's up?")
     with
         i = 0
     # print each value
