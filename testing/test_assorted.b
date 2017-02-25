@@ -257,9 +257,13 @@ do
                 next-key T (kv @ 0)
 
     print ">"
-        cstr T.bangra_interpreter_dir
+        string T.bangra_interpreter_dir
     print ">>"
-        cstr T.bangra_interpreter_path
+        string T.bangra_interpreter_path
+    assert
+        == "test"
+            string
+                rawstring "test"
     print
         T.print_number 302
 

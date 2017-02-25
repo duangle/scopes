@@ -228,6 +228,9 @@ syntax-extend stage-2 (_ scope)
             : uint32 (integer 32 false)
             : uint64 (integer 64 false)
 
+            : size_t (integer 64 false)
+            : ssize_t (integer 64 true)
+
             : int (integer 32 true)
             : uint (integer 32 false)
 

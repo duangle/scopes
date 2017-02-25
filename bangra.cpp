@@ -767,6 +767,7 @@ namespace Types {
     static const Type *R16;
     static const Type *R32;
     static const Type *R64;
+    static const Type *R80;
 
     static const Type *SizeT;
 
@@ -3155,6 +3156,8 @@ struct FFI {
                     default: break;
                 }
             }
+        } else if (is_pointer_type(type)) {
+            return &ffi_type_pointer;
         }
         error("can not translate %s to FFI type",
             get_name(type).c_str());
@@ -3178,28 +3181,41 @@ struct FFI {
         auto ftype = get_element_type(func.type);
         assert(is_cfunction_type(ftype));
         auto count = get_parameter_count(ftype);
-        if (count != argcount) {
-            error("parameter count mismatch");
+        if (is_vararg(ftype)) {
+            if (count > argcount) {
+                error("not enough arguments for vararg function");
+            }
+        } else {
+            if (count != argcount) {
+                error("argument count mismatch");
+            }
         }
+        /*
         if (is_vararg(ftype)) {
             error("vararg functions not supported yet");
-        }
+        }*/
 
         auto rtype = get_result_type(ftype);
 
         ffi_cif cif;
-        ffi_type *argtypes[count];
-        for (size_t i = 0; i < count; ++i) {
-            auto ptype = get_parameter_type(ftype, i);
-            if (!is_subtype_or_type(args[i].type, ptype)) {
-                error("%s type expected, %s provided",
-                    get_name(ptype).c_str(),
-                    get_name(args[i].type).c_str());
+        auto maxcount = std::max(count, argcount);
+        ffi_type *argtypes[maxcount];
+        for (size_t i = 0; i < maxcount; ++i) {
+            const Type *ptype;
+            if (i < count) {
+                ptype = get_parameter_type(ftype, i);
+                if (!is_subtype_or_type(args[i].type, ptype)) {
+                    error("%s type expected, %s provided",
+                        get_name(ptype).c_str(),
+                        get_name(args[i].type).c_str());
+                }
+            } else {
+                ptype = args[i].type;
             }
             argtypes[i] = get_ffi_type(ptype);
         }
         auto prep_result = ffi_prep_cif(
-            &cif, FFI_DEFAULT_ABI, count, get_ffi_type(rtype), argtypes);
+            &cif, FFI_DEFAULT_ABI, maxcount, get_ffi_type(rtype), argtypes);
         assert(prep_result == FFI_OK);
 
         Any result = make_any(rtype);
@@ -3212,8 +3228,8 @@ struct FFI {
             result.ptr = rvalue;
         }
 
-        void *avalues[count];
-        for (size_t i = 0; i < count; ++i) {
+        void *avalues[maxcount];
+        for (size_t i = 0; i < maxcount; ++i) {
             avalues[i] = args[i].type->is_embedded?
                 const_cast<uint8_t *>(args[i].embedded)
                 :const_cast<void *>(args[i].ptr);
@@ -3670,17 +3686,17 @@ namespace Types {
 
     static bangra::Any _integer_add(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) + extract_integer(b));
+        return integer(self, extract_integer(a) + extract_integer(b));
     }
 
     static bangra::Any _integer_sub(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) - extract_integer(b));
+        return integer(self, extract_integer(a) - extract_integer(b));
     }
 
     static bangra::Any _integer_mul(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) * extract_integer(b));
+        return integer(self, extract_integer(a) * extract_integer(b));
     }
 
     static bangra::Any _integer_div(const Type *self,
@@ -3690,12 +3706,27 @@ namespace Types {
 
     static bangra::Any _integer_floordiv(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) / extract_integer(b));
+        return integer(self, extract_integer(a) / extract_integer(b));
     }
 
     static bangra::Any _integer_mod(const Type *self,
         const bangra::Any &a, const bangra::Any &b) {
-        return wrap(extract_integer(a) % extract_integer(b));
+        return integer(self, extract_integer(a) % extract_integer(b));
+    }
+
+    static bangra::Any _integer_and(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return integer(self, extract_integer(a) & extract_integer(b));
+    }
+
+    static bangra::Any _integer_or(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return integer(self, extract_integer(a) | extract_integer(b));
+    }
+
+    static bangra::Any _integer_xor(const Type *self,
+        const bangra::Any &a, const bangra::Any &b) {
+        return integer(self, extract_integer(a) ^ extract_integer(b));
     }
 
     // thx to fabian for this one
@@ -3880,7 +3911,20 @@ namespace Types {
     static bangra::Any _string_apply_type(const Type *self,
         const bangra::Any *args, size_t argcount) {
         builtin_checkparams(argcount, 1, 1);
-        return pstring(get_string(args[0]));
+        if (is_subtype_or_type(args[0].type, Types::Rawstring)) {
+            const char *str = args[0].c_str;
+            return wrap(Types::String, alloc_slice<char>(str, strlen(str)));
+        } else {
+            return pstring(get_string(args[0]));
+        }
+    }
+
+    static bangra::Any _rawstring_apply_type(const Type *self,
+        const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        if (!is_subtype_or_type(args[0].type, Types::String))
+            error("string expected");
+        return wrap_ptr(Types::Rawstring, args[0].str->ptr);
     }
 
     static bangra::Any _list_apply_type(const Type *self,
@@ -4345,6 +4389,12 @@ namespace Types {
         return type;
     }
 
+    static bangra::Any _integer_value_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 1, 1);
+        return integer(self, extract_integer(args[0]));
+    }
+
     static const Type *_new_integer_type(size_t width, bool signed_) {
         ffi_type *itype = nullptr;
         if (signed_) {
@@ -4384,6 +4434,11 @@ namespace Types {
         type->op2[OP2_Mod] = _integer_mod;
         type->op2[OP2_Pow] = _integer_pow;
 
+        type->op2[OP2_And] = _integer_and;
+        type->op2[OP2_Or] = _integer_or;
+        type->op2[OP2_Xor] = _integer_xor;
+
+        type->apply_type = apply_type_call<_integer_value_apply_type>;
         type->hash = _integer_hash;
 
         if (width == 1) {
@@ -4406,6 +4461,7 @@ namespace Types {
             case 16: itype = &ffi_type_uint16; break;
             case 32: itype = &ffi_type_float; break;
             case 64: itype = &ffi_type_double; break;
+            case 80: itype = &ffi_type_longdouble; break;
             default: assert(false && "invalid width"); break;
         }
 
@@ -4695,6 +4751,7 @@ namespace Types {
         R16 = Real(16);
         R32 = Real(32);
         R64 = Real(64);
+        R80 = Real(80);
 
         struct _string_alignment { char c; bangra::String s; };
         struct _symbol_alignment { char c; bangra::Symbol s; };
@@ -4785,7 +4842,9 @@ namespace Types {
             PClosure = Pointer(tmp);
         }
 
-        Rawstring = Pointer(I8);
+        tmp = const_cast<Type *>(Pointer(I8));
+        tmp->apply_type = apply_type_call<_rawstring_apply_type>;
+        Rawstring = tmp;
 
         ListTableTuple = Tuple({PList, PTable});
     }
@@ -4800,7 +4859,8 @@ static void initConstants() {}
 
 static void *open_c_module(const char *name) {
     // todo: windows
-    return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+    //return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
+    return dlopen(name, RTLD_LAZY);
 }
 
 static void *get_c_symbol(void *handle, const char *name) {
@@ -4913,7 +4973,8 @@ public:
     const Type *TranslateRecord(clang::RecordDecl *rd) {
         if (!rd->isStruct() && !rd->isUnion()) return NULL;
 
-        std::string name = rd->getName();
+        assert(rd->getName().data());
+        std::string name = rd->getName().data();
 
         Type *struct_type = nullptr;
         if (name.size() && named_structs.count(name)) {
@@ -4927,6 +4988,7 @@ public:
 
         clang::RecordDecl * defn = rd->getDefinition();
         if (defn && !record_defined[rd]) {
+            record_defined[rd] = true;
             /*
             Anchor anchor = anchorFromLocation(rd->getSourceRange().getBegin());
             set_key(*struct_type, "anchor",
@@ -4945,7 +5007,6 @@ public:
             // align.getQuantity()
             // size.getQuantity()
 
-            record_defined[rd] = true;
         }
 
         return struct_type;
@@ -4966,6 +5027,7 @@ public:
 
         clang::EnumDecl * defn = ed->getDefinition();
         if (defn && !enum_defined[ed]) {
+            enum_defined[ed] = true;
             /*
             set_key(*enum_type, "anchor",
                 pointer(Types::AnchorRef,
@@ -4994,8 +5056,6 @@ public:
             enum_type->tags = tags;
             Types::_set_union_field_types(enum_type, types);
             Types::_set_field_names(enum_type, names);
-
-            enum_defined[ed] = true;
         }
 
         return enum_type;
@@ -5005,6 +5065,7 @@ public:
         using namespace clang;
 
         const clang::Type *Ty = T.getTypePtr();
+        assert(Ty);
 
         switch (Ty->getTypeClass()) {
         case clang::Type::Elaborated: {
@@ -5019,7 +5080,9 @@ public:
             const TypedefType *tt = dyn_cast<TypedefType>(Ty);
             TypedefNameDecl * td = tt->getDecl();
             auto it = typedefs.find(td->getName().data());
-            assert (it != typedefs.end());
+            if (it == typedefs.end()) {
+                break;
+            }
             return it->second;
         } break;
         case clang::Type::Record: {
@@ -5068,7 +5131,9 @@ public:
             case clang::BuiltinType::Double: {
                 return Types::R64;
             } break;
-            case clang::BuiltinType::LongDouble:
+            case clang::BuiltinType::LongDouble: {
+                return Types::R80;
+            } break;
             case clang::BuiltinType::NullPtr:
             case clang::BuiltinType::UInt128:
             default:
@@ -5094,7 +5159,7 @@ public:
             const Type *at = TranslateType(ATy->getElementType());
             if(at) {
                 int sz = ATy->getSize().getZExtValue();
-                Types::Array(at, sz);
+                return Types::Array(at, sz);
             }
         } break;
         case clang::Type::ExtVector:
@@ -5122,9 +5187,9 @@ public:
         default:
             break;
         }
-        fprintf(stderr, "type not understood: %s (%i)\n",
+        fprintf(stderr, "cannot convert type: %s (%s)\n",
             T.getAsString().c_str(),
-            Ty->getTypeClass());
+            Ty->getTypeClassName());
 
         return NULL;
     }
@@ -5504,14 +5569,6 @@ static Any builtin_escape(const Any *args, size_t argcount) {
     return result;
 }
 
-static Any builtin_cstr(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 1, 1);
-    if (!is_subtype_or_type(args[0].type, Types::Rawstring))
-        error("rawstring expected");
-    const char *str = args[0].c_str;
-    return wrap(Types::String, alloc_slice<char>(str, strlen(str)));
-}
-
 static Any builtin_print(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 0, -1);
     for (size_t i = 0; i < argcount; ++i) {
@@ -5532,6 +5589,11 @@ static Any builtin_globals(const Any *args, size_t argcount) {
 static Any builtin_countof(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     return wrap(countof(args[0]));
+}
+
+static Any builtin_sizeof(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    return wrap(extract_type(args[0])->size);
 }
 
 static Any builtin_slice(const Any *args, size_t argcount) {
@@ -5763,14 +5825,18 @@ static Any builtin_raise(const Any *args, size_t argcount) {
 
 // (import-c const-path (tupleof const-string ...))
 static Any builtin_import_c(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 2, 2);
+    builtin_checkparams(argcount, 2, 3);
     std::string path = extract_string(args[0]);
     auto compile_args = extract_tuple(args[1]);
     std::vector<std::string> cargs;
     for (size_t i = 0; i < compile_args.size(); ++i) {
         cargs.push_back(extract_string(compile_args[i]));
     }
-    return wrap_ptr(Types::PTable, bangra::importCModule(path, cargs));
+    const char *buffer = nullptr;
+    if (argcount == 3) {
+        buffer = strdup(extract_string(args[2]).c_str());
+    }
+    return wrap_ptr(Types::PTable, bangra::importCModule(path, cargs, buffer));
 }
 
 static Any builtin_external(const Any *args, size_t argcount) {
@@ -6555,9 +6621,9 @@ static void initGlobals () {
     setBuiltin<builtin_error>(env, "error");
     setBuiltin<builtin_raise>(env, "raise");
     setBuiltin<builtin_countof>(env, "countof");
+    setBuiltin<builtin_sizeof>(env, "sizeof");
     setBuiltin<builtin_loadlist>(env, "list-load");
     setBuiltin<builtin_eval>(env, "eval");
-    setBuiltin<builtin_cstr>(env, "cstr");
     setBuiltin<builtin_hash>(env, "hash");
 
     setBuiltin<builtin_bitcast>(env, "bitcast");

@@ -39,7 +39,7 @@ local function bangra_symbols()
             .. " list-load load require cstr exit hash min max"
             .. " va-arg va-countof range zip enumerate bitcast element-type"
             .. " qualify disqualify iter iterator? list? symbol?"
-            .. " get-exception-handler xpcall error"
+            .. " get-exception-handler xpcall error sizeof"
         ),
 
     -- builtin and global functions with side effects
@@ -59,7 +59,7 @@ local function bangra_symbols()
             .. " rawstring opaque half float double symbol list parameter"
             .. " frame closure flow integer real cfunction array tuple vector"
             .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
-            .. " iterator type table"
+            .. " iterator type table size_t ssize_t"
         )
     }
 end
