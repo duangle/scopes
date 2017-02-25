@@ -1256,6 +1256,69 @@ syntax-extend stage-5 (_ scope)
                             # no extra state params
                             generate-template body (list) (list)
 
+            # an extended version of function that permits chaining
+            # sequential cross-dependent declarations with a `with` keyword
+            : function # (function [name] (param ...) body ...) with (function ...) ...
+                block-macro
+                    do
+                        function parse-funcdef (topexpr k)
+                            let expr =
+                                @ topexpr 0
+                            assert (list-head? expr (quote function))
+                                "function definition expected after 'with'"
+                            let decl =
+                                @ (@ topexpr 0) 1
+                            let retparam =
+                                quote return
+                            let make-params-body =
+                                function (param-idx)
+                                    cons
+                                        cons
+                                            retparam
+                                            @ expr param-idx
+                                        slice expr (+ param-idx 1)
+                            let rest =
+                                slice topexpr 1
+                            if (symbol? decl)
+                                # build single xlet assignment
+                                let func-expr =
+                                    list decl (quote =)
+                                        cons continuation
+                                            cons
+                                                @ expr 1
+                                                make-params-body 2
+                                let result =
+                                    if (empty? rest)
+                                        tupleof (list func-expr)
+                                            list decl
+                                    elseif (list-head? rest (quote with))
+                                        let defs defs-rest =
+                                            parse-funcdef
+                                                slice rest 1
+                                                k + 1
+                                        tupleof
+                                            cons func-expr defs
+                                            defs-rest
+                                    else
+                                        tupleof (list func-expr) rest
+                                if (k == 0)
+                                    cons
+                                        cons xlet (@ result 0)
+                                        @ result 1
+                                else result
+                            else
+                                assert (k == 0)
+                                    "unnamed function can not be chained"
+                                # regular, unchained form
+                                cons
+                                    cons continuation
+                                        make-params-body 1
+                                    rest
+
+                        function (topexpr)
+                            parse-funcdef topexpr 0
+
+
 syntax-extend stage-final (_ scope)
     set-globals! scope
     scope
