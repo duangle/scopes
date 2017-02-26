@@ -1329,41 +1329,67 @@ syntax-extend stage-6 (_ scope)
             .. (string (@ bangra-version 0)) "." (string (@ bangra-version 1))
                 ? ((@ bangra-version 2) == 0) ""
                     .. "." (string (@ bangra-version 2))
-
-        let scope =
-            ..
-                globals;
-                tableof;
-        loop
-            with
-                k = 1
-            let idstr =
-                .. "$" (string k)
-            let id =
-                symbol idstr
-            let cmd =
-                prompt
-                    .. idstr "> "
+        let state = (tableof)
+            scope : (.. (globals) (tableof))
+            counter : 1
+        function reset-state ()
+            set-key! state
+                scope :
+                    .. (globals)
+                        tableof
+                            reset : reset-state
+            set-key! state (frame : none)
+            set-key! state (counter : 1)
+        reset-state;
+        function capture-scope (scope)
+            set-key! state (: scope)
+        # appending this to an expression before evaluation captures the scope
+        # table so it can be used for the next expression.
+        let expression-suffix =
+            list
+                qquote
+                    syntax-extend (_ scope)
+                        (unquote capture-scope) scope
+                        scope
+        loop ()
+            let idstr = (.. "$" (string state.counter))
+            let id = (symbol idstr)
+            let cmd = (prompt (.. idstr "> "))
             if ((typeof cmd) != void)
-                let cmdstr =
-                    (string cmd) .. "\n"
-                repeat
-                    try
-                        let expr =
-                            list-parse cmdstr
-                        let f =
-                            eval expr scope
-                        let result = (f)
-                        if ((typeof result) != void)
-                            print
-                                .. idstr "= " (repr result)
-                            set-key! scope id result
-                            k + 1
-                        else
-                            k
-                    except (e)
-                        print e
-                        k
+                let cmdstr = (.. (string cmd) "\n")
+                try
+
+                    let expr = (list-parse cmdstr)
+                    if (none? expr)
+                        error "parsing failed"
+                    let f = (eval (.. expr expression-suffix) state.scope)
+                    function wrapper ()
+                        # by removing closure context from capture-frame,
+                        # we run in the frame of the caller, which we can
+                        # then capture to run the next expression.
+                        # because "return" is resolved to the value it had
+                        # in the last frame, we need to save it in the
+                        # state table, and retrieve it from there.
+                        set-key! state (: return)
+                        let capture-frame =
+                            continuation (_ x)
+                                # create bogus function from which we can
+                                # capture the frame.
+                                let _c = (function () none)
+                                state.return (tupleof x _c.frame)
+                        contcall capture-frame.entry
+                            if (none? state.frame) f
+                            else (closure f state.frame)
+                    let result newframe = (wrapper)
+                    set-key! state (frame : newframe)
+                    if ((typeof result) != void)
+                        print (.. idstr "= " (repr result))
+                        set-key! state.scope id result
+                        set-key! state
+                            counter : (state.counter + 1)
+                except (e)
+                    print "error:" e
+                repeat;
     set-key! scope
         : read-eval-print-loop
     scope

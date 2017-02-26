@@ -2049,6 +2049,14 @@ static const Closure *extract_closure(const Any &value) {
     return nullptr;
 }
 
+static Any wrap(const Closure *closure) {
+    return wrap_ptr(Types::PClosure, closure);
+}
+
+static Any wrap(Closure *closure) {
+    return wrap_ptr(Types::PClosure, closure);
+}
+
 //------------------------------------------------------------------------------
 
 static Any macro(const Any &value) {
@@ -4679,6 +4687,14 @@ namespace Types {
         return wrap(tag);
     }
 
+    static bangra::Any _closure_apply_type(
+        const Type *self, const bangra::Any *args, size_t argcount) {
+        builtin_checkparams(argcount, 2, 2);
+        auto entry = extract_flow(args[0]);
+        auto frame = extract_frame(args[1]);
+        return wrap(create_closure(entry, const_cast<Frame *>(frame)));
+    }
+
     // TYPE INIT
     //--------------------------------------------------------------------------
 
@@ -4854,6 +4870,8 @@ namespace Types {
             _set_struct_field_types(tmp, types);
             _set_field_names(tmp, names);
             PClosure = Pointer(tmp);
+            tmp = const_cast<Type *>(PClosure);
+            tmp->apply_type = apply_type_call<_closure_apply_type>;
         }
 
         tmp = const_cast<Type *>(Pointer(I8));
@@ -6139,9 +6157,9 @@ static Cursor expand_syntax_extend (const Table *env, const List *topit) {
     verifyValueKind(Types::PTable, expr_env);
 
     auto rest = cur.list->next;
-    if (!rest) {
+    /*if (!rest) {
         error("syntax-extend: missing subsequent expression");
-    }
+    }*/
 
     return { rest, expr_env.table };
 }
@@ -6210,6 +6228,10 @@ process:
                 topit = result.list;
                 env = result.scope;
                 goto process;
+            } else if (result.scope) {
+                topit = result.list;
+                env = result.scope;
+                return { nullptr, env };
             }
         }
 
@@ -6245,6 +6267,7 @@ process:
         result = expr;
         topit = topit->next;
     }
+done:
     return { List::create(result, topit), env };
 }
 
