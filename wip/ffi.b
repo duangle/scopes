@@ -1,5 +1,3 @@
-# a REPL console for bangra
-
 let void* =
     pointer void
 let NULL =
@@ -50,38 +48,3 @@ let lib =
             void linenoiseSetMultiLine(int ml);
             void linenoisePrintKeyCodes(void);
             "
-
-# make a copy of the globals table
-let scope =
-    ..
-        globals;
-        tableof;
-loop
-    with
-        k = 1
-    let cmd =
-        lib.linenoise (rawstring "B> ")
-    if (not (null? cmd))
-        lib.linenoiseHistoryAdd cmd
-        let cmdstr =
-            (string cmd) .. "\n"
-        repeat
-            try
-                let expr =
-                    list-parse cmdstr
-                let f =
-                    eval expr scope
-                let result = (f)
-                if ((typeof result) != void)
-                    let id =
-                        symbol (.. "$" (string k))
-                    print id "=" (repr result)
-                    set-key! scope id result
-                    k + 1
-                else
-                    k
-            except (e)
-                print e
-                k
-
-

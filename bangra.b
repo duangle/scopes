@@ -1323,6 +1323,50 @@ syntax-extend stage-5 (_ scope)
                         function (topexpr)
                             parse-funcdef topexpr 0
 
+syntax-extend stage-6 (_ scope)
+    function read-eval-print-loop ()
+        print "Bangra"
+            .. (string (@ bangra-version 0)) "." (string (@ bangra-version 1))
+                ? ((@ bangra-version 2) == 0) ""
+                    .. "." (string (@ bangra-version 2))
+
+        let scope =
+            ..
+                globals;
+                tableof;
+        loop
+            with
+                k = 1
+            let idstr =
+                .. "$" (string k)
+            let id =
+                symbol idstr
+            let cmd =
+                prompt
+                    .. idstr "> "
+            if ((typeof cmd) != void)
+                let cmdstr =
+                    (string cmd) .. "\n"
+                repeat
+                    try
+                        let expr =
+                            list-parse cmdstr
+                        let f =
+                            eval expr scope
+                        let result = (f)
+                        if ((typeof result) != void)
+                            print
+                                .. idstr "= " (repr result)
+                            set-key! scope id result
+                            k + 1
+                        else
+                            k
+                    except (e)
+                        print e
+                        k
+    set-key! scope
+        : read-eval-print-loop
+    scope
 
 syntax-extend stage-final (_ scope)
     set-globals! scope

@@ -39,7 +39,7 @@ local function bangra_symbols()
             .. " list-load list-parse load require cstr exit hash min max"
             .. " va-arg va-countof range zip enumerate bitcast element-type"
             .. " qualify disqualify iter iterator? list? symbol?"
-            .. " get-exception-handler xpcall error sizeof"
+            .. " get-exception-handler xpcall error sizeof prompt"
         ),
 
     -- builtin and global functions with side effects

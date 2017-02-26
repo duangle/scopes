@@ -628,6 +628,8 @@ enum {
     SYM_Return,
     SYM_Result,
 
+    SYM_ReadEvalPrintLoop,
+
     SYM_ScriptSize,
     SYM_Count,
 };
@@ -673,6 +675,7 @@ static void initSymbols() {
     map_symbol(SYM_Return, "return");
     map_symbol(SYM_Result, "result");
     map_symbol(SYM_Continuation, "cont");
+    map_symbol(SYM_ReadEvalPrintLoop, "read-eval-print-loop");
 }
 
 //------------------------------------------------------------------------------
@@ -5688,6 +5691,15 @@ static Any builtin_hash(const Any *args, size_t argcount) {
     return wrap(hash(args[0]));
 }
 
+static Any builtin_prompt(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    auto s = extract_string(args[0]);
+    char *r = linenoise(s.c_str());
+    if (!r) return const_none;
+    linenoiseHistoryAdd(r);
+    return wrap(Types::String, alloc_slice<char>(r, strlen(r)));
+}
+
 static Any builtin_bitcast(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 2);
     auto type = extract_type(args[0]);
@@ -6581,6 +6593,12 @@ static void initGlobals () {
 
     setBuiltin< builtin_escape >(env, "escape");
 
+    Any version_tuple[3] = {
+        wrap((int)BANGRA_VERSION_MAJOR),
+        wrap((int)BANGRA_VERSION_MINOR),
+        wrap((int)BANGRA_VERSION_PATCH) };
+    setLocalString(env, "bangra-version", wrap(version_tuple, 3));
+
     setLocalString(env, "integer", wrap(Types::TInteger));
     setLocalString(env, "real", wrap(Types::TReal));
     setLocalString(env, "cfunction", wrap(Types::TCFunction));
@@ -6654,6 +6672,7 @@ static void initGlobals () {
     setBuiltin<builtin_parselist>(env, "list-parse");
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_hash>(env, "hash");
+    setBuiltin<builtin_prompt>(env, "prompt");
 
     //setBuiltin<builtin_dlopen>(env, "dlopen");
     //setBuiltin<builtin_dlclose>(env, "dlclose");
@@ -6803,6 +6822,11 @@ static bool compileMain (Any expr, const char *path) {
     Any exec_args[] = {compileFlow(globals, expr, path)};
     execute(exec_args, 1);
     return true;
+}
+
+static void runREPL () {
+    Any args[] = { getLocal(globals, SYM_ReadEvalPrintLoop)};
+    execute(args, 1);
 }
 
 // This function isn't referenced outside its translation unit, but it
@@ -7046,7 +7070,8 @@ int bangra_main(int argc, char ** argv) {
         }
 
         if (isnone(expr)) {
-            return 1;
+            bangra::runREPL();
+            return 0;
         } else {
             bangra::compileMain(expr, cpath);
         }
