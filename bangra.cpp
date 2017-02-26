@@ -61,6 +61,7 @@ int print_number(int value);
 #include "mman.h"
 #include "stdlib_ex.h"
 #include "dlfcn.h"
+#include "external/linenoise-ng/include/linenoise.h"
 #else
 // for backtrace
 #include <execinfo.h>

@@ -15,7 +15,17 @@ gcc -c -o realpath.o %DIR%win32\realpath.c -O2
 if errorlevel 1 goto :fail
 gcc -c -o dlfcn.o %DIR%win32\dlfcn.c -O2
 if errorlevel 1 goto :fail
-g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o dlfcn.o ^
+gcc -c -o linenoise.o %DIR%external\linenoise-ng\src\linenoise.cpp -O2 ^
+    -I%DIR%external\linenoise-ng\include -std=gnu++11 -fno-rtti
+if errorlevel 1 goto :fail
+gcc -c -o ConvertUTF.o %DIR%external\linenoise-ng\src\ConvertUTF.cpp -O2 ^
+    -I%DIR%external\linenoise-ng\include -std=gnu++11 -fno-rtti
+if errorlevel 1 goto :fail
+gcc -c -o wcwidth.o %DIR%external\linenoise-ng\src\wcwidth.cpp -O2 ^
+    -I%DIR%external\linenoise-ng\include -std=gnu++11 -fno-rtti
+if errorlevel 1 goto :fail
+g++ -o bangra.exe %DIR%bangra.cpp mman.o realpath.o dlfcn.o linenoise.o ^
+    ConvertUTF.o wcwidth.o ^
     -I%DIR%win32 ^
     -I%MINGWPATH%/lib/libffi-3.2.1/include -I%MINGWPATH%/include ^
     -Wno-vla -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL ^
