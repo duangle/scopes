@@ -248,24 +248,26 @@ do
             x : 1
             y : 2
             z : 3
-    let kv =
-        next-key T none
-    loop (kv)
-        if (not (none? kv))
-            print kv
-            repeat
-                next-key T (kv @ 0)
+    for k v in T
+        print k "->"
+            if ((typeof v) < tuple)
+                external (splice v)
+            else
+                v
+        repeat;
 
     print ">"
-        string T.bangra_interpreter_dir
+        string
+            external (splice T.bangra_interpreter_dir)
     print ">>"
-        string T.bangra_interpreter_path
+        string
+            external (splice T.bangra_interpreter_path)
     assert
         == "test"
             string
                 rawstring "test"
     print
-        T.print_number 302
+        (external (splice T.print_number)) 302
 
 assert
     2 * 2 + 1 == 5

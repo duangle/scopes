@@ -794,6 +794,8 @@ namespace Types {
     static const Type *PFrame;
     static const Type *PClosure;
 
+    static const Type *PVoid;
+
     // tuple list table
     static const Type *ListTableTuple;
 
@@ -3235,7 +3237,10 @@ struct FFI {
                 :const_cast<void *>(args[i].ptr);
         }
 
-        ffi_call(&cif, FFI_FN(extract_ptr<void>(func)), rvalue, avalues);
+        auto funcptr = extract_ptr<void>(func);
+        if (!funcptr)
+            error("attempting to call null pointer");
+        ffi_call(&cif, FFI_FN(funcptr), rvalue, avalues);
 
         return result;
     }
@@ -4846,6 +4851,8 @@ namespace Types {
         tmp->apply_type = apply_type_call<_rawstring_apply_type>;
         Rawstring = tmp;
 
+        PVoid = Pointer(Void);
+
         ListTableTuple = Tuple({PList, PTable});
     }
 
@@ -4857,16 +4864,7 @@ static void initConstants() {}
 // C module utility functions
 //------------------------------------------------------------------------------
 
-static void *open_c_module(const char *name) {
-    // todo: windows
-    //return dlopen(name, RTLD_NOW | RTLD_GLOBAL);
-    return dlopen(name, RTLD_LAZY);
-}
-
-static void *get_c_symbol(void *handle, const char *name) {
-    // todo: windows
-    return dlsym(handle, name);
-}
+static void *global_c_namespace = nullptr;
 
 //------------------------------------------------------------------------------
 // C BRIDGE (CLANG)
@@ -5236,14 +5234,9 @@ public:
 
     void exportExternal(const std::string &name, const Type *type,
         const Anchor &anchor) {
-        set_key(*dest, get_symbol(name),
-            wrap(type, get_c_symbol(NULL, name.c_str())));
-    }
-
-    void exportExternalPtr(const std::string &name, const Type *type,
-        const Anchor &anchor) {
-        set_key(*dest, get_symbol(name),
-            wrap_ptr(type, get_c_symbol(NULL, name.c_str())));
+        auto sym = get_symbol(name);
+        set_key(*dest, sym,
+            wrap({wrap_symbol(sym), wrap(type)}));
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
@@ -5323,7 +5316,7 @@ public:
 
         Anchor anchor = anchorFromLocation(f->getSourceRange().getBegin());
 
-        exportExternalPtr(FuncName.c_str(), Types::Pointer(functype), anchor);
+        exportExternal(FuncName.c_str(), functype, anchor);
 
         return true;
     }
@@ -5843,7 +5836,7 @@ static Any builtin_external(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 2);
     auto sym = extract_symbol(args[0]);
     auto type = extract_type(args[1]);
-    void *ptr = get_c_symbol(NULL, get_symbol_name(sym).c_str());
+    void *ptr = dlsym(global_c_namespace, get_symbol_name(sym).c_str());
     if (!ptr) return const_none;
     if (is_cfunction_type(type)) {
         return wrap_ptr(Types::Pointer(type), ptr);
@@ -6626,6 +6619,11 @@ static void initGlobals () {
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_hash>(env, "hash");
 
+    //setBuiltin<builtin_dlopen>(env, "dlopen");
+    //setBuiltin<builtin_dlclose>(env, "dlclose");
+    //setBuiltin<builtin_dlerror>(env, "dlerror");
+    //setBuiltin<builtin_dlsym>(env, "dlsym");
+
     setBuiltin<builtin_bitcast>(env, "bitcast");
     setBuiltin<builtin_element_type>(env, "element-type");
 
@@ -6682,6 +6680,7 @@ static void initGlobals () {
 
 static void init() {
     bangra::support_ansi = isatty(fileno(stdout));
+    bangra::global_c_namespace = dlopen(NULL, RTLD_LAZY);
 
     initSymbols();
 
