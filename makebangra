@@ -16,6 +16,7 @@ else
     PATH=$DIR/../../llvm/build/bin:$PATH
 fi
 clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
+&& clang -c -o $DIR/linenoise.o $DIR/external/linenoise/linenoise.c \
 && clang++ \
     -o $DIR/bangra $DIR/bangra.cpp \
     -pedantic \
@@ -34,6 +35,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     `llvm-config --cxxflags` \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
+    $DIR/linenoise.o \
     `llvm-config --libs engine passes option objcarcopts coverage support` \
     -Wl,--no-whole-archive \
     -O0 \

@@ -67,6 +67,7 @@ int print_number(int value);
 #include <sys/mman.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include "external/linenoise/linenoise.h"
 #endif
 #include <stdint.h>
 #include <assert.h>
@@ -92,8 +93,8 @@ int print_number(int value);
 #include <ffi.h>
 
 #include <llvm-c/Core.h>
-/*
 #include <llvm-c/ExecutionEngine.h>
+/*
 #include <llvm-c/Target.h>
 #include <llvm-c/Analysis.h>
 #include <llvm-c/BitWriter.h>
@@ -312,6 +313,11 @@ static size_t align(size_t offset, size_t align) {
 bool endswith(const std::string &str, const std::string &suffix) {
     return str.size() >= suffix.size() &&
            str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+// return a resident copy
+static char *resident_c_str(const std::string &path) {
+    return strdup(path.c_str());
 }
 
 //------------------------------------------------------------------------------
@@ -5235,8 +5241,8 @@ public:
     void exportExternal(const std::string &name, const Type *type,
         const Anchor &anchor) {
         auto sym = get_symbol(name);
-        set_key(*dest, sym,
-            wrap({wrap_symbol(sym), wrap(type)}));
+        Any args[2] = {wrap_symbol(sym), wrap(type)};
+        set_key(*dest, sym, wrap(args, 2));
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
@@ -5362,6 +5368,25 @@ public:
     }
 };
 
+static LLVMExecutionEngineRef ee = nullptr;
+
+static void initCCompiler() {
+    LLVMEnablePrettyStackTrace();
+    LLVMLinkInMCJIT();
+    //LLVMLinkInInterpreter();
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    LLVMInitializeNativeDisassembler();
+
+    char *errormsg = nullptr;
+    if (LLVMCreateJITCompilerForModule(&ee,
+        LLVMModuleCreateWithName("main"), 0, &errormsg)) {
+        fprintf(stderr, "error: %s\n", errormsg);
+        exit(1);
+    }
+}
+
 static Table *importCModule (
     const std::string &path, const std::vector<std::string> &args,
     const char *buffer = nullptr) {
@@ -5405,6 +5430,8 @@ static Table *importCModule (
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
+        //llvm_modules.push_back(M);
+        LLVMAddModule(ee, M);
         return result;
     } else {
         error("compilation failed");
@@ -5827,7 +5854,7 @@ static Any builtin_import_c(const Any *args, size_t argcount) {
     }
     const char *buffer = nullptr;
     if (argcount == 3) {
-        buffer = strdup(extract_string(args[2]).c_str());
+        buffer = resident_c_str(extract_string(args[2]));
     }
     return wrap_ptr(Types::PTable, bangra::importCModule(path, cargs, buffer));
 }
@@ -5836,7 +5863,14 @@ static Any builtin_external(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 2);
     auto sym = extract_symbol(args[0]);
     auto type = extract_type(args[1]);
-    void *ptr = dlsym(global_c_namespace, get_symbol_name(sym).c_str());
+
+    auto name = get_symbol_name(sym).c_str();
+
+    void *ptr = nullptr;
+    ptr = reinterpret_cast<void *>(LLVMGetGlobalValueAddress(ee, name));
+    if (!ptr) {
+        ptr = dlsym(global_c_namespace, name);
+    }
     if (!ptr) return const_none;
     if (is_cfunction_type(type)) {
         return wrap_ptr(Types::Pointer(type), ptr);
@@ -6526,6 +6560,7 @@ static Any compile (const Any &expr, const Any &dest) {
 //------------------------------------------------------------------------------
 
 static Any builtin_loadlist(const Any *args, size_t argcount);
+static Any builtin_parselist(const Any *args, size_t argcount);
 
 static Any builtin_eval(const Any *args, size_t argcount);
 
@@ -6616,6 +6651,7 @@ static void initGlobals () {
     setBuiltin<builtin_countof>(env, "countof");
     setBuiltin<builtin_sizeof>(env, "sizeof");
     setBuiltin<builtin_loadlist>(env, "list-load");
+    setBuiltin<builtin_parselist>(env, "list-parse");
     setBuiltin<builtin_eval>(env, "eval");
     setBuiltin<builtin_hash>(env, "hash");
 
@@ -6682,18 +6718,12 @@ static void init() {
     bangra::support_ansi = isatty(fileno(stdout));
     bangra::global_c_namespace = dlopen(NULL, RTLD_LAZY);
 
+    initCCompiler();
+
     initSymbols();
 
     Types::initTypes();
     initConstants();
-
-    //LLVMEnablePrettyStackTrace();
-    //LLVMLinkInMCJIT();
-    ////LLVMLinkInInterpreter();
-    //LLVMInitializeNativeTarget();
-    //LLVMInitializeNativeAsmParser();
-    //LLVMInitializeNativeAsmPrinter();
-    //LLVMInitializeNativeDisassembler();
 
     ffi = new FFI();
     builder = new ILBuilder();
@@ -6733,11 +6763,6 @@ static Any compileFlow (const Table *env, const Any &expr,
     return wrap(mainfunc);
 }
 
-// return a resident copy
-static const char *resident_c_str(const std::string &path) {
-    return strdup(path.c_str());
-}
-
 // path must be resident
 static Any loadFile(const char *path) {
     auto file = MappedFile::open(path);
@@ -6754,6 +6779,15 @@ static Any builtin_loadlist(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     auto path = extract_string(args[0]);
     return loadFile(resident_c_str(path));
+}
+
+static Any builtin_parselist(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    auto text = extract_string(args[0]);
+    bangra::Parser parser;
+    return parser.parseMemory(
+        text.c_str(), text.c_str() + text.size(),
+        "<string>");
 }
 
 static Any builtin_eval(const Any *args, size_t argcount) {
@@ -6943,7 +6977,7 @@ int bangra_main(int argc, char ** argv) {
             if (argv[0]) {
                 std::string loader = bangra::GetExecutablePath(argv[0]);
                 // string must be kept resident
-                bangra_interpreter_path = strdup(loader.c_str());
+                bangra_interpreter_path = bangra::resident_c_str(loader);
 
                 expr = bangra::parseLoader(bangra_interpreter_path);
                 cpath = "<loader>";

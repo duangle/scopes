@@ -36,7 +36,7 @@ local function bangra_symbols()
         "external branch print repr tupleof import-c eval structof typeof"
             .. " macro block-macro block-scope-macro cons expand empty?"
             .. " dump list-head? countof tableof slice none? list-atom?"
-            .. " list-load load require cstr exit hash min max"
+            .. " list-load list-parse load require cstr exit hash min max"
             .. " va-arg va-countof range zip enumerate bitcast element-type"
             .. " qualify disqualify iter iterator? list? symbol?"
             .. " get-exception-handler xpcall error sizeof"

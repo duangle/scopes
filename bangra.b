@@ -207,11 +207,13 @@ syntax-extend stage-2 (_ scope)
     let list-head? =
         continuation list-head? (_ expr name)
             ? (list? expr)
-                do
-                    let head = (@ expr 0)
-                    ? (symbol? head)
-                        == head name
-                        false
+                ? (> (countof expr) 0)
+                    do
+                        let head = (@ expr 0)
+                        ? (symbol? head)
+                            == head name
+                            false
+                    false
                 false
     .. scope
         tableof
