@@ -1266,10 +1266,10 @@ syntax-extend stage-5 (_ scope)
             : function # (function [name] (param ...) body ...) with (function ...) ...
                 block-macro
                     do
-                        function parse-funcdef (topexpr k)
+                        function parse-funcdef (topexpr k head)
                             let expr =
                                 @ topexpr 0
-                            assert (list-head? expr (quote function))
+                            assert (list-head? expr head)
                                 "function definition expected after 'with'"
                             let decl =
                                 @ (@ topexpr 0) 1
@@ -1321,7 +1321,7 @@ syntax-extend stage-5 (_ scope)
                                     rest
 
                         function (topexpr)
-                            parse-funcdef topexpr 0
+                            parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
 
 syntax-extend stage-6 (_ scope)
     function repeat-string (n c)
