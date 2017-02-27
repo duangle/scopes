@@ -1358,7 +1358,6 @@ syntax-extend stage-6 (_ scope)
                     .. (globals)
                         tableof
                             reset : reset-state
-            set-key! state (frame : none)
             set-key! state (counter : 1)
         reset-state;
         fn capture-scope (scope)
@@ -1400,26 +1399,11 @@ syntax-extend stage-6 (_ scope)
                             let expr = (list-parse cmdlist)
                             if (none? expr)
                                 error "parsing failed"
-                            let f = (eval (.. expr expression-suffix) state.scope)
-                            fn wrapper ()
-                                # by removing closure context from capture-frame,
-                                # we run in the frame of the caller, which we can
-                                # then capture to run the next expression.
-                                # because "return" is resolved to the value it had
-                                # in the last frame, we need to save it in the
-                                # state table, and retrieve it from there.
-                                set-key! state (: return)
-                                let capture-frame =
-                                    fn/cc (_ x)
-                                        # create bogus function from which we can
-                                        # capture the frame.
-                                        let _c = (fn () none)
-                                        state.return (tupleof x _c.frame)
-                                cc/call capture-frame.entry
-                                    if (none? state.frame) f
-                                    else (closure f state.frame)
-                            let result newframe = (wrapper)
-                            set-key! state (frame : newframe)
+                            let f =
+                                eval
+                                    .. (list (cons do expr)) expression-suffix
+                                    state.scope
+                            let result = (f)
                             if ((typeof result) != void)
                                 print (.. idstr "= " (repr result))
                                 set-key! state.scope id result
