@@ -1324,6 +1324,12 @@ syntax-extend stage-5 (_ scope)
                             parse-funcdef topexpr 0
 
 syntax-extend stage-6 (_ scope)
+    function dots (n)
+        for i in (range n)
+            with (s = "")
+            repeat (s .. ".")
+        else s
+
     function read-eval-print-loop ()
         print "Bangra"
             .. (string (@ bangra-version 0)) "." (string (@ bangra-version 1))
@@ -1351,45 +1357,55 @@ syntax-extend stage-6 (_ scope)
                     syntax-extend (_ scope)
                         (unquote capture-scope) scope
                         scope
-        loop ()
+        loop
+            with
+                cmdlist = ""
             let idstr = (.. "$" (string state.counter))
             let id = (symbol idstr)
-            let cmd = (prompt (.. idstr "> "))
-            if ((typeof cmd) != void)
-                let cmdstr = (.. (string cmd) "\n")
-                try
+            let promptstr = (.. idstr ">")
+            let cmd =
+                prompt (.. (? (empty? cmdlist) promptstr (dots (countof promptstr))) " ")
 
-                    let expr = (list-parse cmdstr)
-                    if (none? expr)
-                        error "parsing failed"
-                    let f = (eval (.. expr expression-suffix) state.scope)
-                    function wrapper ()
-                        # by removing closure context from capture-frame,
-                        # we run in the frame of the caller, which we can
-                        # then capture to run the next expression.
-                        # because "return" is resolved to the value it had
-                        # in the last frame, we need to save it in the
-                        # state table, and retrieve it from there.
-                        set-key! state (: return)
-                        let capture-frame =
-                            continuation (_ x)
-                                # create bogus function from which we can
-                                # capture the frame.
-                                let _c = (function () none)
-                                state.return (tupleof x _c.frame)
-                        contcall capture-frame.entry
-                            if (none? state.frame) f
-                            else (closure f state.frame)
-                    let result newframe = (wrapper)
-                    set-key! state (frame : newframe)
-                    if ((typeof result) != void)
-                        print (.. idstr "= " (repr result))
-                        set-key! state.scope id result
-                        set-key! state
-                            counter : (state.counter + 1)
-                except (e)
-                    print "error:" e
-                repeat;
+            if ((typeof cmd) != void)
+                let cmdlist = (.. cmdlist cmd "\n")
+                let terminated? =
+                    (empty? cmd) or ((slice cmd -1) == ";")
+                repeat
+                    if terminated?
+                        try
+                            let expr = (list-parse cmdlist)
+                            if (none? expr)
+                                error "parsing failed"
+                            let f = (eval (.. expr expression-suffix) state.scope)
+                            function wrapper ()
+                                # by removing closure context from capture-frame,
+                                # we run in the frame of the caller, which we can
+                                # then capture to run the next expression.
+                                # because "return" is resolved to the value it had
+                                # in the last frame, we need to save it in the
+                                # state table, and retrieve it from there.
+                                set-key! state (: return)
+                                let capture-frame =
+                                    continuation (_ x)
+                                        # create bogus function from which we can
+                                        # capture the frame.
+                                        let _c = (function () none)
+                                        state.return (tupleof x _c.frame)
+                                contcall capture-frame.entry
+                                    if (none? state.frame) f
+                                    else (closure f state.frame)
+                            let result newframe = (wrapper)
+                            set-key! state (frame : newframe)
+                            if ((typeof result) != void)
+                                print (.. idstr "= " (repr result))
+                                set-key! state.scope id result
+                                set-key! state
+                                    counter : (state.counter + 1)
+                        except (e)
+                            print "error:" e
+                        ""
+                    else
+                        cmdlist
     set-key! scope
         : read-eval-print-loop
     scope

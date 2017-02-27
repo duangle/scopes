@@ -2706,6 +2706,14 @@ int InputBuffer::getInputLine(PromptBase& pi) {
         killRing.lastAction = KillRing::actionKill;
         break;
 
+      case ctrlChar('I'):
+        for (int i = 0; i < 4; ++i) {
+            buf32[len++] = ' ';
+            pos++;
+        }
+        refreshLine(pi);
+        break;
+
       case ctrlChar('J'):  // ctrl-J/linefeed/newline, accept line
       case ctrlChar('M'):  // ctrl-M/return/enter
         killRing.lastAction = KillRing::actionOther;

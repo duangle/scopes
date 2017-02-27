@@ -16,7 +16,12 @@ else
     PATH=$DIR/../../llvm/build/bin:$PATH
 fi
 clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
-&& clang -c -o $DIR/linenoise.o $DIR/external/linenoise/linenoise.c \
+&& clang -c -o $DIR/linenoise.o $DIR/external/linenoise-ng/src/linenoise.cpp -O2 \
+    -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
+&& clang -c -o $DIR/ConvertUTF.o $DIR/external/linenoise-ng/src/ConvertUTF.cpp -O2 \
+    -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
+&& clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
+    -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && clang++ \
     -o $DIR/bangra $DIR/bangra.cpp \
     -pedantic \
@@ -35,7 +40,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     `llvm-config --cxxflags` \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
-    $DIR/linenoise.o \
+    $DIR/linenoise.o $DIR/ConvertUTF.o $DIR/wcwidth.o \
     `llvm-config --libs engine passes option objcarcopts coverage support` \
     -Wl,--no-whole-archive \
     -O0 \

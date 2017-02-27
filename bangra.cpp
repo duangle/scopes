@@ -68,7 +68,8 @@ int print_number(int value);
 #include <sys/mman.h>
 #include <unistd.h>
 #include <dlfcn.h>
-#include "external/linenoise/linenoise.h"
+//#include "external/linenoise/linenoise.h"
+#include "external/linenoise-ng/include/linenoise.h"
 #endif
 #include <stdint.h>
 #include <assert.h>
@@ -6268,7 +6269,6 @@ process:
         result = expr;
         topit = topit->next;
     }
-done:
     return { List::create(result, topit), env };
 }
 
