@@ -4,16 +4,16 @@
 
 # generator functions can be composed to flatten the iteration
 
-function list-generator (l)
-    function (yield)
+fn list-generator (l)
+    fn (yield)
         for x in l
             # return one element from this list
             yield x
             # and repeat until depleted
             repeat;
 
-function dog-generator (greeting words tail)
-    function (yield)
+fn dog-generator (greeting words tail)
+    fn (yield)
         # yield the first value conditionally
         if greeting
             yield "hello?!"
@@ -39,18 +39,18 @@ else
     print "done." i
     assert (i == 6)
 
-function bleh (args... rest)
+fn bleh (args... rest)
     print rest
         list args...
 
 bleh 1 2 3
 
 call
-    continuation (_ x)
-        contcall _
-            function (x y)
+    fn/cc (_ x)
+        cc/call _
+            fn (x y)
                 print x y
-                contcall none _
+                cc/call none _
             x
     "hi"
 
@@ -61,16 +61,16 @@ print
     quote
         (1 2; 3 4;)
 
-function ilist (alist)
-    function (xf)
-        function step (xf l)
+fn ilist (alist)
+    fn (xf)
+        fn step (xf l)
             if (not (empty? l))
                 let xff = (xf (@ l 0))
-                function ()
+                fn ()
                     step xff (slice l 1)
             else
                 xf;
-        function ()
+        fn ()
             step xf alist
 
 do
@@ -85,7 +85,7 @@ do
         print ">" k v
         repeat;
 
-    function atnext (l)
+    fn atnext (l)
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
 
@@ -143,10 +143,10 @@ do
         ==
             quote ((9 2) (7 1) (5 0))
             zipped-lists
-    function atnext (l)
+    fn atnext (l)
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
-    function iter-list (l)
+    fn iter-list (l)
         tupleof atnext l
 
     for i c in (enumerate "the quick brown fox")

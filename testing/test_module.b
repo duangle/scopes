@@ -8,6 +8,6 @@ assert
 
 tableof
     compute :
-        function (x)
+        fn (x)
             injected-var + x
 

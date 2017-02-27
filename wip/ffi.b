@@ -4,10 +4,10 @@ let NULL =
     bitcast void*
         uint64 0
 
-function null? (x)
+fn null? (x)
     (bitcast uint64 x) == 0
 
-function make-lib (cdefs)
+fn make-lib (cdefs)
     let lib = (tableof)
     for k v in cdefs
         set-key! lib k

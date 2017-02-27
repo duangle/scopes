@@ -666,7 +666,7 @@ static void initSymbols() {
     map_symbol(SYM_Parent, "#parent");
     map_symbol(SYM_VarArgs, "...");
     map_symbol(SYM_Escape, "escape");
-    map_symbol(SYM_ContinuationForm, "form:continuation");
+    map_symbol(SYM_ContinuationForm, "form:fn/cc");
     map_symbol(SYM_QuoteForm, "form:quote");
     map_symbol(SYM_ListWC, "#list");
     map_symbol(SYM_SymbolWC, "#symbol");
@@ -6611,12 +6611,12 @@ static void initGlobals () {
     //setLocalString(env, "globals", wrap(env));
 
     setBuiltin<compile_call>(env, "call");
-    setBuiltin<compile_contcall>(env, "contcall");
-    setBuiltin<compile_continuation>(env, "form:continuation");
+    setBuiltin<compile_contcall>(env, "cc/call");
+    setBuiltin<compile_continuation>(env, "form:fn/cc");
     setBuiltin<compile_splice>(env, "splice");
     setBuiltin<compile_do>(env, "do");
 
-    setBuiltinMacro< wrap_expand_call<expand_continuation> >(env, "continuation");
+    setBuiltinMacro< wrap_expand_call<expand_continuation> >(env, "fn/cc");
     setBuiltinMacro< wrap_expand_call<expand_syntax_extend> >(env, "syntax-extend");
 
     setBuiltin< builtin_escape >(env, "escape");

@@ -1,6 +1,6 @@
 # specializer: specializes and translates flow graph to LLVM
 
-function ANSI-color (num bright)
+fn ANSI-color (num bright)
     .. "\x1b["
         string num
         ? bright ";1m" "m"
@@ -37,11 +37,11 @@ let
 
     ANSI-wrapper =
         ? support-ANSI?
-            function (code)
-                function (content)
+            fn (code)
+                fn (content)
                     .. code content ANSI_RESET
-            function (code)
-                function (content) content
+            fn (code)
+                fn (content) content
 
     style-string        = (ANSI-wrapper ANSI_COLOR_XMAGENTA)
     style-number        = (ANSI-wrapper ANSI_COLOR_XGREEN)
@@ -56,7 +56,7 @@ let
     LAMBDA_CHAR =
         style-keyword "λ"
 
-function flow-label (aflow)
+fn flow-label (aflow)
     let name =
         string (flow-name aflow)
     .. LAMBDA_CHAR
@@ -69,25 +69,25 @@ function flow-label (aflow)
                         flow-name aflow
                     "\""
 
-function closure-label (aclosure)
+fn closure-label (aclosure)
     ..
         style-comment "<"
         flow-label aclosure.entry
         style-comment ">"
 
-function iter-f (f arange args...)
-    function (yield)
+fn iter-f (f arange args...)
+    fn (yield)
         for i in arange
             yield
                 tupleof i
                     f args... i
             repeat;
 
-function flow-iter-eval-arguments (aflow aframe)
+fn flow-iter-eval-arguments (aflow aframe)
     let acount =
         flow-argument-count aflow
     iter-f
-        function (aflow index)
+        fn (aflow index)
             let arg =
                 flow-argument aflow index
             ? ((typeof arg) == parameter)
@@ -97,14 +97,14 @@ function flow-iter-eval-arguments (aflow aframe)
         range acount
         aflow
 
-function flow-iter-arguments (aflow aframe)
+fn flow-iter-arguments (aflow aframe)
     let acount =
         flow-argument-count aflow
     iter-f flow-argument
         range acount
         aflow
 
-function param-label (aparam)
+fn param-label (aparam)
     let name =
         string aparam.name
     ..
@@ -114,7 +114,7 @@ function param-label (aparam)
             style-instruction
                 string aparam.name
 
-function flow-decl-label (aflow aframe)
+fn flow-decl-label (aflow aframe)
     ..
         do
             let
@@ -145,7 +145,7 @@ function flow-decl-label (aflow aframe)
                         style-operator "):"
         "\n    "
         do
-            function is (a b)
+            fn is (a b)
                 and
                     (typeof a) == (typeof b)
                     a == b
@@ -183,10 +183,10 @@ function flow-decl-label (aflow aframe)
                 str
         style-operator "]"
 
-function dump-function (afunc)
+fn dump-function (afunc)
     let visited = (tableof)
-    function dump-closure (aclosure)
-        function dump-flow (aflow aframe)
+    fn dump-closure (aclosure)
+        fn dump-flow (aflow aframe)
             if (none? (visited @ aflow))
                 print
                     flow-decl-label aflow aframe
@@ -205,10 +205,10 @@ function dump-function (afunc)
 
 #### test #####
 
-function pow2 (x)
+fn pow2 (x)
     * x x
 
-function pow (x n)
+fn pow (x n)
     if (n == 0) 1
     elseif ((n % 2) == 0) (pow2 (pow x (n // 2)))
     else (x * (pow x (n - 1)))

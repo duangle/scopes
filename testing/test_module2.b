@@ -15,7 +15,7 @@ set-key! bangra
 
 tableof
     compute :
-        function (x y)
+        fn (x y)
             x + y
 
 

@@ -1,80 +1,80 @@
-function filter (pred)
-    function init (nextf)
-        function process (nextf values)
+fn filter (pred)
+    fn init (nextf)
+        fn process (nextf values)
             let arity = (countof values)
             if (arity == 0) # init
                 let nextff = (nextf)
-                function (value...)
+                fn (value...)
                     process nextff (tupleof value...)
             elseif (arity == 2) # step: (result input)
                 let result input = values
                 if (pred input)
                     let nextff = (nextf result input)
-                    function (value...)
+                    fn (value...)
                         process nextff (tupleof value...)
                 else
-                    function (value...)
+                    fn (value...)
                         process nextf (tupleof value...)
             elseif (arity == 1) # complete: (result)
                 nextf (splice values)
-        function first (value...)
+        fn first (value...)
             process nextf (tupleof value...)
 
-function map (mapf)
-    function init (nextf)
-        function process (nextf values)
+fn map (mapf)
+    fn init (nextf)
+        fn process (nextf values)
             let arity = (countof values)
             if (arity == 0) # init
                 let nextff = (nextf)
-                function (value...)
+                fn (value...)
                     process nextff (tupleof value...)
             elseif (arity == 2) # step: (result input)
                 let result input = values
                 let nextff = (nextf result (mapf input))
-                function (value...)
+                fn (value...)
                     process nextff (tupleof value...)
             elseif (arity == 1) # complete: (result)
                 nextf (splice values)
-        function first (value...)
+        fn first (value...)
             process nextf (tupleof value...)
 
-function limit (n)
-    function init (nextf)
-        function process (nextf i values)
+fn limit (n)
+    fn init (nextf)
+        fn process (nextf i values)
             let arity = (countof values)
             if (arity == 0) # init
                 let nextff = (nextf)
-                function (value...)
+                fn (value...)
                     process nextff 0 (tupleof value...)
             elseif (arity == 2) # step: (result input)
                 let result input = values
                 if (i < n)
                     let nextff = (nextf result input)
-                    function (value...)
+                    fn (value...)
                         process nextff (i + 1) (tupleof value...)
                 else
-                    function (value...)
+                    fn (value...)
                         process nextf i (tupleof value...)
             elseif (arity == 1) # complete: (result)
                 nextf (splice values)
-        function first (value...)
+        fn first (value...)
             process nextf 0 (tupleof value...)
 
-function batchfold (xf f init l)
-    function finalize (state values)
+fn batchfold (xf f init l)
+    fn finalize (state values)
         let arity = (countof values)
         if (arity == 0) # init
-            function (values...)
+            fn (values...)
                 finalize init (tupleof values...)
         elseif (arity == 2) # step: (result input)
             let result input = values
             let newresult =
                 (f result input)
-            function (values...)
+            fn (values...)
                 finalize newresult (tupleof values...)
         elseif (arity == 1) # complete: (result)
             state
-    function ret-first (values...)
+    fn ret-first (values...)
         finalize init (tupleof values...)
     let
         init-process =
@@ -94,11 +94,11 @@ function batchfold (xf f init l)
                 slice l 1
         else state
 
-function compose (funcs...)
+fn compose (funcs...)
     let funcs =
         list funcs...
-    function (values...)
-        function process (funcs values)
+    fn (values...)
+        fn process (funcs values)
             let next-funcs =
                 slice funcs 1
             if (empty? next-funcs)
@@ -112,17 +112,17 @@ function compose (funcs...)
 let pipeline =
     compose
         filter
-            function (x)
+            fn (x)
                 (x % 2) == 0
         map
-            function (x)
+            fn (x)
                 x + 1
         limit 3
 
 ::@ print
 batchfold
     pipeline
-    function (result input)
+    fn (result input)
         print ">" input
         cons input result
     (list)

@@ -6,9 +6,9 @@ syntax-extend stage-0 (_ scope)
     set-key! scope
         symbol "quote"
         block-scope-macro
-            continuation quote (_ expr scope)
+            fn/cc quote (_ expr scope)
                 call
-                    continuation (_ args)
+                    fn/cc (_ args)
                         tupleof
                             cons
                                 # stop compiler expansion
@@ -19,9 +19,9 @@ syntax-extend stage-0 (_ scope)
                                         # if multiple arguments
                                         branch
                                             == (slice args 1) (list)
-                                            continuation ()
+                                            fn/cc ()
                                                 @ args 0
-                                            continuation ()
+                                            fn/cc ()
                                                 args
                                 slice expr 1
                             scope
@@ -29,15 +29,15 @@ syntax-extend stage-0 (_ scope)
     set-key! scope
         symbol "set!"
         block-scope-macro
-            continuation set! (_ expr scope)
+            fn/cc set! (_ expr scope)
                 call
-                    continuation (_ name)
+                    fn/cc (_ name)
                         call
-                            continuation (_ param)
+                            fn/cc (_ param)
                                 branch
                                     == (typeof param) parameter
-                                    continuation () none
-                                    continuation ()
+                                    fn/cc () none
+                                    fn/cc ()
                                         error "set! requires parameter argument"
                                 tupleof
                                     cons
@@ -61,27 +61,27 @@ syntax-extend stage-1 (_ scope)
         tableof
             tupleof
                 quote symbol?
-                continuation symbol? (_ x)
+                fn/cc symbol? (_ x)
                     == (typeof x) symbol
             tupleof
                 quote list?
-                continuation list? (_ x)
+                fn/cc list? (_ x)
                     == (typeof x) list
             tupleof
                 quote none?
-                continuation none? (_ x)
+                fn/cc none? (_ x)
                     == x none
             tupleof
                 quote empty?
-                continuation empty? (_ x)
+                fn/cc empty? (_ x)
                     == (countof x) 0
             tupleof
                 quote key?
-                continuation key? (_ x y)
+                fn/cc key? (_ x y)
                     != (@ x y) none
             tupleof
                 quote load
-                continuation load (_ path)
+                fn/cc load (_ path)
                     eval
                         list-load path
                         globals;
@@ -94,9 +94,9 @@ syntax-extend stage-1 (_ scope)
                     tupleof;
             tupleof
                 quote macro
-                continuation macro (_ f)
+                fn/cc macro (_ f)
                     block-scope-macro
-                        continuation (_ expr scope)
+                        fn/cc (_ expr scope)
                             tupleof
                                 cons
                                     f (@ expr 0) scope
@@ -104,19 +104,19 @@ syntax-extend stage-1 (_ scope)
                                 scope
             tupleof
                 quote block-macro
-                continuation macro (_ f)
+                fn/cc macro (_ f)
                     block-scope-macro
-                        continuation (_ expr scope)
+                        fn/cc (_ expr scope)
                             tupleof
                                 f expr scope
                                 scope
             tupleof
                 quote dump-syntax
                 block-scope-macro
-                    continuation dump-syntax (_ expr scope)
+                    fn/cc dump-syntax (_ expr scope)
                         tupleof
                             call
-                                continuation (_ e)
+                                fn/cc (_ e)
                                     dump
                                         @ (@ e 0) 0
                                     cons
@@ -135,23 +135,23 @@ syntax-extend stage-1 (_ scope)
                 # a lofi version of let so we get some sugar early
                 quote let
                 block-scope-macro
-                    continuation let (_ expr scope)
+                    fn/cc let (_ expr scope)
                         branch
                             == (typeof (@ (@ expr 0) 2)) symbol
-                            continuation () none
-                            continuation ()
+                            fn/cc () none
+                            fn/cc ()
                                 error "syntax: let <var> = <expr>"
                         branch
                             == (@ (@ expr 0) 2) (quote =)
-                            continuation () none
-                            continuation ()
+                            fn/cc () none
+                            fn/cc ()
                                 error "syntax: let <var> = <expr>"
                         tupleof
                             call
-                                continuation (_ param-name rest)
+                                fn/cc (_ param-name rest)
                                     list
                                         cons
-                                            cons continuation
+                                            cons fn/cc
                                                 cons
                                                     list
                                                         parameter (quote _)
@@ -164,21 +164,21 @@ syntax-extend stage-1 (_ scope)
             tupleof
                 quote ?
                 block-scope-macro
-                    continuation ? (_ expr scope)
+                    fn/cc ? (_ expr scope)
                         tupleof
                             cons
                                 list branch
                                     @ (@ expr 0) 1
-                                    list continuation (list)
+                                    list fn/cc (list)
                                         @ (@ expr 0) 2
-                                    list continuation (list)
+                                    list fn/cc (list)
                                         @ (@ expr 0) 3
                                 slice expr 1
                             scope
             tupleof
                 quote :
                 block-scope-macro
-                    continuation : (_ expr scope)
+                    fn/cc : (_ expr scope)
                         tupleof
                             cons
                                 cons tupleof
@@ -188,24 +188,24 @@ syntax-extend stage-1 (_ scope)
                                                 typeof
                                                     @ (@ expr 0) 1
                                                 symbol
-                                            continuation ()
+                                            fn/cc ()
                                                 list quote
                                                     @ (@ expr 0) 1
-                                            continuation ()
+                                            fn/cc ()
                                                 @ (@ expr 0) 1
                                         branch
                                             == (slice (@ expr 0) 2) (list)
-                                            continuation ()
+                                            fn/cc ()
                                                 list
                                                     @ (@ expr 0) 1
-                                            continuation ()
+                                            fn/cc ()
                                                 slice (@ expr 0) 2
                                 slice expr 1
                             scope
 
 syntax-extend stage-2 (_ scope)
     let list-head? =
-        continuation list-head? (_ expr name)
+        fn/cc list-head? (_ expr name)
             ? (list? expr)
                 ? (> (countof expr) 0)
                     do
@@ -246,13 +246,13 @@ syntax-extend stage-2 (_ scope)
 
             : list-head?
             : list-atom?
-                continuation list-atom? (_ x)
+                fn/cc list-atom? (_ x)
                     ? (list? x)
                         empty? x
                         true
             : assert # (assert bool-expr [error-message])
                 macro
-                    continuation assert (_ expr)
+                    fn/cc assert (_ expr)
                         list ? (@ expr 1) true
                             list error
                                 ? (empty? (slice expr 2))
@@ -260,7 +260,7 @@ syntax-extend stage-2 (_ scope)
                                     @ expr 2
             : ::@
                 block-macro
-                    continuation ::@ (_ expr)
+                    fn/cc ::@ (_ expr)
                         cons
                             ..
                                 slice (@ expr 0) 1
@@ -269,14 +269,14 @@ syntax-extend stage-2 (_ scope)
                             slice expr 2
             : ::*
                 block-macro
-                    continuation ::* (_ expr)
+                    fn/cc ::* (_ expr)
                         list
                             ..
                                 slice (@ expr 0) 1
                                 slice expr 1
             : .
                 macro
-                    continuation . (_ expr)
+                    fn/cc . (_ expr)
                         let key =
                             @ expr 2
                         ? (symbol? key)
@@ -286,9 +286,9 @@ syntax-extend stage-2 (_ scope)
                                 list quote key
                             error "symbol expected"
 
-            : function # (function [name] (param ...) body ...)
+            : fn # (fn [name] (param ...) body ...)
                 block-macro
-                    continuation function (_ topexpr)
+                    fn/cc fn (_ topexpr)
                         let expr =
                             @ topexpr 0
                         let decl =
@@ -296,7 +296,7 @@ syntax-extend stage-2 (_ scope)
                         let retparam =
                             quote return
                         let make-params-body =
-                            continuation (_ param-idx)
+                            fn/cc (_ param-idx)
                                 cons
                                     cons
                                         retparam
@@ -309,7 +309,7 @@ syntax-extend stage-2 (_ scope)
                                 list let decl (quote =) none
                                 cons
                                     list set! decl
-                                        cons continuation
+                                        cons fn/cc
                                             cons
                                                 @ expr 1
                                                 make-params-body 2
@@ -317,44 +317,44 @@ syntax-extend stage-2 (_ scope)
                                         list decl
                                         rest
                             cons
-                                cons continuation
+                                cons fn/cc
                                     make-params-body 1
                                 rest
             : and
                 macro
-                    continuation and (_ expr)
+                    fn/cc and (_ expr)
                         let tmp =
                             parameter
                                 quote tmp
                         list
-                            list continuation (list (parameter (quote _)) tmp)
+                            list fn/cc (list (parameter (quote _)) tmp)
                                 list branch tmp
-                                    list continuation (list)
+                                    list fn/cc (list)
                                         @ expr 2
-                                    list continuation (list) tmp
+                                    list fn/cc (list) tmp
                             @ expr 1
             : or
                 macro
-                    continuation or (_ expr)
+                    fn/cc or (_ expr)
                         let tmp =
                             parameter
                                 quote tmp
                         list
-                            list continuation (list (parameter (quote _)) tmp)
+                            list fn/cc (list (parameter (quote _)) tmp)
                                 list branch tmp
-                                    list continuation (list) tmp
-                                    list continuation (list)
+                                    list fn/cc (list) tmp
+                                    list fn/cc (list)
                                         @ expr 2
                             @ expr 1
             : loop # bootstrap loop, better version in stage 4
                 macro
-                    continuation loop (_ expr)
+                    fn/cc loop (_ expr)
                         let param-repeat =
                             quote repeat
                         list do
                             list let param-repeat (quote =) none
                             list set! param-repeat
-                                cons continuation
+                                cons fn/cc
                                     cons
                                         cons
                                             parameter (quote _)
@@ -366,18 +366,18 @@ syntax-extend stage-2 (_ scope)
                 do
                     let if-rec = none
                     set! if-rec
-                        continuation if (_ expr)
+                        fn/cc if (_ expr)
                             let cond =
                                 @ (@ expr 0) 1
                             let then-exprlist =
                                 slice (@ expr 0) 2
                             let make-branch =
-                                continuation (_ else-exprlist)
+                                fn/cc (_ else-exprlist)
                                     list branch
                                         cond
-                                        cons continuation
+                                        cons fn/cc
                                             cons (list) then-exprlist
-                                        cons continuation
+                                        cons fn/cc
                                             cons (list) else-exprlist
                             let rest-expr =
                                 slice expr 1
@@ -405,14 +405,14 @@ syntax-extend stage-2 (_ scope)
                                         slice expr 1
                     block-macro if-rec
             : syntax-infix-rules
-                continuation syntax-infix-rules (_ prec order name)
+                fn/cc syntax-infix-rules (_ prec order name)
                     structof
                         tupleof (quote prec) prec
                         tupleof (quote order) order
                         tupleof (quote name) name
             : syntax-infix-op
                 macro
-                    continuation syntax-infix-op (_ expr)
+                    fn/cc syntax-infix-op (_ expr)
                         list tupleof
                             list quote
                                 symbol
@@ -421,13 +421,13 @@ syntax-extend stage-2 (_ scope)
 
 syntax-extend stage-3 (_ scope)
 
-    function unwrap-single (expr)
+    fn unwrap-single (expr)
         # unwrap single item from list or prepend 'do' clause to list
         ? (empty? (slice expr 1))
             @ expr 0
             cons do expr
 
-    function fold (it init f)
+    fn fold (it init f)
         let next =
             @ it 0
         let st =
@@ -440,26 +440,26 @@ syntax-extend stage-3 (_ scope)
                     f out (@ st 0)
                     next (@ st 1)
 
-    function iter (s)
+    fn iter (s)
         let ls =
             countof s
         tupleof
-            function (i)
+            fn (i)
                 if (< i ls)
                     tupleof (@ s i) (+ i 1)
                 else none
             0
 
-    function iter-r (s)
+    fn iter-r (s)
         tupleof
-            function (i)
+            fn (i)
                 if (> i 0)
                     let k = (- i 1)
                     tupleof (@ s k) k
                 else none
             countof s
 
-    function get-ifx-op (scope op)
+    fn get-ifx-op (scope op)
         let key =
             symbol
                 .. "#ifx:" (string op)
@@ -467,14 +467,14 @@ syntax-extend stage-3 (_ scope)
             find-scope-symbol scope key
             none
 
-    function has-infix-ops (infix-table expr)
+    fn has-infix-ops (infix-table expr)
         # any expression whose second argument matches an infix operator
         # is treated as an infix expression.
         and
             not (empty? (slice expr 2))
             != (get-ifx-op infix-table (@ expr 1)) none
 
-    function infix-op (infix-table token prec pred)
+    fn infix-op (infix-table token prec pred)
         let op =
             get-ifx-op infix-table token
         if (none? op)
@@ -485,7 +485,7 @@ syntax-extend stage-3 (_ scope)
             op
         else none
 
-    function rtl-infix-op (infix-table token prec pred)
+    fn rtl-infix-op (infix-table token prec pred)
         let op =
             get-ifx-op infix-table token
         if (none? op)
@@ -499,7 +499,7 @@ syntax-extend stage-3 (_ scope)
             op
         else none
 
-    function parse-infix-expr (infix-table lhs state mprec)
+    fn parse-infix-expr (infix-table lhs state mprec)
         loop (lhs state)
             if (empty? state)
                 tupleof lhs state
@@ -551,15 +551,15 @@ syntax-extend stage-3 (_ scope)
                     .. interpreter-dir "/?.b"
             : modules
                 tableof;
-    function make-module-path (pattern name)
+    fn make-module-path (pattern name)
         fold (iter pattern) ""
-            function (out val)
+            fn (out val)
                 list out val
                     .. out val
                 .. out
                     ? (== val "?") name val
 
-    function find-module (name)
+    fn find-module (name)
         assert (symbol? name)
             "module name must be symbol"
         let content =
@@ -600,10 +600,10 @@ syntax-extend stage-3 (_ scope)
         else
             content
 
-    function make-expand-multi-op-ltr (op)
+    fn make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
         macro
-            function (expr)
+            fn (expr)
                 let tail =
                     slice expr 1
                 loop (tail)
@@ -619,14 +619,14 @@ syntax-extend stage-3 (_ scope)
                                     @ tail 1
                                 rest
 
-    function xpcall (func xfunc)
+    fn xpcall (func xfunc)
         let old_handler =
             get-exception-handler;
-        function cleanup ()
+        fn cleanup ()
             set-exception-handler! old_handler
         call
-            continuation try (finally)
-                function except (exc aframe args)
+            fn/cc try (finally)
+                fn except (exc aframe args)
                     cleanup;
                     finally
                         xfunc exc
@@ -644,7 +644,7 @@ syntax-extend stage-3 (_ scope)
             : iterator
                 tag (quote iterator)
             : qualify
-                function qualify (tag-type value)
+                fn qualify (tag-type value)
                     assert (== (typeof tag-type) type)
                         error "type argument expected."
                     bitcast
@@ -652,7 +652,7 @@ syntax-extend stage-3 (_ scope)
                         value
 
             : disqualify
-                function disqualify (tag-type value)
+                fn disqualify (tag-type value)
                     assert (== (typeof tag-type) type)
                         error "type argument expected."
                     let t = (typeof value)
@@ -670,11 +670,11 @@ syntax-extend stage-3 (_ scope)
                 make-expand-multi-op-ltr or
             : max
                 make-expand-multi-op-ltr
-                    function (a b)
+                    fn (a b)
                         ? (> b a) b a
             : min
                 make-expand-multi-op-ltr
-                    function (a b)
+                    fn (a b)
                         ? (< b a) b a
             : @
                 make-expand-multi-op-ltr @
@@ -683,7 +683,7 @@ syntax-extend stage-3 (_ scope)
                 # all values are constants
                 : let
                     block-scope-macro
-                        function (topexpr scope)
+                        fn (topexpr scope)
                             let expr = (@ topexpr 0)
                             let rest = (slice topexpr 1)
                             if (!= (typeof (@ expr 2)) symbol)
@@ -698,22 +698,22 @@ syntax-extend stage-3 (_ scope)
                                 do
                                     list
                                         cons
-                                            cons continuation
+                                            cons fn/cc
                                                 cons (list (parameter (quote _)) param)
                                                     rest
                                             value-expr
                                 @ expanded 1
             : try
                 block-macro
-                    function (expr scope)
+                    fn (expr scope)
                         if (not (list-head? (@ expr 1) (quote except)))
                             error "except block missing"
                         cons
                             list xpcall
-                                cons continuation
+                                cons fn/cc
                                     cons (list)
                                         slice (@ expr 0) 1
-                                cons continuation
+                                cons fn/cc
                                     cons
                                         cons (parameter (quote _))
                                             @ (@ expr 1) 1
@@ -724,7 +724,7 @@ syntax-extend stage-3 (_ scope)
             # (qquote expr [...])
             : qquote
                 do
-                    function qquote-1 (x)
+                    fn qquote-1 (x)
                         if (list-atom? x)
                             list quote x
                         elseif (list-head? x (quote unquote))
@@ -744,7 +744,7 @@ syntax-extend stage-3 (_ scope)
                                 qquote-1 (@ x 0)
                                 qquote-1 (slice x 1)
                     block-macro
-                        function (expr)
+                        fn (expr)
                             cons
                                 ? (empty? (slice (@ expr 0) 2))
                                     qquote-1 (@ (@ expr 0) 1)
@@ -753,7 +753,7 @@ syntax-extend stage-3 (_ scope)
 
             : define
                 block-macro
-                    function (expr scope)
+                    fn (expr scope)
                         let name =
                             @ (@ expr 0) 1
                         let exprlist =
@@ -769,7 +769,7 @@ syntax-extend stage-3 (_ scope)
                             slice expr 1
 
             tupleof scope-list-wildcard-symbol
-                function (topexpr scope)
+                fn (topexpr scope)
                     let expr =
                         @ topexpr 0
                     let head =
@@ -796,7 +796,7 @@ syntax-extend stage-3 (_ scope)
                                 quote self
                         cons
                             list
-                                list continuation (list (parameter (quote _)) self)
+                                list fn/cc (list (parameter (quote _)) self)
                                     cons
                                         list (do @) self
                                             list quote name
@@ -812,13 +812,13 @@ syntax-extend stage-3 (_ scope)
                                 0
                             slice topexpr 1
             tupleof scope-symbol-wildcard-symbol
-                function (topexpr scope)
+                fn (topexpr scope)
                     let sym =
                         @ topexpr 0
                     let it =
                         iter-r
                             string sym
-                    function finalize-head (out)
+                    fn finalize-head (out)
                         cons
                             symbol
                                 @ out 0
@@ -829,13 +829,13 @@ syntax-extend stage-3 (_ scope)
                         and
                             none? (find-scope-symbol scope sym)
                             fold it false
-                                function (out k)
+                                fn (out k)
                                     if (== k ".") true
                                     else out
                         cons
                             finalize-head
                                 fold it (list "")
-                                    function (out k)
+                                    fn (out k)
                                         if (== k ".")
                                             cons ""
                                                 cons
@@ -877,7 +877,7 @@ syntax-extend stage-3 (_ scope)
             #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
 syntax-extend stage-4 (_ scope)
-    function =? (x)
+    fn =? (x)
         and
             == (typeof x) symbol
             == x (quote =)
@@ -887,7 +887,7 @@ syntax-extend stage-4 (_ scope)
             : let
                 # support for multiple declarations in one let scope
                 block-macro
-                    function (expr scope)
+                    fn (expr scope)
                         let args = (slice (@ expr 0) 1)
                         let argtype = (typeof (@ args 0))
                         if (== argtype symbol)
@@ -901,7 +901,7 @@ syntax-extend stage-4 (_ scope)
 
                                 # iterate until we hit the = symbol, after which
                                 # the body follows
-                                function find-body (expr)
+                                fn find-body (expr)
 
                                     if (empty? expr)
                                         error "syntax: let <name> ... = <expression>"
@@ -918,7 +918,7 @@ syntax-extend stage-4 (_ scope)
                                     find-body args
                                 list
                                     list
-                                        cons continuation
+                                        cons fn/cc
                                             cons
                                                 cons (parameter (quote _)) (@ cells 0)
                                                 slice expr 1
@@ -932,7 +932,7 @@ syntax-extend stage-4 (_ scope)
                             # regular form, hidden parameter
                             list
                                 cons
-                                    cons continuation
+                                    cons fn/cc
                                         cons
                                             list
                                                 parameter (quote _)
@@ -943,7 +943,7 @@ syntax-extend stage-4 (_ scope)
                             # multiple variables
 
                             # prepare quotable values from declarations
-                            function handle-pairs (pairs)
+                            fn handle-pairs (pairs)
                                 if (empty? pairs)
                                     slice expr 1
                                 else
@@ -961,7 +961,7 @@ syntax-extend stage-4 (_ scope)
                 block-macro
                     # a late-binding let with support for recursion and
                     # function-level cross dependencies. comparable to letrec.
-                    function (expr scope)
+                    fn (expr scope)
                         let args = (slice (@ expr 0) 1)
                         let name = (@ args 0)
                         let argtype = (typeof name)
@@ -983,7 +983,7 @@ syntax-extend stage-4 (_ scope)
                             # and circular dependencies
 
                             # prepare quotable values from declarations
-                            function handle-pairs (pairs)
+                            fn handle-pairs (pairs)
                                 if (empty? pairs)
                                     tupleof
                                         list;
@@ -1008,26 +1008,26 @@ syntax-extend stage-4 (_ scope)
 
                             list
                                 list
-                                    cons continuation
+                                    cons fn/cc
                                         cons
                                             cons (parameter (quote _)) (@ entries 0)
                                             @ entries 1
 
 syntax-extend stage-5 (_ scope)
 
-    function iterator? (x)
+    fn iterator? (x)
         (typeof x) < iterator
 
-    function countable-rslice-iter (l)
+    fn countable-rslice-iter (l)
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
 
-    function countable-iter (x)
+    fn countable-iter (x)
         let c i = x
         if (i < (countof c))
             tupleof (@ c i) (tupleof c (i + 1))
 
-    function table-iter (x)
+    fn table-iter (x)
         let t = (@ x 0)
         let key-value =
             next-key t
@@ -1036,28 +1036,28 @@ syntax-extend stage-5 (_ scope)
             tupleof key-value
                 tupleof t (@ key-value 0)
 
-    function gen-yield-iter (callee)
+    fn gen-yield-iter (callee)
         let caller-return = none
-        function yield-iter (ret)
+        fn yield-iter (ret)
             # store caller continuation in state
             set! caller-return return
             if (none? ret) # first invocation
                 # invoke callee with yield function as first argument
                 callee
-                    continuation (ret value)
+                    fn/cc (ret value)
                         # continue caller
                         caller-return
                             tupleof value ret
                 # callee has returned for good
                 # resume caller - we're done here.
-                contcall none caller-return none
+                cc/call none caller-return none
             else # continue callee
-                contcall none ret
+                cc/call none ret
 
         qualify iterator
             tupleof yield-iter none
 
-    function iter (x)
+    fn iter (x)
         if (iterator? x) x
         else
             let t = (typeof x)
@@ -1079,23 +1079,23 @@ syntax-extend stage-5 (_ scope)
                 error
                     .. "don't know how to iterate " (string x)
 
-    function range (a b c)
+    fn range (a b c)
         let step = (? (none? c) 1 c)
         let from = (? (none? b) 0 a)
         let to = (? (none? b) a b)
         qualify iterator
             tupleof
-                function (x)
+                fn (x)
                     if (< x to)
                         tupleof x (+ x step)
                 from
 
-    function zip (a b)
+    fn zip (a b)
         let iter-a init-a = (disqualify iterator (iter a))
         let iter-b init-b = (disqualify iterator (iter b))
         qualify iterator
             tupleof
-                function (x)
+                fn (x)
                     let state-a = (iter-a (@ x 0))
                     let state-b = (iter-b (@ x 1))
                     if (not (or (none? state-a) (none? state-b)))
@@ -1106,24 +1106,24 @@ syntax-extend stage-5 (_ scope)
                             tupleof next-a next-b
                 tupleof init-a init-b
 
-    function infrange (a b)
+    fn infrange (a b)
         let step = (? (none? b) 1 b)
         let from = (? (none? a) 0 a)
         qualify iterator
             tupleof
-                function (x)
+                fn (x)
                     tupleof x (+ x step)
                 from
 
-    function enumerate (x from step)
+    fn enumerate (x from step)
         zip (infrange from step) (iter x)
 
-    function =? (x)
+    fn =? (x)
         and
             == (typeof x) symbol
             == x (quote =)
 
-    function parse-loop-args (fullexpr)
+    fn parse-loop-args (fullexpr)
         let expr =
             ? (list-head? fullexpr (quote with))
                 slice fullexpr 1
@@ -1161,14 +1161,14 @@ syntax-extend stage-5 (_ scope)
             : enumerate
             : loop # better loop with support for initializers
                 macro
-                    function loop (expr)
+                    fn loop (expr)
                         let param-repeat = (quote repeat)
                         let args names =
                             parse-loop-args (@ expr 1)
                         list do
                             list let param-repeat (quote =) none
                             list set! param-repeat
-                                cons continuation
+                                cons fn/cc
                                     cons
                                         cons
                                             parameter (quote _)
@@ -1178,8 +1178,8 @@ syntax-extend stage-5 (_ scope)
                                 args
             : for
                 block-macro
-                    function (block-expr)
-                        function iter-expr (expr)
+                    fn (block-expr)
+                        fn iter-expr (expr)
                             assert (not (empty? expr))
                                 "syntax: (for let-name ... in iter-expr body-expr ...)"
                             if (list-head? expr (quote in))
@@ -1211,7 +1211,7 @@ syntax-extend stage-5 (_ scope)
                             else
                                 tupleof remainder (list none)
 
-                        function generate-template (body extra-args extra-names)
+                        fn generate-template (body extra-args extra-names)
                             let param-iter = (parameter (quote iter))
                             let param-state = (parameter (quote state))
                             let param-for = (parameter (quote for-loop))
@@ -1221,7 +1221,7 @@ syntax-extend stage-5 (_ scope)
                                     do
                                         let (unquote param-for) = none
                                         set! (unquote param-for)
-                                            continuation (
+                                            fn/cc (
                                                 (unquote (parameter (quote _)))
                                                 (unquote param-iter)
                                                 (unquote param-state)
@@ -1234,7 +1234,7 @@ syntax-extend stage-5 (_ scope)
                                                     do
                                                         let repeat = none
                                                         set! repeat
-                                                            continuation (
+                                                            fn/cc (
                                                                 (unquote (parameter (quote _)))
                                                                 (unquote-splice extra-names))
                                                                 (unquote param-for)
@@ -1263,10 +1263,10 @@ syntax-extend stage-5 (_ scope)
 
             # an extended version of function that permits chaining
             # sequential cross-dependent declarations with a `with` keyword
-            : function # (function [name] (param ...) body ...) with (function ...) ...
+            : fn # (fn [name] (param ...) body ...) with (fn ...) ...
                 block-macro
                     do
-                        function parse-funcdef (topexpr k head)
+                        fn parse-funcdef (topexpr k head)
                             let expr =
                                 @ topexpr 0
                             assert (list-head? expr head)
@@ -1276,7 +1276,7 @@ syntax-extend stage-5 (_ scope)
                             let retparam =
                                 quote return
                             let make-params-body =
-                                function (param-idx)
+                                fn (param-idx)
                                     cons
                                         cons
                                             retparam
@@ -1288,7 +1288,7 @@ syntax-extend stage-5 (_ scope)
                                 # build single xlet assignment
                                 let func-expr =
                                     list decl (quote =)
-                                        cons continuation
+                                        cons fn/cc
                                             cons
                                                 @ expr 1
                                                 make-params-body 2
@@ -1301,6 +1301,7 @@ syntax-extend stage-5 (_ scope)
                                             parse-funcdef
                                                 slice rest 1
                                                 k + 1
+                                                head
                                         tupleof
                                             cons func-expr defs
                                             defs-rest
@@ -1316,20 +1317,20 @@ syntax-extend stage-5 (_ scope)
                                     "unnamed function can not be chained"
                                 # regular, unchained form
                                 cons
-                                    cons continuation
+                                    cons fn/cc
                                         make-params-body 1
                                     rest
 
-                        function (topexpr)
+                        fn (topexpr)
                             parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
 
 syntax-extend stage-6 (_ scope)
-    function repeat-string (n c)
+    fn repeat-string (n c)
         for i in (range n)
             with (s = "")
             repeat (s .. c)
         else s
-    function get-leading-spaces (s)
+    fn get-leading-spaces (s)
         for c in s
             with (out = "")
             if (c == " ")
@@ -1337,13 +1338,13 @@ syntax-extend stage-6 (_ scope)
             else out
         else out
 
-    function has-chars (s)
+    fn has-chars (s)
         for i in s
             if (i != " ") true
             else (repeat)
         else false
 
-    function read-eval-print-loop ()
+    fn read-eval-print-loop ()
         print "Bangra"
             .. (string (@ bangra-version 0)) "." (string (@ bangra-version 1))
                 ? ((@ bangra-version 2) == 0) ""
@@ -1351,7 +1352,7 @@ syntax-extend stage-6 (_ scope)
         let state = (tableof)
             scope : (.. (globals) (tableof))
             counter : 1
-        function reset-state ()
+        fn reset-state ()
             set-key! state
                 scope :
                     .. (globals)
@@ -1360,7 +1361,7 @@ syntax-extend stage-6 (_ scope)
             set-key! state (frame : none)
             set-key! state (counter : 1)
         reset-state;
-        function capture-scope (scope)
+        fn capture-scope (scope)
             set-key! state (: scope)
         # appending this to an expression before evaluation captures the scope
         # table so it can be used for the next expression.
@@ -1400,7 +1401,7 @@ syntax-extend stage-6 (_ scope)
                             if (none? expr)
                                 error "parsing failed"
                             let f = (eval (.. expr expression-suffix) state.scope)
-                            function wrapper ()
+                            fn wrapper ()
                                 # by removing closure context from capture-frame,
                                 # we run in the frame of the caller, which we can
                                 # then capture to run the next expression.
@@ -1409,12 +1410,12 @@ syntax-extend stage-6 (_ scope)
                                 # state table, and retrieve it from there.
                                 set-key! state (: return)
                                 let capture-frame =
-                                    continuation (_ x)
+                                    fn/cc (_ x)
                                         # create bogus function from which we can
                                         # capture the frame.
-                                        let _c = (function () none)
+                                        let _c = (fn () none)
                                         state.return (tupleof x _c.frame)
-                                contcall capture-frame.entry
+                                cc/call capture-frame.entry
                                     if (none? state.frame) f
                                     else (closure f state.frame)
                             let result newframe = (wrapper)

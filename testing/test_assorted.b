@@ -148,7 +148,7 @@ let k = 3
 let T =
     structof
         test :
-            function (self a b)
+            fn (self a b)
                 + a b
 
 assert
@@ -284,12 +284,12 @@ assert
 print typeof
 
 let call/cc =
-    continuation call/cc (cont func)
+    fn/cc call/cc (cont func)
         func cont
 
 assert
     call/cc
-        function (cont)
+        fn (cont)
             print "entered function"
             cont true
             error "unreachable"
@@ -297,19 +297,19 @@ assert
 
 do
     let cont-test =
-        continuation cont-test (topret x)
+        fn/cc cont-test (topret x)
             print "entered function"
-            function subf ()
+            fn subf ()
                 print "entered subfunction"
                 # `return x` would just exit subf, but not cont-test
-                contcall none topret x
+                cc/call none topret x
             subf;
             error "unreachable"
     assert
         cont-test true
         "continuation failed"
 
-    function cont-test2 (x)
+    fn cont-test2 (x)
         if x
             return x
         else
@@ -321,20 +321,20 @@ do
         (cont-test2 false) == none
 
 do
-    function generator ()
+    fn generator ()
         let T =
             tableof;
         set-key! T
             : run
-                function (ret)
+                fn (ret)
                     let G =
                         tableof
                             : ret
-                    function yield ()
+                    fn yield ()
                         call/cc
-                            function (cont)
+                            fn (cont)
                                 G.ret
-                                    function (ret)
+                                    fn (ret)
                                         set-key! G
                                             : ret
                                         cont none
@@ -344,7 +344,7 @@ do
                     yield;
                     print "step 3"
                     yield;
-        function step-gen ()
+        fn step-gen ()
             set-key! T
                 : run
                     call/cc T.run
@@ -429,19 +429,19 @@ assert
         ::@ 5 +
         1 + 3
 
-function test-noparam (x y)
+fn test-noparam (x y)
     assert
         x == none
     assert
         y == none
     true
 test-noparam;
-function test-extraparam ()
+fn test-extraparam ()
     true
 test-extraparam 1 2 3
 
 
-function test-varargs (x y ...)
+fn test-varargs (x y ...)
     assert
         and
             x == 1
@@ -484,7 +484,7 @@ do
         1 + 2
 
     # function declarations support recursion.
-    function q-func (x)
+    fn q-func (x)
         ? (x <= 0)
             1
             x * (q-func (x - 1))
@@ -499,7 +499,7 @@ do
         button-type-no      = 1
         button-type-cancel  = (button-type-no + 1)
 
-    function b-func (x)
+    fn b-func (x)
         ? (x <= 0)
             1
             x * (b-func (x - 1))
@@ -555,7 +555,7 @@ define TEST 5
 define TEST2
     TEST + 1
 define TEST3
-    function (x)
+    fn (x)
         x * 2
 assert
     and
