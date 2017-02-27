@@ -2711,6 +2711,7 @@ int InputBuffer::getInputLine(PromptBase& pi) {
             buf32[len++] = ' ';
             pos++;
         }
+        buf32[len] = 0;
         refreshLine(pi);
         break;
 

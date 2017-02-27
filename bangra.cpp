@@ -5712,8 +5712,12 @@ static Any builtin_hash(const Any *args, size_t argcount) {
 }
 
 static Any builtin_prompt(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 1, 1);
+    builtin_checkparams(argcount, 1, 2);
     auto s = extract_string(args[0]);
+    if (argcount > 1) {
+        auto pre = extract_string(args[1]);
+        linenoisePreloadBuffer(pre.c_str());
+    }
     char *r = linenoise(s.c_str());
     if (!r) return const_none;
     linenoiseHistoryAdd(r);

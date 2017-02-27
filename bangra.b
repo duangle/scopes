@@ -1324,11 +1324,24 @@ syntax-extend stage-5 (_ scope)
                             parse-funcdef topexpr 0
 
 syntax-extend stage-6 (_ scope)
-    function dots (n)
+    function repeat-string (n c)
         for i in (range n)
             with (s = "")
-            repeat (s .. ".")
+            repeat (s .. c)
         else s
+    function get-leading-spaces (s)
+        for c in s
+            with (out = "")
+            if (c == " ")
+                repeat (out .. c)
+            else out
+        else out
+
+    function has-chars (s)
+        for i in s
+            if (i != " ") true
+            else (repeat)
+        else false
 
     function read-eval-print-loop ()
         print "Bangra"
@@ -1359,18 +1372,28 @@ syntax-extend stage-6 (_ scope)
                         scope
         loop
             with
+                preload = ""
                 cmdlist = ""
             let idstr = (.. "$" (string state.counter))
             let id = (symbol idstr)
             let promptstr = (.. idstr ">")
             let cmd =
-                prompt (.. (? (empty? cmdlist) promptstr (dots (countof promptstr))) " ")
+                prompt
+                    ..
+                        ? (empty? cmdlist) promptstr
+                            repeat-string (countof promptstr) "."
+                        " "
+                    preload
 
             if ((typeof cmd) != void)
-                let cmdlist = (.. cmdlist cmd "\n")
                 let terminated? =
-                    (empty? cmd) or ((slice cmd -1) == ";")
-                repeat
+                    or (not (has-chars cmd))
+                        (empty? cmdlist) and ((slice cmd -1) == ";")
+                let cmdlist = (.. cmdlist cmd "\n")
+                let preload =
+                    if terminated? ""
+                    else (get-leading-spaces cmd)
+                let cmdlist =
                     if terminated?
                         try
                             let expr = (list-parse cmdlist)
@@ -1406,6 +1429,7 @@ syntax-extend stage-6 (_ scope)
                         ""
                     else
                         cmdlist
+                repeat preload cmdlist
     set-key! scope
         : read-eval-print-loop
     scope
