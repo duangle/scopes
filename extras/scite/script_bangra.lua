@@ -28,7 +28,7 @@ local function bangra_symbols()
             .. " syntax-extend if else elseif loop repeat none assert qquote"
             .. " unquote unquote-splice globals return splice continuation"
             .. " try except define in for empty-list empty-tuple raise"
-            .. " yield xlet cc/call fn/cc"
+            .. " yield xlet cc/call fn/cc null"
         ),
 
     -- builtin and global functions
@@ -38,8 +38,9 @@ local function bangra_symbols()
             .. " dump list-head? countof tableof slice none? list-atom?"
             .. " list-load list-parse load require cstr exit hash min max"
             .. " va-arg va-countof range zip enumerate bitcast element-type"
-            .. " qualify disqualify iter iterator? list? symbol?"
-            .. " get-exception-handler xpcall error sizeof prompt"
+            .. " qualify disqualify iter iterator? list? symbol? parse-c"
+            .. " get-exception-handler xpcall error sizeof prompt null?"
+            .. " extern-library"
         ),
 
     -- builtin and global functions with side effects
@@ -59,7 +60,7 @@ local function bangra_symbols()
             .. " rawstring opaque half float double symbol list parameter"
             .. " frame closure flow integer real cfunction array tuple vector"
             .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
-            .. " iterator type table size_t usize_t ssize_t"
+            .. " iterator type table size_t usize_t ssize_t void*"
         )
     }
 end

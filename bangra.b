@@ -87,12 +87,6 @@ syntax-extend stage-1 (_ scope)
                         globals;
                         path
             tupleof
-                quote API
-                import-c
-                    # todo: search path & embedded resources
-                    .. interpreter-dir "/bangra.h"
-                    tupleof;
-            tupleof
                 quote macro
                 fn/cc macro (_ f)
                     block-scope-macro
@@ -1303,6 +1297,32 @@ syntax-extend stage-5 (_ scope)
                             parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
 
 syntax-extend stage-6 (_ scope)
+    let void* =
+        pointer void
+    let null =
+        bitcast void*
+            uint64 0
+    fn null? (x)
+        (bitcast uint64 x) == 0
+    fn extern-library (cdefs)
+        let lib = (tableof)
+        for k v in cdefs
+            set-key! lib k
+                ? ((typeof v) < tuple)
+                    external (splice v)
+                    v
+            repeat;
+        lib
+
+    .. scope
+        tableof
+            : void*
+            : null
+            : null?
+            : extern-library
+
+
+syntax-extend stage-7 (_ scope)
     fn repeat-string (n c)
         for i in (range n)
             with (s = "")

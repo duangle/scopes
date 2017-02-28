@@ -243,31 +243,22 @@ assert
         4 == (@ (list 0 (list 1 2 (list 3 4) 5) 6) 1 2 1)
 
 do
-    let T = API
-        /// tableof
-            x : 1
-            y : 2
-            z : 3
-    for k v in T
-        print k "->"
-            if ((typeof v) < tuple)
-                external (splice v)
-            else
-                v
-        repeat;
-
+    let T =
+        extern-library
+            parse-c
+                # todo: search path & embedded resources
+                .. interpreter-dir "/bangra.h"
+                tupleof;
     print ">"
-        string
-            external (splice T.bangra_interpreter_dir)
+        string T.bangra_interpreter_dir
     print ">>"
-        string
-            external (splice T.bangra_interpreter_path)
+        string T.bangra_interpreter_path
     assert
         == "test"
             string
                 rawstring "test"
     print
-        (external (splice T.print_number)) 302
+        T.print_number 302
 
 assert
     2 * 2 + 1 == 5
