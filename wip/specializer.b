@@ -216,6 +216,6 @@ fn pow (x n)
 assert
     (pow 2 5) == 32
 
-dump-function pow
+dump-function pow2
 #dump-function testfunc
 

@@ -5862,8 +5862,8 @@ static Any builtin_raise(const Any *args, size_t argcount) {
     return const_none;
 }
 
-// (import-c const-path (tupleof const-string ...))
-static Any builtin_import_c(const Any *args, size_t argcount) {
+// (parse-c const-path (tupleof const-string ...) [string])
+static Any builtin_parse_c(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 2, 3);
     std::string path = extract_string(args[0]);
     auto compile_args = extract_tuple(args[1]);
@@ -6666,7 +6666,7 @@ static void initGlobals () {
     setBuiltin<builtin_next_key>(env, "next-key");
     setBuiltin<builtin_typeof>(env, "typeof");
     setBuiltin<builtin_external>(env, "external");
-    setBuiltin<builtin_import_c>(env, "import-c");
+    setBuiltin<builtin_parse_c>(env, "parse-c");
     setBuiltin<builtin_branch>(env, "branch");
     setBuiltin<builtin_dump>(env, "dump");
     setBuiltin<builtin_block_scope_macro>(env, "block-scope-macro");
