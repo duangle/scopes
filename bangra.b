@@ -157,7 +157,9 @@ syntax-extend stage-1 (_ scope)
                                                         parameter (quote _)
                                                         param-name
                                                     slice expr 1
-                                            slice (@ expr 0) 3
+                                            list
+                                                cons do
+                                                    slice (@ expr 0) 3
                                 @ (@ expr 0) 1
                                 slice expr 1
                             scope
@@ -974,7 +976,9 @@ syntax-extend stage-4 (_ scope)
                                     tupleof
                                         cons name (@ result 0)
                                         cons
-                                            list set! name (@ pair 2)
+                                            list set! name
+                                                cons do
+                                                    slice pair 2
                                             (@ result 1)
 
                             let entries =
@@ -1324,8 +1328,6 @@ syntax-extend stage-6 (_ scope)
                 ? ((@ bangra-version 2) == 0) ""
                     .. "." (string (@ bangra-version 2))
         let state = (tableof)
-            scope : (.. (globals) (tableof))
-            counter : 1
         fn reset-state ()
             set-key! state
                 scope :
