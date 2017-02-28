@@ -43,6 +43,11 @@ You can verify that everything works by running::
 Running
 -------
 
+Bangra has a built-in console that can be launched from the command-line by
+passing no arguments to the ``bangra`` interpreter::
+
+    bangra
+
 To execute a Bangra program, pass the source file as first argument to the
 ``bangra`` interpreter::
 

@@ -27,7 +27,7 @@ comfortable level. These features are:
   the fly.
 * A **fully embedded** build of **LLVM** that can be accessed via FFI.
 * A **programmable macro preprocessor** that expands symbolic expressions and
-  requires only two builtin macros: ``continuation`` and ``syntax-extend``.
+  requires only two builtin macros: ``fn/cc`` and ``syntax-extend``.
   These are sufficient to bootstrap the rest of the language.
 
   The macro preprocessor supports hooks to preprocessing arbitrary lists and
@@ -46,13 +46,20 @@ comfortable level. These features are:
 * A loader that permits attaching a payload script to the main executable.
 * Initialization routines for the root environment.
 
+With these features, the runtime environment is loaded which bootstraps the
+remaining elements of the language in several stages:
+
+* Various utility functions, types and macros.
+* A global hook to recognize and translate **infix notation**, **dot notation**
+  and **symbol prefixes**.
+* A read-eval-print (REPL) **console** for casual use.
+
 As Bangra is in alpha stage, some essential features are still missing. These
 features will be added in future releases:
 
 * Better error reporting.
 * An on-demand **specializer** that translates flow nodes to fast machine code
   using LLVM. The specializer will feature closure elimination and memory tracking.
-* A read-eval-print (REPL) **console** for casual use.
 * A **garbage collection** mechanism for the interpreter. Right now Bangra
   doesn't free any memory at all.
 * Debugging support for gdb.
