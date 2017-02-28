@@ -217,8 +217,8 @@ syntax-extend stage-2 (_ scope)
                 false
     .. scope
         tableof
-            : empty-list (list)
-            : empty-tuple (tuple)
+            : empty-list (escape (list))
+            : empty-tuple (tupleof)
 
             : bool (integer 1 false)
             : int8 (integer 8 true)
@@ -230,8 +230,7 @@ syntax-extend stage-2 (_ scope)
             : uint32 (integer 32 false)
             : uint64 (integer 64 false)
 
-            : size_t (integer 64 false)
-            : ssize_t (integer 64 true)
+            : size_t usize_t
 
             : int (integer 32 true)
             : uint (integer 32 false)
@@ -678,31 +677,6 @@ syntax-extend stage-3 (_ scope)
                         ? (< b a) b a
             : @
                 make-expand-multi-op-ltr @
-            ///
-                # a mid-fi version of let that avoids creating continuations when
-                # all values are constants
-                : let
-                    block-scope-macro
-                        fn (topexpr scope)
-                            let expr = (@ topexpr 0)
-                            let rest = (slice topexpr 1)
-                            if (!= (typeof (@ expr 2)) symbol)
-                                error "syntax: let <var> = <expr>"
-                            if (!= (@ expr 2) (quote =))
-                                error "syntax: let <var> = <expr>"
-                            let param-name = (@ expr 1)
-                            let value-expr = (slice expr 3)
-                            let param = (parameter param-name)
-                            set-key! scope param-name param
-                            tupleof
-                                do
-                                    list
-                                        cons
-                                            cons fn/cc
-                                                cons (list (parameter (quote _)) param)
-                                                    rest
-                                            value-expr
-                                @ expanded 1
             : try
                 block-macro
                     fn (expr scope)

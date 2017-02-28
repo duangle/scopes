@@ -59,7 +59,7 @@ local function bangra_symbols()
             .. " rawstring opaque half float double symbol list parameter"
             .. " frame closure flow integer real cfunction array tuple vector"
             .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
-            .. " iterator type table size_t ssize_t"
+            .. " iterator type table size_t usize_t ssize_t"
         )
     }
 end

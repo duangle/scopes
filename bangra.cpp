@@ -5589,22 +5589,6 @@ static Any builtin_exit(const Any *args, size_t argcount) {
     return const_none;
 }
 
-static B_FUNC(builtin_flowcall) {
-    builtin_checkparams(B_ARGCOUNT(S), 2, -1, 1);
-    S->wargs[ARG_Cont] = B_GETCONT(S);
-    {
-        auto func = B_GETARG(S,0);
-        if (is_closure_type(func.type)) {
-            func = wrap(func.closure->entry);
-        }
-        S->wargs[ARG_Func] = func;
-    }
-    for (size_t i = (ARG_Arg0 + 1); i < B_ARGCOUNT(S); ++i) {
-        S->wargs[i] = S->rargs[i];
-    }
-    S->wcount = B_ARGCOUNT(S) - 1;
-}
-
 static Any builtin_escape(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 1, 1);
     Any result = args[0];
@@ -6658,10 +6642,10 @@ static void initGlobals () {
 
     setLocalString(env, "usize_t",
         wrap(Types::Integer(sizeof(size_t)*8,false)));
+    setLocalString(env, "ssize_t",
+        wrap(Types::Integer(sizeof(ssize_t)*8,true)));
 
     setLocalString(env, "rawstring", wrap(Types::Rawstring));
-
-    setLocalString(env, "int", getLocalString(env, "int32"));
 
     setLocalString(env, "true", wrap(true));
     setLocalString(env, "false", wrap(false));
@@ -6715,8 +6699,6 @@ static void initGlobals () {
 
     setBuiltin<builtin_set_exception_handler>(env, "set-exception-handler!");
     setBuiltin<builtin_get_exception_handler>(env, "get-exception-handler");
-
-    setBuiltin<builtin_flowcall>(env, "flowcall");
 
     setBuiltin<builtin_flow_parameter_count>(env, "flow-parameter-count");
     setBuiltin<builtin_flow_parameter>(env, "flow-parameter");

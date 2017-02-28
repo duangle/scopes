@@ -88,6 +88,10 @@ class BangraObject(ObjectDescription):
                     for arg in e[1:]:
                         parse_arg(paramlist, arg)
                     plist += paramlist
+                elif head == "<splice>":
+                    print "YES"
+                    for arg in e[1:]:
+                        parse_arg(plist, arg)
                 elif head == "|":
                     for i,arg in enumerate(e[1:]):
                         if i > 0:
