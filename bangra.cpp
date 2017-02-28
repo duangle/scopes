@@ -4244,7 +4244,6 @@ namespace Types {
             type->offsets.push_back(offset);
             offset += size;
         }
-        // struct has to have at least 1 byte size
         type->size = align(offset, max_alignment);
         type->alignment = max_alignment;
     }
