@@ -1,5 +1,26 @@
 # specializer: specializes and translates flow graph to LLVM
 
+syntax-extend (_ scope)
+    # inject all symbols directly into namespace
+    let T =
+        extern-library
+            parse-c
+                "llvm-import.c"
+                tupleof
+                    \ "-I" (.. interpreter-dir "/clang/include")
+                    \ "-I" (.. interpreter-dir "/clang/lib/clang/3.9.1/include")
+                "
+                #include <llvm-c/Core.h>
+                #include <llvm-c/ExecutionEngine.h>
+                "
+    for k v in T
+        let kstr = (string k)
+        # import only LLVM-related symbols, avoid the stddef garbage
+        if ((slice kstr 0 4) == "LLVM")
+            set-key! scope k v
+        repeat;
+    scope
+
 fn ANSI-color (num bright)
     .. "\x1b["
         string num
@@ -218,4 +239,36 @@ assert
 
 dump-function pow2
 #dump-function testfunc
+
+let
+    LLVMFalse = 0
+    LLVMTrue = 1
+/// LLVMDumpType
+    LLVMInt32Type;
+
+
+let builder = (LLVMCreateBuilder)
+let module = (LLVMModuleCreateWithName (rawstring "testmodule"))
+let functype = (LLVMFunctionType
+        (LLVMInt32Type) (bitcast (pointer LLVMTypeRef) null) (uint 0) LLVMFalse)
+let func = (LLVMAddFunction module (rawstring "testfunc") functype)
+let bb = (LLVMAppendBasicBlock func (rawstring "entry"))
+LLVMPositionBuilderAtEnd builder bb
+LLVMBuildRet builder (LLVMConstInt (LLVMInt32Type) (uint64 303) LLVMFalse)
+LLVMDumpValue func
+# outputs:
+# define i32 @testfunc() {
+#   ret i32 303
+# }
+let ee1 = (arrayof LLVMExecutionEngineRef (bitcast LLVMExecutionEngineRef null))
+let errormsg1 = (arrayof rawstring null (bitcast rawstring null))
+if ((LLVMCreateJITCompilerForModule ee1 module (uint 0) errormsg1) == LLVMTrue)
+    error (string (@ errormsg1 0))
+let ee = (@ ee1 0)
+let fptr = (bitcast (pointer (cfunction int32 (tuple) false))
+        (LLVMGetPointerToGlobal ee func))
+assert ((fptr) == 303)
+
+
+
 

@@ -7,6 +7,7 @@ set-key! bangra
 let
     modules =
         quote
+            test_array
             test_assorted
             test_iterator
             test_batchfold

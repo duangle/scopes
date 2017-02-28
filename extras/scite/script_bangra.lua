@@ -40,7 +40,7 @@ local function bangra_symbols()
             .. " va-arg va-countof range zip enumerate bitcast element-type"
             .. " qualify disqualify iter iterator? list? symbol? parse-c"
             .. " get-exception-handler xpcall error sizeof prompt null?"
-            .. " extern-library"
+            .. " extern-library arrayof"
         ),
 
     -- builtin and global functions with side effects

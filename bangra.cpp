@@ -2120,6 +2120,26 @@ static Any wrap(const Any *args, size_t argcount) {
     return wrap(type, data);
 }
 
+static Any wrap_array(const Type *elemtype, const Any *args, size_t argcount) {
+    size_t alignment = get_alignment(elemtype);
+    if (!alignment) {
+        error("attempting to pack opaque type %s in array",
+            get_name(elemtype).c_str());
+    }
+    const Type *type = Types::Array(elemtype, argcount);
+    char *data = (char *)malloc(get_size(type));
+    size_t size = get_size(elemtype);
+    size_t stride = align(size, alignment);
+    size_t offset = 0;
+    for (size_t i = 0; i < argcount; ++i) {
+        const void *srcptr =
+            elemtype->is_embedded?args[i].embedded:args[i].ptr;
+        memcpy(data + offset, srcptr, size);
+        offset += stride;
+    }
+    return wrap(type, data);
+}
+
 static Any wrap(
     const std::vector<Any> &args) {
     return wrap(&args[0], args.size());
@@ -3196,6 +3216,17 @@ struct FFI {
         }
     }
 
+    bool are_types_compatible(const Type *have, const Type *want) {
+        if (is_subtype(have, Types::TArray)
+            && is_subtype(want, Types::TPointer)) {
+            return
+                is_subtype_or_type(
+                    get_element_type(have),
+                    get_element_type(want));
+        }
+        return is_subtype_or_type(have, want);
+    }
+
     Any runFunction(
         const Any &func, const Any *args, size_t argcount) {
         assert(is_pointer_type(func.type));
@@ -3221,11 +3252,12 @@ struct FFI {
         ffi_cif cif;
         auto maxcount = std::max(count, argcount);
         ffi_type *argtypes[maxcount];
+        void *avalues[maxcount];
         for (size_t i = 0; i < maxcount; ++i) {
             const Type *ptype;
             if (i < count) {
                 ptype = get_parameter_type(ftype, i);
-                if (!is_subtype_or_type(args[i].type, ptype)) {
+                if (!are_types_compatible(args[i].type, ptype)) {
                     error("%s type expected, %s provided",
                         get_name(ptype).c_str(),
                         get_name(args[i].type).c_str());
@@ -3234,6 +3266,14 @@ struct FFI {
                 ptype = args[i].type;
             }
             argtypes[i] = get_ffi_type(ptype);
+            if (is_subtype(args[i].type, Types::TArray)
+                && is_subtype(ptype, Types::TPointer)) {
+                avalues[i] = (void *)&args[i].ptr;
+            } else {
+                avalues[i] = args[i].type->is_embedded?
+                    const_cast<uint8_t *>(args[i].embedded)
+                    :const_cast<void *>(args[i].ptr);
+            }
         }
         auto prep_result = ffi_prep_cif(
             &cif, FFI_DEFAULT_ABI, maxcount, get_ffi_type(rtype), argtypes);
@@ -3247,13 +3287,6 @@ struct FFI {
         } else {
             rvalue = malloc(get_size(rtype));
             result.ptr = rvalue;
-        }
-
-        void *avalues[maxcount];
-        for (size_t i = 0; i < maxcount; ++i) {
-            avalues[i] = args[i].type->is_embedded?
-                const_cast<uint8_t *>(args[i].embedded)
-                :const_cast<void *>(args[i].ptr);
         }
 
         auto funcptr = extract_ptr<void>(func);
@@ -3845,11 +3878,9 @@ namespace Types {
 
     static std::string _pointer_tostring(const Type *self,
         const bangra::Any &value) {
-        return format("%s%s %s%s",
-            ansi(ANSI_STYLE_COMMENT, "<").c_str(),
-            ansi(ANSI_STYLE_OPERATOR, "&").c_str(),
-            get_string(pointer_element(self, value)).c_str(),
-            ansi(ANSI_STYLE_COMMENT, ">").c_str());
+        return ansi(ANSI_STYLE_COMMENT, "<")
+            + get_name(self) + format("=%p", value.ptr)
+            + ansi(ANSI_STYLE_COMMENT, ">");
     }
 
     static std::string _type_tostring(
@@ -5169,6 +5200,10 @@ public:
         case clang::Type::LValueReference:
         case clang::Type::RValueReference:
             break;
+        case clang::Type::Decayed: {
+            const clang::DecayedType *DTy = cast<clang::DecayedType>(Ty);
+            return TranslateType(DTy->getDecayedType());
+        } break;
         case clang::Type::Pointer: {
             const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
@@ -5757,6 +5792,12 @@ static Any builtin_find_scope_symbol(const Any *args, size_t argcount) {
 static Any builtin_tupleof(const Any *args, size_t argcount) {
     builtin_checkparams(argcount, 0, -1);
     return wrap(args, argcount);
+}
+
+static Any builtin_arrayof(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, -1);
+    auto etype = extract_type(args[0]);
+    return wrap_array(etype, &args[1], argcount - 1);
 }
 
 static Any builtin_cons(const Any *args, size_t argcount) {
@@ -6658,6 +6699,7 @@ static void initGlobals () {
     setBuiltin<builtin_print>(env, "print");
     setBuiltin<builtin_repr>(env, "repr");
     setBuiltin<builtin_tupleof>(env, "tupleof");
+    setBuiltin<builtin_arrayof>(env, "arrayof");
     setBuiltin<builtin_cons>(env, "cons");
     setBuiltin<builtin_structof>(env, "structof");
     setBuiltin<builtin_tableof>(env, "tableof");
