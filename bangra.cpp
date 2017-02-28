@@ -6997,6 +6997,8 @@ int bangra_main(int argc, char ** argv) {
     SetConsoleMode(hStdOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     GetConsoleMode(hStdErr, &mode);
     SetConsoleMode(hStdErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    // change codepage to UTF-8
+    SetConsoleOutputCP(65001);
 #endif
 
     bangra::init();
