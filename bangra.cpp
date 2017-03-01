@@ -703,6 +703,7 @@ static const Anchor *get_anchor(const Any &value) {
 }
 
 static void set_anchor(const void *ptr, const Anchor *anchor) {
+    if (!ptr) return;
     if (anchor) {
         anchor_map[ptr] = anchor;
     } else {
@@ -2134,6 +2135,11 @@ static Any wrap_array(const Type *elemtype, const Any *args, size_t argcount) {
     size_t stride = align(size, alignment);
     size_t offset = 0;
     for (size_t i = 0; i < argcount; ++i) {
+        if (!is_subtype_or_type(args[i].type, elemtype)) {
+            error("attempting to pack incompatible type %s in array of type %s",
+                get_name(args[i].type).c_str(),
+                get_name(type).c_str());
+        }
         const void *srcptr =
             elemtype->is_embedded?args[i].embedded:args[i].ptr;
         memcpy(data + offset, srcptr, size);

@@ -260,7 +260,7 @@ LLVMDumpValue func
 #   ret i32 303
 # }
 let ee1 = (arrayof LLVMExecutionEngineRef (bitcast LLVMExecutionEngineRef null))
-let errormsg1 = (arrayof rawstring null (bitcast rawstring null))
+let errormsg1 = (arrayof rawstring (bitcast rawstring null))
 if ((LLVMCreateJITCompilerForModule ee1 module (uint 0) errormsg1) == LLVMTrue)
     error (string (@ errormsg1 0))
 let ee = (@ ee1 0)
