@@ -280,7 +280,6 @@ syntax-extend stage-2 (_ scope)
                                 @ expr 1
                                 list quote key
                             error "symbol expected"
-
             : fn # (fn [name] (param ...) body ...)
                 block-macro
                     fn/cc fn (_ topexpr)

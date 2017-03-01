@@ -614,6 +614,7 @@ enum {
 
     SYM_ContinuationForm,
     SYM_QuoteForm,
+    SYM_DoForm,
     SYM_Do,
 
     // wildcards
@@ -663,6 +664,7 @@ static std::string get_symbol_name(Symbol id) {
 static void initSymbols() {
     map_symbol(SYM_Unnamed, "");
     map_symbol(SYM_Do, "do");
+    map_symbol(SYM_DoForm, "form:do");
     map_symbol(SYM_Parent, "#parent");
     map_symbol(SYM_VarArgs, "...");
     map_symbol(SYM_Escape, "escape");
@@ -6126,6 +6128,24 @@ B_FUNC(wrap_expand_call) {
         wrap(out, 2));
 }
 
+static Cursor expand_do (const Table *env, const List *topit) {
+
+    auto it = extract_list(topit->at);
+    auto topanchor = get_anchor(it);
+
+    auto subenv = new_scope(env);
+
+    return {
+        List::create(
+            quote(wrap(
+                List::create(
+                    getLocal(globals, SYM_DoForm),
+                    expand_expr_list(subenv, it),
+                    get_anchor(topanchor)))),
+            topit->next),
+        env };
+}
+
 static Cursor expand_continuation (const Table *env, const List *topit) {
     verifyAtParameterCount(topit, 1, -1);
 
@@ -6638,8 +6658,9 @@ static void initGlobals () {
     setBuiltin<compile_contcall>(env, "cc/call");
     setBuiltin<compile_continuation>(env, "form:fn/cc");
     setBuiltin<compile_splice>(env, "splice");
-    setBuiltin<compile_do>(env, "do");
+    setBuiltin<compile_do>(env, "form:do");
 
+    setBuiltinMacro< wrap_expand_call<expand_do> >(env, "do");
     setBuiltinMacro< wrap_expand_call<expand_continuation> >(env, "fn/cc");
     setBuiltinMacro< wrap_expand_call<expand_syntax_extend> >(env, "syntax-extend");
 

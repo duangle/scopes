@@ -13,6 +13,7 @@ let
             test_batchfold
             test_let
             test_loop
+            test_scope
             test_semicolon
             test_xlet
     total =
