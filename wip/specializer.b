@@ -246,7 +246,6 @@ let
 /// LLVMDumpType
     LLVMInt32Type;
 
-
 let builder = (LLVMCreateBuilder)
 let module = (LLVMModuleCreateWithName (rawstring "testmodule"))
 let functype = (LLVMFunctionType

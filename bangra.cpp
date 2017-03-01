@@ -5095,7 +5095,8 @@ public:
                             ed->getIntegerTypeRange().getBegin()))));
             */
 
-            enum_type->tag_type = TranslateType(ed->getIntegerType());
+            auto tag_type = TranslateType(ed->getIntegerType());
+            enum_type->tag_type = tag_type;
 
             std::vector<std::string> names;
             std::vector<int64_t> tags;
@@ -5106,8 +5107,13 @@ public:
                 //Anchor anchor = anchorFromLocation(it->getSourceRange().getBegin());
                 auto &val = it->getInitVal();
 
-                names.push_back(it->getName().data());
-                tags.push_back(val.getExtValue());
+                auto name = it->getName().data();
+                auto value = val.getExtValue();
+
+                set_key(*dest, get_symbol(name), integer(tag_type, value));
+
+                names.push_back(name);
+                tags.push_back(value);
                 types.push_back(Types::Void);
                 //anchors->push_back(anchor);
             }
