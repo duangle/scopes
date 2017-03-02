@@ -238,35 +238,36 @@ assert
     (pow 2 5) == 32
 
 dump-function pow2
-#dump-function testfunc
+#dump-function pow
 
-let
-    LLVMFalse = 0
-    LLVMTrue = 1
-/// LLVMDumpType
-    LLVMInt32Type;
+do
+    let
+        LLVMFalse = 0
+        LLVMTrue = 1
+    /// LLVMDumpType
+        LLVMInt32Type;
 
-let builder = (LLVMCreateBuilder)
-let module = (LLVMModuleCreateWithName (rawstring "testmodule"))
-let functype = (LLVMFunctionType
-        (LLVMInt32Type) (bitcast (pointer LLVMTypeRef) null) (uint 0) LLVMFalse)
-let func = (LLVMAddFunction module (rawstring "testfunc") functype)
-let bb = (LLVMAppendBasicBlock func (rawstring "entry"))
-LLVMPositionBuilderAtEnd builder bb
-LLVMBuildRet builder (LLVMConstInt (LLVMInt32Type) (uint64 303) LLVMFalse)
-LLVMDumpValue func
-# outputs:
-# define i32 @testfunc() {
-#   ret i32 303
-# }
-let ee1 = (arrayof LLVMExecutionEngineRef (bitcast LLVMExecutionEngineRef null))
-let errormsg1 = (arrayof rawstring (bitcast rawstring null))
-if ((LLVMCreateJITCompilerForModule ee1 module (uint 0) errormsg1) == LLVMTrue)
-    error (string (@ errormsg1 0))
-let ee = (@ ee1 0)
-let fptr = (bitcast (pointer (cfunction int32 (tuple) false))
-        (LLVMGetPointerToGlobal ee func))
-assert ((fptr) == 303)
+    let builder = (LLVMCreateBuilder)
+    let module = (LLVMModuleCreateWithName (rawstring "testmodule"))
+    let functype = (LLVMFunctionType
+            (LLVMInt32Type) (bitcast (pointer LLVMTypeRef) null) (uint 0) LLVMFalse)
+    let func = (LLVMAddFunction module (rawstring "testfunc") functype)
+    let bb = (LLVMAppendBasicBlock func (rawstring "entry"))
+    LLVMPositionBuilderAtEnd builder bb
+    LLVMBuildRet builder (LLVMConstInt (LLVMInt32Type) (uint64 303) LLVMFalse)
+    LLVMDumpValue func
+    # outputs:
+    # define i32 @testfunc() {
+    #   ret i32 303
+    # }
+    let ee1 = (arrayof LLVMExecutionEngineRef (bitcast LLVMExecutionEngineRef null))
+    let errormsg1 = (arrayof rawstring (bitcast rawstring null))
+    if ((LLVMCreateJITCompilerForModule ee1 module (uint 0) errormsg1) == LLVMTrue)
+        error (string (@ errormsg1 0))
+    let ee = (@ ee1 0)
+    let fptr = (bitcast (pointer (cfunction int32 (tuple) false))
+            (LLVMGetPointerToGlobal ee func))
+    assert ((fptr) == 303)
 
 
 

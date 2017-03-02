@@ -548,7 +548,7 @@ syntax-extend stage-3 (_ scope)
     fn make-module-path (pattern name)
         fold (iter pattern) ""
             fn (out val)
-                list out val
+                /// list out val
                     .. out val
                 .. out
                     ? (== val "?") name val

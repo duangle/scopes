@@ -507,7 +507,7 @@ do
     # since let is implemented using vararg function parameters,
     # simple vararg matching can also be performed
     let start center... end =
-        list "(" 1 2 3 ")"
+        tupleof "(" 1 2 3 ")"
     assert
         and
             start == "("
