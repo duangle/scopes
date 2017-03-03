@@ -1669,6 +1669,16 @@ static bool is_table_type(Type type) {
     return is_subtype_or_type(type, TYPE_Table);
 }
 
+static std::string try_extract_string(const Any &value, const std::string &defvalue) {
+    if (value.type == TYPE_String) {
+        return std::string(value.str->ptr, value.str->count);
+    } else if (value.type == TYPE_Rawstring) {
+        return value.c_str;
+    } else {
+        return defvalue;
+    }
+}
+
 static std::string extract_string(const Any &value) {
     if (is_subtype_or_type(value.type, TYPE_Rawstring)) {
         return value.c_str;
@@ -3524,8 +3534,63 @@ static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
 
 static bool trace_arguments = false;
 
+static void print_fallback_value(const Any &arg, const Any &exc) {
+    printf("<error printing value of type %s: %s>\n",
+        get_name(arg.type).c_str(),
+        try_extract_string(exc, format(
+            "exception of type %s raised",
+            get_name(exc.type).c_str())).c_str());
+}
+
+static void print_minimal_call_trace(const Any *rbuf, size_t rcount) {
+    if (!rcount) {
+        printf("  <command buffer is empty>\n");
+    } else {
+        for (size_t i = 0; i < rcount; ++i) {
+            if (i == ARG_Cont)
+                printf("  Return: ");
+            else if (i == ARG_Func)
+                printf("  Callee: ");
+            else if (i >= ARG_Arg0)
+                printf("  Argument #%zu: ", i - ARG_Arg0);
+            if (rbuf[i].type == TYPE_BuiltinFlow) {
+                printf("<%s '%s'>\n",
+                    get_name(rbuf[i].type).c_str(),
+                    get_symbol_name(get_ptr_symbol(rbuf[i].ptr)).c_str());
+            } else {
+                printf("<value of type %s>\n",
+                    get_name(rbuf[i].type).c_str());
+            }
+        }
+    }
+}
+
+static void print_call_trace(const Any *rbuf, size_t rcount) {
+    if (!rcount) {
+        printf("  <command buffer is empty>\n");
+    } else {
+        StreamValueFormat fmt(0, true);
+        fmt.maxdepth = 2;
+        fmt.maxlength = 5;
+
+        for (size_t i = 0; i < rcount; ++i) {
+            if (i == ARG_Cont)
+                printf("  Return: ");
+            else if (i == ARG_Func)
+                printf("  Callee: ");
+            else if (i >= ARG_Arg0)
+                printf("  Argument #%zu: ", i - ARG_Arg0);
+            try {
+                printValue(rbuf[i], fmt);
+            } catch (const Any &any) {
+                print_fallback_value(rbuf[i], any);
+            }
+        }
+    }
+}
+
 static int execute_depth = 0;
-static size_t execute(const Any *args, size_t argcount, Any *ret, const ExecuteOpts &opts) {
+static size_t run_apply_loop(const Any *args, size_t argcount, Any *ret, const ExecuteOpts &opts) {
     size_t retcount = 0;
     execute_depth++;
 
@@ -3540,7 +3605,7 @@ static size_t execute(const Any *args, size_t argcount, Any *ret, const ExecuteO
     assert(argcount <= BANGRA_MAX_FUNCARGS);
     // track exit_cont so we can leave the loop when it is invoked
     auto exit_cont = args[ARG_Cont];
-    assert(exit_cont.type == TYPE_Flow);
+    assert(exit_cont.type == TYPE_BuiltinFlow);
     // init read buffer for arguments
     for (size_t i = 0; i < argcount; ++i) {
         wbuf[i] = args[i];
@@ -3579,34 +3644,13 @@ continue_execution:
 
             if (opts.trace) {
                 printf("TRACE: executing at level %i:\n", execute_depth);
-                if (!rcount) {
-                    printf("  <command buffer is empty>\n");
-                } else {
-                    StreamValueFormat fmt(0, true);
-                    fmt.maxdepth = 2;
-                    fmt.maxlength = 5;
-
-                    for (size_t i = 0; i < rcount; ++i) {
-                        if (i == ARG_Cont)
-                            printf("  -> ");
-                        else if (i == ARG_Func)
-                            printf("  Callee: ");
-                        else if (i >= ARG_Arg0)
-                            printf("  Argument #%zu: ", i - ARG_Arg0);
-                        try {
-                            printValue(rbuf[i], fmt);
-                        } catch (const Any &any) {
-                            printf("<exception raised while printing value of type %s>\n",
-                                get_name(rbuf[i].type).c_str());
-                        }
-                    }
-                }
+                print_call_trace(rbuf, rcount);
             }
 
             assert(rcount >= 2);
 
             Any callee = rbuf[ARG_Func];
-            if ((callee.type == TYPE_Flow)
+            if ((callee.type == TYPE_BuiltinFlow)
                 && (callee.ptr == exit_cont.ptr)) {
                 // exit continuation invoked, copy result and break loop
                 for (size_t i = 0; i < rcount; ++i) {
@@ -3734,18 +3778,7 @@ continue_execution:
 
         if (opts.dump_error) {
             printf("while evaluating arguments:\n");
-            StreamValueFormat fmt(0, true);
-            fmt.maxdepth = 2;
-            fmt.maxlength = 5;
-            for (size_t i = 0; i < rcount; ++i) {
-                printf("  #%zu: ", i);
-                try {
-                    printValue(rbuf[i], fmt);
-                } catch (const Any &any) {
-                    printf("<exception raised while printing value of type %s>\n",
-                        get_name(rbuf[i].type).c_str());
-                }
-            }
+            print_call_trace(rbuf, rcount);
             printf("\n");
 
             Frame::print_stack(S.frame);
@@ -3782,18 +3815,50 @@ continue_execution:
 
 static Any execute(const Any *args, size_t argcount, const ExecuteOpts &opts) {
     assert(argcount < BANGRA_MAX_FUNCARGS);
-    Any *ret = (Any *)malloc(sizeof(Any) * BANGRA_MAX_FUNCARGS);
-    auto exitcont = Flow::create_continuation(SYM_ExitFlow);
-    exitcont->appendParameter(SYM_Result);
-    ret[ARG_Cont] = wrap(exitcont);
-    for (size_t i = 0; i < argcount; ++i) {
-        ret[i + ARG_Func] = args[i];
+    assert(argcount >= 1);
+    if (args[0].type == TYPE_BuiltinFlow) {
+        // we can do a direct C to C call, no need to set up the whole thing
+
+        Any tmp_inargs[BANGRA_MAX_FUNCARGS];
+        Any tmp_outargs[BANGRA_MAX_FUNCARGS];
+
+        tmp_inargs[ARG_Cont] = const_none;
+        for (size_t i = 0; i < argcount; ++i) {
+            tmp_inargs[i + ARG_Func] = args[i];
+        }
+
+        State S;
+        S.frame = nullptr;
+        S.exception_handler = const_none;
+        S.rargs = tmp_inargs;
+        S.wargs = tmp_outargs;
+        S.wcount = 0;
+        S.rcount = argcount + 1;
+
+        if (opts.trace) {
+            printf("TRACE: C2C call:\n");
+            print_minimal_call_trace(S.rargs, S.rcount);
+        }
+
+        args[0].builtin_flow(&S);
+        assert(S.wcount <= BANGRA_MAX_FUNCARGS);
+        assert(S.wcount >= 3);
+        assert(isnone(S.wargs[ARG_Cont]));
+        assert(isnone(S.wargs[ARG_Func]));
+        return S.wargs[ARG_Arg0];
+    } else {
+        // use the interpreter
+        Any ret[BANGRA_MAX_FUNCARGS];
+        // special return value that is never invoked
+        ret[ARG_Cont].u64 = 1;
+        ret[ARG_Cont].type = TYPE_BuiltinFlow;
+        for (size_t i = 0; i < argcount; ++i) {
+            ret[i + ARG_Func] = args[i];
+        }
+        size_t retcount = run_apply_loop(ret, argcount + 1, ret, opts);
+        assert(retcount >= 3);
+        return ret[ARG_Arg0];
     }
-    size_t retcount = execute(ret, argcount + 1, ret, opts);
-    assert(retcount >= 3);
-    Any result = ret[ARG_Arg0];
-    free(ret);
-    return result;
 }
 
 static Any execute(const Any *args, size_t argcount) {
