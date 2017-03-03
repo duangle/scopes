@@ -9,11 +9,16 @@ DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 cd $DIR
 MODE=release
 if [ $MODE = "release" ]; then
-    echo Building with clang release version...
+    echo Building release version...
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
+    OPT_G=
+    OPT_O=-O3
 else
-    echo Building with clang debug version...
-    PATH=$DIR/../../llvm/build/bin:$PATH
+    echo Building debug version...
+    #PATH=$DIR/../../llvm/build/bin:$PATH
+    PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
+    OPT_G=-g
+    OPT_O=-O0
 fi
 clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
 && clang -c -o $DIR/linenoise.o $DIR/external/linenoise-ng/src/linenoise.cpp -O2 \
@@ -25,7 +30,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
 && clang++ \
     -o $DIR/bangra $DIR/bangra.cpp \
     -pedantic \
-    -g -rdynamic \
+    $OPT_G -rdynamic \
     -ferror-limit=1 \
     -Wno-vla-extension \
     -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
@@ -43,7 +48,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     $DIR/linenoise.o $DIR/ConvertUTF.o $DIR/wcwidth.o \
     `llvm-config --libs engine passes option objcarcopts coverage support` \
     -Wl,--no-whole-archive \
-    -O0 \
+    $OPT_O \
     -fexceptions \
 && $DIR/bangra $DIR/testing/test_all.b
 # && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b
