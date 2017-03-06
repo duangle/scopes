@@ -1,4 +1,5 @@
 // gcc -o - -P -E cmta.cpp
+// compile with -Os for smallest stack footprint
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -104,26 +105,30 @@ enum Type {
 struct BuiltinClosure;
 struct Any;
 
-typedef Any (*Function)(BuiltinClosure *, size_t, Any *);
+typedef Any (*Function)(const BuiltinClosure *, size_t, const Any *);
 
 struct Any {
     Type type;
     union {
         int32_t i32;
         Function func;
-        BuiltinClosure *builtin_closure;
-        char *ptr;
+        const BuiltinClosure *builtin_closure;
+        const char *ptr;
     };
 };
 
 Any wrap(int32_t x) { Any r; r.type = TYPE_I32; r.i32 = x; return r; }
 Any wrap(Function x) { Any r; r.type = TYPE_Function; r.func = x; return r; }
+Any wrap(const BuiltinClosure *x) {
+    Any r; r.type = TYPE_BuiltinClosure; r.builtin_closure = x; return r; }
 Any wrap(BuiltinClosure *x) {
-    Any r; r.type = TYPE_BuiltinClosure; r.builtin_closure = (BuiltinClosure *)x; return r; }
+    Any r; r.type = TYPE_BuiltinClosure; r.builtin_closure = x; return r; }
 const Any &wrap(const Any &x) { return x; }
 Any &wrap(Any &x) { return x; }
 template<typename T>
 Any wrap(T &src) { return T::_wrap(src); }
+template<typename T>
+Any wrap(const T &src) { return T::_wrap(src); }
 
 struct BuiltinClosure {
     Function f;
@@ -132,20 +137,13 @@ struct BuiltinClosure {
 };
 
 template<typename ... Args>
-inline Any _call(BuiltinClosure *cl, Args ... args) {
+inline Any _call(const BuiltinClosure *cl, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     return cl->f(cl, sizeof...(args), wrapped_args);
 }
 
 template<typename ... Args>
-inline Any _call(Function f, Args ... args) {
-    printf("HELLO\n");
-    Any wrapped_args[] = { wrap(args) ... };
-    return f(nullptr, sizeof...(args), wrapped_args);
-}
-
-template<typename ... Args>
-inline Any _call(Any &cl, Args ... args) {
+inline Any _call(const Any &cl, Args ... args) {
     switch(cl.type) {
     case TYPE_BuiltinClosure: {
         Any wrapped_args[] = { wrap(args) ... };
@@ -162,7 +160,7 @@ inline Any _call(Any &cl, Args ... args) {
 }
 
 template<typename T, typename ... Args>
-inline Any _call(T caller, Args ... args) {
+inline Any _call(const T &caller, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     Any cl = wrap(caller);
     assert(cl.type == TYPE_BuiltinClosure);
@@ -203,11 +201,11 @@ struct _call_struct<T, false> {
 #define IS_VARARGS_KW(x) CHECK(CAT(_IS_VARARGS_, x))
 
 #define DEF_EXTRACT_MEMBER(X, NAME) \
-    Any &NAME = _self->args[X];
+    const Any &NAME = _self->args[X];
 #define DEF_ANY_PARAM(N, NAME)  \
     IF_ELSE(IS_VARARGS_KW(NAME))( \
     )( \
-        Any &NAME = _args[N]; \
+        const Any &NAME = _args[N]; \
     )
 
 #define CLOSURE_UNPACK_PARAMS(...) \
@@ -250,14 +248,14 @@ struct _call_struct<T, false> {
         typedef NAME this_struct; \
         CLOSURE_CAPTURE_FN UPVARS \
         IF_ELSE(COUNT_VARARGS UPVARS) (\
-        static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
-        static Any run (BuiltinClosure *_self, size_t numargs, Any *_args) { \
+        static Any _wrap(const this_struct &self) { return wrap((const BuiltinClosure *)&self); } \
+        static Any run (const BuiltinClosure *_self, size_t numargs, const Any *_args) { \
             char _stack_marker; char *_stack_addr = &_stack_marker; \
             if (_stack_addr <= g_stack_limit) { \
                 return GC(run, _self, numargs, _args); \
             } \
         ) ( \
-        static Any run (BuiltinClosure *, size_t numargs, Any *_args) { \
+        static Any run (const BuiltinClosure *, size_t numargs, const Any *_args) { \
             char _stack_marker; char *_stack_addr = &_stack_marker; \
             if (_stack_addr <= g_stack_limit) { \
                 return GC(run, nullptr, numargs, _args); \
@@ -318,7 +316,7 @@ struct GC_Context {
     char *heap_end;
     uint64_t *bits;
 
-    void mark_addr(char *dstptr) {
+    void mark_addr(const char *dstptr) {
         size_t offset = g_stack_start - dstptr;
         assert((offset % 8) == 0);
         size_t page = offset / 512;
@@ -328,7 +326,7 @@ struct GC_Context {
         bits[page] |= (1<<bit);
     }
 
-    bool is_marked(char *dstptr) {
+    bool is_marked(const char *dstptr) {
         size_t offset = g_stack_start - dstptr;
         assert((offset % 8) == 0);
         size_t page = offset / 512;
@@ -337,7 +335,7 @@ struct GC_Context {
         return bits[page] & (1<<bit);
     }
 
-    bool is_on_stack(char *ptr) {
+    bool is_on_stack(const char *ptr) {
         return (ptr >= g_stack_limit) && (ptr < g_stack_start);
     }
 
@@ -392,13 +390,13 @@ struct GC_Context {
     }
 };
 
-static Any resume_closure(BuiltinClosure *_self, size_t numargs, Any *_args) {
+static Any resume_closure(const BuiltinClosure *_self, size_t numargs, const Any *_args) {
     assert(numargs == 0);
     assert(_self->size >= 3);
-    Any &f = _self->args[0];
-    Any &cl = _self->args[1];
-    Any &size = _self->args[2];
-    Any *args = _self->args + 3;
+    const Any &f = _self->args[0];
+    const Any &cl = _self->args[1];
+    const Any &size = _self->args[2];
+    const Any *args = _self->args + 3;
     assert (f.type == TYPE_Function);
     assert (cl.type == TYPE_BuiltinClosure);
     assert (size.type == TYPE_I32);
@@ -418,7 +416,7 @@ static Any mark_and_sweep(Any ret) {
         switch(val.type) {
         case TYPE_BuiltinClosure:
             if (val.builtin_closure) {
-                auto &cl = *val.builtin_closure;
+                auto &cl = *const_cast<BuiltinClosure *>(val.builtin_closure);
                 for(size_t i = 0; i < cl.size; ++i) {
                     ctx.move(cl.args[i]);
                 }
@@ -428,13 +426,13 @@ static Any mark_and_sweep(Any ret) {
         headptr++;
     }
 
-    printf("%zu values / %zu bytes moved\n",
+    printf("%llu values / %llu bytes moved\n",
         ctx.head_end - ctx.head,
         ctx.heap_end - ctx.heap);
     return ret;
 }
 
-static Any GC(Function f, BuiltinClosure *cl, size_t numargs, Any *args) {
+static Any GC(Function f, const BuiltinClosure *cl, size_t numargs, const Any *args) {
     // only minor GC, we just build a heap and forget it
 
     BuiltinClosure *retcl = (BuiltinClosure *)alloca(
@@ -506,7 +504,7 @@ FN(cmain, (), (),
                 RET(cont, 0); }),
         0,
         FN((x), (),
-            printf("stack size: %zu bytes\n",
+            printf("stack size: %llu bytes\n",
                 MAX_STACK_SIZE - (size_t)(_stack_addr - g_stack_limit));
             exit(0);));
 #elif 0
