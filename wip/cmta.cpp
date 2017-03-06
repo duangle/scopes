@@ -213,16 +213,16 @@ struct _call_struct {
     IF_ELSE(X)(, Any NAME)(Any NAME)
 #define DEF_CAPTURE_WRAP_ARG(NAME) , NAME
 #define CLOSURE_CAPTURE_FN(...) \
+    IF_ELSE(COUNT_VARARGS(__VA_ARGS__)) (\
     Function f; \
     size_t size; \
-    Any args[ \
-        IF_ELSE(COUNT_VARARGS(__VA_ARGS__))(COUNT_VARARGS(__VA_ARGS__))(1) \
-        ]; \
+    Any args[COUNT_VARARGS(__VA_ARGS__)]; \
     static this_struct capture( \
         MACRO_FOREACH_ENUM(DEF_CAPTURE_PARAM, __VA_ARGS__) \
         ) { \
-        return { (Function)run, COUNT_VARARGS(__VA_ARGS__) \
-            MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; }
+        return { run, COUNT_VARARGS(__VA_ARGS__) \
+            MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; } \
+    ) ()
 
 #define CLOSURE_VARARG_DEFS(...) \
     IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
@@ -231,26 +231,29 @@ struct _call_struct {
     )( \
         CLOSURE_ASSERT(numargs == COUNT_VARARGS(__VA_ARGS__)); \
     )
-#define CLOSURE_2(NAME, PARAMS, UPVARS) \
+#define CLOSURE_2(NAME, PARAMS, UPVARS, ...) \
     struct NAME { \
-    typedef NAME this_struct; \
-    CLOSURE_CAPTURE_FN UPVARS \
-    static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
-    static Any run (BuiltinClosure *_self, size_t numargs, Any *_args) { \
-        char _stack_marker; char *_stack_addr = &_stack_marker; \
-        if (_stack_addr <= g_stack_limit) { \
-            return GC(run, _self, numargs, _args); \
+        typedef NAME this_struct; \
+        CLOSURE_CAPTURE_FN UPVARS \
+        static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
+        static Any run (BuiltinClosure *_self, size_t numargs, Any *_args) { \
+            char _stack_marker; char *_stack_addr = &_stack_marker; \
+            if (_stack_addr <= g_stack_limit) { \
+                return GC(run, _self, numargs, _args); \
+            } \
+            CLOSURE_UNPACK_PARAMS PARAMS \
+            CLOSURE_VARARG_DEFS PARAMS \
+            CLOSURE_UPVARS UPVARS \
+            __VA_ARGS__ \
         } \
-        CLOSURE_UNPACK_PARAMS PARAMS \
-        CLOSURE_VARARG_DEFS PARAMS \
-        CLOSURE_UPVARS UPVARS
+    }
 
 #define DEF_FN(NAME, PARAMS, UPVARS, ...) \
-    CLOSURE_2(NAME, PARAMS, UPVARS) __VA_ARGS__ }}
+    CLOSURE_2(NAME, PARAMS, UPVARS, __VA_ARGS__)
 
 #define CLOSURE_CAPTURE_UPVARS(...) CAPTURE(_, __VA_ARGS__)
 #define LAMBDA_FN(PARAMS, UPVARS, ...) \
-    ({ CLOSURE_2(_, PARAMS, UPVARS) __VA_ARGS__ }}; CLOSURE_CAPTURE_UPVARS UPVARS; })
+    ({ CLOSURE_2(_, PARAMS, UPVARS, __VA_ARGS__); CLOSURE_CAPTURE_UPVARS UPVARS; })
 
 #define FN(ARG0, ...) \
     IF_ELSE(IS_PAREN(ARG0)) \
