@@ -5,9 +5,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <assert.h>
-
-#pragma GCC diagnostic ignored "-Wpedantic"
-#pragma GCC diagnostic ignored "-Wvarargs"
+#include <memory.h>
 
 #define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
 #define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
@@ -106,15 +104,16 @@ enum Type {
 struct Closure;
 struct Any;
 
-typedef Any (*Function)(Closure *, size_t, ...);
+typedef Any (*Function)(Closure *, size_t, Any *);
 
 struct Any {
+    Type type;
     union {
         int32_t i32;
         Function func;
         Closure *closure;
+        char *ptr;
     };
-    Type type;
 };
 
 Any wrap(int32_t x) { Any r; r.type = TYPE_I32; r.i32 = x; return r; }
@@ -133,34 +132,34 @@ struct Closure {
 
 template<typename ... Args>
 inline Any _call(Closure *cl, Args ... args) {
-    return cl->f(cl, sizeof...(args), wrap(args) ...);
+    Any wrapped_args[] = { wrap(args) ... };
+    return cl->f(cl, sizeof...(args), wrapped_args);
 }
 
 template<typename ... Args>
 inline Any _call(Any &cl, Args ... args) {
     assert(cl.type == TYPE_Closure);
-    return cl.closure->f(cl.closure, sizeof...(args), wrap(args) ...);
+    Any wrapped_args[] = { wrap(args) ... };
+    return cl.closure->f(cl.closure, sizeof...(args), wrapped_args);
 }
 
-template<typename ... Args>
-inline Any _call(Args ... args) {
-    return _call(wrap(args) ...);
+template<typename T, typename ... Args>
+inline Any _call(T caller, Args ... args) {
+    Any wrapped_args[] = { wrap(args) ... };
+    Any cl = wrap(caller);
+    assert(cl.type == TYPE_Closure);
+    return cl.closure->f(cl.closure, sizeof...(args), wrapped_args);
 }
-
-/*
-template<typename ... Args>
-inline Any _call(Closure &cl, Args ... args) {
-    return _call_wrapped(&cl, sizeof...(args), wrap(args) ...);
-}*/
 
 template<typename T>
 struct _call_struct {
     template<typename ... Args>
-    static Any call(Args ... args) {
-        return T::run(nullptr, sizeof...(args), wrap(args) ...);
+    inline static Any call(Args ... args) {
+        Any wrapped_args[] = { wrap(args) ... };
+        return T::run(nullptr, sizeof...(args), wrapped_args);
     }
     template<typename ... Args>
-    static T capture(Args ... args) {
+    inline static T capture(Args ... args) {
         return T::capture(wrap(args) ...);
     }
 };
@@ -176,10 +175,14 @@ struct _call_struct {
 
 #define DEF_EXTRACT_MEMBER(X, NAME) \
     Any &NAME = _self->args[X];
-#define DEF_ANY_PARAM(NAME) , IF_ELSE(IS_VARARGS_KW(NAME))(...)(Any NAME)
+#define DEF_ANY_PARAM(N, NAME)  \
+    IF_ELSE(IS_VARARGS_KW(NAME))( \
+    )( \
+        Any &NAME = _args[N]; \
+    )
 
-#define CLOSURE_PARAMS(...) \
-    MACRO_FOREACH(DEF_ANY_PARAM, __VA_ARGS__)
+#define CLOSURE_UNPACK_PARAMS(...) \
+    MACRO_FOREACH_ENUM(DEF_ANY_PARAM, __VA_ARGS__)
 #define CLOSURE_UPVARS(...) \
     IF_ELSE(COUNT_VARARGS(__VA_ARGS__))( \
         CLOSURE_ASSERT(_self); \
@@ -203,26 +206,10 @@ struct _call_struct {
         return { (Function)run, COUNT_VARARGS(__VA_ARGS__) \
             MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; }
 
-#define DEF_GC_ARG(NAME) \
-    IF_ELSE(IS_VARARGS_KW(NAME))( \
-    )( gc_args[N++] = NAME; )
-#define CLOSURE_GC_ARGS(...) \
-    Any gc_args[numargs]; int N = 0; \
-    MACRO_FOREACH(DEF_GC_ARG, __VA_ARGS__) \
-    IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
-        CVA_LIST va; \
-        CVA_START(va); \
-        while (N < numargs) { \
-            gc_args[N++] = CVA_ARG(va); \
-        } \
-        CVA_END(va); \
-    )() \
-    return GC(_self, numargs, gc_args);
 #define CLOSURE_VARARG_DEFS(...) \
     IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
         enum { VARARG_START = DEC(COUNT_VARARGS(__VA_ARGS__)) }; \
         CLOSURE_ASSERT(numargs >= VARARG_START); \
-        auto &_va_begin = SEMITAIL(numargs, __VA_ARGS__); \
     )( \
         CLOSURE_ASSERT(numargs == COUNT_VARARGS(__VA_ARGS__)); \
     )
@@ -231,13 +218,13 @@ struct _call_struct {
     typedef NAME this_struct; \
     CLOSURE_CAPTURE_FN UPVARS \
     static Any _wrap(this_struct &self) { return wrap((Closure *)&self); } \
-    static Any run (Closure *_self, size_t numargs \
-        CLOSURE_PARAMS PARAMS) { \
+    static Any run (Closure *_self, size_t numargs, Any *_args) { \
         char _stack_marker; char *_stack_addr = &_stack_marker; \
-        CLOSURE_VARARG_DEFS PARAMS \
         if (_stack_addr <= g_stack_limit) { \
-            CLOSURE_GC_ARGS PARAMS \
+            return GC(run, _self, numargs, _args); \
         } \
+        CLOSURE_UNPACK_PARAMS PARAMS \
+        CLOSURE_VARARG_DEFS PARAMS \
         CLOSURE_UPVARS UPVARS
 
 #define DEF_FN(NAME, PARAMS, UPVARS, ...) \
@@ -252,10 +239,7 @@ struct _call_struct {
         (LAMBDA_FN(ARG0, __VA_ARGS__)) \
         (DEF_FN(ARG0, __VA_ARGS__))
 
-typedef va_list CVA_LIST;
-#define CVA_START(name) va_start(name, _va_begin)
-#define CVA_ARG(name) va_arg(name, Any)
-#define CVA_END(name) va_end(name)
+#define CVA_ARG(i) _args[i]
 
 #define RET(...) return _call(__VA_ARGS__)
 #define CC(T, ...) return _call_struct<T>::call(__VA_ARGS__)
@@ -264,57 +248,165 @@ typedef va_list CVA_LIST;
 //#define MAX_STACK_SIZE 0x200000
 #define MAX_STACK_SIZE 16384
 
-void dump(Any &value) {
-    switch(value.type) {
-        case TYPE_I32: {
-            printf("int: %i\n", value.i32);
-        } break;
-        case TYPE_Function: {
-            printf("function: %p\n", value.func);
-        } break;
-        case TYPE_Closure: {
-            printf("closure: %p\n", (void *)value.closure);
-        } break;
-        case TYPE_Void: {
-            printf("none\n");
-        } break;
-        default: break;
+static size_t align(size_t offset, size_t align) {
+    return (offset + align - 1) & ~(align - 1);
+}
+
+static size_t sizeof_payload(const Any &from) {
+    switch(from.type) {
+        case TYPE_Closure:
+            if (!from.closure) return 0;
+            return sizeof(Closure)
+                + sizeof(Any) * from.closure->size - sizeof(Any);
+        default:
+            return 0;
     }
 }
 
-void walk(Any &value) {
-    switch(value.type) {
-        case TYPE_Closure: {
-            auto cl = value.closure;
-            printf("function: %p\n", cl->f);
-            printf("%i arguments\n", (int)cl->size);
-            for (size_t i = 0; i < cl->size; ++i) {
-                printf("  #%i: ", (int)i); dump(cl->args[i]);
-            }
-            for (size_t i = 0; i < cl->size; ++i) {
-                walk(cl->args[i]);
-            }
-        } break;
-        default: break;
-    }
-}
-
-Any GC(Closure *cl, size_t numargs, Any *args) {
-    printf("walk! %p %zu\n", cl, numargs);
-    if (cl) {
-        Any clany = wrap(cl);
-        walk(clany);
-    }
-    for (size_t i = 0; i < numargs; ++i) {
-        printf("#%i: ", (int)i); dump(args[i]);
-    }
-    for (size_t i = 0; i < numargs; ++i) {
-        walk(args[i]);
-    }
-    return wrap(0);
-}
-
+static char *g_stack_start;
 static char *g_stack_limit;
+
+struct GC_Context {
+    char *_stack_addr;
+    size_t numpages;
+    Any *head;
+    Any *head_end;
+    char *heap;
+    char *heap_end;
+    uint64_t *bits;
+
+    void mark_addr(char *dstptr) {
+        size_t offset = g_stack_start - dstptr;
+        assert((offset % 8) == 0);
+        size_t page = offset / 512;
+        size_t bit = (offset / 8) % 64;
+        assert (page < numpages);
+        assert(!(bits[page] & (1<<bit)));
+        bits[page] |= (1<<bit);
+    }
+
+    bool is_marked(char *dstptr) {
+        size_t offset = g_stack_start - dstptr;
+        assert((offset % 8) == 0);
+        size_t page = offset / 512;
+        size_t bit = (offset / 8) % 64;
+        assert (page < numpages);
+        return bits[page] & (1<<bit);
+    }
+
+    bool is_on_stack(char *ptr) {
+        return (ptr >= g_stack_limit) && (ptr < g_stack_start);
+    }
+
+    void move_and_mark(size_t plsize, Any &from) {
+        if (is_marked(from.ptr)) {
+            char **dest = (char **)from.ptr;
+            from.ptr = *dest;
+        } else {
+            mark_addr(from.ptr);
+            // copy data to new heap
+            memcpy(heap_end, from.ptr, plsize);
+            // write pointer to old location
+            char **dest = (char **)from.ptr;
+            *dest = heap_end;
+            from.ptr = heap_end;
+            heap_end += align(plsize, 8);
+
+            *head_end++ = from;
+        }
+    }
+
+    void force_move(Any &from) {
+        size_t plsize = sizeof_payload(from);
+        if (plsize) {
+            move_and_mark(plsize, from);
+        }
+    }
+
+    void move(Any &from) {
+        size_t plsize = sizeof_payload(from);
+        if (plsize) {
+            if (is_on_stack(from.ptr)) {
+                move_and_mark(plsize, from);
+            }
+        }
+    }
+
+    GC_Context(char *stack_addr) {
+        _stack_addr = stack_addr;
+        head = (Any *)malloc(sizeof(Any) * 1024);
+        head_end = head;
+        heap = (char *)malloc(MAX_STACK_SIZE * 2);
+        heap_end = heap;
+        numpages = ((MAX_STACK_SIZE + 511) / 512) * 2;
+        bits = (uint64_t *)malloc(numpages * sizeof(uint64_t));
+        memset(bits, 0, numpages * sizeof(uint64_t));
+    }
+
+    ~GC_Context() {
+        free(bits);
+        free(head);
+    }
+};
+
+static Any resume_closure(Closure *_self, size_t numargs, Any *_args) {
+    assert(numargs == 0);
+    assert(_self->size >= 3);
+    Any &f = _self->args[0];
+    Any &cl = _self->args[1];
+    Any &size = _self->args[2];
+    Any *args = _self->args + 3;
+    assert (f.type == TYPE_Function);
+    assert (cl.type == TYPE_Closure);
+    assert (size.type == TYPE_I32);
+    return f.func(cl.closure, (size_t)size.i32, args);
+}
+
+static Any mark_and_sweep(Any ret) {
+    uint64_t _stack_marker;
+    GC_Context ctx((char *)&_stack_marker);
+
+    printf("GC!\n");
+    ctx.force_move(ret);
+
+    Any *headptr = ctx.head;
+    while(headptr < ctx.head_end) {
+        Any &val = *headptr;
+        switch(val.type) {
+        case TYPE_Closure:
+            if (val.closure) {
+                auto &cl = *val.closure;
+                for(size_t i = 0; i < cl.size; ++i) {
+                    ctx.move(cl.args[i]);
+                }
+            } break;
+        default: break;
+        }
+        headptr++;
+    }
+
+    printf("%zu values / %zu bytes moved\n",
+        ctx.head_end - ctx.head,
+        ctx.heap_end - ctx.heap);
+    return ret;
+}
+
+static Any GC(Function f, Closure *cl, size_t numargs, Any *args) {
+    // only minor GC, we just build a heap and forget it
+
+    Closure *retcl = (Closure *)alloca(
+        sizeof(Closure) + sizeof(Any) * (numargs + 3) - sizeof(Any));
+    retcl->size = numargs + 3;
+    retcl->f = resume_closure;
+    retcl->args[0] = wrap(f);
+    retcl->args[1] = wrap(cl);
+    retcl->args[2] = wrap((int)numargs);
+    for (size_t i = 0; i < numargs; ++i) {
+        retcl->args[3 + i] = args[i];
+    }
+
+    return mark_and_sweep(wrap(retcl));
+}
 
 FN(func, (x, y, VARARGS), (a1, a2, a3, a4),
     printf("c=%zu: %i %i %i %i |",
@@ -322,13 +414,10 @@ FN(func, (x, y, VARARGS), (a1, a2, a3, a4),
         a1.i32, a2.i32, a3.i32, a4.i32);
     printf(" a=%zu:", numargs);
     printf(" %i %i >>", x.i32, y.i32);
-    CVA_LIST ap;
-    CVA_START(ap);
     for (size_t i = VARARG_START; i < numargs; ++i) {
-        Any v = CVA_ARG(ap);
+        Any v = CVA_ARG(i);
         printf(" %i", v.i32);
     }
-    CVA_END(ap);
     printf("\n");
 );
 
@@ -342,6 +431,7 @@ fn pow (x n)
     else (x * (pow x (n - 1)))
 */
 
+// needlessly continuation-based version of pow so we can stress the stack
 FN(pow, (x, n, cont), (),
     if (n.i32 == 0) {
         RET(cont.closure, 1); }
@@ -356,14 +446,13 @@ FN(pow, (x, n, cont), (),
 
 FN(cmain, (), (),
 #if 1
+    // print all powers of 2 up to 30 bits
     FN(loop, (i, cont), (n),
         auto loop_self = wrap(_self);
         if (i.i32 <= n.i32) {
             CC(pow, 2, i,
                 FN((x), (i, cont, loop_self),
                     printf("%i\n", x.i32);
-            printf("stack size: %zu bytes\n",
-                MAX_STACK_SIZE - (size_t)(_stack_addr - g_stack_limit));
                     RET(loop_self, i.i32 + 1, cont);)); }
         else {
             RET(cont, 0); });
@@ -393,8 +482,13 @@ FN(cmain, (), (),
 );
 
 int main(int argc, char ** argv) {
-    char c = 0; g_stack_limit = &c - MAX_STACK_SIZE;
-    cmain::run(nullptr, 0);
+    uint64_t c = 0;
+    g_stack_start = (char *)&c;
+    g_stack_limit = g_stack_start - MAX_STACK_SIZE;
+    Any dest = cmain::run(nullptr, 0, nullptr);
+    while (true) {
+        dest = _call(dest);
+    }
 
     return 0;
 }
