@@ -98,57 +98,75 @@ enum Type {
     TYPE_Void,
     TYPE_I32,
     TYPE_Function,
-    TYPE_Closure,
+    TYPE_BuiltinClosure,
 };
 
-struct Closure;
+struct BuiltinClosure;
 struct Any;
 
-typedef Any (*Function)(Closure *, size_t, Any *);
+typedef Any (*Function)(BuiltinClosure *, size_t, Any *);
 
 struct Any {
     Type type;
     union {
         int32_t i32;
         Function func;
-        Closure *closure;
+        BuiltinClosure *builtin_closure;
         char *ptr;
     };
 };
 
 Any wrap(int32_t x) { Any r; r.type = TYPE_I32; r.i32 = x; return r; }
 Any wrap(Function x) { Any r; r.type = TYPE_Function; r.func = x; return r; }
-Any wrap(Closure *x) { Any r; r.type = TYPE_Closure; r.closure = (Closure *)x; return r; }
+Any wrap(BuiltinClosure *x) {
+    Any r; r.type = TYPE_BuiltinClosure; r.builtin_closure = (BuiltinClosure *)x; return r; }
 const Any &wrap(const Any &x) { return x; }
 Any &wrap(Any &x) { return x; }
 template<typename T>
 Any wrap(T &src) { return T::_wrap(src); }
 
-struct Closure {
+struct BuiltinClosure {
     Function f;
     size_t size;
     Any args[1];
 };
 
 template<typename ... Args>
-inline Any _call(Closure *cl, Args ... args) {
+inline Any _call(BuiltinClosure *cl, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     return cl->f(cl, sizeof...(args), wrapped_args);
 }
 
 template<typename ... Args>
-inline Any _call(Any &cl, Args ... args) {
-    assert(cl.type == TYPE_Closure);
+inline Any _call(Function f, Args ... args) {
+    printf("HELLO\n");
     Any wrapped_args[] = { wrap(args) ... };
-    return cl.closure->f(cl.closure, sizeof...(args), wrapped_args);
+    return f(nullptr, sizeof...(args), wrapped_args);
+}
+
+template<typename ... Args>
+inline Any _call(Any &cl, Args ... args) {
+    switch(cl.type) {
+    case TYPE_BuiltinClosure: {
+        Any wrapped_args[] = { wrap(args) ... };
+        return cl.builtin_closure->f(cl.builtin_closure, sizeof...(args), wrapped_args);
+    } break;
+    case TYPE_Function: {
+        Any wrapped_args[] = { wrap(args) ... };
+        return cl.func(nullptr, sizeof...(args), wrapped_args);
+    } break;
+    default: {
+        assert(false && "type not callable");
+    } break;
+    }
 }
 
 template<typename T, typename ... Args>
 inline Any _call(T caller, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     Any cl = wrap(caller);
-    assert(cl.type == TYPE_Closure);
-    return cl.closure->f(cl.closure, sizeof...(args), wrapped_args);
+    assert(cl.type == TYPE_BuiltinClosure);
+    return cl.builtin_closure->f(cl.builtin_closure, sizeof...(args), wrapped_args);
 }
 
 template<typename T>
@@ -217,8 +235,8 @@ struct _call_struct {
     struct NAME { \
     typedef NAME this_struct; \
     CLOSURE_CAPTURE_FN UPVARS \
-    static Any _wrap(this_struct &self) { return wrap((Closure *)&self); } \
-    static Any run (Closure *_self, size_t numargs, Any *_args) { \
+    static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
+    static Any run (BuiltinClosure *_self, size_t numargs, Any *_args) { \
         char _stack_marker; char *_stack_addr = &_stack_marker; \
         if (_stack_addr <= g_stack_limit) { \
             return GC(run, _self, numargs, _args); \
@@ -243,7 +261,10 @@ struct _call_struct {
 
 #define RET(...) return _call(__VA_ARGS__)
 #define CC(T, ...) return _call_struct<T>::call(__VA_ARGS__)
-#define CAPTURE(T, ...) _call_struct<T>::capture(__VA_ARGS__)
+#define CAPTURE(T, ...) \
+    IF_ELSE(COUNT_VARARGS(__VA_ARGS__)) \
+    (_call_struct<T>::capture(__VA_ARGS__)) \
+    (T::run)
 
 //#define MAX_STACK_SIZE 0x200000
 #define MAX_STACK_SIZE 16384
@@ -254,10 +275,10 @@ static size_t align(size_t offset, size_t align) {
 
 static size_t sizeof_payload(const Any &from) {
     switch(from.type) {
-        case TYPE_Closure:
-            if (!from.closure) return 0;
-            return sizeof(Closure)
-                + sizeof(Any) * from.closure->size - sizeof(Any);
+        case TYPE_BuiltinClosure:
+            if (!from.builtin_closure) return 0;
+            return sizeof(BuiltinClosure)
+                + sizeof(Any) * from.builtin_closure->size - sizeof(Any);
         default:
             return 0;
     }
@@ -349,7 +370,7 @@ struct GC_Context {
     }
 };
 
-static Any resume_closure(Closure *_self, size_t numargs, Any *_args) {
+static Any resume_closure(BuiltinClosure *_self, size_t numargs, Any *_args) {
     assert(numargs == 0);
     assert(_self->size >= 3);
     Any &f = _self->args[0];
@@ -357,9 +378,9 @@ static Any resume_closure(Closure *_self, size_t numargs, Any *_args) {
     Any &size = _self->args[2];
     Any *args = _self->args + 3;
     assert (f.type == TYPE_Function);
-    assert (cl.type == TYPE_Closure);
+    assert (cl.type == TYPE_BuiltinClosure);
     assert (size.type == TYPE_I32);
-    return f.func(cl.closure, (size_t)size.i32, args);
+    return f.func(cl.builtin_closure, (size_t)size.i32, args);
 }
 
 static Any mark_and_sweep(Any ret) {
@@ -373,9 +394,9 @@ static Any mark_and_sweep(Any ret) {
     while(headptr < ctx.head_end) {
         Any &val = *headptr;
         switch(val.type) {
-        case TYPE_Closure:
-            if (val.closure) {
-                auto &cl = *val.closure;
+        case TYPE_BuiltinClosure:
+            if (val.builtin_closure) {
+                auto &cl = *val.builtin_closure;
                 for(size_t i = 0; i < cl.size; ++i) {
                     ctx.move(cl.args[i]);
                 }
@@ -391,11 +412,11 @@ static Any mark_and_sweep(Any ret) {
     return ret;
 }
 
-static Any GC(Function f, Closure *cl, size_t numargs, Any *args) {
+static Any GC(Function f, BuiltinClosure *cl, size_t numargs, Any *args) {
     // only minor GC, we just build a heap and forget it
 
-    Closure *retcl = (Closure *)alloca(
-        sizeof(Closure) + sizeof(Any) * (numargs + 3) - sizeof(Any));
+    BuiltinClosure *retcl = (BuiltinClosure *)alloca(
+        sizeof(BuiltinClosure) + sizeof(Any) * (numargs + 3) - sizeof(Any));
     retcl->size = numargs + 3;
     retcl->f = resume_closure;
     retcl->args[0] = wrap(f);
@@ -419,6 +440,7 @@ FN(func, (x, y, VARARGS), (a1, a2, a3, a4),
         printf(" %i", v.i32);
     }
     printf("\n");
+    exit(0);
 );
 
 /*
@@ -434,48 +456,49 @@ fn pow (x n)
 // needlessly continuation-based version of pow so we can stress the stack
 FN(pow, (x, n, cont), (),
     if (n.i32 == 0) {
-        RET(cont.closure, 1); }
+        RET(cont, 1); }
     else if ((n.i32 % 2) == 0) {
         CC(pow, x, n.i32 / 2,
             FN((x2), (cont),
-                RET(cont.closure, x2.i32 * x2.i32);));}
+                RET(cont, x2.i32 * x2.i32);));}
     else {
         CC(pow, x, n.i32 - 1,
             FN((x2), (x, cont),
-                RET(cont.closure, x.i32 * x2.i32);));});
+                RET(cont, x.i32 * x2.i32);));});
 
 FN(cmain, (), (),
 #if 1
     // print all powers of 2 up to 30 bits
-    FN(loop, (i, cont), (n),
-        auto loop_self = wrap(_self);
-        if (i.i32 <= n.i32) {
-            CC(pow, 2, i,
-                FN((x), (i, cont, loop_self),
-                    printf("%i\n", x.i32);
-                    RET(loop_self, i.i32 + 1, cont);)); }
-        else {
-            RET(cont, 0); });
-
     int n = 30;
-    RET(CAPTURE(loop, n), 0,
+    RET(
+        FN((i, cont), (n),
+            assert(_self);
+            auto loop_self = wrap(_self);
+            if (i.i32 <= n.i32) {
+                CC(pow, 2, i,
+                    FN((x), (i, cont, loop_self),
+                        assert(_self);
+                        printf("%i\n", x.i32);
+                        RET(loop_self, i.i32 + 1, cont);)); }
+            else {
+                RET(cont, 0); }),
+        0,
         FN((x), (),
+            assert(!_self);
             printf("stack size: %zu bytes\n",
                 MAX_STACK_SIZE - (size_t)(_stack_addr - g_stack_limit));
             exit(0);));
-#elif 0
+#elif 1
     auto cl = CAPTURE(func, 1, 2, 3, 4);
     RET(cl, 23, 42, 303, 606, 909);
 #else
     CC(pow, 2, 16,
         FN((VARARGS), (),
-            CVA_LIST ap;
-            CVA_START(ap);
+            assert(!_self);
             for (size_t i = VARARG_START; i < numargs; ++i) {
-                Any v = CVA_ARG(ap);
-                printf(" %i", v.i32);
+                Any v = CVA_ARG(i);
+                printf("%i\n", v.i32);
             }
-            CVA_END(ap);
             //printf("%i\n", x.i32);
             exit(0);));
 #endif
