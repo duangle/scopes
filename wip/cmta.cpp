@@ -169,18 +169,29 @@ inline Any _call(T caller, Args ... args) {
     return cl.builtin_closure->f(cl.builtin_closure, sizeof...(args), wrapped_args);
 }
 
+template<typename T, bool has_upvars>
+struct _call_struct {};
+
 template<typename T>
-struct _call_struct {
-    template<typename ... Args>
-    inline static Any call(Args ... args) {
-        Any wrapped_args[] = { wrap(args) ... };
-        return T::run(nullptr, sizeof...(args), wrapped_args);
-    }
+struct _call_struct<T, true> {
     template<typename ... Args>
     inline static T capture(Args ... args) {
         return T::capture(wrap(args) ...);
     }
 };
+
+template<typename T>
+struct _call_struct<T, false> {
+    template<typename ... Args>
+    inline static Any call(Args ... args) {
+        Any wrapped_args[] = { wrap(args) ... };
+        return T::run(nullptr, sizeof...(args), wrapped_args);
+    }
+    inline static Function capture() {
+        return T::run;
+    }
+};
+
 
 #if 1
 #define CLOSURE_ASSERT(x) assert(x)
@@ -214,6 +225,7 @@ struct _call_struct {
 #define DEF_CAPTURE_WRAP_ARG(NAME) , NAME
 #define CLOSURE_CAPTURE_FN(...) \
     IF_ELSE(COUNT_VARARGS(__VA_ARGS__)) (\
+    enum { has_upvars = true }; \
     Function f; \
     size_t size; \
     Any args[COUNT_VARARGS(__VA_ARGS__)]; \
@@ -222,7 +234,9 @@ struct _call_struct {
         ) { \
         return { run, COUNT_VARARGS(__VA_ARGS__) \
             MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; } \
-    ) ()
+    ) ( \
+    enum { has_upvars = false }; \
+    )
 
 #define CLOSURE_VARARG_DEFS(...) \
     IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
@@ -235,12 +249,20 @@ struct _call_struct {
     struct NAME { \
         typedef NAME this_struct; \
         CLOSURE_CAPTURE_FN UPVARS \
+        IF_ELSE(COUNT_VARARGS UPVARS) (\
         static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
         static Any run (BuiltinClosure *_self, size_t numargs, Any *_args) { \
             char _stack_marker; char *_stack_addr = &_stack_marker; \
             if (_stack_addr <= g_stack_limit) { \
                 return GC(run, _self, numargs, _args); \
             } \
+        ) ( \
+        static Any run (BuiltinClosure *, size_t numargs, Any *_args) { \
+            char _stack_marker; char *_stack_addr = &_stack_marker; \
+            if (_stack_addr <= g_stack_limit) { \
+                return GC(run, nullptr, numargs, _args); \
+            } \
+        ) \
             CLOSURE_UNPACK_PARAMS PARAMS \
             CLOSURE_VARARG_DEFS PARAMS \
             CLOSURE_UPVARS UPVARS \
@@ -263,11 +285,8 @@ struct _call_struct {
 #define CVA_ARG(i) _args[i]
 
 #define RET(...) return _call(__VA_ARGS__)
-#define CC(T, ...) return _call_struct<T>::call(__VA_ARGS__)
-#define CAPTURE(T, ...) \
-    IF_ELSE(COUNT_VARARGS(__VA_ARGS__)) \
-    (_call_struct<T>::capture(__VA_ARGS__)) \
-    (T::run)
+#define CC(T, ...) return _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
+#define CAPTURE(T, ...) _call_struct<T, T::has_upvars>::capture(__VA_ARGS__)
 
 //#define MAX_STACK_SIZE 0x200000
 #define MAX_STACK_SIZE 16384
@@ -487,17 +506,15 @@ FN(cmain, (), (),
                 RET(cont, 0); }),
         0,
         FN((x), (),
-            assert(!_self);
             printf("stack size: %zu bytes\n",
                 MAX_STACK_SIZE - (size_t)(_stack_addr - g_stack_limit));
             exit(0);));
-#elif 1
+#elif 0
     auto cl = CAPTURE(func, 1, 2, 3, 4);
     RET(cl, 23, 42, 303, 606, 909);
 #else
     CC(pow, 2, 16,
         FN((VARARGS), (),
-            assert(!_self);
             for (size_t i = VARARG_START; i < numargs; ++i) {
                 Any v = CVA_ARG(i);
                 printf("%i\n", v.i32);
