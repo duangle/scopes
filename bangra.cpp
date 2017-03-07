@@ -119,7 +119,47 @@ int print_number(int value);
 #include "clang/Frontend/MultiplexConsumer.h"
 
 #include "external/cityhash/city.cpp"
+
 #include "external/coro/coro.h"
+
+#define STB_SPRINTF_IMPLEMENTATION
+#define STB_SPRINTF_DECORATE(name) stb_##name
+#include "external/stb_sprintf.h"
+
+typedef struct stb_printf_ctx {
+    FILE *dest;
+    char tmp[STB_SPRINTF_MIN];
+} stb_printf_ctx;
+
+static char *_printf_cb(char * buf, void * user, int len) {
+    stb_printf_ctx *ctx = (stb_printf_ctx *)user;
+    fwrite (buf, 1, len, ctx->dest);
+    return ctx->tmp;
+}
+static int stb_vprintf(const char *fmt, va_list va) {
+    stb_printf_ctx ctx;
+    ctx.dest = stdout;
+    return stb_vsprintfcb(_printf_cb, &ctx, ctx.tmp, fmt, va);
+}
+static int stb_printf(const char *fmt, ...) {
+    stb_printf_ctx ctx;
+    ctx.dest = stdout;
+    va_list va;
+    va_start(va, fmt);
+    int c = stb_vsprintfcb(_printf_cb, &ctx, ctx.tmp, fmt, va);
+    va_end(va);
+    return c;
+}
+
+static int stb_fprintf(FILE *out, const char *fmt, ...) {
+    stb_printf_ctx ctx;
+    ctx.dest = out;
+    va_list va;
+    va_start(va, fmt);
+    int c = stb_vsprintfcb(_printf_cb, &ctx, ctx.tmp, fmt, va);
+    va_end(va);
+    return c;
+}
 
 namespace bangra {
 
@@ -127,17 +167,27 @@ namespace bangra {
 // UTILITIES
 //------------------------------------------------------------------------------
 
-template<typename ... Args>
-std::string format( const std::string& format, Args ... args ) {
-    size_t size = snprintf( nullptr, 0, format.c_str(), args ... );
+static std::string vformat( const char *fmt, va_list va ) {
+    va_list va2;
+    va_copy(va2, va);
+    size_t size = stb_vsnprintf( nullptr, 0, fmt, va2 );
+    va_end(va2);
     std::string str;
     str.resize(size);
-    snprintf( &str[0], size + 1, format.c_str(), args ... );
+    stb_vsnprintf( &str[0], size + 1, fmt, va );
     return str;
 }
 
+static std::string format( const char *fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+    std::string result = vformat(fmt, va);
+    va_end(va);
+    return result;
+}
+
 template <typename R, typename... Args>
-std::function<R (Args...)> memo(R (*fn)(Args...)) {
+static std::function<R (Args...)> memo(R (*fn)(Args...)) {
     std::map<std::tuple<Args...>, R> list;
     return [fn, list](Args... args) mutable -> R {
         auto argt = std::make_tuple(args...);
@@ -385,7 +435,7 @@ public:
                 break;
             end++;
         }
-        printf("%.*s\n", (int)(end - start), str + start);
+        stb_printf("%.*s\n", (int)(end - start), str + start);
         size_t column = offset - start;
         for (size_t i = 0; i < column; ++i) {
             putchar(' ');
@@ -433,7 +483,7 @@ struct Anchor {
     }
 
     void printMessage (const std::string &msg) const {
-        printf("%s:%i:%i: %s\n", path, lineno, column, msg.c_str());
+        stb_printf("%s:%i:%i: %s\n", path, lineno, column, msg.c_str());
         dumpFileLine(path, offset);
     }
 
@@ -447,7 +497,7 @@ struct Anchor {
                 << ansi(ANSI_STYLE_NUMBER, format("%i", anchor->column))
                 << " ";
         }
-        vprintf (fmt, args);
+        stb_vprintf (fmt, args);
         putchar('\n');
         if (anchor) {
             dumpFileLine(anchor->path, anchor->offset);
@@ -477,7 +527,7 @@ struct Anchor {
         } else {
             std::cout << ansi(ANSI_STYLE_ERROR, "error:") << " ";
         }
-        vprintf (fmt, args);
+        stb_vprintf (fmt, args);
         putchar('\n');
         if (anchor) {
             dumpFileLine(anchor->path, anchor->offset);
@@ -779,16 +829,6 @@ struct State {
     size_t wcount;
     Frame *frame;
     Any exception_handler;
-
-    State() :
-        rargs(nullptr),
-        wargs(nullptr),
-        rcount(0),
-        wcount(0),
-        frame(nullptr) {
-        exception_handler.ptr = nullptr;
-        exception_handler.type = TYPE_Void;
-    }
 };
 
 //------------------------------------------------------------------------------
@@ -1680,12 +1720,6 @@ static bool is_table_type(Type type) {
     return is_subtype_or_type(type, TYPE_Table);
 }
 
-static bool is_cfunction_pointer_type(Type type) {
-    return is_pointer_type(type)
-        && is_cfunction_type(get_element_type(type));
-}
-
-
 static std::string try_extract_string(const Any &value, const std::string &defvalue) {
     if (value.type == TYPE_String) {
         return std::string(value.str->ptr, value.str->count);
@@ -2070,7 +2104,7 @@ public:
 
     std::string getRefRepr () const {
         return format("%s%s%" PRId64,
-            ansi(ANSI_STYLE_KEYWORD, "λ").c_str(),
+            ansi(ANSI_STYLE_KEYWORD, "Î»").c_str(),
             get_symbol_name(name).c_str(),
             uid);
     }
@@ -2148,17 +2182,13 @@ protected:
 
 public:
 
-    Frame *bind(const Flow *flow, const Any *values, size_t count) {
+    Frame *bind(const Flow *flow, const std::vector<Any> &values) {
         Frame *frame = Frame::create(this);
         if (frame->map().count(flow)) {
             frame->_map = new FlowValuesMap();
             frame->owner = frame;
         }
-        std::vector<Any> vargs(count);
-        for (size_t i = 0; i < count; ++i) {
-            vargs[i] = values[i];
-        }
-        frame->map()[flow] = { frame->idx, vargs };
+        frame->map()[flow] = { frame->idx, values };
         return frame;
     }
 
@@ -2410,14 +2440,7 @@ static void error (const char *format, ...) {
     va_list args;
 
     va_start (args, format);
-    size_t size = vsnprintf(nullptr, 0, format, args);
-    va_end (args);
-
-    std::string str;
-    str.resize(size);
-
-    va_start (args, format);
-    vsnprintf(&str[0], size + 1, format, args);
+    std::string str = vformat(format, args);
     va_end (args);
 
     throw_any(wrap(str));
@@ -2843,14 +2866,10 @@ struct Lexer {
         return anchor;
     }
 
-    void error( const char *format, ... ) {
+    void error( const char *fmt, ... ) {
         va_list args;
-        va_start (args, format);
-        size_t size = vsnprintf(nullptr, 0, format, args);
-        va_end (args);
-        error_string.resize(size);
-        va_start (args, format);
-        vsnprintf( &error_string[0], size + 1, format, args );
+        va_start (args, fmt);
+        error_string = vformat(fmt, args);
         va_end (args);
         token = token_eof;
     }
@@ -3093,17 +3112,13 @@ struct Parser {
         error_string.clear();
     }
 
-    void error( const char *format, ... ) {
+    void error( const char *fmt, ... ) {
         ++errors;
         lexer.initAnchor(error_origin);
         parse_origin = error_origin;
         va_list args;
-        va_start (args, format);
-        size_t size = vsnprintf(nullptr, 0, format, args);
-        va_end (args);
-        error_string.resize(size);
-        va_start (args, format);
-        vsnprintf( &error_string[0], size + 1, format, args );
+        va_start (args, fmt);
+        error_string = vformat(fmt, args);
         va_end (args);
     }
 
@@ -3348,14 +3363,14 @@ struct Parser {
         }
 
         if (!error_string.empty()) {
-            printf("%s:%i:%i: error: %s\n",
+            stb_printf("%s:%i:%i: error: %s\n",
                 error_origin.path,
                 error_origin.lineno,
                 error_origin.column,
                 error_string.c_str());
             dumpFileLine(path, error_origin.offset);
             if (!(parse_origin == error_origin)) {
-                printf("%s:%i:%i: while parsing expression\n",
+                stb_printf("%s:%i:%i: while parsing expression\n",
                     parse_origin.path,
                     parse_origin.lineno,
                     parse_origin.column);
@@ -3374,7 +3389,7 @@ struct Parser {
                 file->strptr(), file->strptr() + file->size(),
                 path);
         } else {
-            fprintf(stderr, "unable to open file: %s\n", path);
+            stb_fprintf(stderr, "unable to open file: %s\n", path);
             return const_none;
         }
     }
@@ -3529,8 +3544,11 @@ struct FFI {
 static FFI *ffi;
 
 //------------------------------------------------------------------------------
-// INTERPRETER LOOP
+// INTERPRETER
 //------------------------------------------------------------------------------
+
+// set by execute()
+static Frame *handler_frame = nullptr;
 
 typedef std::vector<Any> ILValueArray;
 
@@ -3553,7 +3571,7 @@ static Any evaluate(size_t argindex, const Frame *frame, const Any &value) {
 static bool trace_arguments = false;
 
 static void print_fallback_value(const Any &arg, const Any &exc) {
-    printf("<error printing value of type %s: %s>\n",
+    stb_printf("<error printing value of type %s: %s>\n",
         get_name(arg.type).c_str(),
         try_extract_string(exc, format(
             "exception of type %s raised",
@@ -3562,21 +3580,21 @@ static void print_fallback_value(const Any &arg, const Any &exc) {
 
 static void print_minimal_call_trace(const Any *rbuf, size_t rcount) {
     if (!rcount) {
-        printf("  <command buffer is empty>\n");
+        stb_printf("  <command buffer is empty>\n");
     } else {
         for (size_t i = 0; i < rcount; ++i) {
             if (i == ARG_Cont)
-                printf("  Return: ");
+                stb_printf("  Return: ");
             else if (i == ARG_Func)
-                printf("  Callee: ");
+                stb_printf("  Callee: ");
             else if (i >= ARG_Arg0)
-                printf("  Argument #%zu: ", i - ARG_Arg0);
+                stb_printf("  Argument #%zu: ", i - ARG_Arg0);
             if (rbuf[i].type == TYPE_BuiltinFlow) {
-                printf("<%s '%s'>\n",
+                stb_printf("<%s '%s'>\n",
                     get_name(rbuf[i].type).c_str(),
                     get_symbol_name(get_ptr_symbol(rbuf[i].ptr)).c_str());
             } else {
-                printf("<value of type %s>\n",
+                stb_printf("<value of type %s>\n",
                     get_name(rbuf[i].type).c_str());
             }
         }
@@ -3585,7 +3603,7 @@ static void print_minimal_call_trace(const Any *rbuf, size_t rcount) {
 
 static void print_call_trace(const Any *rbuf, size_t rcount) {
     if (!rcount) {
-        printf("  <command buffer is empty>\n");
+        stb_printf("  <command buffer is empty>\n");
     } else {
         StreamValueFormat fmt(0, true);
         fmt.maxdepth = 2;
@@ -3593,11 +3611,11 @@ static void print_call_trace(const Any *rbuf, size_t rcount) {
 
         for (size_t i = 0; i < rcount; ++i) {
             if (i == ARG_Cont)
-                printf("  Return: ");
+                stb_printf("  Return: ");
             else if (i == ARG_Func)
-                printf("  Callee: ");
+                stb_printf("  Callee: ");
             else if (i >= ARG_Arg0)
-                printf("  Argument #%zu: ", i - ARG_Arg0);
+                stb_printf("  Argument #%zu: ", i - ARG_Arg0);
             try {
                 printValue(rbuf[i], fmt);
             } catch (const Any &any) {
@@ -3607,169 +3625,180 @@ static void print_call_trace(const Any *rbuf, size_t rcount) {
     }
 }
 
-static coro_context ctx_cstack; // original C stack
-static coro_context ctx_bloop; // bangra main loop
-static coro_stack stack_bloop;
-static State bloop_state;
+static int execute_depth = 0;
+static size_t run_apply_loop(const Any *args, size_t argcount, Any *ret, const ExecuteOpts &opts) {
+    size_t retcount = 0;
+    execute_depth++;
 
-static void yield_to_c() {
-    coro_transfer(&ctx_bloop, &ctx_cstack);
-}
-
-static void yield_to_bangra() {
-    coro_transfer(&ctx_cstack, &ctx_bloop);
-}
-
-static void bangra_main_loop(void *) {
     // double buffer arguments
-    Any argbuf[2][BANGRA_MAX_FUNCARGS];
+    Any *argbuf[2];
+    for (size_t i = 0; i < 2; ++i) {
+        argbuf[i] = (Any *)malloc(sizeof(Any) * BANGRA_MAX_FUNCARGS);
+    }
     Any *wbuf = argbuf[0];
-    Any *rbuf = argbuf[1];
-
-    State &S = bloop_state;
-    S.frame = Frame::create();
-    S.exception_handler = const_none;
-    S.rargs = rbuf;
-    S.wargs = wbuf;
-
-    if (trace_arguments) {
-        printf("TRACE: main loop enter\n");
+    size_t wcount = argcount;
+    assert(argcount >= 2);
+    assert(argcount <= BANGRA_MAX_FUNCARGS);
+    // track exit_cont so we can leave the loop when it is invoked
+    auto exit_cont = args[ARG_Cont];
+    assert(exit_cont.type == TYPE_BuiltinFlow);
+    // init read buffer for arguments
+    for (size_t i = 0; i < argcount; ++i) {
+        wbuf[i] = args[i];
     }
 
-    yield_to_c();
-    // State.wargs should now be filled with an entry point
+    Any *rbuf = argbuf[1];
+    size_t rcount = 0;
 
-    assert(S.wcount >= 2);
-    assert(S.wcount <= BANGRA_MAX_FUNCARGS);
+    State S;
+    S.frame = Frame::create();
+    S.exception_handler = const_none;
 
-    while (true) {
-        // flip buffers
-        {
-            Any *xbuf = wbuf;
-            wbuf = rbuf;
-            rbuf = xbuf;
+    std::vector<Any> tmpargs;
 
-            S.rargs = rbuf;
-            S.wargs = wbuf;
-            S.rcount = S.wcount;
-            S.wcount = 0;
-        }
+    if (opts.trace) {
+        stb_printf("TRACE: execute enter (exit = %s)\n",
+            get_string(exit_cont).c_str());
+    }
 
-        if (trace_arguments) {
-            printf("TRACE:\n");
-            print_minimal_call_trace(rbuf, S.rcount);
-        }
+continue_execution:
+    try {
+        while (true) {
+            // flip buffers
+            {
+                Any *xbuf = wbuf;
+                wbuf = rbuf;
+                rbuf = xbuf;
+                rcount = wcount;
+                wcount = 0;
 
-        assert(S.rcount >= 2);
+                S.rargs = rbuf;
+                S.rcount = rcount;
+                S.wargs = wbuf;
+                S.wcount = wcount;
+            }
 
-        Any callee = rbuf[ARG_Func];
-        switch(callee.type.value()) {
-        case TYPE_Closure: {
-            auto closure = callee.closure;
+            if (opts.trace) {
+                stb_printf("TRACE: executing at level %i:\n", execute_depth);
+                print_call_trace(rbuf, rcount);
+            }
 
-            S.frame = closure->frame;
-            callee = wrap(closure->entry);
-        } // no break - we fall right through to flow handling
-        case TYPE_Flow: {
-            auto flow = callee.flow;
-            // TODO: assert(get_anchor(flow));
-            assert(flow->parameters.size() >= 1);
+            assert(rcount >= 2);
 
-            // tmpargs map directly to param indices; that means
-            // the callee is not included.
-            auto pcount = flow->parameters.size();
-            Any tmpargs[pcount];
-
-            // copy over continuation argument
-            tmpargs[PARAM_Cont] = rbuf[ARG_Cont];
-            size_t tcount = pcount - PARAM_Arg0;
-            size_t srci = ARG_Arg0;
-            for (size_t i = 0; i < tcount; ++i) {
-                size_t dsti = PARAM_Arg0 + i;
-                auto param = flow->parameters[dsti];
-                if (param->vararg) {
-                    // how many parameters after this one
-                    int remparams = (int)tcount - (int)i - 1;
-                    // how many varargs to capture
-                    int vargsize = std::max(0, (int)S.rcount - (int)srci - remparams);
-                    auto arg = wrap(&rbuf[srci], vargsize);
-                    arg.type = Types::Splice(arg.type);
-                    tmpargs[dsti] = arg;
-                    srci += vargsize;
-                } else if (srci < S.rcount) {
-                    tmpargs[dsti] = rbuf[srci++];
-                } else {
-                    tmpargs[dsti] = const_none;
+            Any callee = rbuf[ARG_Func];
+            if ((callee.type == TYPE_BuiltinFlow)
+                && (callee.ptr == exit_cont.ptr)) {
+                // exit continuation invoked, copy result and break loop
+                for (size_t i = 0; i < rcount; ++i) {
+                    ret[i] = rbuf[i];
                 }
-            }
-
-            S.frame = S.frame->bind(flow, tmpargs, pcount);
-
-            set_anchor(S.frame, get_anchor(flow));
-
-            assert(!flow->arguments.empty());
-            size_t idx = 0;
-            for (size_t i = 0; i < flow->arguments.size(); ++i) {
-                Any arg = evaluate(i, S.frame, flow->arguments[i]);
-                if (is_splice_type(arg.type)) {
-                    arg.type = get_element_type(arg.type);
-                    arg = evaluate(i, S.frame, arg);
-                    if (!is_tuple_type(arg.type)) {
-                        error("only tuples can be spliced");
-                    }
-                    size_t fcount = countof(arg);
-                    for (size_t k = 0; k < fcount; ++k) {
-                        wbuf[idx] = at(arg, wrap(k));
-                        idx++;
-                    }
-                } else {
-                    wbuf[idx++] = arg;
+                retcount = rcount;
+                if (opts.trace) {
+                    stb_printf("TRACE: execute leave\n");
                 }
+                break;
             }
-            S.wcount = idx;
 
-            if (trace_arguments) {
-                auto anchor = get_anchor(flow);
-                Anchor::printMessage(anchor, "trace");
+            if (is_closure_type(callee.type)) {
+                auto closure = callee.closure;
+
+                S.frame = closure->frame;
+                callee = wrap(closure->entry);
             }
-        } break;
-        case TYPE_Type: {
-            // redirect to type's apply-type handler
-            assert(S.rcount < BANGRA_MAX_FUNCARGS);
-            auto cb = callee.typeref;
-            wbuf[ARG_Cont] = rbuf[ARG_Cont];
-            wbuf[ARG_Func] = get_type_attrib(cb, SYM_ApplyType, const_none);
-            wbuf[ARG_Arg0] = callee;
-            for (size_t k = ARG_Arg0; k < S.rcount; ++k) {
-                wbuf[k + 1] = rbuf[k];
-            }
-            S.wcount = S.rcount + 1;
-        } break;
-        case TYPE_BuiltinFlow: {
-            // let the C side handled that
-            yield_to_c();
-        } break;
-        default: {
-            if (is_cfunction_pointer_type(callee.type)) {
-                // let the C side handle that
-                yield_to_c();
-                // TODO: move this part to C side:
-                /*
+
+            if (is_flow_type(callee.type)) {
+                auto flow = callee.flow;
+                // TODO: assert(get_anchor(flow));
+                assert(flow->parameters.size() >= 1);
+
+                // tmpargs map directly to param indices; that means
+                // the callee is not included.
+                auto pcount = flow->parameters.size();
+                tmpargs.resize(pcount);
+
+                // copy over continuation argument
+                tmpargs[PARAM_Cont] = rbuf[ARG_Cont];
+                size_t tcount = pcount - PARAM_Arg0;
+                size_t srci = ARG_Arg0;
+                for (size_t i = 0; i < tcount; ++i) {
+                    size_t dsti = PARAM_Arg0 + i;
+                    auto param = flow->parameters[dsti];
+                    if (param->vararg) {
+                        // how many parameters after this one
+                        int remparams = (int)tcount - (int)i - 1;
+                        // how many varargs to capture
+                        int vargsize = std::max(0, (int)rcount - (int)srci - remparams);
+                        auto arg = wrap(&rbuf[srci], vargsize);
+                        arg.type = Types::Splice(arg.type);
+                        tmpargs[dsti] = arg;
+                        srci += vargsize;
+                    } else if (srci < rcount) {
+                        tmpargs[dsti] = rbuf[srci++];
+                    } else {
+                        tmpargs[dsti] = const_none;
+                    }
+                }
+
+                S.frame = S.frame->bind(flow, tmpargs);
+
+                set_anchor(S.frame, get_anchor(flow));
+
+                assert(!flow->arguments.empty());
+                size_t idx = 0;
+                for (size_t i = 0; i < flow->arguments.size(); ++i) {
+                    Any arg = evaluate(i, S.frame, flow->arguments[i]);
+                    if (is_splice_type(arg.type)) {
+                        arg.type = get_element_type(arg.type);
+                        arg = evaluate(i, S.frame, arg);
+                        if (!is_tuple_type(arg.type)) {
+                            error("only tuples can be spliced");
+                        }
+                        size_t fcount = countof(arg);
+                        for (size_t k = 0; k < fcount; ++k) {
+                            wbuf[idx] = at(arg, wrap(k));
+                            idx++;
+                        }
+                    } else {
+                        wbuf[idx++] = arg;
+                    }
+                }
+                wcount = idx;
+
+                if (opts.trace) {
+                    auto anchor = get_anchor(flow);
+                    Anchor::printMessage(anchor, "trace");
+                }
+            } else if (is_builtin_flow_type(callee.type)) {
+                auto cb = callee.builtin_flow;
+                auto _oldframe = handler_frame;
+                handler_frame = S.frame;
+                cb(&S);
+                wcount = S.wcount;
+                assert(wcount <= BANGRA_MAX_FUNCARGS);
+                handler_frame = _oldframe;
+            } else if (is_typeref_type(callee.type)) {
+                // redirect to type's apply-type handler
+                assert(S.rcount < BANGRA_MAX_FUNCARGS);
+                auto cb = callee.typeref;
+                wbuf[ARG_Cont] = rbuf[ARG_Cont];
+                wbuf[ARG_Func] = get_type_attrib(cb, SYM_ApplyType, const_none);
+                wbuf[ARG_Arg0] = callee;
+                for (size_t k = ARG_Arg0; k < S.rcount; ++k) {
+                    wbuf[k + 1] = rbuf[k];
+                }
+                wcount = S.rcount + 1;
+            } else if (
+                is_pointer_type(callee.type)
+                    && is_cfunction_type(get_element_type(callee.type))) {
                 wbuf[ARG_Cont] = const_none;
                 wbuf[ARG_Func] = rbuf[ARG_Cont];
                 wbuf[ARG_Arg0] = ffi->runFunction(callee, rbuf + ARG_Arg0, rcount - 2);
-                S.wcount = 3;
-                */
+                wcount = 3;
             } else {
                 error("can not apply value of type %s",
                     get_name(callee.type).c_str());
             }
-
-        } break;
         }
-    }
-
-    /*
     } catch (const Any &any) {
 
         if (!isnone(S.exception_handler)) {
@@ -3784,9 +3813,9 @@ static void bangra_main_loop(void *) {
         }
 
         if (opts.dump_error) {
-            printf("while evaluating arguments:\n");
+            stb_printf("while evaluating arguments:\n");
             print_call_trace(rbuf, rcount);
-            printf("\n");
+            stb_printf("\n");
 
             Frame::print_stack(S.frame);
 
@@ -3808,58 +3837,16 @@ static void bangra_main_loop(void *) {
         for (size_t i = 0; i < 2; ++i) {
             free(argbuf[i]);
         }
+        execute_depth--;
         throw_any(any);
     }
 
     for (size_t i = 0; i < 2; ++i) {
         free(argbuf[i]);
     }
+    execute_depth--;
 
     return retcount;
-    */
-}
-
-static void prepare_exception_handler_call(State &S, const Any &val) {
-    if (!isnone(S.exception_handler)) {
-        S.wargs[ARG_Cont] = const_none;
-        S.wargs[ARG_Func] = S.exception_handler;
-        S.wargs[ARG_Arg0 + 0] = val;
-        S.wargs[ARG_Arg0 + 1] = wrap(S.frame);
-        S.wargs[ARG_Arg0 + 2] = wrap(S.rargs, S.rcount);
-        S.wcount = 5;
-        S.exception_handler = const_none;
-    } else {
-        // rethrow value
-        throw val;
-    }
-}
-
-static void invoke_interpreter() {
-    while (true) {
-        yield_to_bangra();
-        State &S = bloop_state;
-        if (is_cfunction_pointer_type(S.rargs[ARG_Func].type)) {
-            S.wargs[ARG_Cont] = const_none;
-            S.wargs[ARG_Func] = S.rargs[ARG_Cont];
-            S.wargs[ARG_Arg0] = ffi->runFunction(
-                S.rargs[ARG_Func], S.rargs + ARG_Arg0, S.rcount - 2);
-            S.wcount = 3;
-        } else {
-            assert(S.rcount >= 2);
-            assert(S.rargs[ARG_Func].type == TYPE_BuiltinFlow);
-            // can either be a return (pop) or a forward call (push)
-            if (S.rargs[ARG_Func].u64 == 1) {
-                // pop C stack
-                break;
-            }
-            try {
-                // forward call
-                S.rargs[ARG_Func].builtin_flow(&S);
-            } catch (const Any &any) {
-                prepare_exception_handler_call(S, any);
-            }
-        }
-    }
 }
 
 static Any execute(const Any *args, size_t argcount, const ExecuteOpts &opts) {
@@ -3885,7 +3872,7 @@ static Any execute(const Any *args, size_t argcount, const ExecuteOpts &opts) {
         S.rcount = argcount + 1;
 
         if (opts.trace) {
-            printf("TRACE: C2C call:\n");
+            stb_printf("TRACE: C2C call:\n");
             print_minimal_call_trace(S.rargs, S.rcount);
         }
 
@@ -3896,19 +3883,17 @@ static Any execute(const Any *args, size_t argcount, const ExecuteOpts &opts) {
         assert(isnone(S.wargs[ARG_Func]));
         return S.wargs[ARG_Arg0];
     } else {
-        State &S = bloop_state;
-
+        // use the interpreter
+        Any ret[BANGRA_MAX_FUNCARGS];
         // special return value that is never invoked
-        S.wargs[ARG_Cont].u64 = 1;
-        S.wargs[ARG_Cont].type = TYPE_BuiltinFlow;
+        ret[ARG_Cont].u64 = 1;
+        ret[ARG_Cont].type = TYPE_BuiltinFlow;
         for (size_t i = 0; i < argcount; ++i) {
-            S.wargs[i + ARG_Func] = args[i];
+            ret[i + ARG_Func] = args[i];
         }
-        S.wcount = argcount + 1;
-        invoke_interpreter();
-        // we have definitely returned
-        assert(S.rcount >= 3);
-        return S.rargs[ARG_Arg0];
+        size_t retcount = run_apply_loop(ret, argcount + 1, ret, opts);
+        assert(retcount >= 3);
+        return ret[ARG_Arg0];
     }
 }
 
@@ -5463,6 +5448,8 @@ static void initTypes() {
     dest = TYPE_ListTableTuple = Types::Tuple({TYPE_List, TYPE_Table});
 }
 
+static void initConstants() {}
+
 //------------------------------------------------------------------------------
 // C module utility functions
 //------------------------------------------------------------------------------
@@ -5962,7 +5949,7 @@ static void initCCompiler() {
     char *errormsg = nullptr;
     if (LLVMCreateJITCompilerForModule(&ee,
         LLVMModuleCreateWithName("main"), 0, &errormsg)) {
-        fprintf(stderr, "error: %s\n", errormsg);
+        stb_fprintf(stderr, "error: %s\n", errormsg);
         exit(1);
     }
 }
@@ -7326,31 +7313,20 @@ static void initGlobals () {
     setBuiltin< builtin_bool_binary_op<le> >(env, "<=");
 }
 
-static void initLoop() {
-    coro_create (&ctx_cstack, nullptr, nullptr, nullptr, 0);
-
-    if (!coro_stack_alloc(&stack_bloop, 0)) {
-        fprintf(stderr, "error allocating stack.\n"); exit(1);
-    }
-
-    coro_create (&ctx_bloop,
-        (coro_func)bangra_main_loop, nullptr,
-        stack_bloop.sptr, stack_bloop.ssze);
-    yield_to_bangra();
-}
-
 static void init() {
     bangra::support_ansi = isatty(fileno(stdout));
     bangra::global_c_namespace = dlopen(NULL, RTLD_LAZY);
 
     initCCompiler();
+
     initSymbols();
+
+    initTypes();
+    initConstants();
+
     ffi = new FFI();
     builder = new ILBuilder();
 
-    initLoop();
-
-    initTypes();
     initGlobals();
 }
 
@@ -7447,7 +7423,7 @@ static Any parseLoader(const char *executable_path) {
     // attempt to read bootstrap expression from end of binary
     auto file = MappedFile::open(executable_path);
     if (!file) {
-        fprintf(stderr, "could not open binary\n");
+        stb_fprintf(stderr, "could not open binary\n");
         return const_none;
     }
     auto ptr = file->strptr();
@@ -7471,43 +7447,43 @@ static Any parseLoader(const char *executable_path) {
     auto expr = footerParser.parseMemory(
         cursor, ptr + size, executable_path, cursor - ptr);
     if (isnone(expr)) {
-        fprintf(stderr, "could not parse footer expression\n");
+        stb_fprintf(stderr, "could not parse footer expression\n");
         return const_none;
     }
     if (!is_list_type(expr.type))  {
-        fprintf(stderr, "footer expression is not a symbolic list\n");
+        stb_fprintf(stderr, "footer expression is not a symbolic list\n");
         return const_none;
     }
     auto symlist = expr.list;
     auto it = symlist;
     if (!it) {
-        fprintf(stderr, "footer expression is empty\n");
+        stb_fprintf(stderr, "footer expression is empty\n");
         return const_none;
     }
     auto head = it->at;
     it = it->next;
     if (!is_symbol_type(head.type))  {
-        fprintf(stderr, "footer expression does not begin with symbol\n");
+        stb_fprintf(stderr, "footer expression does not begin with symbol\n");
         return const_none;
     }
     if (!isSymbol(head, SYM_ScriptSize))  {
-        fprintf(stderr, "footer expression does not begin with '%s'\n",
+        stb_fprintf(stderr, "footer expression does not begin with '%s'\n",
             get_symbol_name(SYM_ScriptSize).c_str());
         return const_none;
     }
     if (!it) {
-        fprintf(stderr, "footer expression needs two arguments\n");
+        stb_fprintf(stderr, "footer expression needs two arguments\n");
         return const_none;
     }
     auto arg = it->at;
     it = it->next;
     if (!is_integer_type(arg.type))  {
-        fprintf(stderr, "script-size argument is not integer\n");
+        stb_fprintf(stderr, "script-size argument is not integer\n");
         return const_none;
     }
     auto offset = extract_integer(arg);
     if (offset <= 0) {
-        fprintf(stderr, "script-size must be larger than zero\n");
+        stb_fprintf(stderr, "script-size must be larger than zero\n");
         return const_none;
     }
     bangra::Parser parser;
@@ -7550,7 +7526,7 @@ void print_version() {
     if (BANGRA_VERSION_PATCH) {
         versionstr += bangra::format(".%i", BANGRA_VERSION_PATCH);
     }
-    printf(
+    stb_printf(
     "Bangra version %s\n"
     "Executable path: %s\n"
     , versionstr.c_str()
@@ -7560,7 +7536,7 @@ void print_version() {
 }
 
 void print_help(const char *exename) {
-    printf(
+    stb_printf(
     "usage: %s [option [...]] [filename]\n"
     "Options:\n"
     "   -h, --help                  print this text and exit.\n"
@@ -7646,13 +7622,13 @@ int bangra_main(int argc, char ** argv) {
                             } else if (!strcmp(*arg, "--")) {
                                 parse_options = false;
                             } else {
-                                printf("unrecognized option: %s. Try --help for help.\n", *arg);
+                                stb_printf("unrecognized option: %s. Try --help for help.\n", *arg);
                                 exit(1);
                             }
                         } else if (!sourcepath) {
                             sourcepath = *arg;
                         } else {
-                            printf("unrecognized argument: %s. Try --help for help.\n", *arg);
+                            stb_printf("unrecognized argument: %s. Try --help for help.\n", *arg);
                             exit(1);
                         }
                     }
@@ -7708,7 +7684,7 @@ int main(int argc, char ** argv) {
 }
 
 int print_number(int value) {
-    printf("NUMBER: %i\n", value);
+    stb_printf("NUMBER: %i\n", value);
     return value + 1;
 }
 
