@@ -7,6 +7,9 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <memory.h>
+#define STB_SPRINTF_IMPLEMENTATION
+#define STB_SPRINTF_DECORATE(name) stb_##name
+#include "../external/stb_sprintf.h"
 
 #define CAT(a, ...) PRIMITIVE_CAT(a, __VA_ARGS__)
 #define PRIMITIVE_CAT(a, ...) a ## __VA_ARGS__
@@ -94,6 +97,19 @@
 #define _FEN_9(n, _call, x, ...) _call(n,x) _FEN_8(INC(n), _call, __VA_ARGS__)
 #define MACRO_FOREACH_ENUM(x, ...) \
     CAT(_FEN_, COUNT_VARARGS(__VA_ARGS__))(0, x, ##__VA_ARGS__)
+
+static char stb_printf_tmp[STB_SPRINTF_MIN];
+static char *printf_cb(char * buf, void * user, int len) {
+    fwrite (buf, 1, len, (FILE *)user );
+    return stb_printf_tmp;
+}
+static int stb_printf(const char *fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+    int c = stb_vsprintfcb(printf_cb, stdout, stb_printf_tmp, fmt, va);
+    va_end(va);
+    return c;
+}
 
 enum Type {
     TYPE_Void,
@@ -407,7 +423,7 @@ static Any mark_and_sweep(Any ret) {
     uint64_t _stack_marker;
     GC_Context ctx((char *)&_stack_marker);
 
-    printf("GC!\n");
+    stb_printf("GC!\n");
     ctx.force_move(ret);
 
     Any *headptr = ctx.head;
@@ -426,7 +442,7 @@ static Any mark_and_sweep(Any ret) {
         headptr++;
     }
 
-    printf("%llu values / %llu bytes moved\n",
+    stb_printf("%zd values / %zd bytes moved\n",
         ctx.head_end - ctx.head,
         ctx.heap_end - ctx.heap);
     return ret;
@@ -450,16 +466,16 @@ static Any GC(Function f, const BuiltinClosure *cl, size_t numargs, const Any *a
 }
 
 FN(func, (x, y, VARARGS), (a1, a2, a3, a4),
-    printf("c=%zu: %i %i %i %i |",
+    stb_printf("c=%zu: %i %i %i %i |",
         numupvars,
         a1.i32, a2.i32, a3.i32, a4.i32);
-    printf(" a=%zu:", numargs);
-    printf(" %i %i >>", x.i32, y.i32);
+    stb_printf(" a=%zu:", numargs);
+    stb_printf(" %i %i >>", x.i32, y.i32);
     for (size_t i = VARARG_START; i < numargs; ++i) {
         Any v = CVA_ARG(i);
-        printf(" %i", v.i32);
+        stb_printf(" %i", v.i32);
     }
-    printf("\n");
+    stb_printf("\n");
     exit(0);
 );
 
@@ -498,13 +514,13 @@ FN(cmain, (), (),
                 CC(pow, 2, i,
                     FN((x), (i, cont, loop_self),
                         assert(_self);
-                        printf("%i\n", x.i32);
+                        stb_printf("%i\n", x.i32);
                         RET(loop_self, i.i32 + 1, cont);)); }
             else {
                 RET(cont, 0); }),
         0,
         FN((x), (),
-            printf("stack size: %llu bytes\n",
+            stb_printf("stack size: %zd bytes\n",
                 MAX_STACK_SIZE - (size_t)(_stack_addr - g_stack_limit));
             exit(0);));
 #elif 0
@@ -515,9 +531,9 @@ FN(cmain, (), (),
         FN((VARARGS), (),
             for (size_t i = VARARG_START; i < numargs; ++i) {
                 Any v = CVA_ARG(i);
-                printf("%i\n", v.i32);
+                stb_printf("%i\n", v.i32);
             }
-            //printf("%i\n", x.i32);
+            //stb_printf("%i\n", x.i32);
             exit(0);));
 #endif
 );
