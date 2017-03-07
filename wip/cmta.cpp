@@ -7,6 +7,7 @@
 #include <stdarg.h>
 #include <assert.h>
 #include <memory.h>
+#include <setjmp.h>
 #define STB_SPRINTF_IMPLEMENTATION
 #define STB_SPRINTF_DECORATE(name) stb_##name
 #include "../external/stb_sprintf.h"
@@ -121,7 +122,7 @@ enum Type {
 struct BuiltinClosure;
 struct Any;
 
-typedef Any (*Function)(const BuiltinClosure *, size_t, const Any *);
+typedef void (*Function)(const BuiltinClosure *, size_t, const Any *);
 
 struct Any {
     Type type;
@@ -133,18 +134,18 @@ struct Any {
     };
 };
 
-Any wrap(int32_t x) { Any r; r.type = TYPE_I32; r.i32 = x; return r; }
-Any wrap(Function x) { Any r; r.type = TYPE_Function; r.func = x; return r; }
-Any wrap(const BuiltinClosure *x) {
+inline static Any wrap(int32_t x) { Any r; r.type = TYPE_I32; r.i32 = x; return r; }
+inline static Any wrap(Function x) { Any r; r.type = TYPE_Function; r.func = x; return r; }
+inline static Any wrap(const BuiltinClosure *x) {
     Any r; r.type = TYPE_BuiltinClosure; r.builtin_closure = x; return r; }
-Any wrap(BuiltinClosure *x) {
+inline static Any wrap(BuiltinClosure *x) {
     Any r; r.type = TYPE_BuiltinClosure; r.builtin_closure = x; return r; }
-const Any &wrap(const Any &x) { return x; }
-Any &wrap(Any &x) { return x; }
+inline static const Any &wrap(const Any &x) { return x; }
+inline static Any &wrap(Any &x) { return x; }
 template<typename T>
-Any wrap(T &src) { return T::_wrap(src); }
+inline static Any wrap(T &src) { return T::_wrap(src); }
 template<typename T>
-Any wrap(const T &src) { return T::_wrap(src); }
+inline static Any wrap(const T &src) { return T::_wrap(src); }
 
 struct BuiltinClosure {
     Function f;
@@ -153,13 +154,13 @@ struct BuiltinClosure {
 };
 
 template<typename ... Args>
-inline Any _call(const BuiltinClosure *cl, Args ... args) {
+inline static void _call(const BuiltinClosure *cl, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     return cl->f(cl, sizeof...(args), wrapped_args);
 }
 
 template<typename ... Args>
-inline Any _call(const Any &cl, Args ... args) {
+inline static void _call(const Any &cl, Args ... args) {
     switch(cl.type) {
     case TYPE_BuiltinClosure: {
         Any wrapped_args[] = { wrap(args) ... };
@@ -176,7 +177,7 @@ inline Any _call(const Any &cl, Args ... args) {
 }
 
 template<typename T, typename ... Args>
-inline Any _call(const T &caller, Args ... args) {
+inline static void _call(const T &caller, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     Any cl = wrap(caller);
     assert(cl.type == TYPE_BuiltinClosure);
@@ -197,7 +198,7 @@ struct _call_struct<T, true> {
 template<typename T>
 struct _call_struct<T, false> {
     template<typename ... Args>
-    inline static Any call(Args ... args) {
+    inline static void call(Args ... args) {
         Any wrapped_args[] = { wrap(args) ... };
         return T::run(nullptr, sizeof...(args), wrapped_args);
     }
@@ -206,104 +207,8 @@ struct _call_struct<T, false> {
     }
 };
 
-
-#if 1
-#define CLOSURE_ASSERT(x) assert(x)
-#else
-#define CLOSURE_ASSERT(x)
-#endif
-
-#define _IS_VARARGS_VARARGS PROBE(~)
-#define IS_VARARGS_KW(x) CHECK(CAT(_IS_VARARGS_, x))
-
-#define DEF_EXTRACT_MEMBER(X, NAME) \
-    const Any &NAME = _self->args[X];
-#define DEF_ANY_PARAM(N, NAME)  \
-    IF_ELSE(IS_VARARGS_KW(NAME))( \
-    )( \
-        const Any &NAME = _args[N]; \
-    )
-
-#define CLOSURE_UNPACK_PARAMS(...) \
-    MACRO_FOREACH_ENUM(DEF_ANY_PARAM, __VA_ARGS__)
-#define CLOSURE_UPVARS(...) \
-    IF_ELSE(COUNT_VARARGS(__VA_ARGS__))( \
-        CLOSURE_ASSERT(_self); \
-        size_t numupvars = _self?_self->size:0; \
-        CLOSURE_ASSERT(COUNT_VARARGS(__VA_ARGS__) <= numupvars); \
-        MACRO_FOREACH_ENUM(DEF_EXTRACT_MEMBER, __VA_ARGS__) \
-    )()
-
-#define DEF_CAPTURE_PARAM(X, NAME) \
-    IF_ELSE(X)(, Any NAME)(Any NAME)
-#define DEF_CAPTURE_WRAP_ARG(NAME) , NAME
-#define CLOSURE_CAPTURE_FN(...) \
-    IF_ELSE(COUNT_VARARGS(__VA_ARGS__)) (\
-    enum { has_upvars = true }; \
-    Function f; \
-    size_t size; \
-    Any args[COUNT_VARARGS(__VA_ARGS__)]; \
-    static this_struct capture( \
-        MACRO_FOREACH_ENUM(DEF_CAPTURE_PARAM, __VA_ARGS__) \
-        ) { \
-        return { run, COUNT_VARARGS(__VA_ARGS__) \
-            MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; } \
-    ) ( \
-    enum { has_upvars = false }; \
-    )
-
-#define CLOSURE_VARARG_DEFS(...) \
-    IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
-        enum { VARARG_START = DEC(COUNT_VARARGS(__VA_ARGS__)) }; \
-        CLOSURE_ASSERT(numargs >= VARARG_START); \
-    )( \
-        CLOSURE_ASSERT(numargs == COUNT_VARARGS(__VA_ARGS__)); \
-    )
-#define CLOSURE_2(NAME, PARAMS, UPVARS, ...) \
-    struct NAME { \
-        typedef NAME this_struct; \
-        CLOSURE_CAPTURE_FN UPVARS \
-        IF_ELSE(COUNT_VARARGS UPVARS) (\
-        static Any _wrap(const this_struct &self) { return wrap((const BuiltinClosure *)&self); } \
-        static Any run (const BuiltinClosure *_self, size_t numargs, const Any *_args) { \
-            char _stack_marker; char *_stack_addr = &_stack_marker; \
-            if (_stack_addr <= g_stack_limit) { \
-                return GC(run, _self, numargs, _args); \
-            } \
-        ) ( \
-        static Any run (const BuiltinClosure *, size_t numargs, const Any *_args) { \
-            char _stack_marker; char *_stack_addr = &_stack_marker; \
-            if (_stack_addr <= g_stack_limit) { \
-                return GC(run, nullptr, numargs, _args); \
-            } \
-        ) \
-            CLOSURE_UNPACK_PARAMS PARAMS \
-            CLOSURE_VARARG_DEFS PARAMS \
-            CLOSURE_UPVARS UPVARS \
-            __VA_ARGS__ \
-        } \
-    }
-
-#define DEF_FN(NAME, PARAMS, UPVARS, ...) \
-    CLOSURE_2(NAME, PARAMS, UPVARS, __VA_ARGS__)
-
-#define CLOSURE_CAPTURE_UPVARS(...) CAPTURE(_, __VA_ARGS__)
-#define LAMBDA_FN(PARAMS, UPVARS, ...) \
-    ({ CLOSURE_2(_, PARAMS, UPVARS, __VA_ARGS__); CLOSURE_CAPTURE_UPVARS UPVARS; })
-
-#define FN(ARG0, ...) \
-    IF_ELSE(IS_PAREN(ARG0)) \
-        (LAMBDA_FN(ARG0, __VA_ARGS__)) \
-        (DEF_FN(ARG0, __VA_ARGS__))
-
-#define CVA_ARG(i) _args[i]
-
-#define RET(...) return _call(__VA_ARGS__)
-#define CC(T, ...) return _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
-#define CAPTURE(T, ...) _call_struct<T, T::has_upvars>::capture(__VA_ARGS__)
-
-//#define MAX_STACK_SIZE 0x200000
-#define MAX_STACK_SIZE 16384
+#define MAX_STACK_SIZE 0x200000
+//#define MAX_STACK_SIZE 16384
 
 static size_t align(size_t offset, size_t align) {
     return (offset + align - 1) & ~(align - 1);
@@ -322,6 +227,8 @@ static size_t sizeof_payload(const Any &from) {
 
 static char *g_stack_start;
 static char *g_stack_limit;
+static jmp_buf g_retjmp;
+static Any g_contobj;
 
 struct GC_Context {
     char *_stack_addr;
@@ -406,7 +313,7 @@ struct GC_Context {
     }
 };
 
-static Any resume_closure(const BuiltinClosure *_self, size_t numargs, const Any *_args) {
+static void resume_closure(const BuiltinClosure *_self, size_t numargs, const Any *_args) {
     assert(numargs == 0);
     assert(_self->size >= 3);
     const Any &f = _self->args[0];
@@ -448,7 +355,7 @@ static Any mark_and_sweep(Any ret) {
     return ret;
 }
 
-static Any GC(Function f, const BuiltinClosure *cl, size_t numargs, const Any *args) {
+static void GC(Function f, const BuiltinClosure *cl, size_t numargs, const Any *args) {
     // only minor GC, we just build a heap and forget it
 
     BuiltinClosure *retcl = (BuiltinClosure *)alloca(
@@ -462,8 +369,109 @@ static Any GC(Function f, const BuiltinClosure *cl, size_t numargs, const Any *a
         retcl->args[3 + i] = args[i];
     }
 
-    return mark_and_sweep(wrap(retcl));
+    g_contobj = mark_and_sweep(wrap(retcl));
+    longjmp(g_retjmp, 1);
 }
+
+static void exit_loop(int code) {
+    longjmp(g_retjmp, -1);
+}
+
+#if 1
+#define CLOSURE_ASSERT(x) assert(x)
+#else
+#define CLOSURE_ASSERT(x)
+#endif
+
+#define _IS_VARARGS_VARARGS PROBE(~)
+#define IS_VARARGS_KW(x) CHECK(CAT(_IS_VARARGS_, x))
+
+#define DEF_EXTRACT_MEMBER(X, NAME) \
+    const Any &NAME = _self->args[X];
+#define DEF_ANY_PARAM(N, NAME)  \
+    IF_ELSE(IS_VARARGS_KW(NAME))( \
+    )( \
+        const Any &NAME = _args[N]; \
+    )
+
+#define CLOSURE_UNPACK_PARAMS(...) \
+    MACRO_FOREACH_ENUM(DEF_ANY_PARAM, __VA_ARGS__)
+#define CLOSURE_UPVARS(...) \
+    IF_ELSE(COUNT_VARARGS(__VA_ARGS__))( \
+        CLOSURE_ASSERT(_self); \
+        size_t numupvars = _self?_self->size:0; \
+        CLOSURE_ASSERT(COUNT_VARARGS(__VA_ARGS__) <= numupvars); \
+        MACRO_FOREACH_ENUM(DEF_EXTRACT_MEMBER, __VA_ARGS__) \
+    )()
+
+#define DEF_CAPTURE_PARAM(X, NAME) \
+    IF_ELSE(X)(, Any NAME)(Any NAME)
+#define DEF_CAPTURE_WRAP_ARG(NAME) , NAME
+#define CLOSURE_CAPTURE_FN(...) \
+    IF_ELSE(COUNT_VARARGS(__VA_ARGS__)) (\
+    enum { has_upvars = true }; \
+    Function f; \
+    size_t size; \
+    Any args[COUNT_VARARGS(__VA_ARGS__)]; \
+    static this_struct capture( \
+        MACRO_FOREACH_ENUM(DEF_CAPTURE_PARAM, __VA_ARGS__) \
+        ) { \
+        return { run, COUNT_VARARGS(__VA_ARGS__) \
+            MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; } \
+    ) ( \
+    enum { has_upvars = false }; \
+    )
+
+#define CLOSURE_VARARG_DEFS(...) \
+    IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
+        enum { VARARG_START = DEC(COUNT_VARARGS(__VA_ARGS__)) }; \
+        CLOSURE_ASSERT(numargs >= VARARG_START); \
+    )( \
+        CLOSURE_ASSERT(numargs == COUNT_VARARGS(__VA_ARGS__)); \
+    )
+#define CLOSURE_2(NAME, PARAMS, UPVARS, ...) \
+    struct NAME { \
+        typedef NAME this_struct; \
+        CLOSURE_CAPTURE_FN UPVARS \
+        IF_ELSE(COUNT_VARARGS UPVARS) (\
+        static Any _wrap(const this_struct &self) { return wrap((const BuiltinClosure *)&self); } \
+        static void run (const BuiltinClosure *_self, size_t numargs, const Any *_args) { \
+            char _stack_marker; char *_stack_addr = &_stack_marker; \
+            if (_stack_addr <= g_stack_limit) { \
+                return GC(run, _self, numargs, _args); \
+            } \
+        ) ( \
+        static void run (const BuiltinClosure *, size_t numargs, const Any *_args) { \
+            char _stack_marker; char *_stack_addr = &_stack_marker; \
+            if (_stack_addr <= g_stack_limit) { \
+                return GC(run, nullptr, numargs, _args); \
+            } \
+        ) \
+            CLOSURE_UNPACK_PARAMS PARAMS \
+            CLOSURE_VARARG_DEFS PARAMS \
+            CLOSURE_UPVARS UPVARS \
+            __VA_ARGS__ \
+        } \
+    }
+
+#define DEF_FN(NAME, PARAMS, UPVARS, ...) \
+    CLOSURE_2(NAME, PARAMS, UPVARS, __VA_ARGS__)
+
+#define CLOSURE_CAPTURE_UPVARS(...) CAPTURE(_, __VA_ARGS__)
+#define LAMBDA_FN(PARAMS, UPVARS, ...) \
+    ({ CLOSURE_2(_, PARAMS, UPVARS, __VA_ARGS__); CLOSURE_CAPTURE_UPVARS UPVARS; })
+
+#define FN(ARG0, ...) \
+    IF_ELSE(IS_PAREN(ARG0)) \
+        (LAMBDA_FN(ARG0, __VA_ARGS__)) \
+        (DEF_FN(ARG0, __VA_ARGS__))
+
+#define CVA_ARG(i) _args[i]
+
+#define RET(...) return _call(__VA_ARGS__)
+#define CC(T, ...) return _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
+#define CAPTURE(T, ...) _call_struct<T, T::has_upvars>::capture(__VA_ARGS__)
+
 
 FN(func, (x, y, VARARGS), (a1, a2, a3, a4),
     stb_printf("c=%zu: %i %i %i %i |",
@@ -522,7 +530,7 @@ FN(cmain, (), (),
         FN((x), (),
             stb_printf("stack size: %zd bytes\n",
                 MAX_STACK_SIZE - (size_t)(_stack_addr - g_stack_limit));
-            exit(0);));
+            exit_loop(0);));
 #elif 0
     auto cl = CAPTURE(func, 1, 2, 3, 4);
     RET(cl, 23, 42, 303, 606, 909);
@@ -534,18 +542,28 @@ FN(cmain, (), (),
                 stb_printf("%i\n", v.i32);
             }
             //stb_printf("%i\n", x.i32);
-            exit(0);));
+            exit_loop(0);));
 #endif
 );
 
-int main(int argc, char ** argv) {
+static int run_gc_loop (Any entry) {
     uint64_t c = 0;
     g_stack_start = (char *)&c;
     g_stack_limit = g_stack_start - MAX_STACK_SIZE;
-    Any dest = cmain::run(nullptr, 0, nullptr);
-    while (true) {
-        dest = _call(dest);
+
+    g_contobj = entry;
+
+    switch(setjmp(g_retjmp)) {
+    case 0: // first set
+    case 1: _call(g_contobj); break; // loop
+    default: break; // abort
     }
+    return 0;
+}
+
+int main(int argc, char ** argv) {
+    run_gc_loop(wrap(cmain::run));
+    printf("exited.\n");
 
     return 0;
 }
