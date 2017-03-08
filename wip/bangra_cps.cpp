@@ -201,10 +201,11 @@ namespace bangra {
 #define BANGRA_MAX_FUNCARGS 256
 
 // GC nursery size
-#if 1
 #define B_GC_NURSERY_SIZE 0x200000
+#if 0
+#define B_GC_NURSERY_LIMIT B_GC_NURSERY_SIZE
 #else
-#define B_GC_NURSERY_SIZE 16384
+#define B_GC_NURSERY_LIMIT 1024
 #endif
 
 //------------------------------------------------------------------------------
@@ -331,6 +332,10 @@ namespace bangra {
 #define ANSI_STYLE_ERROR ANSI_COLOR_XRED
 #define ANSI_STYLE_LOCATION ANSI_COLOR_XCYAN
 
+#define ANSI(X) (support_ansi?(ANSI_ ## X):"")
+
+static bool support_ansi = false;
+
 //------------------------------------------------------------------------------
 // ARITHMETIC UTILITIES
 //------------------------------------------------------------------------------
@@ -340,10 +345,176 @@ static size_t align(size_t offset, size_t align) {
 }
 
 //------------------------------------------------------------------------------
-// TYPE SYSTEM
+// TYPE TAGGED INTEGERS
 //------------------------------------------------------------------------------
 
-typedef uint64_t Symbol;
+template<typename EnumT, EnumT end_value>
+struct TypedInt {
+protected:
+    uint64_t _value;
+
+    TypedInt(uint64_t tid) :
+        _value(tid) {
+    }
+
+public:
+    static TypedInt wrap(uint64_t value) {
+        return { value };
+    }
+
+    TypedInt() {}
+
+    TypedInt(EnumT id) :
+        _value(id) {
+    }
+
+    bool is_known() const {
+        return _value < end_value;
+    }
+
+    EnumT known_value() const {
+        assert(is_known());
+        return (EnumT)_value;
+    }
+
+    // for std::map support
+    bool operator < (TypedInt b) const {
+        return _value < b._value;
+    }
+
+    bool operator ==(TypedInt b) const {
+        return _value == b._value;
+    }
+
+    bool operator !=(TypedInt b) const {
+        return _value != b._value;
+    }
+
+    bool operator ==(EnumT b) const {
+        return _value == b;
+    }
+
+    bool operator !=(EnumT b) const {
+        return _value != b;
+    }
+
+    std::size_t hash() const {
+        return _value;
+    }
+
+    uint64_t value() const {
+        return _value;
+    }
+};
+
+} namespace std {
+template<typename EnumT, EnumT end_value>
+struct hash< bangra::TypedInt<EnumT, end_value> > {
+    std::size_t operator()(const bangra::TypedInt<EnumT, end_value> & s) const {
+        return s.hash();
+    }
+};
+} namespace bangra {
+
+//------------------------------------------------------------------------------
+// SYMBOL TYPE
+//------------------------------------------------------------------------------
+
+#define B_MAP_SYMBOLS() \
+    T(SYM_Unnamed, "") \
+    T(SYM_Name, "name") \
+    \
+    T(SYM_Cmp, "compare") \
+    T(SYM_CmpType, "compare-type") \
+    T(SYM_ToString, "tostring") \
+    T(SYM_Hash, "hash") \
+    T(SYM_Slice, "slice") \
+    T(SYM_ApplyType, "apply-type") \
+    T(SYM_CountOf, "countof") \
+    \
+    T(SYM_OP1_Neg, "neg") \
+    T(SYM_OP1_Not, "bitnot") /* bit not (~) */ \
+    T(SYM_OP1_BoolNot, "not") \
+    T(SYM_OP1_Rcp, "rcp") \
+    \
+    T(SYM_OP2_Add, "add") \
+    T(SYM_OP2_Sub, "sub") \
+    T(SYM_OP2_Mul, "mul") \
+    T(SYM_OP2_Div, "div") \
+    T(SYM_OP2_FloorDiv, "floordiv") \
+    T(SYM_OP2_Mod, "mod") \
+    T(SYM_OP2_And, "and") \
+    T(SYM_OP2_Or, "or") \
+    T(SYM_OP2_Xor, "xor") \
+    T(SYM_OP2_Join, "join") \
+    T(SYM_OP2_At, "at") \
+    T(SYM_OP2_LShift, "shiftl") \
+    T(SYM_OP2_RShift, "shiftr") \
+    T(SYM_OP2_Pow, "pow") \
+    \
+    T(SYM_OP2_RAdd, "radd") \
+    T(SYM_OP2_RSub, "rsub") \
+    T(SYM_OP2_RMul, "rmul") \
+    T(SYM_OP2_RDiv, "rdiv") \
+    T(SYM_OP2_RFloorDiv, "rfloordiv") \
+    T(SYM_OP2_RMod, "rmod") \
+    T(SYM_OP2_RAnd, "rand") \
+    T(SYM_OP2_ROr, "ror") \
+    T(SYM_OP2_RXor, "rxor") \
+    T(SYM_OP2_RJoin, "rjoin") \
+    T(SYM_OP2_RAt, "rat") \
+    T(SYM_OP2_RLShift, "rshiftl") \
+    T(SYM_OP2_RRShift, "rshiftr") \
+    T(SYM_OP2_RPow, "rpow") \
+    \
+    T(SYM_SuperType, "super") \
+    T(SYM_Size, "size") \
+    T(SYM_Alignment, "alignment") \
+    T(SYM_IsEmbedded, "embedded?") \
+    T(SYM_IsSigned, "signed?") \
+    T(SYM_IsVarArg, "vararg?") \
+    T(SYM_Width, "width") \
+    T(SYM_ElementCount, "count") \
+    T(SYM_ElementType, "element-type") \
+    T(SYM_TagType, "tag-type") \
+    T(SYM_ReturnType, "return-type") \
+    T(SYM_FieldTypes, "field-types") \
+    T(SYM_FieldOffsets, "field-offsets") \
+    T(SYM_FieldNames, "field-names") \
+    T(SYM_TagValues, "tag-values") \
+    T(SYM_ParameterTypes, "parameter-types") \
+    T(SYM_PayloadTypes, "payload-types") \
+    \
+    T(SYM_Do, "do") \
+    T(SYM_DoForm, "form:do") \
+    T(SYM_Parent, "#parent") \
+    T(SYM_VarArgs, "...") \
+    T(SYM_Escape, "escape") \
+    T(SYM_ContinuationForm, "form:fn/cc") \
+    T(SYM_QuoteForm, "form:quote") \
+    T(SYM_ListWC, "#list") \
+    T(SYM_SymbolWC, "#symbol") \
+    T(SYM_ScriptSize, "script-size") \
+    T(SYM_FunctionFlow, "function") \
+    T(SYM_ReturnFlow, "return") \
+    T(SYM_ExitFlow, "exit") \
+    T(SYM_Return, "return") \
+    T(SYM_Result, "result") \
+    T(SYM_Continuation, "cont") \
+    T(SYM_ReadEvalPrintLoop, "read-eval-print-loop")
+
+enum KnownSymbol {
+#define T(sym, name) sym,
+    B_MAP_SYMBOLS()
+#undef T
+    SYM_Count,
+};
+
+typedef TypedInt<KnownSymbol, SYM_Count> Symbol;
+
+//------------------------------------------------------------------------------
+// TYPE SYSTEM
+//------------------------------------------------------------------------------
 
 #define B_MAP_TYPES() \
     T(Void) \
@@ -383,7 +554,7 @@ typedef uint64_t Symbol;
     T(String) \
     T(Symbol) \
     \
-    T(AnchorRef) \
+    T(Anchor) \
     \
     T(List) \
     T(Table) \
@@ -395,7 +566,9 @@ typedef uint64_t Symbol;
     T(BuiltinMacro) \
     T(Frame) \
     T(Closure) \
-    T(BuiltinClosure)
+    T(BuiltinClosure) \
+    T(SourceFile) \
+    T(Userdata)
 
 enum KnownType {
 #define T(X) TYPE_ ## X,
@@ -408,86 +581,27 @@ enum KnownType {
 #define TYPE_SizeT TYPE_U64
 
 typedef uint64_t TypeAttribute;
-struct Type {
-protected:
-    static Type next_type_id;
 
-    uint64_t _value;
+typedef TypedInt<KnownType, TYPE_BuiltinCount> Type;
 
-    Type(uint64_t tid) :
-        _value(tid) {
-    }
+static uint64_t next_type_id = TYPE_BuiltinCount;
 
+static Type new_type() {
+    Type result = Type::wrap(next_type_id);
+    auto newvalue = next_type_id + 1;
+    assert(newvalue <= 0xffffffffull);
+    next_type_id = newvalue;
+    return result;
+}
 
-    static Type wrap(uint64_t value) {
-        return { value };
-    }
-
-public:
-    Type() {}
-
-    Type(KnownType tid) :
-        _value(tid) {
-    }
-
-    bool is_builtin() const {
-        return _value < TYPE_BuiltinCount;
-    }
-
-    KnownType builtin_value() const {
-        assert(is_builtin());
-        return (KnownType)_value;
-    }
-
-    // for std::map support
-    bool operator < (Type b) const {
-        return _value < b._value;
-    }
-
-    bool operator ==(Type b) const {
-        return _value == b._value;
-    }
-
-    bool operator !=(Type b) const {
-        return _value != b._value;
-    }
-
-    bool operator ==(KnownType b) const {
-        return _value == b;
-    }
-
-    bool operator !=(KnownType b) const {
-        return _value != b;
-    }
-
-    std::size_t hash() const {
-        return _value;
-    }
-
-    uint64_t value() const {
-        return _value;
-    }
-
-    static Type create() {
-        Type result = next_type_id;
-        auto newvalue = next_type_id._value + 1;
-        assert(newvalue <= 0xffffffffull);
-        next_type_id = Type::wrap(newvalue);
-        return result;
-    }
-
-    TypeAttribute attrib(Symbol sym) const {
-        assert (sym <= 0xffffffffull);
-        return (sym << 32) | _value;
-    }
-
-};
-
-Type Type::next_type_id = { TYPE_BuiltinCount };
+static TypeAttribute type_attrib(Type type, Symbol sym) {
+    assert (sym.value() <= 0xffffffffull);
+    return (sym.value() << 32) | type.value();
+}
 
 static const char *get_builtin_name(Type type) {
-    if (!type.is_builtin()) return "???";
-    switch(type.builtin_value()) {
+    if (!type.is_known()) return "???";
+    switch(type.known_value()) {
     #define T(X) case TYPE_ ## X: return #X;
         B_MAP_TYPES()
     #undef T
@@ -497,16 +611,14 @@ static const char *get_builtin_name(Type type) {
     return nullptr;
 }
 
-} // namespace bangra
-namespace std {
+} namespace std {
 template<>
 struct hash<bangra::Type> {
     std::size_t operator()(const bangra::Type & s) const {
         return s.hash();
     }
 };
-} // namespace std
-namespace bangra {
+} namespace bangra {
 
 //------------------------------------------------------------------------------
 // ANY
@@ -528,6 +640,7 @@ struct Cursor;
 struct State;
 struct BuiltinClosure;
 struct Anchor;
+struct SourceFile;
 
 template<typename T>
 struct Slice {
@@ -554,7 +667,7 @@ typedef Slice<char> String;
 typedef Any (*BuiltinFunction)(const Any *args, size_t argcount);
 typedef B_FUNC((*BuiltinFlowFunction));
 typedef Any (*SpecialFormFunction)(const List *, const Any &dest);
-typedef void (*Function)(const BuiltinClosure *, size_t, const Any *);
+typedef void (*Function)(BuiltinClosure *, size_t, const Any *);
 
 struct Any {
     Type type;
@@ -579,24 +692,26 @@ struct Any {
         float r32;
         double r64;
 
-        const void *ptr;
-        const String *str;
-        Symbol symbol;
+        void *ptr;
+        String *str;
+        uint64_t symbol;
 
         BuiltinFlowFunction builtin_flow;
         SpecialFormFunction special_form;
         Function function;
-        const BuiltinClosure *builtin_closure;
+        BuiltinClosure *builtin_closure;
 
         const char *c_str;
-        const List *list;
-        int64_t typeref;
-        const Parameter *parameter;
-        const Flow *flow;
-        const Closure *closure;
-        const Frame *frame;
-        const Table *table;
-        const Anchor *anchorref;
+        List *list;
+        uint64_t typeref;
+        Parameter *parameter;
+        Flow *flow;
+        Closure *closure;
+        Frame *frame;
+        Table *table;
+        Anchor *anchor;
+
+        SourceFile *source_file;
     };
 };
 
@@ -621,7 +736,7 @@ struct BuiltinClosure {
 
 static const Any none = { TYPE_Void, .ptr = nullptr };
 
-static bool isnone(const Any &value) {
+static bool is_none(const Any &value) {
     return (value.type == TYPE_Void);
 }
 
@@ -640,11 +755,18 @@ struct State {
 
 #define DEF_WRAP(CTYPE, BTYPE, MEMBER) \
     inline static Any wrap(CTYPE x) { return { TYPE_ ## BTYPE, .MEMBER = x }; }
+#define DEF_WRAP_TAG(CTYPE, BTYPE, MEMBER) \
+    inline static Any wrap(CTYPE x) { return { TYPE_ ## BTYPE, .MEMBER = x.value() }; }
 #define DEF_WRAP_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
     inline static Any wrap(const CTYPE *x) { return { TYPE_ ## BTYPE, .MEMBER = x}; } \
     inline static Any wrap(CTYPE *x) { return { TYPE_ ## BTYPE, .MEMBER = x}; }
+#define DEF_WRAP_MUTABLE_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
+    inline static Any wrap(CTYPE *x) { return { TYPE_ ## BTYPE, .MEMBER = x}; }
 #define DEF_WRAP_PTR(CTYPE, BTYPE, MEMBER) \
-    inline static Any wrap(const CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
+    inline static Any wrap(CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
+// inline static Any wrap(const CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
+#define DEF_WRAP_MUTABLE_PTR(CTYPE, BTYPE, MEMBER) \
+    inline static Any wrap(CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
 
 DEF_WRAP(bool, Bool, i1);
 DEF_WRAP(int8_t, I8, i8);
@@ -659,16 +781,21 @@ DEF_WRAP(uint64_t, U64, u64);
 DEF_WRAP(float, R32, r32);
 DEF_WRAP(double, R64, r64);
 
+DEF_WRAP_TAG(Symbol, Symbol, symbol);
+DEF_WRAP_TAG(Type, Type, typeref);
+
 DEF_WRAP(Function, Function, function);
 
 DEF_WRAP_PTR(String, String, str);
-DEF_WRAP_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
+DEF_WRAP_PTR(Anchor, Anchor, anchor);
+DEF_WRAP_MUTABLE_PTR(SourceFile, SourceFile, source_file);
+DEF_WRAP_MUTABLE_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
 
 inline static Any &wrap(Any &x) { return x; }
 template<typename T>
-inline static Any wrap(const T &src) { return T::_wrap(src); }
+inline static Any wrap(T &src) { return T::_wrap(src); }
 template<typename T>
-inline static Any wrap(T &src) { return wrap(const_cast<const T &>(src)); }
+inline static Any wrap(const T &src) { return T::_wrap(src); }
 
 //------------------------------------------------------------------------------
 
@@ -679,6 +806,10 @@ inline static String str(const char (&s)[n]) {
 
 inline static String str(const char *s, size_t len) {
     return { s, len };
+}
+
+inline static String strc(const char *s) {
+    return { s, strlen(s) };
 }
 
 //------------------------------------------------------------------------------
@@ -693,9 +824,19 @@ template<typename T> struct extract {};
         inline CTYPE operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return x.MEMBER; }}
+#define DEF_EXTRACT_TAG(CTYPE, BTYPE, MEMBER) \
+    template<> struct extract<CTYPE> { \
+        inline CTYPE operator ()(const Any &x) { \
+            assert(is_type(x, TYPE_ ## BTYPE));  \
+            return CTYPE::wrap(x.MEMBER); }}
 #define DEF_EXTRACT_PTR(CTYPE, BTYPE, MEMBER) \
     template<> struct extract<CTYPE> { \
         inline const CTYPE &operator ()(const Any &x) { \
+            assert(is_type(x, TYPE_ ## BTYPE));  \
+            return *x.MEMBER; }}
+#define DEF_EXTRACT_MUTABLE_PTR(CTYPE, BTYPE, MEMBER) \
+    template<> struct extract<CTYPE> { \
+        inline CTYPE &operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return *x.MEMBER; }}
 #define DEF_EXTRACT_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
@@ -717,6 +858,9 @@ DEF_EXTRACT(uint64_t, U64, u64);
 DEF_EXTRACT(float, R32, r32);
 DEF_EXTRACT(double, R64, r64);
 
+DEF_EXTRACT_TAG(Symbol, Symbol, symbol);
+DEF_EXTRACT_TAG(Type, Type, typeref);
+
 DEF_EXTRACT(Function, Function, function);
 
 template<> struct extract<const char *> {
@@ -725,6 +869,8 @@ template<> struct extract<const char *> {
         return x.str->ptr; }};
 
 DEF_EXTRACT_PTR(String, String, str);
+DEF_EXTRACT_PTR(Anchor, Anchor, anchor);
+DEF_EXTRACT_MUTABLE_PTR(SourceFile, SourceFile, source_file);
 DEF_EXTRACT_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
 
 template<typename T>
@@ -763,7 +909,7 @@ inline static void _call(const Any &cl, Args ... args) {
 template<typename T, typename ... Args>
 inline static void _call(const T &caller, Args ... args) {
     Any wrapped_args[] = { wrap(args) ... };
-    Any cl = wrap(caller);
+    Any cl = wrap(const_cast<T &>(caller));
     assert(cl.type == TYPE_BuiltinClosure);
     return cl.builtin_closure->function(
         cl.builtin_closure, sizeof...(args), wrapped_args);
@@ -796,19 +942,14 @@ struct _call_struct<T, false> {
 // GARBAGE COLLECTOR
 //------------------------------------------------------------------------------
 
-static size_t sizeof_payload(const Any &from) {
-    switch(from.type.value()) {
-        case TYPE_BuiltinClosure:
-            if (!from.builtin_closure) return 0;
-            return sizeof(BuiltinClosure)
-                + sizeof(Any) * from.builtin_closure->size - sizeof(Any);
-        default:
-            return 0;
-    }
-}
+struct GC_Context;
+
+static size_t sizeof_payload(const Any &from);
+static void mark_payload(GC_Context &ctx, Any &val);
 
 static char *g_stack_start;
 static char *g_stack_limit;
+static char *g_stack_end;
 static jmp_buf g_retjmp;
 static Any g_contobj;
 
@@ -841,25 +982,30 @@ struct GC_Context {
     }
 
     bool is_on_stack(const char *ptr) {
-        return (ptr >= g_stack_limit) && (ptr < g_stack_start);
+        return (ptr >= g_stack_end) && (ptr < g_stack_start);
+    }
+
+    bool _move_memory(size_t plsize, const char *&ptr) {
+        if (is_marked(ptr)) {
+            char **dest = (char **)ptr;
+            ptr = *dest;
+            return false;
+        } else {
+            mark_addr(ptr);
+            // copy data to new heap
+            memcpy(heap_end, ptr, plsize);
+            // write pointer to old location
+            char **dest = (char **)ptr;
+            *dest = heap_end;
+            ptr = heap_end;
+            heap_end += align(plsize, 8);
+            return true;
+        }
     }
 
     void move_and_mark(size_t plsize, Any &from) {
-        if (is_marked((const char *)from.ptr)) {
-            char **dest = (char **)from.ptr;
-            from.ptr = *dest;
-        } else {
-            mark_addr((const char *)from.ptr);
-            // copy data to new heap
-            memcpy(heap_end, from.ptr, plsize);
-            // write pointer to old location
-            char **dest = (char **)from.ptr;
-            *dest = heap_end;
-            from.ptr = heap_end;
-            heap_end += align(plsize, 8);
-
+        if (_move_memory(plsize, from.c_str))
             *head_end++ = from;
-        }
     }
 
     void force_move(Any &from) {
@@ -867,6 +1013,13 @@ struct GC_Context {
         if (plsize) {
             move_and_mark(plsize, from);
         }
+    }
+
+    bool move_memory(size_t size, const char *&ptr) {
+        if (is_on_stack(ptr)) {
+            return _move_memory(size, ptr);
+        }
+        return false;
     }
 
     void move(Any &from) {
@@ -879,6 +1032,7 @@ struct GC_Context {
     }
 
     GC_Context(char *stack_addr) {
+        assert(stack_addr > g_stack_end);
         _stack_addr = stack_addr;
         head = (Any *)malloc(sizeof(Any) * 1024);
         head_end = head;
@@ -895,7 +1049,7 @@ struct GC_Context {
     }
 };
 
-static void resume_closure(const BuiltinClosure *_self, size_t numargs, const Any *_args) {
+static void resume_closure(BuiltinClosure *_self, size_t numargs, const Any *_args) {
     assert(numargs == 0);
     assert(_self->size >= 3);
     const Any &f = _self->args[0];
@@ -918,16 +1072,7 @@ static Any mark_and_sweep(Any ret) {
     Any *headptr = ctx.head;
     while(headptr < ctx.head_end) {
         Any &val = *headptr;
-        switch(val.type.value()) {
-        case TYPE_BuiltinClosure:
-            if (val.builtin_closure) {
-                auto &cl = *const_cast<BuiltinClosure *>(val.builtin_closure);
-                for(size_t i = 0; i < cl.size; ++i) {
-                    ctx.move(cl.args[i]);
-                }
-            } break;
-        default: break;
-        }
+        mark_payload(ctx, val);
         headptr++;
     }
 
@@ -937,7 +1082,7 @@ static Any mark_and_sweep(Any ret) {
     return ret;
 }
 
-static void GC(Function f, const BuiltinClosure *cl, size_t numargs, const Any *args) {
+static void GC(Function f, BuiltinClosure *cl, size_t numargs, const Any *args) {
     // only minor GC, we just build a heap and forget it
 
     BuiltinClosure *retcl = (BuiltinClosure *)alloca(
@@ -962,7 +1107,8 @@ static void exit_loop(int code) {
 static int run_gc_loop (Any entry) {
     uint64_t c = 0;
     g_stack_start = (char *)&c;
-    g_stack_limit = g_stack_start - B_GC_NURSERY_SIZE;
+    g_stack_limit = g_stack_start - B_GC_NURSERY_LIMIT;
+    g_stack_end = g_stack_start - B_GC_NURSERY_SIZE;
 
     g_contobj = entry;
 
@@ -975,114 +1121,145 @@ static int run_gc_loop (Any entry) {
 }
 
 //------------------------------------------------------------------------------
-// CLOSURE MACROS
+// ANCHORS
 //------------------------------------------------------------------------------
 
-#if 1
-#define CLOSURE_ASSERT(x) assert(x)
-#else
-#define CLOSURE_ASSERT(x)
-#endif
+struct Anchor {
+    const char *path;
+    int lineno;
+    int column;
+    int offset;
 
-#define _IS_VARARGS_VARARGS PROBE(~)
-#define IS_VARARGS_KW(x) CHECK(CAT(_IS_VARARGS_, x))
-
-#define DEF_EXTRACT_MEMBER(X, NAME) \
-    const Any &NAME = _self->args[X];
-#define DEF_ANY_PARAM(N, NAME)  \
-    IF_ELSE(IS_VARARGS_KW(NAME))( \
-    )( \
-        const Any &NAME = _args[N]; \
-    )
-
-#define CLOSURE_UNPACK_PARAMS(...) \
-    MACRO_FOREACH_ENUM(DEF_ANY_PARAM, __VA_ARGS__)
-#define CLOSURE_UPVARS(...) \
-    IF_ELSE(COUNT_VARARGS(__VA_ARGS__))( \
-        CLOSURE_ASSERT(_self); \
-        size_t numupvars = (_self?(_self->size):0); \
-        CLOSURE_ASSERT(COUNT_VARARGS(__VA_ARGS__) <= numupvars); \
-        MACRO_FOREACH_ENUM(DEF_EXTRACT_MEMBER, __VA_ARGS__) \
-    )()
-
-#define DEF_CAPTURE_PARAM(X, NAME) \
-    IF_ELSE(X)(, Any NAME)(Any NAME)
-#define DEF_CAPTURE_WRAP_ARG(NAME) , NAME
-#define CLOSURE_CAPTURE_FN(...) \
-    enum { has_upvars = true }; \
-    Function f; \
-    size_t size; \
-    Any args[COUNT_VARARGS(__VA_ARGS__)]; \
-    static this_struct capture( \
-        MACRO_FOREACH_ENUM(DEF_CAPTURE_PARAM, __VA_ARGS__) \
-        ) { \
-        return { run, COUNT_VARARGS(__VA_ARGS__) \
-            MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; }
-
-#define CLOSURE_VARARG_DEFS(...) \
-    IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
-        enum { VARARG_START = DEC(COUNT_VARARGS(__VA_ARGS__)) }; \
-        CLOSURE_ASSERT(numargs >= VARARG_START); \
-    )( \
-        CLOSURE_ASSERT(numargs == COUNT_VARARGS(__VA_ARGS__)); \
-    )
-#define CLOSURE_2(NAME, PARAMS, UPVARS, ...) \
-    struct NAME { \
-        IF_ELSE(COUNT_VARARGS UPVARS) (\
-        typedef NAME this_struct; \
-        CLOSURE_CAPTURE_FN UPVARS \
-        static Any _wrap(const this_struct &self) { return wrap((const BuiltinClosure *)&self); } \
-        static void run (const BuiltinClosure *_self, size_t numargs, const Any *_args) { \
-            char _stack_marker; char *_stack_addr = &_stack_marker; \
-            if (_stack_addr <= g_stack_limit) { \
-                return GC(run, _self, numargs, _args); \
-            } \
-        ) ( \
-        enum { has_upvars = false }; \
-        static void run (const BuiltinClosure *, size_t numargs, const Any *_args) { \
-            char _stack_marker; char *_stack_addr = &_stack_marker; \
-            if (_stack_addr <= g_stack_limit) { \
-                return GC(run, nullptr, numargs, _args); \
-            } \
-        ) \
-            CLOSURE_UNPACK_PARAMS PARAMS \
-            CLOSURE_VARARG_DEFS PARAMS \
-            CLOSURE_UPVARS UPVARS \
-            __VA_ARGS__ \
-        } \
+    Anchor() {
+        path = nullptr; lineno = 0; column = 0; offset = 0;
     }
 
-#define RCLOSURE_2(NAME, PARAMS, ...) \
-    struct NAME { \
-        enum { has_upvars = false }; \
-        static void run (const BuiltinClosure *, size_t numargs, const Any *_args) { \
-            CLOSURE_UNPACK_PARAMS PARAMS \
-            CLOSURE_VARARG_DEFS PARAMS \
-            __VA_ARGS__ \
-        } \
+    Anchor(const char *_path, int _lineno, int _column, int _offset = -1) :
+        path(_path), lineno(_lineno), column(_column), offset(_offset) {
     }
 
-#define DEF_FN(NAME, PARAMS, UPVARS, ...) \
-    CLOSURE_2(NAME, PARAMS, UPVARS, __VA_ARGS__)
+    bool is_offset_valid() const {
+        return offset >= 0;
+    }
 
-#define CLOSURE_CAPTURE_UPVARS(...) CAPTURE(_, __VA_ARGS__)
-#define LAMBDA_FN(PARAMS, UPVARS, ...) \
-    ({ CLOSURE_2(_, PARAMS, UPVARS, __VA_ARGS__); CLOSURE_CAPTURE_UPVARS UPVARS; })
+    bool is_valid() const {
+        return (path != nullptr) && (lineno != 0) && (column != 0);
+    }
 
-#define FN(ARG0, ...) \
-    IF_ELSE(IS_PAREN(ARG0)) \
-        (LAMBDA_FN(ARG0, __VA_ARGS__)) \
-        (DEF_FN(ARG0, __VA_ARGS__))
+    bool operator ==(const Anchor &other) const {
+        return
+            path == other.path
+                && lineno == other.lineno
+                && column == other.column
+                && offset == other.offset;
+    }
 
-#define RFN(ARG0, ...) \
-    RCLOSURE_2(ARG0, __VA_ARGS__)
+    void print(FILE *stream) const {
+        assert(is_valid());
+        fputs(ANSI(STYLE_LOCATION), stream); fputs(path, stream);
+        fputs(ANSI(STYLE_OPERATOR), stream); fputc(':', stream);
+        fputs(ANSI(STYLE_NUMBER), stream); stb_fprintf(stream, "%i", lineno);
+        fputs(ANSI(STYLE_OPERATOR), stream); fputc(':', stream);
+        fputs(ANSI(STYLE_NUMBER), stream); stb_fprintf(stream, "%i", column);
+        fputs(ANSI(RESET), stream);
+    }
+};
 
-#define VARARG(i) _args[i]
+static Anchor active_anchor;
+static void set_anchor(const Anchor &anchor) {
+    active_anchor = anchor;
+}
 
-#define RET(...) return _call(__VA_ARGS__)
-#define CC(T, ...) return _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
-#define RCALL(T, ...) _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
-#define CAPTURE(T, ...) _call_struct<T, T::has_upvars>::capture(__VA_ARGS__)
+#define ANCHOR() Anchor(__FILE__, __LINE__, 1)
+#define FROM_HERE() set_anchor(ANCHOR())
+
+#define INTERNAL_ERROR(FMT, ...) \
+    { FROM_HERE(); RCALL(error, str(FMT), ## __VA_ARGS__); }
+#define DEBUG_PRINT(FMT, ...) \
+    RCALL(message, ANCHOR(), str(FMT), ## __VA_ARGS__)
+#define ERROR(FMT, ...) \
+    { RCALL(error, str(FMT), ## __VA_ARGS__); }
+
+//------------------------------------------------------------------------------
+// FILE I/O
+//------------------------------------------------------------------------------
+
+struct SourceFile {
+    int fd;
+    off_t length;
+    void *ptr;
+
+    SourceFile() :
+        fd(-1),
+        length(0),
+        ptr(MAP_FAILED)
+        {}
+
+    void close() {
+        if (ptr != MAP_FAILED) {
+            munmap(ptr, length);
+            ptr = MAP_FAILED;
+            length = 0;
+        }
+        if (fd >= 0) {
+            ::close(fd);
+            fd = -1;
+        }
+    }
+
+    bool is_open() const { return (fd != -1); }
+    const char *strptr() const { assert(is_open()); return (const char *)ptr; }
+    size_t size() const { return length; }
+
+    void dump_line(size_t offset, FILE *stream) {
+        const char *str = strptr();
+        if (offset >= (size_t)length) {
+            return;
+        }
+        size_t start = offset;
+        size_t end = offset;
+        while (start > 0) {
+            if (str[start-1] == '\n')
+                break;
+            start--;
+        }
+        while (end < (size_t)length) {
+            if (str[end] == '\n')
+                break;
+            end++;
+        }
+        stb_fprintf(stream, "%.*s\n", (int)(end - start), str + start);
+        size_t column = offset - start;
+        for (size_t i = 0; i < column; ++i) {
+            putc(' ', stream);
+        }
+        fputs(ANSI(STYLE_OPERATOR), stream); fputc('^', stream);
+        fputs(ANSI(RESET), stream); fputc('\n', stream);
+    }
+
+    static SourceFile open(const char *path) {
+        SourceFile file;
+        file.fd = ::open(path, O_RDONLY);
+        if (file.fd >= 0) {
+            file.length = lseek(file.fd, 0, SEEK_END);
+            file.ptr = mmap(nullptr, file.length, PROT_READ, MAP_PRIVATE, file.fd, 0);
+            if (file.ptr != MAP_FAILED) {
+                return file;
+            }
+        }
+        file.close();
+        return file;
+    }
+
+};
+
+static void dump_source_file_line(const char *path, int offset, FILE *stream) {
+    auto file = SourceFile::open(path);
+    if (file.is_open()) {
+        file.dump_line((size_t)offset, stream);
+        file.close();
+    }
+}
 
 //------------------------------------------------------------------------------
 // UTILITY FUNCTIONS
@@ -1280,21 +1457,21 @@ static int vsformat(char *buf, const char *fmt, size_t numargs, const Any *args)
     }
 }
 
-struct fvsprint_cb_ctx {
+struct fvprint_cb_ctx {
     FILE *out;
     char tmp[B_SNFORMAT];
 };
 
-static char *fvsprint_cb(const char *buf, void *user, int len) {
-    fvsprint_cb_ctx *ctx = (fvsprint_cb_ctx *)user;
+static char *fvprint_cb(const char *buf, void *user, int len) {
+    fvprint_cb_ctx *ctx = (fvprint_cb_ctx *)user;
     fwrite(buf, 1, len, ctx->out);
     return ctx->tmp;
 }
 
-static void fvsprint(FILE *f, const char *fmt, size_t numargs, const Any *args) {
-    fvsprint_cb_ctx ctx;
+static void fvprint(FILE *f, const char *fmt, size_t numargs, const Any *args) {
+    fvprint_cb_ctx ctx;
     ctx.out = f;
-    vsformatcb(fvsprint_cb, &ctx, ctx.tmp, fmt, numargs, args);
+    vsformatcb(fvprint_cb, &ctx, ctx.tmp, fmt, numargs, args);
 }
 
 static int escapestrcb(vsformatcb_t cb, void *user, char *buf, const String &str,
@@ -1352,29 +1529,175 @@ static int escapestr(char *buf, const String &str, const char *quote_chars = nul
     }
 }
 
-RFN(print_format, (fmt, VARARGS),
-    auto fmtstr = unwrap<const char *>(fmt);
-    fvsprint(stdout, fmtstr, numargs - VARARG_START, &VARARG(VARARG_START));
-);
+static void fvmessage (
+    FILE *stream, const Anchor &anchor, const char *fmt,
+    size_t numargs, const Any *args) {
+    if (anchor.is_valid()) {
+        anchor.print(stream);
+        fputs(ANSI(STYLE_OPERATOR), stream); fputs(": ", stream);
+    }
+    if (stream == stderr) {
+        fputs(ANSI(STYLE_ERROR), stream); fputs("error: ", stream);
+    }
+    fputs(ANSI(RESET), stream);
+    fvprint(stream, fmt, numargs, args);
+    putc('\n', stream);
+    if (anchor.is_valid() && anchor.is_offset_valid()) {
+        dump_source_file_line(anchor.path, anchor.offset, stream);
+    }
+}
 
-RFN(print, (VARARGS),
+//------------------------------------------------------------------------------
+// CLOSURE MACROS
+//------------------------------------------------------------------------------
+
+#if 1
+#define CLOSURE_ASSERT(x) assert(x)
+#else
+#define CLOSURE_ASSERT(x)
+#endif
+
+#define _IS_VARARGS_VARARGS PROBE(~)
+#define IS_VARARGS_KW(x) CHECK(CAT(_IS_VARARGS_, x))
+
+#define DEF_EXTRACT_MEMBER(X, NAME) \
+    const Any &NAME = _self->args[X];
+#define DEF_ANY_PARAM(N, NAME)  \
+    IF_ELSE(IS_VARARGS_KW(NAME))( \
+    )( \
+        const Any &NAME = _args[N]; \
+    )
+
+#define CLOSURE_UNPACK_PARAMS(...) \
+    MACRO_FOREACH_ENUM(DEF_ANY_PARAM, __VA_ARGS__)
+#define CLOSURE_UPVARS(...) \
+    IF_ELSE(COUNT_VARARGS(__VA_ARGS__))( \
+        CLOSURE_ASSERT(_self); \
+        size_t numupvars = (_self?(_self->size):0); \
+        CLOSURE_ASSERT(COUNT_VARARGS(__VA_ARGS__) <= numupvars); \
+        MACRO_FOREACH_ENUM(DEF_EXTRACT_MEMBER, __VA_ARGS__) \
+    )()
+
+#define DEF_CAPTURE_PARAM(X, NAME) \
+    IF_ELSE(X)(, Any NAME)(Any NAME)
+#define DEF_CAPTURE_WRAP_ARG(NAME) , NAME
+
+#define DEF_UPVAR_MEMBER(NAME) Any NAME;
+#define CLOSURE_CAPTURE_FIELDS(...) \
+    MACRO_FOREACH(DEF_UPVAR_MEMBER, __VA_ARGS__) \
+    static this_struct capture( \
+        MACRO_FOREACH_ENUM(DEF_CAPTURE_PARAM, __VA_ARGS__) \
+        ) { \
+        return { run, COUNT_VARARGS(__VA_ARGS__) \
+            MACRO_FOREACH(DEF_CAPTURE_WRAP_ARG, __VA_ARGS__) }; }
+
+#define CLOSURE_VARARG_DEFS(...) \
+    IF_ELSE(IS_VARARGS_KW(TAIL(__VA_ARGS__)))( \
+        enum { VARARG_START = DEC(COUNT_VARARGS(__VA_ARGS__)) }; \
+        CLOSURE_ASSERT(numargs >= VARARG_START); \
+    )( \
+        CLOSURE_ASSERT(numargs == COUNT_VARARGS(__VA_ARGS__)); \
+    )
+
+#define CLOSURE_BODY(...) \
+    static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
+    static void run (BuiltinClosure *_self, size_t numargs, const Any *_args) { \
+        char _stack_marker; char *_stack_addr = &_stack_marker; \
+        if (_stack_addr <= g_stack_limit) { \
+            GC(run, _self, numargs, _args); \
+        } else { \
+            this_struct *self = (this_struct *)_self; \
+            if (NUMUPVARS) { \
+                assert(self && (self->numupvars >= NUMUPVARS)); \
+            } \
+            self->_run(numargs, _args); \
+        } \
+    } \
+    void _run (size_t numargs, const Any *_args) { \
+        CLOSURE_UNPACK_PARAMS(__VA_ARGS__) \
+        CLOSURE_VARARG_DEFS(__VA_ARGS__)
+
+#define RFN_BODY(...) \
+    static void run (BuiltinClosure *, size_t numargs, const Any *_args) { \
+        CLOSURE_UNPACK_PARAMS(__VA_ARGS__) \
+        CLOSURE_VARARG_DEFS(__VA_ARGS__)
+
+#define LETFN(NAME) \
+    struct NAME { \
+        typedef NAME this_struct; \
+        CLOSURE_BODY
+#define LETFN_END \
+        } \
+        enum { \
+            has_upvars = false, \
+            NUMUPVARS = 0 \
+        }; \
+        Function f; \
+        size_t numupvars; \
+    };
+
+#define LETFN_END_BINDWITH(...) \
+        } \
+        enum { \
+            has_upvars = true, \
+            NUMUPVARS = COUNT_VARARGS(__VA_ARGS__) \
+        }; \
+        Function f; \
+        size_t numupvars; \
+        CLOSURE_CAPTURE_FIELDS(__VA_ARGS__) \
+    };
+
+#define LETRFN(NAME) \
+    struct NAME { \
+        typedef NAME this_struct; \
+        RFN_BODY
+#define LETRFN_END LETFN_END
+
+#define FN(...) \
+    ({ LETFN(_)(__VA_ARGS__)
+
+#define FN_END \
+    LETFN_END \
+    CAPTURE(_); })
+#define FN_END_BINDWITH(...) \
+    LETFN_END_BINDWITH(__VA_ARGS__) \
+    CAPTURE(_, __VA_ARGS__); })
+
+#define VARARG(i) _args[i]
+
+#define RET(...) return _call(__VA_ARGS__)
+#define CC(T, ...) return _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
+#define RCALL(T, ...) _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
+#define CAPTURE(T, ...) _call_struct<T, T::has_upvars>::capture(__VA_ARGS__)
+
+//------------------------------------------------------------------------------
+// FN-BASED UTILITIES
+//------------------------------------------------------------------------------
+
+LETRFN(print_format)(fmt, VARARGS)
+    auto fmtstr = unwrap<const char *>(fmt);
+    fvprint(stdout, fmtstr, numargs - VARARG_START, &VARARG(VARARG_START));
+LETRFN_END
+
+LETRFN(print)(VARARGS)
     for (size_t i = VARARG_START; i < numargs; ++i) {
         if (i != VARARG_START) fputs(" ", stdout);
-        fvsprint(stdout, "{}", 1, &VARARG(i));
+        fvprint(stdout, "{}", 1, &VARARG(i));
     }
     fputs("\n", stdout);
-);
+LETRFN_END
 
-FN(format, (cont, fmt, VARARGS), (),
+LETFN(format)(cont, fmt, VARARGS)
     auto fmtstr = unwrap<const char *>(fmt);
     auto size = vsformat(nullptr,
         fmtstr, numargs - VARARG_START, &VARARG(VARARG_START));
     char dest[size + 1];
     vsformat(dest,
         fmtstr, numargs - VARARG_START, &VARARG(VARARG_START));
-    RET(cont, str(dest, size)); );
+    RET(cont, str(dest, size));
+LETFN_END
 
-FN(escape_string, (cont, s, VARARGS), (),
+LETFN(escape_string)(cont, s, VARARGS)
     auto sstr = unwrap<String>(s);
     const char *cquote_chars = nullptr;
     if (numargs >= 3) {
@@ -1382,9 +1705,10 @@ FN(escape_string, (cont, s, VARARGS), (),
     auto size = escapestr(nullptr, sstr, cquote_chars);
     char dest[size + 1];
     escapestr(dest, sstr, cquote_chars);
-    RET(cont, str(dest, size)); );
+    RET(cont, str(dest, size));
+LETFN_END
 
-FN(concat_strings, (cont, first, VARARGS), (),
+LETFN(concat_strings)(cont, first, VARARGS)
     auto sfirst = unwrap<String>(first);
     // count
     size_t destsize = sfirst.count;
@@ -1399,41 +1723,473 @@ FN(concat_strings, (cont, first, VARARGS), (),
         memcpy(dest + destsize, selem.ptr, selem.count);
         destsize += selem.count; }
     dest[destsize] = 0;
-    RET(cont, str(dest, destsize)); );
+    RET(cont, str(dest, destsize));
+LETFN_END
 
-static bool support_ansi = false;
-FN(color, (cont, code, content), (),
+LETFN(color)(cont, code, content)
     if (support_ansi) {
-        CC(concat_strings, cont, code, content, str(ANSI_RESET)); }
-    else {
-        RET(cont, content); } );
+        CC(concat_strings, cont, code, content, str(ANSI_RESET));
+    } else {
+        RET(cont, content);
+    }
+LETFN_END
 
-FN(repr_string, (cont, s), (),
+LETFN(repr_string)(cont, s)
     CC(escape_string,
-        FN((s), (cont),
+        FN(s)
             auto q = str("\"");
             CC(concat_strings,
-                FN((s), (cont),
-                    CC(color, cont, str(ANSI_STYLE_STRING), s); ),
-                q, s, q); ),
-        s, str("\"")); );
+                FN(s)
+                    CC(color, cont, str(ANSI_STYLE_STRING), s);
+                FN_END_BINDWITH(cont),
+                q, s, q);
+        FN_END_BINDWITH(cont),
+        s, str("\""));
+LETFN_END
 
-FN(cmain, (), (),
+LETRFN(message)(anchor, fmt, VARARGS)
+    Anchor panchor = active_anchor;
+    if (!is_none(anchor)) { panchor = unwrap<Anchor>(anchor); }
+    auto fmtstr = unwrap<const char *>(fmt);
+    fvmessage(stdout, panchor, fmtstr,
+        numargs - VARARG_START, &VARARG(VARARG_START));
+LETRFN_END
+
+LETRFN(errormessage)(anchor, fmt, VARARGS)
+    Anchor panchor = active_anchor;
+    if (!is_none(anchor)) { panchor = unwrap<Anchor>(anchor); }
+    auto fmtstr = unwrap<const char *>(fmt);
+    fvmessage(stderr, panchor, fmtstr,
+        numargs - VARARG_START, &VARARG(VARARG_START));
+LETRFN_END
+
+LETRFN(error)(fmt, VARARGS)
+    auto fmtstr = unwrap<const char *>(fmt);
+    fvmessage(stderr, active_anchor, fmtstr,
+        numargs - VARARG_START, &VARARG(VARARG_START));
+    exit(1);
+LETRFN_END
+
+//------------------------------------------------------------------------------
+// SYMBOL CACHE
+//------------------------------------------------------------------------------
+
+static uint64_t next_symbol_id = SYM_Count;
+static std::unordered_map<Symbol, std::string> map_symbol_name;
+static std::unordered_map<std::string, Symbol> map_name_symbol;
+
+static void map_symbol(Symbol id, const String &name) {
+    std::string sname = std::string(name.ptr, name.count);
+    map_name_symbol[sname] = id;
+    map_symbol_name[id] = sname;
+}
+
+static Symbol get_symbol(const String &name) {
+    std::string sname = std::string(name.ptr, name.count);
+    auto it = map_name_symbol.find(sname);
+    if (it != map_name_symbol.end()) {
+        return it->second;
+    } else {
+        Symbol id = Symbol::wrap(++next_symbol_id);
+        map_symbol(id, name);
+        return id;
+    }
+}
+
+LETFN(get_symbol_name)(cont, id)
+    auto sym = unwrap<Symbol>(id);
+    const std::string &key = map_symbol_name[sym];
+    RET(cont, str(key.c_str(), key.size()));
+LETFN_END
+
+static void initSymbols() {
+#define T(sym, name) map_symbol(sym, str(name));
+    B_MAP_SYMBOLS()
+#undef T
+}
+
+//------------------------------------------------------------------------------
+// S-EXPR LEXER / TOKENIZER
+//------------------------------------------------------------------------------
+
+typedef enum {
+    token_none = -1,
+    token_eof = 0,
+    token_open = '(',
+    token_close = ')',
+    token_square_open = '[',
+    token_square_close = ']',
+    token_curly_open = '{',
+    token_curly_close = '}',
+    token_string = '"',
+    token_symbol = 'S',
+    token_escape = '\\',
+    token_statement = ';',
+    token_integer = 'I',
+    token_real = 'R',
+} Token;
+
+static const char symbol_terminators[]  = "()[]{}\"';#";
+static const char integer_terminators[] = "()[]{}\"';#";
+static const char real_terminators[]    = "()[]{}\"';#";
+
+struct Lexer {
+    const char *path;
+    const char *input_stream;
+    const char *eof;
+    const char *cursor;
+    const char *next_cursor;
+    // beginning of line
+    const char *line;
+    // next beginning of line
+    const char *next_line;
+
+    int lineno;
+    int next_lineno;
+
+    int base_offset;
+
+    int token;
+    const char *string;
+    int string_len;
+    int64_t integer;
+    bool is_unsigned;
+    float real;
+
+    Lexer() {}
+
+    void init (const char *input_stream, const char *eof, const char *path, int offset = 0) {
+        if (eof == NULL) {
+            eof = input_stream + strlen(input_stream);
+        }
+
+        this->base_offset = offset;
+        this->path = path;
+        this->input_stream = input_stream;
+        this->eof = eof;
+        this->next_cursor = input_stream;
+        this->next_lineno = 1;
+        this->next_line = input_stream;
+    }
+
+    void dumpLine() {
+        dumpFileLine(path, offset());
+    }
+
+    int offset () {
+        return base_offset + (cursor - input_stream);
+    }
+
+    int column () {
+        return cursor - line + 1;
+    }
+
+    void initAnchor(Anchor &anchor) {
+        anchor.path = path;
+        anchor.lineno = lineno;
+        anchor.column = column();
+        anchor.offset = offset();
+    }
+
+    Anchor getAnchor() {
+        Anchor anchor;
+        initAnchor(anchor);
+        return anchor;
+    }
+
+    const Anchor *newAnchor() {
+        Anchor *anchor = new Anchor();
+        initAnchor(*anchor);
+        return anchor;
+    }
+
+    char next() {
+        return *next_cursor++;
+    }
+
+    bool verifyGoodTaste(char c) {
+        if (c == '\t') {
+            ERROR("please use spaces instead of tabs.");
+            return false;
+        }
+        return true;
+    }
+
+    void readSymbol () {
+        bool escape = false;
+        while (true) {
+            if (next_cursor == eof) {
+                break;
+            }
+            char c = next();
+            if (escape) {
+                if (c == '\n') {
+                    ++next_lineno;
+                    next_line = next_cursor;
+                }
+                // ignore character
+                escape = false;
+            } else if (c == '\\') {
+                // escape
+                escape = true;
+            } else if (isspace(c)
+                || strchr(symbol_terminators, c)) {
+                -- next_cursor;
+                break;
+            }
+        }
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void readSingleSymbol () {
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void readString (char terminator) {
+        bool escape = false;
+        while (true) {
+            if (next_cursor == eof) {
+                ERROR("unterminated sequence");
+                break;
+            }
+            char c = next();
+            if (c == '\n') {
+                ++next_lineno;
+                next_line = next_cursor;
+            }
+            if (escape) {
+                // ignore character
+                escape = false;
+            } else if (c == '\\') {
+                // escape
+                escape = true;
+            } else if (c == terminator) {
+                break;
+            }
+        }
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    bool readInteger() {
+        char *end;
+        errno = 0;
+        integer = std::strtoll(cursor, &end, 0);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            return false;
+        is_unsigned = false;
+        next_cursor = end;
+        return true;
+    }
+
+    bool readUInteger() {
+        char *end;
+        errno = 0;
+        integer = std::strtoull(cursor, &end, 0);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            return false;
+        is_unsigned = true;
+        next_cursor = end;
+        return true;
+    }
+
+    bool readReal() {
+        char *end;
+        errno = 0;
+        real = std::strtof(cursor, &end);
+        if ((end == cursor)
+            || (errno == ERANGE)
+            || (end >= eof)
+            || (!isspace(*end) && !strchr(real_terminators, *end)))
+            return false;
+        next_cursor = end;
+        return true;
+    }
+
+    int readToken () {
+        lineno = next_lineno;
+        line = next_line;
+        cursor = next_cursor;
+        while (true) {
+            if (next_cursor == eof) {
+                token = token_eof;
+                break;
+            }
+            char c = next();
+            if (!verifyGoodTaste(c)) break;
+            if (c == '\n') {
+                ++next_lineno;
+                next_line = next_cursor;
+            }
+            if (isspace(c)) {
+                lineno = next_lineno;
+                line = next_line;
+                cursor = next_cursor;
+            } else if (c == '#') {
+                readString('\n');
+                // and continue
+                lineno = next_lineno;
+                line = next_line;
+                cursor = next_cursor;
+            } else if (c == '(') {
+                token = token_open;
+                break;
+            } else if (c == ')') {
+                token = token_close;
+                break;
+            } else if (c == '[') {
+                token = token_square_open;
+                break;
+            } else if (c == ']') {
+                token = token_square_close;
+                break;
+            } else if (c == '{') {
+                token = token_curly_open;
+                break;
+            } else if (c == '}') {
+                token = token_curly_close;
+                break;
+            } else if (c == '\\') {
+                token = token_escape;
+                break;
+            } else if (c == '"') {
+                token = token_string;
+                readString(c);
+                break;
+            } else if (c == '\'') {
+                token = token_string;
+                readString(c);
+                break;
+            } else if (c == ';') {
+                token = token_statement;
+                break;
+            } else if (readInteger() || readUInteger()) {
+                token = token_integer;
+                break;
+            } else if (readReal()) {
+                token = token_real;
+                break;
+            } else {
+                token = token_symbol;
+                readSymbol();
+                break;
+            }
+        }
+        return token;
+    }
+
+    Any getAsString() {
+        // TODO: anchor
+        auto result = make_any(TYPE_String);
+        auto s = alloc_string(string + 1, string_len - 2);
+        unescape(*s);
+        result.str = s;
+        return result;
+    }
+
+    Any getAsSymbol() {
+        // TODO: anchor
+        std::string s(string, string_len);
+        inplace_unescape(const_cast<char *>(s.c_str()));
+        return bangra::symbol(s);
+    }
+
+    Any getAsInteger() {
+        // TODO: anchor
+        size_t width;
+        if (is_unsigned) {
+            width = ((uint64_t)integer > (uint64_t)INT_MAX)?64:32;
+        } else {
+            width =
+                ((integer < (int64_t)INT_MIN) || (integer > (int64_t)INT_MAX))?64:32;
+        }
+        auto type = Types::Integer(width, !is_unsigned);
+        return bangra::integer(type, this->integer);
+    }
+
+    Any getAsReal() {
+        return bangra::real(TYPE_R32, this->real);
+    }
+
+};
+
+//------------------------------------------------------------------------------
+// TYPE REFLECTION & GC WALKING
+//------------------------------------------------------------------------------
+
+static size_t sizeof_payload(const Any &from) {
+    switch(from.type.value()) {
+        case TYPE_Bool:
+        case TYPE_I8: case TYPE_I16: case TYPE_I32: case TYPE_I64:
+        case TYPE_U8: case TYPE_U16: case TYPE_U32: case TYPE_U64:
+        case TYPE_R16: case TYPE_R32: case TYPE_R64:
+        case TYPE_Function:
+            return 0;
+        case TYPE_String:
+            return sizeof(String);
+        case TYPE_BuiltinClosure:
+            if (!from.builtin_closure) return 0;
+            return sizeof(BuiltinClosure)
+                + sizeof(Any) * from.builtin_closure->size - sizeof(Any);
+        default:
+            INTERNAL_ERROR("cannot determine payload size of type {}\n",
+                strc(get_builtin_name(from.type)));
+            return 0;
+    }
+}
+
+static void mark_payload(GC_Context &ctx, Any &val) {
+    switch(val.type.value()) {
+    case TYPE_String: {
+        auto &s = *const_cast<String *>(val.str);
+        ctx.move_memory(s.count + 1, s.ptr);
+    } break;
+    case TYPE_BuiltinClosure:
+        if (val.builtin_closure) {
+            auto &cl = *const_cast<BuiltinClosure *>(val.builtin_closure);
+            for(size_t i = 0; i < cl.size; ++i) {
+                ctx.move(cl.args[i]);
+            }
+        } break;
+    default:
+        INTERNAL_ERROR("cannot mark payload size of type {}\n",
+            strc(get_builtin_name(val.type)));
+    }
+}
+
+//------------------------------------------------------------------------------
+// MAIN
+//------------------------------------------------------------------------------
+
+LETFN(cmain)()
     RCALL(print_format, str("hi {} {} {}!\n"), 1, 2, cmain::run);
     CC(color,
-        FN((s), (),
+        FN(s)
             stb_printf("%s\n", unwrap<const char *>(s));
             CC(repr_string,
-                FN((s), (),
-                    stb_printf("'%s'\n", unwrap<const char *>(s)); ),
-                str("this \n \r \\ is a \0 s\"t\"ring"));),
+                FN(s2)
+                    stb_printf("'%s'\n", unwrap<const char *>(s2));
+                    stb_printf("..'%s'\n", unwrap<const char *>(s));
+                FN_END_BINDWITH(s),
+                str("this \n \r \\ is a \0 s\"t\"ring"));
+        FN_END,
         str(ANSI_STYLE_STRING),
         str("the quick brown fox, guys!"));
-);
+LETFN_END
 
 } // namespace bangra
 
 int main(int argc, char ** argv) {
+
+    bangra::support_ansi = isatty(fileno(stdout));
 
 #ifdef _WIN32
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
