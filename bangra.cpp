@@ -126,6 +126,17 @@ int print_number(int value);
 #define STB_SPRINTF_DECORATE(name) stb_##name
 #include "external/stb_sprintf.h"
 
+// we're going to use extensions
+#pragma GCC diagnostic ignored "-Wvla-extension"
+#pragma GCC diagnostic ignored "-Wzero-length-array"
+#pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#pragma GCC diagnostic ignored "-Wembedded-directive"
+#pragma GCC diagnostic ignored "-Wgnu-statement-expression"
+#pragma GCC diagnostic ignored "-Wc99-extensions"
+#pragma GCC diagnostic ignored "-Wmissing-braces"
+// this one is only enabled for code cleanup
+#pragma GCC diagnostic ignored "-Wunused-function"
+
 typedef struct stb_printf_ctx {
     FILE *dest;
     char tmp[STB_SPRINTF_MIN];

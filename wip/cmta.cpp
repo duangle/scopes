@@ -207,8 +207,11 @@ struct _call_struct<T, false> {
     }
 };
 
+#if 0
 #define MAX_STACK_SIZE 0x200000
-//#define MAX_STACK_SIZE 16384
+#else
+#define MAX_STACK_SIZE 16384
+#endif
 
 static size_t align(size_t offset, size_t align) {
     return (offset + align - 1) & ~(align - 1);
@@ -466,7 +469,7 @@ static void exit_loop(int code) {
         (LAMBDA_FN(ARG0, __VA_ARGS__)) \
         (DEF_FN(ARG0, __VA_ARGS__))
 
-#define CVA_ARG(i) _args[i]
+#define VARARG(i) _args[i]
 
 #define RET(...) return _call(__VA_ARGS__)
 #define CC(T, ...) return _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
@@ -480,7 +483,7 @@ FN(func, (x, y, VARARGS), (a1, a2, a3, a4),
     stb_printf(" a=%zu:", numargs);
     stb_printf(" %i %i >>", x.i32, y.i32);
     for (size_t i = VARARG_START; i < numargs; ++i) {
-        Any v = CVA_ARG(i);
+        Any v = VARARG(i);
         stb_printf(" %i", v.i32);
     }
     stb_printf("\n");
@@ -538,7 +541,7 @@ FN(cmain, (), (),
     CC(pow, 2, 16,
         FN((VARARGS), (),
             for (size_t i = VARARG_START; i < numargs; ++i) {
-                Any v = CVA_ARG(i);
+                Any v = VARARG(i);
                 stb_printf("%i\n", v.i32);
             }
             //stb_printf("%i\n", x.i32);
@@ -562,8 +565,10 @@ static int run_gc_loop (Any entry) {
 }
 
 int main(int argc, char ** argv) {
+    stb_printf("%zu\n", sizeof(va_list));
+
     run_gc_loop(wrap(cmain::run));
-    printf("exited.\n");
+    stb_printf("exited.\n");
 
     return 0;
 }
