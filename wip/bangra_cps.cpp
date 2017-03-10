@@ -204,9 +204,12 @@ namespace bangra {
 // maximum number of arguments to a function
 #define BANGRA_MAX_FUNCARGS 256
 
+// have GC announce when it does something
+#define BANGRA_NOISY_GC 0
+
 // GC nursery size
 #define B_GC_NURSERY_SIZE 0x200000
-#if 1
+#if 0
 #define B_GC_NURSERY_LIMIT B_GC_NURSERY_SIZE
 #else
 #define B_GC_NURSERY_LIMIT 1024
@@ -799,6 +802,9 @@ struct BuiltinClosure {
     Any args[1];
 };
 
+#define ALLOC_CLOSURE(NARGS) \
+    ((BuiltinClosure *)alloca(sizeof(BuiltinClosure) - sizeof(Any) + (NARGS) * sizeof(Any)))
+
 //------------------------------------------------------------------------------
 
 static const Any none = { TYPE_Void, .ptr = nullptr };
@@ -871,6 +877,7 @@ DEF_WRAP_PTR(String, String, str);
 DEF_WRAP_PTR(Anchor, Anchor, anchor);
 DEF_WRAP_MUTABLE_PTR(SourceFile, SourceFile, source_file);
 DEF_WRAP_MUTABLE_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
+DEF_WRAP_MUTABLE_PTR_OR_NULL(List, List, list);
 
 inline static Any &wrap(Any &x) { return x; }
 inline static const Any &wrap(const Any &x) { return x; }
@@ -930,6 +937,12 @@ template<typename T> struct extract {};
         inline return_type operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return x.MEMBER; }}
+#define DEF_EXTRACT_MUTABLE_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
+    template<> struct extract<CTYPE *> { \
+        typedef CTYPE *return_type; \
+        inline return_type operator ()(const Any &x) { \
+            assert(is_type(x, TYPE_ ## BTYPE));  \
+            return x.MEMBER; }}
 #define DEF_EXTRACT_CLASS_PTR(CTYPE) \
     template<> struct extract<CTYPE> { \
         typedef CTYPE &return_type; \
@@ -966,6 +979,7 @@ DEF_EXTRACT_PTR(String, String, str);
 DEF_EXTRACT_PTR(Anchor, Anchor, anchor);
 DEF_EXTRACT_MUTABLE_PTR(SourceFile, SourceFile, source_file);
 DEF_EXTRACT_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
+DEF_EXTRACT_MUTABLE_PTR_OR_NULL(List, List, list);
 
 template<typename T>
 inline static typename extract<T>::return_type unwrap(const Any &value) {
@@ -1038,7 +1052,7 @@ struct _call_struct<T, false> {
 
 struct GC_Context;
 
-static size_t sizeof_payload(const Any &from);
+static size_t sizeof_payload(GC_Context &ctx, const Any &from);
 static void mark_payload(GC_Context &ctx, Any &val);
 
 static char *g_stack_limit;
@@ -1060,8 +1074,8 @@ struct GC_Context {
         size_t page = offset / 512;
         size_t bit = (offset / 8) % 64;
         assert (page < numpages);
-        assert(!(bits[page] & (1<<bit)));
-        bits[page] |= (1<<bit);
+        assert(!(bits[page] & (1ull<<(int)bit)));
+        bits[page] |= (1ull<<(int)bit);
     }
 
     bool is_marked(const char *dstptr) {
@@ -1070,7 +1084,7 @@ struct GC_Context {
         size_t page = offset / 512;
         size_t bit = (offset / 8) % 64;
         assert (page < numpages);
-        return bits[page] & (1<<bit);
+        return bits[page] & (1ull<<(int)bit);
     }
 
     bool is_on_stack(const char *ptr) {
@@ -1101,7 +1115,7 @@ struct GC_Context {
     }
 
     void force_move(Any &from) {
-        size_t plsize = sizeof_payload(from);
+        size_t plsize = sizeof_payload(*this, from);
         if (plsize) {
             move_and_mark(plsize, from);
         }
@@ -1115,10 +1129,25 @@ struct GC_Context {
     }
 
     void move(Any &from) {
-        size_t plsize = sizeof_payload(from);
+        size_t plsize = sizeof_payload(*this, from);
         if (plsize) {
-            if (is_on_stack((const char *)from.ptr)) {
+            if (is_on_stack(from.c_str)) {
                 move_and_mark(plsize, from);
+            }
+        }
+    }
+
+    void dump_bits() {
+        for (size_t i = 0; i < numpages; ++i) {
+            if (bits[i]) {
+                printf("page %i: ", (int)i);
+                for (size_t k = 0; k < 64; ++k) {
+                    if (bits[i] & (1ull << k))
+                        putchar('1');
+                    else
+                        putchar('0');
+                }
+                putchar('\n');
             }
         }
     }
@@ -1158,7 +1187,9 @@ static Any mark_and_sweep(Any ret) {
     uint64_t _stack_marker;
     GC_Context ctx((char *)&_stack_marker);
 
+#if BANGRA_NOISY_GC
     stb_printf("GC!\n");
+#endif
     ctx.force_move(ret);
 
     Any *headptr = ctx.head;
@@ -1168,9 +1199,11 @@ static Any mark_and_sweep(Any ret) {
         headptr++;
     }
 
+#if BANGRA_NOISY_GC
     stb_printf("%zd values / %zd bytes moved\n",
         ctx.head_end - ctx.head,
         ctx.heap_end - ctx.heap);
+#endif
     return ret;
 }
 
@@ -2188,124 +2221,95 @@ DEF_EXTRACT_CLASS_PTR(Lexer);
 struct List {
     Anchor anchor;
     Any at;
-    const List *next;
+    List *next;
     size_t count;
-
-    static List *create(const Any &at, const List *next) {
-        auto result = new List();
-        result->at = at;
-        result->next = next;
-        result->count = next?(next->count + 1):1;
-        return result;
-    }
-
-    static List *create(const Any &at, const List *next, const Anchor *anchor) {
-        auto result = create(at, next);
-        result->anchor = *anchor;
-        return result;
-    }
-
-    static const List *create_from_c_array(const Any *values, size_t count) {
-        List *result = nullptr;
-        while (count) {
-            --count;
-            result = create(values[count], result);
-        }
-        return result;
-    }
-
-    static const List *create_from_array(const std::vector<Any> &values) {
-        return create_from_c_array(const_cast<Any *>(&values[0]), values.size());
-    }
 };
+
+inline static List list_create(const Any &at, List *next, const Anchor &anchor) {
+    return { anchor, at, next, next?(next->count + 1):1 };
+}
+
+inline static List list_create(const Any &at, List *next) {
+    return list_create(at, next, Anchor());
+}
+
+/*
+LETFN(_list_create_from_args)(index)
+
+
+LETFN_END_BINDWITH(cont)
+
+LETFN(list_create_from_args)(cont, VARARGS)
+    BuiltinClosure *cl = ALLOC_CLOSURE(numargs);
+    cl->size = numargs;
+    cl->function = _list_create_from_args;
+    for (size_t i = 0; i < numargs; ++i) {
+        cl->args[i] = _args[i];
+    }
+    RET(cl, 0);
+LETFN_END
+
+static const List *list_create_from_c_array(const Any *values, size_t count) {
+    List *result = nullptr;
+    while (count) {
+        --count;
+        result = create(values[count], result);
+    }
+    return result;
+}
+*/
 
 //------------------------------------------------------------------------------
 // S-EXPR PARSER
 //------------------------------------------------------------------------------
 
-#if 0
-// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
-// this is the version for immutables; input lists are not modified
-static const List *reverse_list(const List *l, const List *eol = nullptr) {
-    const List *next = nullptr;
-    while (l != eol) {
-        next = List::create(l->at, next, get_anchor(l));
-        l = l->next;
-    }
-    return next;
-}
-#endif
-
 // (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
 // this is the mutating version; input lists are modified, direction is inverted
-static const List *reverse_list_inplace(
-    const List *l, const List *eol = nullptr, const List *cat_to = nullptr) {
-    const List *next = cat_to;
+static List *reverse_list_inplace(
+    List *l, List *eol = nullptr, List *cat_to = nullptr) {
+    List *next = cat_to;
     size_t count = cat_to?cat_to->count:0;
     while (l != eol) {
         ++count;
-        const List *iternext = l->next;
-        const_cast<List *>(l)->next = next;
-        const_cast<List *>(l)->count = count;
+        List *iternext = l->next;
+        l->next = next;
+        l->count = count;
         next = l;
         l = iternext;
     }
     return next;
 }
-/*
 
-struct ListBuilder {
-protected:
-    Lexer &lexer;
-    const List *prev;
-    const List *eol;
-    Anchor anchor;
-public:
-    ListBuilder(Lexer &lexer_) :
-        lexer(lexer_),
-        prev(nullptr),
-        eol(nullptr) {
-        anchor = lexer.getAnchor();
-    }
+// init prev, eol to nullptr
 
-    const Anchor &getAnchor() {
-        return anchor;
-    }
-
-    void append(const Any &value) {
-        this->prev = List::create(value, this->prev, get_anchor(value));
-    }
-
-    void resetStart() {
-        eol = prev;
-    }
-
-    bool split() {
-        // if we haven't appended anything, that's an error
-        if (!prev) {
-            return false;
-        }
+LETFN(list_builder_split)(cont, prev, eol, anchor) // -> prev, eol
+    // if we haven't appended anything, that's an error
+    if (!unwrap<List *>(prev))
+        ERROR("can't split empty list");
+    auto elem =
         // reverse what we have, up to last split point and wrap result
         // in cell
-        prev = List::create(
-            wrap(reverse_list_inplace(prev, eol)), eol, lexer.newAnchor());
-        resetStart();
-        return true;
-    }
+        list_create(
+            wrap(
+                reverse_list_inplace(unwrap<List *>(prev), unwrap<List *>(eol))),
+            unwrap<List *>(eol),
+            unwrap<Anchor>(anchor));
+    RET(cont, &elem, prev);
+LETFN_END
 
-    bool isSingleResult() {
-        return prev && !prev->next;
-    }
+bool list_builder_is_single_result(List *prev) {
+    return prev && !prev->next;
+}
 
-    Any getSingleResult() {
-        return this->prev?this->prev->at:const_none;
-    }
+Any list_builder_get_single_result(List *prev) {
+    return prev?prev->at:none;
+}
 
-    const List *getResult() {
-        return reverse_list_inplace(this->prev);
-    }
-};
+List *list_builder_get_result(List *prev) {
+    return reverse_list_inplace(prev);
+}
 
+/*
 // parses a list to its terminator and returns a handle to the first cell
 const List *parseList(int end_token) {
     ListBuilder builder(lexer);
@@ -2487,12 +2491,13 @@ LETFN_END
 // TYPE REFLECTION & GC WALKING
 //------------------------------------------------------------------------------
 
-static size_t sizeof_payload(const Any &from) {
+static size_t sizeof_payload(GC_Context &ctx, const Any &from) {
     switch(from.type.value()) {
-        case TYPE_Bool:
+        case TYPE_Void: case TYPE_Bool:
         case TYPE_I8: case TYPE_I16: case TYPE_I32: case TYPE_I64:
         case TYPE_U8: case TYPE_U16: case TYPE_U32: case TYPE_U64:
         case TYPE_R16: case TYPE_R32: case TYPE_R64:
+        case TYPE_Symbol:
         case TYPE_Function:
             return 0;
         case TYPE_String:
@@ -2511,8 +2516,8 @@ static size_t sizeof_payload(const Any &from) {
 static void mark_payload(GC_Context &ctx, Any &val) {
     switch(val.type.value()) {
     case TYPE_String: {
-        auto &s = *const_cast<String *>(val.str);
-        ctx.move_memory(s.count + 1, s.ptr);
+        auto &&s = val.str;
+        ctx.move_memory(s->count + 1, s->ptr);
     } break;
     case TYPE_BuiltinClosure:
         if (val.builtin_closure) {
