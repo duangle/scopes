@@ -19,7 +19,7 @@ else
     #PATH=$DIR/../../llvm/build/bin:$PATH
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
     OPT_G=-g
-    OPT_O=-O0
+    OPT_O=-Os
 fi
 clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
 && clang -c -o $DIR/coro.o $DIR/external/coro/coro.c $OPT_G $OPT_O \
@@ -51,6 +51,7 @@ clang -x c -o $DIR/bangra.h -C -E $DIR/bangra.cpp \
     `llvm-config --libs engine passes option objcarcopts coverage support` \
     -Wl,--no-whole-archive \
     $OPT_O \
+    -fsanitize=undefined \
     -fexceptions \
 && $DIR/bangra
 # && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b

@@ -503,7 +503,6 @@ static void exit_loop(int code) {
 #define RCALL(T, ...) _call_struct<T, T::has_upvars>::call(__VA_ARGS__)
 #define CAPTURE(T, ...) _call_struct<T, T::has_upvars>::capture(__VA_ARGS__)
 
-
 LETFN(func)(x, y, VARARGS)
     stb_printf("c=%zu: %i %i %i %i |",
         numupvars,

@@ -502,15 +502,20 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE( vsprintfcb )( STBSP_SPRINTFCB * callb
         if ( stbsp__real_to_str( &sn, &l, num, &dp, fv, (pr-1)|0x80000000 ) )
           fl |= STBSP__NEGATIVE;
 
-        // clamp the precision and delete extra zeros after clamp
         n = pr;
-        if ( l > (stbsp__uint32)pr ) l = pr; while ((l>1)&&(pr)&&(sn[l-1]=='0')) { --pr; --l; }
 
         // should we use %e
         if ((dp<=-4)||(dp>(stbsp__int32)n))
         {
+          // clamp the precision and delete extra zeros after clamp
+          if ( l > (stbsp__uint32)pr ) l = pr; while ((l>1)&&(pr)&&(sn[l-1]=='0')) { --pr; --l; }
           if ( pr > (stbsp__int32)l ) pr = l-1; else if ( pr ) --pr; // when using %e, there is one digit before the decimal
           goto doexpfromg;
+        } else {
+          if (*sn == '0') dp--; // (lritter) for a zero, insert a trailing 0.
+          unsigned int minl = (dp > 0)?(dp+1):1; // (lritter) keep at least one zero after the dot
+          // clamp the precision and delete extra zeros after clamp
+          if ( l > (stbsp__uint32)pr ) l = pr; while ((l>minl)&&(pr)&&(sn[l-1]=='0')) { --pr; --l; }
         }
         // this is the insane action to get the pr to match %g sematics for %f
         if(dp>0) { pr=(dp<(stbsp__int32)l)?l-dp:0; } else { pr = -dp+((pr>(stbsp__int32)l)?l:pr); }
@@ -891,6 +896,7 @@ STBSP__PUBLICDEF int STB_SPRINTF_DECORATE( vsnprintf )( char * buf, int count, c
   stbsp__context c;
   int l;
 
+  // (lritter) support querying length without providing a buffer
   if ( (count == 0) && !buf )
   {
     c.count = 0;

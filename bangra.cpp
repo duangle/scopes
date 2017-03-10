@@ -2076,36 +2076,6 @@ static const List *extract_list(const Any &value) {
     return nullptr;
 }
 
-#if 0
-// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
-// this is the version for immutables; input lists are not modified
-static const List *reverse_list(const List *l, const List *eol = nullptr) {
-    const List *next = nullptr;
-    while (l != eol) {
-        next = List::create(l->at, next, get_anchor(l));
-        l = l->next;
-    }
-    return next;
-}
-#endif
-
-// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
-// this is the mutating version; input lists are modified, direction is inverted
-static const List *reverse_list_inplace(
-    const List *l, const List *eol = nullptr, const List *cat_to = nullptr) {
-    const List *next = cat_to;
-    size_t count = cat_to?cat_to->count:0;
-    while (l != eol) {
-        ++count;
-        const List *iternext = l->next;
-        const_cast<List *>(l)->next = next;
-        const_cast<List *>(l)->count = count;
-        next = l;
-        l = iternext;
-    }
-    return next;
-}
-
 //------------------------------------------------------------------------------
 
 struct Flow {

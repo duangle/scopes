@@ -160,6 +160,9 @@ int print_number(int value);
 // this one is only enabled for code cleanup
 #pragma GCC diagnostic ignored "-Wunused-function"
 
+typedef float real32_t;
+typedef double real64_t;
+
 typedef struct stb_printf_ctx {
     FILE *dest;
     char tmp[STB_SPRINTF_MIN];
@@ -168,6 +171,7 @@ typedef struct stb_printf_ctx {
 static char *_printf_cb(char * buf, void * user, int len) {
     stb_printf_ctx *ctx = (stb_printf_ctx *)user;
     fwrite (buf, 1, len, ctx->dest);
+    fflush(ctx->dest);
     return ctx->tmp;
 }
 static int stb_vprintf(const char *fmt, va_list va) {
@@ -202,7 +206,7 @@ namespace bangra {
 
 // GC nursery size
 #define B_GC_NURSERY_SIZE 0x200000
-#if 0
+#if 1
 #define B_GC_NURSERY_LIMIT B_GC_NURSERY_SIZE
 #else
 #define B_GC_NURSERY_LIMIT 1024
@@ -226,6 +230,16 @@ namespace bangra {
 #define DEC_7 6
 #define DEC_8 7
 #define DEC_9 8
+#define DEC_10 9
+#define DEC_11 10
+#define DEC_12 11
+#define DEC_13 12
+#define DEC_14 13
+#define DEC_15 14
+#define DEC_16 15
+#define DEC_17 16
+#define DEC_18 17
+#define DEC_19 18
 
 #define INC(x) PRIMITIVE_CAT(INC_, x)
 #define INC_0 1
@@ -238,6 +252,16 @@ namespace bangra {
 #define INC_7 8
 #define INC_8 9
 #define INC_9 10
+#define INC_10 11
+#define INC_11 12
+#define INC_12 13
+#define INC_13 14
+#define INC_14 15
+#define INC_15 16
+#define INC_16 17
+#define INC_17 18
+#define INC_18 19
+#define INC_19 20
 
 #define GETARG(N, ...) PRIMITIVE_CAT(GETARG_, N)(__VA_ARGS__)
 #define GETARG_0(_0, ...) _0
@@ -250,6 +274,26 @@ namespace bangra {
 #define GETARG_7(_0, _1, _2, _3, _4, _5, _6, _7, ...) _7
 #define GETARG_8(_0, _1, _2, _3, _4, _5, _6, _7, _8, ...) _8
 #define GETARG_9(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, ...) _9
+#define GETARG_10(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, ...) _10
+#define GETARG_11(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, ...) _11
+#define GETARG_12(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, ...) _12
+#define GETARG_13(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, ...) _13
+#define GETARG_14(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, _14, ...) _14
+#define GETARG_15(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, _14, _15, ...) _15
+#define GETARG_16(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, _14, _15, _16, ...) _16
+#define GETARG_17(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, _14, _15, _16, _17, ...) _17
+#define GETARG_18(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, _14, _15, _16, _17, _18, ...) _18
+#define GETARG_19(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                 _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, ...) _19
 #define TAIL(...) \
     GETARG(DEC(COUNT_VARARGS(__VA_ARGS__)), __VA_ARGS__)
 #define SEMITAIL(...) \
@@ -271,9 +315,13 @@ namespace bangra {
 #define _IF_1_ELSE(...)
 #define _IF_0_ELSE(...) __VA_ARGS__
 
-#define _GET_10TH_ARG(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, N, ...) N
+#define _GET_20TH_ARG(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, \
+                     _10, _11, _12, _13, _14, _15, _16, _17, _18, _19, \
+                     N, ...) N
 #define COUNT_VARARGS(...) \
-    _GET_10TH_ARG("ignored", ##__VA_ARGS__, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
+    _GET_20TH_ARG("ignored", ##__VA_ARGS__, \
+    19, 18, 17, 16, 15, 14, 13, 12, 11, 10, \
+    9, 8, 7, 6, 5, 4, 3, 2, 1, 0)
 #define _FE_0(_call, ...)
 #define _FE_1(_call, x) _call(x)
 #define _FE_2(_call, x, ...) _call(x) _FE_1(_call, __VA_ARGS__)
@@ -284,6 +332,16 @@ namespace bangra {
 #define _FE_7(_call, x, ...) _call(x) _FE_6(_call, __VA_ARGS__)
 #define _FE_8(_call, x, ...) _call(x) _FE_7(_call, __VA_ARGS__)
 #define _FE_9(_call, x, ...) _call(x) _FE_8(_call, __VA_ARGS__)
+#define _FE_10(_call, x, ...) _call(x) _FE_9(_call, __VA_ARGS__)
+#define _FE_11(_call, x, ...) _call(x) _FE_10(_call, __VA_ARGS__)
+#define _FE_12(_call, x, ...) _call(x) _FE_11(_call, __VA_ARGS__)
+#define _FE_13(_call, x, ...) _call(x) _FE_12(_call, __VA_ARGS__)
+#define _FE_14(_call, x, ...) _call(x) _FE_13(_call, __VA_ARGS__)
+#define _FE_15(_call, x, ...) _call(x) _FE_14(_call, __VA_ARGS__)
+#define _FE_16(_call, x, ...) _call(x) _FE_15(_call, __VA_ARGS__)
+#define _FE_17(_call, x, ...) _call(x) _FE_16(_call, __VA_ARGS__)
+#define _FE_18(_call, x, ...) _call(x) _FE_17(_call, __VA_ARGS__)
+#define _FE_19(_call, x, ...) _call(x) _FE_18(_call, __VA_ARGS__)
 #define MACRO_FOREACH(x, ...) \
     CAT(_FE_, COUNT_VARARGS(__VA_ARGS__))(x, ##__VA_ARGS__)
 #define _FEN_0(n, _call, ...)
@@ -296,6 +354,16 @@ namespace bangra {
 #define _FEN_7(n, _call, x, ...) _call(n,x) _FEN_6(INC(n), _call, __VA_ARGS__)
 #define _FEN_8(n, _call, x, ...) _call(n,x) _FEN_7(INC(n), _call, __VA_ARGS__)
 #define _FEN_9(n, _call, x, ...) _call(n,x) _FEN_8(INC(n), _call, __VA_ARGS__)
+#define _FEN_10(n, _call, x, ...) _call(n,x) _FEN_9(INC(n), _call, __VA_ARGS__)
+#define _FEN_11(n, _call, x, ...) _call(n,x) _FEN_10(INC(n), _call, __VA_ARGS__)
+#define _FEN_12(n, _call, x, ...) _call(n,x) _FEN_11(INC(n), _call, __VA_ARGS__)
+#define _FEN_13(n, _call, x, ...) _call(n,x) _FEN_12(INC(n), _call, __VA_ARGS__)
+#define _FEN_14(n, _call, x, ...) _call(n,x) _FEN_13(INC(n), _call, __VA_ARGS__)
+#define _FEN_15(n, _call, x, ...) _call(n,x) _FEN_14(INC(n), _call, __VA_ARGS__)
+#define _FEN_16(n, _call, x, ...) _call(n,x) _FEN_15(INC(n), _call, __VA_ARGS__)
+#define _FEN_17(n, _call, x, ...) _call(n,x) _FEN_16(INC(n), _call, __VA_ARGS__)
+#define _FEN_18(n, _call, x, ...) _call(n,x) _FEN_17(INC(n), _call, __VA_ARGS__)
+#define _FEN_19(n, _call, x, ...) _call(n,x) _FEN_18(INC(n), _call, __VA_ARGS__)
 #define MACRO_FOREACH_ENUM(x, ...) \
     CAT(_FEN_, COUNT_VARARGS(__VA_ARGS__))(0, x, ##__VA_ARGS__)
 
@@ -567,8 +635,7 @@ typedef TypedInt<KnownSymbol, SYM_Count> Symbol;
     T(Frame) \
     T(Closure) \
     T(BuiltinClosure) \
-    T(SourceFile) \
-    T(Userdata)
+    T(SourceFile)
 
 enum KnownType {
 #define T(X) TYPE_ ## X,
@@ -689,8 +756,8 @@ struct Any {
 
         size_t size;
 
-        float r32;
-        double r64;
+        real32_t r32;
+        real64_t r64;
 
         void *ptr;
         String *str;
@@ -753,20 +820,34 @@ struct State {
 
 //------------------------------------------------------------------------------
 
+static char *g_stack_start;
+static char *g_stack_end;
+
+static bool is_stackptr(const char *ptr) {
+    return (ptr >= g_stack_end) && (ptr < g_stack_start);
+}
+
+#define CHECKALIGN(x) \
+    assert(!is_stackptr((const char *)(x)) || !(((uintptr_t)(x))&3))
+
 #define DEF_WRAP(CTYPE, BTYPE, MEMBER) \
     inline static Any wrap(CTYPE x) { return { TYPE_ ## BTYPE, .MEMBER = x }; }
+
 #define DEF_WRAP_TAG(CTYPE, BTYPE, MEMBER) \
     inline static Any wrap(CTYPE x) { return { TYPE_ ## BTYPE, .MEMBER = x.value() }; }
+
 #define DEF_WRAP_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
-    inline static Any wrap(const CTYPE *x) { return { TYPE_ ## BTYPE, .MEMBER = x}; } \
-    inline static Any wrap(CTYPE *x) { return { TYPE_ ## BTYPE, .MEMBER = x}; }
+    inline static Any wrap(const CTYPE *x) { CHECKALIGN(x); return { TYPE_ ## BTYPE, .MEMBER = x}; } \
+    inline static Any wrap(CTYPE *x) { CHECKALIGN(x); return { TYPE_ ## BTYPE, .MEMBER = x}; }
+
 #define DEF_WRAP_MUTABLE_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
-    inline static Any wrap(CTYPE *x) { return { TYPE_ ## BTYPE, .MEMBER = x}; }
+    inline static Any wrap(CTYPE *x) { CHECKALIGN(x); return { TYPE_ ## BTYPE, .MEMBER = x}; }
+
 #define DEF_WRAP_PTR(CTYPE, BTYPE, MEMBER) \
     inline static Any wrap(CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
-// inline static Any wrap(const CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
+
 #define DEF_WRAP_MUTABLE_PTR(CTYPE, BTYPE, MEMBER) \
-    inline static Any wrap(CTYPE &x) { return { TYPE_ ## BTYPE, .MEMBER = &x }; }
+    inline static Any wrap(CTYPE &x) { CHECKALIGN(&x); return { TYPE_ ## BTYPE, .MEMBER = &x }; }
 
 DEF_WRAP(bool, Bool, i1);
 DEF_WRAP(int8_t, I8, i8);
@@ -792,10 +873,8 @@ DEF_WRAP_MUTABLE_PTR(SourceFile, SourceFile, source_file);
 DEF_WRAP_MUTABLE_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
 
 inline static Any &wrap(Any &x) { return x; }
-template<typename T>
-inline static Any wrap(T &src) { return T::_wrap(src); }
-template<typename T>
-inline static Any wrap(const T &src) { return T::_wrap(src); }
+inline static const Any &wrap(const Any &x) { return x; }
+//template<typename T> inline static Any wrap(T &src) { return T::_wrap(src); }
 
 //------------------------------------------------------------------------------
 
@@ -805,10 +884,12 @@ inline static String str(const char (&s)[n]) {
 }
 
 inline static String str(const char *s, size_t len) {
+    CHECKALIGN(s);
     return { s, len };
 }
 
 inline static String strc(const char *s) {
+    CHECKALIGN(s);
     return { s, strlen(s) };
 }
 
@@ -821,29 +902,41 @@ template<typename T> struct extract {};
 
 #define DEF_EXTRACT(CTYPE, BTYPE, MEMBER) \
     template<> struct extract<CTYPE> { \
-        inline CTYPE operator ()(const Any &x) { \
+        typedef CTYPE return_type; \
+        inline return_type operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return x.MEMBER; }}
 #define DEF_EXTRACT_TAG(CTYPE, BTYPE, MEMBER) \
     template<> struct extract<CTYPE> { \
-        inline CTYPE operator ()(const Any &x) { \
+        typedef CTYPE return_type; \
+        inline return_type operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return CTYPE::wrap(x.MEMBER); }}
 #define DEF_EXTRACT_PTR(CTYPE, BTYPE, MEMBER) \
     template<> struct extract<CTYPE> { \
-        inline const CTYPE &operator ()(const Any &x) { \
+        typedef const CTYPE &return_type; \
+        inline return_type operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return *x.MEMBER; }}
 #define DEF_EXTRACT_MUTABLE_PTR(CTYPE, BTYPE, MEMBER) \
     template<> struct extract<CTYPE> { \
-        inline CTYPE &operator ()(const Any &x) { \
+        typedef CTYPE &return_type; \
+        inline return_type operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return *x.MEMBER; }}
 #define DEF_EXTRACT_PTR_OR_NULL(CTYPE, BTYPE, MEMBER) \
     template<> struct extract<CTYPE *> { \
-        inline const CTYPE *operator ()(const Any &x) { \
+        typedef const CTYPE *return_type; \
+        inline return_type operator ()(const Any &x) { \
             assert(is_type(x, TYPE_ ## BTYPE));  \
             return x.MEMBER; }}
+#define DEF_EXTRACT_CLASS_PTR(CTYPE) \
+    template<> struct extract<CTYPE> { \
+        typedef CTYPE &return_type; \
+        inline return_type operator ()(const Any &x) { \
+            assert(is_type(x, TYPE_BuiltinClosure)); \
+            assert(x.builtin_closure->function == CTYPE::run); \
+            return *(CTYPE *)x.builtin_closure; }}
 
 DEF_EXTRACT(bool, Bool, i1);
 DEF_EXTRACT(int8_t, I8, i8);
@@ -864,7 +957,8 @@ DEF_EXTRACT_TAG(Type, Type, typeref);
 DEF_EXTRACT(Function, Function, function);
 
 template<> struct extract<const char *> {
-    const char *operator ()(const Any &x) {
+    typedef const char *return_type;
+    return_type operator ()(const Any &x) {
         assert(is_type(x, TYPE_String)); assert(x.str);
         return x.str->ptr; }};
 
@@ -874,7 +968,7 @@ DEF_EXTRACT_MUTABLE_PTR(SourceFile, SourceFile, source_file);
 DEF_EXTRACT_PTR_OR_NULL(BuiltinClosure, BuiltinClosure, builtin_closure);
 
 template<typename T>
-inline static T unwrap(const Any &value) {
+inline static typename extract<T>::return_type unwrap(const Any &value) {
     return extract<T>()(value);
 }
 
@@ -883,13 +977,13 @@ inline static T unwrap(const Any &value) {
 //------------------------------------------------------------------------------
 
 template<typename ... Args>
-inline static void _call(const BuiltinClosure *cl, Args ... args) {
+inline static void _call(const BuiltinClosure *cl, Args&& ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     return cl->function(cl, sizeof...(args), wrapped_args);
 }
 
 template<typename ... Args>
-inline static void _call(const Any &cl, Args ... args) {
+inline static void _call(const Any &cl, Args&& ... args) {
     switch(cl.type.value()) {
     case TYPE_BuiltinClosure: {
         Any wrapped_args[] = { wrap(args) ... };
@@ -907,7 +1001,7 @@ inline static void _call(const Any &cl, Args ... args) {
 }
 
 template<typename T, typename ... Args>
-inline static void _call(const T &caller, Args ... args) {
+inline static void _call(const T &caller, Args&& ... args) {
     Any wrapped_args[] = { wrap(args) ... };
     Any cl = wrap(const_cast<T &>(caller));
     assert(cl.type == TYPE_BuiltinClosure);
@@ -921,7 +1015,7 @@ struct _call_struct {};
 template<typename T>
 struct _call_struct<T, true> {
     template<typename ... Args>
-    inline static T capture(Args ... args) {
+    inline static T capture(Args&& ... args) {
         return T::capture(wrap(args) ...);
     }
 };
@@ -929,7 +1023,7 @@ struct _call_struct<T, true> {
 template<typename T>
 struct _call_struct<T, false> {
     template<typename ... Args>
-    inline static void call(Args ... args) {
+    inline static void call(Args&& ... args) {
         Any wrapped_args[] = { wrap(args) ... };
         return T::run(nullptr, sizeof...(args), wrapped_args);
     }
@@ -947,9 +1041,7 @@ struct GC_Context;
 static size_t sizeof_payload(const Any &from);
 static void mark_payload(GC_Context &ctx, Any &val);
 
-static char *g_stack_start;
 static char *g_stack_limit;
-static char *g_stack_end;
 static jmp_buf g_retjmp;
 static Any g_contobj;
 
@@ -982,7 +1074,7 @@ struct GC_Context {
     }
 
     bool is_on_stack(const char *ptr) {
-        return (ptr >= g_stack_end) && (ptr < g_stack_start);
+        return is_stackptr(ptr);
     }
 
     bool _move_memory(size_t plsize, const char *&ptr) {
@@ -1345,7 +1437,6 @@ static size_t inplace_unescape(char *buf) {
     return dst - buf;
 }
 
-
 #define B_SNFORMAT 512 // how many characters per callback
 typedef char *(*vsformatcb_t)(const char *buf, void *user, int len);
 
@@ -1358,7 +1449,7 @@ static int vsformatcb(vsformatcb_t cb, void *user, char *buf, const char *fmt,
     if (((p - buf) + (N)) > B_SNFORMAT) { buf = p = cb(buf, user, p - buf); }
 #define VSFCB_PRINT(FMT, ...) { \
         VSFCB_CHECKWRITE(B_SNFORMAT); \
-        p += stb_snprintf(p, B_SNFORMAT - (p - buf), FMT, __VA_ARGS__); }
+        p += stb_snprintf(p, B_SNFORMAT - (p - buf), FMT, ## __VA_ARGS__); }
 scan:
     for(;;) {
         if (!(*fmt)) goto done;
@@ -1369,16 +1460,17 @@ scan:
                     if ((args - arg) < (long)numargs) { // got more args?
                         switch(arg->type.value()) {
                         case TYPE_Bool: VSFCB_PRINT("%s", (arg->i1?"true":"false")); goto success;
+                        case TYPE_Void: VSFCB_PRINT("none"); goto success;
                         case TYPE_I8: VSFCB_PRINT("%" PRId8, arg->i8); goto success;
                         case TYPE_I16: VSFCB_PRINT("%" PRId16, arg->i16); goto success;
                         case TYPE_I32: VSFCB_PRINT("%" PRId32, arg->i32); goto success;
-                        case TYPE_I64: VSFCB_PRINT("%" PRId64, arg->i64); goto success;
+                        case TYPE_I64: VSFCB_PRINT("%lld", arg->i64); goto success;
                         case TYPE_U8: VSFCB_PRINT("%" PRIu8, arg->u8); goto success;
                         case TYPE_U16: VSFCB_PRINT("%" PRIu16, arg->u16); goto success;
                         case TYPE_U32: VSFCB_PRINT("%" PRIu32, arg->u32); goto success;
-                        case TYPE_U64: VSFCB_PRINT("%" PRIu64, arg->u64); goto success;
-                        case TYPE_R32: VSFCB_PRINT("%f", arg->r32); goto success;
-                        case TYPE_R64: VSFCB_PRINT("%f", arg->r64); goto success;
+                        case TYPE_U64: VSFCB_PRINT("%llu", arg->u64); goto success;
+                        case TYPE_R32: VSFCB_PRINT("%g", arg->r32); goto success;
+                        case TYPE_R64: VSFCB_PRINT("%g", arg->r64); goto success;
                         case TYPE_String: {
                             auto str = unwrap<String>(*arg);
                             int rem = str.count;
@@ -1465,6 +1557,7 @@ struct fvprint_cb_ctx {
 static char *fvprint_cb(const char *buf, void *user, int len) {
     fvprint_cb_ctx *ctx = (fvprint_cb_ctx *)user;
     fwrite(buf, 1, len, ctx->out);
+    fflush(ctx->out);
     return ctx->tmp;
 }
 
@@ -1601,14 +1694,15 @@ static void fvmessage (
 
 #define CLOSURE_BODY(...) \
     static Any _wrap(this_struct &self) { return wrap((BuiltinClosure *)&self); } \
+    operator Any() { return wrap((BuiltinClosure *)this); } \
     static void run (BuiltinClosure *_self, size_t numargs, const Any *_args) { \
         char _stack_marker; char *_stack_addr = &_stack_marker; \
         if (_stack_addr <= g_stack_limit) { \
             GC(run, _self, numargs, _args); \
         } else { \
             this_struct *self = (this_struct *)_self; \
-            if (NUMUPVARS) { \
-                assert(self && (self->numupvars >= NUMUPVARS)); \
+            if (this_struct::NUMUPVARS) { \
+                assert(self && (self->numupvars >= this_struct::NUMUPVARS)); \
             } \
             self->_run(numargs, _args); \
         } \
@@ -1627,7 +1721,7 @@ static void fvmessage (
         typedef NAME this_struct; \
         CLOSURE_BODY
 #define LETFN_END \
-        } \
+        }; \
         enum { \
             has_upvars = false, \
             NUMUPVARS = 0 \
@@ -1636,8 +1730,11 @@ static void fvmessage (
         size_t numupvars; \
     };
 
+#define FN_CLASS_BEGIN }
+#define FN_CLASS_END enum { has_class // bogus enum to close the dangling brace
+
 #define LETFN_END_BINDWITH(...) \
-        } \
+        }; \
         enum { \
             has_upvars = true, \
             NUMUPVARS = COUNT_VARARGS(__VA_ARGS__) \
@@ -1802,7 +1899,7 @@ LETFN(get_symbol_name)(cont, id)
     RET(cont, str(key.c_str(), key.size()));
 LETFN_END
 
-static void initSymbols() {
+static void init_symbols() {
 #define T(sym, name) map_symbol(sym, str(name));
     B_MAP_SYMBOLS()
 #undef T
@@ -1812,153 +1909,128 @@ static void initSymbols() {
 // S-EXPR LEXER / TOKENIZER
 //------------------------------------------------------------------------------
 
+#define LEXER_TOKENS() \
+    T(token_none, -1) \
+    T(token_eof, 0) \
+    T(token_open, '(') \
+    T(token_close, ')') \
+    T(token_square_open, '[') \
+    T(token_square_close, ']') \
+    T(token_curly_open, '{') \
+    T(token_curly_close, '}') \
+    T(token_string, '"') \
+    T(token_symbol, 'S') \
+    T(token_escape, '\\') \
+    T(token_statement, ';') \
+    T(token_integer, 'I') \
+    T(token_real, 'R')
+
 typedef enum {
-    token_none = -1,
-    token_eof = 0,
-    token_open = '(',
-    token_close = ')',
-    token_square_open = '[',
-    token_square_close = ']',
-    token_curly_open = '{',
-    token_curly_close = '}',
-    token_string = '"',
-    token_symbol = 'S',
-    token_escape = '\\',
-    token_statement = ';',
-    token_integer = 'I',
-    token_real = 'R',
+#define T(NAME, VALUE) NAME = VALUE,
+LEXER_TOKENS()
+#undef T
 } Token;
 
-static const char symbol_terminators[]  = "()[]{}\"';#";
-static const char integer_terminators[] = "()[]{}\"';#";
-static const char real_terminators[]    = "()[]{}\"';#";
+static const char token_terminators[]    = "()[]{}\"';#";
 
-struct Lexer {
-    const char *path;
-    const char *input_stream;
-    const char *eof;
-    const char *cursor;
-    const char *next_cursor;
-    // beginning of line
-    const char *line;
-    // next beginning of line
-    const char *next_line;
+static const char *get_lexer_token_name(int token) {
+    switch(token) {
+#define T(NAME, VALUE) case NAME: return #NAME;
+LEXER_TOKENS()
+#undef T
+        default: return "???";
+    }
+}
 
-    int lineno;
-    int next_lineno;
+static void verify_good_taste(char c) {
+    if (c == '\t') {
+        ERROR("please use spaces instead of tabs.");
+    }
+}
 
-    int base_offset;
+template<typename FromType, typename ToType>
+static bool is_lossless_cast(FromType x) {
+    return (FromType(ToType(x)) == x);
+}
 
-    int token;
-    const char *string;
-    int string_len;
-    int64_t integer;
-    bool is_unsigned;
-    float real;
+LETFN(Lexer)()
+FN_CLASS_BEGIN
+    static Lexer create(String &buffer, String &path, int offset = 0) {
+        return CAPTURE(Lexer,
+            buffer, path,
+            0, 0, // cursor_offset, next_cursor_offset, // int
+            0, 0, // line_offset, next_line_offset, // int
+            0, 1, // lineno, next_lineno, // int
+            offset, // base_offset
 
-    Lexer() {}
-
-    void init (const char *input_stream, const char *eof, const char *path, int offset = 0) {
-        if (eof == NULL) {
-            eof = input_stream + strlen(input_stream);
-        }
-
-        this->base_offset = offset;
-        this->path = path;
-        this->input_stream = input_stream;
-        this->eof = eof;
-        this->next_cursor = input_stream;
-        this->next_lineno = 1;
-        this->next_line = input_stream;
+            (int)token_none, // token
+            0, 0, // string_offset, string_len, // int
+            int64_t(0), // integer
+            0.0); // real
     }
 
-    void dumpLine() {
-        dumpFileLine(path, offset());
+    int offset() {
+        return base_offset.i32 + cursor_offset.i32;
     }
 
-    int offset () {
-        return base_offset + (cursor - input_stream);
+    int column() {
+        return cursor_offset.i32 - line_offset.i32 + 1;
     }
 
-    int column () {
-        return cursor - line + 1;
+    Anchor get_anchor() {
+        return Anchor(path.str->ptr, lineno.i32, column(), offset());
     }
 
-    void initAnchor(Anchor &anchor) {
-        anchor.path = path;
-        anchor.lineno = lineno;
-        anchor.column = column();
-        anchor.offset = offset();
-    }
-
-    Anchor getAnchor() {
-        Anchor anchor;
-        initAnchor(anchor);
-        return anchor;
-    }
-
-    const Anchor *newAnchor() {
-        Anchor *anchor = new Anchor();
-        initAnchor(*anchor);
-        return anchor;
+    const char *at() {
+        return buffer.str->ptr + cursor_offset.i32;
     }
 
     char next() {
-        return *next_cursor++;
+        return buffer.str->ptr[next_cursor_offset.i32++];
     }
 
-    bool verifyGoodTaste(char c) {
-        if (c == '\t') {
-            ERROR("please use spaces instead of tabs.");
-            return false;
-        }
-        return true;
+    bool is_eof() {
+        return (size_t)next_cursor_offset.i32 == buffer.str->count;
     }
 
-    void readSymbol () {
+    void newline() {
+        ++next_lineno.i32;
+        next_line_offset.i32 = next_cursor_offset.i32;
+    }
+
+    void read_symbol() {
         bool escape = false;
         while (true) {
-            if (next_cursor == eof) {
+            if (is_eof()) {
                 break;
             }
             char c = next();
             if (escape) {
-                if (c == '\n') {
-                    ++next_lineno;
-                    next_line = next_cursor;
-                }
+                if (c == '\n') newline();
                 // ignore character
                 escape = false;
             } else if (c == '\\') {
                 // escape
                 escape = true;
             } else if (isspace(c)
-                || strchr(symbol_terminators, c)) {
-                -- next_cursor;
+                || strchr(token_terminators, c)) {
+                --next_cursor_offset.i32;
                 break;
             }
         }
-        string = cursor;
-        string_len = next_cursor - cursor;
+        string_offset.i32 = cursor_offset.i32;
+        string_len.i32 = next_cursor_offset.i32 - cursor_offset.i32;
     }
 
-    void readSingleSymbol () {
-        string = cursor;
-        string_len = next_cursor - cursor;
-    }
-
-    void readString (char terminator) {
+    void read_string(char terminator) {
         bool escape = false;
         while (true) {
-            if (next_cursor == eof) {
+            if (is_eof()) {
                 ERROR("unterminated sequence");
                 break;
             }
             char c = next();
-            if (c == '\n') {
-                ++next_lineno;
-                next_line = next_cursor;
-            }
+            if (c == '\n') newline();
             if (escape) {
                 // ignore character
                 escape = false;
@@ -1969,157 +2041,447 @@ struct Lexer {
                 break;
             }
         }
-        string = cursor;
-        string_len = next_cursor - cursor;
+        string_offset.i32 = cursor_offset.i32;
+        string_len.i32 = next_cursor_offset.i32 - cursor_offset.i32;
     }
 
-    bool readInteger() {
+    bool read_int64() {
         char *end;
         errno = 0;
-        integer = std::strtoll(cursor, &end, 0);
-        if ((end == cursor)
+        integer.type = TYPE_I64;
+        integer.i64 = std::strtoll(at(), &end, 0);
+        int end_offset = (int)(end - buffer.str->ptr);
+        if ((end_offset == cursor_offset.i32)
             || (errno == ERANGE)
-            || (end >= eof)
-            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            || ((size_t)end_offset > buffer.str->count)
+            || (!isspace(*end) && !strchr(token_terminators, *end)))
             return false;
-        is_unsigned = false;
-        next_cursor = end;
+        next_cursor_offset.i32 = end_offset;
         return true;
     }
 
-    bool readUInteger() {
+    bool read_uint64() {
         char *end;
         errno = 0;
-        integer = std::strtoull(cursor, &end, 0);
-        if ((end == cursor)
+        integer.type = TYPE_U64;
+        integer.u64 = std::strtoull(at(), &end, 0);
+        int end_offset = (int)(end - buffer.str->ptr);
+        if ((end_offset == cursor_offset.i32)
             || (errno == ERANGE)
-            || (end >= eof)
-            || (!isspace(*end) && !strchr(integer_terminators, *end)))
+            || ((size_t)end_offset > buffer.str->count)
+            || (!isspace(*end) && !strchr(token_terminators, *end)))
             return false;
-        is_unsigned = true;
-        next_cursor = end;
+        next_cursor_offset.i32 = end_offset;
         return true;
     }
 
-    bool readReal() {
+    bool read_real() {
         char *end;
         errno = 0;
-        real = std::strtof(cursor, &end);
-        if ((end == cursor)
+        real.type = TYPE_R32;
+        real.r32 = std::strtof(at(), &end);
+        int end_offset = (int)(end - buffer.str->ptr);
+        if ((end_offset == cursor_offset.i32)
             || (errno == ERANGE)
-            || (end >= eof)
-            || (!isspace(*end) && !strchr(real_terminators, *end)))
+            || ((size_t)end_offset > buffer.str->count)
+            || (!isspace(*end) && !strchr(token_terminators, *end)))
             return false;
-        next_cursor = end;
+        next_cursor_offset.i32 = end_offset;
         return true;
     }
 
-    int readToken () {
-        lineno = next_lineno;
-        line = next_line;
-        cursor = next_cursor;
-        while (true) {
-            if (next_cursor == eof) {
-                token = token_eof;
-                break;
-            }
-            char c = next();
-            if (!verifyGoodTaste(c)) break;
-            if (c == '\n') {
-                ++next_lineno;
-                next_line = next_cursor;
-            }
-            if (isspace(c)) {
-                lineno = next_lineno;
-                line = next_line;
-                cursor = next_cursor;
-            } else if (c == '#') {
-                readString('\n');
-                // and continue
-                lineno = next_lineno;
-                line = next_line;
-                cursor = next_cursor;
-            } else if (c == '(') {
-                token = token_open;
-                break;
-            } else if (c == ')') {
-                token = token_close;
-                break;
-            } else if (c == '[') {
-                token = token_square_open;
-                break;
-            } else if (c == ']') {
-                token = token_square_close;
-                break;
-            } else if (c == '{') {
-                token = token_curly_open;
-                break;
-            } else if (c == '}') {
-                token = token_curly_close;
-                break;
-            } else if (c == '\\') {
-                token = token_escape;
-                break;
-            } else if (c == '"') {
-                token = token_string;
-                readString(c);
-                break;
-            } else if (c == '\'') {
-                token = token_string;
-                readString(c);
-                break;
-            } else if (c == ';') {
-                token = token_statement;
-                break;
-            } else if (readInteger() || readUInteger()) {
-                token = token_integer;
-                break;
-            } else if (readReal()) {
-                token = token_real;
-                break;
-            } else {
-                token = token_symbol;
-                readSymbol();
-                break;
-            }
+    void next_token() {
+        lineno.i32 = next_lineno.i32;
+        line_offset.i32 = next_line_offset.i32;
+        cursor_offset.i32 = next_cursor_offset.i32;
+        active_anchor = get_anchor();
+    }
+
+    int read_token () {
+        char c;
+    skip:
+        next_token();
+        if (is_eof()) { token.i32 = token_eof; goto done; }
+        c = next();
+        verify_good_taste(c);
+        if (c == '\n') newline();
+        if (isspace(c)) { goto skip; }
+        switch(c) {
+        case '#': read_string('\n'); goto skip;
+        case '(': token.i32 = token_open; break;
+        case ')': token.i32 = token_close; break;
+        case '[': token.i32 = token_square_open; break;
+        case ']': token.i32 = token_square_close; break;
+        case '{': token.i32 = token_curly_open; break;
+        case '}': token.i32 = token_curly_close; break;
+        case '\\': token.i32 = token_escape; break;
+        case '"': token.i32 = token_string; read_string(c); break;
+        //case '\'': token.i32 = token_string; read_string(c); break;
+        case ';': token.i32 = token_statement; break;
+        default: {
+            if (read_int64() || read_uint64()) { token.i32 = token_integer; }
+            else if (read_real()) { token.i32 = token_real; }
+            else { token.i32 = token_symbol; read_symbol(); }
+        } break;
         }
-        return token;
+    done:
+        return token.i32;
     }
 
-    Any getAsString() {
-        // TODO: anchor
-        auto result = make_any(TYPE_String);
-        auto s = alloc_string(string + 1, string_len - 2);
-        unescape(*s);
-        result.str = s;
+    void get_any(Any cont) {
+        switch(token.i32) {
+        case token_integer: RET(cont, convert_integer());
+        case token_real: RET(cont, real);
+        case token_string: {
+            size_t l1 = string_len.i32 - 2;
+            char dest[l1 + 1];
+            memcpy(dest, buffer.str->ptr + string_offset.i32 + 1, l1);
+            dest[l1] = 0;
+            size_t size = inplace_unescape(dest);
+            RET(cont, str(dest, size));
+        }
+        case token_symbol: RET(cont, convert_symbol());
+        default: RET(cont, none);
+        }
+    }
+
+    Symbol convert_symbol() {
+        char dest[string_len.i32 + 1];
+        memcpy(dest, buffer.str->ptr + string_offset.i32, string_len.i32);
+        dest[string_len.i32] = 0;
+        size_t size = inplace_unescape(dest);
+        auto s = str(dest, size);
+        return get_symbol(s);
+    }
+
+    Any convert_integer() {
+        if ((integer.type == TYPE_I64)
+            && is_lossless_cast<int64_t, int32_t>(integer.i64)) {
+            return wrap(int32_t(integer.i64));
+        } else if ((integer.type == TYPE_U64)
+            && is_lossless_cast<uint64_t, uint32_t>(integer.u64)) {
+            return wrap(uint32_t(integer.u64));
+        }
+        return integer;
+    }
+
+FN_CLASS_END
+LETFN_END_BINDWITH(
+    buffer, path, // string
+    cursor_offset, next_cursor_offset, // int
+    line_offset, next_line_offset, // int
+    lineno, next_lineno, // int
+    base_offset, // int
+
+    token, // int
+    string_offset, string_len, // int
+    integer, // int64
+    real // float
+)
+
+DEF_EXTRACT_CLASS_PTR(Lexer);
+
+//------------------------------------------------------------------------------
+// LIST
+//------------------------------------------------------------------------------
+
+struct List {
+    Anchor anchor;
+    Any at;
+    const List *next;
+    size_t count;
+
+    static List *create(const Any &at, const List *next) {
+        auto result = new List();
+        result->at = at;
+        result->next = next;
+        result->count = next?(next->count + 1):1;
         return result;
     }
 
-    Any getAsSymbol() {
-        // TODO: anchor
-        std::string s(string, string_len);
-        inplace_unescape(const_cast<char *>(s.c_str()));
-        return bangra::symbol(s);
+    static List *create(const Any &at, const List *next, const Anchor *anchor) {
+        auto result = create(at, next);
+        result->anchor = *anchor;
+        return result;
     }
 
-    Any getAsInteger() {
-        // TODO: anchor
-        size_t width;
-        if (is_unsigned) {
-            width = ((uint64_t)integer > (uint64_t)INT_MAX)?64:32;
-        } else {
-            width =
-                ((integer < (int64_t)INT_MIN) || (integer > (int64_t)INT_MAX))?64:32;
+    static const List *create_from_c_array(const Any *values, size_t count) {
+        List *result = nullptr;
+        while (count) {
+            --count;
+            result = create(values[count], result);
         }
-        auto type = Types::Integer(width, !is_unsigned);
-        return bangra::integer(type, this->integer);
+        return result;
     }
 
-    Any getAsReal() {
-        return bangra::real(TYPE_R32, this->real);
+    static const List *create_from_array(const std::vector<Any> &values) {
+        return create_from_c_array(const_cast<Any *>(&values[0]), values.size());
     }
-
 };
+
+//------------------------------------------------------------------------------
+// S-EXPR PARSER
+//------------------------------------------------------------------------------
+
+#if 0
+// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
+// this is the version for immutables; input lists are not modified
+static const List *reverse_list(const List *l, const List *eol = nullptr) {
+    const List *next = nullptr;
+    while (l != eol) {
+        next = List::create(l->at, next, get_anchor(l));
+        l = l->next;
+    }
+    return next;
+}
+#endif
+
+// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
+// this is the mutating version; input lists are modified, direction is inverted
+static const List *reverse_list_inplace(
+    const List *l, const List *eol = nullptr, const List *cat_to = nullptr) {
+    const List *next = cat_to;
+    size_t count = cat_to?cat_to->count:0;
+    while (l != eol) {
+        ++count;
+        const List *iternext = l->next;
+        const_cast<List *>(l)->next = next;
+        const_cast<List *>(l)->count = count;
+        next = l;
+        l = iternext;
+    }
+    return next;
+}
+/*
+
+struct ListBuilder {
+protected:
+    Lexer &lexer;
+    const List *prev;
+    const List *eol;
+    Anchor anchor;
+public:
+    ListBuilder(Lexer &lexer_) :
+        lexer(lexer_),
+        prev(nullptr),
+        eol(nullptr) {
+        anchor = lexer.getAnchor();
+    }
+
+    const Anchor &getAnchor() {
+        return anchor;
+    }
+
+    void append(const Any &value) {
+        this->prev = List::create(value, this->prev, get_anchor(value));
+    }
+
+    void resetStart() {
+        eol = prev;
+    }
+
+    bool split() {
+        // if we haven't appended anything, that's an error
+        if (!prev) {
+            return false;
+        }
+        // reverse what we have, up to last split point and wrap result
+        // in cell
+        prev = List::create(
+            wrap(reverse_list_inplace(prev, eol)), eol, lexer.newAnchor());
+        resetStart();
+        return true;
+    }
+
+    bool isSingleResult() {
+        return prev && !prev->next;
+    }
+
+    Any getSingleResult() {
+        return this->prev?this->prev->at:const_none;
+    }
+
+    const List *getResult() {
+        return reverse_list_inplace(this->prev);
+    }
+};
+
+// parses a list to its terminator and returns a handle to the first cell
+const List *parseList(int end_token) {
+    ListBuilder builder(lexer);
+    lexer.readToken();
+    while (true) {
+        if (lexer.token == end_token) {
+            break;
+        } else if (lexer.token == token_escape) {
+            int column = lexer.column();
+            lexer.readToken();
+            auto elem = parseNaked(column, end_token);
+            if (errors) return nullptr;
+            builder.append(elem);
+        } else if (lexer.token == token_eof) {
+            error("missing closing bracket");
+            // point to beginning of list
+            error_origin = builder.getAnchor();
+            return nullptr;
+        } else if (lexer.token == token_statement) {
+            if (!builder.split()) {
+                error("empty expression");
+                return nullptr;
+            }
+            lexer.readToken();
+        } else {
+            auto elem = parseAny();
+            if (errors) return nullptr;
+            builder.append(elem);
+            lexer.readToken();
+        }
+    }
+    return builder.getResult();
+}
+
+// parses the next sequence and returns it wrapped in a cell that points
+// to prev
+Any parseAny () {
+    assert(lexer.token != token_eof);
+    auto anchor = lexer.newAnchor();
+    Any result = const_none;
+    if (lexer.token == token_open) {
+        result = wrap(parseList(token_close));
+    } else if (lexer.token == token_square_open) {
+        const List *list = parseList(token_square_close);
+        if (errors) return const_none;
+        Any sym = symbol("[");
+        result = wrap(List::create(sym, list, anchor));
+    } else if (lexer.token == token_curly_open) {
+        const List *list = parseList(token_curly_close);
+        if (errors) return const_none;
+        Any sym = symbol("{");
+        result = wrap(List::create(sym, list, anchor));
+    } else if ((lexer.token == token_close)
+        || (lexer.token == token_square_close)
+        || (lexer.token == token_curly_close)) {
+        error("stray closing bracket");
+    } else if (lexer.token == token_string) {
+        result = lexer.getAsString();
+    } else if (lexer.token == token_symbol) {
+        result = lexer.getAsSymbol();
+    } else if (lexer.token == token_integer) {
+        result = lexer.getAsInteger();
+    } else if (lexer.token == token_real) {
+        result = lexer.getAsReal();
+    } else {
+        error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
+    }
+    if (errors) return const_none;
+    set_anchor(result, anchor);
+    return result;
+}
+
+Any parseNaked (int column = 0, int end_token = token_none) {
+    int lineno = lexer.lineno;
+
+    bool escape = false;
+    int subcolumn = 0;
+
+    ListBuilder builder(lexer);
+
+    while (lexer.token != token_eof) {
+        if (lexer.token == end_token) {
+            break;
+        } else if (lexer.token == token_escape) {
+            escape = true;
+            lexer.readToken();
+            if (lexer.lineno <= lineno) {
+                error("escape character is not at end of line");
+                parse_origin = builder.getAnchor();
+                return const_none;
+            }
+            lineno = lexer.lineno;
+        } else if (lexer.lineno > lineno) {
+            if (subcolumn == 0) {
+                subcolumn = lexer.column();
+            } else if (lexer.column() != subcolumn) {
+                error("indentation mismatch");
+                parse_origin = builder.getAnchor();
+                return const_none;
+            }
+            if (column != subcolumn) {
+                if ((column + 4) != subcolumn) {
+                    error("indentations must nest by 4 spaces.");
+                    return const_none;
+                }
+            }
+
+            escape = false;
+            builder.resetStart();
+            lineno = lexer.lineno;
+            // keep adding elements while we're in the same line
+            while ((lexer.token != token_eof)
+                    && (lexer.token != end_token)
+                    && (lexer.lineno == lineno)) {
+                auto elem = parseNaked(
+                    subcolumn, end_token);
+                if (errors) return const_none;
+                builder.append(elem);
+            }
+        } else if (lexer.token == token_statement) {
+            if (!builder.split()) {
+                error("empty expression");
+                return const_none;
+            }
+            lexer.readToken();
+            // if we are in the same line, continue in parent
+            if (lexer.lineno == lineno)
+                break;
+        } else {
+            auto elem = parseAny();
+            if (errors) return const_none;
+            builder.append(elem);
+            lineno = lexer.next_lineno;
+            lexer.readToken();
+        }
+
+        if ((!escape || (lexer.lineno > lineno))
+            && (lexer.column() <= column)) {
+            break;
+        }
+    }
+
+    if (builder.isSingleResult()) {
+        return builder.getSingleResult();
+    } else {
+        return wrap(builder.getResult());
+    }
+}
+
+Any parseFile (const char *path) {
+    auto file = MappedFile::open(path);
+    if (file) {
+        return parseMemory(
+            file->strptr(), file->strptr() + file->size(),
+            path);
+    } else {
+        stb_fprintf(stderr, "unable to open file: %s\n", path);
+        return const_none;
+    }
+}
+*/
+
+LETFN(parse_root)(cont, lexer)
+/*
+    ListBuilder builder(lexer);
+
+    while (lexer.token != token_eof) {
+        if (lexer.token == token_none)
+            break;
+        auto elem = parseNaked(1, token_none);
+        if (errors) return const_none;
+        builder.append(elem);
+    }
+
+    return wrap(builder.getResult());*/
+LETFN_END
 
 //------------------------------------------------------------------------------
 // TYPE REFLECTION & GC WALKING
@@ -2170,6 +2532,25 @@ static void mark_payload(GC_Context &ctx, Any &val) {
 //------------------------------------------------------------------------------
 
 LETFN(cmain)()
+#if 1
+    auto buf = str("test(-1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff 0xffffffffffffffff 0.00012345 1 2 3.5 10.0 1001.0 1001.1 1001.001 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33 1.0 0.0 \"te\\\"st\\n\\ttest!\")test\ntest((3;))\n");
+    auto path = str("<path>");
+    Lexer lexer = Lexer::create(buf, path);
+    RET(
+        FN()
+            auto &&repeat = *this;
+            int token = unwrap<Lexer>(lexer).read_token();
+            stb_printf("token: %s ", get_lexer_token_name(token));
+            if (token == token_eof)
+                exit_loop(0);
+            unwrap<Lexer>(lexer).get_any(
+                FN(val)
+                    RCALL(print_format, str("= {} {}\n"),
+                        strc(get_builtin_name(val.type)), val);
+                    RET(repeat);
+                FN_END_BINDWITH(repeat));
+        FN_END_BINDWITH(lexer));
+#else
     RCALL(print_format, str("hi {} {} {}!\n"), 1, 2, cmain::run);
     CC(color,
         FN(s)
@@ -2183,6 +2564,7 @@ LETFN(cmain)()
         FN_END,
         str(ANSI_STYLE_STRING),
         str("the quick brown fox, guys!"));
+#endif
 LETFN_END
 
 } // namespace bangra
@@ -2190,6 +2572,7 @@ LETFN_END
 int main(int argc, char ** argv) {
 
     bangra::support_ansi = isatty(fileno(stdout));
+    bangra::init_symbols();
 
 #ifdef _WIN32
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
