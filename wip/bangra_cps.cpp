@@ -205,11 +205,11 @@ namespace bangra {
 #define BANGRA_MAX_FUNCARGS 256
 
 // have GC announce when it does something
-#define BANGRA_NOISY_GC 0
+#define BANGRA_NOISY_GC 1
 
 // GC nursery size
 #define B_GC_NURSERY_SIZE 0x200000
-#if 0
+#if 1
 #define B_GC_NURSERY_LIMIT B_GC_NURSERY_SIZE
 #else
 #define B_GC_NURSERY_LIMIT 1024
@@ -494,6 +494,9 @@ struct hash< bangra::TypedInt<EnumT, end_value> > {
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
     T(SYM_Name, "name") \
+    \
+    T(SYM_SquareList, "[") \
+    T(SYM_CurlyList, "{") \
     \
     T(SYM_Cmp, "compare") \
     T(SYM_CmpType, "compare-type") \
@@ -1651,7 +1654,7 @@ static int escapestr(char *buf, const String &str, const char *quote_chars = nul
     } else {
         ctx.count = 0;
         escapestrcb(vsformat_cb_null, &ctx, ctx.tmp, str, quote_chars);
-        return ctx.count;
+        return ctx.count + 1;
     }
 }
 
@@ -1926,6 +1929,10 @@ static Symbol get_symbol(const String &name) {
     }
 }
 
+static std::string get_symbol_name_stdstr(Symbol sym) {
+    return map_symbol_name[sym];
+}
+
 LETFN(get_symbol_name)(cont, id)
     auto sym = unwrap<Symbol>(id);
     const std::string &key = map_symbol_name[sym];
@@ -2123,6 +2130,10 @@ FN_CLASS_BEGIN
         return true;
     }
 
+    int get_token() {
+        return token.i32;
+    }
+
     void next_token() {
         lineno.i32 = next_lineno.i32;
         line_offset.i32 = next_line_offset.i32;
@@ -2260,6 +2271,263 @@ static const List *list_create_from_c_array(const Any *values, size_t count) {
 */
 
 //------------------------------------------------------------------------------
+// PRINTING
+//------------------------------------------------------------------------------
+
+#if 0
+template<typename T>
+static void streamTraceback(T &stream) {
+    void *array[10];
+    size_t size;
+    char **strings;
+    size_t i;
+
+    size = backtrace (array, 10);
+    strings = backtrace_symbols (array, size);
+
+    for (i = 0; i < size; i++) {
+        stream << format("%s\n", strings[i]);
+    }
+
+    free (strings);
+}
+
+static std::string formatTraceback() {
+    std::stringstream ss;
+    streamTraceback(ss);
+    return ss.str();
+}
+#endif
+
+static bool isNested(const Any &e) {
+    if (e.type == TYPE_List) {
+        auto it = unwrap<List *>(e);
+        while (it) {
+            if (it->at.type == TYPE_List)
+                return true;
+            it = it->next;
+        }
+    }
+    return false;
+}
+
+static const Anchor *find_valid_anchor(const Any &expr);
+static const Anchor *find_valid_anchor(List *l) {
+    const Anchor *a = nullptr;
+    while (l) {
+        a = &l->anchor;
+        if (!a->is_valid()) {
+            a = find_valid_anchor(l->at);
+        }
+        if (!a || !a->is_valid()) {
+            l = l->next;
+        } else {
+            break;
+        }
+    }
+    return a;
+}
+
+static const Anchor *find_valid_anchor(const Any &expr) {
+    if (expr.type == TYPE_List) {
+        return find_valid_anchor(expr.list);
+    }
+    return nullptr;
+}
+
+template<typename T>
+static void streamAnchor(T &stream, const Any &e, size_t depth=0) {
+    const Anchor *anchor = find_valid_anchor(e);
+    if (anchor) {
+        stream << anchor->path << ":" << anchor->lineno << ":" << anchor->column;
+    }
+    for(size_t i = 0; i < depth; i++)
+        stream << "    ";
+}
+
+enum {
+    STRV_Naked = (1<<0),
+};
+
+struct StreamValueFormat {
+    size_t depth;
+    uint32_t flags;
+    size_t maxdepth;
+    size_t maxlength;
+
+    StreamValueFormat(size_t depth, bool naked) :
+        maxdepth((size_t)-1),
+        maxlength((size_t)-1) {
+        this->depth = depth;
+        this->flags = naked?STRV_Naked:0;
+    }
+
+    StreamValueFormat() :
+        depth(0),
+        flags(STRV_Naked),
+        maxdepth((size_t)-1),
+        maxlength((size_t)-1) {
+    }
+};
+
+template<typename T>
+static void streamValue(T &stream, const Any &e,
+    const StreamValueFormat &format) {
+    size_t depth = format.depth;
+    size_t maxdepth = format.maxdepth;
+    bool naked = format.flags & STRV_Naked;
+
+    if (naked) {
+        streamAnchor(stream, e, depth);
+    }
+
+    if (e.type == TYPE_List) {
+        if (!maxdepth) {
+            stream << "(<...>)";
+            if (naked)
+                stream << '\n';
+        } else {
+            StreamValueFormat subfmt(format);
+            subfmt.maxdepth = subfmt.maxdepth - 1;
+
+            //auto slist = llvm::cast<ListValue>(e);
+            auto it = unwrap<List *>(e);
+            if (!it) {
+                stream << "()";
+                if (naked)
+                    stream << '\n';
+                return;
+            }
+            size_t offset = 0;
+            if (naked) {
+                bool single = !it->next;
+            print_terse:
+                subfmt.depth = depth;
+                subfmt.flags &= ~STRV_Naked;
+                streamValue(stream, it->at, subfmt);
+                it = it->next;
+                offset++;
+                while (it) {
+                    if (isNested(it->at))
+                        break;
+                    stream << ' ';
+                    streamValue(stream, it->at, subfmt);
+                    offset++;
+                    it = it->next;
+                }
+                stream << (single?";\n":"\n");
+            //print_sparse:
+                while (it) {
+                    subfmt.depth = depth + 1;
+                    subfmt.flags |= STRV_Naked;
+                    auto value = it->at;
+                    if ((value.type != TYPE_List) // not a list
+                        && (offset >= 1) // not first element in list
+                        && it->next // not last element in list
+                        && !isNested(it->next->at)) { // next element can be terse packed too
+                        single = false;
+                        streamAnchor(stream, value, depth + 1);
+                        stream << "\\ ";
+                        goto print_terse;
+                    }
+                    if (offset >= subfmt.maxlength) {
+                        streamAnchor(stream, value, depth + 1);
+                        stream << "<...>\n";
+                        return;
+                    }
+                    streamValue(stream, value, subfmt);
+                    offset++;
+                    it = it->next;
+                }
+
+            } else {
+                subfmt.depth = depth + 1;
+                subfmt.flags &= ~STRV_Naked;
+                stream << '(';
+                while (it) {
+                    if (offset > 0)
+                        stream << ' ';
+                    if (offset >= subfmt.maxlength) {
+                        stream << "...";
+                        break;
+                    }
+                    streamValue(stream, it->at, subfmt);
+                    offset++;
+                    it = it->next;
+                }
+                stream << ')';
+                if (naked)
+                    stream << '\n';
+            }
+        }
+    } else {
+        if (e.type == TYPE_Symbol) {
+            //stream << ANSI(STYLE_KEYWORD);
+            std::string s = get_symbol_name_stdstr(unwrap<Symbol>(e));
+            auto ss = str(s.c_str(),s.size());
+            int sz = escapestr(nullptr, ss, "[]{}()\"");
+            char dest[sz + 1];
+            escapestr(dest, ss, "[]{}()\"");
+            stream << dest;
+            //stream << ANSI(RESET);
+        } else if (e.type == TYPE_String) {
+            stream << ANSI(STYLE_STRING);
+            stream << '"';
+            auto &&ss = *e.str;
+            int sz = escapestr(nullptr, ss, "\"");
+            char dest[sz + 1];
+            escapestr(dest, ss, "\"");
+            stream << dest;
+            stream << '"';
+            stream << ANSI(RESET);
+        } else {
+            int sz = vsformat(nullptr, "{}", 1, &e);
+            char dest[sz + 1];
+            vsformat(dest, "{}", 1, &e);
+            switch(e.type.value()) {
+                case TYPE_Bool: {
+                    stream << ANSI(STYLE_KEYWORD);
+                    stream << dest;
+                    stream << ANSI(RESET);
+                } break;
+                case TYPE_I8: case TYPE_I16: case TYPE_I32: case TYPE_I64:
+                case TYPE_U8: case TYPE_U16: case TYPE_U32: case TYPE_U64:
+                case TYPE_R32: case TYPE_R64: {
+                    stream << ANSI(STYLE_NUMBER);
+                    stream << dest;
+                    stream << ANSI(RESET);
+                } break;
+                default: {
+                    stream << dest;
+                } break;
+            }
+        }
+        if (naked)
+            stream << '\n';
+    }
+}
+
+static std::string formatValue(const Any &e, const StreamValueFormat &fmt) {
+    std::stringstream ss;
+    streamValue(ss, e, fmt);
+    return ss.str();
+}
+
+static std::string formatValue(const Any &e, size_t depth=0, bool naked=false) {
+    std::stringstream ss;
+    streamValue(ss, e, StreamValueFormat(depth, naked));
+    return ss.str();
+}
+
+static void printValue(const Any &e, const StreamValueFormat &fmt) {
+    streamValue(std::cout, e, fmt);
+}
+
+static void printValue(const Any &e, size_t depth=0, bool naked=false) {
+    printValue(e, StreamValueFormat(depth, naked));
+}
+
+//------------------------------------------------------------------------------
 // S-EXPR PARSER
 //------------------------------------------------------------------------------
 
@@ -2285,7 +2553,7 @@ static List *reverse_list_inplace(
 LETFN(list_builder_split)(cont, prev, eol, anchor) // -> prev, eol
     // if we haven't appended anything, that's an error
     if (!unwrap<List *>(prev))
-        ERROR("can't split empty list");
+        ERROR("cannot split empty expression");
     auto elem =
         // reverse what we have, up to last split point and wrap result
         // in cell
@@ -2310,155 +2578,6 @@ List *list_builder_get_result(List *prev) {
 }
 
 /*
-// parses a list to its terminator and returns a handle to the first cell
-const List *parseList(int end_token) {
-    ListBuilder builder(lexer);
-    lexer.readToken();
-    while (true) {
-        if (lexer.token == end_token) {
-            break;
-        } else if (lexer.token == token_escape) {
-            int column = lexer.column();
-            lexer.readToken();
-            auto elem = parseNaked(column, end_token);
-            if (errors) return nullptr;
-            builder.append(elem);
-        } else if (lexer.token == token_eof) {
-            error("missing closing bracket");
-            // point to beginning of list
-            error_origin = builder.getAnchor();
-            return nullptr;
-        } else if (lexer.token == token_statement) {
-            if (!builder.split()) {
-                error("empty expression");
-                return nullptr;
-            }
-            lexer.readToken();
-        } else {
-            auto elem = parseAny();
-            if (errors) return nullptr;
-            builder.append(elem);
-            lexer.readToken();
-        }
-    }
-    return builder.getResult();
-}
-
-// parses the next sequence and returns it wrapped in a cell that points
-// to prev
-Any parseAny () {
-    assert(lexer.token != token_eof);
-    auto anchor = lexer.newAnchor();
-    Any result = const_none;
-    if (lexer.token == token_open) {
-        result = wrap(parseList(token_close));
-    } else if (lexer.token == token_square_open) {
-        const List *list = parseList(token_square_close);
-        if (errors) return const_none;
-        Any sym = symbol("[");
-        result = wrap(List::create(sym, list, anchor));
-    } else if (lexer.token == token_curly_open) {
-        const List *list = parseList(token_curly_close);
-        if (errors) return const_none;
-        Any sym = symbol("{");
-        result = wrap(List::create(sym, list, anchor));
-    } else if ((lexer.token == token_close)
-        || (lexer.token == token_square_close)
-        || (lexer.token == token_curly_close)) {
-        error("stray closing bracket");
-    } else if (lexer.token == token_string) {
-        result = lexer.getAsString();
-    } else if (lexer.token == token_symbol) {
-        result = lexer.getAsSymbol();
-    } else if (lexer.token == token_integer) {
-        result = lexer.getAsInteger();
-    } else if (lexer.token == token_real) {
-        result = lexer.getAsReal();
-    } else {
-        error("unexpected token: %c (%i)", *lexer.cursor, (int)*lexer.cursor);
-    }
-    if (errors) return const_none;
-    set_anchor(result, anchor);
-    return result;
-}
-
-Any parseNaked (int column = 0, int end_token = token_none) {
-    int lineno = lexer.lineno;
-
-    bool escape = false;
-    int subcolumn = 0;
-
-    ListBuilder builder(lexer);
-
-    while (lexer.token != token_eof) {
-        if (lexer.token == end_token) {
-            break;
-        } else if (lexer.token == token_escape) {
-            escape = true;
-            lexer.readToken();
-            if (lexer.lineno <= lineno) {
-                error("escape character is not at end of line");
-                parse_origin = builder.getAnchor();
-                return const_none;
-            }
-            lineno = lexer.lineno;
-        } else if (lexer.lineno > lineno) {
-            if (subcolumn == 0) {
-                subcolumn = lexer.column();
-            } else if (lexer.column() != subcolumn) {
-                error("indentation mismatch");
-                parse_origin = builder.getAnchor();
-                return const_none;
-            }
-            if (column != subcolumn) {
-                if ((column + 4) != subcolumn) {
-                    error("indentations must nest by 4 spaces.");
-                    return const_none;
-                }
-            }
-
-            escape = false;
-            builder.resetStart();
-            lineno = lexer.lineno;
-            // keep adding elements while we're in the same line
-            while ((lexer.token != token_eof)
-                    && (lexer.token != end_token)
-                    && (lexer.lineno == lineno)) {
-                auto elem = parseNaked(
-                    subcolumn, end_token);
-                if (errors) return const_none;
-                builder.append(elem);
-            }
-        } else if (lexer.token == token_statement) {
-            if (!builder.split()) {
-                error("empty expression");
-                return const_none;
-            }
-            lexer.readToken();
-            // if we are in the same line, continue in parent
-            if (lexer.lineno == lineno)
-                break;
-        } else {
-            auto elem = parseAny();
-            if (errors) return const_none;
-            builder.append(elem);
-            lineno = lexer.next_lineno;
-            lexer.readToken();
-        }
-
-        if ((!escape || (lexer.lineno > lineno))
-            && (lexer.column() <= column)) {
-            break;
-        }
-    }
-
-    if (builder.isSingleResult()) {
-        return builder.getSingleResult();
-    } else {
-        return wrap(builder.getResult());
-    }
-}
-
 Any parseFile (const char *path) {
     auto file = MappedFile::open(path);
     if (file) {
@@ -2472,19 +2591,273 @@ Any parseFile (const char *path) {
 }
 */
 
-LETFN(parse_root)(cont, lexer)
-/*
-    ListBuilder builder(lexer);
+LETFN(ListParser)()
+FN_CLASS_BEGIN
+FN_CLASS_END
+LETFN_END_BINDWITH(
+    lexer, // Lexer
+    eol, // int
+    end_token // int
+);
+DEF_EXTRACT_CLASS_PTR(ListParser);
 
-    while (lexer.token != token_eof) {
-        if (lexer.token == token_none)
-            break;
-        auto elem = parseNaked(1, token_none);
-        if (errors) return const_none;
-        builder.append(elem);
+
+LETFN(NakedParser)()
+FN_CLASS_BEGIN
+    bool is_same_line() {
+        return unwrap<Lexer>(lexer).lineno.i32 == lineno.i32;
     }
+    bool is_next_line() {
+        return unwrap<Lexer>(lexer).lineno.i32 > lineno.i32;
+    }
+FN_CLASS_END
+LETFN_END_BINDWITH(
+    lexer, // Lexer
+    eol, // int
+    column, // int
+    end_token, // int
+    lineno, // int
+    subcolumn, // int
+    escape // bool
+);
+DEF_EXTRACT_CLASS_PTR(NakedParser);
 
-    return wrap(builder.getResult());*/
+LETFN(parse_naked)(cont, lexer, column /*=0*/, end_token /*=token_none*/)
+    // naked depends on any, which depends on list, which depends on naked,
+    // therefore nest all three functions so they can see each other
+    LETFN(parse_any)(cont, _lexer)
+        LETFN(parse_list)(cont, _lexer, end_token)
+            auto parser = CAPTURE(ListParser,
+                _lexer, // lexer
+                (List *)nullptr, // eol
+                end_token // end_token
+            );
+
+            auto &&lexer = unwrap<Lexer>(_lexer);
+            lexer.read_token();
+
+            LETFN(loop)(cont, _parser, _prev)
+                auto &&parser = unwrap<ListParser>(_parser);
+                auto &&lexer = unwrap<Lexer>(parser.lexer);
+                auto &&token = lexer.token.i32;
+
+                if (token == parser.end_token.i32)
+                    RET(cont, _prev);
+                switch(token) {
+                case token_eof:
+                    // TODO: point to beginning of list
+                    // error_origin = builder.getAnchor();
+                    ERROR("missing closing bracket");
+                case token_escape: {
+                    int column = lexer.column();
+                    lexer.read_token();
+                    CC(parse_naked,
+                        FN(elem)
+                            auto nextelem = list_create(elem, unwrap<List *>(_prev));
+                            CC(loop, cont, _parser, &nextelem);
+                        FN_END_BINDWITH(cont, _parser, _prev),
+                        parser.lexer,
+                        column,
+                        parser.end_token);
+                }
+                case token_statement:
+                    CC(list_builder_split,
+                        FN(prev, eol)
+                            auto &&parser = unwrap<ListParser>(_parser);
+                            auto &&lexer = unwrap<Lexer>(parser.lexer);
+                            parser.eol = eol;
+                            lexer.read_token();
+                            CC(loop, cont, _parser, prev);
+                        FN_END_BINDWITH(cont, _parser),
+                        _prev, parser.eol, active_anchor);
+                default:
+                CC(parse_any,
+                    FN(elem)
+                        auto &&parser = unwrap<ListParser>(_parser);
+                        auto &&lexer = unwrap<Lexer>(parser.lexer);
+                        auto nextelem = list_create(elem, unwrap<List *>(_prev));
+                        lexer.read_token();
+                        CC(loop, cont, _parser, &nextelem);
+                    FN_END_BINDWITH(cont, _parser, _prev),
+                    parser.lexer);
+                }
+            LETFN_END
+
+            CC(loop,
+                FN(_prev)
+                    auto &&prev = unwrap<List *>(_prev);
+                    RET(cont, list_builder_get_result(prev));
+                FN_END_BINDWITH(cont),
+                parser, (List *)nullptr);
+        LETFN_END
+
+        auto &&lexer = unwrap<Lexer>(_lexer);
+        assert(lexer.token.i32 != token_eof);
+
+        switch(lexer.token.i32) {
+            case token_open:
+                CC(parse_list, cont, lexer, token_close);
+            case token_square_open:
+                CC(parse_list,
+                    FN(elem)
+                        auto newelem = list_create(wrap(SYM_SquareList), unwrap<List *>(elem));
+                        RET(cont, &newelem);
+                    FN_END_BINDWITH(cont),
+                    lexer, token_square_close);
+            case token_curly_open:
+                CC(parse_list,
+                    FN(elem)
+                        auto newelem = list_create(wrap(SYM_CurlyList), unwrap<List *>(elem));
+                        RET(cont, &newelem);
+                    FN_END_BINDWITH(cont),
+                    lexer, token_curly_close);
+            case token_close:
+            case token_square_close:
+            case token_curly_close:
+                ERROR("stray closing bracket");
+            case token_string:
+            case token_symbol:
+            case token_integer:
+            case token_real:
+                lexer.get_any(cont);
+            default:
+                ERROR("unexpected token: %c (%i)", *lexer.at(), (int)*lexer.at());
+        }
+    LETFN_END
+
+    auto parser = CAPTURE(NakedParser,
+        lexer, // lexer
+        (List *)nullptr, // eol
+        column, // column
+        end_token, // end_token
+        unwrap<Lexer>(lexer).lineno, // lineno
+        0, // subcolumn
+        false // escape
+    );
+
+    LETFN(loop)(cont, _parser, _prev)
+        LETFN(repeat)(cont, _parser, _prev)
+            auto &&parser = unwrap<NakedParser>(_parser);
+            auto &&lexer = unwrap<Lexer>(parser.lexer);
+            if ((!parser.escape.i1 || parser.is_next_line())
+                && (lexer.column() <= parser.column.i32)) {
+                RET(cont, _prev);
+            } else {
+                CC(loop, cont, _parser, _prev);
+            }
+        LETFN_END
+
+        auto &&parser = unwrap<NakedParser>(_parser);
+        auto &&lexer = unwrap<Lexer>(parser.lexer);
+
+        auto &&token = lexer.token.i32;
+
+        if ((token == token_eof)||(token == parser.end_token.i32))
+            RET(cont, _prev);
+        if (token == token_escape) {
+            parser.escape.i1 = true;
+            lexer.read_token();
+            if (lexer.lineno.i32 <= parser.lineno.i32)
+                ERROR("escape character is not at end of line");
+            parser.lineno = lexer.lineno;
+            CC(repeat, cont, _parser, _prev);
+        } else if (parser.is_next_line()) {
+            if (parser.subcolumn.i32 == 0) {
+                parser.subcolumn.i32 = lexer.column();
+            } else if (lexer.column() != parser.subcolumn.i32) {
+                ERROR("indentation mismatch");
+            }
+            if (parser.column.i32 != parser.subcolumn.i32) {
+                if ((parser.column.i32 + 4) != parser.subcolumn.i32) {
+                    ERROR("indentations must nest by 4 spaces.");
+                }
+            }
+
+            parser.escape.i1 = false;
+            parser.eol = _prev;
+            parser.lineno = lexer.lineno;
+            LETFN(loop_add_elems)(cont, _parser, _prev)
+                auto &&parser = unwrap<NakedParser>(_parser);
+                auto &&lexer = unwrap<Lexer>(parser.lexer);
+                // keep adding elements while we're in the same line
+                if ((lexer.token.i32 != token_eof)
+                        && (lexer.token.i32 != parser.end_token.i32)
+                        && parser.is_same_line()) {
+                    CC(parse_naked,
+                        FN(elem)
+                            auto nextelem = list_create(elem, unwrap<List *>(_prev));
+                            CC(loop_add_elems, cont, _parser, &nextelem);
+                        FN_END_BINDWITH(cont, _parser, _prev),
+                        parser.lexer,
+                        parser.subcolumn,
+                        parser.end_token);
+                } else {
+                    CC(repeat, cont, _parser, _prev);
+                }
+            LETFN_END
+            CC(loop_add_elems, cont, _parser, _prev);
+
+        } else if (token == token_statement) {
+            CC(list_builder_split,
+                FN(prev, eol)
+                    auto &&parser = unwrap<NakedParser>(_parser);
+                    auto &&lexer = unwrap<Lexer>(parser.lexer);
+                    parser.eol = eol;
+                    lexer.read_token();
+                    // if we are in the same line, continue in parent
+                    if (parser.is_same_line()) {
+                        RET(cont, prev);
+                    } else {
+                        CC(repeat, cont, _parser, prev);
+                    }
+                FN_END_BINDWITH(cont, _parser),
+                _prev, parser.eol, active_anchor);
+        } else {
+            CC(parse_any,
+                FN(elem)
+                    auto &&parser = unwrap<NakedParser>(_parser);
+                    auto &&lexer = unwrap<Lexer>(parser.lexer);
+                    auto nextelem = list_create(elem, unwrap<List *>(_prev));
+                    parser.lineno = lexer.next_lineno;
+                    lexer.read_token();
+                    CC(repeat, cont, _parser, &nextelem);
+                FN_END_BINDWITH(cont, _parser, _prev),
+                parser.lexer);
+        }
+    LETFN_END
+
+    CC(loop,
+        FN(_prev)
+            auto &&prev = unwrap<List *>(_prev);
+            if (list_builder_is_single_result(prev)) {
+                RET(cont, list_builder_get_single_result(prev));
+            } else {
+                RET(cont, list_builder_get_result(prev));
+            }
+        FN_END_BINDWITH(cont),
+        parser, (List *)nullptr);
+LETFN_END
+
+
+LETFN(parse_root)(cont, lexer)
+    unwrap<Lexer>(lexer).read_token();
+
+    LETFN(loop)(cont, lexer, prev)
+        switch(unwrap<Lexer>(lexer).get_token()) {
+            case token_eof:
+            case token_none:
+                RET(cont, list_builder_get_result(unwrap<List *>(prev)));
+            default: {
+                CC(parse_naked,
+                    FN(elem)
+                        auto nextelem = list_create(elem, unwrap<List *>(prev));
+                        CC(loop, cont, lexer, &nextelem);
+                    FN_END_BINDWITH(cont, lexer, prev),
+                    lexer, 1, token_none);
+            } break;
+        }
+    LETFN_END
+    CC(loop, cont, lexer, (List *)nullptr);
 LETFN_END
 
 //------------------------------------------------------------------------------
@@ -2500,6 +2873,10 @@ static size_t sizeof_payload(GC_Context &ctx, const Any &from) {
         case TYPE_Symbol:
         case TYPE_Function:
             return 0;
+        case TYPE_Anchor:
+            return sizeof(Anchor);
+        case TYPE_List:
+            return sizeof(List);
         case TYPE_String:
             return sizeof(String);
         case TYPE_BuiltinClosure:
@@ -2519,6 +2896,14 @@ static void mark_payload(GC_Context &ctx, Any &val) {
         auto &&s = val.str;
         ctx.move_memory(s->count + 1, s->ptr);
     } break;
+    case TYPE_List: {
+        // todo: move memory?
+        auto &&l = val.list;
+        ctx.move(l->at);
+        Any next = wrap(l->next);
+        ctx.move(next);
+        l->next = next.list;
+    } break;
     case TYPE_BuiltinClosure:
         if (val.builtin_closure) {
             auto &cl = *const_cast<BuiltinClosure *>(val.builtin_closure);
@@ -2537,7 +2922,7 @@ static void mark_payload(GC_Context &ctx, Any &val) {
 //------------------------------------------------------------------------------
 
 LETFN(cmain)()
-#if 1
+#if 0
     auto buf = str("test(-1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff 0xffffffffffffffff 0.00012345 1 2 3.5 10.0 1001.0 1001.1 1001.001 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33 1.0 0.0 \"te\\\"st\\n\\ttest!\")test\ntest((3;))\n");
     auto path = str("<path>");
     Lexer lexer = Lexer::create(buf, path);
@@ -2555,6 +2940,16 @@ LETFN(cmain)()
                     RET(repeat);
                 FN_END_BINDWITH(repeat));
         FN_END_BINDWITH(lexer));
+#elif 1
+    auto buf = str("test\n    test test\n(-1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff 0xffffffffffffffff 0.00012345 1 2 3.5 10.0 1001.0 1001.1 1001.001 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33 1.0 0.0 \"te\\\"st\\n\\ttest!\")test\ntest((1 2; 3 4))\n");
+    auto path = str("<path>");
+    Lexer lexer = Lexer::create(buf, path);
+    CC(parse_root,
+        FN(val)
+            printValue(val);
+            exit_loop(0);
+        FN_END,
+        lexer);
 #else
     RCALL(print_format, str("hi {} {} {}!\n"), 1, 2, cmain::run);
     CC(color,
