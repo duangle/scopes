@@ -13,6 +13,7 @@ syntax: regexp
 
 ^clang
 ^libffi
+^luajit
 ^bangra$
 ^bangra[.]h$
 ^doc/_build/
