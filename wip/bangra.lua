@@ -22,7 +22,7 @@ SOFTWARE.
 --]]
 
 --------------------------------------------------------------------------------
--- STRICT
+-- strict.lua
 --------------------------------------------------------------------------------
 
 local mt = getmetatable(_G)
@@ -514,6 +514,14 @@ local function make_get_enum_name(T)
     end
 end
 
+local function set(keys)
+    local r = {}
+    for i,k in ipairs(keys) do
+        r[tostring(k)] = i
+    end
+    return r
+end
+
 --------------------------------------------------------------------------------
 -- ANSI COLOR FORMATTING
 --------------------------------------------------------------------------------
@@ -552,6 +560,7 @@ LOCATION = ANSI.COLOR_XCYAN,
 }
 
 local is_tty = (C.isatty(C.fileno(C.stdout)) == 1)
+local support_ansi = is_tty
 local ansi
 if is_tty then
     local reset = ANSI.RESET
@@ -573,21 +582,30 @@ local Type
 
 local function define_types(def)
     def('Void')
-    def('I32')
-    def('I64')
 
-    def('U32')
-    def('U64')
+    def('Bool', 'i1')
 
-    def('R32')
+    def('I8', 'i8')
+    def('I16', 'i16')
+    def('I32', 'i32')
+    def('I64', 'i64')
 
-    def('Symbol')
-    def('List')
-    def('String')
+    def('U8', 'u8')
+    def('U16', 'u16')
+    def('U32', 'u32')
+    def('U64', 'u64')
+
+    def('R32', 'r32')
+    def('R64', 'r64')
+
+    def('Symbol', 'symbol')
+    def('List', 'list')
+    def('String', 'string')
 end
 
 do
     local typename = {}
+    local typemembers = {}
     local cls = {}
     function eq(self, other)
         return self.value == other.value
@@ -595,17 +613,34 @@ do
     function repr(self)
         return "type:" .. typename[self.value]
     end
+    function cls:extract(value)
+        return value[typemembers[self.value]]
+    end
     Type = ffi.metatype('Type', {
         __index = cls,
         __eq = eq,
         __tostring = repr })
 
     local idx = 0
-    define_types(function(name)
+    define_types(function(name, member)
         cls[name] = Type(idx)
         typename[idx] = string.lower(name)
+        typemembers[idx] = member
         idx = idx + 1
     end)
+end
+
+local is_number_type
+do
+    local number_types = set({
+        Type.I8, Type.I16, Type.I32, Type.I64,
+        Type.U8, Type.U16, Type.U32, Type.U64,
+        Type.R32, Type.R64
+    })
+    is_number_type = function(t)
+        assert(istype(Type, t))
+        return number_types[tostring(t)] ~= null
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -694,6 +729,8 @@ do
     function repr(self)
         if self.type == Type.Void then
             return 'none'
+        elseif is_number_type(self.type) then
+            return tostring(self.type:extract(self))
         else
             return '<value of ' .. tostring(self.type) .. '>'
         end
@@ -1298,14 +1335,209 @@ local function parse(lexer)
 end
 
 --------------------------------------------------------------------------------
+-- VALUE PRINTING
+--------------------------------------------------------------------------------
+
+local function is_nested(e)
+    if (e.type == Type.List) then
+        local it = e.list
+        while (it ~= EOL) do
+            if (it.at.type == Type.List) then
+                return true
+            end
+            it = it.next
+        end
+    end
+    return false
+end
+
+local function stream_anchor(writer, e, depth)
+    depth = depth or 0
+    --[[
+    const Anchor *anchor = find_valid_anchor(e);
+    if (anchor) {
+        stream <<
+            format("%s:%i:%i: ",
+                anchor->path,
+                anchor->lineno,
+                anchor->column);
+    }
+    --]]
+    for i=1,depth do
+        writer("    ")
+    end
+end
+
+local function StreamValueFormat(naked, depth)
+    if type(naked) == "table" and depth == null then
+        local obj = naked
+        return {
+            depth = obj.depth,
+            naked = obj.naked,
+            maxdepth = obj.maxdepth,
+            maxlength = obj.maxlength
+        }
+    else
+        return {
+            depth = depth or 0,
+            naked = naked or false,
+            maxdepth = bit.lshift(1,30),
+            maxlength = bit.lshift(1,30),
+        }
+    end
+end
+
+local function stream_value(writer, e, format)
+    local depth = format.depth
+    local maxdepth = format.maxdepth
+    local naked = format.naked
+
+    if (naked) then
+        stream_anchor(writer, e, depth)
+    end
+
+    if (e.type == Type.List) then
+        if (maxdepth == 0) then
+            writer(ansi(STYLE.OPERATOR,"("))
+            writer(ansi(STYLE.COMMENT,"<...>"))
+            writer(ansi(STYLE.OPERATOR,")"))
+            if (naked) then
+                writer('\n')
+            end
+        else
+            local subfmt = StreamValueFormat(format)
+            subfmt.maxdepth = subfmt.maxdepth - 1
+
+            local it = e.list
+            if (it == EOL) then
+                writer(ansi(STYLE.OPERATOR,"()"))
+                if (naked) then
+                    writer('\n')
+                end
+                return
+            end
+            local offset = 0
+            if (naked) then
+                local single = (it.next == EOL)
+            ::print_terse::
+                subfmt.depth = depth
+                subfmt.naked = false
+                stream_value(writer, it.at, subfmt)
+                it = it.next
+                offset = offset + 1
+                while (it ~= EOL) do
+                    if (is_nested(it.at)) then
+                        break
+                    end
+                    writer(' ')
+                    stream_value(writer, it.at, subfmt)
+                    offset = offset + 1
+                    it = it.next
+                end
+                if single then
+                    writer(";\n")
+                else
+                    writer("\n")
+                end
+            -- ::print_sparse::
+                while (it ~= EOL) do
+                    subfmt.depth = depth + 1
+                    subfmt.naked = true
+                    local value = it.at
+                    if ((value.type ~= Type.List) -- not a list
+                        and (offset >= 1) -- not first element in list
+                        and (it.next ~= EOL) -- not last element in list
+                        and not(is_nested(it.next.at))) then -- next element can be terse packed too
+                        single = false
+                        stream_anchor(writer, value, depth + 1)
+                        writer("\\ ")
+                        goto print_terse
+                    end
+                    if (offset >= subfmt.maxlength) then
+                        stream_anchor(writer, value, depth + 1)
+                        writer("<...>\n")
+                        return
+                    end
+                    stream_value(writer, value, subfmt)
+                    offset = offset + 1
+                    it = it.next
+                end
+
+            else
+                subfmt.depth = depth + 1
+                subfmt.naked = false
+                writer(ansi(STYLE.OPERATOR,'('))
+                while (it ~= EOL) do
+                    if (offset > 0) then
+                        writer(' ')
+                    end
+                    if (offset >= subfmt.maxlength) then
+                        writer(ansi(STYLE.COMMENT,"..."))
+                        break
+                    end
+                    stream_value(writer, it.at, subfmt)
+                    offset = offset + 1
+                    it = it.next
+                end
+                writer(ansi(STYLE.OPERATOR,')'))
+                if (naked) then
+                    writer('\n')
+                end
+            end
+        end
+    else
+        if (e.type == Type.Symbol) then
+            local name = get_symbol_name(e.symbol)
+            local len = #name
+            local elen = C.escape_string(null, name, len, "[]{}()\"")
+            local es = new(typeof('$[$]', int8_t, elen + 1))
+            C.escape_string(es, name, len, "[]{}()\"")
+            writer(es)
+        elseif (e.type == Type.String) then
+            if (support_ansi) then writer(STYLE.STRING) end
+            writer('"')
+            local elen = C.escape_string(null, e.str.ptr, e.str.count, "\"")
+            local es = new(typeof('$[$]', int8_t, elen + 1))
+            C.escape_string(es, e.str.ptr, e.str.count, "\"")
+            writer(es)
+            writer('"')
+            if (support_ansi) then writer(ANSI.RESET) end
+        else
+            local s = tostring(e)
+            if (e.type == Type.Bool) then
+                writer(ansi(STYLE.KEYWORD, s))
+            elseif (is_number_type(e.type)) then
+                writer(ansi(STYLE.NUMBER, s))
+            else
+                writer(s)
+            end
+        end
+        if (naked) then
+            writer('\n')
+        end
+    end
+end
+
+--------------------------------------------------------------------------------
 -- TESTING
 --------------------------------------------------------------------------------
 
+local lexer_test = [[
+test
+    test test
+numbers -1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff
+    \ 0xffffffffffffffff 0.00012345 1 2 3.5 10.0 1001.0 1001.1 1001.001
+    \ 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33
+    \ 1.0 0.0 "te\"st\n\ttest!" test
+test (1 2; 3 4; 5 6)
+]]
+
 local function test_lexer()
-    local s = "test\n    test test\n(-1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff 0xffffffffffffffff 0.00012345 1 2 3.5 10.0 1001.0 1001.1 1001.001 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33 1.0 0.0 \"te\\\"st\\n\\ttest!\")test\ntest((1 2; 3 4))\n"
+    collectgarbage("stop")
+    local lexer = Lexer.init(new(rawstring, lexer_test), null, "path")
+    local expr = parse(lexer)
 
-    local lexer = Lexer.init(new(rawstring, s), null, "path")
-
+    stream_value(stdout_writer, expr, StreamValueFormat(true))
 end
 
 local function testf()

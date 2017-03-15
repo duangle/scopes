@@ -136,7 +136,6 @@ namespace blobs {
 #pragma GCC diagnostic pop
 }
 
-// we're going to use extensions
 // #pragma GCC diagnostic ignored "-Wvla-extension"
 // #pragma GCC diagnostic ignored "-Wzero-length-array"
 // #pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
