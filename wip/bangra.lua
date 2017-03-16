@@ -774,6 +774,44 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- ANCHOR
+--------------------------------------------------------------------------------
+
+cdef[[
+typedef struct _Anchor {
+    const char *path;
+    int lineno;
+    int column;
+    int offset;
+} Anchor;
+]]
+local Anchor
+
+do
+    local cls = {}
+    function repr(self)
+        return
+            ansi(STYLE.LOCATION, ffi.string(self.path))
+            .. ansi(STYLE.OPERATOR, ":")
+            .. format("%i", self.lineno)
+            .. ansi(STYLE.OPERATOR, ":")
+            .. format("%i", self.column)
+    end
+    Anchor = ffi.metatype('Anchor', {
+        __index = cls,
+        __tostring = repr })
+end
+
+local active_anchor
+local _error = error
+local function error(msg)
+    if type(msg) == "string" then
+        msg = {msg = msg, anchor = active_anchor}
+    end
+    _error(msg)
+end
+
+--------------------------------------------------------------------------------
 -- S-EXPR LEXER / TOKENIZER
 --------------------------------------------------------------------------------
 
@@ -855,12 +893,7 @@ do
         return self.cursor - self.line + 1
     end
     function cls:anchor()
-        return {
-            path = self.path,
-            lineno = self.lineno,
-            column = self:column(),
-            offset = self:offset(),
-        }
+        return Anchor(self.path, self.lineno, self:column(), self:offset())
     end
     function cls:next()
         local c = self.next_cursor[0]
@@ -947,7 +980,7 @@ do
         self.lineno = self.next_lineno
         self.line = self.next_line
         self.cursor = self.next_cursor
-        --self.active_anchor = get_anchor()
+        active_anchor = self:anchor()
     end
     function cls:read_token ()
         local c
@@ -968,7 +1001,7 @@ do
         end
         cc = tochar(c)
         if (cc == '#') then
-            self:read_string('\n')
+            self:read_string(CR)
             goto skip
         elseif (cc == '(') then self.token = Token.open
         elseif (cc == ')') then self.token = Token.close
@@ -1166,9 +1199,12 @@ local function ListBuilder(lexer)
     function cls.reset_start()
         eol = prev
     end
+    function cls.is_expression_empty()
+        return (prev == EOL)
+    end
     function cls.split()
         -- if we haven't appended anything, that's an error
-        if (prev == EOL) then
+        if (cls.is_expression_empty()) then
             error("can't split empty expression")
         end
         -- reverse what we have, up to last split point and wrap result
@@ -1294,11 +1330,15 @@ local function parse(lexer)
                     builder.append(parse_naked(subcolumn, end_token))
                 end
             elseif (lexer.token == Token.statement) then
-                builder.split()
-                lexer:read_token()
-                -- if we are in the same line, continue in parent
-                if (lexer.lineno == lineno) then
-                    break
+                if builder.is_expression_empty() then
+                    lexer:read_token()
+                else
+                    builder.split()
+                    lexer:read_token()
+                    -- if we are in the same line, continue in parent
+                    if (lexer.lineno == lineno) then
+                        break
+                    end
                 end
             else
                 builder.append(parse_any())
@@ -1331,7 +1371,31 @@ local function parse(lexer)
         return wrap(builder.get_result())
     end
 
-    return parse_root()
+    return xpcall(
+        function()
+            return parse_root()
+        end,
+        function(err)
+            if (type(err) == "table") then
+                local msg = err.msg
+                if err.anchor then
+                    msg = tostring(err.anchor)
+                        .. ansi(STYLE.OPERATOR,":") .. " " .. msg
+                    local sf = SourceFile.open(err.anchor.path)
+                    if sf then
+                        msg = msg .. "\n"
+                        sf:dump_line(err.anchor.offset,
+                            function (s)
+                                msg = msg .. s
+                            end)
+                    end
+                end
+                return msg
+            else
+                return err
+            end
+        end
+    )
 end
 
 --------------------------------------------------------------------------------
@@ -1419,6 +1483,10 @@ local function stream_value(writer, e, format)
             local offset = 0
             if (naked) then
                 local single = (it.next == EOL)
+                if is_nested(it.at) then
+                    writer(";\n")
+                    goto print_sparse
+                end
             ::print_terse::
                 subfmt.depth = depth
                 subfmt.naked = false
@@ -1439,7 +1507,7 @@ local function stream_value(writer, e, format)
                 else
                     writer("\n")
                 end
-            -- ::print_sparse::
+            ::print_sparse::
                 while (it ~= EOL) do
                     subfmt.depth = depth + 1
                     subfmt.naked = true
@@ -1530,14 +1598,49 @@ numbers -1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff
     \ 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33
     \ 1.0 0.0 "te\"st\n\ttest!" test
 test (1 2; 3 4; 5 6)
+(
+cond
+    i == 0;
+        print "yes"
+    i == 1;
+        print "no"
+
+function test (a b)
+    assert (a != b)
+    + a b
+
+; more more
+    one
+    two
+    three
+; test test test
+
+
+
 ]]
 
 local function test_lexer()
     collectgarbage("stop")
     local lexer = Lexer.init(new(rawstring, lexer_test), null, "path")
-    local expr = parse(lexer)
+    local result,expr = parse(lexer)
+    if result then
+        stream_value(stdout_writer, expr, StreamValueFormat(true))
+    else
+        print(expr)
+    end
+end
 
-    stream_value(stdout_writer, expr, StreamValueFormat(true))
+local function test_bangra()
+    collectgarbage("stop")
+    local src = SourceFile.open("bangra.b")
+    local ptr = src:strptr()
+    local lexer = Lexer.init(ptr, ptr + src.length, "bangra.b")
+    local result,expr = parse(lexer)
+    if result then
+        stream_value(stdout_writer, expr, StreamValueFormat(true))
+    else
+        print(expr)
+    end
 end
 
 local function testf()
@@ -1554,8 +1657,5 @@ local function testf()
 end
 
 --testf()
-test_lexer()
-
-
-
-
+--test_lexer()
+test_bangra()
