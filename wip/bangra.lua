@@ -429,10 +429,16 @@ reflect = reflect()
 -- IMPORTS
 --------------------------------------------------------------------------------
 
+local WIN32 = (jit.os == "Windows")
+
 local ord = string.byte
 local tochar = string.char
 local format = string.format
 local null = nil
+
+local lshift = bit.lshift
+local rshift = bit.rshift
+local band = bit.band
 
 local ffi = require 'ffi'
 local typeof = ffi.typeof
@@ -522,6 +528,20 @@ local function set(keys)
     return r
 end
 
+local function update(a, b)
+    for k,v in pairs(b) do
+        a[k] = v
+    end
+end
+
+local function split(str)
+    local result = {}
+    for s in string.gmatch(str, "%S+") do
+      table.insert(result, s)
+    end
+    return result
+end
+
 --------------------------------------------------------------------------------
 -- ANSI COLOR FORMATTING
 --------------------------------------------------------------------------------
@@ -545,12 +565,52 @@ COLOR_XBLUE     = "\027[34;1m",
 COLOR_XMAGENTA  = "\027[35;1m",
 COLOR_XCYAN     = "\027[36;1m",
 COLOR_WHITE     = "\027[37;1m",
+COLOR_RGB       = function(hexcode, isbg)
+    local r = band(rshift(hexcode, 16), 0xff)
+    local g = band(rshift(hexcode, 8), 0xff)
+    local b = band(hexcode, 0xff)
+    local ctrlcode
+    if isbg then
+        ctrlcode = "\027[48;2;"
+    else
+        ctrlcode = "\027[38;2;"
+    end
+    return ctrlcode
+        .. tostring(r) .. ";"
+        .. tostring(g) .. ";"
+        .. tostring(b) .. "m"
+end
 }
 
-local STYLE = {
+local SUPPORT_ISO_8613_3 = not WIN32
+local STYLE
+if SUPPORT_ISO_8613_3 then
+local BG = ANSI.COLOR_RGB(0x2D2D2D, true)
+STYLE = {
+FOREGROUND = ANSI.COLOR_RGB(0xCCCCCC),
+BACKGROUND = ANSI.COLOR_RGB(0x2D2D2D, true),
+SYMBOL = ANSI.COLOR_RGB(0xCCCCCC),
+STRING = ANSI.COLOR_RGB(0xCC99CC),
+NUMBER = ANSI.COLOR_RGB(0x99CC99),
+KEYWORD = ANSI.COLOR_RGB(0x6699CC),
+FUNCTION = ANSI.COLOR_RGB(0xFFCC66),
+SFXFUNCTION = ANSI.COLOR_RGB(0xCC6666),
+OPERATOR = ANSI.COLOR_RGB(0x66CCCC),
+INSTRUCTION = ANSI.COLOR_YELLOW,
+TYPE = ANSI.COLOR_RGB(0xF99157),
+COMMENT = ANSI.COLOR_RGB(0x999999),
+ERROR = ANSI.COLOR_XRED,
+LOCATION = ANSI.COLOR_XCYAN,
+}
+else
+STYLE = {
+FOREGROUND = ANSI.COLOR_WHITE,
+BACKGROUND = ANSI.RESET,
 STRING = ANSI.COLOR_XMAGENTA,
 NUMBER = ANSI.COLOR_XGREEN,
 KEYWORD = ANSI.COLOR_XBLUE,
+FUNCTION = ANSI.COLOR_GREEN,
+SFXFUNCTION = ANSI.COLOR_RED,
 OPERATOR = ANSI.COLOR_XCYAN,
 INSTRUCTION = ANSI.COLOR_YELLOW,
 TYPE = ANSI.COLOR_XYELLOW,
@@ -558,6 +618,7 @@ COMMENT = ANSI.COLOR_GRAY30,
 ERROR = ANSI.COLOR_XRED,
 LOCATION = ANSI.COLOR_XCYAN,
 }
+end
 
 local is_tty = (C.isatty(C.fileno(C.stdout)) == 1)
 local support_ansi = is_tty
@@ -1432,22 +1493,72 @@ local function stream_anchor(writer, e, depth)
     end
 end
 
-local function StreamValueFormat(naked, depth)
-    if type(naked) == "table" and depth == null then
+-- keywords and macros
+local KEYWORDS = set(split(
+    "let true false fn quote with ::* ::@ call escape do dump-syntax"
+        .. " syntax-extend if else elseif loop repeat none assert qquote"
+        .. " unquote unquote-splice globals return splice continuation"
+        .. " try except define in for empty-list empty-tuple raise"
+        .. " yield xlet cc/call fn/cc null"
+    ))
+
+    -- builtin and global functions
+local FUNCTIONS = set(split(
+    "external branch print repr tupleof import-c eval structof typeof"
+        .. " macro block-macro block-scope-macro cons expand empty?"
+        .. " dump list-head? countof tableof slice none? list-atom?"
+        .. " list-load list-parse load require cstr exit hash min max"
+        .. " va-arg va-countof range zip enumerate bitcast element-type"
+        .. " qualify disqualify iter iterator? list? symbol? parse-c"
+        .. " get-exception-handler xpcall error sizeof prompt null?"
+        .. " extern-library arrayof"
+    ))
+
+-- builtin and global functions with side effects
+local SFXFUNCTIONS = set(split(
+    "set-key! set-globals! set-exception-handler! bind! set!"
+    ))
+
+-- builtin operator functions that can also be used as infix
+local OPERATORS = set(split(
+    "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
+        .. " *= /= %= ^= &= |= ~= <- ? := // << >>"
+    ))
+
+local TYPES = set(split(
+    "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void string"
+        .. " rawstring opaque half float double symbol list parameter"
+        .. " frame closure flow integer real cfunction array tuple vector"
+        .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
+        .. " iterator type table size_t usize_t ssize_t void*"
+    ))
+
+local function StreamValueFormat(naked, depth, opts)
+    if type(naked) == "table" then
         local obj = naked
         return {
             depth = obj.depth,
             naked = obj.naked,
             maxdepth = obj.maxdepth,
-            maxlength = obj.maxlength
+            maxlength = obj.maxlength,
+            keywords = obj.keywords,
+            functions = obj.functions,
+            sfxfunctions = obj.sfxfunctions,
+            operators = obj.operators,
+            types = obj.types
         }
     else
-        return {
-            depth = depth or 0,
-            naked = naked or false,
-            maxdepth = bit.lshift(1,30),
-            maxlength = bit.lshift(1,30),
-        }
+        opts = opts or {}
+        opts.depth = depth or 0
+        opts.naked = naked or false
+        opts.maxdepth = opts.maxdepth or lshift(1,30)
+        opts.maxlength = opts.maxlength or lshift(1,30)
+        opts.keywords = opts.keywords or KEYWORDS
+        opts.functions = opts.functions or FUNCTIONS
+        opts.sfxfunctions = opts.sfxfunctions or SFXFUNCTIONS
+        opts.operators = opts.operators or OPERATORS
+        opts.types = opts.types or TYPES
+        return opts
     end
 end
 
@@ -1560,7 +1671,17 @@ local function stream_value(writer, e, format)
             local elen = C.escape_string(null, name, len, "[]{}()\"")
             local es = new(typeof('$[$]', int8_t, elen + 1))
             C.escape_string(es, name, len, "[]{}()\"")
+            local ess = ffi.string(es)
+            local style =
+                (format.keywords[ess] and STYLE.KEYWORD)
+                or (format.functions[ess] and STYLE.FUNCTION)
+                or (format.sfxfunctions[ess] and STYLE.SFXFUNCTION)
+                or (format.operators[ess] and STYLE.OPERATOR)
+                or (format.types[ess] and STYLE.TYPE)
+                or STYLE.SYMBOL
+            if (style and support_ansi) then writer(style) end
             writer(es)
+            if (style and support_ansi) then writer(ANSI.RESET) end
         elseif (e.type == Type.String) then
             if (support_ansi) then writer(STYLE.STRING) end
             writer('"')
@@ -1656,6 +1777,17 @@ local function testf()
     print(cstr(ss))
 end
 
+local function test_ansicolors()
+    for k,v in pairs(ANSI) do
+        if type(v) == "string" then
+            print(ansi(v, k))
+        end
+    end
+    print(ansi(ANSI.COLOR_RGB(0x4080ff), "yes"))
+
+end
+
 --testf()
 --test_lexer()
 test_bangra()
+--test_ansicolors()
