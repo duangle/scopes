@@ -32,14 +32,16 @@ if mt == nil then
 end
 
 __STRICT = true
-mt.__declared = {}
+mt.__declared = {
+    global = true
+}
 
 mt.__newindex = function (t, n, v)
   if __STRICT and not mt.__declared[n] then
-    local w = debug.getinfo(2, "S").what
-    if w ~= "main" and w ~= "C" then
-      error("assign to undeclared variable '"..n.."'", 2)
-    end
+    --local w = debug.getinfo(2, "S").what
+    --if w ~= "main" and w ~= "C" then
+    error("assign to undeclared variable '"..n.."'", 2)
+    --end
     mt.__declared[n] = true
   end
   rawset(t, n, v)
@@ -55,6 +57,44 @@ end
 function global(...)
    for _, v in ipairs{...} do mt.__declared[v] = true end
 end
+
+--------------------------------------------------------------------------------
+-- 30log.lua
+--------------------------------------------------------------------------------
+
+local function class()
+    local assert, pairs, type, tostring, setmetatable = assert, pairs, type, tostring, setmetatable
+    local baseMt, _instances, _classes, _class = {}, setmetatable({},{__mode='k'}), setmetatable({},{__mode='k'})
+    local function assert_class(class, method) assert(_classes[class], ('Wrong method call. Expected class:%s.'):format(method)) end
+    local function deep_copy(t, dest, aType) t = t or {}; local r = dest or {}
+      for k,v in pairs(t) do
+        if aType and type(v)==aType then r[k] = v elseif not aType then
+          if type(v) == 'table' and k ~= "__index" then r[k] = deep_copy(v) else r[k] = v end
+        end
+      end; return r
+    end
+    local function instantiate(self,...)
+      assert_class(self, 'new(...) or class(...)'); local instance = {class = self}; _instances[instance] = tostring(instance); setmetatable(instance,self)
+      if self.init then if type(self.init) == 'table' then deep_copy(self.init, instance) else self.init(instance, ...) end; end; return instance
+    end
+    local function extend(self, name, extra_params)
+      assert_class(self, 'extend(...)'); local heir = {}; _classes[heir] = tostring(heir); deep_copy(extra_params, deep_copy(self, heir));
+      heir.name, heir.__index, heir.super = extra_params and extra_params.name or name, heir, self; return setmetatable(heir,self)
+    end
+    baseMt = { __call = function (self,...) return self:new(...) end, __tostring = function(self,...)
+      if _instances[self] then return ("instance of '%s' (%s)"):format(rawget(self.class,'name') or '?', _instances[self]) end
+      return _classes[self] and ("class '%s' (%s)"):format(rawget(self,'name') or '?',_classes[self]) or self
+    end}; _classes[baseMt] = tostring(baseMt); setmetatable(baseMt, {__tostring = baseMt.__tostring})
+    local class = {isClass = function(class, ofsuper) local isclass = not not _classes[class]; if ofsuper then return isclass and (class.super == ofsuper) end; return isclass end, isInstance = function(instance, ofclass)
+        local isinstance = not not _instances[instance]; if ofclass then return isinstance and (instance.class == ofclass) end; return isinstance end}; _class = function(name, attr)
+      local c = deep_copy(attr); c.mixins=setmetatable({},{__mode='k'}); _classes[c] = tostring(c); c.name, c.__tostring, c.__call = name or c.name, baseMt.__tostring, baseMt.__call
+      c.include = function(self,mixin) assert_class(self, 'include(mixin)'); self.mixins[mixin] = true; return deep_copy(mixin, self, 'function') end
+      c.new, c.extend, c.__index, c.includes = instantiate, extend, c, function(self,mixin) assert_class(self,'includes(mixin)') return not not (self.mixins[mixin] or (self.super and self.super:includes(mixin))) end
+      c.extends = function(self, class) assert_class(self, 'extends(class)') local super = self; repeat super = super.super until (super == class or super == nil); return class and (super == class) end
+        return setmetatable(c, baseMt) end; class._DESCRIPTION = '30 lines library for object orientation in Lua'; class._VERSION = '30log v1.0.0'; class._URL = 'http://github.com/Yonaba/30log'; class._LICENSE = 'MIT LICENSE <http://www.opensource.org/licenses/mit-license.php>'
+    return setmetatable(class,{__call = function(_,...) return _class(...) end })
+end
+class = class()
 
 --------------------------------------------------------------------------------
 -- reflect.lua
@@ -436,6 +476,8 @@ local tochar = string.char
 local format = string.format
 local null = nil
 
+local traceback = debug.traceback
+
 local lshift = bit.lshift
 local rshift = bit.rshift
 local band = bit.band
@@ -465,6 +507,7 @@ local uint32_t = typeof('uint32_t')
 local uint64_t = typeof('uint64_t')
 
 local int = typeof('int')
+local bool = typeof('bool')
 
 local size_t = typeof('size_t')
 
@@ -488,6 +531,11 @@ local cast_t = typeof('cast_t')
 
 local MAP_FAILED = new(cast_t, -1).ptr
 local NULL = new(cast_t, 0).ptr
+
+local typeid_char = reflect.typeof(int8_t).typeid
+local function is_char_array_ctype(refct)
+    return refct.what == 'array' and refct.element_type.typeid == typeid_char
+end
 
 local function zstr_from_buffer(ptr, size)
     local s = new(typeof('$[$]', int8_t, size + 1))
@@ -540,6 +588,21 @@ local function split(str)
       table.insert(result, s)
     end
     return result
+end
+
+local function cformat(fmt, ...)
+    local size = C.stb_snprintf(null, 0, fmt, ...)
+    local s = vla_int8_t(size + 1)
+    C.stb_snprintf(s, size + 1, fmt, ...)
+    return cstr(s)
+end
+
+local function escape_string(s, quote_chars)
+    local len = #s
+    local size = C.escape_string(null, s, len, quote_chars)
+    local es = vla_int8_t(size + 1)
+    C.escape_string(es, s, len, quote_chars)
+    return cstr(es)
 end
 
 --------------------------------------------------------------------------------
@@ -630,6 +693,62 @@ else
     ansi = function(style, x) return x end
 end
 
+local function repr(x)
+    local visited = {}
+    local function _repr(x, maxd)
+        if type(x) == "table" then
+            if visited[x] then
+                maxd = 0
+            end
+            local mt = getmetatable(x)
+            if mt and mt.__tostring then
+                return mt.__tostring(x)
+            end
+            visited[x] = x
+            local s = ansi(STYLE.OPERATOR,"{")
+            if maxd <= 0 then
+                s = s .. ansi(STYLE.COMMENT, "...")
+            else
+                local n = ''
+                for k,v in pairs(x) do
+                    if n ~= '' then
+                        n = n .. ansi(STYLE.OPERATOR,",")
+                    end
+                    k = _repr(k, maxd - 1)
+                    n = n .. k .. ansi(STYLE.OPERATOR, "=") .. _repr(v, maxd - 1)
+                end
+                if mt then
+                    if n ~= '' then
+                        n = n .. ansi(STYLE.OPERATOR,",")
+                    end
+                    if mt.__class then
+                        n = n .. ansi(STYLE.KEYWORD, "class")
+                            .. ansi(STYLE.OPERATOR, "=")
+                            .. tostring(mt.__class)
+                    else
+                        n = n .. ansi(STYLE.KEYWORD, "meta")
+                            .. ansi(STYLE.OPERATOR, "=")
+                            .. _repr(mt, maxd - 1)
+                    end
+                end
+                s = s .. n
+            end
+            s = s .. ansi(STYLE.OPERATOR,"}")
+            return s
+        elseif type(x) == "number" then
+            return ansi(STYLE.NUMBER, tostring(x))
+        elseif type(x) == "boolean" then
+            return ansi(STYLE.KEYWORD, tostring(x))
+        elseif type(x) == "string" then
+            return ansi(STYLE.STRING, format("%q", x))
+        elseif type(x) == "nil" then
+            return ansi(STYLE.KEYWORD, "null")
+        end
+        return tostring(x)
+    end
+    return _repr(x, 10)
+end
+
 --------------------------------------------------------------------------------
 -- TYPE
 --------------------------------------------------------------------------------
@@ -640,47 +759,56 @@ typedef struct _Type {
 } Type;
 ]]
 local Type
-
+local function assert_type(x)
+    if type(x) == "cdata" and typeof(x) == Type then
+        return x
+    else
+        error("type expected, got " .. repr(x))
+    end
+end
 local function define_types(def)
     def('Void')
 
-    def('Bool', 'i1')
+    def('Bool')
 
-    def('I8', 'i8')
-    def('I16', 'i16')
-    def('I32', 'i32')
-    def('I64', 'i64')
+    def('I8')
+    def('I16')
+    def('I32')
+    def('I64')
 
-    def('U8', 'u8')
-    def('U16', 'u16')
-    def('U32', 'u32')
-    def('U64', 'u64')
+    def('U8')
+    def('U16')
+    def('U32')
+    def('U64')
 
-    def('R32', 'r32')
-    def('R64', 'r64')
+    def('R32')
+    def('R64')
 
-    def('Symbol', 'symbol')
-    def('List', 'list')
-    def('String', 'string')
+    def('Symbol')
+    def('List')
+    def('String')
 end
 
 do
     local typename = {}
     local typemembers = {}
     local cls = {}
-    function eq(self, other)
+    local function eq(self, other)
         return self.value == other.value
     end
-    function repr(self)
-        return "type:" .. typename[self.value]
+    local function type_tostring(self)
+        return ansi(STYLE.KEYWORD, "type")
+            .. ansi(STYLE.COMMENT, "<")
+            .. ansi(STYLE.TYPE, typename[self.value])
+            .. ansi(STYLE.COMMENT, ">")
     end
-    function cls:extract(value)
-        return value[typemembers[self.value]]
+    function cls:get_typename(value)
+        return typename[self.value]
     end
     Type = ffi.metatype('Type', {
         __index = cls,
         __eq = eq,
-        __tostring = repr })
+        __tostring = type_tostring })
 
     local idx = 0
     define_types(function(name, member)
@@ -712,24 +840,37 @@ local name_symbol_map = {}
 local symbol_name_map = {}
 local get_symbol_name
 
+local SYMBOL_ESCAPE_CHARS = "[]{}()\""
+
 cdef[[
 typedef struct _Symbol {
     int value;
 } Symbol;
 ]]
 local Symbol
+local function assert_symbol(x)
+    if type(x) == "cdata" and typeof(x) == Symbol then
+        return x
+    else
+        error("type expected, got " .. repr(x))
+    end
+end
 do
     local cls = {}
-    function eq(self, other)
+    local function eq(self, other)
         return self.value == other.value
     end
-    function repr(self)
-        return "symbol<" .. get_symbol_name(self) .. ">"
+    local function symbol_tostring(self)
+        return
+            ansi(STYLE.KEYWORD, "symbol")
+            .. ansi(STYLE.COMMENT, "<")
+            .. ansi(STYLE.SYMBOL, get_symbol_name(self))
+            .. ansi(STYLE.COMMENT, ">")
     end
     Symbol = ffi.metatype('Symbol', {
         __index = cls,
         __eq = eq,
-        __tostring = repr })
+        __tostring = symbol_tostring })
 end
 
 local next_symbol_id = 0
@@ -746,6 +887,7 @@ local function get_symbol(name)
 end
 
 get_symbol_name = function(sym)
+    assert_symbol(sym)
     local name = symbol_name_map[sym.value]
     assert(name ~= null)
     return name
@@ -757,82 +899,54 @@ local SYM_Unnamed = get_symbol("")
 -- ANY
 --------------------------------------------------------------------------------
 
-local List
-
-cdef[[
-typedef struct _List List;
-
-typedef struct _String {
-    const char *ptr;
-    int count;
-} String;
-
-typedef struct _Any {
-    Type type;
-    union {
-        uint8_t embedded[8];
-
-        int32_t i32;
-        int64_t i64;
-        uint32_t u32;
-        uint64_t u64;
-        float r32;
-        Symbol symbol;
-        List *list;
-        String *str;
-    };
-} Any;
-]]
-local String = typeof('String')
-local Any = typeof('Any')
-do
-    local cls = {}
-    function repr(self)
-        if self.type == Type.Void then
-            return 'none'
-        elseif is_number_type(self.type) then
-            return tostring(self.type:extract(self))
-        else
-            return '<value of ' .. tostring(self.type) .. '>'
-        end
+local function assert_ctype(x)
+    if type(x) == "cdata" then
+        return x
+    else
+        error("ctype expected, got " .. repr(x))
     end
-    Any = ffi.metatype('Any', {
-        __index = cls,
-        __tostring = repr })
 end
-local none = new(Any, {Type.Void})
 
 local wrap
-do
-    local typeid_char = reflect.typeof(int8_t).typeid
-    wrap = function(value)
-        local t = type(value)
-        if t == 'cdata' then
-            local ct = typeof(value)
-            if istype(Symbol, ct) then
-                local any = Any()
-                any.type = Type.Symbol
-                any.symbol = value
-                return any
-            elseif istype(List, ct) then
-                local any = Any()
-                any.type = Type.List
-                any.list = value
-                return any
-            end
-            local refct = reflect.typeof(value)
-            if refct.what == 'array'
-                and refct.element_type.typeid == typeid_char then
-                local str = String(value, refct.size - 1)
-                local any = Any()
-                any.type = Type.String
-                any.str = str
-                return any
-            end
+local format_any_value
+local Any = {}
+setmetatable(Any, {
+    __call = function(cls, arg1, arg2)
+        local _type = arg1
+        local value = arg2
+        if type(arg2) == "nil" then
+            -- wrap syntax
+            _type, value = wrap(arg1)
+        else
+            local _type = arg1
+            local value = arg2
         end
-        error("unable to wrap " .. tostring(value))
+        assert_type(_type)
+        --assert_ctype(x)
+        return setmetatable({
+            type = _type,
+            value = value
+        }, cls)
+    end
+})
+function Any.__tostring(self)
+    return ansi(STYLE.KEYWORD, "any")
+        .. ansi(STYLE.COMMENT, "<")
+        .. format_any_value(self.type, self.value)
+        .. ansi(STYLE.OPERATOR, ":")
+        .. ansi(STYLE.TYPE, self.type:get_typename())
+        .. ansi(STYLE.COMMENT, ">")
+end
+
+local function assert_any(x)
+    if type(x) == "table" and getmetatable(x) == Any then
+        return x
+    else
+        error("any expected, got " .. tostring(x))
     end
 end
+
+local none = Any(Type.Void, NULL)
 
 --------------------------------------------------------------------------------
 -- ANCHOR
@@ -850,7 +964,7 @@ local Anchor
 
 do
     local cls = {}
-    function repr(self)
+    local function anchor_tostring(self)
         return
             ansi(STYLE.LOCATION, ffi.string(self.path))
             .. ansi(STYLE.OPERATOR, ":")
@@ -860,16 +974,15 @@ do
     end
     Anchor = ffi.metatype('Anchor', {
         __index = cls,
-        __tostring = repr })
+        __tostring = anchor_tostring })
 end
 
 local active_anchor
-local _error = error
-local function error(msg)
+local function location_error(msg)
     if type(msg) == "string" then
         msg = {msg = msg, anchor = active_anchor}
     end
-    _error(msg)
+    error(msg)
 end
 
 --------------------------------------------------------------------------------
@@ -896,7 +1009,7 @@ local get_token_name = make_get_enum_name(Token)
 
 local token_terminators = new(rawstring, "()[]{}\"';#")
 
-cdef[[
+--[[
 typedef struct _Lexer {
     const char *path;
     const char *input_stream;
@@ -920,24 +1033,26 @@ typedef struct _Lexer {
 } Lexer;
 ]]
 
-local Lexer
+local Lexer = {}
 do
+    Lexer.__index = Lexer
+
     local TAB = ord('\t')
     local CR = ord('\n')
     local BS = ord('\\')
 
-    function verify_good_taste(c)
+    local function verify_good_taste(c)
         if (c == TAB) then
-            error("please use spaces instead of tabs.")
+            location_error("please use spaces instead of tabs.")
         end
     end
 
-    local cls = {}
+    local cls = Lexer
     function cls.init(input_stream, eof, path, offset)
         offset = offset or 0
         eof = eof or (input_stream + C.strlen(input_stream))
 
-        local self = Lexer()
+        local self = setmetatable({}, Lexer)
         self.base_offset = offset
         self.path = path
         self.input_stream = input_stream
@@ -994,7 +1109,7 @@ do
         local escape = false
         while (true) do
             if (self:is_eof()) then
-                error("unterminated sequence")
+                location_error("unterminated sequence")
                 break
             end
             local c = self:next()
@@ -1013,12 +1128,11 @@ do
         self.string_len = self.next_cursor - self.cursor
     end
     local pp_int8_t = typeof('$*[1]', int8_t)
-    local function make_read_number(desttype, destattr, f)
+    local function make_read_number(desttype, f)
         return function (self)
             local cendp = new(pp_int8_t)
             local errno = 0
-            self.number.type = desttype
-            self.number[destattr] = f(self.cursor, cendp, 0)
+            self.number = Any(desttype, f(self.cursor, cendp, 0))
             local cend = cendp[0]
             if ((cend == self.cursor)
                 or (errno == C._ERANGE)
@@ -1031,9 +1145,9 @@ do
             return true
         end
     end
-    cls.read_int64 = make_read_number(Type.I64, "i64", C.strtoll)
-    cls.read_uint64 = make_read_number(Type.U64, "u64", C.strtoull)
-    cls.read_real32 = make_read_number(Type.R32, "r32",
+    cls.read_int64 = make_read_number(Type.I64, C.strtoll)
+    cls.read_uint64 = make_read_number(Type.U64, C.strtoull)
+    cls.read_real32 = make_read_number(Type.R32,
         function (cursor, cendp, base)
             return C.strtof(cursor, cendp)
         end)
@@ -1085,26 +1199,24 @@ do
     function cls:get_symbol()
         local dest = zstr_from_buffer(self.string, self.string_len)
         local size = C.unescape_string(dest)
-        return wrap(get_symbol(cstr(zstr_from_buffer(dest, size))))
+        return Any(get_symbol(cstr(zstr_from_buffer(dest, size))))
     end
     function cls:get_string()
         local dest = zstr_from_buffer(self.string + 1, self.string_len - 2)
         local size = C.unescape_string(dest)
-        return wrap(zstr_from_buffer(dest, size))
+        return Any(zstr_from_buffer(dest, size))
     end
     function cls:get_number()
         if ((self.number.type == Type.I64)
-            and (self.number.i64 <= 0x7fffffffll)
-            and (self.number.i64 >= -0x80000000ll)) then
-            self.number.type = Type.I32
-            self.number.i32 = self.number.i64
+            and (self.number.value <= 0x7fffffffll)
+            and (self.number.value >= -0x80000000ll)) then
+            return Any(int32_t(self.number.value))
         elseif ((self.number.type == Type.U64)
-            and (self.number.u64 <= 0xffffffffull)) then
-            self.number.type = Type.U32
-            self.number.u32 = self.number.u64
+            and (self.number.value <= 0xffffffffull)) then
+            return Any(uint32_t(self.number.value))
         end
         -- return copy instead of reference
-        return Any(self.number)
+        return self.number
     end
     function cls:get()
         if (self.token == Token.number) then
@@ -1115,8 +1227,6 @@ do
             return self:get_string()
         end
     end
-
-    Lexer = ffi.metatype('Lexer', { __index = cls })
 end
 
 --------------------------------------------------------------------------------
@@ -1203,29 +1313,37 @@ end
 -- S-EXPR PARSER
 --------------------------------------------------------------------------------
 
-cdef[[
-struct _List {
-    Any at;
-    List *next;
-    int count;
-};
-]]
-
-local EOL = cast(typeof('List*'), NULL)
-do
-    local cls = {}
-    function cls.create(at, next)
-        local self = List()
-        self.at = at
-        self.next = next
-        if (next ~= EOL) then
-            self.count = next.count + 1
-        else
-            self.count = 1
-        end
-        return self
+local EOL = {}
+local List = {}
+setmetatable(EOL, List)
+local function assert_list(x)
+    if type(x) == "table" and getmetatable(x) == List then
+        return x
+    else
+        error("expected List or null, got " .. repr(x))
     end
-    List = ffi.metatype('List', { __index = cls })
+end
+do
+    List.__index = List
+    List.__class = "List"
+
+    setmetatable(List, {
+        __call = function (cls, at, next)
+            assert_any(at)
+            assert_list(next)
+            local count
+            if (next ~= EOL) then
+                count = next.count + 1
+            else
+                count = 1
+            end
+            return setmetatable({
+                at = at,
+                next = next,
+                count = count
+            }, List)
+        end
+    })
 end
 
 -- (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
@@ -1254,7 +1372,7 @@ local function ListBuilder(lexer)
     local eol = EOL
     local cls = {}
     function cls.append(value)
-        prev = List.create(value, prev)
+        prev = List(value, prev)
         assert(prev)
     end
     function cls.reset_start()
@@ -1270,7 +1388,7 @@ local function ListBuilder(lexer)
         end
         -- reverse what we have, up to last split point and wrap result
         -- in cell
-        prev = List.create(wrap(reverse_list_inplace(prev, eol)), eol)
+        prev = List(Any(reverse_list_inplace(prev, eol)), eol)
         assert(prev)
         cls.reset_start()
     end
@@ -1306,7 +1424,7 @@ local function parse(lexer)
                 lexer:read_token()
                 builder.append(parse_naked(column, end_token))
             elseif (lexer.token == Token.eof) then
-                error("missing closing bracket")
+                location_error("missing closing bracket")
                 -- point to beginning of list
                 --error_origin = builder.getAnchor();
             elseif (lexer.token == Token.statement) then
@@ -1326,19 +1444,19 @@ local function parse(lexer)
         assert(lexer.token ~= Token.eof)
         --auto anchor = lexer.newAnchor();
         if (lexer.token == Token.open) then
-            return wrap(parse_list(Token.close))
+            return Any(parse_list(Token.close))
         elseif (lexer.token == Token.square_open) then
             local list = parse_list(Token.square_close)
             local sym = get_symbol("[")
-            return wrap(List.create(sym, list))
+            return Any(List(wrap(sym), list))
         elseif (lexer.token == Token.curly_open) then
             local list = parse_list(Token.curly_close)
             local sym = get_symbol("{")
-            return wrap(List.create(sym, list))
+            return Any(List(wrap(sym), list))
         elseif ((lexer.token == Token.close)
             or (lexer.token == Token.square_close)
             or (lexer.token == Token.curly_close)) then
-            error("stray closing bracket")
+            location_error("stray closing bracket")
         elseif (lexer.token == Token.string) then
             return lexer:get_string()
         elseif (lexer.token == Token.symbol) then
@@ -1366,18 +1484,18 @@ local function parse(lexer)
                 escape = true
                 lexer:read_token()
                 if (lexer.lineno <= lineno) then
-                    error("escape character is not at end of line")
+                    location_error("escape character is not at end of line")
                 end
                 lineno = lexer.lineno
             elseif (lexer.lineno > lineno) then
                 if (subcolumn == 0) then
                     subcolumn = lexer:column()
                 elseif (lexer:column() ~= subcolumn) then
-                    error("indentation mismatch")
+                    location_error("indentation mismatch")
                 end
                 if (column ~= subcolumn) then
                     if ((column + 4) ~= subcolumn) then
-                        error("indentations must nest by 4 spaces.")
+                        location_error("indentations must nest by 4 spaces.")
                     end
                 end
 
@@ -1416,7 +1534,7 @@ local function parse(lexer)
         if (builder.is_single_result()) then
             return builder.get_single_result()
         else
-            return wrap(builder.get_result())
+            return Any(builder.get_result())
         end
     end
 
@@ -1429,7 +1547,7 @@ local function parse(lexer)
             end
             builder.append(parse_naked(1, Token.none))
         end
-        return wrap(builder.get_result())
+        return Any(builder.get_result())
     end
 
     return xpcall(
@@ -1437,7 +1555,7 @@ local function parse(lexer)
             return parse_root()
         end,
         function(err)
-            if (type(err) == "table") then
+            if (type(err) == "table") and err.anchor then
                 local msg = err.msg
                 if err.anchor then
                     msg = tostring(err.anchor)
@@ -1453,7 +1571,8 @@ local function parse(lexer)
                 end
                 return msg
             else
-                return err
+                print(traceback(err,3))
+                os.exit(1)
             end
         end
     )
@@ -1465,7 +1584,7 @@ end
 
 local function is_nested(e)
     if (e.type == Type.List) then
-        local it = e.list
+        local it = e.value
         while (it ~= EOL) do
             if (it.at.type == Type.List) then
                 return true
@@ -1583,7 +1702,7 @@ local function stream_value(writer, e, format)
             local subfmt = StreamValueFormat(format)
             subfmt.maxdepth = subfmt.maxdepth - 1
 
-            local it = e.list
+            local it = e.value
             if (it == EOL) then
                 writer(ansi(STYLE.OPERATOR,"()"))
                 if (naked) then
@@ -1666,45 +1785,110 @@ local function stream_value(writer, e, format)
         end
     else
         if (e.type == Type.Symbol) then
-            local name = get_symbol_name(e.symbol)
-            local len = #name
-            local elen = C.escape_string(null, name, len, "[]{}()\"")
-            local es = new(typeof('$[$]', int8_t, elen + 1))
-            C.escape_string(es, name, len, "[]{}()\"")
-            local ess = ffi.string(es)
+            local name = get_symbol_name(e.value)
             local style =
-                (format.keywords[ess] and STYLE.KEYWORD)
-                or (format.functions[ess] and STYLE.FUNCTION)
-                or (format.sfxfunctions[ess] and STYLE.SFXFUNCTION)
-                or (format.operators[ess] and STYLE.OPERATOR)
-                or (format.types[ess] and STYLE.TYPE)
+                (format.keywords[name] and STYLE.KEYWORD)
+                or (format.functions[name] and STYLE.FUNCTION)
+                or (format.sfxfunctions[name] and STYLE.SFXFUNCTION)
+                or (format.operators[name] and STYLE.OPERATOR)
+                or (format.types[name] and STYLE.TYPE)
                 or STYLE.SYMBOL
             if (style and support_ansi) then writer(style) end
-            writer(es)
+            writer(escape_string(name, SYMBOL_ESCAPE_CHARS))
             if (style and support_ansi) then writer(ANSI.RESET) end
-        elseif (e.type == Type.String) then
-            if (support_ansi) then writer(STYLE.STRING) end
-            writer('"')
-            local elen = C.escape_string(null, e.str.ptr, e.str.count, "\"")
-            local es = new(typeof('$[$]', int8_t, elen + 1))
-            C.escape_string(es, e.str.ptr, e.str.count, "\"")
-            writer(es)
-            writer('"')
-            if (support_ansi) then writer(ANSI.RESET) end
         else
-            local s = tostring(e)
-            if (e.type == Type.Bool) then
-                writer(ansi(STYLE.KEYWORD, s))
-            elseif (is_number_type(e.type)) then
-                writer(ansi(STYLE.NUMBER, s))
-            else
-                writer(s)
-            end
+            writer(format_any_value(e.type, e.value))
         end
         if (naked) then
             writer('\n')
         end
     end
+end
+
+function List.__tostring(self)
+    local s = ""
+    stream_value(
+        function (x)
+            s = s .. x
+        end,
+        {type=Type.List, value=self}, StreamValueFormat(false))
+    return s
+end
+
+--------------------------------------------------------------------------------
+-- Any wrapping
+--------------------------------------------------------------------------------
+-- define this one after all other types have been defined
+
+wrap = function(value)
+    local t = type(value)
+    if t == 'table' then
+        local mt = getmetatable(value)
+        if mt == List then
+            return Type.List, value
+        end
+    elseif t == 'cdata' then
+        local ct = typeof(value)
+        if istype(int8_t, ct) then
+            return Type.I8, value
+        elseif istype(int16_t, ct) then
+            return Type.I16, value
+        elseif istype(int32_t, ct) then
+            return Type.I32, value
+        elseif istype(int64_t, ct) then
+            return Type.I64, value
+        elseif istype(uint8_t, ct) then
+            return Type.U8, value
+        elseif istype(uint16_t, ct) then
+            return Type.U16, value
+        elseif istype(uint32_t, ct) then
+            return Type.U32, value
+        elseif istype(uint64_t, ct) then
+            return Type.U64, value
+        elseif istype(Symbol, ct) then
+            return Type.Symbol, value
+        end
+        local refct = reflect.typeof(value)
+        if is_char_array_ctype(refct) then
+            return Type.String, cstr(value)
+        end
+    end
+    error("unable to wrap " .. repr(value))
+end
+
+format_any_value = function(self, x)
+    if self == Type.I8 then
+        return ansi(STYLE.NUMBER, cformat("%d", x))
+    elseif self == Type.I16 then
+        return ansi(STYLE.NUMBER, cformat("%d", x))
+    elseif self == Type.I32 then
+        return ansi(STYLE.NUMBER, cformat("%d", x))
+    elseif self == Type.I64 then
+        return ansi(STYLE.NUMBER, cformat("%lld", x))
+    elseif self == Type.U8 then
+        return ansi(STYLE.NUMBER, cformat("%u", x))
+    elseif self == Type.U16 then
+        return ansi(STYLE.NUMBER, cformat("%u", x))
+    elseif self == Type.U32 then
+        return ansi(STYLE.NUMBER, cformat("%u", x))
+    elseif self == Type.U64 then
+        return ansi(STYLE.NUMBER, cformat("%llu", x))
+    elseif self == Type.Bool then
+        if x == bool(true) then
+            return ansi(STYLE.KEYWORD, "true")
+        else
+            return ansi(STYLE.KEYWORD, "false")
+        end
+    elseif self == Type.Void then
+        return ansi(STYLE.KEYWORD, "none")
+    elseif self == Type.Symbol then
+        return ansi(STYLE.SYMBOL,
+            escape_string(get_symbol_name(x), SYMBOL_ESCAPE_CHARS))
+    elseif self == Type.String then
+        return ansi(STYLE.STRING,
+            '"' .. escape_string(x, "\"") .. '"')
+    end
+    return repr(x)
 end
 
 --------------------------------------------------------------------------------
@@ -1719,7 +1903,7 @@ numbers -1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff
     \ 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33
     \ 1.0 0.0 "te\"st\n\ttest!" test
 test (1 2; 3 4; 5 6)
-(
+
 cond
     i == 0;
         print "yes"
@@ -1787,7 +1971,10 @@ local function test_ansicolors()
 
 end
 
+print(List(Any(int(1)), List(Any(int(2)), EOL)))
+
 --testf()
 --test_lexer()
 test_bangra()
 --test_ansicolors()
+

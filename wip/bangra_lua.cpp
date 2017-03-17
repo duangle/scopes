@@ -48,6 +48,8 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #include <string.h>
 #include <stdlib.h>
 #include <errno.h>
+#define STB_SPRINTF_DECORATE(name) stb_##name
+#include "external/stb_sprintf.h"
 
 #if defined __cplusplus
 extern "C" {
@@ -135,6 +137,9 @@ namespace blobs {
 #undef char
 #pragma GCC diagnostic pop
 }
+
+#define STB_SPRINTF_IMPLEMENTATION
+#include "external/stb_sprintf.h"
 
 // #pragma GCC diagnostic ignored "-Wvla-extension"
 // #pragma GCC diagnostic ignored "-Wzero-length-array"

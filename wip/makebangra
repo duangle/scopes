@@ -21,7 +21,7 @@ else
     OPT_G=-g
     OPT_O=-O0
 fi
-clang -x c -o $DIR/wip/bangra_lua.h -P -E $DIR/wip/bangra_lua.cpp \
+clang -x c -o $DIR/wip/bangra_lua.h -I$DIR -P -E $DIR/wip/bangra_lua.cpp \
 && xxd -i wip/bangra_lua.h $DIR/wip/bangra_lua.bin.h \
 && clang -c -o $DIR/coro.o $DIR/external/coro/coro.c $OPT_G $OPT_O \
 && clang -c -o $DIR/linenoise.o $DIR/external/linenoise-ng/src/linenoise.cpp -O2 \
