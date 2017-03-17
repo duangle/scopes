@@ -849,7 +849,6 @@ local function define_types(def)
 
     def('QuoteQualifier')
     def('MacroQualifier')
-    def('SpliceQualifier')
 end
 
 do
@@ -901,7 +900,6 @@ do
     end
     Type.Macro = make_qualifier_type("macro", Type.MacroQualifier)
     Type.Quote = make_qualifier_type("quote", Type.QuoteQualifier)
-    Type.Splice = make_qualifier_type("splice", Type.SpliceQualifier)
 end
 
 local function is_quote_type(_type)
@@ -912,11 +910,6 @@ end
 local function is_macro_type(_type)
     assert_type(_type)
     return _type.super == Type.MacroQualifier
-end
-
-local function is_splice_type(_type)
-    assert_type(_type)
-    return _type.super == Type.SpliceQualifier
 end
 
 --------------------------------------------------------------------------------
@@ -1916,6 +1909,19 @@ end
 -- IL OBJECTS
 --------------------------------------------------------------------------------
 
+local function verify_any_type(_type, value)
+    assert_any(value)
+    if (value.type == _type) then
+        return value.value
+    else
+        location_error("type "
+            .. ansi(STYLE.TYPE,_type.name)
+            .. " expected, got "
+            .. ansi(STYLE.TYPE,value.type.name)
+            )
+    end
+end
+
 local Builtin = class("Builtin")
 do
     local cls = Builtin
@@ -2227,9 +2233,6 @@ local function unquote(x) return unqualify(Type.QuoteQualifier, x) end
 local function macro(x) return qualify(Type.Macro, x) end
 local function unmacro(x) return unqualify(Type.MacroQualifier, x) end
 
-local function splice(x) return qualify(Type.Splice, x) end
-local function unsplice(x) return unqualify(Type.SpliceQualifier, x) end
-
 local function evaluate(argindex, frame, value)
     assert_number(argindex)
     assert_frame(frame)
@@ -2275,16 +2278,15 @@ local function call_flow(frame, cont, flow, ...)
         local param = flow.parameters[dsti]
         if param.vararg then
             -- how many parameters after this one
-            local remparams = tcount - i
+            local remparams = tcount - i - 1
             -- how many varargs to capture
             local vargsize = max(0, rcount - srci - remparams + 1)
             local argvalues = {}
             for k=srci,(srci + vargsize - 1) do
+                assert(rbuf[k])
                 argvalues[k - srci + 1] = rbuf[k]
             end
-            local arg = Any(argvalues)
-            arg.type = Type.Splice(arg.type)
-            tmpargs[dsti] = arg
+            tmpargs[dsti] = Any(argvalues)
             srci = srci + vargsize
         elseif srci <= rcount then
             tmpargs[dsti] = rbuf[srci]
@@ -2302,16 +2304,11 @@ local function call_flow(frame, cont, flow, ...)
     local wbuf = {}
     for i=1,#flow.arguments do
         local arg = flow.arguments[i]
-        if (is_splice_type(arg.type)) then
-            arg = Any(arg)
-            arg.type = arg.type.element_type
+        if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
-            if (not is_tuple_type(arg.type)) then
-                error("only tuples can be spliced")
-            end
-            local fcount = countof(arg)
-            for k=1,fcount do
-                wbuf[idx] = at(arg, Any(k))
+            local args = verify_any_type(Type.Table, arg)
+            for k=1,#args do
+                wbuf[idx] = args[k]
                 idx = idx + 1
             end
         else
@@ -2440,19 +2437,6 @@ static void setBuiltin(Table *scope, const std::string &name) {
 --------------------------------------------------------------------------------
 -- MACRO EXPANDER
 --------------------------------------------------------------------------------
-
-local function verify_any_type(_type, value)
-    assert_any(value)
-    if (value.type == _type) then
-        return value.value
-    else
-        location_error("type "
-            .. ansi(STYLE.TYPE,_type.name)
-            .. " expected, got "
-            .. ansi(STYLE.TYPE,value.type.name)
-            )
-    end
-end
 
 local function verify_list_parameter_count(expr, mincount, maxcount)
     assert_list(expr)
@@ -2901,18 +2885,6 @@ local function compile_continuation(it, dest)
     end)
 end
 
-local function compile_splice(it, dest)
-    assert_list(it)
-    assert_any(dest)
-    it = it.next
-    assert(it ~= EOL)
-
-    -- spliced values are always returned directly
-    local value = Any(compile_to_parameter(it.at))
-    value.type = Type.Splice(value.type)
-    return value
-end
-
 local function compile_implicit_call(it, dest)
     assert_list(it)
     assert_any(dest)
@@ -2927,8 +2899,9 @@ local function compile_implicit_call(it, dest)
     end
 
     if (dest.type == Type.Symbol) then
-        local next = Flow.create_continuation(dest.symbol)
-        next:append_parameter(dest.symbol)
+        local next = Flow.create_continuation(dest.value)
+        local param = next:append_parameter(dest.value)
+        param.vararg = true
         -- patch dest to an actual function
         args[1] = Any(next)
         builder.br(args)
@@ -3062,7 +3035,9 @@ wrap = function(value)
         end
     elseif t == 'cdata' then
         local ct = typeof(value)
-        if istype(int8_t, ct) then
+        if istype(bool, ct) then
+            return Type.Bool, value
+        elseif istype(int8_t, ct) then
             return Type.I8, value
         elseif istype(int16_t, ct) then
             return Type.I16, value
@@ -3142,6 +3117,15 @@ local function wrap_simple_builtin(f)
     end
 end
 
+local b_true = bool(true)
+local function builtin_branch(frame, cont, self, cond, then_cont, else_cont)
+    if verify_any_type(Type.Bool, cond) == b_true then
+        call(frame, cont, then_cont)
+    else
+        call(frame, cont, else_cont)
+    end
+end
+
 local function builtin_print(...)
     local writer = stdout_writer
     for i=1,select('#', ...) do
@@ -3196,14 +3180,18 @@ local function init_globals()
     decl_builtin("cc/call", SpecialForm(compile_contcall))
     decl_builtin(Symbol.ContinuationForm,
         SpecialForm(compile_continuation))
-    decl_builtin("splice", SpecialForm(compile_splice))
     decl_builtin(Symbol.DoForm, SpecialForm(compile_do))
 
     decl_builtin_macro("do", expand_do)
     decl_builtin_macro("fn/cc", expand_continuation)
     decl_builtin_macro("syntax-extend", expand_syntax_extend)
 
+    decl_builtin("branch", builtin_branch)
+
     decl_builtin("print", wrap_simple_builtin(builtin_print))
+
+    decl_builtin("true", bool(true))
+    decl_builtin("false", bool(false))
 end
 
 init_globals()
@@ -3216,6 +3204,9 @@ init_globals()
 how to implement type dependent operators:
 
 bind-type-op! type (symbol +) func
+    -->
+        typemap[type][(symbol +)] = func
+
 
 macro: + a b
 evaluates to:
@@ -3230,6 +3221,14 @@ local macro_test = [[
 print 1 2 3
 print "hello world"
 ((fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!")
+print
+    branch true
+        fn/cc (_)
+            print "true!"
+            _ 1 2 3
+        fn/cc (_)
+            print "false!"
+            _ 4 5 6
 ]]
 
 local lexer_test = [[
@@ -3259,7 +3258,6 @@ function test (a b)
 ]]
 
 local function test_lexer()
-    collectgarbage("stop")
     local lexer = Lexer.init(new(rawstring, macro_test), null, "demo.b")
     local result,expr = parse(lexer)
     if result then
@@ -3283,29 +3281,27 @@ local function test_lexer()
 end
 
 local function test_bangra()
-    collectgarbage("stop")
     local src = SourceFile.open("bangra.b")
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, "bangra.b")
     local result,expr = parse(lexer)
     if result then
-        stream_value(stdout_writer, expr, StreamValueFormat(true))
+        --stream_value(stdout_writer, expr, StreamValueFormat(true))
+        local result,expexpr = expand_root(verify_any_type(Type.List, expr))
+        if result then
+            --stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
+            local func = compile_root(expexpr, Symbol("main"))
+            execute(
+                function(...)
+                    print(...)
+                end,
+                func)
+        else
+            print(expexpr)
+        end
     else
         print(expr)
     end
-end
-
-local function testf()
-    local q = "hello " .. "\\n\\\"world!"
-    local s = new(c_int8vla_t, #q+1, q);
-    C.unescape_string(s)
-    print(cstr(s), C.strlen(s))
-    print(q)
-
-    local sz = C.escape_string(null, s, C.strlen(s), '"')
-    local ss = new(c_int8vla_t, sz+1)
-    C.escape_string(ss, s, C.strlen(s), '"')
-    print(cstr(ss))
 end
 
 local function test_ansicolors()
@@ -3325,7 +3321,6 @@ local function test_list()
 end
 
 --test_list()
---testf()
 test_lexer()
 --test_bangra()
 --test_ansicolors()
