@@ -509,6 +509,9 @@ local uint64_t = typeof('uint64_t')
 local int = typeof('int')
 local bool = typeof('bool')
 
+local float = typeof('float')
+local double = typeof('double')
+
 local size_t = typeof('size_t')
 
 local p_int8_t = typeof('$ *', int8_t)
@@ -1009,30 +1012,6 @@ local get_token_name = make_get_enum_name(Token)
 
 local token_terminators = new(rawstring, "()[]{}\"';#")
 
---[[
-typedef struct _Lexer {
-    const char *path;
-    const char *input_stream;
-    const char *eof;
-    const char *cursor;
-    const char *next_cursor;
-    // beginning of line
-    const char *line;
-    // next beginning of line
-    const char *next_line;
-
-    int lineno;
-    int next_lineno;
-
-    int base_offset;
-
-    int token;
-    const char *string;
-    int string_len;
-    Any number;
-} Lexer;
-]]
-
 local Lexer = {}
 do
     Lexer.__index = Lexer
@@ -1128,11 +1107,15 @@ do
         self.string_len = self.next_cursor - self.cursor
     end
     local pp_int8_t = typeof('$*[1]', int8_t)
-    local function make_read_number(desttype, f)
+    local function make_read_number(srctype, f)
+        local atype = typeof('$[$]', srctype, 1)
+        local rtype = typeof('$&', srctype)
         return function (self)
             local cendp = new(pp_int8_t)
             local errno = 0
-            self.number = Any(desttype, f(self.cursor, cendp, 0))
+            local srcval = new(atype)
+            f(srcval, self.cursor, cendp, 0)
+            self.number = Any(cast(srctype, cast(rtype, srcval)))
             local cend = cendp[0]
             if ((cend == self.cursor)
                 or (errno == C._ERANGE)
@@ -1145,11 +1128,11 @@ do
             return true
         end
     end
-    cls.read_int64 = make_read_number(Type.I64, C.strtoll)
-    cls.read_uint64 = make_read_number(Type.U64, C.strtoull)
-    cls.read_real32 = make_read_number(Type.R32,
-        function (cursor, cendp, base)
-            return C.strtof(cursor, cendp)
+    cls.read_int64 = make_read_number(int64_t, C.bangra_strtoll)
+    cls.read_uint64 = make_read_number(uint64_t, C.bangra_strtoull)
+    cls.read_real32 = make_read_number(float,
+        function (dest, cursor, cendp, base)
+            return C.bangra_strtof(dest, cursor, cendp)
         end)
     function cls:next_token()
         self.lineno = self.next_lineno
@@ -1845,6 +1828,10 @@ wrap = function(value)
             return Type.U32, value
         elseif istype(uint64_t, ct) then
             return Type.U64, value
+        elseif istype(float, ct) then
+            return Type.R32, value
+        elseif istype(double, ct) then
+            return Type.R64, value
         elseif istype(Symbol, ct) then
             return Type.Symbol, value
         end
@@ -1873,6 +1860,10 @@ format_any_value = function(self, x)
         return ansi(STYLE.NUMBER, cformat("%u", x))
     elseif self == Type.U64 then
         return ansi(STYLE.NUMBER, cformat("%llu", x))
+    elseif self == Type.R32 then
+        return ansi(STYLE.NUMBER, cformat("%g", x))
+    elseif self == Type.R64 then
+        return ansi(STYLE.NUMBER, cformat("%g", x))
     elseif self == Type.Bool then
         if x == bool(true) then
             return ansi(STYLE.KEYWORD, "true")
@@ -1971,10 +1962,8 @@ local function test_ansicolors()
 
 end
 
-print(List(Any(int(1)), List(Any(int(2)), EOL)))
-
 --testf()
---test_lexer()
-test_bangra()
+test_lexer()
+--test_bangra()
 --test_ansicolors()
 

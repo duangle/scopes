@@ -91,6 +91,10 @@ enum {
 int unescape_string(char *buf);
 int escape_string(char *buf, const char *str, int strcount, const char *quote_chars);
 
+void bangra_strtof(float *v, const char *str, char **str_end );
+void bangra_strtoll(long long int *v, const char* str, char** endptr, int base);
+void bangra_strtoull(unsigned long long int *v, const char* str, char** endptr, int base);
+
 #if defined __cplusplus
 }
 #endif
@@ -118,6 +122,8 @@ int escape_string(char *buf, const char *str, int strcount, const char *quote_ch
 #include <stdarg.h>
 #include <stdlib.h>
 #include <libgen.h>
+
+#include <cstdlib>
 
 extern "C" {
 #include <lua.h>
@@ -154,6 +160,16 @@ namespace blobs {
 //------------------------------------------------------------------------------
 // UTILITIES
 //------------------------------------------------------------------------------
+
+void bangra_strtof(float *v, const char *str, char **str_end ) {
+    *v = std::strtof(str, str_end);
+}
+void bangra_strtoll(long long int *v, const char* str, char** endptr, int base) {
+    *v = std::strtoll(str, endptr, base);
+}
+void bangra_strtoull(unsigned long long int *v, const char* str, char** endptr, int base) {
+    *v = std::strtoull(str, endptr, base);
+}
 
 static char parse_hexchar(char c) {
     if ((c >= '0') && (c <= '9')) {
