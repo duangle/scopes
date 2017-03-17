@@ -22,6 +22,19 @@ SOFTWARE.
 --]]
 
 --------------------------------------------------------------------------------
+-- verify luajit was built with the right flags
+
+do
+
+    local t = setmetatable({count=10}, {
+        __len = function(x)
+            return x.count
+        end})
+    -- the flag can be uncommented in luajit/src/Makefile
+    assert(#t == 10, "luajit must be built with -DLUAJIT_ENABLE_LUA52COMPAT")
+end
+
+--------------------------------------------------------------------------------
 -- strict.lua
 --------------------------------------------------------------------------------
 
@@ -474,6 +487,7 @@ local WIN32 = (jit.os == "Windows")
 local ord = string.byte
 local tochar = string.char
 local format = string.format
+local substr = string.sub
 local null = nil
 
 local traceback = debug.traceback
@@ -607,6 +621,25 @@ local function escape_string(s, quote_chars)
     C.escape_string(es, s, len, quote_chars)
     return cstr(es)
 end
+
+local function endswith(str,tail)
+   return tail=='' or substr(str,-(#tail))==tail
+end
+
+local function assert_luatype(ltype, x)
+    if type(x) == ltype then
+        return x
+    else
+        error(ltype .. " expected, got " .. repr(x))
+    end
+end
+
+local function assert_number(x) assert_luatype("number", x) end
+local function assert_string(x) assert_luatype("string", x) end
+local function assert_table(x) assert_luatype("table", x) end
+local function assert_boolean(x) assert_luatype("boolean", x) end
+local function assert_cdata(x) assert_luatype("cdata", x) end
+
 
 --------------------------------------------------------------------------------
 -- ANSI COLOR FORMATTING
@@ -756,14 +789,9 @@ end
 -- TYPE
 --------------------------------------------------------------------------------
 
-cdef[[
-typedef struct _Type {
-    int value;
-} Type;
-]]
-local Type
+local Type = {}
 local function assert_type(x)
-    if type(x) == "cdata" and typeof(x) == Type then
+    if type(x) == "table" and getmetatable(x) == Type then
         return x
     else
         error("type expected, got " .. repr(x))
@@ -771,6 +799,7 @@ local function assert_type(x)
 end
 local function define_types(def)
     def('Void')
+    def('Any')
 
     def('Bool')
 
@@ -790,125 +819,102 @@ local function define_types(def)
     def('Symbol')
     def('List')
     def('String')
+
+    def('Parameter')
+    def('Flow')
+    def('Table')
 end
 
 do
-    local typename = {}
-    local typemembers = {}
-    local cls = {}
-    local function eq(self, other)
-        return self.value == other.value
-    end
-    local function type_tostring(self)
+    Type.__index = Type
+    local idx = 0
+
+    local cls = Type
+    setmetatable(Type, {
+        __call = function(cls, name)
+            local k = idx
+            idx = idx + 1
+            return setmetatable({
+                name = name,
+                index = idx
+            }, Type)
+        end
+    })
+
+    function cls:__tostring()
         return ansi(STYLE.KEYWORD, "type")
             .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.TYPE, typename[self.value])
+            .. ansi(STYLE.TYPE, self.name)
             .. ansi(STYLE.COMMENT, ">")
     end
-    function cls:get_typename(value)
-        return typename[self.value]
-    end
-    Type = ffi.metatype('Type', {
-        __index = cls,
-        __eq = eq,
-        __tostring = type_tostring })
 
-    local idx = 0
-    define_types(function(name, member)
-        cls[name] = Type(idx)
-        typename[idx] = string.lower(name)
-        typemembers[idx] = member
-        idx = idx + 1
+    define_types(function(name)
+        cls[name] = Type(string.lower(name))
     end)
-end
-
-local is_number_type
-do
-    local number_types = set({
-        Type.I8, Type.I16, Type.I32, Type.I64,
-        Type.U8, Type.U16, Type.U32, Type.U64,
-        Type.R32, Type.R64
-    })
-    is_number_type = function(t)
-        assert(istype(Type, t))
-        return number_types[tostring(t)] ~= null
-    end
 end
 
 --------------------------------------------------------------------------------
 -- SYMBOL
 --------------------------------------------------------------------------------
 
-local name_symbol_map = {}
-local symbol_name_map = {}
-local get_symbol_name
-
 local SYMBOL_ESCAPE_CHARS = "[]{}()\""
 
-cdef[[
-typedef struct _Symbol {
-    int value;
-} Symbol;
-]]
-local Symbol
+local Symbol = {__class="Symbol"}
 local function assert_symbol(x)
-    if type(x) == "cdata" and typeof(x) == Symbol then
+    if type(x) == "table" and getmetatable(x) == Symbol then
         return x
     else
-        error("type expected, got " .. repr(x))
+        error("symbol expected, got " .. repr(x))
     end
 end
 do
-    local cls = {}
-    local function eq(self, other)
-        return self.value == other.value
-    end
-    local function symbol_tostring(self)
+    Symbol.__index = Symbol
+
+    local next_symbol_id = 0
+    local name_symbol_map = {}
+    local cls = Symbol
+    setmetatable(Symbol, {
+        __call = function(cls, name)
+            assert_string(name)
+            local sym = name_symbol_map[name]
+            if (sym == null) then
+                sym = setmetatable({name=name, index=next_symbol_id},Symbol)
+                next_symbol_id = next_symbol_id + 1
+                name_symbol_map[name] = sym
+            end
+            return sym
+        end
+    })
+    function cls:__tostring()
         return
             ansi(STYLE.KEYWORD, "symbol")
             .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.SYMBOL, get_symbol_name(self))
+            .. ansi(STYLE.SYMBOL, self.name)
             .. ansi(STYLE.COMMENT, ">")
     end
-    Symbol = ffi.metatype('Symbol', {
-        __index = cls,
-        __eq = eq,
-        __tostring = symbol_tostring })
 end
 
-local next_symbol_id = 0
-local function get_symbol(name)
-    assert(type(name) == 'string')
-    local sym = name_symbol_map[name]
-    if (sym == null) then
-        sym = next_symbol_id
-        next_symbol_id = next_symbol_id + 1
-        name_symbol_map[name] = sym
-        symbol_name_map[sym] = name
-    end
-    return Symbol(sym)
+local function define_symbols(def)
+    def({Unnamed=''})
+    def({DoForm='form:do'})
+    def({ContinuationForm='form:fn/cc'})
+
+    def({ListWildcard='#list'})
+    def({SymbolWildcard='#symbol'})
+
+    def({ScopeParent='#parent'})
 end
 
-get_symbol_name = function(sym)
-    assert_symbol(sym)
-    local name = symbol_name_map[sym.value]
-    assert(name ~= null)
-    return name
+do
+    define_symbols(function(kv)
+        local key, value = next(kv)
+        Symbol[key] = Symbol(value)
+    end)
 end
-
-local SYM_Unnamed = get_symbol("")
 
 --------------------------------------------------------------------------------
 -- ANY
 --------------------------------------------------------------------------------
-
-local function assert_ctype(x)
-    if type(x) == "cdata" then
-        return x
-    else
-        error("ctype expected, got " .. repr(x))
-    end
-end
 
 local wrap
 local format_any_value
@@ -925,7 +931,6 @@ setmetatable(Any, {
             local value = arg2
         end
         assert_type(_type)
-        --assert_ctype(x)
         return setmetatable({
             type = _type,
             value = value
@@ -937,7 +942,7 @@ function Any.__tostring(self)
         .. ansi(STYLE.COMMENT, "<")
         .. format_any_value(self.type, self.value)
         .. ansi(STYLE.OPERATOR, ":")
-        .. ansi(STYLE.TYPE, self.type:get_typename())
+        .. ansi(STYLE.TYPE, self.type.name)
         .. ansi(STYLE.COMMENT, ">")
 end
 
@@ -949,7 +954,23 @@ local function assert_any(x)
     end
 end
 
+local function assert_any_type(_type, value)
+    assert_any(value)
+    if (value.type == _type) then
+        return value.value
+    else
+        error("type "
+            .. ansi(STYLE.TYPE,_type.name)
+            .. " expected, got "
+            .. ansi(STYLE.TYPE,value.type.name)
+            )
+    end
+end
+
 local none = Any(Type.Void, NULL)
+local function is_none(value)
+    return value.type == Type.Void
+end
 
 --------------------------------------------------------------------------------
 -- ANCHOR
@@ -1182,7 +1203,7 @@ do
     function cls:get_symbol()
         local dest = zstr_from_buffer(self.string, self.string_len)
         local size = C.unescape_string(dest)
-        return Any(get_symbol(cstr(zstr_from_buffer(dest, size))))
+        return Any(Symbol(cstr(zstr_from_buffer(dest, size))))
     end
     function cls:get_string()
         local dest = zstr_from_buffer(self.string + 1, self.string_len - 2)
@@ -1296,7 +1317,7 @@ end
 -- S-EXPR PARSER
 --------------------------------------------------------------------------------
 
-local EOL = {}
+local EOL = {count=0}
 local List = {}
 setmetatable(EOL, List)
 local function assert_list(x)
@@ -1307,8 +1328,26 @@ local function assert_list(x)
     end
 end
 do
-    List.__index = List
     List.__class = "List"
+
+    function List:__len()
+        return self.count
+    end
+
+    function List:__index(key)
+        local value = rawget(self, key)
+        if value == null and self == EOL then
+            error("attempting to access list terminator")
+        end
+    end
+
+    function List.from_args(...)
+        local l = EOL
+        for i=select('#',...),1,-1 do
+            l = List(select(i, ...), l)
+        end
+        return l
+    end
 
     setmetatable(List, {
         __call = function (cls, at, next)
@@ -1332,8 +1371,11 @@ end
 -- (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
 -- this is the mutating version; input lists are modified, direction is inverted
 local function reverse_list_inplace(l, eol, cat_to)
+    assert_list(l)
     eol = eol or EOL
     cat_to = cat_to or EOL
+    assert_list(eol)
+    assert_list(cat_to)
     local next = cat_to
     local count = 0
     if (cat_to ~= EOL) then
@@ -1768,7 +1810,7 @@ local function stream_value(writer, e, format)
         end
     else
         if (e.type == Type.Symbol) then
-            local name = get_symbol_name(e.value)
+            local name = e.value.name
             local style =
                 (format.keywords[name] and STYLE.KEYWORD)
                 or (format.functions[name] and STYLE.FUNCTION)
@@ -1799,6 +1841,425 @@ function List.__tostring(self)
 end
 
 --------------------------------------------------------------------------------
+-- IL OBJECTS
+--------------------------------------------------------------------------------
+
+local Parameter = class("Parameter")
+do
+    local cls = Parameter
+    function cls:init(name)
+        assert_symbol(name)
+        self.flow = null
+        self.index = -1
+        self.name = name
+        self.type = Type.Any
+        self.vararg = endswith(name.name, "...")
+    end
+    function cls:__tostring()
+        return
+            (function()
+                if self.vararg then
+                    return ansi(STYLE.KEYWORD, "parameter...")
+                else
+                    return ansi(STYLE.KEYWORD, "parameter")
+                end
+            end)()
+            .. ansi(STYLE.COMMENT, "<")
+            .. ansi(STYLE.SYMBOL, self.name.name)
+            .. ansi(STYLE.OPERATOR, ":")
+            .. ansi(STYLE.TYPE, self.type.name)
+            .. ansi(STYLE.COMMENT, ">")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- SCOPES
+--------------------------------------------------------------------------------
+
+local function assert_scope(x)
+    if type(x) == "table" and getmetatable(x) == null then
+        return x
+    else
+        error("plain table expected, not " .. repr(x))
+    end
+end
+
+local function new_scope(scope)
+    local self = {}
+    if scope ~= nil then
+        assert_scope(scope)
+        self[Symbol.ScopeParent] = Any(scope)
+    end
+    return self
+end
+
+local function set_local(scope, name, value)
+    assert_scope(scope)
+    assert_symbol(name)
+    assert_any(value)
+    scope[name] = value
+end
+
+local function get_parent(scope)
+    assert_scope(scope)
+    local parent = scope[Symbol.ScopeParent]
+    if parent then
+        return parent.value
+    end
+end
+
+local function get_local(scope, name)
+    assert_scope(scope)
+    assert_symbol(name)
+    while scope do
+        local result = scope[name]
+        if result then
+            return result
+        end
+        scope = get_parent(scope)
+    end
+end
+
+--[[
+template<BuiltinFlowFunction func>
+static void setBuiltinMacro(Table *scope, const std::string &name) {
+    assert(scope);
+    auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
+    setLocal(scope, sym, macro(wrap_ptr(TYPE_BuiltinFlow, (void *)func)));
+}
+
+template<SpecialFormFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    assert(scope);
+    auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
+    setLocal(scope, sym,
+        wrap_ptr(TYPE_SpecialForm, (void *)func));
+}
+
+template<BuiltinFlowFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    assert(scope);
+    auto sym = get_symbol(name);
+    set_ptr_symbol((void *)func, sym);
+    setLocal(scope, sym,
+        wrap_ptr(TYPE_BuiltinFlow, (void *)func));
+}
+
+template<BuiltinFunction func>
+static void setBuiltin(Table *scope, const std::string &name) {
+    setBuiltin< builtin_call<func> >(scope, name);
+}
+]]
+
+--------------------------------------------------------------------------------
+-- MACRO EXPANDER
+--------------------------------------------------------------------------------
+
+local function verify_any_type(_type, value)
+    assert_any(value)
+    if (value.type == _type) then
+        return value.value
+    else
+        location_error("type "
+            .. ansi(STYLE.TYPE,_type.name)
+            .. " expected, got "
+            .. ansi(STYLE.TYPE,value.type.name)
+            )
+    end
+end
+
+local function verify_list_parameter_count(expr, mincount, maxcount)
+    assert_list(expr)
+    if ((mincount <= 0) and (maxcount == -1)) then
+        return true
+    end
+    local argcount = #expr - 1
+
+    if ((maxcount >= 0) and (argcount > maxcount)) then
+        location_error(
+            format("excess argument. At most %i arguments expected", maxcount))
+        return false
+    end
+    if ((mincount >= 0) and (argcount < mincount)) then
+        location_error(
+            format("at least %i arguments expected", mincount))
+        return false
+    end
+    return true;
+end
+
+local function verify_at_parameter_count(topit, mincount, maxcount)
+    assert_list(expr)
+    assert(topit ~= EOL)
+    local val = topit.at
+    verify_any_type(Type.List, val)
+    verify_list_parameter_count(val.value, mincount, maxcount)
+end
+
+--------------------------------------------------------------------------------
+
+-- new descending approach for compiler to optimize tail calls:
+-- 1. each function is called with a flow node as target argument; it represents
+--    a continuation that should be called with the resulting value.
+
+local globals = new_scope()
+
+--static Cursor expand (const Table *env, const List *topit);
+--static Any compile (const Any &expr, const Any &dest);
+local expand
+local compile
+
+local function toparameter(env, value)
+    assert_scope(env)
+    local sym
+    if getmetatable(value) == Symbol then
+        sym = value
+    elseif getmetatable(value) == Parameter then
+        return value
+    elseif getmetatable(value) == Any then
+        if (value.type == Type.Parameter) then
+            return value
+        else
+            assert_any_type(Type.Symbol)
+            sym = value.value
+        end
+    end
+    assert_symbol(sym)
+    local param = Any(Parameter(sym))
+    set_local(env, sym, param)
+    return param
+end
+
+local function expand_expr_list(env, it)
+    assert_scope(env)
+    assert_list(it)
+    local l = EOL
+    while (it ~= EOL) do
+        local nextlist,nextscope = expand(env, it)
+        if (nextlist == EOL) then
+            break
+        end
+        l = List(nextlist.at, l)
+        it = nextlist.next
+        env = nextscope
+    end
+    return reverse_list_inplace(l)
+end
+
+--[[
+template <Cursor (*ExpandFunc)(const Table *, const List *)>
+B_FUNC(wrap_expand_call) {
+    builtin_checkparams(B_RCOUNT(S), 2, 2, 2);
+    auto topit = extract_list(B_GETARG(S, 0));
+    auto env = extract_table(B_GETARG(S, 1));
+    auto cur = ExpandFunc(env, topit);
+    Any out[] = { wrap(cur.list), wrap(cur.scope) };
+    B_CALL(S,
+        const_none,
+        B_GETCONT(S),
+        wrap(out, 2));
+}
+]]
+
+local function expand_do(env, topit)
+    assert_scope(env)
+    assert_list(topit)
+
+    local it = verify_any_type(Type.List, topit.at)
+
+    local subenv = new_scope(env)
+    return
+        List(
+            quote(Any(List(
+                get_local(globals, Symbol.DoForm) or none,
+                expand_expr_list(subenv, it)))),
+            topit.next), env
+end
+
+local function expand_continuation(env, topit)
+    assert_scope(env)
+    assert_list(topit)
+    verify_at_parameter_count(topit, 1, -1)
+
+    local it = verify_any_type(Type.List, topit.at)
+    it = it.next
+
+    local sym
+    assert(it ~= EOL)
+    if (it.at.type == Type.Symbol) then
+        sym = it.at
+        it = it.next
+        assert(it ~= EOL)
+    else
+        sym = Any(Symbol.Unnamed)
+    end
+
+    local expr_parameters = it.at
+    it = it.next
+
+    local subenv = new_scope(env)
+
+    local outargs = EOL
+    local params = verify_any_type(Type.List, expr_parameters)
+    local param = params
+    while (param ~= EOL) do
+        outargs = List(toparameter(subenv, param.at), outargs)
+        param = param.next
+    end
+
+    return
+        List(
+            quote(Any(
+                List(
+                    get_local(globals, Symbol.ContinuationForm) or none,
+                    List(
+                        sym,
+                        List(
+                            Any(reverse_list_inplace(outargs)),
+                            expand_expr_list(subenv, it)))))),
+            topit.next), env
+end
+
+local function expand_syntax_extend(env, topit)
+    local cur_list, cur_env = expand_continuation(env, topit)
+
+    local fun = compile(unquote(cur_list.at), none)
+    return cur_list.next, execute(function(expr_env)
+        return verify_any_type(Type.Table, expr_env)
+    end, fun, Any(env))
+end
+
+local function expand_wildcard(env, handler, topit)
+    assert_scope(env)
+    assert_any(handler)
+    assert_list(topit)
+    return execute(function(result)
+        if (is_none(result)) then
+            return EOL
+        end
+        return verify_any_type(Type.List, result)
+    end, handler, Any(topit), Any(env))
+end
+
+local function expand_macro(env, handler, topit)
+    assert_scope(env)
+    assert_any(handler)
+    assert_list(topit)
+    return execute(function(result_list, result_scope)
+        if (is_none(result_list)) then
+            return EOL
+        end
+        return verify_any_type(Type.List, result_list),
+            result_scope and verify_any_type(Type.Table, result_scope)
+    end, handler,  Any(topit), Any(env))
+end
+
+local function expand(env, topit)
+    assert_scope(env)
+    assert_list(topit)
+    local result = none
+::process::
+    assert(topit ~= EOL)
+    local expr = topit.at
+    if (is_quote_type(expr.type)) then
+        -- remove qualifier and return as-is
+        return List(unquote(expr), topit.next), env
+    elseif (expr.type == Type.List) then
+        local list = expr.value
+        if (list == EOL) then
+            location_error("expression is empty")
+        end
+
+        local head = list.at
+
+        -- resolve symbol
+        if (head.type == Type.Symbol) then
+            head = get_local(env, head.value) or none
+        end
+
+        if (is_macro_type(head.type)) then
+            local result_list,result_env = expand_macro(env, unmacro(head), topit)
+            if (result_list ~= EOL) then
+                topit = result_list
+                env = result_env
+                goto process
+            elseif result_scope then
+                return EOL, env
+            end
+        end
+
+        local default_handler = get_local(env, Symbol.ListWildcard)
+        if not is_none(default_handler) then
+            local result = expand_wildcard(env, default_handler, topit)
+            if result then
+                topit = result
+                goto process
+            end
+        end
+
+        local it = verify_any_type(Type.List, topit.at)
+        result = Any(expand_expr_list(env, it))
+        topit = topit.next
+    elseif expr.type == Type.Symbol then
+        local value = expr.value
+        result = get_local(env, value)
+        if result == null then
+            local default_handler = get_local(env, Symbol.SymbolWildcard)
+            if (default_handler.type ~= Type.Void) then
+                local result = expand_wildcard(env, default_handler, topit)
+                if result then
+                    topit = result
+                    goto process
+                end
+            end
+            location_error("no such symbol in scope: '%s'", value.name)
+        end
+        topit = topit.next
+    else
+        result = expr
+        topit = topit.next
+    end
+    return List(result, topit), env
+end
+
+--[[
+static Any builtin_expand(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 2, 2);
+    auto expr_eval = extract_list(args[0]);
+    auto scope = args[1];
+    verifyValueKind(TYPE_Table, scope);
+
+    auto retval = expand(scope.table, expr_eval);
+    Any out[] = {wrap(retval.list), wrap(retval.scope)};
+    return wrap(out, 2);
+}
+
+static Any builtin_set_globals(const Any *args, size_t argcount) {
+    builtin_checkparams(argcount, 1, 1);
+    auto scope = args[0];
+    verifyValueKind(TYPE_Table, scope);
+
+    globals = scope.table;
+    return const_none;
+}
+
+static B_FUNC(builtin_set_exception_handler) {
+    builtin_checkparams(B_ARGCOUNT(S), 1, 1);
+    auto old_exception_handler = S->exception_handler;
+    auto func = B_GETARG(S, 0);
+    S->exception_handler = func;
+    B_CALL(S, const_none, B_GETCONT(S), old_exception_handler);
+}
+
+static B_FUNC(builtin_get_exception_handler) {
+    builtin_checkparams(B_ARGCOUNT(S), 0, 0);
+    B_CALL(S, const_none, B_GETCONT(S), S->exception_handler);
+}
+]]
+
+--------------------------------------------------------------------------------
 -- Any wrapping
 --------------------------------------------------------------------------------
 -- define this one after all other types have been defined
@@ -1809,6 +2270,10 @@ wrap = function(value)
         local mt = getmetatable(value)
         if mt == List then
             return Type.List, value
+        elseif mt == Parameter then
+            return Type.Parameter, value
+        elseif mt == Symbol then
+            return Type.Symbol, value
         end
     elseif t == 'cdata' then
         local ct = typeof(value)
@@ -1832,8 +2297,6 @@ wrap = function(value)
             return Type.R32, value
         elseif istype(double, ct) then
             return Type.R64, value
-        elseif istype(Symbol, ct) then
-            return Type.Symbol, value
         end
         local refct = reflect.typeof(value)
         if is_char_array_ctype(refct) then
@@ -1962,8 +2425,16 @@ local function test_ansicolors()
 
 end
 
+local function test_list()
+    local l = List(Any(int(5)), EOL)
+    print(l.next)
+    --print(EOL.next)
+end
+
+--test_list()
 --testf()
-test_lexer()
---test_bangra()
+--test_lexer()
+test_bangra()
 --test_ansicolors()
+
 
