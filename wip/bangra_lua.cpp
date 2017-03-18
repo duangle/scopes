@@ -106,6 +106,7 @@ bool bangra_r64_lt(double a, double b);
 bool bangra_r64_gt(double a, double b);
 
 
+
 #if defined __cplusplus
 }
 #endif

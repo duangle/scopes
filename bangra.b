@@ -2,11 +2,11 @@
 # the bangra executable looks for a boot file at
 # path/to/executable.b and, if found, executes it.
 
-syntax-extend stage-0 (_ scope)
-    set-key! scope
+syntax-extend stage-0 (_ env)
+    set-scope-symbol! env
         symbol "quote"
         block-scope-macro
-            fn/cc quote (return expr scope)
+            fn/cc quote (return expr env)
                 call
                     fn/cc (_ args)
                         return
@@ -24,12 +24,12 @@ syntax-extend stage-0 (_ scope)
                                             fn/cc ()
                                                 args
                                 slice expr 1
-                            scope
+                            env
                     slice (@ expr 0) 1
-    set-key! scope
+    set-scope-symbol! env
         symbol "set!"
         block-scope-macro
-            fn/cc set! (return expr scope)
+            fn/cc set! (return expr env)
                 call
                     fn/cc (_ name)
                         call
@@ -51,155 +51,154 @@ syntax-extend stage-0 (_ scope)
                                                         escape param
                                                 slice (@ expr 0) 2
                                         slice expr 1
-                                    scope
-                            find-scope-symbol scope name name
+                                    env
+                            get-scope-symbol env name name
                     @ (@ expr 0) 1
-    scope
+    env
 
-syntax-extend stage-1 (_ scope)
-    .. scope
-        tableof
-            tupleof
-                quote symbol?
-                fn/cc symbol? (_ x)
-                    == (typeof x) symbol
-            tupleof
-                quote list?
-                fn/cc list? (_ x)
-                    == (typeof x) list
-            tupleof
-                quote none?
-                fn/cc none? (_ x)
-                    == x none
-            tupleof
-                quote empty?
-                fn/cc empty? (_ x)
-                    == (countof x) 0
-            tupleof
-                quote key?
-                fn/cc key? (_ x y)
-                    != (@ x y) none
-            tupleof
-                quote load
-                fn/cc load (_ path)
-                    eval
-                        list-load path
-                        globals;
-                        path
-            tupleof
-                quote macro
-                fn/cc macro (_ f)
-                    block-scope-macro
-                        fn/cc (_ expr scope)
-                            tupleof
+syntax-extend stage-1 (_ env)
+    set-scope-symbol! env
+        quote symbol?
+        fn/cc symbol? (_ x)
+            == (typeof x) symbol
+    set-scope-symbol! env
+        quote list?
+        fn/cc list? (_ x)
+            == (typeof x) list
+    set-scope-symbol! env
+        quote none?
+        fn/cc none? (_ x)
+            == x none
+    set-scope-symbol! env
+        quote empty?
+        fn/cc empty? (_ x)
+            == (countof x) 0
+    set-scope-symbol! env
+        quote key?
+        fn/cc key? (_ x y)
+            != (@ x y) none
+    set-scope-symbol! env
+        quote load
+        fn/cc load (_ path)
+            eval
+                list-load path
+                globals;
+                path
+    set-scope-symbol! env
+        quote macro
+        fn/cc macro (_ f)
+            block-scope-macro
+                fn/cc (return expr env)
+                    return
+                        cons
+                            f (@ expr 0) env
+                            slice expr 1
+                        env
+    set-scope-symbol! env
+        quote block-macro
+        fn/cc macro (_ f)
+            block-scope-macro
+                fn/cc (return expr env)
+                    return
+                        f expr env
+                        env
+    set-scope-symbol! env
+        quote dump-syntax
+        block-scope-macro
+            fn/cc dump-syntax (return expr env)
+                return
+                    call
+                        fn/cc (_ e)
+                            dump
+                                @ (@ e 0) 0
+                            cons
+                                escape
+                                    @ (@ e 0) 0
+                                slice e 1
+                        @
+                            expand
                                 cons
-                                    f (@ expr 0) scope
+                                    slice (@ expr 0) 1
                                     slice expr 1
-                                scope
-            tupleof
-                quote block-macro
-                fn/cc macro (_ f)
-                    block-scope-macro
-                        fn/cc (_ expr scope)
-                            tupleof
-                                f expr scope
-                                scope
-            tupleof
-                quote dump-syntax
-                block-scope-macro
-                    fn/cc dump-syntax (_ expr scope)
-                        tupleof
-                            call
-                                fn/cc (_ e)
-                                    dump
-                                        @ (@ e 0) 0
-                                    cons
-                                        escape
-                                            @ (@ e 0) 0
-                                        slice e 1
-                                @
-                                    expand
+                                env
+                            0
+                    env
+    set-scope-symbol! env
+        # a lofi version of let so we get some sugar early
+        quote let
+        block-scope-macro
+            fn/cc let (return expr env)
+                branch
+                    == (typeof (@ (@ expr 0) 2)) symbol
+                    fn/cc () none
+                    fn/cc ()
+                        error "syntax: let <var> = <expr>"
+                branch
+                    == (@ (@ expr 0) 2) (quote =)
+                    fn/cc () none
+                    fn/cc ()
+                        error "syntax: let <var> = <expr>"
+                return
+                    call
+                        fn/cc (_ param-name rest)
+                            list
+                                cons
+                                    cons fn/cc
                                         cons
-                                            slice (@ expr 0) 1
-                                            slice expr 1
-                                        scope
-                                    0
-                            scope
-            tupleof
-                # a lofi version of let so we get some sugar early
-                quote let
-                block-scope-macro
-                    fn/cc let (_ expr scope)
-                        branch
-                            == (typeof (@ (@ expr 0) 2)) symbol
-                            fn/cc () none
-                            fn/cc ()
-                                error "syntax: let <var> = <expr>"
-                        branch
-                            == (@ (@ expr 0) 2) (quote =)
-                            fn/cc () none
-                            fn/cc ()
-                                error "syntax: let <var> = <expr>"
-                        tupleof
-                            call
-                                fn/cc (_ param-name rest)
-                                    list
-                                        cons
-                                            cons fn/cc
-                                                cons
-                                                    list
-                                                        parameter (quote _)
-                                                        param-name
-                                                    slice expr 1
                                             list
-                                                cons do
-                                                    slice (@ expr 0) 3
-                                @ (@ expr 0) 1
-                                slice expr 1
-                            scope
-            tupleof
-                quote ?
-                block-scope-macro
-                    fn/cc ? (_ expr scope)
-                        tupleof
-                            cons
-                                list branch
-                                    @ (@ expr 0) 1
-                                    list fn/cc (list)
-                                        @ (@ expr 0) 2
-                                    list fn/cc (list)
-                                        @ (@ expr 0) 3
-                                slice expr 1
-                            scope
-            tupleof
-                quote :
-                block-scope-macro
-                    fn/cc : (_ expr scope)
-                        tupleof
-                            cons
-                                cons tupleof
-                                    cons
-                                        branch
-                                            ==
-                                                typeof
-                                                    @ (@ expr 0) 1
-                                                symbol
-                                            fn/cc ()
-                                                list quote
-                                                    @ (@ expr 0) 1
-                                            fn/cc ()
-                                                @ (@ expr 0) 1
-                                        branch
-                                            == (slice (@ expr 0) 2) (list)
-                                            fn/cc ()
-                                                list
-                                                    @ (@ expr 0) 1
-                                            fn/cc ()
-                                                slice (@ expr 0) 2
-                                slice expr 1
-                            scope
+                                                parameter (quote _)
+                                                param-name
+                                            slice expr 1
+                                    list
+                                        cons do
+                                            slice (@ expr 0) 3
+                        @ (@ expr 0) 1
+                        slice expr 1
+                    env
+    set-scope-symbol! env
+        quote ?
+        block-scope-macro
+            fn/cc ? (return expr env)
+                return
+                    cons
+                        list branch
+                            @ (@ expr 0) 1
+                            list fn/cc (list)
+                                @ (@ expr 0) 2
+                            list fn/cc (list)
+                                @ (@ expr 0) 3
+                        slice expr 1
+                    env
+    #~ set-scope-symbol! env
+        #~ quote :
+        #~ block-scope-macro
+            #~ fn/cc : (return expr env)
+                #~ return
+                    #~ cons
+                        #~ cons tupleof
+                            #~ cons
+                                #~ branch
+                                    #~ ==
+                                        #~ typeof
+                                            #~ @ (@ expr 0) 1
+                                        #~ symbol
+                                    #~ fn/cc ()
+                                        #~ list quote
+                                            #~ @ (@ expr 0) 1
+                                    #~ fn/cc ()
+                                        #~ @ (@ expr 0) 1
+                                #~ branch
+                                    #~ == (slice (@ expr 0) 2) (list)
+                                    #~ fn/cc ()
+                                        #~ list
+                                            #~ @ (@ expr 0) 1
+                                    #~ fn/cc ()
+                                        #~ slice (@ expr 0) 2
+                        #~ slice expr 1
+                    #~ env
+    env
 
-syntax-extend stage-2 (_ scope)
+syntax-extend stage-2 (_ env)
     let list-head? =
         fn/cc list-head? (_ expr name)
             ? (list? expr)
@@ -211,209 +210,190 @@ syntax-extend stage-2 (_ scope)
                             false
                     false
                 false
-    .. scope
-        tableof
-            : empty-list (escape (list))
-            : empty-tuple (tupleof)
+    set-scope-symbol! env (quote empty-list) (escape (list))
 
-            : bool (integer 1 false)
-            : int8 (integer 8 true)
-            : int16 (integer 16 true)
-            : int32 (integer 32 true)
-            : int64 (integer 64 true)
-            : uint8 (integer 8 false)
-            : uint16 (integer 16 false)
-            : uint32 (integer 32 false)
-            : uint64 (integer 64 false)
+    set-scope-symbol! env (quote int) i32
+    set-scope-symbol! env (quote uint) i32
 
-            : size_t usize_t
+    #set-scope-symbol! env (quote half) r16
+    set-scope-symbol! env (quote float) r32
+    set-scope-symbol! env (quote double) r64
 
-            : int (integer 32 true)
-            : uint (integer 32 false)
-
-            : real16 (real 16)
-            : real32 (real 32)
-            : real64 (real 64)
-
-            : half (real 16)
-            : float (real 32)
-            : double (real 64)
-
-            : list-head?
-            : list-atom?
-                fn/cc list-atom? (_ x)
-                    ? (list? x)
-                        empty? x
-                        true
-            : assert # (assert bool-expr [error-message])
-                macro
-                    fn/cc assert (_ expr)
-                        list ? (@ expr 1) true
-                            list error
-                                ? (empty? (slice expr 2))
-                                    .. "assertion failed: " (string (@ expr 1))
-                                    @ expr 2
-            : ::@
-                block-macro
-                    fn/cc ::@ (_ expr)
+    set-scope-symbol! env (quote list-head?) list-head?
+    set-scope-symbol! env (quote list-atom?)
+        fn/cc list-atom? (_ x)
+            ? (list? x)
+                empty? x
+                true
+    set-scope-symbol! env (quote assert) # (assert bool-expr [error-message])
+        macro
+            fn/cc assert (_ expr)
+                list ? (@ expr 1) true
+                    list error
+                        ? (empty? (slice expr 2))
+                            .. "assertion failed: " (string (@ expr 1))
+                            @ expr 2
+    set-scope-symbol! env (quote ::@)
+        block-macro
+            fn/cc ::@ (_ expr)
+                cons
+                    ..
+                        slice (@ expr 0) 1
+                        list
+                            @ expr 1
+                    slice expr 2
+    set-scope-symbol! env (quote ::*)
+        block-macro
+            fn/cc ::* (_ expr)
+                list
+                    ..
+                        slice (@ expr 0) 1
+                        slice expr 1
+    set-scope-symbol! env (quote .)
+        macro
+            fn/cc . (_ expr)
+                let key =
+                    @ expr 2
+                ? (symbol? key)
+                    list
+                        (do @)
+                        @ expr 1
+                        list quote key
+                    error "symbol expected"
+    set-scope-symbol! env (quote fn) # (fn [name] (param ...) body ...)
+        block-macro
+            fn/cc fn (_ topexpr)
+                let expr =
+                    @ topexpr 0
+                let decl =
+                    @ (@ topexpr 0) 1
+                let retparam =
+                    quote return
+                let make-params-body =
+                    fn/cc (_ param-idx)
                         cons
-                            ..
-                                slice (@ expr 0) 1
-                                list
-                                    @ expr 1
-                            slice expr 2
-            : ::*
-                block-macro
-                    fn/cc ::* (_ expr)
-                        list
-                            ..
-                                slice (@ expr 0) 1
-                                slice expr 1
-            : .
-                macro
-                    fn/cc . (_ expr)
-                        let key =
-                            @ expr 2
-                        ? (symbol? key)
-                            list
-                                (do @)
-                                @ expr 1
-                                list quote key
-                            error "symbol expected"
-            : fn # (fn [name] (param ...) body ...)
-                block-macro
-                    fn/cc fn (_ topexpr)
-                        let expr =
-                            @ topexpr 0
-                        let decl =
-                            @ (@ topexpr 0) 1
-                        let retparam =
-                            quote return
-                        let make-params-body =
-                            fn/cc (_ param-idx)
-                                cons
-                                    cons
-                                        retparam
-                                        @ expr param-idx
-                                    slice expr (+ param-idx 1)
-                        let rest =
-                            slice topexpr 1
-                        ? (symbol? decl)
                             cons
-                                list let decl (quote =) none
-                                cons
-                                    list set! decl
-                                        cons fn/cc
-                                            cons
-                                                @ expr 1
-                                                make-params-body 2
-                                    ? (empty? rest)
-                                        list decl
-                                        rest
-                            cons
+                                retparam
+                                @ expr param-idx
+                            slice expr (+ param-idx 1)
+                let rest =
+                    slice topexpr 1
+                ? (symbol? decl)
+                    cons
+                        list let decl (quote =) none
+                        cons
+                            list set! decl
                                 cons fn/cc
-                                    make-params-body 1
+                                    cons
+                                        @ expr 1
+                                        make-params-body 2
+                            ? (empty? rest)
+                                list decl
                                 rest
-            : and
-                macro
-                    fn/cc and (_ expr)
-                        let tmp =
-                            parameter
-                                quote tmp
-                        list
-                            list fn/cc (list (parameter (quote _)) tmp)
-                                list branch tmp
-                                    list fn/cc (list)
-                                        @ expr 2
-                                    list fn/cc (list) tmp
-                            @ expr 1
-            : or
-                macro
-                    fn/cc or (_ expr)
-                        let tmp =
-                            parameter
-                                quote tmp
-                        list
-                            list fn/cc (list (parameter (quote _)) tmp)
-                                list branch tmp
-                                    list fn/cc (list) tmp
-                                    list fn/cc (list)
-                                        @ expr 2
-                            @ expr 1
-            : loop # bootstrap loop, better version in stage 4
-                macro
-                    fn/cc loop (_ expr)
-                        let param-repeat =
-                            quote repeat
-                        list do
-                            list let param-repeat (quote =) none
-                            list set! param-repeat
+                    cons
+                        cons fn/cc
+                            make-params-body 1
+                        rest
+    set-scope-symbol! env (quote and)
+        macro
+            fn/cc and (_ expr)
+                let tmp =
+                    parameter
+                        quote tmp
+                list
+                    list fn/cc (list (parameter (quote _)) tmp)
+                        list branch tmp
+                            list fn/cc (list)
+                                @ expr 2
+                            list fn/cc (list) tmp
+                    @ expr 1
+    set-scope-symbol! env (quote or)
+        macro
+            fn/cc or (_ expr)
+                let tmp =
+                    parameter
+                        quote tmp
+                list
+                    list fn/cc (list (parameter (quote _)) tmp)
+                        list branch tmp
+                            list fn/cc (list) tmp
+                            list fn/cc (list)
+                                @ expr 2
+                    @ expr 1
+    set-scope-symbol! env (quote loop) # bootstrap loop, better version in stage 4
+        macro
+            fn/cc loop (_ expr)
+                let param-repeat =
+                    quote repeat
+                list do
+                    list let param-repeat (quote =) none
+                    list set! param-repeat
+                        cons fn/cc
+                            cons
+                                cons
+                                    parameter (quote _)
+                                    @ expr 1
+                                slice expr 2
+                    cons param-repeat
+                        @ expr 1
+    set-scope-symbol! env (quote if)
+        do
+            let if-rec = none
+            set! if-rec
+                fn/cc if (_ expr)
+                    let cond =
+                        @ (@ expr 0) 1
+                    let then-exprlist =
+                        slice (@ expr 0) 2
+                    let make-branch =
+                        fn/cc (_ else-exprlist)
+                            list branch
+                                cond
                                 cons fn/cc
-                                    cons
-                                        cons
-                                            parameter (quote _)
-                                            @ expr 1
-                                        slice expr 2
-                            cons param-repeat
-                                @ expr 1
-            : if
-                do
-                    let if-rec = none
-                    set! if-rec
-                        fn/cc if (_ expr)
-                            let cond =
-                                @ (@ expr 0) 1
-                            let then-exprlist =
-                                slice (@ expr 0) 2
-                            let make-branch =
-                                fn/cc (_ else-exprlist)
-                                    list branch
-                                        cond
-                                        cons fn/cc
-                                            cons (list) then-exprlist
-                                        cons fn/cc
-                                            cons (list) else-exprlist
-                            let rest-expr =
+                                    cons (list) then-exprlist
+                                cons fn/cc
+                                    cons (list) else-exprlist
+                    let rest-expr =
+                        slice expr 1
+                    let next-expr =
+                        ? (empty? rest-expr)
+                            none
+                            @ rest-expr 0
+                    ? (list-head? next-expr (quote elseif))
+                        do
+                            let nextif =
+                                if-rec
+                                    slice expr 1
+                            cons
+                                make-branch
+                                    list (@ nextif 0)
+                                slice nextif 1
+                        ? (list-head? next-expr (quote else))
+                            cons
+                                make-branch
+                                    slice (@ expr 1) 1
+                                slice expr 2
+                            cons
+                                make-branch
+                                    list;
                                 slice expr 1
-                            let next-expr =
-                                ? (empty? rest-expr)
-                                    none
-                                    @ rest-expr 0
-                            ? (list-head? next-expr (quote elseif))
-                                do
-                                    let nextif =
-                                        if-rec
-                                            slice expr 1
-                                    cons
-                                        make-branch
-                                            list (@ nextif 0)
-                                        slice nextif 1
-                                ? (list-head? next-expr (quote else))
-                                    cons
-                                        make-branch
-                                            slice (@ expr 1) 1
-                                        slice expr 2
-                                    cons
-                                        make-branch
-                                            list;
-                                        slice expr 1
-                    block-macro if-rec
-            : syntax-infix-rules
-                fn/cc syntax-infix-rules (_ prec order name)
-                    structof
-                        tupleof (quote prec) prec
-                        tupleof (quote order) order
-                        tupleof (quote name) name
-            : syntax-infix-op
-                macro
-                    fn/cc syntax-infix-op (_ expr)
-                        list tupleof
-                            list quote
-                                symbol
-                                    .. "#ifx:" (string (@ expr 1))
-                            @ expr 2
+            block-macro if-rec
+    set-scope-symbol! env (quote syntax-infix-rules)
+        fn/cc syntax-infix-rules (_ prec order name)
+            let spec = (scope)
+            set-scope-symbol! spec (quote prec) prec
+            set-scope-symbol! spec (quote order) order
+            set-scope-symbol! spec (quote name) name
+            spec
+    set-scope-symbol! env (quote set-syntax-infix-op!)
+        fn/cc set-syntax-infix-op! (_ env name expr)
+            set-scope-symbol! env
+                symbol
+                    .. "#ifx:" (string name)
+                expr
+    env
 
-syntax-extend stage-3 (_ scope)
+syntax-extend stage-3 (_ env)
 
     fn unwrap-single (expr)
         # unwrap single item from list or prepend 'do' clause to list
@@ -453,12 +433,12 @@ syntax-extend stage-3 (_ scope)
                 else none
             countof s
 
-    fn get-ifx-op (scope op)
+    fn get-ifx-op (env op)
         let key =
             symbol
                 .. "#ifx:" (string op)
         ? (symbol? op)
-            find-scope-symbol scope key
+            get-scope-symbol env key
             none
 
     fn has-infix-ops (infix-table expr)
@@ -582,7 +562,7 @@ syntax-extend stage-3 (_ scope)
                                 module-path
                         let content =
                             fn;
-                        set-key! (. bangra modules)
+                        set-scope-symbol! (. bangra modules)
                             tupleof name content
                         content
                     else
@@ -630,7 +610,7 @@ syntax-extend stage-3 (_ scope)
                 cleanup;
                 result
 
-    .. scope
+    .. env
         tableof
             : xpcall
             : bangra
@@ -674,7 +654,7 @@ syntax-extend stage-3 (_ scope)
                 make-expand-multi-op-ltr @
             : try
                 block-macro
-                    fn (expr scope)
+                    fn (expr env)
                         if (not (list-head? (@ expr 1) (quote except)))
                             error "except block missing"
                         cons
@@ -722,23 +702,23 @@ syntax-extend stage-3 (_ scope)
 
             : define
                 block-macro
-                    fn (expr scope)
+                    fn (expr env)
                         let name =
                             @ (@ expr 0) 1
                         let exprlist =
                             slice (@ expr 0) 2
                         let subscope =
-                            parameter (quote scope)
+                            parameter (quote env)
                         cons
                             list syntax-extend (list (parameter (quote _)) subscope)
                                 list let (quote name) (quote =)
                                     cons do exprlist
-                                list set-key! subscope (list quote name) (quote name)
+                                list set-scope-symbol! subscope (list quote name) (quote name)
                                 subscope
                             slice expr 1
 
             tupleof scope-list-wildcard-symbol
-                fn (topexpr scope)
+                fn (topexpr env)
                     let expr =
                         @ topexpr 0
                     let head =
@@ -750,7 +730,7 @@ syntax-extend stage-3 (_ scope)
                         and
                             symbol? head
                             and
-                                none? (find-scope-symbol scope head)
+                                none? (get-scope-symbol env head)
                                 == (slice headstr 0 1) "."
 
                         let name =
@@ -773,15 +753,15 @@ syntax-extend stage-3 (_ scope)
                                 self-arg
                             slice topexpr 1
                     # infix operator support
-                    elseif (has-infix-ops scope expr)
+                    elseif (has-infix-ops env expr)
                         cons
                             @
-                                parse-infix-expr scope
+                                parse-infix-expr env
                                     \ (@ expr 0) (slice expr 1) 0
                                 0
                             slice topexpr 1
             tupleof scope-symbol-wildcard-symbol
-                fn (topexpr scope)
+                fn (topexpr env)
                     let sym =
                         @ topexpr 0
                     let it =
@@ -796,7 +776,7 @@ syntax-extend stage-3 (_ scope)
                     # and it's not the concat operator
                     if
                         and
-                            none? (find-scope-symbol scope sym)
+                            none? (get-scope-symbol env sym)
                             fold it false
                                 fn (out k)
                                     if (== k ".") true
@@ -845,18 +825,18 @@ syntax-extend stage-3 (_ scope)
             #syntax-infix-op @= (syntax-infix-rules 800 > @=)
             #syntax-infix-op =@ (syntax-infix-rules 800 > =@)
 
-syntax-extend stage-4 (_ scope)
+syntax-extend stage-4 (_ env)
     fn =? (x)
         and
             == (typeof x) symbol
             == x (quote =)
 
-    .. scope
+    .. env
         tableof
             : let
-                # support for multiple declarations in one let scope
+                # support for multiple declarations in one let env
                 block-macro
-                    fn (expr scope)
+                    fn (expr env)
                         let args = (slice (@ expr 0) 1)
                         let argtype = (typeof (@ args 0))
                         if (== argtype symbol)
@@ -930,7 +910,7 @@ syntax-extend stage-4 (_ scope)
                 block-macro
                     # a late-binding let with support for recursion and
                     # function-level cross dependencies. comparable to letrec.
-                    fn (expr scope)
+                    fn (expr env)
                         let args = (slice (@ expr 0) 1)
                         let name = (@ args 0)
                         let argtype = (typeof name)
@@ -984,7 +964,7 @@ syntax-extend stage-4 (_ scope)
                                             cons (parameter (quote _)) (@ entries 0)
                                             @ entries 1
 
-syntax-extend stage-5 (_ scope)
+syntax-extend stage-5 (_ env)
 
     fn iterator? (x)
         (typeof x) < iterator
@@ -1123,7 +1103,7 @@ syntax-extend stage-5 (_ scope)
                     tupleof
                         cons (cons do (slice elem 2)) args
                         cons (@ elem 0) names
-    .. scope
+    .. env
         tableof
             : iter
             : iterator?
@@ -1295,7 +1275,7 @@ syntax-extend stage-5 (_ scope)
                         fn (topexpr)
                             parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
 
-syntax-extend stage-6 (_ scope)
+syntax-extend stage-6 (_ env)
     let void* =
         pointer void
     let null =
@@ -1306,14 +1286,14 @@ syntax-extend stage-6 (_ scope)
     fn extern-library (cdefs)
         let lib = (tableof)
         for k v in cdefs
-            set-key! lib k
+            set-scope-symbol! lib k
                 ? ((typeof v) < tuple)
                     external (splice v)
                     v
             repeat;
         lib
 
-    .. scope
+    .. env
         tableof
             : void*
             : null
@@ -1321,7 +1301,7 @@ syntax-extend stage-6 (_ scope)
             : extern-library
 
 
-syntax-extend stage-7 (_ scope)
+syntax-extend stage-7 (_ env)
     fn repeat-string (n c)
         for i in (range n)
             with (s = "")
@@ -1348,23 +1328,23 @@ syntax-extend stage-7 (_ scope)
                     .. "." (string (@ bangra-version 2))
         let state = (tableof)
         fn reset-state ()
-            set-key! state
-                scope :
+            set-scope-symbol! state
+                env :
                     .. (globals)
                         tableof
                             reset : reset-state
-            set-key! state (counter : 1)
+            set-scope-symbol! state (counter : 1)
         reset-state;
-        fn capture-scope (scope)
-            set-key! state (: scope)
-        # appending this to an expression before evaluation captures the scope
+        fn capture-scope (env)
+            set-scope-symbol! state (: env)
+        # appending this to an expression before evaluation captures the env
         # table so it can be used for the next expression.
         let expression-suffix =
             list
                 qquote
-                    syntax-extend (_ scope)
-                        (unquote capture-scope) scope
-                        scope
+                    syntax-extend (_ env)
+                        (unquote capture-scope) env
+                        env
         loop
             with
                 preload = ""
@@ -1401,8 +1381,8 @@ syntax-extend stage-7 (_ scope)
                             let result = (f)
                             if ((typeof result) != void)
                                 print (.. idstr "= " (repr result))
-                                set-key! state.scope id result
-                                set-key! state
+                                set-scope-symbol! state.scope id result
+                                set-scope-symbol! state
                                     counter : (state.counter + 1)
                         except (e)
                             print "error:" e
@@ -1410,12 +1390,12 @@ syntax-extend stage-7 (_ scope)
                     else
                         cmdlist
                 repeat preload cmdlist
-    set-key! scope
+    set-scope-symbol! env
         : read-eval-print-loop
-    scope
+    env
 
-syntax-extend stage-final (_ scope)
-    set-globals! scope
-    scope
+syntax-extend stage-final (_ env)
+    set-globals! env
+    env
 
 none

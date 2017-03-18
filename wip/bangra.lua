@@ -576,7 +576,7 @@ local function stdout_writer(x)
 end
 
 local function min(a,b)
-    if (a > b) then
+    if (a < b) then
         return a
     else
         return b
@@ -604,7 +604,7 @@ end
 local function set(keys)
     local r = {}
     for i,k in ipairs(keys) do
-        r[tostring(k)] = i
+        r[k] = i
     end
     return r
 end
@@ -852,6 +852,22 @@ local function define_symbols(def)
     def({SymbolWildcard='#symbol'})
 
     def({Compare='compare'})
+    def({CountOf='countof'})
+    def({Slice='slice'})
+    def({Cast='cast'})
+    def({Size='size'})
+    def({Alignment='alignment'})
+    def({Unsigned='unsigned'})
+    def({Bitwidth='bitwidth'})
+    def({Super='super'})
+    def({At='@'})
+    def({ApplyType='apply-type'})
+    def({Concat='..'})
+    def({Add='+'})
+    def({Sub='-'})
+    def({Mul='*'})
+    def({Div='/'})
+    def({FloorDiv='//'})
 end
 
 do
@@ -867,13 +883,8 @@ end
 
 local assert_any
 local is_none
-
-local Ordering = {
-    Less = -1,
-    Equal = 0,
-    Greater = 1,
-    Unordered = 0x7f,
-}
+local unwrap
+local Any
 
 local Type = {}
 local function assert_type(x)
@@ -889,6 +900,9 @@ local function define_types(def)
     def('Type')
 
     def('Bool')
+
+    def('Integer')
+    def('Real')
 
     def('I8')
     def('I16')
@@ -942,14 +956,18 @@ do
     function cls:bind(name, value)
         assert_symbol(name)
         assert_any(value)
-        if is_none(value) then
-            value = null
-        end
         self.symbols[name] = value
     end
     function cls:lookup(name)
         assert_symbol(name)
         return self.symbols[name]
+    end
+    function cls:super()
+        local super = self:lookup(Symbol.Super)
+        return super and unwrap(Type.Type, super)
+    end
+    function cls:set_super(_type)
+        self:bind(Symbol.Super, Any(_type))
     end
 
     function cls:__tostring()
@@ -968,7 +986,6 @@ do
         local cache = {}
         return function(_type)
             assert_type(_type)
-            assert(_type.super ~= qualifier_type)
             local val = cache[_type]
             if not val then
                 val = Type(
@@ -977,7 +994,7 @@ do
                     .. ansi(STYLE.TYPE, _type.name)
                     .. ansi(STYLE.OPERATOR, "]"))
                 val.element_type = _type
-                val.super = qualifier_type
+                val:set_super(qualifier_type)
                 cache[_type] = val
             end
             return val
@@ -985,16 +1002,17 @@ do
     end
     Type.Macro = make_qualifier_type("macro", Type.MacroQualifier)
     Type.Quote = make_qualifier_type("quote", Type.QuoteQualifier)
+    Type.SizeT = Type.U64
 end
 
 local function is_quote_type(_type)
     assert_type(_type)
-    return _type.super == Type.QuoteQualifier
+    return _type:super() == Type.QuoteQualifier
 end
 
 local function is_macro_type(_type)
     assert_type(_type)
-    return _type.super == Type.MacroQualifier
+    return _type:super() == Type.MacroQualifier
 end
 
 --------------------------------------------------------------------------------
@@ -1003,7 +1021,7 @@ end
 
 local wrap
 local format_any_value
-local Any = {}
+Any = {}
 setmetatable(Any, {
     __call = function(cls, arg1, arg2)
         local _type = arg1
@@ -1415,7 +1433,7 @@ local function location_error_handler(err)
                     end)
             end
         end
-        return msg
+        return traceback(msg,3)
     else
         print(traceback(err,3))
         os.exit(1)
@@ -1744,12 +1762,12 @@ local FUNCTIONS = set(split(
         .. " va-arg va-countof range zip enumerate bitcast element-type"
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
-        .. " extern-library arrayof"
+        .. " extern-library arrayof get-scope-symbol"
     ))
 
 -- builtin and global functions with side effects
 local SFXFUNCTIONS = set(split(
-    "set-key! set-globals! set-exception-handler! bind! set!"
+    "set-scope-symbol! set-globals! set-exception-handler! bind! set!"
     ))
 
 -- builtin operator functions that can also be used as infix
@@ -1923,11 +1941,14 @@ end
 
 function List.__tostring(self)
     local s = ""
+    local fmt = StreamValueFormat(false)
+    fmt.maxdepth = 2
+    fmt.maxlength = 5
     stream_value(
         function (x)
             s = s .. x
         end,
-        Any(self), StreamValueFormat(false))
+        Any(self), fmt)
     return s
 end
 
@@ -1935,7 +1956,7 @@ end
 -- IL OBJECTS
 --------------------------------------------------------------------------------
 
-local function unwrap(_type, value)
+unwrap = function(_type, value)
     assert_any(value)
     if (value.type == _type) then
         return value.value
@@ -2162,7 +2183,6 @@ do
         assert_flow(cont)
         assert_number(index)
         assert_any(value)
-        index = index + 1
         local ptr = self
         while ptr do
             ptr = ptr.owner
@@ -2247,7 +2267,7 @@ end
 
 local function unqualify(qualifier_type, x)
     assert_any(x)
-    assert(x.type.super == qualifier_type)
+    assert(x.type:super() == qualifier_type)
     x = Any(x)
     x.type = x.type.element_type
     return x
@@ -2347,7 +2367,7 @@ local function call_flow(frame, cont, flow, ...)
 end
 
 call = function(frame, cont, dest, ...)
-    --print("CALL", frame, cont, dest, ...)
+    print("CALL", frame, cont, dest, ...)
     assert_frame(frame)
     assert_any(cont)
     assert_any(dest)
@@ -2362,8 +2382,20 @@ call = function(frame, cont, dest, ...)
     elseif dest.type == Type.Builtin then
         local func = dest.value.func
         return func(frame, cont, dest, ...)
+    elseif dest.type == Type.Type then
+        local ty = dest.value
+        local func = ty:lookup(Symbol.ApplyType)
+        if func ~= null then
+            return call(frame, cont, func, ...)
+        else
+            error("can not apply type "
+                .. ansi(STYLE.TYPE, ty.name))
+        end
     else
-        error("don't know how to apply " .. repr(dest))
+        print("while evaluating:")
+        print(dest, ...)
+        error("don't know how to apply value of type "
+            .. ansi(STYLE.TYPE, dest.type.name))
     end
 end
 
@@ -2371,6 +2403,7 @@ local function execute(cont, dest, ...)
     assert_function(cont)
     assert_any(dest)
     local wrapped_cont = Any(Builtin(function(frame, _cont, dest, ...)
+        assert_frame(frame)
         return cont(...)
     end))
     return call(Frame(), wrapped_cont, dest, ...)
@@ -2398,12 +2431,20 @@ do
             update(self.symbols, scope.symbols)
         end
     end
+    function cls:__tostring()
+        local count = 0
+        for k,v in pairs(self.symbols) do
+            count = count + 1
+        end
+        return
+            ansi(STYLE.KEYWORD, "scope")
+            .. ansi(STYLE.COMMENT, "<")
+            .. format("%i symbols", count)
+            .. ansi(STYLE.COMMENT, ">")
+    end
     function cls:bind(name, value)
         assert_symbol(name)
         assert_any(value)
-        if is_none(value) then
-            value = null
-        end
         self.symbols[name] = value
     end
     function cls:lookup(name)
@@ -2626,6 +2667,7 @@ expand = function(env, topit)
         end
 
         if (is_macro_type(head.type)) then
+            --print("HEAD:",head)
             local result_list,result_env = expand_macro(env, unmacro(head), topit)
             if (result_list ~= EOL) then
                 topit = result_list
@@ -2675,10 +2717,10 @@ expand = function(env, topit)
     return List(result, topit), env
 end
 
-local function expand_root(expr)
+local function expand_root(expr, scope)
     assert_list(expr)
     return xpcall(function()
-        return expand_expr_list(globals, expr)
+        return expand_expr_list(scope or globals, expr)
     end, location_error_handler)
 end
 
@@ -3082,7 +3124,7 @@ format_any_value = function(_type, x)
         return ansi(STYLE.KEYWORD, "none")
     elseif _type == Type.Symbol then
         return ansi(STYLE.SYMBOL,
-            escape_string(get_symbol_name(x), SYMBOL_ESCAPE_CHARS))
+            escape_string(x.name, SYMBOL_ESCAPE_CHARS))
     elseif _type == Type.String then
         return ansi(STYLE.STRING,
             '"' .. escape_string(x, "\"") .. '"')
@@ -3095,6 +3137,8 @@ end
 --------------------------------------------------------------------------------
 -- BUILTINS
 --------------------------------------------------------------------------------
+
+do -- reduce number of locals
 
 local function checkargs(mincount, maxcount, ...)
     if ((mincount <= 0) and (maxcount == -1)) then
@@ -3133,6 +3177,21 @@ local function builtin_macro(value)
     return macro(Any(Builtin(wrap_expand_builtin(value))))
 end
 
+local function builtin_forward(name, errmsg)
+    assert_symbol(name)
+    assert_string(errmsg)
+    return function(frame, cont, self, value, ...)
+        checkargs(1,1, value)
+        local func = value.type:lookup(name)
+        if func == null then
+            error("type "
+                .. ansi(STYLE.TYPE, value.type.name)
+                .. " " .. errmsg)
+        end
+        return call(frame, cont, func, value, ...)
+    end
+end
+
 local builtins = {}
 local builtin_ops = {}
 
@@ -3140,16 +3199,63 @@ local function builtin_op(_type, name, func)
     table.insert(builtin_ops, {_type, name, func})
 end
 
+local function unwrap_integer(value)
+    local super = value.type:super()
+    if super == Type.Integer then
+        return int64_t(value.value)
+    else
+        error("integer expected, not " .. repr(value))
+    end
+end
+
+local cast
+local function unwrap_cast(_type, value)
+    assert_any(value)
+    if (value.type == _type) then
+        return value.value
+    else
+        return execute(
+            function(casted)
+                print("CASTED",casted)
+            end,
+            Any(Builtin(cast)),
+            value,
+            Any(_type))
+    end
+end
+
 -- constants
 --------------------------------------------------------------------------------
 
 builtins["true"] = bool(true)
 builtins["false"] = bool(false)
+builtins["none"] = none
 
 -- types
 --------------------------------------------------------------------------------
 
+builtins.void = Type.Void
+builtins.any = Type.Any
+builtins.bool = Type.Bool
+
+builtins.i8 = Type.I8
+builtins.i16 = Type.I16
+builtins.i32 = Type.I32
+builtins.i64 = Type.I64
+
+builtins.u8 = Type.U8
+builtins.u16 = Type.U16
+builtins.u32 = Type.U32
+builtins.u64 = Type.U64
+
+builtins.r32 = Type.R32
+builtins.r64 = Type.R64
+
+builtins.scope = Type.Scope
 builtins.symbol = Type.Symbol
+builtins.list = Type.List
+builtins.parameter = Type.Parameter
+builtins.string = Type.String
 
 -- special forms
 --------------------------------------------------------------------------------
@@ -3182,13 +3288,17 @@ end
 local function ordered_branch(frame, cont, self, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
-    local function unordered(frame, cont, self)
+    local function unordered()
         local rcmp = b.type:lookup(Symbol.Compare)
         if rcmp then
             return call(frame, cont, rcmp, b, a,
                 equal_cont, unordered_cont, greater_cont, less_cont)
         else
-            return call(frame, cont, unordered_cont)
+            error("types "
+                .. ansi(STYLE.TYPE, a.type.name)
+                .. " and "
+                .. ansi(STYLE.TYPE, b.type.name)
+                .. " are incomparable")
         end
     end
     local cmp = a.type:lookup(Symbol.Compare)
@@ -3201,6 +3311,99 @@ local function ordered_branch(frame, cont, self, a, b,
 end
 -- ordered-branch(a, b, equal, unordered [, less [, greater]])
 builtins['ordered-branch'] = ordered_branch
+
+builtins.error = wrap_simple_builtin(function(msg)
+    checkargs(1,1, msg)
+    error(unwrap(Type.String, msg))
+end)
+
+-- constructors
+--------------------------------------------------------------------------------
+
+builtins["list-load"] = wrap_simple_builtin(function(path)
+    checkargs(1,1, path)
+    path = unwrap(Type.String, path)
+    local src = SourceFile.open(path)
+    local ptr = src:strptr()
+    local lexer = Lexer.init(ptr, ptr + src.length, path)
+    local result,expr = parse(lexer)
+    if result then
+        return expr
+    else
+        error(expr)
+    end
+end)
+
+builtins.expand = wrap_simple_builtin(function(expr, scope)
+    checkargs(2,2, expr, scope)
+    scope = unwrap(Type.Scope, scope)
+    local result,expexpr = expand_root(unwrap(Type.List, expr), scope)
+    if result then
+        return expexpr
+    else
+        error(expexpr)
+    end
+end)
+
+builtins.eval = wrap_simple_builtin(function(expr, scope, path)
+    local argcount = checkargs(1,3, expr, scope, path)
+    local scope
+    if argcount > 1 then
+        scope = unwrap(Type.Scope, scope)
+    else
+        scope = globals
+    end
+    local path
+    if argcount > 2 then
+        path = unwrap(Type.String, path)
+    else
+        path = "<eval>"
+    end
+    local result,expexpr = expand_root(unwrap(Type.List, expr), scope)
+    if result then
+        return compile_root(expexpr, Symbol(path))
+    else
+        error(expexpr)
+    end
+end)
+
+builtins.escape = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    return quote(value)
+end)
+
+builtins["block-scope-macro"] = wrap_simple_builtin(function(func)
+    checkargs(1,1, func)
+    unwrap(Type.Closure, func)
+    return macro(func)
+end)
+
+builtins.cons = wrap_simple_builtin(function(at, next)
+    checkargs(2,2, at, next)
+    next = unwrap(Type.List, next)
+    return Any(List(at, next))
+end)
+
+builtin_op(Type.Symbol, Symbol.ApplyType,
+    wrap_simple_builtin(function(name)
+        checkargs(1,1,name)
+        return Any(Symbol(unwrap(Type.String, name)))
+    end))
+
+builtin_op(Type.List, Symbol.ApplyType,
+    wrap_simple_builtin(function(...)
+        checkargs(0,-1,...)
+        return Any(List.from_args(...))
+    end))
+
+builtin_op(Type.Parameter, Symbol.ApplyType,
+    wrap_simple_builtin(function(name)
+        checkargs(1,1,name)
+        return Any(Parameter(unwrap(Type.Symbol, name)))
+    end))
+
+-- comparisons
+--------------------------------------------------------------------------------
 
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
@@ -3235,30 +3438,7 @@ builtins['>='] = function(frame, cont, self, a, b)
         return_true, return_false, return_false, return_true)
 end
 
--- constructors
---------------------------------------------------------------------------------
-
-builtins.escape = wrap_simple_builtin(function(value)
-    checkargs(1,1, value)
-    return quote(value)
-end)
-
-builtins["block-scope-macro"] = wrap_simple_builtin(function(func)
-    checkargs(1,1, func)
-    unwrap(Type.Closure, func)
-    return macro(func)
-end)
-
-builtins.cons = wrap_simple_builtin(function(at, next)
-    checkargs(2,2, at, next)
-    unwrap(Type.List, next)
-    return List(at, next)
-end)
-
--- operations
---------------------------------------------------------------------------------
-
-local function compare_bool_func(T)
+local function compare_func(T)
     builtin_op(T, Symbol.Compare,
         function(frame, cont, self, a, b,
             equal_cont, unordered_cont, less_cont, greater_cont)
@@ -3272,7 +3452,10 @@ local function compare_bool_func(T)
         end)
 end
 
-compare_bool_func(Type.Bool)
+compare_func(Type.Bool)
+compare_func(Type.Symbol)
+compare_func(Type.Parameter)
+compare_func(Type.Flow)
 
 local function compare_int_func(T)
     builtin_op(T, Symbol.Compare,
@@ -3323,40 +3506,305 @@ end
 compare_real_func(Type.R32, 'bangra_r32')
 compare_real_func(Type.R64, 'bangra_r64')
 
--- list api
+builtin_op(Type.List, Symbol.Compare,
+    function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        local x = unwrap(Type.List, a)
+        local y = unwrap(Type.List, b)
+        local function loop()
+            if (x == y) then
+                return call(frame, cont, equal_cont)
+            elseif (x == EOL) then
+                return call(frame, cont, less_cont)
+            elseif (y == EOL) then
+                return call(frame, cont, greater_cont)
+            end
+            return ordered_branch(frame, cont, none, x.at, y.at,
+                Any(Builtin(function()
+                    x = x.next
+                    y = y.next
+                    return loop()
+                end)), unordered_cont, less_cont, greater_cont)
+        end
+        return loop()
+    end)
+
+builtin_op(Type.Type, Symbol.Compare,
+    function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        local x = unwrap(Type.Type, a)
+        local y = unwrap(Type.Type, b)
+        if x == y then
+            return call(frame, cont, equal_cont)
+        else
+            local xs = x:super()
+            local ys = y:super()
+            if xs == y then
+                return call(frame, cont, less_cont)
+            elseif ys == x then
+                return call(frame, cont, greater_cont)
+            else
+                return call(frame, cont, unordered_cont)
+            end
+        end
+    end)
+
+-- cast
 --------------------------------------------------------------------------------
 
---[[
-builtins['list-compare'] = function(frame, cont, self, a, b,
-    equal_cont, unordered_cont, less_cont, greater_cont)
-    checkargs(4,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
+local function safecall(f1, f2)
+    local function fwd_xpcall_dest(result, ...)
+        if result then
+            return ...
+        else
+            return f2(...)
+        end
+    end
+    return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
+end
 
+cast = function(frame, cont, self, value, totype)
+    checkargs(2,2, value, totype)
+    local fromtype = Any(value.type)
+    local func = value.type:lookup(Symbol.Cast)
+    local function fallback_call(err)
+        local desttype = unwrap(Type.Type, totype)
+        local function errmsg()
+            error("can not cast from type "
+                .. ansi(STYLE.TYPE, value.type.name)
+                .. " to "
+                .. ansi(STYLE.TYPE, desttype.name))
+        end
+        func = desttype:lookup(Symbol.Cast)
+        if func ~= null then
+            return safecall(function()
+                return call(frame, cont, func, fromtype, totype, value)
+            end, errmsg)
+        else
+            errmsg()
+        end
+    end
+    if func ~= null then
+        return safecall(
+            function()
+                return call(frame, cont, func, fromtype, totype, value)
+            end, fallback_call)
+    end
+    return fallback_call()
+end
+builtins.cast = cast
 
-    less_cont = less_cont or unordered_cont
-    greater_cont = greater_cont or unordered_cont
-    a = unwrap(Type.List, a)
-    b = unwrap(Type.List, b)
+local default_casts = wrap_simple_builtin(function(fromtype, totype, value)
+    fromtype = unwrap(Type.Type, fromtype)
+    totype = unwrap(Type.Type, totype)
+    local fromsuper = fromtype:lookup(Symbol.Super)
+    local tosuper = totype:lookup(Symbol.Super)
+    fromsuper = fromsuper and unwrap(Type.Type, fromsuper)
+    tosuper = tosuper and unwrap(Type.Type, tosuper)
+    -- extend integer types of same signed type, but no truncation
+    if fromsuper == Type.Integer and tosuper == Type.Integer then
+        local from_unsigned = unwrap(Type.Bool, fromtype:lookup(Symbol.Unsigned))
+        local to_unsigned = unwrap(Type.Bool, totype:lookup(Symbol.Unsigned))
+        if (from_unsigned == to_unsigned) then
+            local from_size = unwrap(Type.SizeT, fromtype:lookup(Symbol.Size))
+            local to_size = unwrap(Type.SizeT, totype:lookup(Symbol.Size))
+            if from_size <= to_size then
+                return Any(totype.ctype(value.value))
+            end
+        end
+    end
+    error("incompatible types")
+end)
 
+builtin_op(Type.I8, Symbol.Cast, default_casts)
+builtin_op(Type.I16, Symbol.Cast, default_casts)
+builtin_op(Type.I32, Symbol.Cast, default_casts)
+builtin_op(Type.I64, Symbol.Cast, default_casts)
+builtin_op(Type.U8, Symbol.Cast, default_casts)
+builtin_op(Type.U16, Symbol.Cast, default_casts)
+builtin_op(Type.U32, Symbol.Cast, default_casts)
+builtin_op(Type.U64, Symbol.Cast, default_casts)
 
-    return List(at, next)
-end) ]]
+-- concat
+--------------------------------------------------------------------------------
+
+local function builtin_forward_op2(name, errmsg)
+    assert_symbol(name)
+    assert_string(errmsg)
+    return function(frame, cont, self, a, b, ...)
+        checkargs(2,2, a, b, ...)
+        local func = a.type:lookup(name)
+        local function fallback_call(err)
+            func = b.type:lookup(name)
+            if func ~= null then
+                return call(frame, cont, func, a, b, any_true)
+            else
+                error("can not " .. errmsg .. " values of type "
+                    .. ansi(STYLE.TYPE, a.type.name)
+                    .. " and "
+                    .. ansi(STYLE.TYPE, b.type.name))
+            end
+        end
+        if func ~= null then
+            return safecall(
+                function()
+                    return call(frame, cont, func, a, b, any_false)
+                end, fallback_call)
+        end
+        return fallback_call()
+    end
+end
+
+builtins[Symbol.Concat] = builtin_forward_op2(Symbol.Concat, "concatenate")
+
+builtin_op(Type.String, Symbol.Concat,
+    wrap_simple_builtin(function(a, b, flipped)
+        checkargs(3,3,a,b,flipped)
+        a = unwrap(Type.String, a)
+        b = unwrap(Type.String, b)
+        return Any(a .. b)
+    end))
+
+-- arithmetic
+--------------------------------------------------------------------------------
+
+builtins[Symbol.Add] = builtin_forward_op2(Symbol.Add, "add")
+
+-- interrogation
+--------------------------------------------------------------------------------
+
+builtins.typeof = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    return Any(value.type)
+end)
+
+local countof = builtin_forward(Symbol.CountOf, "is not countable")
+builtins.countof = countof
+
+local function countof_func(T)
+    builtin_op(T, Symbol.CountOf,
+        function(frame, cont, self, value)
+            value = unwrap(T, value)
+            return call(frame, none, cont, Any(size_t(#value)))
+        end)
+end
+
+countof_func(Type.String)
+countof_func(Type.List)
+
+local at = builtin_forward(Symbol.At, "is not indexable")
+builtins[Symbol.At] = at
+
+builtin_op(Type.List, Symbol.At,
+    wrap_simple_builtin(function(x, i)
+        checkargs(2,2,x,i)
+        x = unwrap(Type.List, x)
+        i = unwrap_integer(i)
+        for k=1,tonumber(i) do
+            x = x.next
+        end
+        return x.at
+    end))
+
+local fwd_slice = builtin_forward(Symbol.Slice, "is not sliceable")
+builtins.slice = function(frame, cont, self, obj, start_index, end_index)
+    checkargs(2,3, obj, start_index, end_index)
+    return countof(frame,
+        Any(Builtin(function(_frame, _cont, self, l)
+            l = unwrap_integer(l)
+            local i0 = unwrap_integer(start_index)
+            if (i0 < size_t(0)) then
+                i0 = i0 + l
+            end
+            i0 = min(max(i0, size_t(0)), l)
+            local i1
+            if end_index then
+                i1 = unwrap_integer(end_index)
+                if (i1 < size_t(0)) then
+                    i1 = i1 + l
+                end
+                i1 = min(max(i1, i0), l)
+            else
+                i1 = l
+            end
+            return fwd_slice(frame, cont, none, obj, Any(i0), Any(i1))
+        end)), countof, obj)
+end
+
+builtin_op(Type.List, Symbol.Slice,
+    wrap_simple_builtin(function(value, i0, i1)
+        checkargs(3,3,value,i0,i1)
+        local list = unwrap(Type.List, value)
+        i0 = unwrap_integer(i0)
+        i1 = unwrap_integer(i1)
+        local i = int64_t(0)
+        while (i < i0) do
+            assert(list ~= EOL)
+            list = list.next
+            i = i + 1
+        end
+        local count = int64_t(0)
+        if list ~= EOL then
+            count = list.count
+        end
+        if (count ~= (i1 - i0)) then
+            -- need to chop off tail, which requires creating a new list
+            assert(list ~= EOL)
+            local outlist = EOL
+            while (i < i1) do
+                assert(list ~= EOL)
+                outlist = List(list.at, outlist)
+                list = list.next
+                i = i + 1
+            end
+            list = reverse_list_inplace(outlist)
+        end
+        return Any(list)
+    end))
+
+builtins["get-scope-symbol"] = wrap_simple_builtin(function(scope, key, defvalue)
+    checkargs(2, 3, scope, key, defvalue)
+
+    scope = unwrap(Type.Scope, scope)
+    key = unwrap(Type.Symbol, key)
+
+    return scope:lookup(key) or defvalue or none
+end)
 
 -- data manipulation
 --------------------------------------------------------------------------------
 
-builtins["set-key!"] = wrap_simple_builtin(function(dest, key, value)
+builtins["set-scope-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     checkargs(3,3, dest, key, value)
-    local atable = unwrap(Type.Table, dest)
+    local atable = unwrap(Type.Scope, dest)
     local sym = unwrap(Type.Symbol, key)
-    if is_none(value) then
-        atable[sym] = null
-    else
-        atable[sym] = value
-    end
+    atable:bind(sym, value)
 end)
+
+builtins["bind!"] = function(frame, cont, self, param, value)
+    checkargs(2,2, param, value)
+    if is_quote_type(param.type) then
+        param = unquote(param)
+    end
+    param = unwrap(Type.Parameter, param)
+    if not param.flow then
+        error("can't rebind unbound parameter")
+    end
+    frame:rebind(param.flow, param.index, value)
+    return call(frame, none, cont)
+end
 
 -- auxiliary utilities
 --------------------------------------------------------------------------------
+
+builtins.dump = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    local fmt = StreamValueFormat(true)
+    stream_value(
+        stdout_writer,
+        value, fmt)
+    return value
+end)
 
 builtins.print = wrap_simple_builtin(function(...)
     local writer = stdout_writer
@@ -3404,16 +3852,51 @@ local function decl_builtin(name, value)
 end
 
 local function init_globals()
+    local function configure_int_type(_type, ctype)
+        local refct = reflect.typeof(ctype)
+        _type:bind(Symbol.Size, Any(size_t(refct.size)))
+        _type:bind(Symbol.Alignment, Any(size_t(refct.alignment)))
+        _type:bind(Symbol.Bitwidth, Any(int(refct.size * 8)))
+        _type:bind(Symbol.Unsigned, Any(bool(refct.unsigned or false)))
+        _type:bind(Symbol.Super, Any(Type.Integer))
+        _type.ctype = ctype
+    end
+    local function configure_real_type(_type, ctype)
+        local refct = reflect.typeof(ctype)
+        _type:bind(Symbol.Size, Any(size_t(refct.size)))
+        _type:bind(Symbol.Alignment, Any(size_t(refct.alignment)))
+        _type:bind(Symbol.Bitwidth, Any(int(refct.size * 8)))
+        _type:bind(Symbol.Super, Any(Type.Real))
+        _type.ctype = ctype
+    end
+    configure_int_type(Type.Bool, bool)
+    configure_int_type(Type.U8, uint8_t)
+    configure_int_type(Type.U16, uint16_t)
+    configure_int_type(Type.U32, uint32_t)
+    configure_int_type(Type.U64, uint64_t)
+    configure_int_type(Type.I8, int8_t)
+    configure_int_type(Type.I16, int16_t)
+    configure_int_type(Type.I32, int32_t)
+    configure_int_type(Type.I64, int64_t)
+
+    configure_real_type(Type.R32, float)
+    configure_real_type(Type.R64, double)
+
     globals = Scope()
     for name,value in pairs(builtins) do
         decl_builtin(name, value)
     end
+    globals:bind(Symbol("globals"), Any(globals))
+
     for _,entry in ipairs(builtin_ops) do
         local _type,name,value = unpack(entry)
         name,value = prepare_builtin_value(name,value)
         _type:bind(name, value)
     end
 end
+
+init_globals()
+end -- do
 
 --------------------------------------------------------------------------------
 -- TESTING
@@ -3434,6 +3917,15 @@ print
     < 10.0 5.0
     < 5.0 10.0
     != 1.0 1.0
+
+print
+    cast 5 i64
+
+print
+    == 5 5.0
+
+print
+    countof "test"
 print
     ordered-branch 3 4
         fn/cc () "=="
@@ -3469,7 +3961,6 @@ function test (a b)
 ]]
 
 local function test_lexer()
-    init_globals()
     local lexer = Lexer.init(new(rawstring, macro_test), null, "demo.b")
     local result,expr = parse(lexer)
     if result then
@@ -3479,11 +3970,17 @@ local function test_lexer()
             stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
             print("func:", func)
-            execute(
-                function(...)
-                    print(...)
-                end,
-                func)
+            local result,err = xpcall(
+                function()
+                    execute(
+                        function(...)
+                            print(...)
+                        end,
+                        func)
+                end, location_error_handler)
+            if not result then
+                print(err)
+            end
         else
             print(expexpr)
         end
@@ -3493,7 +3990,6 @@ local function test_lexer()
 end
 
 local function test_bangra()
-    init_globals()
     local src = SourceFile.open("bangra.b")
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, "bangra.b")
@@ -3504,6 +4000,7 @@ local function test_bangra()
         if result then
             --stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
+
             execute(
                 function(...)
                     print(...)
@@ -3534,8 +4031,8 @@ local function test_list()
 end
 
 --test_list()
-test_lexer()
---test_bangra()
+--test_lexer()
+test_bangra()
 --test_ansicolors()
 
 
