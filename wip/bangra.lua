@@ -803,116 +803,6 @@ repr = function(x)
 end
 
 --------------------------------------------------------------------------------
--- TYPE
---------------------------------------------------------------------------------
-
-local Type = {}
-local function assert_type(x)
-    if type(x) == "table" and getmetatable(x) == Type then
-        return x
-    else
-        error("type expected, got " .. repr(x))
-    end
-end
-local function define_types(def)
-    def('Void')
-    def('Any')
-
-    def('Bool')
-
-    def('I8')
-    def('I16')
-    def('I32')
-    def('I64')
-
-    def('U8')
-    def('U16')
-    def('U32')
-    def('U64')
-
-    def('R32')
-    def('R64')
-
-    def('Builtin')
-
-    def('Symbol')
-    def('List')
-    def('String')
-
-    def('SpecialForm')
-    def('Parameter')
-    def('Flow')
-    def('Table')
-
-    def('Closure')
-    def('Frame')
-
-    def('QuoteQualifier')
-    def('MacroQualifier')
-end
-
-do
-    Type.__index = Type
-    local idx = 0
-
-    local cls = Type
-    setmetatable(Type, {
-        __call = function(cls, name)
-            local k = idx
-            idx = idx + 1
-            return setmetatable({
-                name = name,
-                index = idx
-            }, Type)
-        end
-    })
-
-    function cls:__tostring()
-        return ansi(STYLE.KEYWORD, "type")
-            .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.TYPE, self.name)
-            .. ansi(STYLE.COMMENT, ">")
-    end
-
-    define_types(function(name)
-        cls[name] = Type(string.lower(name))
-    end)
-
-    local function make_qualifier_type(name, qualifier_type)
-        assert_type(qualifier_type)
-        local cache = {}
-        return function(_type)
-            assert_type(_type)
-            assert(_type.super ~= qualifier_type)
-            local val = cache[_type]
-            if not val then
-                val = Type(
-                    ansi(STYLE.TYPE, name)
-                    .. ansi(STYLE.OPERATOR, "[")
-                    .. ansi(STYLE.TYPE, _type.name)
-                    .. ansi(STYLE.OPERATOR, "]"))
-                val.element_type = _type
-                val.super = qualifier_type
-                cache[_type] = val
-            end
-            return val
-        end
-    end
-    Type.Macro = make_qualifier_type("macro", Type.MacroQualifier)
-    Type.Quote = make_qualifier_type("quote", Type.QuoteQualifier)
-end
-
-local function is_quote_type(_type)
-    assert_type(_type)
-    return _type.super == Type.QuoteQualifier
-end
-
-local function is_macro_type(_type)
-    assert_type(_type)
-    return _type.super == Type.MacroQualifier
-end
-
---------------------------------------------------------------------------------
 -- SYMBOL
 --------------------------------------------------------------------------------
 
@@ -961,7 +851,7 @@ local function define_symbols(def)
     def({ListWildcard='#list'})
     def({SymbolWildcard='#symbol'})
 
-    def({ScopeParent='#parent'})
+    def({Compare='compare'})
 end
 
 do
@@ -969,6 +859,142 @@ do
         local key, value = next(kv)
         Symbol[key] = Symbol(value)
     end)
+end
+
+--------------------------------------------------------------------------------
+-- TYPE
+--------------------------------------------------------------------------------
+
+local assert_any
+local is_none
+
+local Ordering = {
+    Less = -1,
+    Equal = 0,
+    Greater = 1,
+    Unordered = 0x7f,
+}
+
+local Type = {}
+local function assert_type(x)
+    if type(x) == "table" and getmetatable(x) == Type then
+        return x
+    else
+        error("type expected, got " .. repr(x))
+    end
+end
+local function define_types(def)
+    def('Void')
+    def('Any')
+    def('Type')
+
+    def('Bool')
+
+    def('I8')
+    def('I16')
+    def('I32')
+    def('I64')
+
+    def('U8')
+    def('U16')
+    def('U32')
+    def('U64')
+
+    def('R32')
+    def('R64')
+
+    def('Builtin')
+
+    def('Scope')
+
+    def('Symbol')
+    def('List')
+    def('String')
+
+    def('SpecialForm')
+    def('Parameter')
+    def('Flow')
+    def('Table')
+
+    def('Closure')
+    def('Frame')
+
+    def('QuoteQualifier')
+    def('MacroQualifier')
+end
+
+do
+    Type.__index = Type
+    local idx = 0
+
+    local cls = Type
+    setmetatable(Type, {
+        __call = function(cls, name)
+            local k = idx
+            idx = idx + 1
+            return setmetatable({
+                name = name,
+                index = idx,
+                symbols = {}
+            }, Type)
+        end
+    })
+    function cls:bind(name, value)
+        assert_symbol(name)
+        assert_any(value)
+        if is_none(value) then
+            value = null
+        end
+        self.symbols[name] = value
+    end
+    function cls:lookup(name)
+        assert_symbol(name)
+        return self.symbols[name]
+    end
+
+    function cls:__tostring()
+        return ansi(STYLE.KEYWORD, "type")
+            .. ansi(STYLE.COMMENT, "<")
+            .. ansi(STYLE.TYPE, self.name)
+            .. ansi(STYLE.COMMENT, ">")
+    end
+
+    define_types(function(name)
+        cls[name] = Type(string.lower(name))
+    end)
+
+    local function make_qualifier_type(name, qualifier_type)
+        assert_type(qualifier_type)
+        local cache = {}
+        return function(_type)
+            assert_type(_type)
+            assert(_type.super ~= qualifier_type)
+            local val = cache[_type]
+            if not val then
+                val = Type(
+                    ansi(STYLE.TYPE, name)
+                    .. ansi(STYLE.OPERATOR, "[")
+                    .. ansi(STYLE.TYPE, _type.name)
+                    .. ansi(STYLE.OPERATOR, "]"))
+                val.element_type = _type
+                val.super = qualifier_type
+                cache[_type] = val
+            end
+            return val
+        end
+    end
+    Type.Macro = make_qualifier_type("macro", Type.MacroQualifier)
+    Type.Quote = make_qualifier_type("quote", Type.QuoteQualifier)
+end
+
+local function is_quote_type(_type)
+    assert_type(_type)
+    return _type.super == Type.QuoteQualifier
+end
+
+local function is_macro_type(_type)
+    assert_type(_type)
+    return _type.super == Type.MacroQualifier
 end
 
 --------------------------------------------------------------------------------
@@ -1005,7 +1031,7 @@ function Any.__tostring(self)
         .. ansi(STYLE.COMMENT, ">")
 end
 
-local function assert_any(x)
+assert_any = function(x)
     if type(x) == "table" and getmetatable(x) == Any then
         return x
     else
@@ -1027,7 +1053,7 @@ local function assert_any_type(_type, value)
 end
 
 local none = Any(Type.Void, NULL)
-local function is_none(value)
+is_none = function(value)
     return value.type == Type.Void
 end
 
@@ -1909,7 +1935,7 @@ end
 -- IL OBJECTS
 --------------------------------------------------------------------------------
 
-local function verify_any_type(_type, value)
+local function unwrap(_type, value)
     assert_any(value)
     if (value.type == _type) then
         return value.value
@@ -2306,7 +2332,7 @@ local function call_flow(frame, cont, flow, ...)
         local arg = flow.arguments[i]
         if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
-            local args = verify_any_type(Type.Table, arg)
+            local args = unwrap(Type.Table, arg)
             for k=1,#args do
                 wbuf[idx] = args[k]
                 idx = idx + 1
@@ -2354,85 +2380,38 @@ end
 -- SCOPES
 --------------------------------------------------------------------------------
 
+local Scope = class("Scope")
 local function assert_scope(x)
-    if type(x) == "table" and getmetatable(x) == null then
+    if type(x) == "table" and getmetatable(x) == Scope then
         return x
     else
-        error("plain table expected, not " .. repr(x))
+        error("scope expected, not " .. repr(x))
     end
 end
-
-local function new_scope(scope)
-    local self = {}
-    if scope ~= nil then
-        assert_scope(scope)
-        self[Symbol.ScopeParent] = Any(scope)
-    end
-    return self
-end
-
-local function set_local(scope, name, value)
-    assert_scope(scope)
-    if type(name) == "string" then
-        name = Symbol(name)
-    end
-    assert_symbol(name)
-    assert_any(value)
-    scope[name] = value
-end
-
-local function get_parent(scope)
-    assert_scope(scope)
-    local parent = scope[Symbol.ScopeParent]
-    if parent then
-        return parent.value
-    end
-end
-
-local function get_local(scope, name)
-    assert_scope(scope)
-    assert_symbol(name)
-    while scope do
-        local result = scope[name]
-        if result then
-            return result
+do
+    local cls = Scope
+    function cls:init(scope)
+        -- symbol -> any
+        self.symbols = {}
+        if scope ~= null then
+            assert_scope(scope)
+            update(self.symbols, scope.symbols)
         end
-        scope = get_parent(scope)
     end
+    function cls:bind(name, value)
+        assert_symbol(name)
+        assert_any(value)
+        if is_none(value) then
+            value = null
+        end
+        self.symbols[name] = value
+    end
+    function cls:lookup(name)
+        assert_symbol(name)
+        return self.symbols[name]
+    end
+
 end
-
---[[
-template<BuiltinFlowFunction func>
-static void setBuiltinMacro(Table *scope, const std::string &name) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym, macro(wrap_ptr(TYPE_BuiltinFlow, (void *)func)));
-}
-
-template<SpecialFormFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym,
-        wrap_ptr(TYPE_SpecialForm, (void *)func));
-}
-
-template<BuiltinFlowFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
-    assert(scope);
-    auto sym = get_symbol(name);
-    set_ptr_symbol((void *)func, sym);
-    setLocal(scope, sym,
-        wrap_ptr(TYPE_BuiltinFlow, (void *)func));
-}
-
-template<BuiltinFunction func>
-static void setBuiltin(Table *scope, const std::string &name) {
-    setBuiltin< builtin_call<func> >(scope, name);
-}
-]]
 
 --------------------------------------------------------------------------------
 -- MACRO EXPANDER
@@ -2462,7 +2441,7 @@ local function verify_at_parameter_count(topit, mincount, maxcount)
     assert_list(topit)
     assert(topit ~= EOL)
     local val = topit.at
-    verify_any_type(Type.List, val)
+    unwrap(Type.List, val)
     verify_list_parameter_count(val.value, mincount, maxcount)
 end
 
@@ -2472,7 +2451,7 @@ end
 -- 1. each function is called with a flow node as target argument; it represents
 --    a continuation that should be called with the resulting value.
 
-local globals = new_scope()
+local globals
 
 --static Cursor expand (const Table *env, const List *topit);
 --static Any compile (const Any &expr, const Any &dest);
@@ -2496,7 +2475,7 @@ local function toparameter(env, value)
     end
     assert_symbol(sym)
     local param = Any(Parameter(sym))
-    set_local(env, sym, param)
+    env:bind(sym, param)
     return param
 end
 
@@ -2519,8 +2498,8 @@ end
 local function wrap_expand_builtin(f)
     return function(frame, cont, dest, topit, env)
         local cur_list, cur_env = f(
-            verify_any_type(Type.Table, env),
-            verify_any_type(Type.List, topit))
+            unwrap(Type.Scope, env),
+            unwrap(Type.List, topit))
         assert(cur_env)
         if not cur_env then
             return call(frame, none, cont, Any(cur_list))
@@ -2534,13 +2513,13 @@ local function expand_do(env, topit)
     assert_scope(env)
     assert_list(topit)
 
-    local it = verify_any_type(Type.List, topit.at)
+    local it = unwrap(Type.List, topit.at)
 
-    local subenv = new_scope(env)
+    local subenv = Scope(env)
     return
         List(
             quote(Any(List(
-                get_local(globals, Symbol.DoForm) or none,
+                globals:lookup(Symbol.DoForm) or none,
                 expand_expr_list(subenv, it)))),
             topit.next), env
 end
@@ -2550,7 +2529,7 @@ local function expand_continuation(env, topit)
     assert_list(topit)
     verify_at_parameter_count(topit, 1, -1)
 
-    local it = verify_any_type(Type.List, topit.at)
+    local it = unwrap(Type.List, topit.at)
     it = it.next
 
     local sym
@@ -2566,10 +2545,10 @@ local function expand_continuation(env, topit)
     local expr_parameters = it.at
     it = it.next
 
-    local subenv = new_scope(env)
+    local subenv = Scope(env)
 
     local outargs = EOL
-    local params = verify_any_type(Type.List, expr_parameters)
+    local params = unwrap(Type.List, expr_parameters)
     local param = params
     while (param ~= EOL) do
         outargs = List(toparameter(subenv, param.at), outargs)
@@ -2580,7 +2559,7 @@ local function expand_continuation(env, topit)
         List(
             quote(Any(
                 List(
-                    get_local(globals, Symbol.ContinuationForm) or none,
+                    globals:lookup(Symbol.ContinuationForm) or none,
                     List(
                         sym,
                         List(
@@ -2594,7 +2573,7 @@ local function expand_syntax_extend(env, topit)
 
     local fun = compile(unquote(cur_list.at), none)
     return cur_list.next, execute(function(expr_env)
-        return verify_any_type(Type.Table, expr_env)
+        return unwrap(Type.Scope, expr_env)
     end, fun, Any(env))
 end
 
@@ -2606,7 +2585,7 @@ local function expand_wildcard(env, handler, topit)
         if (is_none(result)) then
             return EOL
         end
-        return verify_any_type(Type.List, result)
+        return unwrap(Type.List, result)
     end, handler, Any(topit), Any(env))
 end
 
@@ -2618,8 +2597,8 @@ local function expand_macro(env, handler, topit)
         if (is_none(result_list)) then
             return EOL
         end
-        return verify_any_type(Type.List, result_list),
-            result_scope and verify_any_type(Type.Table, result_scope)
+        return unwrap(Type.List, result_list),
+            result_scope and unwrap(Type.Scope, result_scope)
     end, handler,  Any(topit), Any(env))
 end
 
@@ -2643,7 +2622,7 @@ expand = function(env, topit)
 
         -- resolve symbol
         if (head.type == Type.Symbol) then
-            head = get_local(env, head.value) or none
+            head = env:lookup(head.value) or none
         end
 
         if (is_macro_type(head.type)) then
@@ -2661,7 +2640,7 @@ expand = function(env, topit)
             end
         end
 
-        local default_handler = get_local(env, Symbol.ListWildcard)
+        local default_handler = env:lookup(Symbol.ListWildcard)
         if default_handler then
             local result = expand_wildcard(env, default_handler, topit)
             if result then
@@ -2670,14 +2649,14 @@ expand = function(env, topit)
             end
         end
 
-        local it = verify_any_type(Type.List, topit.at)
+        local it = unwrap(Type.List, topit.at)
         result = Any(expand_expr_list(env, it))
         topit = topit.next
     elseif expr.type == Type.Symbol then
         local value = expr.value
-        result = get_local(env, value)
+        result = env:lookup(value)
         if result == null then
-            local default_handler = get_local(env, Symbol.SymbolWildcard)
+            local default_handler = env:lookup(Symbol.SymbolWildcard)
             if default_handler then
                 local result = expand_wildcard(env, default_handler, topit)
                 if result then
@@ -2855,7 +2834,7 @@ local function compile_continuation(it, dest)
     it = it.next
 
     assert(it ~= EOL)
-    local func_name = verify_any_type(Type.Symbol, it.at)
+    local func_name = unwrap(Type.Symbol, it.at)
 
     it = it.next
 
@@ -2869,9 +2848,9 @@ local function compile_continuation(it, dest)
 
         builder.continue_at(func)
 
-        local param = verify_any_type(Type.List, expr_parameters)
+        local param = unwrap(Type.List, expr_parameters)
         while (param ~= EOL) do
-            func:append_parameter(verify_any_type(Type.Parameter, param.at))
+            func:append_parameter(unwrap(Type.Parameter, param.at))
             param = param.next
         end
         if (#func.parameters == 0) then
@@ -2997,7 +2976,7 @@ local function expand_and_compile(expr, name)
     anchor->offset = 0;
     ]]
 
-    local rootit = verify_any_type(Type.List, expr)
+    local rootit = unwrap(Type.List, expr)
     local expexpr = expand_expr_list(env, rootit)
 
     return compile_root(expr, name)
@@ -3030,9 +3009,15 @@ wrap = function(value)
             return Type.SpecialForm, value
         elseif mt == Any then -- effectively create a copy
             return value.type, value.value
+        elseif mt == Type then
+            return Type.Type, value
+        elseif mt == Scope then
+            return Type.Scope, value
         elseif mt == null then
             return Type.Table, value
         end
+    elseif t == 'string' then
+        return Type.String, value
     elseif t == 'cdata' then
         local ct = typeof(value)
         if istype(bool, ct) then
@@ -3111,22 +3096,269 @@ end
 -- BUILTINS
 --------------------------------------------------------------------------------
 
+local function checkargs(mincount, maxcount, ...)
+    if ((mincount <= 0) and (maxcount == -1)) then
+        return true
+    end
+
+    local count = 0
+    for i=1,select('#', ...) do
+        local arg = select(i, ...)
+        if arg ~= null then
+            assert_any(arg)
+            count = count + 1
+        else
+            break
+        end
+    end
+
+    if ((maxcount >= 0) and (count > maxcount)) then
+        location_error(
+            format("excess argument. At most %i arguments expected", maxcount))
+    end
+    if ((mincount >= 0) and (count < mincount)) then
+        location_error(
+            format("at least %i arguments expected", mincount))
+    end
+    return count
+end
+
 local function wrap_simple_builtin(f)
     return function(frame, cont, self, ...)
         return call(frame, none, cont, f(...))
     end
 end
 
+local function builtin_macro(value)
+    return macro(Any(Builtin(wrap_expand_builtin(value))))
+end
+
+local builtins = {}
+local builtin_ops = {}
+
+local function builtin_op(_type, name, func)
+    table.insert(builtin_ops, {_type, name, func})
+end
+
+-- constants
+--------------------------------------------------------------------------------
+
+builtins["true"] = bool(true)
+builtins["false"] = bool(false)
+
+-- types
+--------------------------------------------------------------------------------
+
+builtins.symbol = Type.Symbol
+
+-- special forms
+--------------------------------------------------------------------------------
+
+builtins.call = SpecialForm(compile_call)
+builtins["cc/call"] = SpecialForm(compile_contcall)
+builtins[Symbol.ContinuationForm] = SpecialForm(compile_continuation)
+builtins[Symbol.DoForm] = SpecialForm(compile_do)
+
+-- builtin macros
+--------------------------------------------------------------------------------
+
+builtins["do"] = builtin_macro(expand_do)
+builtins["fn/cc"] = builtin_macro(expand_continuation)
+builtins["syntax-extend"] = builtin_macro(expand_syntax_extend)
+
+-- flow control
+--------------------------------------------------------------------------------
+
 local b_true = bool(true)
-local function builtin_branch(frame, cont, self, cond, then_cont, else_cont)
-    if verify_any_type(Type.Bool, cond) == b_true then
-        call(frame, cont, then_cont)
+function builtins.branch(frame, cont, self, cond, then_cont, else_cont)
+    checkargs(3,3,cond,then_cont,else_cont)
+    if unwrap(Type.Bool, cond) == b_true then
+        return call(frame, cont, then_cont)
     else
-        call(frame, cont, else_cont)
+        return call(frame, cont, else_cont)
     end
 end
 
-local function builtin_print(...)
+local function ordered_branch(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
+    local function unordered(frame, cont, self)
+        local rcmp = b.type:lookup(Symbol.Compare)
+        if rcmp then
+            return call(frame, cont, rcmp, b, a,
+                equal_cont, unordered_cont, greater_cont, less_cont)
+        else
+            return call(frame, cont, unordered_cont)
+        end
+    end
+    local cmp = a.type:lookup(Symbol.Compare)
+    if cmp then
+        return call(frame, cont, cmp, a, b,
+            equal_cont, Any(Builtin(unordered)), less_cont, greater_cont)
+    else
+        return unordered()
+    end
+end
+-- ordered-branch(a, b, equal, unordered [, less [, greater]])
+builtins['ordered-branch'] = ordered_branch
+
+local any_true = Any(bool(true))
+local any_false = Any(bool(false))
+local return_true = Any(Builtin(function(frame, cont, self)
+    return call(frame, none, cont, any_true)
+end))
+local return_false = Any(Builtin(function(frame, cont, self)
+    return call(frame, none, cont, any_false)
+end))
+builtins['=='] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_true, return_false, return_false, return_false)
+end
+builtins['!='] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_false, return_true, return_true, return_true)
+end
+builtins['<'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_false, return_false, return_true, return_false)
+end
+builtins['<='] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_true, return_false, return_true, return_false)
+end
+builtins['>'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_false, return_false, return_false, return_true)
+end
+builtins['>='] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_true, return_false, return_false, return_true)
+end
+
+-- constructors
+--------------------------------------------------------------------------------
+
+builtins.escape = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    return quote(value)
+end)
+
+builtins["block-scope-macro"] = wrap_simple_builtin(function(func)
+    checkargs(1,1, func)
+    unwrap(Type.Closure, func)
+    return macro(func)
+end)
+
+builtins.cons = wrap_simple_builtin(function(at, next)
+    checkargs(2,2, at, next)
+    unwrap(Type.List, next)
+    return List(at, next)
+end)
+
+-- operations
+--------------------------------------------------------------------------------
+
+local function compare_bool_func(T)
+    builtin_op(T, Symbol.Compare,
+        function(frame, cont, self, a, b,
+            equal_cont, unordered_cont, less_cont, greater_cont)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a == b) then
+                return call(frame, cont, equal_cont)
+            else
+                return call(frame, cont, unordered_cont)
+            end
+        end)
+end
+
+compare_bool_func(Type.Bool)
+
+local function compare_int_func(T)
+    builtin_op(T, Symbol.Compare,
+        function(frame, cont, self, a, b,
+            equal_cont, unordered_cont, less_cont, greater_cont)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a == b) then
+                return call(frame, cont, equal_cont)
+            elseif (a < b) then
+                return call(frame, cont, less_cont)
+            else
+                return call(frame, cont, greater_cont)
+            end
+        end)
+end
+
+compare_int_func(Type.I8)
+compare_int_func(Type.I16)
+compare_int_func(Type.I32)
+compare_int_func(Type.I64)
+compare_int_func(Type.U8)
+compare_int_func(Type.U16)
+compare_int_func(Type.U32)
+compare_int_func(Type.U64)
+
+local function compare_real_func(T, base)
+    local eq = C[base .. '_eq']
+    local lt = C[base .. '_lt']
+    local gt = C[base .. '_gt']
+    builtin_op(T, Symbol.Compare,
+        function(frame, cont, self, a, b,
+            equal_cont, unordered_cont, less_cont, greater_cont)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if eq(a,b) then
+                return call(frame, cont, equal_cont)
+            elseif lt(a,b) then
+                return call(frame, cont, less_cont)
+            elseif gt(a,b) then
+                return call(frame, cont, greater_cont)
+            else
+                return call(frame, cont, unordered_cont)
+            end
+        end)
+end
+
+compare_real_func(Type.R32, 'bangra_r32')
+compare_real_func(Type.R64, 'bangra_r64')
+
+-- list api
+--------------------------------------------------------------------------------
+
+--[[
+builtins['list-compare'] = function(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    checkargs(4,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
+
+
+    less_cont = less_cont or unordered_cont
+    greater_cont = greater_cont or unordered_cont
+    a = unwrap(Type.List, a)
+    b = unwrap(Type.List, b)
+
+
+    return List(at, next)
+end) ]]
+
+-- data manipulation
+--------------------------------------------------------------------------------
+
+builtins["set-key!"] = wrap_simple_builtin(function(dest, key, value)
+    checkargs(3,3, dest, key, value)
+    local atable = unwrap(Type.Table, dest)
+    local sym = unwrap(Type.Symbol, key)
+    if is_none(value) then
+        atable[sym] = null
+    else
+        atable[sym] = value
+    end
+end)
+
+-- auxiliary utilities
+--------------------------------------------------------------------------------
+
+builtins.print = wrap_simple_builtin(function(...)
     local writer = stdout_writer
     for i=1,select('#', ...) do
         if i > 1 then
@@ -3140,13 +3372,13 @@ local function builtin_print(...)
         end
     end
     writer('\n')
-end
+end)
 
 --------------------------------------------------------------------------------
 -- GLOBALS
 --------------------------------------------------------------------------------
 
-local function decl_builtin(name, value)
+local function prepare_builtin_value(name, value)
     local ty = type(value)
     if ty == "function" then
         value = Builtin(value)
@@ -3161,60 +3393,30 @@ local function decl_builtin(name, value)
         or (value.type == Type.SpecialForm))
         and value.value.name == Symbol.Unnamed then
         value.value.name = name
+    elseif is_macro_type(value.type) then
+        value.value.name = name
     end
-    set_local(globals, name, value)
+    return name, value
 end
 
-local function decl_builtin_macro(name, value)
-    if type(name) == "string" then
-        name = Symbol(name)
-    end
-    assert_symbol(name)
-    value = Builtin(wrap_expand_builtin(value))
-    value.name = name
-    decl_builtin(name, macro(Any(value)))
+local function decl_builtin(name, value)
+    globals:bind(prepare_builtin_value(name, value))
 end
 
 local function init_globals()
-    decl_builtin("call", SpecialForm(compile_call))
-    decl_builtin("cc/call", SpecialForm(compile_contcall))
-    decl_builtin(Symbol.ContinuationForm,
-        SpecialForm(compile_continuation))
-    decl_builtin(Symbol.DoForm, SpecialForm(compile_do))
-
-    decl_builtin_macro("do", expand_do)
-    decl_builtin_macro("fn/cc", expand_continuation)
-    decl_builtin_macro("syntax-extend", expand_syntax_extend)
-
-    decl_builtin("branch", builtin_branch)
-
-    decl_builtin("print", wrap_simple_builtin(builtin_print))
-
-    decl_builtin("true", bool(true))
-    decl_builtin("false", bool(false))
+    globals = Scope()
+    for name,value in pairs(builtins) do
+        decl_builtin(name, value)
+    end
+    for _,entry in ipairs(builtin_ops) do
+        local _type,name,value = unpack(entry)
+        name,value = prepare_builtin_value(name,value)
+        _type:bind(name, value)
+    end
 end
-
-init_globals()
 
 --------------------------------------------------------------------------------
 -- TESTING
---------------------------------------------------------------------------------
-
---[[
-how to implement type dependent operators:
-
-bind-type-op! type (symbol +) func
-    -->
-        typemap[type][(symbol +)] = func
-
-
-macro: + a b
-evaluates to:
-    form:+(typemap, a, b)
-
-
-]]
-
 --------------------------------------------------------------------------------
 
 local macro_test = [[
@@ -3222,13 +3424,22 @@ print 1 2 3
 print "hello world"
 ((fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!")
 print
-    branch true
-        fn/cc (_)
-            print "true!"
-            _ 1 2 3
-        fn/cc (_)
-            print "false!"
-            _ 4 5 6
+    == 3 4
+    == 3 3
+    != 3 3
+    != 3 4
+print
+    == 1.0 1.0
+    == 1.0 1.1
+    < 10.0 5.0
+    < 5.0 10.0
+    != 1.0 1.0
+print
+    ordered-branch 3 4
+        fn/cc () "=="
+        fn/cc () "!="
+        fn/cc () "<"
+        fn/cc () ">"
 ]]
 
 local lexer_test = [[
@@ -3258,15 +3469,16 @@ function test (a b)
 ]]
 
 local function test_lexer()
+    init_globals()
     local lexer = Lexer.init(new(rawstring, macro_test), null, "demo.b")
     local result,expr = parse(lexer)
     if result then
         stream_value(stdout_writer, expr, StreamValueFormat(true))
-        local result,expexpr = expand_root(verify_any_type(Type.List, expr))
+        local result,expexpr = expand_root(unwrap(Type.List, expr))
         if result then
             stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
-            print(func)
+            print("func:", func)
             execute(
                 function(...)
                     print(...)
@@ -3281,13 +3493,14 @@ local function test_lexer()
 end
 
 local function test_bangra()
+    init_globals()
     local src = SourceFile.open("bangra.b")
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, "bangra.b")
     local result,expr = parse(lexer)
     if result then
         --stream_value(stdout_writer, expr, StreamValueFormat(true))
-        local result,expexpr = expand_root(verify_any_type(Type.List, expr))
+        local result,expexpr = expand_root(unwrap(Type.List, expr))
         if result then
             --stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))

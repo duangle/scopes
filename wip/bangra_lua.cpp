@@ -95,6 +95,17 @@ void bangra_strtof(float *v, const char *str, char **str_end );
 void bangra_strtoll(long long int *v, const char* str, char** endptr, int base);
 void bangra_strtoull(unsigned long long int *v, const char* str, char** endptr, int base);
 
+bool bangra_r32_eq(float a, float b);
+bool bangra_r32_ne(float a, float b);
+bool bangra_r32_lt(float a, float b);
+bool bangra_r32_gt(float a, float b);
+
+bool bangra_r64_eq(double a, double b);
+bool bangra_r64_ne(double a, double b);
+bool bangra_r64_lt(double a, double b);
+bool bangra_r64_gt(double a, double b);
+
+
 #if defined __cplusplus
 }
 #endif
@@ -303,6 +314,16 @@ int escape_string(char *buf, const char *str, int strcount, const char *quote_ch
         return ctx.count + 1;
     }
 }
+
+bool bangra_r32_eq(float a, float b) { return a == b; }
+bool bangra_r32_ne(float a, float b) { return a != b; }
+bool bangra_r32_lt(float a, float b) { return a <  b; }
+bool bangra_r32_gt(float a, float b) { return a >  b; }
+
+bool bangra_r64_eq(double a, double b) { return a == b; }
+bool bangra_r64_ne(double a, double b) { return a != b; }
+bool bangra_r64_lt(double a, double b) { return a <  b; }
+bool bangra_r64_gt(double a, double b) { return a >  b; }
 
 //------------------------------------------------------------------------------
 // MAIN

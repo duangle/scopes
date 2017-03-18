@@ -6,10 +6,10 @@ syntax-extend stage-0 (_ scope)
     set-key! scope
         symbol "quote"
         block-scope-macro
-            fn/cc quote (_ expr scope)
+            fn/cc quote (return expr scope)
                 call
                     fn/cc (_ args)
-                        tupleof
+                        return
                             cons
                                 # stop compiler expansion
                                 escape
@@ -29,7 +29,7 @@ syntax-extend stage-0 (_ scope)
     set-key! scope
         symbol "set!"
         block-scope-macro
-            fn/cc set! (_ expr scope)
+            fn/cc set! (return expr scope)
                 call
                     fn/cc (_ name)
                         call
@@ -39,7 +39,7 @@ syntax-extend stage-0 (_ scope)
                                     fn/cc () none
                                     fn/cc ()
                                         error "set! requires parameter argument"
-                                tupleof
+                                return
                                     cons
                                         cons bind!
                                             cons
