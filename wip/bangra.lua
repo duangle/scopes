@@ -21,6 +21,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 --]]
 
+local trace_execution
+    = false
+    --= true
+
 --------------------------------------------------------------------------------
 -- verify luajit was built with the right flags
 
@@ -38,37 +42,39 @@ end
 -- strict.lua
 --------------------------------------------------------------------------------
 
-local mt = getmetatable(_G)
-if mt == nil then
-  mt = {}
-  setmetatable(_G, mt)
-end
+do
+    local mt = getmetatable(_G)
+    if mt == nil then
+      mt = {}
+      setmetatable(_G, mt)
+    end
 
-__STRICT = true
-mt.__declared = {
-    global = true
-}
+    __STRICT = true
+    mt.__declared = {
+        global = true
+    }
 
-mt.__newindex = function (t, n, v)
-  if __STRICT and not mt.__declared[n] then
-    --local w = debug.getinfo(2, "S").what
-    --if w ~= "main" and w ~= "C" then
-    error("assign to undeclared variable '"..n.."'", 2)
-    --end
-    mt.__declared[n] = true
-  end
-  rawset(t, n, v)
-end
+    mt.__newindex = function (t, n, v)
+      if __STRICT and not mt.__declared[n] then
+        --local w = debug.getinfo(2, "S").what
+        --if w ~= "main" and w ~= "C" then
+        error("assign to undeclared variable '"..n.."'", 2)
+        --end
+        mt.__declared[n] = true
+      end
+      rawset(t, n, v)
+    end
 
-mt.__index = function (t, n)
-  if not mt.__declared[n] and debug.getinfo(2, "S").what ~= "C" then
-    error("variable '"..n.."' is not declared", 2)
-  end
-  return rawget(t, n)
-end
+    mt.__index = function (t, n)
+      if not mt.__declared[n] and debug.getinfo(2, "S").what ~= "C" then
+        error("variable '"..n.."' is not declared", 2)
+      end
+      return rawget(t, n)
+    end
 
-function global(...)
-   for _, v in ipairs{...} do mt.__declared[v] = true end
+    function global(...)
+       for _, v in ipairs{...} do mt.__declared[v] = true end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -658,6 +664,29 @@ local function assert_boolean(x) assert_luatype("boolean", x) end
 local function assert_cdata(x) assert_luatype("cdata", x) end
 local function assert_function(x) assert_luatype("function", x) end
 
+local function safecallr(f1, f2)
+    local function fwd_xpcall_dest(result, ...)
+        if result then
+            return result, ...
+        else
+            return result, f2(...)
+        end
+    end
+    return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
+end
+
+local function safecall(f1, f2)
+    local function fwd_xpcall_dest(result, ...)
+        if result then
+            return ...
+        else
+            return f2(...)
+        end
+    end
+    return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
+end
+
+
 --------------------------------------------------------------------------------
 -- ANSI COLOR FORMATTING
 --------------------------------------------------------------------------------
@@ -1113,29 +1142,35 @@ end
 -- ANCHOR
 --------------------------------------------------------------------------------
 
-cdef[[
-typedef struct _Anchor {
-    const char *path;
-    int lineno;
-    int column;
-    int offset;
-} Anchor;
-]]
-local Anchor
-
-do
-    local cls = {}
-    local function anchor_tostring(self)
-        return
-            ansi(STYLE.LOCATION, ffi.string(self.path))
-            .. ansi(STYLE.OPERATOR, ":")
-            .. format("%i", self.lineno)
-            .. ansi(STYLE.OPERATOR, ":")
-            .. format("%i", self.column)
+local Anchor = class("Anchor")
+local function assert_anchor(x)
+    if type(x) == "table" and getmetatable(x) == Anchor then
+        return x
+    else
+        error("expected anchor, got " .. repr(x))
     end
-    Anchor = ffi.metatype('Anchor', {
-        __index = cls,
-        __tostring = anchor_tostring })
+end
+do
+    local cls = Anchor
+    function cls:init(path, lineno, column, offset)
+        assert_string(path)
+        assert_number(lineno)
+        assert_number(column)
+        offset = offset or 0
+        assert_number(offset)
+        self.path = path
+        self.lineno = lineno
+        self.column = column
+        self.offset = offset
+    end
+    function cls:format_plain()
+        return self.path
+            .. ':' .. format("%i", self.lineno)
+            .. ':' .. format("%i", self.column)
+    end
+    function cls:__tostring()
+        return ansi(STYLE.LOCATION, self:format_plain())
+    end
 end
 
 local active_anchor
@@ -1374,31 +1409,53 @@ end
 -- SOURCE FILE
 --------------------------------------------------------------------------------
 
-cdef[[
-typedef struct _SourceFile {
-    int fd;
-    off_t length;
-    void *ptr;
-} SourceFile;
-]]
-
-local SourceFile
+local SourceFile = class("SourceFile")
 do
-    local cls = {}
-    function cls.open(path)
-        local file = ffi.gc(SourceFile(-1, 0, null), cls.close)
-        file.fd = C.open(path, C._O_RDONLY)
-        if (file.fd >= 0) then
-            file.length = C.lseek(file.fd, 0, C._SEEK_END)
-            file.ptr = C.mmap(null,
-                file.length, C._PROT_READ, C._MAP_PRIVATE, file.fd, 0)
-            if (file.ptr ~= MAP_FAILED) then
-                return file
-            end
-        end
-        file:close()
+    local file_cache = setmetatable({}, {__mode = "v"})
+    local gc_token = typeof('struct {}')
+
+    local cls = SourceFile
+    function cls:init(path)
+        self.path = path
+        self.fd = -1
+        self.length = 0
+        self.ptr = MAP_FAILED
     end
-    function cls.close(self)
+
+    function cls.open(path, str)
+        assert_string(path)
+        local file = file_cache[path]
+        if file == null then
+            if str ~= null then
+                assert_string(str)
+                local file = SourceFile(path)
+                file.ptr = new(rawstring, str)
+                file.length = #str
+                -- keep reference
+                file._str = str
+                file_cache[path] = file
+                return file
+            else
+                local file = SourceFile(path)
+                file.fd = C.open(path, C._O_RDONLY)
+                if (file.fd >= 0) then
+                    file.length = C.lseek(file.fd, 0, C._SEEK_END)
+                    file.ptr = C.mmap(null,
+                        file.length, C._PROT_READ, C._MAP_PRIVATE, file.fd, 0)
+                    if (file.ptr ~= MAP_FAILED) then
+                        file_cache[path] = file
+                        file._close_token = ffi.gc(new(gc_token), cls.close)
+                        return file
+                    end
+                end
+                file:close()
+            end
+        else
+            return file
+        end
+    end
+    function cls:close()
+        assert(not self._str)
         if (self.ptr ~= MAP_FAILED) then
             C.munmap(self.ptr, self.length)
             self.ptr = MAP_FAILED
@@ -1409,17 +1466,18 @@ do
             self.fd = -1
         end
     end
-    function cls.is_open(self)
+    function cls:is_open()
         return (self.fd ~= -1)
     end
-    function cls.strptr(self)
-        assert(self:is_open())
-        return cast(rawstring, self.ptr);
+    function cls:strptr()
+        assert(self:is_open() or self._str)
+        return cast(rawstring, self.ptr)
     end
     local CR = ord('\n')
-    function cls.dump_line(self, offset, writer)
+    function cls:dump_line(offset, writer)
         local str = self:strptr()
         if (offset >= self.length) then
+            writer("<cannot display location in source file>\n")
             return
         end
         local start = offset
@@ -1446,8 +1504,13 @@ do
         writer(ansi(STYLE.OPERATOR, '^'))
         writer("\n")
     end
+end
 
-    SourceFile = ffi.metatype('SourceFile', { __index = cls })
+function Anchor:dump_source_line(writer)
+    local sf = SourceFile.open(self.path)
+    if sf then
+        sf:dump_line(self.offset, writer)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -1456,16 +1519,12 @@ local function location_error_handler(err)
     if (type(err) == "table") and err.anchor then
         local msg = err.msg
         if err.anchor then
-            msg = tostring(err.anchor)
-                .. ansi(STYLE.OPERATOR,":") .. " " .. msg
-            local sf = SourceFile.open(err.anchor.path)
-            if sf then
-                msg = msg .. "\n"
-                sf:dump_line(err.anchor.offset,
-                    function (s)
-                        msg = msg .. s
-                    end)
-            end
+            msg =
+                ansi(STYLE.LOCATION, err.anchor:format_plain() .. ": ")
+                .. msg .. "\n"
+            err.anchor:dump_source_line(function(s)
+                msg = msg .. s
+            end)
         end
         return traceback(msg,3)
     else
@@ -1511,7 +1570,7 @@ do
     end
 
     setmetatable(List, {
-        __call = function (cls, at, next)
+        __call = function (cls, at, next, anchor)
             assert_any(at)
             assert_list(next)
             local count
@@ -1520,10 +1579,14 @@ do
             else
                 count = 1
             end
+            if anchor then
+                assert_anchor(anchor)
+            end
             return setmetatable({
                 at = at,
                 next = next,
-                count = count
+                count = count,
+                anchor = anchor
             }, List)
         end
     })
@@ -1557,8 +1620,8 @@ local function ListBuilder(lexer)
     local prev = EOL
     local eol = EOL
     local cls = {}
-    function cls.append(value)
-        prev = List(value, prev)
+    function cls.append(value, anchor)
+        prev = List(value, prev, anchor)
         assert(prev)
     end
     function cls.reset_start()
@@ -1567,14 +1630,14 @@ local function ListBuilder(lexer)
     function cls.is_expression_empty()
         return (prev == EOL)
     end
-    function cls.split()
+    function cls.split(anchor)
         -- if we haven't appended anything, that's an error
         if (cls.is_expression_empty()) then
             error("can't split empty expression")
         end
         -- reverse what we have, up to last split point and wrap result
         -- in cell
-        prev = List(Any(reverse_list_inplace(prev, eol)), eol)
+        prev = List(Any(reverse_list_inplace(prev, eol)), eol, anchor)
         assert(prev)
         cls.reset_start()
     end
@@ -1614,7 +1677,7 @@ local function parse(lexer)
                 -- point to beginning of list
                 --error_origin = builder.getAnchor();
             elseif (lexer.token == Token.statement) then
-                builder.split()
+                builder.split(lexer:anchor())
                 lexer:read_token()
             else
                 builder.append(parse_any())
@@ -1628,27 +1691,27 @@ local function parse(lexer)
     -- to prev
     parse_any = function()
         assert(lexer.token ~= Token.eof)
-        --auto anchor = lexer.newAnchor();
+        local anchor = lexer:anchor()
         if (lexer.token == Token.open) then
-            return Any(parse_list(Token.close))
+            return Any(parse_list(Token.close)), anchor
         elseif (lexer.token == Token.square_open) then
             local list = parse_list(Token.square_close)
             local sym = get_symbol("[")
-            return Any(List(wrap(sym), list))
+            return Any(List(wrap(sym), list)), anchor
         elseif (lexer.token == Token.curly_open) then
             local list = parse_list(Token.curly_close)
             local sym = get_symbol("{")
-            return Any(List(wrap(sym), list))
+            return Any(List(wrap(sym), list)), anchor
         elseif ((lexer.token == Token.close)
             or (lexer.token == Token.square_close)
             or (lexer.token == Token.curly_close)) then
             location_error("stray closing bracket")
         elseif (lexer.token == Token.string) then
-            return lexer:get_string()
+            return lexer:get_string(), anchor
         elseif (lexer.token == Token.symbol) then
-            return lexer:get_symbol()
+            return lexer:get_symbol(), anchor
         elseif (lexer.token == Token.number) then
-            return lexer:get_number()
+            return lexer:get_number(), anchor
         else
             error("unexpected token: %c (%i)",
                 tochar(lexer.cursor[0]), lexer.cursor[0])
@@ -1661,6 +1724,7 @@ local function parse(lexer)
         local escape = false
         local subcolumn = 0
 
+        local anchor = lexer:anchor()
         local builder = ListBuilder(lexer)
 
         while (lexer.token ~= Token.eof) do
@@ -1698,7 +1762,7 @@ local function parse(lexer)
                 if builder.is_expression_empty() then
                     lexer:read_token()
                 else
-                    builder.split()
+                    builder.split(lexer:anchor())
                     lexer:read_token()
                     -- if we are in the same line, continue in parent
                     if (lexer.lineno == lineno) then
@@ -1718,15 +1782,15 @@ local function parse(lexer)
         end
 
         if (builder.is_single_result()) then
-            return builder.get_single_result()
+            return builder.get_single_result(), anchor
         else
-            return Any(builder.get_result())
+            return Any(builder.get_result()), anchor
         end
     end
 
     local function parse_root()
-        local builder = ListBuilder(lexer)
         lexer:read_token()
+        local builder = ListBuilder(lexer)
         while (lexer.token ~= Token.eof) do
             if (lexer.token == Token.none) then
                 break
@@ -1736,7 +1800,7 @@ local function parse(lexer)
         return Any(builder.get_result())
     end
 
-    return xpcall(
+    return safecallr(
         function()
             return parse_root()
         end,
@@ -1747,36 +1811,6 @@ end
 --------------------------------------------------------------------------------
 -- VALUE PRINTER
 --------------------------------------------------------------------------------
-
-local function is_nested(e)
-    if (e.type == Type.List) then
-        local it = e.value
-        while (it ~= EOL) do
-            if (it.at.type == Type.List) then
-                return true
-            end
-            it = it.next
-        end
-    end
-    return false
-end
-
-local function stream_anchor(writer, e, depth)
-    depth = depth or 0
-    --[[
-    const Anchor *anchor = find_valid_anchor(e);
-    if (anchor) {
-        stream <<
-            format("%s:%i:%i: ",
-                anchor->path,
-                anchor->lineno,
-                anchor->column);
-    }
-    --]]
-    for i=1,depth do
-        writer("    ")
-    end
-end
 
 -- keywords and macros
 local KEYWORDS = set(split(
@@ -1819,62 +1853,114 @@ local TYPES = set(split(
     ))
 
 local function StreamValueFormat(naked, depth, opts)
-    if type(naked) == "table" then
-        local obj = naked
-        return {
-            depth = obj.depth,
-            naked = obj.naked,
-            maxdepth = obj.maxdepth,
-            maxlength = obj.maxlength,
-            keywords = obj.keywords,
-            functions = obj.functions,
-            sfxfunctions = obj.sfxfunctions,
-            operators = obj.operators,
-            types = obj.types
-        }
-    else
-        opts = opts or {}
-        opts.depth = depth or 0
-        opts.naked = naked or false
-        opts.maxdepth = opts.maxdepth or lshift(1,30)
-        opts.maxlength = opts.maxlength or lshift(1,30)
-        opts.keywords = opts.keywords or KEYWORDS
-        opts.functions = opts.functions or FUNCTIONS
-        opts.sfxfunctions = opts.sfxfunctions or SFXFUNCTIONS
-        opts.operators = opts.operators or OPERATORS
-        opts.types = opts.types or TYPES
-        return opts
+    opts = opts or {}
+    opts.depth = depth or 0
+    opts.naked = naked or false
+    opts.maxdepth = opts.maxdepth or lshift(1,30)
+    opts.maxlength = opts.maxlength or lshift(1,30)
+    opts.keywords = opts.keywords or KEYWORDS
+    opts.functions = opts.functions or FUNCTIONS
+    opts.sfxfunctions = opts.sfxfunctions or SFXFUNCTIONS
+    opts.operators = opts.operators or OPERATORS
+    opts.types = opts.types or TYPES
+    opts.line_anchors = (opts.anchors == "line") or false
+    opts.atom_anchors = (opts.anchors == "all") or true
+    return opts
+end
+
+local stream_value
+do
+local function is_nested(e)
+    if (e.type == Type.List) then
+        local it = e.value
+        while (it ~= EOL) do
+            if (it.at.type == Type.List) then
+                return true
+            end
+            it = it.next
+        end
+    end
+    return false
+end
+
+local function stream_indent(writer, depth)
+    depth = depth or 0
+    for i=1,depth do
+        writer("    ")
     end
 end
 
-local function stream_value(writer, e, format)
-    assert_any(e)
-
+stream_value = function(writer, e, format)
     local depth = format.depth
     local maxdepth = format.maxdepth
+    local maxlength = format.maxlength
     local naked = format.naked
+    local line_anchors = format.line_anchors
+    local atom_anchors = format.atom_anchors
 
-    if (naked) then
-        stream_anchor(writer, e, depth)
+    local last_anchor
+    local function stream_cr(anchor)
+        if anchor then
+            writer('\t')
+            writer(
+                ansi(STYLE.COMMENT, '# '
+                    .. anchor:format_plain()))
+        end
+        writer('\n')
     end
 
-    if (e.type == Type.List) then
-        if (maxdepth == 0) then
-            writer(ansi(STYLE.OPERATOR,"("))
-            writer(ansi(STYLE.COMMENT,"<...>"))
-            writer(ansi(STYLE.OPERATOR,")"))
-            if (naked) then
-                writer('\n')
+    local function stream_anchor(anchor)
+        if anchor then
+            local str
+            if not last_anchor or last_anchor.path ~= anchor.path then
+                str = "[" .. anchor.path
+                    .. ":" .. tostring(anchor.lineno)
+                    .. ":" .. tostring(anchor.column) .. "]"
+            elseif not last_anchor or last_anchor.lineno ~= anchor.lineno then
+                str = "[" .. tostring(anchor.lineno)
+                    .. ":" .. tostring(anchor.column) .. "]"
+            elseif not last_anchor or last_anchor.column ~= anchor.column then
+                str = "[" .. tostring(anchor.column) .. "]"
+            else
+                str = "|"
             end
+
+            writer(ansi(STYLE.COMMENT, str))
+            last_anchor = anchor
         else
-            local subfmt = StreamValueFormat(format)
-            subfmt.maxdepth = subfmt.maxdepth - 1
+            writer(ansi(STYLE.ERROR, "?"))
+        end
+    end
+
+    local function walk(e, depth, maxdepth, naked)
+        assert_any(e)
+
+        local anchor
+
+        if (naked) then
+            stream_indent(writer, depth)
+        end
+
+        if (e.type == Type.List) then
+            maxdepth = maxdepth - 1
 
             local it = e.value
             if (it == EOL) then
                 writer(ansi(STYLE.OPERATOR,"()"))
                 if (naked) then
-                    writer('\n')
+                    stream_cr(anchor)
+                end
+                return
+            end
+            if line_anchors then
+                anchor = it.anchor
+            end
+            if maxdepth == 0 then
+                writer(ansi(STYLE.OPERATOR,"("))
+                writer(ansi(STYLE.COMMENT,"<...>"))
+                writer(ansi(STYLE.OPERATOR,")"))
+                if (naked) then
+                    stream_cr(anchor)
                 end
                 return
             end
@@ -1882,13 +1968,17 @@ local function stream_value(writer, e, format)
             if (naked) then
                 local single = (it.next == EOL)
                 if is_nested(it.at) then
-                    writer(";\n")
+                    writer(";")
+                    stream_cr(anchor)
                     goto print_sparse
                 end
             ::print_terse::
-                subfmt.depth = depth
-                subfmt.naked = false
-                stream_value(writer, it.at, subfmt)
+                if atom_anchors then
+                    stream_anchor(it.anchor)
+                end
+                depth = depth
+                naked = false
+                walk(it.at, depth, maxdepth, naked)
                 it = it.next
                 offset = offset + 1
                 while (it ~= EOL) do
@@ -1896,82 +1986,94 @@ local function stream_value(writer, e, format)
                         break
                     end
                     writer(' ')
-                    stream_value(writer, it.at, subfmt)
+                    if atom_anchors then
+                        stream_anchor(it.anchor)
+                    end
+                    walk(it.at, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
                 end
                 if single then
-                    writer(";\n")
-                else
-                    writer("\n")
+                    writer(";")
                 end
+                stream_cr(anchor)
             ::print_sparse::
                 while (it ~= EOL) do
-                    subfmt.depth = depth + 1
-                    subfmt.naked = true
+                    local depth = depth + 1
+                    naked = true
                     local value = it.at
                     if ((value.type ~= Type.List) -- not a list
                         and (offset >= 1) -- not first element in list
                         and (it.next ~= EOL) -- not last element in list
                         and not(is_nested(it.next.at))) then -- next element can be terse packed too
                         single = false
-                        stream_anchor(writer, value, depth + 1)
+                        stream_indent(writer, depth)
                         writer("\\ ")
                         goto print_terse
                     end
-                    if (offset >= subfmt.maxlength) then
-                        stream_anchor(writer, value, depth + 1)
+                    if (offset >= maxlength) then
+                        stream_indent(writer, depth)
                         writer("<...>\n")
                         return
                     end
-                    stream_value(writer, value, subfmt)
+                    if atom_anchors then
+                        stream_indent(writer, depth)
+                        stream_anchor(it.anchor)
+                        writer("\n")
+                    end
+                    walk(value, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
                 end
 
             else
-                subfmt.depth = depth + 1
-                subfmt.naked = false
+                depth = depth + 1
+                naked = false
                 writer(ansi(STYLE.OPERATOR,'('))
                 while (it ~= EOL) do
                     if (offset > 0) then
                         writer(' ')
                     end
-                    if (offset >= subfmt.maxlength) then
+                    if (offset >= maxlength) then
                         writer(ansi(STYLE.COMMENT,"..."))
                         break
                     end
-                    stream_value(writer, it.at, subfmt)
+                    if atom_anchors then
+                        stream_anchor(it.anchor)
+                    end
+                    walk(it.at, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
                 end
                 writer(ansi(STYLE.OPERATOR,')'))
                 if (naked) then
-                    writer('\n')
+                    stream_cr(anchor)
                 end
             end
-        end
-    else
-        if (e.type == Type.Symbol) then
-            local name = e.value.name
-            local style =
-                (format.keywords[name] and STYLE.KEYWORD)
-                or (format.functions[name] and STYLE.FUNCTION)
-                or (format.sfxfunctions[name] and STYLE.SFXFUNCTION)
-                or (format.operators[name] and STYLE.OPERATOR)
-                or (format.types[name] and STYLE.TYPE)
-                or STYLE.SYMBOL
-            if (style and support_ansi) then writer(style) end
-            writer(escape_string(name, SYMBOL_ESCAPE_CHARS))
-            if (style and support_ansi) then writer(ANSI.RESET) end
         else
-            writer(format_any_value(e.type, e.value))
-        end
-        if (naked) then
-            writer('\n')
+            if (e.type == Type.Symbol) then
+                local name = e.value.name
+                local style =
+                    (format.keywords[name] and STYLE.KEYWORD)
+                    or (format.functions[name] and STYLE.FUNCTION)
+                    or (format.sfxfunctions[name] and STYLE.SFXFUNCTION)
+                    or (format.operators[name] and STYLE.OPERATOR)
+                    or (format.types[name] and STYLE.TYPE)
+                    or STYLE.SYMBOL
+                if (style and support_ansi) then writer(style) end
+                writer(escape_string(name, SYMBOL_ESCAPE_CHARS))
+                if (style and support_ansi) then writer(ANSI.RESET) end
+            else
+                writer(format_any_value(e.type, e.value))
+            end
+            if (naked) then
+                stream_cr(anchor)
+            end
         end
     end
+    walk(e, depth, maxdepth, naked)
 end
+end -- do
 
 function List.__tostring(self)
     local s = ""
@@ -1989,6 +2091,19 @@ end
 --------------------------------------------------------------------------------
 -- IL OBJECTS
 --------------------------------------------------------------------------------
+
+-- CFF form implemented after
+-- Leissa et al., Graph-Based Higher-Order Intermediate Representation
+-- http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
+--
+-- some parts of the paper use hindley-milner notation
+-- https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
+--
+-- more reading material:
+-- Simple and Effective Type Check Removal through Lazy Basic Block Versioning
+-- https://arxiv.org/pdf/1411.0352v2.pdf
+-- Julia: A Fast Dynamic Language for Technical Computing
+-- http://arxiv.org/pdf/1209.5145v1.pdf
 
 unwrap = function(_type, value)
     assert_any(value)
@@ -2018,13 +2133,12 @@ do
     end
     function cls:__tostring()
         return
-            ansi(STYLE.KEYWORD, "builtin")
-            .. ansi(STYLE.COMMENT, "<")
+            ansi(STYLE.COMMENT, "<")
             .. (function()
                 if self.name ~= Symbol.Unnamed then
-                    return ansi(STYLE.SYMBOL, self.name.name)
+                    return ansi(STYLE.FUNCTION, self.name.name)
                 else
-                    return tostring(self.func)
+                    return ansi(STYLE.FUNCTION, tostring(self.func))
                 end
             end)()
             .. ansi(STYLE.COMMENT, ">")
@@ -2067,12 +2181,15 @@ local function assert_parameter(x)
 end
 do
     local cls = Parameter
-    function cls:init(name)
+    function cls:init(name, _type, anchor)
         assert_symbol(name)
+        _type = _type or Type.Any
+        assert_type(_type)
         self.flow = null
         self.index = -1
         self.name = name
-        self.type = Type.Any
+        self.type = _type
+        self.anchor = anchor
         self.vararg = endswith(name.name, "...")
     end
     function cls:__tostring()
@@ -2100,6 +2217,14 @@ do
                     return ""
                 end
             end)()
+            ..
+                (function ()
+                    if self.anchor then
+                        return " " ..tostring(self.anchor)
+                    else
+                        return ""
+                    end
+                end)()
             .. ansi(STYLE.COMMENT, ">")
     end
 end
@@ -2132,18 +2257,27 @@ do
     end
 
     function cls:__tostring()
-        return ansi(STYLE.KEYWORD, "flow")
-            .. ansi(STYLE.COMMENT, "<")
+        return
+            ansi(STYLE.COMMENT, "<")
+            .. (function()
+                if self.anchor then
+                    return ansi(STYLE.LOCATION,
+                        self.anchor:format_plain() .. ":")
+                else
+                    return ""
+                end
+            end)()
+            .. ansi(STYLE.KEYWORD, "λ")
             .. ansi(STYLE.SYMBOL, self.name.name)
             .. ansi(STYLE.OPERATOR, "#")
             .. ansi(STYLE.NUMBER, self.uid)
             .. ansi(STYLE.COMMENT, ">")
     end
 
-    function cls:append_parameter(param)
+    function cls:append_parameter(param, _type, anchor)
         assert_table(param)
         if getmetatable(param) == Symbol then
-            param = Parameter(param)
+            param = Parameter(param, _type, anchor)
         else
             assert_parameter(param)
         end
@@ -2156,30 +2290,33 @@ do
 
     -- an empty function
     -- you have to add the continuation argument manually
-    function cls.create_empty_function(name)
+    function cls.create_empty_function(name, anchor)
         local value = Flow()
         value.name = name
+        value.anchor = anchor
         return value
     end
 
     -- a function that eventually returns
-    function cls.create_function(name)
+    function cls.create_function(name, anchor)
         assert_symbol(name)
         local value = Flow()
         value.name = name
+        value.anchor = anchor
         -- continuation is always first argument
         -- this argument will be called when the function is done
-        value:append_parameter(Symbol("return-" .. name.name))
+        value:append_parameter(Symbol("return-" .. name.name), Type.Any, anchor)
         return value
     end
 
     -- a continuation that never returns
-    function cls.create_continuation(name)
+    function cls.create_continuation(name, anchor)
         assert_symbol(name)
         local value = Flow()
         value.name = name
+        value.anchor = anchor
         -- first argument is present, but unused
-        value:append_parameter(Symbol.Unnamed)
+        value:append_parameter(Symbol.Unnamed, Type.Any, anchor)
         return value
     end
 end
@@ -2266,19 +2403,6 @@ do
         end
         return defvalue
     end
-
-    --[[
-    function cls:stream_stack(writer)
-        if not frame then
-            return
-        end
-        frame.parent:stream_stack(writer)
-        auto anchor = get_anchor(frame)
-        if (anchor) {
-            Anchor::printMessage(anchor, "while evaluating");
-        }
-    end
-    ]]
 end
 
 local Closure = class("Closure")
@@ -2298,6 +2422,103 @@ do
             .. ansi(STYLE.OPERATOR, "@")
             .. tostring(self.frame)
             .. ansi(STYLE.COMMENT, ">")
+    end
+end
+
+--------------------------------------------------------------------------------
+-- IL PRINTING
+--------------------------------------------------------------------------------
+
+local stream_il
+do
+    stream_il = function(writer, afunc)
+        local visited = {}
+        local stream_any
+        local function stream_flow_label(aflow)
+            writer(ansi(STYLE.KEYWORD, "λ"))
+            writer(ansi(STYLE.SYMBOL, aflow.name.name))
+            writer(ansi(STYLE.OPERATOR, "#"))
+            writer(ansi(STYLE.NUMBER, tostring(aflow.uid)))
+        end
+
+        local function stream_param_label(param, aflow)
+            if param.flow ~= aflow then
+                stream_flow_label(param.flow)
+                writer(ansi(STYLE.OPERATOR, "."))
+            end
+            writer(ansi(STYLE.SYMBOL, param.name.name))
+            writer(ansi(STYLE.OPERATOR, "@"))
+            writer(ansi(STYLE.NUMBER, tostring(param.index)))
+            if param.vararg then
+                writer(ansi(STYLE.KEYWORD, "…"))
+            end
+        end
+
+        local function stream_argument(arg, aflow)
+            if arg.type == Type.Parameter then
+                stream_param_label(arg.value, aflow)
+            elseif arg.type == Type.Flow then
+                stream_flow_label(arg.value)
+            else
+                writer(tostring(arg))
+            end
+        end
+        local function stream_flow (aflow, aframe)
+            if visited[aflow] then
+                return
+            end
+            visited[aflow] = true
+            writer(ansi(STYLE.KEYWORD, "fn/cc"))
+            writer(" ")
+            writer(ansi(STYLE.SYMBOL, aflow.name.name))
+            writer(ansi(STYLE.OPERATOR, "#"))
+            writer(ansi(STYLE.NUMBER, tostring(aflow.uid)))
+            writer(" ")
+            writer(ansi(STYLE.OPERATOR, "("))
+            for i,param in ipairs(aflow.parameters) do
+                if i > 1 then
+                    writer(" ")
+                end
+                stream_param_label(param, aflow)
+            end
+            writer(ansi(STYLE.OPERATOR, ")"))
+            if aflow.anchor then
+                writer(" ")
+                writer(ansi(STYLE.COMMENT,
+                    "# " .. aflow.anchor:format_plain()))
+            end
+            writer("\n    ")
+            for i=2,#aflow.arguments do
+                local arg = aflow.arguments[i]
+                if i > 2 then
+                    writer(" ")
+                end
+                stream_argument(arg, aflow)
+            end
+            local cont = aflow.arguments[1]
+            if not is_none(cont) then
+                writer(ansi(STYLE.COMMENT," ⮕ "))
+                stream_argument(cont, aflow)
+            end
+            writer("\n")
+
+            --print(flow_decl_label(aflow, aframe))
+
+            for i,arg in ipairs(aflow.arguments) do
+                stream_any(arg)
+            end
+        end
+        local function stream_closure(aclosure)
+            stream_flow(aclosure.entry, aclosure.frame)
+        end
+        stream_any = function(afunc, aframe)
+            if afunc.type == Type.Flow then
+                stream_flow(afunc.value, aframe)
+            elseif afunc.type == Type.Closure then
+                stream_closure(afunc.value)
+            end
+        end
+        stream_any(afunc)
     end
 end
 
@@ -2406,7 +2627,7 @@ local function call_flow(frame, cont, flow, ...)
     frame = frame:bind(flow, tmpargs)
     --set_anchor(frame, get_anchor(flow))
 
-    if true then
+    if trace_execution then
         print("FLOW:")
         dump_trace(frame, unpack(flow.arguments))
     end
@@ -2433,7 +2654,7 @@ local function call_flow(frame, cont, flow, ...)
 end
 
 call = function(frame, cont, dest, ...)
-    if true then
+    if trace_execution then
         print("TRACE:")
         dump_trace(frame, cont, dest, ...)
     end
@@ -2568,7 +2789,7 @@ local globals
 local expand
 local compile
 
-local function toparameter(env, value)
+local function toparameter(env, value, anchor)
     assert_scope(env)
     local sym
     if getmetatable(value) == Symbol then
@@ -2584,7 +2805,7 @@ local function toparameter(env, value)
         end
     end
     assert_symbol(sym)
-    local param = Any(Parameter(sym))
+    local param = Any(Parameter(sym, Type.Any, anchor))
     env:bind(sym, param)
     return param
 end
@@ -2594,11 +2815,12 @@ local function expand_expr_list(env, it)
     assert_list(it)
     local l = EOL
     while (it ~= EOL) do
+        local anchor = it.anchor
         local nextlist,nextscope = expand(env, it)
         if (nextlist == EOL) then
             break
         end
-        l = List(nextlist.at, l)
+        l = List(nextlist.at, l, anchor)
         it = nextlist.next
         env = nextscope
     end
@@ -2624,14 +2846,18 @@ local function expand_do(env, topit)
     assert_list(topit)
 
     local it = unwrap(Type.List, topit.at)
+    local anchor = it.anchor
+    it = it.next
 
     local subenv = Scope(env)
     return
         List(
             quote(Any(List(
                 globals:lookup(Symbol.DoForm) or none,
-                expand_expr_list(subenv, it)))),
-            topit.next), env
+                expand_expr_list(subenv, it),
+                anchor))),
+            topit.next,
+            topit.anchor), env
 end
 
 local function expand_continuation(env, topit)
@@ -2640,19 +2866,23 @@ local function expand_continuation(env, topit)
     verify_at_parameter_count(topit, 1, -1)
 
     local it = unwrap(Type.List, topit.at)
+    local anchor_kw = it.anchor
     it = it.next
 
+    local anchor_sym = anchor_kw
     local sym
     assert(it ~= EOL)
     if (it.at.type == Type.Symbol) then
         sym = it.at
         it = it.next
+        anchor_sym = it.anchor
         assert(it ~= EOL)
     else
         sym = Any(Symbol.Unnamed)
     end
 
     local expr_parameters = it.at
+    local anchor_params = it.anchor
     it = it.next
 
     local subenv = Scope(env)
@@ -2661,7 +2891,8 @@ local function expand_continuation(env, topit)
     local params = unwrap(Type.List, expr_parameters)
     local param = params
     while (param ~= EOL) do
-        outargs = List(toparameter(subenv, param.at), outargs)
+        outargs = List(toparameter(subenv, param.at, param.anchor),
+            outargs, param.anchor)
         param = param.next
     end
 
@@ -2674,8 +2905,12 @@ local function expand_continuation(env, topit)
                         sym,
                         List(
                             Any(reverse_list_inplace(outargs)),
-                            expand_expr_list(subenv, it)))))),
-            topit.next), env
+                            expand_expr_list(subenv, it),
+                            anchor_params),
+                        anchor_sym),
+                    anchor_kw))),
+            topit.next,
+            topit.anchor), env
 end
 
 local function expand_syntax_extend(env, topit)
@@ -2703,6 +2938,7 @@ local function expand_macro(env, handler, topit)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
+    print(topit.anchor, handler)
     return execute(function(result_list, result_scope)
         if (is_none(result_list)) then
             return EOL
@@ -2718,10 +2954,11 @@ expand = function(env, topit)
     local result = none
 ::process::
     assert(topit ~= EOL)
+    local anchor = topit.anchor
     local expr = topit.at
     if (is_quote_type(expr.type)) then
         -- remove qualifier and return as-is
-        return List(unquote(expr), topit.next), env
+        return List(unquote(expr), topit.next, anchor), env
     elseif (expr.type == Type.List) then
         local list = expr.value
         if (list == EOL) then
@@ -2736,7 +2973,6 @@ expand = function(env, topit)
         end
 
         if (is_macro_type(head.type)) then
-            --print("HEAD:",head)
             local result_list,result_env = expand_macro(env, unmacro(head), topit)
             if (result_list ~= EOL) then
                 topit = result_list
@@ -2783,50 +3019,15 @@ expand = function(env, topit)
         result = expr
         topit = topit.next
     end
-    return List(result, topit), env
+    return List(result, topit, anchor), env
 end
 
 local function expand_root(expr, scope)
     assert_list(expr)
-    return xpcall(function()
+    return safecallr(function()
         return expand_expr_list(scope or globals, expr)
     end, location_error_handler)
 end
-
---[[
-static Any builtin_expand(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 2, 2);
-    auto expr_eval = extract_list(args[0]);
-    auto scope = args[1];
-    verifyValueKind(TYPE_Table, scope);
-
-    auto retval = expand(scope.table, expr_eval);
-    Any out[] = {wrap(retval.list), wrap(retval.scope)};
-    return wrap(out, 2);
-}
-
-static Any builtin_set_globals(const Any *args, size_t argcount) {
-    builtin_checkparams(argcount, 1, 1);
-    auto scope = args[0];
-    verifyValueKind(TYPE_Table, scope);
-
-    globals = scope.table;
-    return const_none;
-}
-
-static B_FUNC(builtin_set_exception_handler) {
-    builtin_checkparams(B_ARGCOUNT(S), 1, 1);
-    auto old_exception_handler = S->exception_handler;
-    auto func = B_GETARG(S, 0);
-    S->exception_handler = func;
-    B_CALL(S, const_none, B_GETCONT(S), old_exception_handler);
-}
-
-static B_FUNC(builtin_get_exception_handler) {
-    builtin_checkparams(B_ARGCOUNT(S), 0, 0);
-    B_CALL(S, const_none, B_GETCONT(S), S->exception_handler);
-}
-]]
 
 --------------------------------------------------------------------------------
 -- COMPILER
@@ -2871,23 +3072,23 @@ end
 
 --------------------------------------------------------------------------------
 
-local function compile_to_parameter(value)
+local function compile_to_parameter(value, anchor)
     assert_any(value)
     if (value.type == Type.List) then
         -- complex expression
-        return compile(value, Any(Symbol.Unnamed))
+        return compile(value, Any(Symbol.Unnamed), anchor)
     else
         -- constant value - can be inserted directly
-        return compile(value, none)
+        return compile(value, none, anchor)
     end
 end
 
 -- for return values that don't need to be stored
-local function compile_to_none(value)
+local function compile_to_none(value, anchor)
     assert_any(value)
     if (value.type == Type.List) then
         -- complex expression
-        local next = Flow.create_continuation(Symbol.Unnamed)
+        local next = Flow.create_continuation(Symbol.Unnamed, anchor)
         compile(value, Any(next))
         builder.continue_at(next)
     else
@@ -2938,7 +3139,7 @@ local function compile_do(it, dest)
     return compile_expr_list(it, dest)
 end
 
-local function compile_continuation(it, dest)
+local function compile_continuation(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
 
@@ -2955,7 +3156,7 @@ local function compile_continuation(it, dest)
     it = it.next
 
     return builder.with(function()
-        local func = Flow.create_empty_function(func_name)
+        local func = Flow.create_empty_function(func_name, anchor)
 
         builder.continue_at(func)
 
@@ -2966,7 +3167,7 @@ local function compile_continuation(it, dest)
         end
         if (#func.parameters == 0) then
             -- auto-add continuation parameter
-            func:append_parameter(Symbol.Unnamed)
+            func:append_parameter(Symbol.Unnamed, Type.Any, anchor)
         end
         local ret = func.parameters[PARAM_Cont]
         assert(ret)
@@ -2975,22 +3176,22 @@ local function compile_continuation(it, dest)
     end)
 end
 
-local function compile_implicit_call(it, dest)
+local function compile_implicit_call(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
 
-    local callable = compile_to_parameter(it.at)
+    local callable = compile_to_parameter(it.at, it.anchor)
     it = it.next
 
     local args = { dest, callable }
     while (it ~= EOL) do
-        table.insert(args, compile_to_parameter(it.at))
+        table.insert(args, compile_to_parameter(it.at, it.anchor))
         it = it.next
     end
 
     if (dest.type == Type.Symbol) then
-        local next = Flow.create_continuation(dest.value)
-        local param = next:append_parameter(dest.value)
+        local next = Flow.create_continuation(dest.value, anchor)
+        local param = next:append_parameter(dest.value, Type.Any, anchor)
         param.vararg = true
         -- patch dest to an actual function
         args[1] = Any(next)
@@ -3003,15 +3204,15 @@ local function compile_implicit_call(it, dest)
     end
 end
 
-local function compile_call(it, dest)
+local function compile_call(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
 
     it = it.next
-    return compile_implicit_call(it, dest)
+    return compile_implicit_call(it, dest, anchor)
 end
 
-local function compile_contcall(it, dest)
+local function compile_contcall(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
     assert(not is_none(dest))
@@ -3021,15 +3222,15 @@ local function compile_contcall(it, dest)
         location_error("continuation expected")
     end
     local args = {}
-    table.insert(args, compile_to_parameter(it.at))
+    table.insert(args, compile_to_parameter(it.at, it.anchor))
     it = it.next
     if (it == EOL) then
         location_error("callable expected")
     end
-    table.insert(args, compile_to_parameter(it.at))
+    table.insert(args, compile_to_parameter(it.at, it.anchor))
     it = it.next
     while (it ~= EOL) do
-        table.insert(args, compile_to_parameter(it.at))
+        table.insert(args, compile_to_parameter(it.at, it.anchor))
         it = it.next
     end
     builder.br(args)
@@ -3038,7 +3239,7 @@ end
 
 --------------------------------------------------------------------------------
 
-compile = function(expr, dest)
+compile = function(expr, dest, anchor)
     assert_any(expr)
     assert_any(dest)
 
@@ -3049,9 +3250,9 @@ compile = function(expr, dest)
         end
         local head = slist.at
         if (head.type == Type.SpecialForm) then
-            return head.value(slist, dest)
+            return head.value(slist, dest, anchor)
         else
-            return compile_implicit_call(slist, dest)
+            return compile_implicit_call(slist, dest, anchor)
         end
     else
         local result = Any(expr)
@@ -3614,17 +3815,6 @@ builtin_op(Type.Type, Symbol.Compare,
 -- cast
 --------------------------------------------------------------------------------
 
-local function safecall(f1, f2)
-    local function fwd_xpcall_dest(result, ...)
-        if result then
-            return ...
-        else
-            return f2(...)
-        end
-    end
-    return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
-end
-
 cast = function(frame, cont, self, value, totype)
     checkargs(2,2, value, totype)
     local fromtype = Any(value.type)
@@ -3632,7 +3822,7 @@ cast = function(frame, cont, self, value, totype)
     local function fallback_call(err)
         local desttype = unwrap(Type.Type, totype)
         local function errmsg()
-            error("can not cast from type "
+            location_error("can not cast from type "
                 .. value.type.displayname
                 .. " to "
                 .. desttype.displayname)
@@ -3975,11 +4165,12 @@ print
     < 5.0 10.0
     != 1.0 1.0
 
-print
-    cast 5 i64
+do
+    print
+        i64 5
 
-print
-    == 5 5.0
+    print
+        == (r32 5) 5.0
 
 print
     countof "test"
@@ -4018,7 +4209,9 @@ function test (a b)
 ]]
 
 local function test_lexer()
-    local lexer = Lexer.init(new(rawstring, macro_test), null, "demo.b")
+    local src = SourceFile.open("<test>", macro_test)
+    local ptr = src:strptr()
+    local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local result,expr = parse(lexer)
     if result then
         stream_value(stdout_writer, expr, StreamValueFormat(true))
@@ -4026,6 +4219,7 @@ local function test_lexer()
         if result then
             stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
+            stream_il(stdout_writer, func)
             print("func:", func)
             local result,err = xpcall(
                 function()
@@ -4049,7 +4243,7 @@ end
 local function test_bangra()
     local src = SourceFile.open("bangra.b")
     local ptr = src:strptr()
-    local lexer = Lexer.init(ptr, ptr + src.length, "bangra.b")
+    local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local result,expr = parse(lexer)
     if result then
         --stream_value(stdout_writer, expr, StreamValueFormat(true))
@@ -4088,8 +4282,8 @@ local function test_list()
 end
 
 --test_list()
---test_lexer()
-test_bangra()
+test_lexer()
+--test_bangra()
 --test_ansicolors()
 
 
