@@ -72,7 +72,7 @@ syntax-extend stage-1 (_ env)
     set-scope-symbol! env
         quote empty?
         fn/cc empty? (_ x)
-            == (countof x) 0
+            == (countof x) (u64 0)
     set-scope-symbol! env
         quote key?
         fn/cc key? (_ x y)
@@ -202,7 +202,7 @@ syntax-extend stage-2 (_ env)
     let list-head? =
         fn/cc list-head? (_ expr name)
             ? (list? expr)
-                ? (> (countof expr) 0)
+                ? (> (countof expr) (u64 0))
                     do
                         let head = (@ expr 0)
                         ? (symbol? head)
@@ -420,15 +420,15 @@ syntax-extend stage-3 (_ env)
         tupleof
             fn (i)
                 if (< i ls)
-                    tupleof (@ s i) (+ i 1)
+                    tupleof (@ s i) (+ i (u64 1))
                 else none
-            0
+            u64 0
 
     fn iter-r (s)
         tupleof
             fn (i)
-                if (> i 0)
-                    let k = (- i 1)
+                if (> i (u64 0))
+                    let k = (- i (u64 1))
                     tupleof (@ s k) k
                 else none
             countof s
@@ -1097,7 +1097,7 @@ syntax-extend stage-5 (_ env)
                     assert
                         and
                             list? elem
-                            (countof elem) >= 3
+                            (countof elem) >= (u64 3)
                             =? (@ elem 1)
                         error "illegal initializer"
                     tupleof

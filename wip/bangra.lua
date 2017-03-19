@@ -868,6 +868,12 @@ local function define_symbols(def)
     def({Mul='*'})
     def({Div='/'})
     def({FloorDiv='//'})
+
+    -- ad-hoc builtin names
+    def({ExecuteReturn='execute-return'})
+    def({RCompare='rcompare'})
+    def({SliceForwarder='slice-forwarder'})
+    def({CompareListNext="compare-list-next"})
 end
 
 do
@@ -943,11 +949,12 @@ do
 
     local cls = Type
     setmetatable(Type, {
-        __call = function(cls, name)
+        __call = function(cls, name, displayname)
             local k = idx
             idx = idx + 1
             return setmetatable({
                 name = name,
+                displayname = displayname or ansi(STYLE.TYPE, name),
                 index = idx,
                 symbols = {}
             }, Type)
@@ -973,7 +980,7 @@ do
     function cls:__tostring()
         return ansi(STYLE.KEYWORD, "type")
             .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.TYPE, self.name)
+            .. self.displayname
             .. ansi(STYLE.COMMENT, ">")
     end
 
@@ -989,9 +996,10 @@ do
             local val = cache[_type]
             if not val then
                 val = Type(
+                    name .. "[" .. _type.name .. "]",
                     ansi(STYLE.TYPE, name)
                     .. ansi(STYLE.OPERATOR, "[")
-                    .. ansi(STYLE.TYPE, _type.name)
+                    .. _type.displayname
                     .. ansi(STYLE.OPERATOR, "]"))
                 val.element_type = _type
                 val:set_super(qualifier_type)
@@ -1013,6 +1021,35 @@ end
 local function is_macro_type(_type)
     assert_type(_type)
     return _type:super() == Type.MacroQualifier
+end
+
+local function each_numerical_type(f, opts)
+    if opts == null then
+        opts = {
+            floats = true,
+            ints = true,
+        }
+    end
+    if opts.ints then
+        opts.signed = true
+        opts.unsigned = true
+    end
+    if opts.floats then
+        f(Type.R32)
+        f(Type.R64)
+    end
+    if opts.signed then
+        f(Type.I8)
+        f(Type.I16)
+        f(Type.I32)
+        f(Type.I64)
+    end
+    if opts.unsigned then
+        f(Type.U8)
+        f(Type.U16)
+        f(Type.U32)
+        f(Type.U64)
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -1041,12 +1078,9 @@ setmetatable(Any, {
     end
 })
 function Any.__tostring(self)
-    return ansi(STYLE.KEYWORD, "any")
-        .. ansi(STYLE.COMMENT, "<")
-        .. format_any_value(self.type, self.value)
+    return format_any_value(self.type, self.value)
         .. ansi(STYLE.OPERATOR, ":")
-        .. ansi(STYLE.TYPE, self.type.name)
-        .. ansi(STYLE.COMMENT, ">")
+        .. self.type.displayname
 end
 
 assert_any = function(x)
@@ -1063,9 +1097,9 @@ local function assert_any_type(_type, value)
         return value.value
     else
         error("type "
-            .. ansi(STYLE.TYPE,_type.name)
+            .. _type.displayname
             .. " expected, got "
-            .. ansi(STYLE.TYPE,value.type.name)
+            .. value.type.displayname
             )
     end
 end
@@ -1711,7 +1745,7 @@ local function parse(lexer)
 end
 
 --------------------------------------------------------------------------------
--- VALUE PRINTING
+-- VALUE PRINTER
 --------------------------------------------------------------------------------
 
 local function is_nested(e)
@@ -1777,10 +1811,10 @@ local OPERATORS = set(split(
     ))
 
 local TYPES = set(split(
-    "int int8 int16 int32 int64 uint8 uint16 uint32 uint64 void string"
-        .. " rawstring opaque half float double symbol list parameter"
+        "int i8 i16 i32 i64 u8 u16 u32 u64 void string"
+        .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
-        .. " pointer struct enum bool uint real16 real32 real64 tag qualifier"
+        .. " pointer struct enum bool uint tag qualifier"
         .. " iterator type table size_t usize_t ssize_t void*"
     ))
 
@@ -1962,9 +1996,9 @@ unwrap = function(_type, value)
         return value.value
     else
         location_error("type "
-            .. ansi(STYLE.TYPE,_type.name)
+            .. _type.displayname
             .. " expected, got "
-            .. ansi(STYLE.TYPE,value.type.name)
+            .. value.type.displayname
             )
     end
 end
@@ -1972,10 +2006,12 @@ end
 local Builtin = class("Builtin")
 do
     local cls = Builtin
-    function cls:init(func)
+    function cls:init(func, name)
         assert_function(func)
         self.func = func
-        self.name = Symbol.Unnamed
+        name = name or Symbol.Unnamed
+        assert_symbol(name)
+        self.name = name
     end
     function cls:__call(...)
         return self.func(...)
@@ -2041,17 +2077,29 @@ do
     end
     function cls:__tostring()
         return
-            (function()
-                if self.vararg then
-                    return ansi(STYLE.KEYWORD, "parameter...")
-                else
-                    return ansi(STYLE.KEYWORD, "parameter")
-                end
-            end)()
-            .. ansi(STYLE.COMMENT, "<")
+            ansi(STYLE.COMMENT, "<")
+            ..
+                (function()
+                    if self.vararg then
+                        return ansi(STYLE.KEYWORD, "parameter...")
+                    else
+                        return ansi(STYLE.KEYWORD, "parameter")
+                    end
+                end)()
+            .. " "
             .. ansi(STYLE.SYMBOL, self.name.name)
             .. ansi(STYLE.OPERATOR, ":")
-            .. ansi(STYLE.TYPE, self.type.name)
+            .. self.type.displayname
+            .. (function()
+                if self.flow ~= null then
+                    return " of "
+                        .. tostring(self.flow)
+                        .. ansi(STYLE.OPERATOR, "@")
+                        .. ansi(STYLE.NUMBER, self.index - 1)
+                else
+                    return ""
+                end
+            end)()
             .. ansi(STYLE.COMMENT, ">")
     end
 end
@@ -2199,7 +2247,6 @@ do
 
     function cls:get(cont, index, defvalue)
         assert_number(index)
-        assert_any(defvalue)
         if cont then
             assert_flow(cont)
             -- parameter is bound - attempt resolve
@@ -2286,7 +2333,11 @@ local function evaluate(argindex, frame, value)
 
     if (value.type == Type.Parameter) then
         local param = value.value
-        return frame:get(param.flow, param.index, value)
+        local result = frame:get(param.flow, param.index)
+        if result == nil then
+            location_error(tostring(param) .. " unbound in frame")
+        end
+        return result
     elseif (value.type == Type.Flow) then
         if (argindex == ARG_Func) then
             -- no closure creation required
@@ -2297,6 +2348,16 @@ local function evaluate(argindex, frame, value)
         end
     end
     return value
+end
+
+local function dump_trace(frame, cont, dest, ...)
+    print(repr(dest))
+    for i=1,select('#', ...) do
+        print("    " .. repr(select(i, ...)))
+    end
+    if not is_none(cont) then
+        print("-> " .. repr(cont))
+    end
 end
 
 local call
@@ -2345,6 +2406,11 @@ local function call_flow(frame, cont, flow, ...)
     frame = frame:bind(flow, tmpargs)
     --set_anchor(frame, get_anchor(flow))
 
+    if true then
+        print("FLOW:")
+        dump_trace(frame, unpack(flow.arguments))
+    end
+
     assert(#flow.arguments > 0)
     local idx = 1
     local wbuf = {}
@@ -2367,7 +2433,10 @@ local function call_flow(frame, cont, flow, ...)
 end
 
 call = function(frame, cont, dest, ...)
-    print("CALL", frame, cont, dest, ...)
+    if true then
+        print("TRACE:")
+        dump_trace(frame, cont, dest, ...)
+    end
     assert_frame(frame)
     assert_any(cont)
     assert_any(dest)
@@ -2389,13 +2458,13 @@ call = function(frame, cont, dest, ...)
             return call(frame, cont, func, ...)
         else
             error("can not apply type "
-                .. ansi(STYLE.TYPE, ty.name))
+                .. ty.displayname)
         end
     else
         print("while evaluating:")
-        print(dest, ...)
+        dump_trace(frame, cont, dest, ...)
         error("don't know how to apply value of type "
-            .. ansi(STYLE.TYPE, dest.type.name))
+            .. dest.type.displayname)
     end
 end
 
@@ -2405,7 +2474,7 @@ local function execute(cont, dest, ...)
     local wrapped_cont = Any(Builtin(function(frame, _cont, dest, ...)
         assert_frame(frame)
         return cont(...)
-    end))
+    end, Symbol.ExecuteReturn))
     return call(Frame(), wrapped_cont, dest, ...)
 end
 
@@ -3185,7 +3254,7 @@ local function builtin_forward(name, errmsg)
         local func = value.type:lookup(name)
         if func == null then
             error("type "
-                .. ansi(STYLE.TYPE, value.type.name)
+                .. value.type.displayname
                 .. " " .. errmsg)
         end
         return call(frame, cont, func, value, ...)
@@ -3209,20 +3278,6 @@ local function unwrap_integer(value)
 end
 
 local cast
-local function unwrap_cast(_type, value)
-    assert_any(value)
-    if (value.type == _type) then
-        return value.value
-    else
-        return execute(
-            function(casted)
-                print("CASTED",casted)
-            end,
-            Any(Builtin(cast)),
-            value,
-            Any(_type))
-    end
-end
 
 -- constants
 --------------------------------------------------------------------------------
@@ -3295,16 +3350,17 @@ local function ordered_branch(frame, cont, self, a, b,
                 equal_cont, unordered_cont, greater_cont, less_cont)
         else
             error("types "
-                .. ansi(STYLE.TYPE, a.type.name)
+                .. a.type.displayname
                 .. " and "
-                .. ansi(STYLE.TYPE, b.type.name)
+                .. b.type.displayname
                 .. " are incomparable")
         end
     end
     local cmp = a.type:lookup(Symbol.Compare)
     if cmp then
         return call(frame, cont, cmp, a, b,
-            equal_cont, Any(Builtin(unordered)), less_cont, greater_cont)
+            equal_cont, Any(Builtin(unordered, Symbol.RCompare)),
+            less_cont, greater_cont)
     else
         return unordered()
     end
@@ -3402,6 +3458,20 @@ builtin_op(Type.Parameter, Symbol.ApplyType,
         return Any(Parameter(unwrap(Type.Symbol, name)))
     end))
 
+each_numerical_type(function(T)
+    builtin_op(T, Symbol.ApplyType,
+        wrap_simple_builtin(function(x)
+            checkargs(1,1,x)
+            local xs = x.type:super()
+            if xs ~= Type.Integer and xs ~= Type.Float then
+                error("Unable to apply type "
+                    .. T.displayname .. " to value of type "
+                    .. x.type.displayname)
+            end
+            return Any(T.ctype(x.value))
+        end))
+end)
+
 -- comparisons
 --------------------------------------------------------------------------------
 
@@ -3409,10 +3479,10 @@ local any_true = Any(bool(true))
 local any_false = Any(bool(false))
 local return_true = Any(Builtin(function(frame, cont, self)
     return call(frame, none, cont, any_true)
-end))
+end, Symbol("return-true")))
 local return_false = Any(Builtin(function(frame, cont, self)
     return call(frame, none, cont, any_false)
-end))
+end, Symbol("return-false")))
 builtins['=='] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
         return_true, return_false, return_false, return_false)
@@ -3457,7 +3527,7 @@ compare_func(Type.Symbol)
 compare_func(Type.Parameter)
 compare_func(Type.Flow)
 
-local function compare_int_func(T)
+each_numerical_type(function(T)
     builtin_op(T, Symbol.Compare,
         function(frame, cont, self, a, b,
             equal_cont, unordered_cont, less_cont, greater_cont)
@@ -3471,16 +3541,7 @@ local function compare_int_func(T)
                 return call(frame, cont, greater_cont)
             end
         end)
-end
-
-compare_int_func(Type.I8)
-compare_int_func(Type.I16)
-compare_int_func(Type.I32)
-compare_int_func(Type.I64)
-compare_int_func(Type.U8)
-compare_int_func(Type.U16)
-compare_int_func(Type.U32)
-compare_int_func(Type.U64)
+end, {ints=true})
 
 local function compare_real_func(T, base)
     local eq = C[base .. '_eq']
@@ -3524,7 +3585,8 @@ builtin_op(Type.List, Symbol.Compare,
                     x = x.next
                     y = y.next
                     return loop()
-                end)), unordered_cont, less_cont, greater_cont)
+                end, Symbol.CompareListNext)),
+                unordered_cont, less_cont, greater_cont)
         end
         return loop()
     end)
@@ -3571,9 +3633,9 @@ cast = function(frame, cont, self, value, totype)
         local desttype = unwrap(Type.Type, totype)
         local function errmsg()
             error("can not cast from type "
-                .. ansi(STYLE.TYPE, value.type.name)
+                .. value.type.displayname
                 .. " to "
-                .. ansi(STYLE.TYPE, desttype.name))
+                .. desttype.displayname)
         end
         func = desttype:lookup(Symbol.Cast)
         if func ~= null then
@@ -3616,14 +3678,9 @@ local default_casts = wrap_simple_builtin(function(fromtype, totype, value)
     error("incompatible types")
 end)
 
-builtin_op(Type.I8, Symbol.Cast, default_casts)
-builtin_op(Type.I16, Symbol.Cast, default_casts)
-builtin_op(Type.I32, Symbol.Cast, default_casts)
-builtin_op(Type.I64, Symbol.Cast, default_casts)
-builtin_op(Type.U8, Symbol.Cast, default_casts)
-builtin_op(Type.U16, Symbol.Cast, default_casts)
-builtin_op(Type.U32, Symbol.Cast, default_casts)
-builtin_op(Type.U64, Symbol.Cast, default_casts)
+each_numerical_type(function(T)
+    builtin_op(T, Symbol.Cast, default_casts)
+end)
 
 -- concat
 --------------------------------------------------------------------------------
@@ -3640,9 +3697,9 @@ local function builtin_forward_op2(name, errmsg)
                 return call(frame, cont, func, a, b, any_true)
             else
                 error("can not " .. errmsg .. " values of type "
-                    .. ansi(STYLE.TYPE, a.type.name)
+                    .. a.type.displayname
                     .. " and "
-                    .. ansi(STYLE.TYPE, b.type.name))
+                    .. b.type.displayname)
             end
         end
         if func ~= null then
@@ -3728,7 +3785,7 @@ builtins.slice = function(frame, cont, self, obj, start_index, end_index)
                 i1 = l
             end
             return fwd_slice(frame, cont, none, obj, Any(i0), Any(i1))
-        end)), countof, obj)
+        end, Symbol.SliceForwarder)), countof, obj)
 end
 
 builtin_op(Type.List, Symbol.Slice,
