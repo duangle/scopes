@@ -664,17 +664,6 @@ local function assert_boolean(x) assert_luatype("boolean", x) end
 local function assert_cdata(x) assert_luatype("cdata", x) end
 local function assert_function(x) assert_luatype("function", x) end
 
-local function safecallr(f1, f2)
-    local function fwd_xpcall_dest(result, ...)
-        if result then
-            return result, ...
-        else
-            return result, f2(...)
-        end
-    end
-    return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
-end
-
 local function safecall(f1, f2)
     local function fwd_xpcall_dest(result, ...)
         if result then
@@ -839,7 +828,7 @@ local SYMBOL_ESCAPE_CHARS = "[]{}()\""
 
 local Symbol = {__class="Symbol"}
 local function assert_symbol(x)
-    if type(x) == "table" and getmetatable(x) == Symbol then
+    if getmetatable(x) == Symbol then
         return x
     else
         error("symbol expected, got " .. repr(x))
@@ -874,7 +863,6 @@ end
 
 local function define_symbols(def)
     def({Unnamed=''})
-    def({DoForm='form:do'})
     def({ContinuationForm='form:fn/cc'})
 
     def({ListWildcard='#list'})
@@ -923,7 +911,7 @@ local Any
 
 local Type = {}
 local function assert_type(x)
-    if type(x) == "table" and getmetatable(x) == Type then
+    if getmetatable(x) == Type then
         return x
     else
         error("type expected, got " .. repr(x))
@@ -968,6 +956,7 @@ local function define_types(def)
     def('Closure')
     def('Frame')
 
+    def('SyntaxQualifier')
     def('QuoteQualifier')
     def('MacroQualifier')
 end
@@ -1039,6 +1028,7 @@ do
     end
     Type.Macro = make_qualifier_type("macro", Type.MacroQualifier)
     Type.Quote = make_qualifier_type("quote", Type.QuoteQualifier)
+    Type.Syntax = make_qualifier_type("syntax", Type.SyntaxQualifier)
     Type.SizeT = Type.U64
 end
 
@@ -1085,27 +1075,89 @@ end
 -- ANY
 --------------------------------------------------------------------------------
 
-local wrap
-local format_any_value
+local MT_TYPE_MAP = {
+    [Symbol] = Type.Symbol,
+    [Type] = Type.Type
+}
+
+local function format_any_value(_type, x)
+    if _type.format_value then
+        return _type:format_value(x)
+    else
+        return repr(x)
+    end
+end
+
 Any = {}
-setmetatable(Any, {
-    __call = function(cls, arg1, arg2)
-        local _type = arg1
-        local value = arg2
-        if type(arg2) == "nil" then
-            -- wrap syntax
-            _type, value = wrap(arg1)
-        else
+do
+    local function wrap(value)
+        local t = type(value)
+        if t == 'table' then
+            local mt = getmetatable(value)
+            if mt == Any then -- effectively create a copy
+                return value.type, value.value
+            elseif mt == null then
+                return Type.Table, value
+            else
+                local ty = MT_TYPE_MAP[mt]
+                if ty ~= null then
+                    return ty, value
+                end
+            end
+        elseif t == 'string' then
+            return Type.String, value
+        elseif t == 'cdata' then
+            local ct = typeof(value)
+            if bool == ct then
+                return Type.Bool, value
+            elseif int8_t == ct then
+                return Type.I8, value
+            elseif int16_t == ct then
+                return Type.I16, value
+            elseif int32_t == ct then
+                return Type.I32, value
+            elseif int64_t == ct then
+                return Type.I64, value
+            elseif uint8_t == ct then
+                return Type.U8, value
+            elseif uint16_t == ct then
+                return Type.U16, value
+            elseif uint32_t == ct then
+                return Type.U32, value
+            elseif uint64_t == ct then
+                return Type.U64, value
+            elseif float == ct then
+                return Type.R32, value
+            elseif double == ct then
+                return Type.R64, value
+            end
+            local refct = reflect.typeof(value)
+            if is_char_array_ctype(refct) then
+                return Type.String, cstr(value)
+            end
+        end
+        error("unable to wrap " .. repr(value))
+    end
+
+    setmetatable(Any, {
+        __call = function(cls, arg1, arg2)
             local _type = arg1
             local value = arg2
+            if type(arg2) == "nil" then
+                -- wrap syntax
+                _type, value = wrap(arg1)
+            else
+                local _type = arg1
+                local value = arg2
+            end
+            assert_type(_type)
+            return setmetatable({
+                type = _type,
+                value = value
+            }, cls)
         end
-        assert_type(_type)
-        return setmetatable({
-            type = _type,
-            value = value
-        }, cls)
-    end
-})
+    })
+end
 function Any.__tostring(self)
     return format_any_value(self.type, self.value)
         .. ansi(STYLE.OPERATOR, ":")
@@ -1113,7 +1165,7 @@ function Any.__tostring(self)
 end
 
 assert_any = function(x)
-    if type(x) == "table" and getmetatable(x) == Any then
+    if getmetatable(x) == Any then
         return x
     else
         error("any expected, got " .. tostring(x))
@@ -1144,7 +1196,7 @@ end
 
 local Anchor = class("Anchor")
 local function assert_anchor(x)
-    if type(x) == "table" and getmetatable(x) == Anchor then
+    if getmetatable(x) == Anchor then
         return x
     else
         error("expected anchor, got " .. repr(x))
@@ -1173,12 +1225,107 @@ do
     end
 end
 
-local active_anchor
+local set_active_anchor
+local get_active_anchor
+do
+    local _active_anchor
+
+    set_active_anchor = function(anchor)
+        if anchor ~= null then
+            assert_anchor(anchor)
+        end
+        _active_anchor = anchor
+    end
+    get_active_anchor = function()
+        return _active_anchor
+    end
+end
+
 local function location_error(msg)
     if type(msg) == "string" then
-        msg = {msg = msg, anchor = active_anchor}
+        msg = {msg = msg, anchor = get_active_anchor()}
     end
     error(msg)
+end
+
+--------------------------------------------------------------------------------
+-- SYNTAX OBJECTS
+--------------------------------------------------------------------------------
+
+Type.SyntaxList = Type.Syntax(Type.List)
+Type.SyntaxSymbol = Type.Syntax(Type.Symbol)
+
+local function qualify(qualifier_type, x)
+    assert_any(x)
+    x = Any(x)
+    x.type = qualifier_type(x.type)
+    return x
+end
+
+local function unqualify(qualifier_type, x)
+    assert_any(x)
+    assert(x.type:super() == qualifier_type)
+    x = Any(x)
+    x.type = x.type.element_type
+    return x
+end
+
+local function quote(x) return qualify(Type.Quote, x) end
+local function unquote(x) return unqualify(Type.QuoteQualifier, x) end
+
+local function macro(x) return qualify(Type.Macro, x) end
+local function unmacro(x) return unqualify(Type.MacroQualifier, x) end
+
+local function is_syntax_type(_type)
+    assert_type(_type)
+    return _type:super() == Type.SyntaxQualifier
+end
+
+local function assert_syntax(x)
+    if is_syntax_type(x.type) then
+        return x
+    else
+        error("expected syntax, got " .. repr(x))
+    end
+end
+
+local syntax
+local unsyntax
+do
+    local Syntax = {}
+    do
+        Syntax.__index = Syntax
+        local cls = Syntax
+        function cls:__tostring()
+            return
+                ansi(STYLE.COMMENT,
+                    self.anchor:format_plain()
+                    .. ":")
+                .. tostring(self.datum)
+        end
+    end
+
+    syntax = function(x, anchor)
+        assert_any(x)
+        assert(not is_syntax_type(x.type))
+        assert_anchor(anchor)
+        x = qualify(Type.Syntax, x)
+        x.value = setmetatable({
+            datum = x.value,
+            anchor = anchor
+        }, Syntax)
+        return x
+    end
+    unsyntax = function(x)
+        assert_any(x)
+        if is_syntax_type(x.type) then
+            x = unqualify(Type.SyntaxQualifier, x)
+            x.value = x.value.datum
+            return x
+        else
+            return x
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -1331,7 +1478,7 @@ do
         self.lineno = self.next_lineno
         self.line = self.next_line
         self.cursor = self.next_cursor
-        active_anchor = self:anchor()
+        set_active_anchor(self:anchor())
     end
     function cls:read_token ()
         local c
@@ -1516,7 +1663,7 @@ end
 --------------------------------------------------------------------------------
 
 local function location_error_handler(err)
-    if (type(err) == "table") and err.anchor then
+    if type(err) == "table" and err.anchor then
         local msg = err.msg
         if err.anchor then
             msg =
@@ -1526,9 +1673,9 @@ local function location_error_handler(err)
                 msg = msg .. s
             end)
         end
-        return traceback(msg,3)
+        return traceback(msg, 3)
     else
-        print(traceback(err,3))
+        print(traceback(err, 3))
         os.exit(1)
     end
 end
@@ -1539,9 +1686,10 @@ end
 
 local EOL = {count=0}
 local List = {}
+MT_TYPE_MAP[List] = Type.List
 setmetatable(EOL, List)
 local function assert_list(x)
-    if type(x) == "table" and getmetatable(x) == List then
+    if getmetatable(x) == List then
         return x
     else
         error("expected list, got " .. repr(x))
@@ -1570,7 +1718,7 @@ do
     end
 
     setmetatable(List, {
-        __call = function (cls, at, next, anchor)
+        __call = function (cls, at, next)
             assert_any(at)
             assert_list(next)
             local count
@@ -1579,14 +1727,10 @@ do
             else
                 count = 1
             end
-            if anchor then
-                assert_anchor(anchor)
-            end
             return setmetatable({
                 at = at,
                 next = next,
-                count = count,
-                anchor = anchor
+                count = count
             }, List)
         end
     })
@@ -1620,8 +1764,10 @@ local function ListBuilder(lexer)
     local prev = EOL
     local eol = EOL
     local cls = {}
-    function cls.append(value, anchor)
-        prev = List(value, prev, anchor)
+    function cls.append(value)
+        assert_any(value)
+        assert_syntax(value)
+        prev = List(Any(value), prev)
         assert(prev)
     end
     function cls.reset_start()
@@ -1637,7 +1783,7 @@ local function ListBuilder(lexer)
         end
         -- reverse what we have, up to last split point and wrap result
         -- in cell
-        prev = List(Any(reverse_list_inplace(prev, eol)), eol, anchor)
+        prev = List(syntax(Any(reverse_list_inplace(prev, eol)),anchor), eol)
         assert(prev)
         cls.reset_start()
     end
@@ -1693,25 +1839,25 @@ local function parse(lexer)
         assert(lexer.token ~= Token.eof)
         local anchor = lexer:anchor()
         if (lexer.token == Token.open) then
-            return Any(parse_list(Token.close)), anchor
+            return syntax(Any(parse_list(Token.close)), anchor)
         elseif (lexer.token == Token.square_open) then
             local list = parse_list(Token.square_close)
             local sym = get_symbol("[")
-            return Any(List(wrap(sym), list)), anchor
+            return syntax(Any(List(wrap(sym), list)), anchor)
         elseif (lexer.token == Token.curly_open) then
             local list = parse_list(Token.curly_close)
             local sym = get_symbol("{")
-            return Any(List(wrap(sym), list)), anchor
+            return syntax(Any(List(wrap(sym), list)), anchor)
         elseif ((lexer.token == Token.close)
             or (lexer.token == Token.square_close)
             or (lexer.token == Token.curly_close)) then
             location_error("stray closing bracket")
         elseif (lexer.token == Token.string) then
-            return lexer:get_string(), anchor
+            return syntax(lexer:get_string(), anchor)
         elseif (lexer.token == Token.symbol) then
-            return lexer:get_symbol(), anchor
+            return syntax(lexer:get_symbol(), anchor)
         elseif (lexer.token == Token.number) then
-            return lexer:get_number(), anchor
+            return syntax(lexer:get_number(), anchor)
         else
             error("unexpected token: %c (%i)",
                 tochar(lexer.cursor[0]), lexer.cursor[0])
@@ -1782,14 +1928,15 @@ local function parse(lexer)
         end
 
         if (builder.is_single_result()) then
-            return builder.get_single_result(), anchor
+            return builder.get_single_result()
         else
-            return Any(builder.get_result()), anchor
+            return syntax(Any(builder.get_result()), anchor)
         end
     end
 
     local function parse_root()
         lexer:read_token()
+        local anchor = lexer:anchor()
         local builder = ListBuilder(lexer)
         while (lexer.token ~= Token.eof) do
             if (lexer.token == Token.none) then
@@ -1797,10 +1944,10 @@ local function parse(lexer)
             end
             builder.append(parse_naked(1, Token.none))
         end
-        return Any(builder.get_result())
+        return syntax(Any(builder.get_result()), anchor)
     end
 
-    return safecallr(
+    return xpcall(
         function()
             return parse_root()
         end,
@@ -1871,10 +2018,17 @@ end
 local stream_value
 do
 local function is_nested(e)
+    if is_syntax_type(e.type) then
+        e = unsyntax(e)
+    end
     if (e.type == Type.List) then
         local it = e.value
         while (it ~= EOL) do
-            if (it.at.type == Type.List) then
+            local q = it.at
+            if is_syntax_type(q.type) then
+                q = unsyntax(q)
+            end
+            if (q.type == Type.List) then
                 return true
             end
             it = it.next
@@ -1889,6 +2043,8 @@ local function stream_indent(writer, depth)
         writer("    ")
     end
 end
+
+local ANCHOR_SEP = "»"
 
 stream_value = function(writer, e, format)
     local depth = format.depth
@@ -1913,22 +2069,22 @@ stream_value = function(writer, e, format)
         if anchor then
             local str
             if not last_anchor or last_anchor.path ~= anchor.path then
-                str = "[" .. anchor.path
+                str = anchor.path
                     .. ":" .. tostring(anchor.lineno)
-                    .. ":" .. tostring(anchor.column) .. "]"
+                    .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
             elseif not last_anchor or last_anchor.lineno ~= anchor.lineno then
-                str = "[" .. tostring(anchor.lineno)
-                    .. ":" .. tostring(anchor.column) .. "]"
+                str = tostring(anchor.lineno)
+                    .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
             elseif not last_anchor or last_anchor.column ~= anchor.column then
-                str = "[" .. tostring(anchor.column) .. "]"
+                str = tostring(anchor.column) .. ANCHOR_SEP
             else
-                str = "|"
+                str = ANCHOR_SEP
             end
 
             writer(ansi(STYLE.COMMENT, str))
             last_anchor = anchor
         else
-            writer(ansi(STYLE.ERROR, "?"))
+            --writer(ansi(STYLE.ERROR, "?"))
         end
     end
 
@@ -1936,9 +2092,16 @@ stream_value = function(writer, e, format)
         assert_any(e)
 
         local anchor
+        if is_syntax_type(e.type) then
+            anchor = e.value.anchor
+            e = unsyntax(e)
+        end
 
         if (naked) then
             stream_indent(writer, depth)
+        end
+        if atom_anchors then
+            stream_anchor(anchor)
         end
 
         if (e.type == Type.List) then
@@ -1973,9 +2136,6 @@ stream_value = function(writer, e, format)
                     goto print_sparse
                 end
             ::print_terse::
-                if atom_anchors then
-                    stream_anchor(it.anchor)
-                end
                 depth = depth
                 naked = false
                 walk(it.at, depth, maxdepth, naked)
@@ -1986,9 +2146,6 @@ stream_value = function(writer, e, format)
                         break
                     end
                     writer(' ')
-                    if atom_anchors then
-                        stream_anchor(it.anchor)
-                    end
                     walk(it.at, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
@@ -2016,11 +2173,6 @@ stream_value = function(writer, e, format)
                         writer("<...>\n")
                         return
                     end
-                    if atom_anchors then
-                        stream_indent(writer, depth)
-                        stream_anchor(it.anchor)
-                        writer("\n")
-                    end
                     walk(value, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
@@ -2037,9 +2189,6 @@ stream_value = function(writer, e, format)
                     if (offset >= maxlength) then
                         writer(ansi(STYLE.COMMENT,"..."))
                         break
-                    end
-                    if atom_anchors then
-                        stream_anchor(it.anchor)
                     end
                     walk(it.at, depth, maxdepth, naked)
                     offset = offset + 1
@@ -2063,8 +2212,13 @@ stream_value = function(writer, e, format)
                 if (style and support_ansi) then writer(style) end
                 writer(escape_string(name, SYMBOL_ESCAPE_CHARS))
                 if (style and support_ansi) then writer(ANSI.RESET) end
-            else
+            elseif
+                e.type == Type.I32
+                or e.type == Type.R32
+                or e.type == Type.String then
                 writer(format_any_value(e.type, e.value))
+            else
+                writer(tostring(e))
             end
             if (naked) then
                 stream_cr(anchor)
@@ -2119,6 +2273,7 @@ unwrap = function(_type, value)
 end
 
 local Builtin = class("Builtin")
+MT_TYPE_MAP[Builtin] = Type.Builtin
 do
     local cls = Builtin
     function cls:init(func, name)
@@ -2146,6 +2301,7 @@ do
 end
 
 local SpecialForm = class("SpecialForm")
+MT_TYPE_MAP[SpecialForm] = Type.SpecialForm
 do
     local cls = SpecialForm
     function cls:init(func)
@@ -2172,8 +2328,9 @@ do
 end
 
 local Parameter = class("Parameter")
+MT_TYPE_MAP[Parameter] = Type.Parameter
 local function assert_parameter(x)
-    if type(x) == "table" and getmetatable(x) == Parameter then
+    if getmetatable(x) == Parameter then
         return x
     else
         error("expected parameter, got " .. repr(x))
@@ -2237,8 +2394,9 @@ local PARAM_Cont = 1
 local PARAM_Arg0 = 2
 
 local Flow = class("Flow")
+MT_TYPE_MAP[Flow] = Type.Flow
 local function assert_flow(x)
-    if type(x) == "table" and getmetatable(x) == Flow then
+    if getmetatable(x) == Flow then
         return x
     else
         error("expected flow, got " .. repr(x))
@@ -2322,8 +2480,9 @@ do
 end
 
 local Frame = class("Frame")
+MT_TYPE_MAP[Frame] = Type.Frame
 local function assert_frame(x)
-    if type(x) == "table" and getmetatable(x) == Frame then
+    if getmetatable(x) == Frame then
         return x
     else
         error("expected frame, got " .. repr(x))
@@ -2406,6 +2565,7 @@ do
 end
 
 local Closure = class("Closure")
+MT_TYPE_MAP[Closure] = Type.Closure
 do
     local cls = Closure
     function cls:init(flow, frame)
@@ -2525,27 +2685,6 @@ end
 --------------------------------------------------------------------------------
 -- INTERPRETER
 --------------------------------------------------------------------------------
-
-local function qualify(qualifier_type, x)
-    assert_any(x)
-    x = Any(x)
-    x.type = qualifier_type(x.type)
-    return x
-end
-
-local function unqualify(qualifier_type, x)
-    assert_any(x)
-    assert(x.type:super() == qualifier_type)
-    x = Any(x)
-    x.type = x.type.element_type
-    return x
-end
-
-local function quote(x) return qualify(Type.Quote, x) end
-local function unquote(x) return unqualify(Type.QuoteQualifier, x) end
-
-local function macro(x) return qualify(Type.Macro, x) end
-local function unmacro(x) return unqualify(Type.MacroQualifier, x) end
 
 local function evaluate(argindex, frame, value)
     assert_number(argindex)
@@ -2704,8 +2843,9 @@ end
 --------------------------------------------------------------------------------
 
 local Scope = class("Scope")
+MT_TYPE_MAP[Scope] = Type.Scope
 local function assert_scope(x)
-    if type(x) == "table" and getmetatable(x) == Scope then
+    if getmetatable(x) == Scope then
         return x
     else
         error("scope expected, not " .. repr(x))
@@ -2772,8 +2912,9 @@ local function verify_at_parameter_count(topit, mincount, maxcount)
     assert_list(topit)
     assert(topit ~= EOL)
     local val = topit.at
-    unwrap(Type.List, val)
-    verify_list_parameter_count(val.value, mincount, maxcount)
+    assert_syntax(val)
+    verify_list_parameter_count(
+        unwrap(Type.List, unsyntax(val)), mincount, maxcount)
 end
 
 --------------------------------------------------------------------------------
@@ -2784,48 +2925,13 @@ end
 
 local globals
 
---static Cursor expand (const Table *env, const List *topit);
---static Any compile (const Any &expr, const Any &dest);
 local expand
 local compile
 
-local function toparameter(env, value, anchor)
-    assert_scope(env)
-    local sym
-    if getmetatable(value) == Symbol then
-        sym = value
-    elseif getmetatable(value) == Parameter then
-        return value
-    elseif getmetatable(value) == Any then
-        if (value.type == Type.Parameter) then
-            return value
-        else
-            assert_any_type(Type.Symbol, value)
-            sym = value.value
-        end
-    end
-    assert_symbol(sym)
-    local param = Any(Parameter(sym, Type.Any, anchor))
-    env:bind(sym, param)
-    return param
-end
+local expand_continuation
+local expand_syntax_extend
 
-local function expand_expr_list(env, it)
-    assert_scope(env)
-    assert_list(it)
-    local l = EOL
-    while (it ~= EOL) do
-        local anchor = it.anchor
-        local nextlist,nextscope = expand(env, it)
-        if (nextlist == EOL) then
-            break
-        end
-        l = List(nextlist.at, l, anchor)
-        it = nextlist.next
-        env = nextscope
-    end
-    return reverse_list_inplace(l)
-end
+local expand_root
 
 local function wrap_expand_builtin(f)
     return function(frame, cont, dest, topit, env)
@@ -2833,87 +2939,104 @@ local function wrap_expand_builtin(f)
             unwrap(Type.Scope, env),
             unwrap(Type.List, topit))
         assert(cur_env)
-        if not cur_env then
-            return call(frame, none, cont, Any(cur_list))
-        else
-            return call(frame, none, cont, Any(cur_list), Any(cur_env))
-        end
+        return call(frame, none, cont, Any(cur_list), Any(cur_env))
     end
 end
 
-local function expand_do(env, topit)
+do
+
+local function toparameter(env, value)
     assert_scope(env)
-    assert_list(topit)
-
-    local it = unwrap(Type.List, topit.at)
-    local anchor = it.anchor
-    it = it.next
-
-    local subenv = Scope(env)
-    return
-        List(
-            quote(Any(List(
-                globals:lookup(Symbol.DoForm) or none,
-                expand_expr_list(subenv, it),
-                anchor))),
-            topit.next,
-            topit.anchor), env
+    assert_syntax(value)
+    local anchor = value.value.anchor
+    local _value = unsyntax(value)
+    if _value.type == Type.Parameter then
+        return value
+    else
+        local sym = unwrap(Type.Symbol, _value)
+        local param = Any(Parameter(sym, Type.Any, anchor))
+        env:bind(sym, param)
+        return syntax(param, anchor)
+    end
 end
 
-local function expand_continuation(env, topit)
+local function expand_expr_list(env, it)
+    assert_scope(env)
+    assert_list(it)
+
+    local l = EOL
+    while (it ~= EOL) do
+        local nextlist,nextscope = expand(env, it)
+        assert_list(nextlist)
+        if (nextlist == EOL) then
+            break
+        end
+        l = List(nextlist.at, l)
+        it = nextlist.next
+        env = nextscope
+    end
+    return reverse_list_inplace(l)
+end
+
+expand_continuation = function(env, topit)
     assert_scope(env)
     assert_list(topit)
     verify_at_parameter_count(topit, 1, -1)
 
-    local it = unwrap(Type.List, topit.at)
-    local anchor_kw = it.anchor
+    local it = topit.at
+
+    assert_syntax(it)
+    local anchor = it.value.anchor
+    it = unwrap(Type.List, unsyntax(it))
+
+    assert_syntax(it.at)
+    local anchor_kw = it.at.value.anchor
+
     it = it.next
 
-    local anchor_sym = anchor_kw
     local sym
     assert(it ~= EOL)
-    if (it.at.type == Type.Symbol) then
+
+    assert_syntax(it.at)
+    local trysym = unsyntax(it.at)
+    if (trysym.type == Type.Symbol) then
         sym = it.at
         it = it.next
-        anchor_sym = it.anchor
         assert(it ~= EOL)
     else
-        sym = Any(Symbol.Unnamed)
+        sym = syntax(Any(Symbol.Unnamed), anchor_kw)
     end
 
-    local expr_parameters = it.at
-    local anchor_params = it.anchor
+    local params = it.at
+    assert_syntax(params)
+    local anchor_params = params.value.anchor
+    params = unwrap(Type.List, unsyntax(params))
+
     it = it.next
 
     local subenv = Scope(env)
 
     local outargs = EOL
-    local params = unwrap(Type.List, expr_parameters)
     local param = params
     while (param ~= EOL) do
-        outargs = List(toparameter(subenv, param.at, param.anchor),
-            outargs, param.anchor)
+        outargs = List(toparameter(subenv, param.at), outargs)
         param = param.next
     end
 
-    return
-        List(
-            quote(Any(
+    return List(
+            syntax(quote(Any(
                 List(
-                    globals:lookup(Symbol.ContinuationForm) or none,
+                    syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw),
                     List(
                         sym,
                         List(
-                            Any(reverse_list_inplace(outargs)),
-                            expand_expr_list(subenv, it),
-                            anchor_params),
-                        anchor_sym),
-                    anchor_kw))),
-            topit.next,
-            topit.anchor), env
+                            syntax(Any(reverse_list_inplace(outargs)),
+                                anchor_params),
+                            expand_expr_list(subenv, it)))))), anchor),
+            topit.next), env
 end
 
-local function expand_syntax_extend(env, topit)
+expand_syntax_extend = function(env, topit)
     local cur_list, cur_env = expand_continuation(env, topit)
 
     local fun = compile(unquote(cur_list.at), none)
@@ -2938,7 +3061,6 @@ local function expand_macro(env, handler, topit)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
-    print(topit.anchor, handler)
     return execute(function(result_list, result_scope)
         if (is_none(result_list)) then
             return EOL
@@ -2954,11 +3076,14 @@ expand = function(env, topit)
     local result = none
 ::process::
     assert(topit ~= EOL)
-    local anchor = topit.anchor
     local expr = topit.at
+    assert_syntax(expr)
+    local anchor = expr.value.anchor
+    expr = unsyntax(expr)
+
     if (is_quote_type(expr.type)) then
         -- remove qualifier and return as-is
-        return List(unquote(expr), topit.next, anchor), env
+        return List(syntax(unquote(expr), anchor), topit.next), env
     elseif (expr.type == Type.List) then
         local list = expr.value
         if (list == EOL) then
@@ -2966,6 +3091,9 @@ expand = function(env, topit)
         end
 
         local head = list.at
+        assert_syntax(head)
+        local head_anchor = expr.value.anchor
+        head = unsyntax(head)
 
         -- resolve symbol
         if (head.type == Type.Symbol) then
@@ -2996,8 +3124,8 @@ expand = function(env, topit)
             end
         end
 
-        local it = unwrap(Type.List, topit.at)
-        result = Any(expand_expr_list(env, it))
+        local it = unwrap(Type.List, expr)
+        result = syntax(Any(expand_expr_list(env, it)), anchor)
         topit = topit.next
     elseif expr.type == Type.Symbol then
         local value = expr.value
@@ -3014,20 +3142,25 @@ expand = function(env, topit)
             location_error(
                 format("no value bound to name '%s' in scope", value.name))
         end
+        result = syntax(result, anchor)
         topit = topit.next
     else
-        result = expr
+        result = topit.at
         topit = topit.next
     end
-    return List(result, topit, anchor), env
+    return List(result, topit), env
 end
 
-local function expand_root(expr, scope)
-    assert_list(expr)
-    return safecallr(function()
-        return expand_expr_list(scope or globals, expr)
+expand_root = function(expr, scope)
+    assert_syntax(expr)
+    local anchor = expr.value.anchor
+    expr = unwrap(Type.List, unsyntax(expr))
+    return xpcall(function()
+        return syntax(Any(expand_expr_list(scope or globals, expr)), anchor)
     end, location_error_handler)
 end
+
+end -- do
 
 --------------------------------------------------------------------------------
 -- COMPILER
@@ -3072,34 +3205,39 @@ end
 
 --------------------------------------------------------------------------------
 
-local function compile_to_parameter(value, anchor)
-    assert_any(value)
+local function compile_to_parameter(sxvalue)
+    assert_syntax(sxvalue)
+    local anchor = sxvalue.value.anchor
+    local value = unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
-        return compile(value, Any(Symbol.Unnamed), anchor)
+        return compile(sxvalue, Any(Symbol.Unnamed))
     else
         -- constant value - can be inserted directly
-        return compile(value, none, anchor)
+        return compile(sxvalue, none)
     end
 end
 
 -- for return values that don't need to be stored
-local function compile_to_none(value, anchor)
-    assert_any(value)
+local function compile_to_none(sxvalue)
+    assert_syntax(sxvalue)
+    local anchor = sxvalue.value.anchor
+    local value = unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
         local next = Flow.create_continuation(Symbol.Unnamed, anchor)
-        compile(value, Any(next))
+        compile(sxvalue, Any(next))
         builder.continue_at(next)
     else
         -- constant value - technically we could just ignore it
-        compile(value, none)
+        compile(sxvalue, none)
     end
 end
 
 local function write_dest(dest, value)
     assert_any(dest)
-    assert_any(value)
+    assert_syntax(value)
+    value = unsyntax(value)
     if not is_none(dest) then
         if (dest.type == Type.Symbol) then
             -- a known value is returned - no need to generate code
@@ -3111,11 +3249,12 @@ local function write_dest(dest, value)
     return value
 end
 
-local function compile_expr_list(it, dest)
+local function compile_expr_list(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
+    assert_anchor(anchor)
     if (it == EOL) then
-        return write_dest(dest, const_none);
+        return write_dest(dest, syntax(none, anchor))
     else
         while (it ~= EOL) do
             local next = it.next
@@ -3133,25 +3272,34 @@ local function compile_expr_list(it, dest)
 end
 
 local function compile_do(it, dest)
-    assert_list(it)
+    assert_syntax(it)
     assert_any(dest)
+
+    local anchor = it.value.anchor
+    it = unwrap(Type.List, unsyntax(it))
+
     it = it.next
-    return compile_expr_list(it, dest)
+    return compile_expr_list(it, dest, anchor)
 end
 
 local function compile_continuation(it, dest, anchor)
-    assert_list(it)
+    assert_syntax(it)
     assert_any(dest)
 
-    it = it.next
-
-    assert(it ~= EOL)
-    local func_name = unwrap(Type.Symbol, it.at)
+    local anchor = it.value.anchor
+    it = unwrap(Type.List, unsyntax(it))
 
     it = it.next
 
-    assert(it ~= EOL)
+    local func_name = unwrap(Type.Symbol, unsyntax(it.at))
+
+    it = it.next
+
+
     local expr_parameters = it.at
+    assert_syntax(expr_parameters)
+    local params_anchor = expr_parameters.value.anchor
+    expr_parameters = unsyntax(it.at)
 
     it = it.next
 
@@ -3160,19 +3308,21 @@ local function compile_continuation(it, dest, anchor)
 
         builder.continue_at(func)
 
-        local param = unwrap(Type.List, expr_parameters)
-        while (param ~= EOL) do
-            func:append_parameter(unwrap(Type.Parameter, param.at))
-            param = param.next
+        local params = unwrap(Type.List, expr_parameters)
+        while (params ~= EOL) do
+            local param = params.at
+            assert_syntax(param)
+            func:append_parameter(unwrap(Type.Parameter, unsyntax(param)))
+            params = params.next
         end
         if (#func.parameters == 0) then
             -- auto-add continuation parameter
-            func:append_parameter(Symbol.Unnamed, Type.Any, anchor)
+            func:append_parameter(Symbol.Unnamed, Type.Any, params_anchor)
         end
         local ret = func.parameters[PARAM_Cont]
         assert(ret)
-        compile_expr_list(it, Any(ret))
-        return write_dest(dest, Any(func))
+        compile_expr_list(it, Any(ret), anchor)
+        return write_dest(dest, syntax(Any(func), anchor))
     end)
 end
 
@@ -3180,7 +3330,7 @@ local function compile_implicit_call(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
 
-    local callable = compile_to_parameter(it.at, it.anchor)
+    local callable = compile_to_parameter(it.at)
     it = it.next
 
     local args = { dest, callable }
@@ -3239,9 +3389,12 @@ end
 
 --------------------------------------------------------------------------------
 
-compile = function(expr, dest, anchor)
-    assert_any(expr)
+compile = function(sxexpr, dest, anchor)
+    assert_syntax(sxexpr)
     assert_any(dest)
+
+    local anchor = sxexpr.value.anchor
+    local expr = unsyntax(sxexpr)
 
     if (expr.type == Type.List) then
         local slist = expr.value
@@ -3249,18 +3402,20 @@ compile = function(expr, dest, anchor)
             location_error("empty expression")
         end
         local head = slist.at
+        assert_syntax(head)
+        head = unsyntax(head)
         if (head.type == Type.SpecialForm) then
-            return head.value(slist, dest, anchor)
+            return head.value(sxexpr, dest)
         else
             return compile_implicit_call(slist, dest, anchor)
         end
     else
-        local result = Any(expr)
+        local result = expr
         if (is_quote_type(expr.type)) then
             -- remove qualifier and return as-is
-            result.type = expr.type.element_type
+            result = unquote(result)
         end
-        return write_dest(dest, result)
+        return write_dest(dest, syntax(result, anchor))
     end
 end
 
@@ -3268,140 +3423,19 @@ end
 
 -- path must be resident
 local function compile_root(expr, name)
-    assert_list(expr)
+    assert_syntax(expr)
     assert_symbol(name)
-    local mainfunc = Flow.create_function(name)
+
+    local anchor = expr.value.anchor
+    expr = unwrap(Type.List, unsyntax(expr))
+
+    local mainfunc = Flow.create_function(name, anchor)
     local ret = mainfunc.parameters[PARAM_Cont]
     builder.continue_at(mainfunc)
 
-    compile_expr_list(expr, Any(ret))
+    compile_expr_list(expr, Any(ret), anchor)
 
     return Any(mainfunc)
-end
-
-local function expand_and_compile(expr, name)
-    --[[
-    Anchor *anchor = new Anchor()
-    anchor->path = path;
-    anchor->lineno = 1;
-    anchor->column = 1;
-    anchor->offset = 0;
-    ]]
-
-    local rootit = unwrap(Type.List, expr)
-    local expexpr = expand_expr_list(env, rootit)
-
-    return compile_root(expr, name)
-end
-
---------------------------------------------------------------------------------
--- Any wrapping
---------------------------------------------------------------------------------
--- define this one after all other types have been defined
-
-wrap = function(value)
-    local t = type(value)
-    if t == 'table' then
-        local mt = getmetatable(value)
-        if mt == List then
-            return Type.List, value
-        elseif mt == Parameter then
-            return Type.Parameter, value
-        elseif mt == Symbol then
-            return Type.Symbol, value
-        elseif mt == Builtin then
-            return Type.Builtin, value
-        elseif mt == Frame then
-            return Type.Frame, value
-        elseif mt == Closure then
-            return Type.Closure, value
-        elseif mt == Flow then
-            return Type.Flow, value
-        elseif mt == SpecialForm then
-            return Type.SpecialForm, value
-        elseif mt == Any then -- effectively create a copy
-            return value.type, value.value
-        elseif mt == Type then
-            return Type.Type, value
-        elseif mt == Scope then
-            return Type.Scope, value
-        elseif mt == null then
-            return Type.Table, value
-        end
-    elseif t == 'string' then
-        return Type.String, value
-    elseif t == 'cdata' then
-        local ct = typeof(value)
-        if istype(bool, ct) then
-            return Type.Bool, value
-        elseif istype(int8_t, ct) then
-            return Type.I8, value
-        elseif istype(int16_t, ct) then
-            return Type.I16, value
-        elseif istype(int32_t, ct) then
-            return Type.I32, value
-        elseif istype(int64_t, ct) then
-            return Type.I64, value
-        elseif istype(uint8_t, ct) then
-            return Type.U8, value
-        elseif istype(uint16_t, ct) then
-            return Type.U16, value
-        elseif istype(uint32_t, ct) then
-            return Type.U32, value
-        elseif istype(uint64_t, ct) then
-            return Type.U64, value
-        elseif istype(float, ct) then
-            return Type.R32, value
-        elseif istype(double, ct) then
-            return Type.R64, value
-        end
-        local refct = reflect.typeof(value)
-        if is_char_array_ctype(refct) then
-            return Type.String, cstr(value)
-        end
-    end
-    error("unable to wrap " .. repr(value))
-end
-
-format_any_value = function(_type, x)
-    if _type == Type.I8 then
-        return ansi(STYLE.NUMBER, cformat("%d", x))
-    elseif _type == Type.I16 then
-        return ansi(STYLE.NUMBER, cformat("%d", x))
-    elseif _type == Type.I32 then
-        return ansi(STYLE.NUMBER, cformat("%d", x))
-    elseif _type == Type.I64 then
-        return ansi(STYLE.NUMBER, cformat("%lld", x))
-    elseif _type == Type.U8 then
-        return ansi(STYLE.NUMBER, cformat("%u", x))
-    elseif _type == Type.U16 then
-        return ansi(STYLE.NUMBER, cformat("%u", x))
-    elseif _type == Type.U32 then
-        return ansi(STYLE.NUMBER, cformat("%u", x))
-    elseif _type == Type.U64 then
-        return ansi(STYLE.NUMBER, cformat("%llu", x))
-    elseif _type == Type.R32 then
-        return ansi(STYLE.NUMBER, cformat("%g", x))
-    elseif _type == Type.R64 then
-        return ansi(STYLE.NUMBER, cformat("%g", x))
-    elseif _type == Type.Bool then
-        if x == bool(true) then
-            return ansi(STYLE.KEYWORD, "true")
-        else
-            return ansi(STYLE.KEYWORD, "false")
-        end
-    elseif _type == Type.Void then
-        return ansi(STYLE.KEYWORD, "none")
-    elseif _type == Type.Symbol then
-        return ansi(STYLE.SYMBOL,
-            escape_string(x.name, SYMBOL_ESCAPE_CHARS))
-    elseif _type == Type.String then
-        return ansi(STYLE.STRING,
-            '"' .. escape_string(x, "\"") .. '"')
-    elseif _type == Type.Builtin then
-        return tostring(x)
-    end
-    return repr(x)
 end
 
 --------------------------------------------------------------------------------
@@ -3519,12 +3553,11 @@ builtins.string = Type.String
 builtins.call = SpecialForm(compile_call)
 builtins["cc/call"] = SpecialForm(compile_contcall)
 builtins[Symbol.ContinuationForm] = SpecialForm(compile_continuation)
-builtins[Symbol.DoForm] = SpecialForm(compile_do)
+builtins["do"] = SpecialForm(compile_do)
 
 -- builtin macros
 --------------------------------------------------------------------------------
 
-builtins["do"] = builtin_macro(expand_do)
 builtins["fn/cc"] = builtin_macro(expand_continuation)
 builtins["syntax-extend"] = builtin_macro(expand_syntax_extend)
 
@@ -4078,7 +4111,7 @@ local function prepare_builtin_value(name, value)
     if ty == "function" then
         value = Builtin(value)
     end
-    if type(value) ~= "table" or getmetatable(value) ~= Any then
+    if getmetatable(value) ~= Any then
         value = Any(value)
     end
     if type(name) == "string" then
@@ -4098,8 +4131,23 @@ local function decl_builtin(name, value)
     globals:bind(prepare_builtin_value(name, value))
 end
 
+function Type.Void:format_value()
+    return ansi(STYLE.KEYWORD, "none")
+end
+function Type.Symbol:format_symbol(x)
+    return ansi(STYLE.SYMBOL,
+        escape_string(x.name, SYMBOL_ESCAPE_CHARS))
+end
+function Type.String:format_symbol(x)
+    return ansi(STYLE.STRING,
+        '"' .. escape_string(x, "\"") .. '"')
+end
+function Type.Builtin:format_symbol(x)
+    return tostring(x)
+end
+
 local function init_globals()
-    local function configure_int_type(_type, ctype)
+    local function configure_int_type(_type, ctype, fmt)
         local refct = reflect.typeof(ctype)
         _type:bind(Symbol.Size, Any(size_t(refct.size)))
         _type:bind(Symbol.Alignment, Any(size_t(refct.alignment)))
@@ -4107,6 +4155,19 @@ local function init_globals()
         _type:bind(Symbol.Unsigned, Any(bool(refct.unsigned or false)))
         _type:bind(Symbol.Super, Any(Type.Integer))
         _type.ctype = ctype
+        if _type == Type.Bool then
+            function _type:format_value(x)
+                if x == bool(true) then
+                    return ansi(STYLE.KEYWORD, "true")
+                else
+                    return ansi(STYLE.KEYWORD, "false")
+                end
+            end
+        else
+            function _type:format_value(x)
+                return ansi(STYLE.NUMBER, cformat(fmt, x))
+            end
+        end
     end
     local function configure_real_type(_type, ctype)
         local refct = reflect.typeof(ctype)
@@ -4115,16 +4176,19 @@ local function init_globals()
         _type:bind(Symbol.Bitwidth, Any(int(refct.size * 8)))
         _type:bind(Symbol.Super, Any(Type.Real))
         _type.ctype = ctype
+        function _type:format_value(x)
+            return ansi(STYLE.NUMBER, cformat("%g", x))
+        end
     end
     configure_int_type(Type.Bool, bool)
-    configure_int_type(Type.U8, uint8_t)
-    configure_int_type(Type.U16, uint16_t)
-    configure_int_type(Type.U32, uint32_t)
-    configure_int_type(Type.U64, uint64_t)
-    configure_int_type(Type.I8, int8_t)
-    configure_int_type(Type.I16, int16_t)
-    configure_int_type(Type.I32, int32_t)
-    configure_int_type(Type.I64, int64_t)
+    configure_int_type(Type.U8, uint8_t, "%d")
+    configure_int_type(Type.U16, uint16_t, "%d")
+    configure_int_type(Type.U32, uint32_t, "%d")
+    configure_int_type(Type.U64, uint64_t, "%lld")
+    configure_int_type(Type.I8, int8_t, "%u")
+    configure_int_type(Type.I16, int16_t, "%u")
+    configure_int_type(Type.I32, int32_t, "%u")
+    configure_int_type(Type.I64, int64_t, "%llu")
 
     configure_real_type(Type.R32, float)
     configure_real_type(Type.R64, double)
@@ -4150,9 +4214,9 @@ end -- do
 --------------------------------------------------------------------------------
 
 local macro_test = [[
-print 1 2 3
-print "hello world"
-((fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!")
+do
+    print 1 2 3
+    print "hello world"
 print
     == 3 4
     == 3 3
@@ -4164,6 +4228,8 @@ print
     < 10.0 5.0
     < 5.0 10.0
     != 1.0 1.0
+
+((fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!")
 
 do
     print
@@ -4215,9 +4281,9 @@ local function test_lexer()
     local result,expr = parse(lexer)
     if result then
         stream_value(stdout_writer, expr, StreamValueFormat(true))
-        local result,expexpr = expand_root(unwrap(Type.List, expr))
+        local result,expexpr = expand_root(expr)
         if result then
-            stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
+            stream_value(stdout_writer, expexpr, StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
             stream_il(stdout_writer, func)
             print("func:", func)
@@ -4281,9 +4347,15 @@ local function test_list()
     --print(EOL.next)
 end
 
---test_list()
-test_lexer()
---test_bangra()
---test_ansicolors()
-
-
+do
+    local result,err = xpcall(function()
+        --test_list()
+        test_lexer()
+        --test_bangra()
+        --test_ansicolors()
+    end,
+    location_error_handler)
+    if not result then
+        print(err)
+    end
+end
