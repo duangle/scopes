@@ -19,10 +19,10 @@ syntax-extend stage-0 (_ env)
                                         # if multiple arguments
                                         branch
                                             == (slice args 1) (list)
-                                            fn/cc ()
-                                                @ args 0
-                                            fn/cc ()
-                                                args
+                                            fn/cc (_)
+                                                _ (@ args 0)
+                                            fn/cc (_)
+                                                _ args
                                 slice expr 1
                             env
                     slice (@ expr 0) 1
@@ -36,8 +36,8 @@ syntax-extend stage-0 (_ env)
                             fn/cc (_ param)
                                 branch
                                     == (typeof param) parameter
-                                    fn/cc () none
-                                    fn/cc ()
+                                    fn/cc (_) (_ none)
+                                    fn/cc (_)
                                         error "set! requires parameter argument"
                                 return
                                     cons
@@ -54,7 +54,7 @@ syntax-extend stage-0 (_ env)
                                     env
                             get-scope-symbol env name name
                     @ (@ expr 0) 1
-    env
+    _ env
 
 syntax-extend stage-1 (_ env)
     set-scope-symbol! env

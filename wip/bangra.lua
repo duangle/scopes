@@ -581,6 +581,17 @@ local function stdout_writer(x)
     C.fputs(x, C.stdout)
 end
 
+local function string_writer(s)
+    s = s or ""
+    return function (x)
+        if x == null then
+            return s
+        else
+            s = s .. x
+        end
+    end
+end
+
 local function min(a,b)
     if (a < b) then
         return a
@@ -734,7 +745,7 @@ INSTRUCTION = ANSI.COLOR_YELLOW,
 TYPE = ANSI.COLOR_RGB(0xF99157),
 COMMENT = ANSI.COLOR_RGB(0x999999),
 ERROR = ANSI.COLOR_XRED,
-LOCATION = ANSI.COLOR_XCYAN,
+LOCATION = ANSI.COLOR_RGB(0x999999),
 }
 else
 STYLE = {
@@ -750,7 +761,7 @@ INSTRUCTION = ANSI.COLOR_YELLOW,
 TYPE = ANSI.COLOR_XYELLOW,
 COMMENT = ANSI.COLOR_GRAY30,
 ERROR = ANSI.COLOR_XRED,
-LOCATION = ANSI.COLOR_XCYAN,
+LOCATION = ANSI.COLOR_GRAY30,
 }
 end
 
@@ -853,11 +864,7 @@ do
         end
     })
     function cls:__tostring()
-        return
-            ansi(STYLE.KEYWORD, "symbol")
-            .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.SYMBOL, self.name)
-            .. ansi(STYLE.COMMENT, ">")
+        return ansi(STYLE.SYMBOL, self.name)
     end
 end
 
@@ -879,6 +886,7 @@ local function define_symbols(def)
     def({Super='super'})
     def({At='@'})
     def({ApplyType='apply-type'})
+    def({ElementType="element-type"})
     def({Concat='..'})
     def({Add='+'})
     def({Sub='-'})
@@ -891,6 +899,7 @@ local function define_symbols(def)
     def({RCompare='rcompare'})
     def({SliceForwarder='slice-forwarder'})
     def({CompareListNext="compare-list-next"})
+
 end
 
 do
@@ -948,17 +957,13 @@ local function define_types(def)
     def('List')
     def('String')
 
-    def('SpecialForm')
+    def('Form')
     def('Parameter')
     def('Flow')
     def('Table')
 
     def('Closure')
     def('Frame')
-
-    def('SyntaxQualifier')
-    def('QuoteQualifier')
-    def('MacroQualifier')
 end
 
 do
@@ -985,61 +990,78 @@ do
     end
     function cls:lookup(name)
         assert_symbol(name)
-        return self.symbols[name]
+        local value = self.symbols[name]
+        if value ~= null then
+            return value
+        end
+        local super = self:super()
+        if super then
+            return super:lookup(name)
+        end
     end
     function cls:super()
-        local super = self:lookup(Symbol.Super)
+        local super = self.symbols[Symbol.Super]
         return super and unwrap(Type.Type, super)
     end
     function cls:set_super(_type)
+        assert_type(_type)
         self:bind(Symbol.Super, Any(_type))
+    end
+    function cls:element_type()
+        local et = self:lookup(Symbol.ElementType)
+        return et and unwrap(Type.Type, et)
+    end
+    function cls:set_element_type(_type)
+        assert_type(_type)
+        self:bind(Symbol.ElementType, Any(_type))
+    end
+    function cls:__call(...)
+        return self:__call(...)
     end
 
     function cls:__tostring()
-        return ansi(STYLE.KEYWORD, "type")
-            .. ansi(STYLE.COMMENT, "<")
-            .. self.displayname
-            .. ansi(STYLE.COMMENT, ">")
+        return self.displayname
     end
 
     define_types(function(name)
         cls[name] = Type(string.lower(name))
     end)
 
-    local function make_qualifier_type(name, qualifier_type)
-        assert_type(qualifier_type)
+    local function make_qualifier_type(name)
+        local cls = Type(name)
         local cache = {}
-        return function(_type)
+        function cls:__call(_type)
             assert_type(_type)
             local val = cache[_type]
             if not val then
                 val = Type(
-                    name .. "[" .. _type.name .. "]",
-                    ansi(STYLE.TYPE, name)
+                    self.name .. "[" .. _type.name .. "]",
+                    self.displayname
                     .. ansi(STYLE.OPERATOR, "[")
                     .. _type.displayname
                     .. ansi(STYLE.OPERATOR, "]"))
-                val.element_type = _type
-                val:set_super(qualifier_type)
+                val:set_element_type(_type)
+                val:set_super(self)
                 cache[_type] = val
             end
             return val
         end
+        return cls
     end
-    Type.Macro = make_qualifier_type("macro", Type.MacroQualifier)
-    Type.Quote = make_qualifier_type("quote", Type.QuoteQualifier)
-    Type.Syntax = make_qualifier_type("syntax", Type.SyntaxQualifier)
+    Type.Macro = make_qualifier_type("macro")
+    Type.Quote = make_qualifier_type("quote")
+    Type.Syntax = make_qualifier_type("syntax")
     Type.SizeT = Type.U64
 end
 
 local function is_quote_type(_type)
     assert_type(_type)
-    return _type:super() == Type.QuoteQualifier
+    return _type:super() == Type.Quote
 end
 
 local function is_macro_type(_type)
     assert_type(_type)
-    return _type:super() == Type.MacroQualifier
+    return _type:super() == Type.Macro
 end
 
 local function each_numerical_type(f, opts)
@@ -1094,9 +1116,7 @@ do
         local t = type(value)
         if t == 'table' then
             local mt = getmetatable(value)
-            if mt == Any then -- effectively create a copy
-                return value.type, value.value
-            elseif mt == null then
+            if mt == null then
                 return Type.Table, value
             else
                 local ty = MT_TYPE_MAP[mt]
@@ -1159,9 +1179,13 @@ do
     })
 end
 function Any.__tostring(self)
-    return format_any_value(self.type, self.value)
-        .. ansi(STYLE.OPERATOR, ":")
-        .. self.type.displayname
+    if getmetatable(self.type) ~= Type then
+        return ansi(STYLE.ERROR, "corrupted value")
+    else
+        return format_any_value(self.type, self.value)
+            .. ansi(STYLE.OPERATOR, ":")
+            .. self.type.displayname
+    end
 end
 
 assert_any = function(x)
@@ -1215,10 +1239,19 @@ do
         self.column = column
         self.offset = offset
     end
+    -- defined elsewhere:
+    -- function cls.stream_source_line
     function cls:format_plain()
         return self.path
             .. ':' .. format("%i", self.lineno)
             .. ':' .. format("%i", self.column)
+    end
+    function cls:stream_message_with_source(writer, msg)
+        writer(ansi(STYLE.LOCATION, self:format_plain() .. ":"))
+        writer(" ")
+        writer(msg)
+        writer("\n")
+        self:stream_source_line(writer)
     end
     function cls:__tostring()
         return ansi(STYLE.LOCATION, self:format_plain())
@@ -1241,6 +1274,13 @@ do
     end
 end
 
+local function with_anchor(anchor, f)
+    local _anchor = get_active_anchor()
+    set_active_anchor(anchor)
+    f()
+    set_active_anchor(_anchor)
+end
+
 local function location_error(msg)
     if type(msg) == "string" then
         msg = {msg = msg, anchor = get_active_anchor()}
@@ -1257,28 +1297,29 @@ Type.SyntaxSymbol = Type.Syntax(Type.Symbol)
 
 local function qualify(qualifier_type, x)
     assert_any(x)
-    x = Any(x)
-    x.type = qualifier_type(x.type)
-    return x
+    return Any(qualifier_type(x.type), x.value)
 end
 
 local function unqualify(qualifier_type, x)
     assert_any(x)
-    assert(x.type:super() == qualifier_type)
-    x = Any(x)
-    x.type = x.type.element_type
-    return x
+    if (x.type:super() ~= qualifier_type) then
+        location_error("attempting to unqualify type "
+            .. repr(qualifier_type)
+            .. " from unrelated type "
+            .. repr(x.type))
+    end
+    return Any(x.type:element_type(), x.value)
 end
 
 local function quote(x) return qualify(Type.Quote, x) end
-local function unquote(x) return unqualify(Type.QuoteQualifier, x) end
+local function unquote(x) return unqualify(Type.Quote, x) end
 
 local function macro(x) return qualify(Type.Macro, x) end
-local function unmacro(x) return unqualify(Type.MacroQualifier, x) end
+local function unmacro(x) return unqualify(Type.Macro, x) end
 
 local function is_syntax_type(_type)
     assert_type(_type)
-    return _type:super() == Type.SyntaxQualifier
+    return _type:super() == Type.Syntax
 end
 
 local function assert_syntax(x)
@@ -1319,9 +1360,10 @@ do
     unsyntax = function(x)
         assert_any(x)
         if is_syntax_type(x.type) then
-            x = unqualify(Type.SyntaxQualifier, x)
+            local anchor = x.value.anchor
+            x = unqualify(Type.Syntax, x)
             x.value = x.value.datum
-            return x
+            return x, anchor
         else
             return x
         end
@@ -1621,7 +1663,7 @@ do
         return cast(rawstring, self.ptr)
     end
     local CR = ord('\n')
-    function cls:dump_line(offset, writer)
+    function cls:stream_line(offset, writer)
         local str = self:strptr()
         if (offset >= self.length) then
             writer("<cannot display location in source file>\n")
@@ -1653,29 +1695,31 @@ do
     end
 end
 
-function Anchor:dump_source_line(writer)
+function Anchor:stream_source_line(writer)
     local sf = SourceFile.open(self.path)
     if sf then
-        sf:dump_line(self.offset, writer)
+        sf:stream_line(self.offset, writer)
     end
 end
 
 --------------------------------------------------------------------------------
 
+local debugger
 local function location_error_handler(err)
+    local w = string_writer()
+    w(traceback("",3))
+    w('\n\n')
+    debugger.stream_traceback(w)
     if type(err) == "table" and err.anchor then
-        local msg = err.msg
         if err.anchor then
-            msg =
-                ansi(STYLE.LOCATION, err.anchor:format_plain() .. ": ")
-                .. msg .. "\n"
-            err.anchor:dump_source_line(function(s)
-                msg = msg .. s
-            end)
+            w(ansi(STYLE.LOCATION, err.anchor:format_plain() .. ": "))
         end
-        return traceback(msg, 3)
+        w(err.msg)
+        w('\n')
+        return w()
     else
-        print(traceback(err, 3))
+        w(tostring(err))
+        print(w())
         os.exit(1)
     end
 end
@@ -1705,7 +1749,7 @@ do
     function List:__index(key)
         local value = rawget(self, key)
         if value == null and self == EOL then
-            error("attempting to access list terminator")
+            location_error("cannot index into empty list")
         end
     end
 
@@ -1767,7 +1811,7 @@ local function ListBuilder(lexer)
     function cls.append(value)
         assert_any(value)
         assert_syntax(value)
-        prev = List(Any(value), prev)
+        prev = List(value, prev)
         assert(prev)
     end
     function cls.reset_start()
@@ -1959,6 +2003,9 @@ end
 -- VALUE PRINTER
 --------------------------------------------------------------------------------
 
+local ANCHOR_SEP = ":"
+local CONT_SEP = " ⮕ "
+
 -- keywords and macros
 local KEYWORDS = set(split(
     "let true false fn quote with ::* ::@ call escape do dump-syntax"
@@ -2010,13 +2057,18 @@ local function StreamValueFormat(naked, depth, opts)
     opts.sfxfunctions = opts.sfxfunctions or SFXFUNCTIONS
     opts.operators = opts.operators or OPERATORS
     opts.types = opts.types or TYPES
-    opts.line_anchors = (opts.anchors == "line") or false
-    opts.atom_anchors = (opts.anchors == "all") or true
+    opts.line_anchors = (opts.anchors == "line") or true
+    opts.atom_anchors = (opts.anchors == "all") or false
     return opts
 end
 
-local stream_value
+local stream_expr
 do
+
+local simple_types = set({
+    Type.Symbol, Type.String, Type.I32, Type.R32
+})
+
 local function is_nested(e)
     if is_syntax_type(e.type) then
         e = unsyntax(e)
@@ -2028,7 +2080,7 @@ local function is_nested(e)
             if is_syntax_type(q.type) then
                 q = unsyntax(q)
             end
-            if (q.type == Type.List) then
+            if simple_types[q.type] == null then
                 return true
             end
             it = it.next
@@ -2044,9 +2096,7 @@ local function stream_indent(writer, depth)
     end
 end
 
-local ANCHOR_SEP = "»"
-
-stream_value = function(writer, e, format)
+stream_expr = function(writer, e, format)
     local depth = format.depth
     local maxdepth = format.maxdepth
     local maxlength = format.maxlength
@@ -2055,15 +2105,6 @@ stream_value = function(writer, e, format)
     local atom_anchors = format.atom_anchors
 
     local last_anchor
-    local function stream_cr(anchor)
-        if anchor then
-            writer('\t')
-            writer(
-                ansi(STYLE.COMMENT, '# '
-                    .. anchor:format_plain()))
-        end
-        writer('\n')
-    end
 
     local function stream_anchor(anchor)
         if anchor then
@@ -2073,12 +2114,12 @@ stream_value = function(writer, e, format)
                     .. ":" .. tostring(anchor.lineno)
                     .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
             elseif not last_anchor or last_anchor.lineno ~= anchor.lineno then
-                str = tostring(anchor.lineno)
+                str = ":" .. tostring(anchor.lineno)
                     .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
             elseif not last_anchor or last_anchor.column ~= anchor.column then
-                str = tostring(anchor.column) .. ANCHOR_SEP
+                str = "::" .. tostring(anchor.column) .. ANCHOR_SEP
             else
-                str = ANCHOR_SEP
+                str = "::" .. ANCHOR_SEP
             end
 
             writer(ansi(STYLE.COMMENT, str))
@@ -2105,25 +2146,26 @@ stream_value = function(writer, e, format)
         end
 
         if (e.type == Type.List) then
+            if naked and line_anchors and not atom_anchors then
+                stream_anchor(anchor)
+            end
+
             maxdepth = maxdepth - 1
 
             local it = e.value
             if (it == EOL) then
                 writer(ansi(STYLE.OPERATOR,"()"))
                 if (naked) then
-                    stream_cr(anchor)
+                    writer('\n')
                 end
                 return
-            end
-            if line_anchors then
-                anchor = it.anchor
             end
             if maxdepth == 0 then
                 writer(ansi(STYLE.OPERATOR,"("))
                 writer(ansi(STYLE.COMMENT,"<...>"))
                 writer(ansi(STYLE.OPERATOR,")"))
                 if (naked) then
-                    stream_cr(anchor)
+                    writer('\n')
                 end
                 return
             end
@@ -2132,7 +2174,7 @@ stream_value = function(writer, e, format)
                 local single = (it.next == EOL)
                 if is_nested(it.at) then
                     writer(";")
-                    stream_cr(anchor)
+                    writer('\n')
                     goto print_sparse
                 end
             ::print_terse::
@@ -2153,7 +2195,7 @@ stream_value = function(writer, e, format)
                 if single then
                     writer(";")
                 end
-                stream_cr(anchor)
+                writer('\n')
             ::print_sparse::
                 while (it ~= EOL) do
                     local depth = depth + 1
@@ -2196,7 +2238,7 @@ stream_value = function(writer, e, format)
                 end
                 writer(ansi(STYLE.OPERATOR,')'))
                 if (naked) then
-                    stream_cr(anchor)
+                    writer('\n')
                 end
             end
         else
@@ -2215,13 +2257,14 @@ stream_value = function(writer, e, format)
             elseif
                 e.type == Type.I32
                 or e.type == Type.R32
-                or e.type == Type.String then
+                or e.type == Type.String
+                or e.type == Type.Parameter then
                 writer(format_any_value(e.type, e.value))
             else
                 writer(tostring(e))
             end
             if (naked) then
-                stream_cr(anchor)
+                writer('\n')
             end
         end
     end
@@ -2234,7 +2277,7 @@ function List.__tostring(self)
     local fmt = StreamValueFormat(false)
     fmt.maxdepth = 2
     fmt.maxlength = 5
-    stream_value(
+    stream_expr(
         function (x)
             s = s .. x
         end,
@@ -2287,43 +2330,29 @@ do
         return self.func(...)
     end
     function cls:__tostring()
-        return
-            ansi(STYLE.COMMENT, "<")
-            .. (function()
-                if self.name ~= Symbol.Unnamed then
-                    return ansi(STYLE.FUNCTION, self.name.name)
-                else
-                    return ansi(STYLE.FUNCTION, tostring(self.func))
-                end
-            end)()
-            .. ansi(STYLE.COMMENT, ">")
+        if self.name ~= Symbol.Unnamed then
+            return ansi(STYLE.FUNCTION, self.name.name)
+        else
+            return ansi(STYLE.ERROR, tostring(self.func))
+        end
     end
 end
 
-local SpecialForm = class("SpecialForm")
-MT_TYPE_MAP[SpecialForm] = Type.SpecialForm
+local Form = class("Form")
+MT_TYPE_MAP[Form] = Type.Form
 do
-    local cls = SpecialForm
-    function cls:init(func)
+    local cls = Form
+    function cls:init(func, name)
         assert_function(func)
+        assert_symbol(name)
         self.func = func
-        self.name = Symbol.Unnamed
+        self.name = name
     end
     function cls:__call(...)
         return self.func(...)
     end
     function cls:__tostring()
-        return
-            ansi(STYLE.KEYWORD, "form")
-            .. ansi(STYLE.COMMENT, "<")
-            .. (function()
-                if self.name ~= Symbol.Unnamed then
-                    return ansi(STYLE.SYMBOL, self.name.name)
-                else
-                    return tostring(self.func)
-                end
-            end)()
-            .. ansi(STYLE.COMMENT, ">")
+        return ansi(STYLE.KEYWORD, self.name.name)
     end
 end
 
@@ -2351,38 +2380,34 @@ do
     end
     function cls:__tostring()
         return
-            ansi(STYLE.COMMENT, "<")
-            ..
-                (function()
-                    if self.vararg then
-                        return ansi(STYLE.KEYWORD, "parameter...")
-                    else
-                        return ansi(STYLE.KEYWORD, "parameter")
-                    end
-                end)()
-            .. " "
-            .. ansi(STYLE.SYMBOL, self.name.name)
-            .. ansi(STYLE.OPERATOR, ":")
-            .. self.type.displayname
-            .. (function()
+            (function()
                 if self.flow ~= null then
-                    return " of "
-                        .. tostring(self.flow)
+                    return tostring(self.flow)
                         .. ansi(STYLE.OPERATOR, "@")
                         .. ansi(STYLE.NUMBER, self.index - 1)
                 else
                     return ""
                 end
             end)()
+            .. ansi(STYLE.COMMENT, "%")
+            .. ansi(STYLE.SYMBOL, self.name.name)
             ..
-                (function ()
-                    if self.anchor then
-                        return " " ..tostring(self.anchor)
+                (function()
+                    if self.vararg then
+                        return ansi(STYLE.KEYWORD, "…")
                     else
                         return ""
                     end
                 end)()
-            .. ansi(STYLE.COMMENT, ">")
+            ..
+                (function()
+                    if self.type ~= Type.Any then
+                        return ansi(STYLE.OPERATOR, ":")
+                            .. self.type.displayname
+                    else
+                        return ""
+                    end
+                end)()
     end
 end
 
@@ -2412,24 +2437,21 @@ do
         self.parameters = {}
         self.arguments = {}
         self.name = Symbol.Unnamed
+        --self.anchor = null
+        --self.body_anchor = null
+    end
+
+    function cls:set_body_anchor(anchor)
+        assert_anchor(anchor)
+        self.body_anchor = anchor
     end
 
     function cls:__tostring()
         return
-            ansi(STYLE.COMMENT, "<")
-            .. (function()
-                if self.anchor then
-                    return ansi(STYLE.LOCATION,
-                        self.anchor:format_plain() .. ":")
-                else
-                    return ""
-                end
-            end)()
-            .. ansi(STYLE.KEYWORD, "λ")
+            ansi(STYLE.KEYWORD, "λ")
             .. ansi(STYLE.SYMBOL, self.name.name)
             .. ansi(STYLE.OPERATOR, "#")
             .. ansi(STYLE.NUMBER, self.uid)
-            .. ansi(STYLE.COMMENT, ">")
     end
 
     function cls:append_parameter(param, _type, anchor)
@@ -2575,23 +2597,44 @@ do
         self.frame = frame
     end
     function cls:__tostring()
-        return
-            ansi(STYLE.KEYWORD, "closure")
-            .. ansi(STYLE.COMMENT, "<")
+        return tostring(self.frame)
+            .. ansi(STYLE.OPERATOR, "[")
             .. tostring(self.flow)
-            .. ansi(STYLE.OPERATOR, "@")
-            .. tostring(self.frame)
-            .. ansi(STYLE.COMMENT, ">")
+            .. ansi(STYLE.OPERATOR, "]")
     end
 end
 
 --------------------------------------------------------------------------------
--- IL PRINTING
+-- IL PRINTER
 --------------------------------------------------------------------------------
 
 local stream_il
 do
     stream_il = function(writer, afunc)
+        local last_anchor
+        local function stream_anchor(anchor)
+            if anchor then
+                local str
+                if not last_anchor or last_anchor.path ~= anchor.path then
+                    str = anchor.path
+                        .. ":" .. tostring(anchor.lineno)
+                        .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
+                elseif not last_anchor or last_anchor.lineno ~= anchor.lineno then
+                    str = ":" .. tostring(anchor.lineno)
+                        .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
+                elseif not last_anchor or last_anchor.column ~= anchor.column then
+                    str = "::" .. tostring(anchor.column) .. ANCHOR_SEP
+                else
+                    str = "::" .. ANCHOR_SEP
+                end
+
+                writer(ansi(STYLE.COMMENT, str))
+                last_anchor = anchor
+            else
+                --writer(ansi(STYLE.ERROR, "?"))
+            end
+        end
+
         local visited = {}
         local stream_any
         local function stream_flow_label(aflow)
@@ -2604,11 +2647,14 @@ do
         local function stream_param_label(param, aflow)
             if param.flow ~= aflow then
                 stream_flow_label(param.flow)
-                writer(ansi(STYLE.OPERATOR, "."))
             end
-            writer(ansi(STYLE.SYMBOL, param.name.name))
-            writer(ansi(STYLE.OPERATOR, "@"))
-            writer(ansi(STYLE.NUMBER, tostring(param.index)))
+            if param.name == Symbol.Unnamed then
+                writer(ansi(STYLE.OPERATOR, "@"))
+                writer(ansi(STYLE.NUMBER, tostring(param.index)))
+            else
+                writer(ansi(STYLE.COMMENT, "%"))
+                writer(ansi(STYLE.SYMBOL, param.name.name))
+            end
             if param.vararg then
                 writer(ansi(STYLE.KEYWORD, "…"))
             end
@@ -2623,11 +2669,13 @@ do
                 writer(tostring(arg))
             end
         end
+
         local function stream_flow (aflow, aframe)
             if visited[aflow] then
                 return
             end
             visited[aflow] = true
+            stream_anchor(aflow.anchor)
             writer(ansi(STYLE.KEYWORD, "fn/cc"))
             writer(" ")
             writer(ansi(STYLE.SYMBOL, aflow.name.name))
@@ -2642,23 +2690,23 @@ do
                 stream_param_label(param, aflow)
             end
             writer(ansi(STYLE.OPERATOR, ")"))
-            if aflow.anchor then
-                writer(" ")
-                writer(ansi(STYLE.COMMENT,
-                    "# " .. aflow.anchor:format_plain()))
-            end
             writer("\n    ")
-            for i=2,#aflow.arguments do
-                local arg = aflow.arguments[i]
-                if i > 2 then
-                    writer(" ")
+            if #aflow.arguments == 0 then
+                writer(ansi(STYLE.ERROR, "empty"))
+            else
+                stream_anchor(aflow.body_anchor)
+                for i=2,#aflow.arguments do
+                    local arg = aflow.arguments[i]
+                    if i > 2 then
+                        writer(" ")
+                    end
+                    stream_argument(arg, aflow)
                 end
-                stream_argument(arg, aflow)
-            end
-            local cont = aflow.arguments[1]
-            if not is_none(cont) then
-                writer(ansi(STYLE.COMMENT," ⮕ "))
-                stream_argument(cont, aflow)
+                local cont = aflow.arguments[1]
+                if not is_none(cont) then
+                    writer(ansi(STYLE.COMMENT,CONT_SEP))
+                    stream_argument(cont, aflow)
+                end
             end
             writer("\n")
 
@@ -2679,6 +2727,107 @@ do
             end
         end
         stream_any(afunc)
+    end
+end
+
+--------------------------------------------------------------------------------
+-- DEBUG SERVICES
+--------------------------------------------------------------------------------
+
+debugger = {}
+do
+    local stack = {}
+    local cls = debugger
+    local last_anchor
+    function cls.dump_traceback()
+        cls.stream_traceback(stderr_writer)
+    end
+    function cls.stream_traceback(writer)
+        writer("Traceback (most recent call last):\n")
+        for i=1,#stack do
+            local entry = stack[i]
+            local anchor = entry[1]
+            local frame = entry[2]
+            local cont = entry[3]
+            local dest = entry[4]
+            if dest.type == Type.Builtin then
+                local builtin = dest.value
+                writer('  in builtin ')
+                writer(tostring(builtin))
+                writer('\n')
+            elseif dest.type == Type.Flow then
+                local flow = dest.value
+                if anchor == null then
+                    anchor = flow.body_anchor or flow.anchor
+                end
+                if anchor then
+                    writer('  File ')
+                    writer(repr(anchor.path))
+                    writer(', line ')
+                    writer(ansi(STYLE.NUMBER, tostring(anchor.lineno)))
+                    if flow.name ~= Symbol.Unnamed then
+                        writer(', in ')
+                        writer(tostring(flow.name))
+                    end
+                    writer('\n')
+                    anchor:stream_source_line(writer)
+                end
+            end
+        end
+    end
+    local function is_eq(a,b)
+        if a.type ~= b.type then
+            return false
+        end
+        if is_none(a) then
+            return true
+        end
+        if a.value ~= b.value then
+            return false
+        end
+        return true
+    end
+    local function pop_stack(i)
+        for k=#stack,i,-1 do
+            stack[k] = null
+        end
+    end
+    function cls.enter_call(frame, cont, dest, ...)
+        for i=1,#stack do
+            local entry = stack[i]
+            local _cont = entry[3]
+            if is_none(_cont) or is_eq(_cont, dest) then
+                pop_stack(i)
+                break
+            end
+        end
+
+        if #stack > 0 then
+            stack[#stack][1] = last_anchor
+        end
+        if dest.type == Type.Closure then
+            local closure = dest.value
+            frame = closure.frame
+            dest = Any(closure.flow)
+        end
+        local anchor
+        if dest.type == Type.Flow then
+            local flow = dest.value
+            local flow_anchor = flow.body_anchor or flow.anchor
+            if flow_anchor then
+                last_anchor = flow_anchor
+                anchor = flow.anchor
+                set_active_anchor(last_anchor)
+            end
+        end
+        table.insert(stack, { anchor, frame, cont, dest, ... })
+        if false then
+            for i=1,#stack do
+                local entry = stack[i]
+                print(i,unpack(entry))
+            end
+            print("----")
+        end
     end
 end
 
@@ -2710,13 +2859,16 @@ local function evaluate(argindex, frame, value)
     return value
 end
 
-local function dump_trace(frame, cont, dest, ...)
-    print(repr(dest))
+local function dump_trace(writer, frame, cont, dest, ...)
+    print(writer)
+    writer(repr(dest))
     for i=1,select('#', ...) do
-        print("    " .. repr(select(i, ...)))
+        writer(' ')
+        writer(repr(select(i, ...)))
     end
     if not is_none(cont) then
-        print("-> " .. repr(cont))
+        writer(ansi(STYLE.COMMENT, CONT_SEP))
+        writer(repr(cont))
     end
 end
 
@@ -2767,11 +2919,22 @@ local function call_flow(frame, cont, flow, ...)
     --set_anchor(frame, get_anchor(flow))
 
     if trace_execution then
-        print("FLOW:")
-        dump_trace(frame, unpack(flow.arguments))
+        local w = string_writer()
+        w(ansi(STYLE.KEYWORD, "flow "))
+        dump_trace(w, frame, unpack(flow.arguments))
+        if flow.body_anchor then
+            flow.body_anchor:stream_message_with_source(stderr_writer, w())
+        else
+            stderr_writer("<unknown source location>: ")
+            stderr_writer(w())
+        end
+        stderr_writer('\n')
     end
 
-    assert(#flow.arguments > 0)
+    if (#flow.arguments == 0) then
+        location_error("function never returns")
+    end
+
     local idx = 1
     local wbuf = {}
     for i=1,#flow.arguments do
@@ -2794,8 +2957,9 @@ end
 
 call = function(frame, cont, dest, ...)
     if trace_execution then
-        print("TRACE:")
-        dump_trace(frame, cont, dest, ...)
+        stderr_writer(ansi(STYLE.KEYWORD, "trace "))
+        dump_trace(stderr_writer, frame, cont, dest, ...)
+        stderr_writer('\n')
     end
     assert_frame(frame)
     assert_any(cont)
@@ -2803,12 +2967,16 @@ call = function(frame, cont, dest, ...)
     for i=1,select('#', ...) do
         assert_any(select(i, ...))
     end
+
     if dest.type == Type.Closure then
+        debugger.enter_call(frame, cont, dest, ...)
         local closure = dest.value
         return call_flow(closure.frame, cont, closure.flow, ...)
     elseif dest.type == Type.Flow then
+        debugger.enter_call(frame, cont, dest, ...)
         return call_flow(frame, cont, dest.value, ...)
     elseif dest.type == Type.Builtin then
+        debugger.enter_call(frame, cont, dest, ...)
         local func = dest.value.func
         return func(frame, cont, dest, ...)
     elseif dest.type == Type.Type then
@@ -2821,9 +2989,7 @@ call = function(frame, cont, dest, ...)
                 .. ty.displayname)
         end
     else
-        print("while evaluating:")
-        dump_trace(frame, cont, dest, ...)
-        error("don't know how to apply value of type "
+        location_error("don't know how to apply value of type "
             .. dest.type.displayname)
     end
 end
@@ -3039,7 +3205,10 @@ end
 expand_syntax_extend = function(env, topit)
     local cur_list, cur_env = expand_continuation(env, topit)
 
-    local fun = compile(unquote(cur_list.at), none)
+    local expr = cur_list.at
+    local anchor = expr.value.anchor
+
+    local fun = compile(syntax(unquote(unsyntax(expr)),anchor), none)
     return cur_list.next, execute(function(expr_env)
         return unwrap(Type.Scope, expr_env)
     end, fun, Any(env))
@@ -3079,6 +3248,7 @@ expand = function(env, topit)
     local expr = topit.at
     assert_syntax(expr)
     local anchor = expr.value.anchor
+    set_active_anchor(anchor)
     expr = unsyntax(expr)
 
     if (is_quote_type(expr.type)) then
@@ -3184,38 +3354,41 @@ do
         return result
     end
 
-    local function insert_and_advance(values, next)
-        if (state == null) then
-            error("can not insert call: continuation already exited.")
-        end
-        assert(#state.arguments == 0)
-        state.arguments = values
-        state = next
-    end
-
     -- arguments must include continuation
-    function builder.br(arguments)
+    function builder.br(arguments, anchor)
+        assert_table(arguments)
+        assert_anchor(anchor)
         assert(#arguments >= 2)
         if (state == null) then
-            error("can not break: continuation already exited.");
+            error("can not define body: continuation already exited.")
         end
-        insert_and_advance(arguments, null)
+        assert(#state.arguments == 0)
+        state.arguments = arguments
+        state:set_body_anchor(anchor)
+        state = null
     end
 end
 
 --------------------------------------------------------------------------------
 
-local function compile_to_parameter(sxvalue)
-    assert_syntax(sxvalue)
-    local anchor = sxvalue.value.anchor
-    local value = unsyntax(sxvalue)
-    if (value.type == Type.List) then
-        -- complex expression
-        return compile(sxvalue, Any(Symbol.Unnamed))
-    else
-        -- constant value - can be inserted directly
-        return compile(sxvalue, none)
+-- write a result to a given destination; value types for dest:
+-- none: value will be discarded
+-- symbol: value should be returned as constant or parameter
+-- *: value should be passed to dest which is assumed to be a continuation
+local function write_dest(dest, value)
+    assert_any(dest)
+    assert_syntax(value)
+    local anchor = value.value.anchor
+    value = unsyntax(value)
+    if not is_none(dest) then
+        if dest.type == Type.Symbol then
+            -- a known value is returned - no need to generate code
+            return value
+        else
+            builder.br({none, dest, value}, anchor)
+        end
     end
+    return value
 end
 
 -- for return values that don't need to be stored
@@ -3234,31 +3407,19 @@ local function compile_to_none(sxvalue)
     end
 end
 
-local function write_dest(dest, value)
-    assert_any(dest)
-    assert_syntax(value)
-    value = unsyntax(value)
-    if not is_none(dest) then
-        if (dest.type == Type.Symbol) then
-            -- a known value is returned - no need to generate code
-            return value
-        else
-            builder.br({none, dest, value})
-        end
-    end
-    return value
-end
-
 local function compile_expr_list(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
     assert_anchor(anchor)
     if (it == EOL) then
+        if is_none(dest) then
+            error("expression list has no instructions")
+        end
         return write_dest(dest, syntax(none, anchor))
     else
         while (it ~= EOL) do
             local next = it.next
-            if (next == EOL) then -- last element goes to dest
+            if next == EOL then -- last element goes to dest
                 return compile(it.at, dest)
             else
                 -- write to unused parameter
@@ -3267,7 +3428,9 @@ local function compile_expr_list(it, dest, anchor)
             it = next
         end
     end
-    error("unreachable branch")
+    if not is_none(dest) then
+        error("unreachable branch")
+    end
     return none
 end
 
@@ -3295,7 +3458,6 @@ local function compile_continuation(it, dest, anchor)
 
     it = it.next
 
-
     local expr_parameters = it.at
     assert_syntax(expr_parameters)
     local params_anchor = expr_parameters.value.anchor
@@ -3316,14 +3478,28 @@ local function compile_continuation(it, dest, anchor)
             params = params.next
         end
         if (#func.parameters == 0) then
-            -- auto-add continuation parameter
-            func:append_parameter(Symbol.Unnamed, Type.Any, params_anchor)
+            set_active_anchor(params_anchor)
+            location_error("explicit continuation parameter missing")
         end
-        local ret = func.parameters[PARAM_Cont]
-        assert(ret)
-        compile_expr_list(it, Any(ret), anchor)
+        compile_expr_list(it, none, anchor)
+        if #func.arguments == 0 then
+            location_error("function does not return")
+        end
         return write_dest(dest, syntax(Any(func), anchor))
     end)
+end
+
+local function compile_to_parameter(sxvalue)
+    assert_syntax(sxvalue)
+    local anchor = sxvalue.value.anchor
+    local value = unsyntax(sxvalue)
+    if (value.type == Type.List) then
+        -- complex expression
+        return compile(sxvalue, Any(Symbol.Unnamed))
+    else
+        -- constant value - can be inserted directly
+        return compile(sxvalue, none)
+    end
 end
 
 local function compile_implicit_call(it, dest, anchor)
@@ -3335,7 +3511,7 @@ local function compile_implicit_call(it, dest, anchor)
 
     local args = { dest, callable }
     while (it ~= EOL) do
-        table.insert(args, compile_to_parameter(it.at, it.anchor))
+        table.insert(args, compile_to_parameter(it.at))
         it = it.next
     end
 
@@ -3345,45 +3521,51 @@ local function compile_implicit_call(it, dest, anchor)
         param.vararg = true
         -- patch dest to an actual function
         args[1] = Any(next)
-        builder.br(args)
+        builder.br(args, anchor)
         builder.continue_at(next)
         return Any(next.parameters[PARAM_Arg0])
     else
-        builder.br(args)
+        builder.br(args, anchor)
         return none
     end
 end
 
 local function compile_call(it, dest, anchor)
-    assert_list(it)
+    assert_syntax(it)
     assert_any(dest)
+
+    local anchor = it.value.anchor
+    it = unwrap(Type.List, unsyntax(it))
 
     it = it.next
     return compile_implicit_call(it, dest, anchor)
 end
 
 local function compile_contcall(it, dest, anchor)
-    assert_list(it)
+    assert_syntax(it)
     assert_any(dest)
     assert(not is_none(dest))
+
+    local anchor = it.value.anchor
+    it = unwrap(Type.List, unsyntax(it))
 
     it = it.next
     if (it == EOL) then
         location_error("continuation expected")
     end
     local args = {}
-    table.insert(args, compile_to_parameter(it.at, it.anchor))
+    table.insert(args, compile_to_parameter(it.at))
     it = it.next
     if (it == EOL) then
         location_error("callable expected")
     end
-    table.insert(args, compile_to_parameter(it.at, it.anchor))
+    table.insert(args, compile_to_parameter(it.at))
     it = it.next
     while (it ~= EOL) do
-        table.insert(args, compile_to_parameter(it.at, it.anchor))
+        table.insert(args, compile_to_parameter(it.at))
         it = it.next
     end
-    builder.br(args)
+    builder.br(args, anchor)
     return none
 end
 
@@ -3404,7 +3586,7 @@ compile = function(sxexpr, dest, anchor)
         local head = slist.at
         assert_syntax(head)
         head = unsyntax(head)
-        if (head.type == Type.SpecialForm) then
+        if (head.type == Type.Form) then
             return head.value(sxexpr, dest)
         else
             return compile_implicit_call(slist, dest, anchor)
@@ -3473,6 +3655,9 @@ end
 
 local function wrap_simple_builtin(f)
     return function(frame, cont, self, ...)
+        if is_none(cont) then
+            location_error("missing return")
+        end
         return call(frame, none, cont, f(...))
     end
 end
@@ -3488,7 +3673,7 @@ local function builtin_forward(name, errmsg)
         checkargs(1,1, value)
         local func = value.type:lookup(name)
         if func == null then
-            error("type "
+            location_error("type "
                 .. value.type.displayname
                 .. " " .. errmsg)
         end
@@ -3508,7 +3693,7 @@ local function unwrap_integer(value)
     if super == Type.Integer then
         return int64_t(value.value)
     else
-        error("integer expected, not " .. repr(value))
+        location_error("integer expected, not " .. repr(value))
     end
 end
 
@@ -3550,10 +3735,10 @@ builtins.string = Type.String
 -- special forms
 --------------------------------------------------------------------------------
 
-builtins.call = SpecialForm(compile_call)
-builtins["cc/call"] = SpecialForm(compile_contcall)
-builtins[Symbol.ContinuationForm] = SpecialForm(compile_continuation)
-builtins["do"] = SpecialForm(compile_do)
+builtins.call = Form(compile_call, Symbol("call"))
+builtins["cc/call"] = Form(compile_contcall, Symbol("cc/call"))
+builtins[Symbol.ContinuationForm] = Form(compile_continuation, Symbol("fn/cc"))
+builtins["do"] = Form(compile_do, Symbol("do"))
 
 -- builtin macros
 --------------------------------------------------------------------------------
@@ -3604,7 +3789,7 @@ builtins['ordered-branch'] = ordered_branch
 
 builtins.error = wrap_simple_builtin(function(msg)
     checkargs(1,1, msg)
-    error(unwrap(Type.String, msg))
+    location_error(unwrap(Type.String, msg))
 end)
 
 -- constructors
@@ -3845,6 +4030,15 @@ builtin_op(Type.Type, Symbol.Compare,
         end
     end)
 
+builtin_op(Type.Syntax, Symbol.Compare,
+    function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        local x = unsyntax(a)
+        local y = b
+        return ordered_branch(frame, cont, none,
+            x, y, equal_cont, unordered_cont, less_cont, greater_cont)
+    end)
+
 -- cast
 --------------------------------------------------------------------------------
 
@@ -3964,13 +4158,14 @@ builtins.countof = countof
 local function countof_func(T)
     builtin_op(T, Symbol.CountOf,
         function(frame, cont, self, value)
-            value = unwrap(T, value)
+            value = value.value
             return call(frame, none, cont, Any(size_t(#value)))
         end)
 end
 
 countof_func(Type.String)
 countof_func(Type.List)
+countof_func(Type.Syntax)
 
 local at = builtin_forward(Symbol.At, "is not indexable")
 builtins[Symbol.At] = at
@@ -3985,6 +4180,11 @@ builtin_op(Type.List, Symbol.At,
         end
         return x.at
     end))
+builtin_op(Type.Syntax, Symbol.At,
+    function(frame, cont, self, value, ...)
+        value = unsyntax(value)
+        return at(frame, cont, none, value, ...)
+    end)
 
 local fwd_slice = builtin_forward(Symbol.Slice, "is not sliceable")
 builtins.slice = function(frame, cont, self, obj, start_index, end_index)
@@ -4010,6 +4210,15 @@ builtins.slice = function(frame, cont, self, obj, start_index, end_index)
             return fwd_slice(frame, cont, none, obj, Any(i0), Any(i1))
         end, Symbol.SliceForwarder)), countof, obj)
 end
+
+builtin_op(Type.Syntax, Symbol.Slice,
+    function(frame, cont, self, value, ...)
+        local value, anchor = unsyntax(value)
+        return fwd_slice(frame,
+            Any(Builtin(function(_frame, _cont, _self, l)
+                call(frame, none, cont, syntax(l, anchor))
+            end, Symbol.SliceForwarder)), none, value, ...)
+    end)
 
 builtin_op(Type.List, Symbol.Slice,
     wrap_simple_builtin(function(value, i0, i1)
@@ -4080,7 +4289,7 @@ end
 builtins.dump = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     local fmt = StreamValueFormat(true)
-    stream_value(
+    stream_expr(
         stdout_writer,
         value, fmt)
     return value
@@ -4106,7 +4315,7 @@ end)
 -- GLOBALS
 --------------------------------------------------------------------------------
 
-local function prepare_builtin_value(name, value)
+local function prepare_builtin_value(name, value, _type)
     local ty = type(value)
     if ty == "function" then
         value = Builtin(value)
@@ -4117,12 +4326,17 @@ local function prepare_builtin_value(name, value)
     if type(name) == "string" then
         name = Symbol(name)
     end
+    local displayname = name
+    if _type then
+        displayname = Symbol(_type.name .. "." .. name.name)
+    end
     if ((value.type == Type.Builtin)
-        or (value.type == Type.SpecialForm))
+        or (value.type == Type.Form))
         and value.value.name == Symbol.Unnamed then
-        value.value.name = name
-    elseif is_macro_type(value.type) then
-        value.value.name = name
+        value.value.name = displayname
+    elseif is_macro_type(value.type)
+        and value.value.name == Symbol.Unnamed then
+        value.value.name = displayname
     end
     return name, value
 end
@@ -4201,7 +4415,7 @@ local function init_globals()
 
     for _,entry in ipairs(builtin_ops) do
         local _type,name,value = unpack(entry)
-        name,value = prepare_builtin_value(name,value)
+        name,value = prepare_builtin_value(name,value,_type)
         _type:bind(name, value)
     end
 end
@@ -4212,6 +4426,20 @@ end -- do
 --------------------------------------------------------------------------------
 -- TESTING
 --------------------------------------------------------------------------------
+
+local macro_test2 = [[
+print "yes"
+print "this"
+print "is"
+print "dog"
+call
+    fn/cc (_ x y)
+        _ x y
+    \ 2 3
+print "yup"
+
+error "bang"
+]]
 
 local macro_test = [[
 do
@@ -4229,7 +4457,25 @@ print
     < 5.0 10.0
     != 1.0 1.0
 
+print "yes"
+print "this"
+print "is"
+print "dog"
+
 ((fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!")
+
+;
+    fn/cc testf (_ x y z w)
+        print "heyy"
+        print "hooo"
+        call
+            fn/cc subf (_ x y)
+                print "hoo"
+                _ x y
+            \ 2 3
+        print x y z w
+        _ x y
+    \ "yes" "this" "is" "dog!"
 
 do
     print
@@ -4237,15 +4483,26 @@ do
 
     print
         == (r32 5) 5.0
+    #error "oh my god"
 
 print
     countof "test"
-print
-    ordered-branch 3 4
-        fn/cc () "=="
-        fn/cc () "!="
-        fn/cc () "<"
-        fn/cc () ">"
+;
+    fn/cc more-testing (_ x y)
+        ordered-branch 3 4
+            fn/cc (_)
+                _ "=="
+            fn/cc (_)
+                _ "!="
+            fn/cc (_)
+                print "hey"
+                print "crash here"
+                _ "<"
+            fn/cc (_)
+                _ ">"
+        _;
+    \ 3 4
+
 ]]
 
 local lexer_test = [[
@@ -4280,13 +4537,16 @@ local function test_lexer()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local result,expr = parse(lexer)
     if result then
-        stream_value(stdout_writer, expr, StreamValueFormat(true))
+        print("parsed result:")
+        stream_expr(stdout_writer, expr, StreamValueFormat(true))
         local result,expexpr = expand_root(expr)
         if result then
-            stream_value(stdout_writer, expexpr, StreamValueFormat(true))
+            print("expanded result:")
+            stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
+            print("generated IL:")
             stream_il(stdout_writer, func)
-            print("func:", func)
+            print("executing",func)
             local result,err = xpcall(
                 function()
                     execute(
@@ -4312,17 +4572,28 @@ local function test_bangra()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local result,expr = parse(lexer)
     if result then
-        --stream_value(stdout_writer, expr, StreamValueFormat(true))
-        local result,expexpr = expand_root(unwrap(Type.List, expr))
+        --stream_expr(stdout_writer, expr, StreamValueFormat(true))
+        local result,expexpr = expand_root(expr)
         if result then
-            --stream_value(stdout_writer, Any(expexpr), StreamValueFormat(true))
+            --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
             local func = compile_root(expexpr, Symbol("main"))
-
             execute(
                 function(...)
                     print(...)
                 end,
                 func)
+            print("executing",func)
+            local result,err = xpcall(
+                function()
+                    execute(
+                        function(...)
+                            print(...)
+                        end,
+                        func)
+                end, location_error_handler)
+            if not result then
+                print(err)
+            end
         else
             print(expexpr)
         end
@@ -4350,8 +4621,8 @@ end
 do
     local result,err = xpcall(function()
         --test_list()
-        test_lexer()
-        --test_bangra()
+        --test_lexer()
+        test_bangra()
         --test_ansicolors()
     end,
     location_error_handler)
