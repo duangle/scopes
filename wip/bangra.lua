@@ -905,17 +905,17 @@ local function define_symbols(def)
     def({At='@'})
     def({ApplyType='apply-type'})
     def({ElementType="element-type"})
-    def({Concat='..'})
+    def({Join='..'})
     def({Add='+'})
     def({Sub='-'})
     def({Mul='*'})
     def({Div='/'})
-    def({FloorDiv='//'})
 
     -- ad-hoc builtin names
     def({ExecuteReturn='execute-return'})
     def({RCompare='rcompare'})
     def({SliceForwarder='slice-forwarder'})
+    def({JoinForwarder='join-forwarder'})
     def({CompareListNext="compare-list-next"})
 
 end
@@ -2159,7 +2159,7 @@ local FUNCTIONS = set(split(
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
-        .. " datum->syntax syntax->datum"
+        .. " datum->syntax syntax->datum syntax->anchor syntax-do"
     ))
 
 -- builtin and global functions with side effects
@@ -2193,8 +2193,7 @@ local function StreamValueFormat(naked, depth, opts)
     opts.sfxfunctions = opts.sfxfunctions or SFXFUNCTIONS
     opts.operators = opts.operators or OPERATORS
     opts.types = opts.types or TYPES
-    opts.line_anchors = (opts.anchors == "line") or true
-    opts.atom_anchors = (opts.anchors == "all") or false
+    opts.anchors = opts.anchors or "line"
     return opts
 end
 
@@ -2239,8 +2238,8 @@ stream_expr = function(writer, e, format)
     local maxdepth = format.maxdepth
     local maxlength = format.maxlength
     local naked = format.naked
-    local line_anchors = format.line_anchors
-    local atom_anchors = format.atom_anchors
+    local line_anchors = (format.anchors == "line")
+    local atom_anchors = (format.anchors == "all")
 
     local last_anchor
 
@@ -2270,10 +2269,22 @@ stream_expr = function(writer, e, format)
     local function walk(e, depth, maxdepth, naked)
         assert_any(e)
 
+        local quoted = false
+
         local anchor
+        if is_quote_type(e.type) then
+            e = unquote(e)
+            quoted = true
+        end
+
         if is_syntax_type(e.type) then
             anchor = e.value.anchor
             e = unsyntax(e)
+        end
+
+        local otype = e.type
+        if quoted then
+            otype = Type.Quote(otype)
         end
 
         if (naked) then
@@ -2392,14 +2403,18 @@ stream_expr = function(writer, e, format)
                 if (style and support_ansi) then writer(style) end
                 writer(escape_string(name, SYMBOL_ESCAPE_CHARS))
                 if (style and support_ansi) then writer(ANSI.RESET) end
-            elseif
-                e.type == Type.I32
-                or e.type == Type.R32
-                or e.type == Type.String
-                or e.type == Type.Parameter then
-                writer(format_any_value(e.type, e.value))
             else
-                writer(tostring(e))
+                writer(format_any_value(e.type, e.value))
+            end
+            if
+                quoted
+                or (e.type ~= Type.I32
+                and e.type ~= Type.R32
+                and e.type ~= Type.String
+                and e.type ~= Type.Symbol
+                and e.type ~= Type.Parameter) then
+                writer(ansi(STYLE.OPERATOR, ":"))
+                writer(tostring(otype))
             end
             if (naked) then
                 writer('\n')
@@ -2413,8 +2428,8 @@ end -- do
 function List.__tostring(self)
     local s = ""
     local fmt = StreamValueFormat(false)
-    fmt.maxdepth = 2
-    fmt.maxlength = 5
+    fmt.maxdepth = 5
+    fmt.maxlength = 10
     stream_expr(
         function (x)
             s = s .. x
@@ -3425,7 +3440,7 @@ local function expand_macro(env, handler, topit)
         anchor:stream_message_with_source(w, 'while expanding expression')
         local fmt = StreamValueFormat()
         fmt.naked = true
-        fmt.maxdepth = 2
+        fmt.maxdepth = 3
         fmt.maxlength = 5
         stream_expr(w, topit.at, fmt)
         w(_0)
@@ -3516,11 +3531,19 @@ expand = function(env, topit)
 end
 
 expand_root = function(expr, scope)
-    assert_syntax(expr)
-    local anchor = expr.value.anchor
-    expr = unwrap(Type.List, unsyntax(expr))
+    local anchor
+    if is_syntax_type(expr.type) then
+        anchor = expr.value.anchor
+        expr = unsyntax(expr)
+    end
+    expr = unwrap(Type.List, expr)
     return xpcall(function()
-        return syntax(Any(expand_expr_list(scope or globals, expr)), anchor)
+        local result = Any(expand_expr_list(scope or globals, expr))
+        if anchor then
+            return syntax(result, anchor)
+        else
+            return result
+        end
     end, location_error_handler)
 end
 
@@ -4037,10 +4060,10 @@ end)
 
 builtins.expand = wrap_simple_builtin(function(expr, scope)
     checkargs(2,2, expr, scope)
-    scope = unwrap(Type.Scope, scope)
-    local result,expexpr = expand_root(unwrap(Type.List, expr), scope)
+    local _scope = unwrap(Type.Scope, scope)
+    local result,expexpr = expand_root(expr, _scope)
     if result then
-        return expexpr
+        return expexpr, scope
     else
         error(expexpr)
     end
@@ -4395,7 +4418,7 @@ each_numerical_type(function(T)
     builtin_op(T, Symbol.Cast, default_casts)
 end)
 
--- concat
+-- join
 --------------------------------------------------------------------------------
 
 local function builtin_forward_op2(name, errmsg)
@@ -4425,9 +4448,9 @@ local function builtin_forward_op2(name, errmsg)
     end
 end
 
-builtins[Symbol.Concat] = builtin_forward_op2(Symbol.Concat, "concatenate")
+builtins[Symbol.Join] = builtin_forward_op2(Symbol.Join, "join")
 
-builtin_op(Type.String, Symbol.Concat,
+builtin_op(Type.String, Symbol.Join,
     wrap_simple_builtin(function(a, b, flipped)
         checkargs(3,3,a,b,flipped)
         a = unwrap(Type.String, a)
@@ -4435,10 +4458,56 @@ builtin_op(Type.String, Symbol.Concat,
         return Any(a .. b)
     end))
 
+builtin_op(Type.List, Symbol.Join,
+    wrap_simple_builtin(function(a, b)
+        checkargs(2,2,a,b)
+        local la = unwrap(Type.List, a)
+        local lb = unwrap(Type.List, b)
+        local l = lb
+        while (la ~= EOL) do
+            l = List(la.at, l)
+            la = la.next
+        end
+        return Any(reverse_list_inplace(l, lb, lb))
+    end))
+
+builtin_op(Type.Syntax, Symbol.Join,
+    function(frame, cont, self, a, b)
+        checkargs(2,2,a,b)
+        assert_syntax(a)
+        assert_syntax(b)
+        local aa, ba
+        a,aa = unsyntax(a)
+        b,ba = unsyntax(b)
+        local join = builtins[Symbol.Join]
+        return join(frame,
+            Any(Builtin(function(_frame, _cont, _dest, l)
+                return call(_frame, none, cont, syntax(l, aa))
+            end, Symbol.JoinForwarder)),
+            none, a, b)
+    end)
+
 -- arithmetic
 --------------------------------------------------------------------------------
 
 builtins[Symbol.Add] = builtin_forward_op2(Symbol.Add, "add")
+builtins[Symbol.Sub] = builtin_forward_op2(Symbol.Sub, "subtract")
+builtins[Symbol.Mul] = builtin_forward_op2(Symbol.Mul, "multiply")
+builtins[Symbol.Div] = builtin_forward_op2(Symbol.Div, "divide")
+
+each_numerical_type(function(T)
+    local function arithmetic_op(sym, op)
+        builtin_op(T, sym,
+            wrap_simple_builtin(function(a,b)
+                checkargs(2,2,a,b)
+                return Any(op(unwrap(T, a),unwrap(T, b)))
+            end))
+    end
+    arithmetic_op(Symbol.Add, function(a,b) return a + b end)
+    arithmetic_op(Symbol.Sub, function(a,b) return a - b end)
+    arithmetic_op(Symbol.Mul, function(a,b) return a * b end)
+    arithmetic_op(Symbol.Div, function(a,b) return a / b end)
+end)
 
 -- interrogation
 --------------------------------------------------------------------------------
@@ -4583,7 +4652,9 @@ end
 
 builtins.dump = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
-    local fmt = StreamValueFormat(true)
+    local fmt = StreamValueFormat()
+    fmt.naked = true
+    fmt.anchors = "all"
     stream_expr(
         stdout_writer,
         value, fmt)

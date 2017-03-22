@@ -2,7 +2,7 @@
 # the bangra executable looks for a boot file at
 # path/to/executable.b and, if found, executes it.
 
-syntax-extend stage-0 (return env)
+syntax-extend def-quote-set (return env)
     set-scope-symbol! env
         symbol "quote"
         block-scope-macro
@@ -57,7 +57,7 @@ syntax-extend stage-0 (return env)
                     @ (@ expr 0) 1
     return env
 
-syntax-extend stage-1 (return env)
+syntax-extend def-? (return env)
     set-scope-symbol! env
         quote symbol?
         fn/cc symbol? (return x)
@@ -115,62 +115,19 @@ syntax-extend stage-1 (return env)
         quote dump-syntax
         block-scope-macro
             fn/cc dump-syntax (return expr env)
-                return
-                    call
-                        fn/cc (_ e)
-                            dump
-                                @ (@ e 0) 0
+                call
+                    fn/cc (_ e env)
+                        dump
+                            @ e 0
+                        return
                             cons
                                 escape
-                                    @ (@ e 0) 0
-                                slice e 1
-                        @
-                            expand
-                                cons
-                                    slice (@ expr 0) 1
-                                    slice expr 1
-                                env
-                            0
-                    env
-    set-scope-symbol! env
-        # a lofi version of let so we get some sugar early
-        quote let
-        block-scope-macro
-            fn/cc let (return expr env)
-                branch
-                    == (typeof (@ (@ expr 0) 2)) syntax-symbol
-                    fn/cc (_) (_)
-                    fn/cc (_)
-                        error "syntax: let <var> = <expr>"
-                branch
-                    == (@ (@ expr 0) 2) (quote =)
-                    fn/cc (_) (_)
-                    fn/cc (_)
-                        error "syntax: let <var> = <expr>"
-                return
-                    call
-                        fn/cc (_ param-name rest)
-                            _
-                                list
-                                    syntax-cons
-                                        syntax-cons
-                                            datum->syntax fn/cc
-                                                syntax->anchor param-name
-                                            syntax-cons
-                                                syntax-list
-                                                    datum->syntax
-                                                        parameter (quote _)
-                                                    param-name
-                                                datum->syntax
-                                                    slice expr 1
-                                        syntax-list
-                                            syntax-cons
-                                                datum->syntax do
-                                                    syntax->anchor param-name
-                                                slice (@ expr 0) 3
-                        @ (@ expr 0) 1
-                        slice expr 1
-                    env
+                                    @ e 0
+                                slice expr 1
+                            env
+                    expand
+                        slice (@ expr 0) 1
+                        env
     set-scope-symbol! env
         quote ?
         block-scope-macro
@@ -229,109 +186,252 @@ syntax-extend stage-1 (return env)
                     #~ env
     return env
 
-syntax-extend stage-2 (return env)
-    let list-head? =
+syntax-extend def-list-defs (return env)
+    set-scope-symbol! env (quote list-head?)
         fn/cc list-head? (return expr name)
             return
-                ? (list? expr)
-                    ? (> (countof expr) (u64 0))
-                        do
-                            let head = (@ expr 0)
-                            ? (symbol? head)
-                                == head name
-                                false
+                ? (list? (syntax->datum expr))
+                    ? (empty? expr)
                         false
+                        call
+                            fn/cc (_ head)
+                                ? (symbol? (syntax->datum head))
+                                    _ (== head name)
+                                    _ false
+                            @ expr 0
                     false
-    set-scope-symbol! env (quote empty-list) (escape (list))
-
-    set-scope-symbol! env (quote int) i32
-    set-scope-symbol! env (quote uint) i32
-
-    #set-scope-symbol! env (quote half) r16
-    set-scope-symbol! env (quote float) r32
-    set-scope-symbol! env (quote double) r64
-
-    set-scope-symbol! env (quote list-head?) list-head?
     set-scope-symbol! env (quote list-atom?)
         fn/cc list-atom? (return x)
             return
-                ? (list? x)
+                ? (list? (syntax->datum x))
                     empty? x
                     true
-    set-scope-symbol! env (quote assert) # (assert bool-expr [error-message])
-        macro
-            fn/cc assert (return expr)
+    # unwrap single item from list or prepend 'do' clause to list
+    set-scope-symbol! env (quote syntax-do)
+        fn/cc syntax-do (return expr)
+            return
+                ? (empty? (slice expr 1))
+                    @ expr 0
+                    syntax-cons (datum->syntax do (syntax->anchor expr)) expr
+    # build a list terminator tagged with a desired anchor from an expression
+    set-scope-symbol! env (quote syntax-eol)
+        fn/cc syntax-eol (return expr)
+            return
+                datum->syntax (list) (syntax->anchor expr)
+    return env
+
+syntax-extend def-qquote (return env)
+    # quasiquote support
+    # (qquote expr [...])
+    set-scope-symbol! env (quote qquote)
+        call
+            fn/cc (return qquote-1)
+                set! qquote-1
+                    fn/cc (return x)
+                        return
+                            ? (list-atom? x)
+                                syntax-list
+                                    datum->syntax quote
+                                        syntax->anchor x
+                                    x
+                                ? (list-head? x (quote unquote))
+                                    syntax-do (slice x 1)
+                                    ? (list-head? x (quote qquote))
+                                        qquote-1 (qquote-1 (@ x 1))
+                                        ? (list-atom? (@ x 0))
+                                            syntax-list
+                                                datum->syntax syntax-cons
+                                                    syntax->anchor (@ x 0)
+                                                qquote-1 (@ x 0)
+                                                qquote-1 (slice x 1)
+                                            ? (list-head? (@ x 0) (quote unquote-splice))
+                                                syntax-list
+                                                    datum->syntax (do ..)
+                                                        syntax->anchor (@ x 0)
+                                                    syntax-do (slice (@ x 0) 1)
+                                                    qquote-1 (slice x 1)
+                                                syntax-list
+                                                    datum->syntax syntax-cons
+                                                        syntax->anchor (@ x 0)
+                                                    qquote-1 (@ x 0)
+                                                    qquote-1 (slice x 1)
                 return
-                    list ? (@ expr 1) true
-                        list error
-                            ? (empty? (slice expr 2))
-                                .. "assertion failed: " (string (@ expr 1))
-                                @ expr 2
-    set-scope-symbol! env (quote ::@)
+                    macro
+                        fn/cc qquote (return expr)
+                            return
+                                ? (empty? (slice expr 2))
+                                    qquote-1 (@ expr 1)
+                                    qquote-1 (slice expr 1)
+    return env
+
+syntax-extend def-define (return env)
+    set-scope-symbol! env (quote define)
         block-macro
-            fn/cc ::@ (return expr)
+            fn/cc expand-define (return topexpr env)
                 return
                     cons
-                        ..
-                            slice (@ expr 0) 1
+                        qquote
+                            syntax-extend define (return local-scope)
+                                do
+                                    set-scope-symbol! local-scope
+                                        quote
+                                            unquote (@ (@ topexpr 0) 1)
+                                        unquote
+                                            syntax-do (slice (@ topexpr 0) 2)
+                                return local-scope
+                        slice topexpr 1
+    return env
+
+# a lofi version of let so we get some sugar early
+define let
+    block-scope-macro
+        fn/cc let (return expr env)
+            branch
+                == (typeof (@ (@ expr 0) 2)) syntax-symbol
+                fn/cc (_) (_)
+                fn/cc (_)
+                    error "syntax: let <var> = <expr>"
+            branch
+                == (@ (@ expr 0) 2) (quote =)
+                fn/cc (_) (_)
+                fn/cc (_)
+                    error "syntax: let <var> = <expr>"
+            return
+                call
+                    fn/cc (_ cont-param param-name rest)
+                        _
                             list
-                                @ expr 1
-                        slice expr 2
-    set-scope-symbol! env (quote ::*)
-        block-macro
-            fn/cc ::* (return expr)
-                return
-                    list
-                        ..
-                            slice (@ expr 0) 1
-                            slice expr 1
-    set-scope-symbol! env (quote .)
-        macro
-            fn/cc . (return expr)
-                let key =
-                    @ expr 2
-                return
-                    ? (symbol? key)
-                        list
-                            (do @)
-                            @ expr 1
-                            list quote key
-                        error "symbol expected"
-    set-scope-symbol! env (quote fn) # (fn [name] (param ...) body ...)
-        block-macro
-            fn/cc fn (return topexpr)
-                let expr =
-                    @ topexpr 0
-                let decl =
-                    @ (@ topexpr 0) 1
-                let retparam =
-                    quote return
-                let make-params-body =
-                    fn/cc (_ param-idx)
+                                qquote
+                                    ;
+                                        fn/cc
+                                            ;
+                                                unquote cont-param
+                                                unquote param-name
+                                            ;
+                                                unquote cont-param
+                                                unquote
+                                                    syntax-do
+                                                        datum->syntax rest
+                                                            syntax->anchor (@ expr 0)
+                                        unquote
+                                            syntax-do
+                                                slice (@ expr 0) 3
+                                        # force enclosing list to use anchor
+                                        # of original expression
+                                        unquote-splice
+                                            syntax-eol (@ expr 0)
+                    datum->syntax
+                        parameter (quote _)
+                    @ (@ expr 0) 1
+                    slice expr 1
+                env
+
+# a standard function declaration that supports recursion
+# (fn [name] (param ...) body ...)
+define fn
+    block-macro
+        fn/cc fn (return topexpr)
+            let expr =
+                @ topexpr 0
+            let decl =
+                @ (@ topexpr 0) 1
+            let decl-anchor =
+                syntax->anchor decl
+            let retparam =
+                quote return
+            let wrap =
+                fn/cc (return val)
+                    return (datum->syntax val decl-anchor)
+            let make-params-body =
+                fn/cc (return param-idx)
+                    return
                         syntax-cons
                             syntax-cons
                                 retparam
                                 @ expr param-idx
-                            slice expr (+ param-idx 1)
-                let rest =
-                    slice topexpr 1
-                return
-                    ? (symbol? (syntax->datum decl))
+                            syntax-list
+                                syntax-list retparam
+                                    syntax-cons (wrap do)
+                                        slice expr (+ param-idx 1)
+            let rest =
+                slice topexpr 1
+            return
+                ? (symbol? (syntax->datum decl))
+                    cons
+                        syntax-list
+                            wrap let
+                            \ decl (quote =)
+                            wrap none
                         cons
-                            list let decl (quote =) none
-                            cons
-                                list set! decl
-                                    cons fn/cc
-                                        cons
-                                            @ expr 1
-                                            make-params-body 2
-                                ? (empty? rest)
-                                    list decl
-                                    rest
-                        cons
-                            cons fn/cc
-                                make-params-body 1
-                            rest
+                            syntax-list
+                                wrap set!
+                                decl
+                                syntax-cons
+                                    wrap fn/cc
+                                    syntax-cons
+                                        @ expr 1
+                                        make-params-body 2
+                            ? (empty? rest)
+                                list decl
+                                rest
+                    cons
+                        syntax-cons
+                            wrap fn/cc
+                            make-params-body 1
+                        rest
+
+define empty-list
+    escape (list)
+define int i32
+define uint i32
+define float r32
+define double r64
+# (assert bool-expr [error-message])
+define assert
+    macro
+        fn assert (expr)
+            qquote
+                ? (unquote (@ expr 1))
+                    true
+                    error
+                        unquote
+                            ? (empty? (slice expr 2))
+                                .. "assertion failed: " (string (@ expr 1))
+                                @ expr 2
+                        unquote-splice
+                            syntax-eol expr
+                    unquote-splice
+                        syntax-eol expr
+define ::@
+    block-macro
+        fn ::@ (expr)
+            cons
+                ..
+                    slice (@ expr 0) 1
+                    syntax-list
+                        @ expr 1
+                slice expr 2
+define ::*
+    block-macro
+        fn ::* (expr)
+            list
+                ..
+                    slice (@ expr 0) 1
+                    slice expr 1
+
+define .
+    macro
+        fn . (expr)
+            let key =
+                syntax->datum (@ expr 2)
+            ? (symbol? key)
+                qquote
+                    @ (unquote (@ expr 1)) (unquote (escape (escape key)))
+                        unquote-splice
+                            syntax-eol (@ expr 2)
+                error "symbol expected"
+
+syntax-extend stage-2 (return env)
     set-scope-symbol! env (quote and)
         macro
             fn/cc and (return expr)
@@ -360,22 +460,36 @@ syntax-extend stage-2 (return env)
                                 list fn/cc (list)
                                     @ expr 2
                         @ expr 1
-    set-scope-symbol! env (quote loop) # bootstrap loop, better version in stage 4
+    set-scope-symbol! env (quote loop) # bootstrap loop, better version later
         macro
             fn/cc loop (return expr)
+                let expr-anchor = (syntax->anchor expr)
                 let param-repeat =
                     quote repeat
+                let param-return =
+                    datum->syntax (parameter (quote return))
                 return
-                    list do
-                        list let param-repeat (quote =) none
-                        list set! param-repeat
-                            cons fn/cc
-                                cons
-                                    cons
-                                        parameter (quote _)
+                    syntax-list
+                        datum->syntax do expr-anchor
+                        syntax-list
+                            datum->syntax let expr-anchor
+                            param-repeat
+                            quote =
+                            datum->syntax none expr-anchor
+                        syntax-list
+                            datum->syntax set! expr-anchor
+                            param-repeat
+                            syntax-cons
+                                datum->syntax fn/cc expr-anchor
+                                syntax-cons
+                                    syntax-cons param-return
                                         @ expr 1
-                                    slice expr 2
-                        cons param-repeat
+                                    syntax-list
+                                        syntax-list param-return
+                                            syntax-cons
+                                                datum->syntax do expr-anchor
+                                                slice expr 2
+                        syntax-cons param-repeat
                             @ expr 1
     let if-rec = none
     set! if-rec
@@ -444,12 +558,6 @@ syntax-extend stage-2 (return env)
     return env
 
 syntax-extend stage-3 (return env)
-
-    fn unwrap-single (expr)
-        # unwrap single item from list or prepend 'do' clause to list
-        ? (empty? (slice expr 1))
-            @ expr 0
-            cons do expr
 
     fn fold (it init f)
         let next =
@@ -714,37 +822,6 @@ syntax-extend stage-3 (return env)
                                     @ (@ expr 1) 1
                                 slice (@ expr 1) 2
                     slice expr 2
-
-    # quasiquote support
-    # (qquote expr [...])
-    set-scope-symbol! env (quote qquote)
-        do
-            fn qquote-1 (x)
-                if (list-atom? x)
-                    list quote x
-                elseif (list-head? x (quote unquote))
-                    unwrap-single (slice x 1)
-                elseif (list-head? x (quote qquote))
-                    qquote-1 (qquote-1 (@ x 1))
-                elseif (list-atom? (@ x 0))
-                    list cons
-                        qquote-1 (@ x 0)
-                        qquote-1 (slice x 1)
-                elseif (list-head? (@ x 0) (quote unquote-splice))
-                    list (do ..)
-                        unwrap-single (slice (@ x 0) 1)
-                        qquote-1 (slice x 1)
-                else
-                    list cons
-                        qquote-1 (@ x 0)
-                        qquote-1 (slice x 1)
-            block-macro
-                fn (expr)
-                    cons
-                        ? (empty? (slice (@ expr 0) 2))
-                            qquote-1 (@ (@ expr 0) 1)
-                            qquote-1 (slice (@ expr 0) 1)
-                        slice expr 1
 
     set-scope-symbol! env (quote define)
         block-macro

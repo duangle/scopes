@@ -41,7 +41,7 @@ local function bangra_symbols()
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
-        .. " datum->syntax syntax->datum syntax->anchor"
+        .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         ),
 
     -- builtin and global functions with side effects
