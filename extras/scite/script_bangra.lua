@@ -33,14 +33,15 @@ local function bangra_symbols()
 
     -- builtin and global functions
     FUNCTIONS = splitstr(getprop("functions.bangra_lang") or
-        "external branch print repr tupleof import-c eval structof typeof"
-            .. " macro block-macro block-scope-macro cons expand empty?"
-            .. " dump list-head? countof tableof slice none? list-atom?"
-            .. " list-load list-parse load require cstr exit hash min max"
-            .. " va-arg va-countof range zip enumerate bitcast element-type"
-            .. " qualify disqualify iter iterator? list? symbol? parse-c"
-            .. " get-exception-handler xpcall error sizeof prompt null?"
-            .. " extern-library arrayof get-scope-symbol"
+    "external branch print repr tupleof import-c eval structof typeof"
+        .. " macro block-macro block-scope-macro cons expand empty?"
+        .. " dump list-head? countof tableof slice none? list-atom?"
+        .. " list-load list-parse load require cstr exit hash min max"
+        .. " va-arg va-countof range zip enumerate bitcast element-type"
+        .. " qualify disqualify iter iterator? list? symbol? parse-c"
+        .. " get-exception-handler xpcall error sizeof prompt null?"
+        .. " extern-library arrayof get-scope-symbol syntax-cons"
+        .. " datum->syntax syntax->datum syntax->anchor"
         ),
 
     -- builtin and global functions with side effects
@@ -59,7 +60,8 @@ local function bangra_symbols()
         "int i8 i16 i32 i64 u8 u16 u32 u64 void string"
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
-        .. " pointer struct enum bool uint tag qualifier"
+        .. " pointer struct enum bool uint tag qualifier syntax-list"
+        .. " syntax-symbol syntax anchor"
         .. " iterator type table size_t usize_t ssize_t void*"
         )
     }

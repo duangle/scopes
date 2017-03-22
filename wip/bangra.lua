@@ -21,9 +21,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 --]]
 
-local trace_execution
-    = false
-    --= true
+local global_opts = {
+    trace_execution = false,
+    print_lua_traceback = false
+}
 
 --------------------------------------------------------------------------------
 -- verify luajit was built with the right flags
@@ -686,6 +687,16 @@ local function safecall(f1, f2)
     return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
 end
 
+local function protect(obj)
+    local mt = getmetatable(obj)
+    assert(mt)
+    assert(mt.__index == null)
+    function mt.__index(cls, name)
+        error("no such attribute in "
+            .. tostring(cls)
+            .. ": " .. tostring(name))
+    end
+end
 
 --------------------------------------------------------------------------------
 -- ANSI COLOR FORMATTING
@@ -832,6 +843,13 @@ repr = function(x)
 end
 
 --------------------------------------------------------------------------------
+--
+--------------------------------------------------------------------------------
+
+local builtins = {}
+local builtin_ops = {}
+
+--------------------------------------------------------------------------------
 -- SYMBOL
 --------------------------------------------------------------------------------
 
@@ -910,15 +928,171 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- ANCHOR
+--------------------------------------------------------------------------------
+
+local Anchor = class("Anchor")
+local function assert_anchor(x)
+    if getmetatable(x) == Anchor then
+        return x
+    else
+        error("expected anchor, got " .. repr(x))
+    end
+end
+do
+    local cls = Anchor
+    function cls:init(path, lineno, column, offset)
+        assert_string(path)
+        assert_number(lineno)
+        assert_number(column)
+        offset = offset or 0
+        assert_number(offset)
+        self.path = path
+        self.lineno = lineno
+        self.column = column
+        self.offset = offset
+    end
+    -- defined elsewhere:
+    -- function cls.stream_source_line
+    function cls:format_plain()
+        return self.path
+            .. ':' .. format("%i", self.lineno)
+            .. ':' .. format("%i", self.column)
+    end
+    function cls:stream_message_with_source(writer, msg)
+        writer(ansi(STYLE.LOCATION, self:format_plain() .. ":"))
+        writer(" ")
+        writer(msg)
+        writer("\n")
+        self:stream_source_line(writer)
+    end
+    function cls:__tostring()
+        return ansi(STYLE.LOCATION, self:format_plain())
+    end
+end
+
+--------------------------------------------------------------------------------
+-- SCOPES
+--------------------------------------------------------------------------------
+
+local Any = {}
+
+local function assert_any(x)
+    if getmetatable(x) == Any then
+        return x
+    else
+        error("any expected, got " .. tostring(x))
+    end
+end
+
+local function quote_error(msg)
+    if type(msg) == "string" then
+        msg = {msg = msg, quoted = true}
+    end
+    error(msg)
+end
+
+local set_active_anchor
+local get_active_anchor
+do
+    local _active_anchor
+
+    set_active_anchor = function(anchor)
+        if anchor ~= null then
+            assert_anchor(anchor)
+        end
+        _active_anchor = anchor
+    end
+    get_active_anchor = function()
+        return _active_anchor
+    end
+end
+
+local function with_anchor(anchor, f)
+    local _anchor = get_active_anchor()
+    set_active_anchor(anchor)
+    f()
+    set_active_anchor(_anchor)
+end
+
+local function location_error(msg)
+    if type(msg) == "string" then
+        msg = {msg = msg, anchor = get_active_anchor()}
+    end
+    error(msg)
+end
+
+local function unwrap(_type, value)
+    assert_any(value)
+    if (value.type == _type) then
+        return value.value
+    else
+        location_error("type "
+            .. _type.displayname
+            .. " expected, got "
+            .. value.type.displayname
+            )
+    end
+end
+
+local unsyntax
+local Type = {}
+
+local Scope = class("Scope")
+local function assert_scope(x)
+    if getmetatable(x) == Scope then
+        return x
+    else
+        error("scope expected, not " .. repr(x))
+    end
+end
+do
+    local cls = Scope
+    function cls:init(scope)
+        -- symbol -> any
+        self.symbols = {}
+        if scope ~= null then
+            assert_scope(scope)
+        end
+        self.parent = scope
+    end
+    function cls:__tostring()
+        local count = 0
+        for k,v in pairs(self.symbols) do
+            count = count + 1
+        end
+        return
+            ansi(STYLE.KEYWORD, "scope")
+            .. ansi(STYLE.COMMENT, "<")
+            .. format("%i symbols", count)
+            .. ansi(STYLE.COMMENT, ">")
+    end
+    function cls:bind(sxname, value)
+        local name = unwrap(Type.Symbol, unsyntax(sxname))
+        assert_any(value)
+        assert(self.symbols[name] == null)
+        self.symbols[name] = { sxname, value }
+    end
+    function cls:lookup(name)
+        assert_symbol(name)
+        local entry = self.symbols[name]
+        if entry then
+            return entry[2]
+        end
+        if self.parent then
+            return self.parent:lookup(name)
+        end
+    end
+
+end
+
+--------------------------------------------------------------------------------
 -- TYPE
 --------------------------------------------------------------------------------
 
-local assert_any
 local is_none
-local unwrap
-local Any
+local format_any_value
 
-local Type = {}
 local function assert_type(x)
     if getmetatable(x) == Type then
         return x
@@ -964,6 +1138,7 @@ local function define_types(def)
 
     def('Closure')
     def('Frame')
+    def('Anchor')
 end
 
 do
@@ -979,33 +1154,31 @@ do
                 name = name,
                 displayname = displayname or ansi(STYLE.TYPE, name),
                 index = idx,
-                symbols = {}
+                scope = Scope()
             }, Type)
         end
     })
+    protect(cls)
     function cls:bind(name, value)
-        assert_symbol(name)
-        assert_any(value)
-        self.symbols[name] = value
+        return self.scope:bind(name, value)
     end
     function cls:lookup(name)
-        assert_symbol(name)
-        local value = self.symbols[name]
+        local value = self.scope:lookup(name)
         if value ~= null then
             return value
         end
-        local super = self:super()
-        if super then
-            return super:lookup(name)
+        local super = self.scope:lookup(Symbol.Super)
+        if super ~= null then
+            return super.value:lookup(name)
         end
     end
     function cls:super()
-        local super = self.symbols[Symbol.Super]
+        local super = self:lookup(Symbol.Super)
         return super and unwrap(Type.Type, super)
     end
     function cls:set_super(_type)
         assert_type(_type)
-        self:bind(Symbol.Super, Any(_type))
+        self:bind(Any(Symbol.Super), Any(_type))
     end
     function cls:element_type()
         local et = self:lookup(Symbol.ElementType)
@@ -1013,7 +1186,7 @@ do
     end
     function cls:set_element_type(_type)
         assert_type(_type)
-        self:bind(Symbol.ElementType, Any(_type))
+        self:bind(Any(Symbol.ElementType), Any(_type))
     end
     function cls:__call(...)
         return self:__call(...)
@@ -1027,7 +1200,7 @@ do
         cls[name] = Type(string.lower(name))
     end)
 
-    local function make_qualifier_type(name)
+    local function make_qualifier_type(name, on_create)
         local cls = Type(name)
         local cache = {}
         function cls:__call(_type)
@@ -1042,7 +1215,13 @@ do
                     .. ansi(STYLE.OPERATOR, "]"))
                 val:set_element_type(_type)
                 val:set_super(self)
+                function val:format_value(value)
+                    return format_any_value(self:element_type(), value)
+                end
                 cache[_type] = val
+                if on_create then
+                    on_create(val)
+                end
             end
             return val
         end
@@ -1050,7 +1229,16 @@ do
     end
     Type.Macro = make_qualifier_type("macro")
     Type.Quote = make_qualifier_type("quote")
-    Type.Syntax = make_qualifier_type("syntax")
+    Type.Syntax = make_qualifier_type("syntax", function(val)
+        function val:format_value(value)
+            return
+                ansi(STYLE.LOCATION,
+                    tostring(value.anchor:format_plain()) .. ":")
+                .. format_any_value(
+                    self:element_type(),
+                    value.datum)
+        end
+    end)
     Type.SizeT = Type.U64
 end
 
@@ -1099,18 +1287,19 @@ end
 
 local MT_TYPE_MAP = {
     [Symbol] = Type.Symbol,
-    [Type] = Type.Type
+    [Type] = Type.Type,
+    [Scope] = Type.Scope,
+    [Anchor] = Type.Anchor
 }
 
-local function format_any_value(_type, x)
-    if _type.format_value then
+format_any_value = function(_type, x)
+    if rawget(_type, 'format_value') then
         return _type:format_value(x)
     else
         return repr(x)
     end
 end
 
-Any = {}
 do
     local function wrap(value)
         local t = type(value)
@@ -1188,14 +1377,6 @@ function Any.__tostring(self)
     end
 end
 
-assert_any = function(x)
-    if getmetatable(x) == Any then
-        return x
-    else
-        error("any expected, got " .. tostring(x))
-    end
-end
-
 local function assert_any_type(_type, value)
     assert_any(value)
     if (value.type == _type) then
@@ -1213,87 +1394,13 @@ local none = Any(Type.Void, NULL)
 is_none = function(value)
     return value.type == Type.Void
 end
-
---------------------------------------------------------------------------------
--- ANCHOR
---------------------------------------------------------------------------------
-
-local Anchor = class("Anchor")
-local function assert_anchor(x)
-    if getmetatable(x) == Anchor then
-        return x
-    else
-        error("expected anchor, got " .. repr(x))
-    end
-end
-do
-    local cls = Anchor
-    function cls:init(path, lineno, column, offset)
-        assert_string(path)
-        assert_number(lineno)
-        assert_number(column)
-        offset = offset or 0
-        assert_number(offset)
-        self.path = path
-        self.lineno = lineno
-        self.column = column
-        self.offset = offset
-    end
-    -- defined elsewhere:
-    -- function cls.stream_source_line
-    function cls:format_plain()
-        return self.path
-            .. ':' .. format("%i", self.lineno)
-            .. ':' .. format("%i", self.column)
-    end
-    function cls:stream_message_with_source(writer, msg)
-        writer(ansi(STYLE.LOCATION, self:format_plain() .. ":"))
-        writer(" ")
-        writer(msg)
-        writer("\n")
-        self:stream_source_line(writer)
-    end
-    function cls:__tostring()
-        return ansi(STYLE.LOCATION, self:format_plain())
-    end
-end
-
-local set_active_anchor
-local get_active_anchor
-do
-    local _active_anchor
-
-    set_active_anchor = function(anchor)
-        if anchor ~= null then
-            assert_anchor(anchor)
-        end
-        _active_anchor = anchor
-    end
-    get_active_anchor = function()
-        return _active_anchor
-    end
-end
-
-local function with_anchor(anchor, f)
-    local _anchor = get_active_anchor()
-    set_active_anchor(anchor)
-    f()
-    set_active_anchor(_anchor)
-end
-
-local function location_error(msg)
-    if type(msg) == "string" then
-        msg = {msg = msg, anchor = get_active_anchor()}
-    end
-    error(msg)
+local is_null_or_none = function(value)
+    return value == null or value.type == Type.Void
 end
 
 --------------------------------------------------------------------------------
 -- SYNTAX OBJECTS
 --------------------------------------------------------------------------------
-
-Type.SyntaxList = Type.Syntax(Type.List)
-Type.SyntaxSymbol = Type.Syntax(Type.Symbol)
 
 local function qualify(qualifier_type, x)
     assert_any(x)
@@ -1323,20 +1430,23 @@ local function is_syntax_type(_type)
 end
 
 local function assert_syntax(x)
+    assert_any(x)
     if is_syntax_type(x.type) then
         return x
     else
-        error("expected syntax, got " .. repr(x))
+        location_error("expected syntax, got " .. repr(x))
     end
 end
 
 local syntax
-local unsyntax
 do
     local Syntax = {}
     do
         Syntax.__index = Syntax
         local cls = Syntax
+        function cls:__len()
+            return #self.datum
+        end
         function cls:__tostring()
             return
                 ansi(STYLE.COMMENT,
@@ -1369,6 +1479,9 @@ do
         end
     end
 end
+
+Type.SyntaxList = Type.Syntax(Type.List)
+Type.SyntaxSymbol = Type.Syntax(Type.Symbol)
 
 --------------------------------------------------------------------------------
 -- S-EXPR LEXER / TOKENIZER
@@ -1663,19 +1776,28 @@ do
         return cast(rawstring, self.ptr)
     end
     local CR = ord('\n')
-    function cls:stream_line(offset, writer)
+    function cls:stream_line(writer, offset, indent)
         local str = self:strptr()
         if (offset >= self.length) then
             writer("<cannot display location in source file>\n")
             return
         end
+        indent = indent or '    '
         local start = offset
         local send = offset
         while (start > 0) do
-            if (str[start-1] == CR) then
+            local c = str[start-1]
+            if (c == CR) then
                 break
             end
             start = start - 1
+        end
+        while (start < offset) do
+            local c = str[start]
+            if C.isspace(c) == 0 then
+                break
+            end
+            start = start + 1
         end
         while (send < self.length) do
             if (str[send] == CR) then
@@ -1684,21 +1806,25 @@ do
             send = send + 1
         end
         local line = zstr_from_buffer(str + start, send - start)
+        writer(indent)
         writer(cstr(line))
         writer("\n")
         local column = offset - start
-        for i=1,column do
-            writer(' ')
+        if column > 0 then
+            writer(indent)
+            for i=1,column do
+                writer(' ')
+            end
+            writer(ansi(STYLE.OPERATOR, '^'))
+            writer("\n")
         end
-        writer(ansi(STYLE.OPERATOR, '^'))
-        writer("\n")
     end
 end
 
-function Anchor:stream_source_line(writer)
+function Anchor:stream_source_line(writer, indent)
     local sf = SourceFile.open(self.path)
     if sf then
-        sf:stream_line(self.offset, writer)
+        sf:stream_line(writer, self.offset, indent)
     end
 end
 
@@ -1706,16 +1832,24 @@ end
 
 local debugger
 local function location_error_handler(err)
+    local is_complex_msg = type(err) == "table" and err.msg
     local w = string_writer()
-    w(traceback("",3))
-    w('\n\n')
+    if global_opts.print_lua_traceback or not is_complex_msg then
+        w(traceback("",3))
+        w('\n\n')
+    end
     debugger.stream_traceback(w)
-    if type(err) == "table" and err.anchor then
-        if err.anchor then
-            w(ansi(STYLE.LOCATION, err.anchor:format_plain() .. ": "))
+    if is_complex_msg then
+        if err.quoted then
+            -- return as-is
+            return err.msg
         end
-        w(err.msg)
-        w('\n')
+        if err.anchor then
+            err.anchor:stream_message_with_source(w, err.msg)
+        else
+            w(err.msg)
+            w('\n')
+        end
         return w()
     else
         w(tostring(err))
@@ -2024,7 +2158,8 @@ local FUNCTIONS = set(split(
         .. " va-arg va-countof range zip enumerate bitcast element-type"
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
-        .. " extern-library arrayof get-scope-symbol"
+        .. " extern-library arrayof get-scope-symbol syntax-cons"
+        .. " datum->syntax syntax->datum"
     ))
 
 -- builtin and global functions with side effects
@@ -2042,7 +2177,8 @@ local TYPES = set(split(
         "int i8 i16 i32 i64 u8 u16 u32 u64 void string"
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
-        .. " pointer struct enum bool uint tag qualifier"
+        .. " pointer struct enum bool uint tag qualifier syntax-list"
+        .. " syntax-symbol syntax anchor"
         .. " iterator type table size_t usize_t ssize_t void*"
     ))
 
@@ -2097,6 +2233,8 @@ local function stream_indent(writer, depth)
 end
 
 stream_expr = function(writer, e, format)
+    format = format or StreamValueFormat()
+
     local depth = format.depth
     local maxdepth = format.maxdepth
     local maxlength = format.maxlength
@@ -2302,19 +2440,6 @@ end
 -- Julia: A Fast Dynamic Language for Technical Computing
 -- http://arxiv.org/pdf/1209.5145v1.pdf
 
-unwrap = function(_type, value)
-    assert_any(value)
-    if (value.type == _type) then
-        return value.value
-    else
-        location_error("type "
-            .. _type.displayname
-            .. " expected, got "
-            .. value.type.displayname
-            )
-    end
-end
-
 local Builtin = class("Builtin")
 MT_TYPE_MAP[Builtin] = Type.Builtin
 do
@@ -2367,8 +2492,12 @@ local function assert_parameter(x)
 end
 do
     local cls = Parameter
-    function cls:init(name, _type, anchor)
+    function cls:init(name, _type)
+        assert_syntax(name)
+        local name,anchor = unsyntax(name)
+        name = unwrap(Type.Symbol, name)
         assert_symbol(name)
+        assert_anchor(anchor)
         _type = _type or Type.Any
         assert_type(_type)
         self.flow = null
@@ -2431,14 +2560,17 @@ do
     local cls = Flow
     local unique_id_counter = 1
 
-    function cls:init()
+    function cls:init(name)
+        assert_syntax(name)
+        local name,anchor = unsyntax(name)
+        name = unwrap(Type.Symbol, name)
+        assert_symbol(name)
         self.uid = unique_id_counter
         unique_id_counter = unique_id_counter + 1
         self.parameters = {}
         self.arguments = {}
-        self.name = Symbol.Unnamed
-        --self.anchor = null
-        --self.body_anchor = null
+        self.name = name
+        self.anchor = anchor
     end
 
     function cls:set_body_anchor(anchor)
@@ -2454,13 +2586,9 @@ do
             .. ansi(STYLE.NUMBER, self.uid)
     end
 
-    function cls:append_parameter(param, _type, anchor)
+    function cls:append_parameter(param)
         assert_table(param)
-        if getmetatable(param) == Symbol then
-            param = Parameter(param, _type, anchor)
-        else
-            assert_parameter(param)
-        end
+        assert_parameter(param)
         assert(param.flow == null)
         param.flow = self
         table.insert(self.parameters, param)
@@ -2470,33 +2598,29 @@ do
 
     -- an empty function
     -- you have to add the continuation argument manually
-    function cls.create_empty_function(name, anchor)
-        local value = Flow()
-        value.name = name
-        value.anchor = anchor
-        return value
+    function cls.create_empty_function(name)
+        return Flow(name)
     end
 
     -- a function that eventually returns
-    function cls.create_function(name, anchor)
-        assert_symbol(name)
-        local value = Flow()
-        value.name = name
-        value.anchor = anchor
+    function cls.create_function(name)
+        local value = Flow(name)
+        local sym, anchor = unsyntax(name)
+        sym = unwrap(Type.Symbol, sym)
         -- continuation is always first argument
         -- this argument will be called when the function is done
-        value:append_parameter(Symbol("return-" .. name.name), Type.Any, anchor)
+        value:append_parameter(
+            Parameter(syntax(Any(Symbol("return-" .. sym.name)),anchor),
+                Type.Any))
         return value
     end
 
     -- a continuation that never returns
-    function cls.create_continuation(name, anchor)
-        assert_symbol(name)
-        local value = Flow()
-        value.name = name
-        value.anchor = anchor
+    function cls.create_continuation(name)
+        local value = Flow(name)
         -- first argument is present, but unused
-        value:append_parameter(Symbol.Unnamed, Type.Any, anchor)
+        value:append_parameter(
+            Parameter(name, Type.Any))
         return value
     end
 end
@@ -2510,7 +2634,7 @@ local function assert_frame(x)
         error("expected frame, got " .. repr(x))
     end
 end
-do
+do -- compact hashtables as much as one can where possible
     local cls = Frame
     function cls:init(frame)
         if (frame == null) then
@@ -2538,6 +2662,7 @@ do
     function cls:bind(flow, values)
         assert_flow(flow)
         assert_table(values)
+        self = Frame(self)
         if self.map[flow] then
             self.map = {}
             self.owner = self
@@ -2585,6 +2710,71 @@ do
         return defvalue
     end
 end
+--[[
+do -- clone frame for every mapping
+    local cls = Frame
+    function cls:init(frame)
+        if frame ~= null then
+            assert_frame(frame)
+            self.index = frame.index + 1
+        else
+            self.index = 0
+        end
+        self.parent = frame
+        self.map = {}
+    end
+    function cls:__tostring()
+        return
+            ansi(STYLE.KEYWORD, "frame")
+            .. ansi(STYLE.COMMENT, "<")
+            .. ansi(STYLE.OPERATOR, "#")
+            .. ansi(STYLE.NUMBER, tostring(self.index))
+            .. ansi(STYLE.COMMENT, ">")
+    end
+    function cls:bind(flow, values)
+        assert_flow(flow)
+        assert_table(values)
+        self = Frame(self)
+        self.map[flow] = values
+        return self
+    end
+    function cls:rebind(cont, index, value)
+        assert_flow(cont)
+        assert_number(index)
+        assert_any(value)
+        local ptr = self
+        while ptr do
+            local entry = ptr.map[cont]
+            if (entry ~= null) then
+                local values = entry
+                assert (index <= #values)
+                values[index] = value
+                return
+            end
+            ptr = ptr.parent
+        end
+    end
+
+    function cls:get(cont, index, defvalue)
+        assert_number(index)
+        if cont then
+            assert_flow(cont)
+            -- parameter is bound - attempt resolve
+            local ptr = self
+            while ptr do
+                local entry = ptr.map[cont]
+                if (entry ~= null) then
+                    local values = entry
+                    assert (index <= #values)
+                    return values[index]
+                end
+                ptr = ptr.parent
+            end
+        end
+        return defvalue
+    end
+end
+]]
 
 local Closure = class("Closure")
 MT_TYPE_MAP[Closure] = Type.Closure
@@ -2661,6 +2851,12 @@ do
         end
 
         local function stream_argument(arg, aflow)
+            if is_syntax_type(arg.type) then
+                local anchor
+                arg,anchor = unsyntax(arg)
+                stream_anchor(anchor)
+            end
+
             if arg.type == Type.Parameter then
                 stream_param_label(arg.value, aflow)
             elseif arg.type == Type.Flow then
@@ -2694,12 +2890,15 @@ do
             if #aflow.arguments == 0 then
                 writer(ansi(STYLE.ERROR, "empty"))
             else
-                stream_anchor(aflow.body_anchor)
+                if aflow.body_anchor then
+                    stream_anchor(aflow.body_anchor)
+                    writer(' ')
+                end
                 for i=2,#aflow.arguments do
-                    local arg = aflow.arguments[i]
                     if i > 2 then
                         writer(" ")
                     end
+                    local arg = aflow.arguments[i]
                     stream_argument(arg, aflow)
                 end
                 local cont = aflow.arguments[1]
@@ -2713,6 +2912,7 @@ do
             --print(flow_decl_label(aflow, aframe))
 
             for i,arg in ipairs(aflow.arguments) do
+                arg = unsyntax(arg)
                 stream_any(arg)
             end
         end
@@ -2860,7 +3060,6 @@ local function evaluate(argindex, frame, value)
 end
 
 local function dump_trace(writer, frame, cont, dest, ...)
-    print(writer)
     writer(repr(dest))
     for i=1,select('#', ...) do
         writer(' ')
@@ -2918,7 +3117,7 @@ local function call_flow(frame, cont, flow, ...)
     frame = frame:bind(flow, tmpargs)
     --set_anchor(frame, get_anchor(flow))
 
-    if trace_execution then
+    if global_opts.trace_execution then
         local w = string_writer()
         w(ansi(STYLE.KEYWORD, "flow "))
         dump_trace(w, frame, unpack(flow.arguments))
@@ -2937,13 +3136,30 @@ local function call_flow(frame, cont, flow, ...)
 
     local idx = 1
     local wbuf = {}
-    for i=1,#flow.arguments do
+    local numflowargs = #flow.arguments
+    for i=1,numflowargs do
         local arg = flow.arguments[i]
+        if is_quote_type(arg.type) then
+            arg = unquote(arg)
+        else
+            arg = unsyntax(arg)
+        end
         if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
             local args = unwrap(Type.Table, arg)
-            for k=1,#args do
-                wbuf[idx] = args[k]
+            if i == numflowargs then
+                -- splice as-is
+                for k=1,#args do
+                    wbuf[idx] = args[k]
+                    idx = idx + 1
+                end
+            else
+                -- splice first argument or none
+                if #args >= 1 then
+                    wbuf[idx] = args[1]
+                else
+                    wbuf[idx] = none
+                end
                 idx = idx + 1
             end
         else
@@ -2956,7 +3172,7 @@ local function call_flow(frame, cont, flow, ...)
 end
 
 call = function(frame, cont, dest, ...)
-    if trace_execution then
+    if global_opts.trace_execution then
         stderr_writer(ansi(STYLE.KEYWORD, "trace "))
         dump_trace(stderr_writer, frame, cont, dest, ...)
         stderr_writer('\n')
@@ -3002,52 +3218,6 @@ local function execute(cont, dest, ...)
         return cont(...)
     end, Symbol.ExecuteReturn))
     return call(Frame(), wrapped_cont, dest, ...)
-end
-
---------------------------------------------------------------------------------
--- SCOPES
---------------------------------------------------------------------------------
-
-local Scope = class("Scope")
-MT_TYPE_MAP[Scope] = Type.Scope
-local function assert_scope(x)
-    if getmetatable(x) == Scope then
-        return x
-    else
-        error("scope expected, not " .. repr(x))
-    end
-end
-do
-    local cls = Scope
-    function cls:init(scope)
-        -- symbol -> any
-        self.symbols = {}
-        if scope ~= null then
-            assert_scope(scope)
-            update(self.symbols, scope.symbols)
-        end
-    end
-    function cls:__tostring()
-        local count = 0
-        for k,v in pairs(self.symbols) do
-            count = count + 1
-        end
-        return
-            ansi(STYLE.KEYWORD, "scope")
-            .. ansi(STYLE.COMMENT, "<")
-            .. format("%i symbols", count)
-            .. ansi(STYLE.COMMENT, ">")
-    end
-    function cls:bind(name, value)
-        assert_symbol(name)
-        assert_any(value)
-        self.symbols[name] = value
-    end
-    function cls:lookup(name)
-        assert_symbol(name)
-        return self.symbols[name]
-    end
-
 end
 
 --------------------------------------------------------------------------------
@@ -3119,9 +3289,8 @@ local function toparameter(env, value)
     if _value.type == Type.Parameter then
         return value
     else
-        local sym = unwrap(Type.Symbol, _value)
-        local param = Any(Parameter(sym, Type.Any, anchor))
-        env:bind(sym, param)
+        local param = Any(Parameter(value, Type.Any))
+        env:bind(value, param)
         return syntax(param, anchor)
     end
 end
@@ -3190,7 +3359,7 @@ expand_continuation = function(env, topit)
     end
 
     return List(
-            syntax(quote(Any(
+            quote(syntax(Any(
                 List(
                     syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw),
                     List(
@@ -3198,7 +3367,7 @@ expand_continuation = function(env, topit)
                         List(
                             syntax(Any(reverse_list_inplace(outargs)),
                                 anchor_params),
-                            expand_expr_list(subenv, it)))))), anchor),
+                            expand_expr_list(subenv, it))))), anchor)),
             topit.next), env
 end
 
@@ -3208,7 +3377,7 @@ expand_syntax_extend = function(env, topit)
     local expr = cur_list.at
     local anchor = expr.value.anchor
 
-    local fun = compile(syntax(unquote(unsyntax(expr)),anchor), none)
+    local fun = unsyntax(compile(unquote(expr), none))
     return cur_list.next, execute(function(expr_env)
         return unwrap(Type.Scope, expr_env)
     end, fun, Any(env))
@@ -3230,13 +3399,38 @@ local function expand_macro(env, handler, topit)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
-    return execute(function(result_list, result_scope)
-        if (is_none(result_list)) then
-            return EOL
-        end
-        return unwrap(Type.List, result_list),
-            result_scope and unwrap(Type.Scope, result_scope)
-    end, handler,  Any(topit), Any(env))
+    local result,_0,_1 = xpcall(function()
+        return execute(function(result_list, result_scope)
+            --print(handler, result_list, result_scope)
+            if (is_none(result_list)) then
+                return EOL
+            end
+            result_list = unwrap(Type.List, result_list)
+            result_scope = result_scope and unwrap(Type.Scope, result_scope)
+            if result_list ~= EOL and result_scope == null then
+                error(tostring(handler) .. " did not return a scope")
+            end
+            if not is_quote_type(result_list.at.type) then
+                assert_syntax(result_list.at)
+            end
+            return result_list, result_scope
+        end, handler,  Any(topit), Any(env))
+    end, location_error_handler)
+    if result then
+        return _0,_1
+    else
+        local w = string_writer()
+        assert_syntax(topit.at)
+        local anchor = topit.at.value.anchor
+        anchor:stream_message_with_source(w, 'while expanding expression')
+        local fmt = StreamValueFormat()
+        fmt.naked = true
+        fmt.maxdepth = 2
+        fmt.maxlength = 5
+        stream_expr(w, topit.at, fmt)
+        w(_0)
+        quote_error(w())
+    end
 end
 
 expand = function(env, topit)
@@ -3246,15 +3440,18 @@ expand = function(env, topit)
 ::process::
     assert(topit ~= EOL)
     local expr = topit.at
+    if (is_quote_type(expr.type)) then
+        -- remove qualifier and return as-is
+        return List(unquote(expr), topit.next), env
+    end
     assert_syntax(expr)
     local anchor = expr.value.anchor
     set_active_anchor(anchor)
     expr = unsyntax(expr)
-
     if (is_quote_type(expr.type)) then
-        -- remove qualifier and return as-is
-        return List(syntax(unquote(expr), anchor), topit.next), env
-    elseif (expr.type == Type.List) then
+        location_error("syntax must not wrap quote")
+    end
+    if (expr.type == Type.List) then
         local list = expr.value
         if (list == EOL) then
             location_error("expression is empty")
@@ -3275,10 +3472,7 @@ expand = function(env, topit)
             if (result_list ~= EOL) then
                 topit = result_list
                 env = result_env
-                if not env then
-                    error(tostring(head) .. " did not return a scope")
-                end
-                --assert_scope(env)
+                assert_scope(env)
                 goto process
             elseif result_scope then
                 return EOL, env
@@ -3336,6 +3530,9 @@ end -- do
 -- COMPILER
 --------------------------------------------------------------------------------
 
+local compile_root
+
+do
 local builder = {}
 do
     local state
@@ -3358,6 +3555,10 @@ do
     function builder.br(arguments, anchor)
         assert_table(arguments)
         assert_anchor(anchor)
+        for i=1,#arguments do
+            local arg = arguments[i]
+            assert_any(arg)
+        end
         assert(#arguments >= 2)
         if (state == null) then
             error("can not define body: continuation already exited.")
@@ -3377,14 +3578,19 @@ end
 -- *: value should be passed to dest which is assumed to be a continuation
 local function write_dest(dest, value)
     assert_any(dest)
-    assert_syntax(value)
-    local anchor = value.value.anchor
-    value = unsyntax(value)
     if not is_none(dest) then
         if dest.type == Type.Symbol then
             -- a known value is returned - no need to generate code
             return value
         else
+            local v = value
+            local anchor
+            if (is_quote_type(v.type)) then
+                v = unquote(v)
+            end
+            if (is_syntax_type(v.type)) then
+                v,anchor = unsyntax(v)
+            end
             builder.br({none, dest, value}, anchor)
         end
     end
@@ -3398,7 +3604,8 @@ local function compile_to_none(sxvalue)
     local value = unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
-        local next = Flow.create_continuation(Symbol.Unnamed, anchor)
+        local next = Flow.create_continuation(
+            syntax(Any(Symbol.Unnamed), anchor))
         compile(sxvalue, Any(next))
         builder.continue_at(next)
     else
@@ -3454,7 +3661,7 @@ local function compile_continuation(it, dest, anchor)
 
     it = it.next
 
-    local func_name = unwrap(Type.Symbol, unsyntax(it.at))
+    local func_name = it.at
 
     it = it.next
 
@@ -3490,8 +3697,6 @@ local function compile_continuation(it, dest, anchor)
 end
 
 local function compile_to_parameter(sxvalue)
-    assert_syntax(sxvalue)
-    local anchor = sxvalue.value.anchor
     local value = unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
@@ -3516,9 +3721,11 @@ local function compile_implicit_call(it, dest, anchor)
     end
 
     if (dest.type == Type.Symbol) then
-        local next = Flow.create_continuation(dest.value, anchor)
-        local param = next:append_parameter(dest.value, Type.Any, anchor)
+        local sxdest = syntax(dest, anchor)
+        local next = Flow.create_continuation(sxdest)
+        local param = Parameter(sxdest, Type.Any)
         param.vararg = true
+        next:append_parameter(param)
         -- patch dest to an actual function
         args[1] = Any(next)
         builder.br(args, anchor)
@@ -3572,8 +3779,13 @@ end
 --------------------------------------------------------------------------------
 
 compile = function(sxexpr, dest, anchor)
-    assert_syntax(sxexpr)
     assert_any(dest)
+    assert_any(sxexpr)
+    if (is_quote_type(sxexpr.type)) then
+        -- write as-is
+        return write_dest(dest, sxexpr)
+    end
+    assert_syntax(sxexpr)
 
     local anchor = sxexpr.value.anchor
     local expr = unsyntax(sxexpr)
@@ -3592,32 +3804,54 @@ compile = function(sxexpr, dest, anchor)
             return compile_implicit_call(slist, dest, anchor)
         end
     else
-        local result = expr
-        if (is_quote_type(expr.type)) then
-            -- remove qualifier and return as-is
-            result = unquote(result)
-        end
-        return write_dest(dest, syntax(result, anchor))
+        return write_dest(dest, sxexpr)
     end
 end
 
 --------------------------------------------------------------------------------
 
 -- path must be resident
-local function compile_root(expr, name)
+compile_root = function(expr, name)
     assert_syntax(expr)
-    assert_symbol(name)
+    assert_string(name)
 
     local anchor = expr.value.anchor
     expr = unwrap(Type.List, unsyntax(expr))
 
-    local mainfunc = Flow.create_function(name, anchor)
+    local mainfunc = Flow.create_function(syntax(Any(Symbol(name)), anchor))
     local ret = mainfunc.parameters[PARAM_Cont]
     builder.continue_at(mainfunc)
 
     compile_expr_list(expr, Any(ret), anchor)
 
     return Any(mainfunc)
+end
+
+-- special forms
+--------------------------------------------------------------------------------
+
+builtins.call = Form(compile_call, Symbol("call"))
+builtins["cc/call"] = Form(compile_contcall, Symbol("cc/call"))
+builtins[Symbol.ContinuationForm] = Form(compile_continuation, Symbol("fn/cc"))
+builtins["do"] = Form(compile_do, Symbol("do"))
+
+end -- do
+
+function Anchor.extract(value)
+    if is_syntax_type(value.type) then
+        return value.value.anchor
+    elseif value.type == Type.Parameter then
+        local anchor = value.value.anchor
+        if anchor then
+            return anchor
+        end
+    elseif value.type == Type.List then
+        if value.value ~= EOL then
+            local head = value.value.at
+            -- try to extract head
+            return Anchor.extract(head)
+        end
+    end
 end
 
 --------------------------------------------------------------------------------
@@ -3681,9 +3915,6 @@ local function builtin_forward(name, errmsg)
     end
 end
 
-local builtins = {}
-local builtin_ops = {}
-
 local function builtin_op(_type, name, func)
     table.insert(builtin_ops, {_type, name, func})
 end
@@ -3732,13 +3963,8 @@ builtins.list = Type.List
 builtins.parameter = Type.Parameter
 builtins.string = Type.String
 
--- special forms
---------------------------------------------------------------------------------
-
-builtins.call = Form(compile_call, Symbol("call"))
-builtins["cc/call"] = Form(compile_contcall, Symbol("cc/call"))
-builtins[Symbol.ContinuationForm] = Form(compile_continuation, Symbol("fn/cc"))
-builtins["do"] = Form(compile_do, Symbol("do"))
+builtins["syntax-list"] = Type.SyntaxList
+builtins["syntax-symbol"] = Type.SyntaxSymbol
 
 -- builtin macros
 --------------------------------------------------------------------------------
@@ -3787,10 +4013,10 @@ end
 -- ordered-branch(a, b, equal, unordered [, less [, greater]])
 builtins['ordered-branch'] = ordered_branch
 
-builtins.error = wrap_simple_builtin(function(msg)
+builtins.error = function(frame, cont, self, msg)
     checkargs(1,1, msg)
     location_error(unwrap(Type.String, msg))
-end)
+end
 
 -- constructors
 --------------------------------------------------------------------------------
@@ -3836,7 +4062,7 @@ builtins.eval = wrap_simple_builtin(function(expr, scope, path)
     end
     local result,expexpr = expand_root(unwrap(Type.List, expr), scope)
     if result then
-        return compile_root(expexpr, Symbol(path))
+        return compile_root(expexpr, path)
     else
         error(expexpr)
     end
@@ -3859,6 +4085,53 @@ builtins.cons = wrap_simple_builtin(function(at, next)
     return Any(List(at, next))
 end)
 
+builtins["syntax-cons"] = wrap_simple_builtin(function(at, next)
+    checkargs(2,2, at, next)
+    if not is_quote_type(at.type) then
+        assert_syntax(at)
+    end
+    assert_syntax(next)
+    local next, next_anchor = unsyntax(next)
+    next = unwrap(Type.List, next)
+    return syntax(Any(List(at, next)), next_anchor)
+end)
+
+builtins["syntax->datum"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    assert_syntax(value)
+    return (unsyntax(value))
+end)
+
+builtins["syntax->anchor"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    assert_syntax(value)
+    local _,anchor = unsyntax(value)
+    return Any(anchor)
+end)
+
+builtins["active-anchor"] = wrap_simple_builtin(function()
+    return Any(get_active_anchor())
+end)
+
+builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
+    checkargs(1,2,value,anchor)
+
+    if is_syntax_type(value.type) then
+        location_error("argument must not be syntax")
+    end
+    if is_null_or_none(anchor) then
+        anchor = Anchor.extract(value)
+        if anchor == null then
+            location_error("argument of type "
+                .. repr(value.type)
+                .. " does not embed anchor")
+        end
+    else
+        anchor = unwrap(Type.Anchor, anchor)
+    end
+    return syntax(value,anchor)
+end)
+
 builtin_op(Type.Symbol, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
         checkargs(1,1,name)
@@ -3871,10 +4144,27 @@ builtin_op(Type.List, Symbol.ApplyType,
         return Any(List.from_args(...))
     end))
 
+builtin_op(Type.SyntaxList, Symbol.ApplyType,
+    wrap_simple_builtin(function(...)
+        checkargs(0,-1,...)
+        local vacount = select('#', ...)
+        for i=1,vacount do
+            assert_syntax(select(i, ...))
+        end
+        local anchor
+        if vacount > 0 then
+            local _
+            _,anchor = unsyntax(select(1, ...))
+        else
+            anchor = get_active_anchor()
+        end
+        return syntax(Any(List.from_args(...)), anchor)
+    end))
+
 builtin_op(Type.Parameter, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
         checkargs(1,1,name)
-        return Any(Parameter(unwrap(Type.Symbol, name)))
+        return Any(Parameter(name))
     end))
 
 each_numerical_type(function(T)
@@ -3890,6 +4180,12 @@ each_numerical_type(function(T)
             return Any(T.ctype(x.value))
         end))
 end)
+
+builtin_op(Type.Syntax, Symbol.ApplyType,
+    wrap_simple_builtin(function(_type)
+        checkargs(1,1,_type)
+        return Any(Type.Syntax(unwrap(Type.Type, _type)))
+    end))
 
 -- comparisons
 --------------------------------------------------------------------------------
@@ -4034,7 +4330,7 @@ builtin_op(Type.Syntax, Symbol.Compare,
     function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         local x = unsyntax(a)
-        local y = b
+        local y = unsyntax(b)
         return ordered_branch(frame, cont, none,
             x, y, equal_cont, unordered_cont, less_cont, greater_cont)
     end)
@@ -4216,7 +4512,7 @@ builtin_op(Type.Syntax, Symbol.Slice,
         local value, anchor = unsyntax(value)
         return fwd_slice(frame,
             Any(Builtin(function(_frame, _cont, _self, l)
-                call(frame, none, cont, syntax(l, anchor))
+                return call(frame, none, cont, syntax(l, anchor))
             end, Symbol.SliceForwarder)), none, value, ...)
     end)
 
@@ -4255,7 +4551,7 @@ builtins["get-scope-symbol"] = wrap_simple_builtin(function(scope, key, defvalue
     checkargs(2, 3, scope, key, defvalue)
 
     scope = unwrap(Type.Scope, scope)
-    key = unwrap(Type.Symbol, key)
+    key = unwrap(Type.Symbol, unsyntax(key))
 
     return scope:lookup(key) or defvalue or none
 end)
@@ -4266,8 +4562,7 @@ end)
 builtins["set-scope-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     checkargs(3,3, dest, key, value)
     local atable = unwrap(Type.Scope, dest)
-    local sym = unwrap(Type.Symbol, key)
-    atable:bind(sym, value)
+    atable:bind(key, value)
 end)
 
 builtins["bind!"] = function(frame, cont, self, param, value)
@@ -4338,7 +4633,7 @@ local function prepare_builtin_value(name, value, _type)
         and value.value.name == Symbol.Unnamed then
         value.value.name = displayname
     end
-    return name, value
+    return Any(name), value
 end
 
 local function decl_builtin(name, value)
@@ -4363,11 +4658,11 @@ end
 local function init_globals()
     local function configure_int_type(_type, ctype, fmt)
         local refct = reflect.typeof(ctype)
-        _type:bind(Symbol.Size, Any(size_t(refct.size)))
-        _type:bind(Symbol.Alignment, Any(size_t(refct.alignment)))
-        _type:bind(Symbol.Bitwidth, Any(int(refct.size * 8)))
-        _type:bind(Symbol.Unsigned, Any(bool(refct.unsigned or false)))
-        _type:bind(Symbol.Super, Any(Type.Integer))
+        _type:bind(Any(Symbol.Size), Any(size_t(refct.size)))
+        _type:bind(Any(Symbol.Alignment), Any(size_t(refct.alignment)))
+        _type:bind(Any(Symbol.Bitwidth), Any(int(refct.size * 8)))
+        _type:bind(Any(Symbol.Unsigned), Any(bool(refct.unsigned or false)))
+        _type:bind(Any(Symbol.Super), Any(Type.Integer))
         _type.ctype = ctype
         if _type == Type.Bool then
             function _type:format_value(x)
@@ -4385,10 +4680,10 @@ local function init_globals()
     end
     local function configure_real_type(_type, ctype)
         local refct = reflect.typeof(ctype)
-        _type:bind(Symbol.Size, Any(size_t(refct.size)))
-        _type:bind(Symbol.Alignment, Any(size_t(refct.alignment)))
-        _type:bind(Symbol.Bitwidth, Any(int(refct.size * 8)))
-        _type:bind(Symbol.Super, Any(Type.Real))
+        _type:bind(Any(Symbol.Size), Any(size_t(refct.size)))
+        _type:bind(Any(Symbol.Alignment), Any(size_t(refct.alignment)))
+        _type:bind(Any(Symbol.Bitwidth), Any(int(refct.size * 8)))
+        _type:bind(Any(Symbol.Super), Any(Type.Real))
         _type.ctype = ctype
         function _type:format_value(x)
             return ansi(STYLE.NUMBER, cformat("%g", x))
@@ -4411,7 +4706,7 @@ local function init_globals()
     for name,value in pairs(builtins) do
         decl_builtin(name, value)
     end
-    globals:bind(Symbol("globals"), Any(globals))
+    globals:bind(Any(Symbol("globals")), Any(globals))
 
     for _,entry in ipairs(builtin_ops) do
         local _type,name,value = unpack(entry)
@@ -4428,17 +4723,24 @@ end -- do
 --------------------------------------------------------------------------------
 
 local macro_test2 = [[
-print "yes"
-print "this"
-print "is"
-print "dog"
-call
-    fn/cc (_ x y)
-        _ x y
-    \ 2 3
-print "yup"
+print "result:"
+    call
+        fn/cc (return tuple)
+            call
+                fn/cc (_ f1 f2)
+                    f1; f2;
+                    return true
+                tuple 1 2 3
+                tuple 4 5 6
 
-error "bang"
+        fn/cc (return vars...)
+            return
+                fn/cc (_)
+                    print "captured:" vars...
+                    _;
+
+
+true
 ]]
 
 local macro_test = [[
@@ -4484,6 +4786,15 @@ do
     print
         == (r32 5) 5.0
     #error "oh my god"
+
+print "varargs:"
+    call
+        fn/cc (_)
+            _ 1 2 3
+    "test"
+    call
+        fn/cc (_)
+            _ 1 2 3 4
 
 print
     countof "test"
@@ -4532,7 +4843,7 @@ function test (a b)
 ]]
 
 local function test_lexer()
-    local src = SourceFile.open("<test>", macro_test)
+    local src = SourceFile.open("<test>", macro_test2)
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local result,expr = parse(lexer)
@@ -4543,7 +4854,7 @@ local function test_lexer()
         if result then
             print("expanded result:")
             stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
-            local func = compile_root(expexpr, Symbol("main"))
+            local func = compile_root(expexpr, "main")
             print("generated IL:")
             stream_il(stdout_writer, func)
             print("executing",func)
@@ -4576,7 +4887,7 @@ local function test_bangra()
         local result,expexpr = expand_root(expr)
         if result then
             --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
-            local func = compile_root(expexpr, Symbol("main"))
+            local func = compile_root(expexpr, "main")
             execute(
                 function(...)
                     print(...)
