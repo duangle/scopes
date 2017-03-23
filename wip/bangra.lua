@@ -5024,8 +5024,8 @@ end
 do
     local result,err = xpcall(function()
         --test_list()
-        test_lexer()
-        --test_bangra()
+        --test_lexer()
+        test_bangra()
         --test_ansicolors()
     end,
     location_error_handler)
