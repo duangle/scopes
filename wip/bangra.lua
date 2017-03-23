@@ -1542,11 +1542,15 @@ do
     function cls:column()
         return self.cursor - self.line + 1
     end
+    function cls:next_column()
+        return self.next_cursor - self.next_line + 1
+    end
     function cls:anchor()
         return Anchor(self.path, self.lineno, self:column(), self:offset())
     end
     function cls:next()
         local c = self.next_cursor[0]
+        verify_good_taste(c)
         self.next_cursor = self.next_cursor + 1
         return c
     end
@@ -1581,8 +1585,8 @@ do
     end
     function cls:read_string(terminator)
         local escape = false
-        while (true) do
-            if (self:is_eof()) then
+        while true do
+            if self:is_eof() then
                 location_error("unterminated sequence")
                 break
             end
@@ -1600,6 +1604,23 @@ do
         end
         self.string = self.cursor
         self.string_len = self.next_cursor - self.cursor
+    end
+    function cls:read_comment()
+        local col = self:column()
+        while true do
+            if self:is_eof() then
+                break
+            end
+            local next_col = self:next_column()
+            local c = self:next()
+            if (c == CR) then
+                self:newline()
+            elseif C.isspace(c) == 0
+                and next_col <= col then
+                self.next_cursor = self.next_cursor - 1
+                break
+            end
+        end
     end
     local pp_int8_t = typeof('$*[1]', int8_t)
     local function make_read_number(srctype, f)
@@ -1645,7 +1666,6 @@ do
             goto done
         end
         c = self:next()
-        verify_good_taste(c)
         if (c == CR) then
             self:newline()
         end
@@ -1654,7 +1674,7 @@ do
         end
         cc = tochar(c)
         if (cc == '#') then
-            self:read_string(CR)
+            self:read_comment()
             goto skip
         elseif (cc == '(') then self.token = Token.open
         elseif (cc == ')') then self.token = Token.close
@@ -1672,6 +1692,7 @@ do
             else self.token = Token.symbol; self:read_symbol() end
         end
     ::done::
+        --print(get_token_name(self.token))
         return self.token
     end
     function cls:get_symbol()
@@ -5003,8 +5024,8 @@ end
 do
     local result,err = xpcall(function()
         --test_list()
-        --test_lexer()
-        test_bangra()
+        test_lexer()
+        --test_bangra()
         --test_ansicolors()
     end,
     location_error_handler)

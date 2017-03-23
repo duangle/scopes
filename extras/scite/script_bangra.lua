@@ -200,6 +200,22 @@ local function Lexer()
         end
     end
 
+    function readComment()
+        local col = cursor - line
+        while next_cursor ~= eof do
+            local next_col = next_cursor - next_line
+            local c = readChar()
+            if (c == '\n') then
+                next_lineno = next_lineno + 1
+                next_line = next_cursor
+            elseif not isspace(c)
+                and next_col <= col then
+                next_cursor = next_cursor - 1
+                break
+            end
+        end
+    end
+
     local function skipCharSet(p, chars)
         while (p < eof) do
             local c = deref(p)
@@ -281,7 +297,7 @@ local function Lexer()
                 cursor = next_cursor
             elseif (c == '#') then
                 token = token_comment
-                readString('\n')
+                readComment()
                 break
             elseif (c == '(') then
                 token = token_open
