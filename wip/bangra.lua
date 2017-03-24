@@ -917,6 +917,7 @@ local function define_symbols(def)
     def({SliceForwarder='slice-forwarder'})
     def({JoinForwarder='join-forwarder'})
     def({CompareListNext="compare-list-next"})
+    def({ReturnSafecall='return-safecall'})
 
 end
 
@@ -1070,7 +1071,6 @@ do
     function cls:bind(sxname, value)
         local name = unwrap(Type.Symbol, unsyntax(sxname))
         assert_any(value)
-        assert(self.symbols[name] == null)
         self.symbols[name] = { sxname, value }
     end
     function cls:lookup(name)
@@ -1264,20 +1264,20 @@ local function each_numerical_type(f, opts)
         opts.unsigned = true
     end
     if opts.floats then
-        f(Type.R32)
-        f(Type.R64)
+        f(Type.R32, float)
+        f(Type.R64, double)
     end
     if opts.signed then
-        f(Type.I8)
-        f(Type.I16)
-        f(Type.I32)
-        f(Type.I64)
+        f(Type.I8, int8_t)
+        f(Type.I16, int16_t)
+        f(Type.I32, int32_t)
+        f(Type.I64, int64_t)
     end
     if opts.unsigned then
-        f(Type.U8)
-        f(Type.U16)
-        f(Type.U32)
-        f(Type.U64)
+        f(Type.U8, uint8_t)
+        f(Type.U16, uint16_t)
+        f(Type.U32, uint32_t)
+        f(Type.U64, uint64_t)
     end
 end
 
@@ -2167,14 +2167,14 @@ local KEYWORDS = set(split(
         .. " syntax-extend if else elseif loop repeat none assert qquote"
         .. " unquote unquote-splice globals return splice continuation"
         .. " try except define in for empty-list empty-tuple raise"
-        .. " yield xlet cc/call fn/cc null"
+        .. " yield xlet cc/call fn/cc null break"
     ))
 
     -- builtin and global functions
 local FUNCTIONS = set(split(
     "external branch print repr tupleof import-c eval structof typeof"
         .. " macro block-macro block-scope-macro cons expand empty?"
-        .. " dump list-head? countof tableof slice none? list-atom?"
+        .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate bitcast element-type"
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
@@ -2670,6 +2670,7 @@ local function assert_frame(x)
         error("expected frame, got " .. repr(x))
     end
 end
+----[[
 do -- compact hashtables as much as one can where possible
     local cls = Frame
     function cls:init(frame)
@@ -2746,6 +2747,7 @@ do -- compact hashtables as much as one can where possible
         return defvalue
     end
 end
+--]]
 --[[
 do -- clone frame for every mapping
     local cls = Frame
@@ -2810,7 +2812,7 @@ do -- clone frame for every mapping
         return defvalue
     end
 end
-]]
+--]]
 
 local Closure = class("Closure")
 MT_TYPE_MAP[Closure] = Type.Closure
@@ -2836,7 +2838,10 @@ end
 
 local stream_il
 do
-    stream_il = function(writer, afunc)
+    stream_il = function(writer, afunc, opts)
+        opts = opts or {}
+        local enter_closures = opts.enter_closures or false
+
         local last_anchor
         local function stream_anchor(anchor)
             if anchor then
@@ -2958,7 +2963,7 @@ do
         stream_any = function(afunc, aframe)
             if afunc.type == Type.Flow then
                 stream_flow(afunc.value, aframe)
-            elseif afunc.type == Type.Closure then
+            elseif afunc.type == Type.Closure and enter_closures then
                 stream_closure(afunc.value)
             end
         end
@@ -3414,9 +3419,13 @@ expand_syntax_extend = function(env, topit)
     local anchor = expr.value.anchor
 
     local fun = unsyntax(compile(unquote(expr), none))
-    return cur_list.next, execute(function(expr_env)
-        return unwrap(Type.Scope, expr_env)
-    end, fun, Any(env))
+    local nextenv = execute(
+        function(expr_env)
+            return unwrap(Type.Scope, expr_env)
+        end,
+        fun, Any(env))
+
+    return cur_list.next, nextenv
 end
 
 local function expand_wildcard(env, handler, topit)
@@ -3794,8 +3803,8 @@ end
 
 local function compile_contcall(it, dest, anchor)
     assert_syntax(it)
-    assert_any(dest)
-    assert(not is_none(dest))
+    --assert_any(dest)
+    --assert(not is_none(dest))
 
     local anchor = it.value.anchor
     it = unwrap(Type.List, unsyntax(it))
@@ -3904,6 +3913,15 @@ end
 
 do -- reduce number of locals
 
+local function safecontcall(callfunc, errfunc)
+    return safecall(function()
+        return callfunc(Any(Builtin(
+            function(_frame, _cont, _self, ...)
+                return ...
+            end, Symbol.ReturnSafecall)))
+    end, errfunc)
+end
+
 local function checkargs(mincount, maxcount, ...)
     if ((mincount <= 0) and (maxcount == -1)) then
         return true
@@ -3972,7 +3990,7 @@ local function unwrap_integer(value)
     end
 end
 
-local cast
+local any_cast
 
 -- constants
 --------------------------------------------------------------------------------
@@ -4059,8 +4077,16 @@ builtins['ordered-branch'] = ordered_branch
 
 builtins.error = function(frame, cont, self, msg)
     checkargs(1,1, msg)
-    location_error(unwrap(Type.String, msg))
+    return location_error(unwrap(Type.String, msg))
 end
+
+local _exception_handler = none
+builtins["set-exception-handler!"] = wrap_simple_builtin(function(handler)
+    _exception_handler = handler
+end)
+builtins["get-exception-handler"] = wrap_simple_builtin(function(handler)
+    return _exception_handler
+end)
 
 -- constructors
 --------------------------------------------------------------------------------
@@ -4175,6 +4201,20 @@ builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
     end
     return syntax(value,anchor)
 end)
+
+builtin_op(Type.String, Symbol.ApplyType,
+    wrap_simple_builtin(function(value)
+        checkargs(1,1,value)
+        local ty = value.type
+        -- todo: types should do that conversion
+        if ty == Type.String then
+            return value.value
+        elseif ty == Type.Symbol then
+            return value.value.name
+        else
+            return Any(format_any_value(value.type, value.value))
+        end
+    end))
 
 builtin_op(Type.Symbol, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
@@ -4382,7 +4422,7 @@ builtin_op(Type.Syntax, Symbol.Compare,
 -- cast
 --------------------------------------------------------------------------------
 
-cast = function(frame, cont, self, value, totype)
+any_cast = function(frame, cont, self, value, totype)
     checkargs(2,2, value, totype)
     local fromtype = Any(value.type)
     local func = value.type:lookup(Symbol.Cast)
@@ -4396,22 +4436,21 @@ cast = function(frame, cont, self, value, totype)
         end
         func = desttype:lookup(Symbol.Cast)
         if func ~= null then
-            return safecall(function()
+            return call(frame, none, cont, safecontcall(function(cont)
                 return call(frame, cont, func, fromtype, totype, value)
-            end, errmsg)
+            end, errmsg))
         else
             errmsg()
         end
     end
     if func ~= null then
-        return safecall(
-            function()
-                return call(frame, cont, func, fromtype, totype, value)
-            end, fallback_call)
+        return call(frame, none, cont, safecontcall(function(cont)
+            return call(frame, cont, func, fromtype, totype, value)
+        end, fallback_call))
     end
     return fallback_call()
 end
-builtins.cast = cast
+builtins.cast = any_cast
 
 local default_casts = wrap_simple_builtin(function(fromtype, totype, value)
     fromtype = unwrap(Type.Type, fromtype)
@@ -4460,10 +4499,11 @@ local function builtin_forward_op2(name, errmsg)
             end
         end
         if func ~= null then
-            return safecall(
-                function()
+            local result = safecontcall(
+                function(cont)
                     return call(frame, cont, func, a, b, any_false)
                 end, fallback_call)
+            return call(frame, none, cont, result)
         end
         return fallback_call()
     end
@@ -4516,18 +4556,37 @@ builtins[Symbol.Sub] = builtin_forward_op2(Symbol.Sub, "subtract")
 builtins[Symbol.Mul] = builtin_forward_op2(Symbol.Mul, "multiply")
 builtins[Symbol.Div] = builtin_forward_op2(Symbol.Div, "divide")
 
-each_numerical_type(function(T)
-    local function arithmetic_op(sym, op)
+each_numerical_type(function(T, ctype)
+    local atype = typeof('$[$]', ctype, 1)
+    local rtype = typeof('$&', ctype)
+    local function arithmetic_op(sym, opname)
+        local op = C["bangra_" .. T.name .. "_" .. opname]
+        assert(op)
+
         builtin_op(T, sym,
             wrap_simple_builtin(function(a,b)
                 checkargs(2,2,a,b)
-                return Any(op(unwrap(T, a),unwrap(T, b)))
+                a = unwrap(T, a)
+                b = unwrap(T, b)
+                local srcval = new(atype)
+                op(srcval, a, b)
+                return Any(cast(ctype, cast(rtype, srcval)))
             end))
     end
-    arithmetic_op(Symbol.Add, function(a,b) return a + b end)
-    arithmetic_op(Symbol.Sub, function(a,b) return a - b end)
-    arithmetic_op(Symbol.Mul, function(a,b) return a * b end)
-    arithmetic_op(Symbol.Div, function(a,b) return a / b end)
+    arithmetic_op(Symbol.Add, "add")
+    arithmetic_op(Symbol.Sub, "sub")
+    arithmetic_op(Symbol.Mul, "mul")
+    arithmetic_op(Symbol.Div, "div")
+end)
+
+builtins["not"] = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    value = unwrap(Type.Bool, value)
+    if tonumber(value) == 0 then
+        return any_true
+    else
+        return any_false
+    end
 end)
 
 -- interrogation

@@ -209,8 +209,8 @@ syntax-extend def-? (return env)
     return env
 
 syntax-extend def-list-defs (return env)
-    set-scope-symbol! env (quote list-head?)
-        fn/cc list-head? (return expr name)
+    set-scope-symbol! env (quote syntax-head?)
+        fn/cc syntax-head? (return expr name)
             return
                 ? (list? (syntax->datum expr))
                     ? (empty? expr)
@@ -232,7 +232,7 @@ syntax-extend def-list-defs (return env)
     set-scope-symbol! env (quote syntax-do)
         fn/cc syntax-do (return expr)
             return
-                ? (empty? (slice expr 1))
+                ? (== (countof expr) (u64 1))
                     @ expr 0
                     syntax-cons (datum->syntax do (syntax->anchor expr)) expr
     # build a list terminator tagged with a desired anchor from an expression
@@ -256,9 +256,9 @@ syntax-extend def-qquote (return env)
                                     datum->syntax quote
                                         syntax->anchor x
                                     x
-                                ? (list-head? x (quote unquote))
+                                ? (syntax-head? x (quote unquote))
                                     syntax-do (slice x 1)
-                                    ? (list-head? x (quote qquote))
+                                    ? (syntax-head? x (quote qquote))
                                         qquote-1 (qquote-1 (@ x 1))
                                         ? (list-atom? (@ x 0))
                                             syntax-list
@@ -266,7 +266,7 @@ syntax-extend def-qquote (return env)
                                                     syntax->anchor (@ x 0)
                                                 qquote-1 (@ x 0)
                                                 qquote-1 (slice x 1)
-                                            ? (list-head? (@ x 0) (quote unquote-splice))
+                                            ? (syntax-head? (@ x 0) (quote unquote-splice))
                                                 syntax-list
                                                     datum->syntax (do ..)
                                                         syntax->anchor (@ x 0)
@@ -294,12 +294,11 @@ syntax-extend def-define (return env)
                     cons
                         qquote
                             syntax-extend define (return local-scope)
-                                do
-                                    set-scope-symbol! local-scope
-                                        quote
-                                            unquote (@ (@ topexpr 0) 1)
-                                        unquote
-                                            syntax-do (slice (@ topexpr 0) 2)
+                                set-scope-symbol! local-scope
+                                    quote
+                                        unquote (@ (@ topexpr 0) 1)
+                                    unquote
+                                        syntax-do (slice (@ topexpr 0) 2)
                                 return local-scope
                         slice topexpr 1
     return env
@@ -335,6 +334,8 @@ define let
                                                     syntax-do
                                                         datum->syntax rest
                                                             syntax->anchor (@ expr 0)
+                                                unquote-splice
+                                                    syntax-eol (@ expr 0)
                                         unquote
                                             syntax-do
                                                 slice (@ expr 0) 3
@@ -402,12 +403,65 @@ define fn
                             make-params-body 1
                         rest
 
+define xpcall
+    fn xpcall (func xfunc)
+        let old_handler =
+            get-exception-handler;
+        fn cleanup ()
+            set-exception-handler! old_handler
+        call
+            fn/cc try (finally)
+                fn except (exc aframe args)
+                    cleanup;
+                    finally
+                        xfunc exc
+                set-exception-handler! except
+                let result =
+                    func;
+                cleanup;
+                finally result
+
+define raise
+    fn/cc raise (_ x)
+        cc/call none (get-exception-handler) x
+
+define try
+    block-macro
+        fn expand-try (expr env)
+            ? (not (syntax-head? (@ expr 1) (quote except)))
+                error "except block missing"
+                true
+            cons
+                qquote
+                    xpcall
+                        fn ()
+                            unquote-splice
+                                slice (@ expr 0) 1
+                        fn
+                            unquote (@ (@ expr 1) 1)
+                            unquote-splice
+                                slice (@ expr 1) 2
+                slice expr 2
+
 define empty-list
     escape (list)
 define int i32
 define uint i32
 define float r32
 define double r64
+
+define _
+    macro
+        fn expand-multiargs (expr)
+            let ret =
+                datum->syntax (parameter (@ expr 0))
+            qquote
+                call
+                    fn/cc ((unquote ret))
+                        unquote ret;
+                            unquote-splice
+                                slice expr 1
+
 # (assert bool-expr [error-message])
 define assert
     macro
@@ -418,7 +472,12 @@ define assert
                     error
                         unquote
                             ? (empty? (slice expr 2))
-                                .. "assertion failed: " (string (@ expr 1))
+                                datum->syntax
+                                    .. "assertion failed: "
+                                        string
+                                            syntax->datum
+                                                @ expr 1
+                                    syntax->anchor expr
                                 @ expr 2
                         unquote-splice
                             syntax-eol expr
@@ -473,6 +532,8 @@ define and
                                     unquote ret
                                     unquote tmp
                     unquote (@ expr 1)
+                    unquote-splice
+                        syntax-eol expr
 
 define or
     macro
@@ -494,6 +555,257 @@ define or
                                     unquote ret
                                     unquote (@ expr 2)
                     unquote (@ expr 1)
+                    unquote-splice
+                        syntax-eol expr
+
+define if
+    fn if-rec (topexpr)
+        let expr =
+            @ topexpr 0
+        let cond =
+            @ expr 1
+        let then-exprlist =
+            slice expr 2
+        fn make-branch (else-exprlist)
+            let ret-then = (datum->syntax (parameter (quote ret-then)))
+            let ret-else = (datum->syntax (parameter (quote ret-else)))
+            qquote
+                branch (unquote cond)
+                    fn/cc ((unquote ret-then))
+                        ;
+                            unquote ret-then
+                            unquote
+                                syntax-do then-exprlist
+                            unquote-splice
+                                syntax-eol then-exprlist
+                    fn/cc ((unquote ret-else))
+                        ;
+                            unquote ret-else
+                            unquote
+                                syntax-do else-exprlist
+                            unquote-splice
+                                syntax-eol else-exprlist
+                    unquote-splice
+                        syntax-eol expr
+        let rest-expr =
+            slice topexpr 1
+        let next-expr =
+            ? (empty? rest-expr)
+                rest-expr
+                @ rest-expr 0
+        ? (syntax-head? next-expr (quote elseif))
+            do
+                let nextif =
+                    if-rec rest-expr
+                cons
+                    make-branch
+                        syntax-list (@ nextif 0)
+                    slice nextif 1
+            ? (syntax-head? next-expr (quote else))
+                cons
+                    make-branch
+                        slice next-expr 1
+                    slice topexpr 2
+                cons
+                    make-branch
+                        syntax-eol expr
+                    rest-expr
+    block-macro if-rec
+
+syntax-extend def-let-xlet (return env)
+    fn =? (x)
+        and
+            symbol? (syntax->datum x)
+            == x (quote =)
+
+    # iterate until we hit the = symbol, after which
+      the body follows
+    fn find= (expr)
+        if (empty? expr)
+            error "syntax: let <name> ... = <expression> ..."
+        elseif (=? (@ expr 0))
+            return (list)
+                slice expr 1
+        else
+            call
+                fn (args rest)
+                    return
+                        cons (@ expr 0) args
+                        rest
+                find=
+                    slice expr 1
+
+    set-scope-symbol! env
+        quote let
+        # support for multiple declarations in one let env
+        block-macro
+            fn expand-let (topexpr env)
+                let expr = (@ topexpr 0)
+                let rest = (slice topexpr 1)
+                let body = (slice expr 1)
+                let argtype = (typeof (syntax->datum (@ body 0)))
+                if (== argtype list)
+                    # prepare quotable values from declarations
+                    fn handle-pairs (pairs)
+                        if (empty? pairs)
+                            rest
+                        else
+                            let pair =
+                                @ pairs 0
+                            assert (=? (@ pair 1))
+                                "syntax: let (<name> = <expression>) ..."
+                            cons
+                                qquote let
+                                    unquote-splice pair
+                                handle-pairs
+                                    slice pairs 1
+                    handle-pairs body
+                else
+                    call
+                        fn (args init)
+                            let cont-param =
+                                datum->syntax (parameter (quote let-return))
+                            list
+                                qquote
+                                    ;
+                                        fn/cc
+                                            ;
+                                                unquote cont-param
+                                                unquote-splice
+                                                    datum->syntax args
+                                                        syntax->anchor body
+                                            ;
+                                                unquote cont-param
+                                                unquote
+                                                    syntax-do
+                                                        datum->syntax rest
+                                                            syntax->anchor expr
+                                                unquote-splice
+                                                    syntax-eol expr
+                                            unquote-splice
+                                                syntax-eol expr
+                                        unquote-splice init
+                                        # force enclosing list to use anchor
+                                          of original expression
+                                        unquote-splice
+                                            syntax-eol expr
+                        find= body
+
+    set-scope-symbol! env
+        quote xlet
+        block-macro
+            # a late-binding let with support for recursion and
+              function-level cross dependencies. comparable to letrec.
+            fn (topexpr env)
+                let expr = (@ topexpr 0)
+                let rest = (slice topexpr 1)
+                let body = (slice expr 1)
+                let argtype = (typeof (syntax->datum (@ body 0)))
+                let xlet-return =
+                    datum->syntax (parameter (quote xlet-return))
+                if (== argtype list)
+                    # multiple variables with support for recursion
+                      and circular dependencies
+
+                    # prepare quotable values from declarations
+                    fn handle-pairs (pairs)
+                        if (empty? pairs)
+                            return
+                                syntax-eol expr
+                                rest
+                        else
+                            call
+                                fn (args rest)
+                                    let pair =
+                                        @ pairs 0
+                                    assert
+                                        and (=? (@ pair 1))
+                                            == (countof pair) (u64 3)
+                                        "syntax: xlet (<name> = <expression>) ..."
+                                    let name = (@ pair 0)
+                                    return
+                                        syntax-cons name args
+                                        cons
+                                            qquote
+                                                set!
+                                                    unquote name
+                                                    unquote
+                                                        @ pair 2
+                                            rest
+                                handle-pairs
+                                    slice pairs 1
+
+                    call
+                        fn (argnames xlet-rest)
+                            list
+                                qquote
+                                    call
+                                        fn/cc
+                                            ;
+                                                unquote xlet-return
+                                                unquote-splice argnames
+                                            ;
+                                                unquote xlet-return
+                                                unquote
+                                                    syntax-do
+                                                        datum->syntax xlet-rest
+                                                            syntax->anchor expr
+                        handle-pairs body
+                else
+                    assert (=? (@ expr 2))
+                        "syntax: xlet <parameter> = <expression>"
+                    let name = (@ expr 1)
+                    let value = (@ expr 3)
+                    # regular form with support for recursion
+                    list
+                        qquote
+                            call
+                                fn/cc
+                                    ;
+                                        unquote xlet-return
+                                        unquote name
+                                    ;
+                                        unquote xlet-return
+                                        unquote
+                                            syntax-do
+                                                datum->syntax
+                                                    cons
+                                                        qquote
+                                                            set! (unquote name)
+                                                                unquote value
+                                                        rest
+                                                    syntax->anchor expr
+    return env
+
+syntax-extend stage-test1b (return env)
+    #do
+        xlet
+            even? =
+                fn (n)
+                    ? (== n 0) true
+                        odd? (- n one)
+            odd? =
+                fn (n)
+                    ? (== n 0) false
+                        even? (- n one)
+            one = 1
+        assert (even? 12)
+        assert (odd? 11)
+
+    #error "fuck"
+
+    print
+        try
+            print "doing some stuff!"
+            #raise "bang"
+            print "no longer doing stuff"
+            606
+        except (err)
+            print "error raised:" err
+            303
+    print "et voila"
+
+    return env
 
 define loop
     macro
@@ -501,101 +813,49 @@ define loop
             let expr-anchor = (syntax->anchor expr)
             let param-repeat =
                 quote repeat
-            let param-return =
-                datum->syntax (parameter (quote loop-return))
+            let param-break =
+                quote break
             qquote
                 do
-                    let (unquote param-repeat) = none
-                    set! (unquote param-repeat)
-                        fn/cc ((unquote param-return) (unquote-splice (@ expr 1)))
+                    xlet (unquote param-repeat) =
+                        fn/cc ((unquote param-break) (unquote-splice (@ expr 1)))
                             ;
-                                unquote param-return
+                                unquote param-break
                                 unquote
                                     syntax-do (slice expr 2)
                     ;
                         unquote param-repeat
                         unquote-splice (@ expr 1)
 
-syntax-extend stage-test1b (return env)
-    print
-        and false "hi"
-    let i = (i32 0)
-    dump-syntax
-        loop (i)
-            ? (< i 10)
-                do
-                    print i
-                    repeat (i32 (+ i 1))
-                true
+define syntax-infix-rules
+    fn syntax-infix-rules (prec order name)
+        let spec = (scope)
+        set-scope-symbol! spec (quote prec) prec
+        set-scope-symbol! spec (quote order) order
+        set-scope-symbol! spec (quote name) name
+        spec
 
-    return env
-
-syntax-extend stage-2 (return env)
-    let if-rec = none
-    set! if-rec
-        fn/cc if (return expr)
-            let cond =
-                @ (@ expr 0) 1
-            let then-exprlist =
-                slice (@ expr 0) 2
-            let make-branch =
-                fn/cc make-branch (return else-exprlist)
-                    let ret-then = (datum->syntax (parameter (quote ret-then)))
-                    let ret-else = (datum->syntax (parameter (quote ret-else)))
-                    return
-                        syntax-list
-                            branch
-                            cond
-                            syntax-cons fn/cc
-                                syntax-cons (syntax-list ret-then)
-                                    syntax-list ret-then
-                                        syntax-cons do
-                                            then-exprlist
-                            syntax-cons fn/cc
-                                syntax-cons (syntax-list ret-else)
-                                    syntax-list ret-else
-                                        syntax-cons do
-                                            else-exprlist
-            let rest-expr =
-                slice expr 1
-            let next-expr =
-                ? (empty? rest-expr)
-                    none
-                    @ rest-expr 0
-            return
-                ? (list-head? next-expr (quote elseif))
-                    do
-                        let nextif =
-                            if-rec
-                                slice expr 1
-                        cons
-                            make-branch
-                                list (@ nextif 0)
-                            slice nextif 1
-                    ? (list-head? next-expr (quote else))
-                        cons
-                            make-branch
-                                slice (@ expr 1) 1
-                            slice expr 2
-                        cons
-                            make-branch (list)
-                            slice expr 1
-    set-scope-symbol! env (quote if) (block-macro if-rec)
-    set-scope-symbol! env (quote syntax-infix-rules)
-        fn/cc syntax-infix-rules (return prec order name)
-            let spec = (scope)
-            set-scope-symbol! spec (quote prec) prec
-            set-scope-symbol! spec (quote order) order
-            set-scope-symbol! spec (quote name) name
-            return spec
-    set-scope-symbol! env (quote set-syntax-infix-op!)
-        fn/cc set-syntax-infix-op! (return env name expr)
-            set-scope-symbol! env
-                symbol
-                    .. "#ifx:" name
-                expr
-            return;
-    return env
+define define-infix-op
+    macro
+        fn expand-define-infix-op (expr)
+            let name = (@ expr 1)
+            let prec = (@ expr 2)
+            let order = (@ expr 3)
+            let dest-name = (@ expr 4)
+            let infix-symbol =
+                datum->syntax
+                    symbol
+                        .. "#ifx:" (string name)
+                    syntax->anchor expr
+            qquote
+                syntax-extend define-infix-op (return local-scope)
+                    set-scope-symbol! local-scope
+                        unquote infix-symbol
+                        syntax-infix-rules
+                            unquote prec
+                            unquote order
+                            unquote dest-name
+                    return local-scope
 
 syntax-extend stage-3 (return env)
 
@@ -615,19 +875,19 @@ syntax-extend stage-3 (return env)
     fn iter (s)
         let ls =
             countof s
-        tupleof
+        return
             fn (i)
                 if (< i ls)
-                    tupleof (@ s i) (+ i (u64 1))
+                    return (@ s i) (+ i (u64 1))
                 else none
             u64 0
 
     fn iter-r (s)
-        tupleof
+        return
             fn (i)
                 if (> i (u64 0))
                     let k = (- i (u64 1))
-                    tupleof (@ s k) k
+                    return (@ s k) k
                 else none
             countof s
 
@@ -674,21 +934,21 @@ syntax-extend stage-3 (return env)
     fn parse-infix-expr (infix-table lhs state mprec)
         loop (lhs state)
             if (empty? state)
-                tupleof lhs state
+                break lhs state
             else
                 let la = (@ state 0)
                 let op =
                     infix-op infix-table la mprec >=
                 if (none? op)
-                    tupleof lhs state
+                    break lhs state
                 else
                     let next-state = (slice state 1)
                     let rhs = (@ next-state 0)
                     let state = (slice next-state 1)
-                    let rhs-state =
+                    let next-rhs next-state =
                         loop (rhs state)
                             if (empty? state)
-                                tupleof rhs state
+                                break rhs state
                             else
                                 let ra =
                                     @ state 0
@@ -699,21 +959,18 @@ syntax-extend stage-3 (return env)
                                         rtl-infix-op infix-table ra (. op prec) ==
                                         lop
                                 if (none? nextop)
-                                    tupleof rhs state
+                                    break rhs state
                                 else
-                                    let rhs-state =
+                                    repeat
                                         parse-infix-expr
                                             infix-table
                                             rhs
                                             state
                                             . nextop prec
-                                    repeat
-                                        @ rhs-state 0
-                                        @ rhs-state 1
                     repeat
                         list (. op name) lhs
-                            @ rhs-state 0
-                        @ rhs-state 1
+                            next-rhs
+                        next-state
 
     let bangra =
         tableof
@@ -749,17 +1006,16 @@ syntax-extend stage-3 (return env)
                     let expr =
                         list-load module-path
                     if (not (none? expr))
-                        let fn =
-                            eval expr
-                                tableof
-                                    tupleof scope-parent-symbol
-                                        globals;
-                                    : module-path
-                                module-path
+                        let eval-scope =
+                            scope (globals)
+                        set-scope-symbol! eval-scope
+                            quote module-path
+                            module-path
+                        let fun =
+                            eval expr eval-scope module-path
                         let content =
-                            fn;
-                        set-scope-symbol! (. bangra modules)
-                            tupleof name content
+                            fun;
+                        set-scope-symbol! (. bangra modules) name content
                         content
                     else
                         repeat
@@ -789,24 +1045,6 @@ syntax-extend stage-3 (return env)
                                     @ tail 1
                                 rest
 
-    fn xpcall (func xfunc)
-        let old_handler =
-            get-exception-handler;
-        fn cleanup ()
-            set-exception-handler! old_handler
-        call
-            fn/cc try (finally)
-                fn except (exc aframe args)
-                    cleanup;
-                    finally
-                        xfunc exc
-                set-exception-handler! except
-                let result =
-                    func;
-                cleanup;
-                result
-
-    set-scope-symbol! env (quote xpcall) xpcall
     set-scope-symbol! env (quote bangra) bangra
     set-scope-symbol! env (quote require) find-module
     set-scope-symbol! env (quote iterator)
@@ -846,22 +1084,6 @@ syntax-extend stage-3 (return env)
                 ? (< b a) b a
     set-scope-symbol! env (quote @)
         make-expand-multi-op-ltr @
-    set-scope-symbol! env (quote try)
-        block-macro
-            fn (expr env)
-                if (not (list-head? (@ expr 1) (quote except)))
-                    error "except block missing"
-                cons
-                    list xpcall
-                        cons fn/cc
-                            cons (list)
-                                slice (@ expr 0) 1
-                        cons fn/cc
-                            cons
-                                cons (parameter (quote _))
-                                    @ (@ expr 1) 1
-                                slice (@ expr 1) 2
-                    slice expr 2
 
     set-scope-symbol! env (quote define)
         block-macro
@@ -918,10 +1140,8 @@ syntax-extend stage-3 (return env)
             # infix operator support
             elseif (has-infix-ops env expr)
                 cons
-                    @
-                        parse-infix-expr env
-                            \ (@ expr 0) (slice expr 1) 0
-                        0
+                    parse-infix-expr env
+                        \ (@ expr 0) (slice expr 1) 0
                     slice topexpr 1
 
     set-scope-symbol! env scope-symbol-wildcard-symbol
@@ -989,145 +1209,6 @@ syntax-extend stage-3 (return env)
      set-syntax-infix-op! env "@=" (syntax-infix-rules 800 > @=)
      set-syntax-infix-op! env "=@" (syntax-infix-rules 800 > =@)
     return env
-
-syntax-extend stage-4 (_ env)
-    fn =? (x)
-        and
-            == (typeof x) symbol
-            == x (quote =)
-
-    .. env
-        tableof
-            : let
-                # support for multiple declarations in one let env
-                block-macro
-                    fn (expr env)
-                        let args = (slice (@ expr 0) 1)
-                        let argtype = (typeof (@ args 0))
-                        if (== argtype symbol)
-                            if (=? (@ args 1))
-                                # regular form
-                                cons
-                                    cons let args
-                                    slice expr 1
-                            else
-                                # unpacking multiple variables
-
-                                # iterate until we hit the = symbol, after which
-                                  the body follows
-                                fn find-body (expr)
-
-                                    if (empty? expr)
-                                        error "syntax: let <name> ... = <expression>"
-                                    elseif (=? (@ expr 0))
-                                        tupleof (list)
-                                            slice expr 1
-                                    else
-                                        let out =
-                                            find-body (slice expr 1)
-                                        tupleof
-                                            cons (@ expr 0) (@ out 0)
-                                            @ out 1
-                                let cells =
-                                    find-body args
-                                list
-                                    list
-                                        cons fn/cc
-                                            cons
-                                                cons (parameter (quote _)) (@ cells 0)
-                                                slice expr 1
-                                        list splice
-                                            cons do
-                                                @ cells 1
-
-                        elseif (== argtype parameter)
-                            assert (=? (@ args 1))
-                                "syntax: let <parameter> = <expression>"
-                            # regular form, hidden parameter
-                            list
-                                cons
-                                    cons fn/cc
-                                        cons
-                                            list
-                                                parameter (quote _)
-                                                @ args 0
-                                            slice expr 1
-                                    slice args 2
-                        else
-                            # multiple variables
-
-                            # prepare quotable values from declarations
-                            fn handle-pairs (pairs)
-                                if (empty? pairs)
-                                    slice expr 1
-                                else
-                                    let pair =
-                                        @ pairs 0
-                                    assert (=? (@ pair 1))
-                                        "syntax: let (<name> = <expression>) ..."
-                                    cons
-                                        cons let pair
-                                        handle-pairs
-                                            slice pairs 1
-
-                            handle-pairs args
-            : xlet
-                block-macro
-                    # a late-binding let with support for recursion and
-                      function-level cross dependencies. comparable to letrec.
-                    fn (expr env)
-                        let args = (slice (@ expr 0) 1)
-                        let name = (@ args 0)
-                        let argtype = (typeof name)
-                        if (or (== argtype symbol) (== argtype parameter))
-                            assert (=? (@ args 1))
-                                "syntax: xlet <parameter> = <expression>"
-                            # regular form with support for recursion
-                            cons
-                                list let name (quote =) none
-                                cons
-                                    list set! name
-                                        cons do
-                                            slice args 2
-                                    slice expr 1
-                        else
-                            assert (== argtype list)
-                                "syntax: xlet (<name> = <expression>) ..."
-                            # multiple variables with support for recursion
-                              and circular dependencies
-
-                            # prepare quotable values from declarations
-                            fn handle-pairs (pairs)
-                                if (empty? pairs)
-                                    tupleof
-                                        list;
-                                        slice expr 1
-                                else
-                                    let result =
-                                        handle-pairs
-                                            slice pairs 1
-                                    let pair =
-                                        @ pairs 0
-                                    assert (=? (@ pair 1))
-                                        "syntax: xlet (<name> = <expression>) ..."
-                                    let name = (@ pair 0)
-                                    tupleof
-                                        cons name (@ result 0)
-                                        cons
-                                            list set! name
-                                                cons do
-                                                    slice pair 2
-                                            (@ result 1)
-
-                            let entries =
-                                handle-pairs args
-
-                            list
-                                list
-                                    cons fn/cc
-                                        cons
-                                            cons (parameter (quote _)) (@ entries 0)
-                                            @ entries 1
 
 syntax-extend stage-5 (_ env)
 
@@ -1241,7 +1322,7 @@ syntax-extend stage-5 (_ env)
 
     fn parse-loop-args (fullexpr)
         let expr =
-            ? (list-head? fullexpr (quote with))
+            ? (syntax-head? fullexpr (quote with))
                 slice fullexpr 1
                 fullexpr
         loop (expr)
@@ -1298,7 +1379,7 @@ syntax-extend stage-5 (_ env)
                         fn iter-expr (expr)
                             assert (not (empty? expr))
                                 "syntax: (for let-name ... in iter-expr body-expr ...)"
-                            if (list-head? expr (quote in))
+                            if (syntax-head? expr (quote in))
                                 tupleof
                                     list;
                                     slice expr 1
@@ -1322,7 +1403,7 @@ syntax-extend stage-5 (_ env)
                             if
                                 and
                                     not (empty? remainder)
-                                    list-head? (@ remainder 0) (quote else)
+                                    syntax-head? (@ remainder 0) (quote else)
                                 tupleof (slice remainder 1) (slice (@ remainder 0) 1)
                             else
                                 tupleof remainder (list none)
@@ -1366,7 +1447,7 @@ syntax-extend stage-5 (_ env)
                                 block-rest
 
                         let body = (slice rest 1)
-                        if (list-head? (@ body 0) (quote with))
+                        if (syntax-head? (@ body 0) (quote with))
                             let args names =
                                 parse-loop-args (@ body 0)
                             # read extra state params
@@ -1386,7 +1467,7 @@ syntax-extend stage-5 (_ env)
                         fn parse-funcdef (topexpr k head)
                             let expr =
                                 @ topexpr 0
-                            assert (list-head? expr head)
+                            assert (syntax-head? expr head)
                                 "function definition expected after 'with'"
                             let decl =
                                 @ (@ topexpr 0) 1
@@ -1413,7 +1494,7 @@ syntax-extend stage-5 (_ env)
                                     if (empty? rest)
                                         tupleof (list func-expr)
                                             list decl
-                                    elseif (list-head? rest (quote with))
+                                    elseif (syntax-head? rest (quote with))
                                         let defs defs-rest =
                                             parse-funcdef
                                                 slice rest 1

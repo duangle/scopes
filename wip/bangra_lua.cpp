@@ -105,7 +105,27 @@ bool bangra_r64_ne(double a, double b);
 bool bangra_r64_lt(double a, double b);
 bool bangra_r64_gt(double a, double b);
 
-
+#define DEF_BINOP_FUNC(tag, ctype, name, op) \
+    void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b);
+#define IMPL_BINOP_FUNC(tag, ctype, name, op) \
+    void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b) { *out = a op b; }
+#define WALK_ARITHMETIC_OPS(tag, ctype, T) \
+    T(tag, ctype, add, +) \
+    T(tag, ctype, sub, -) \
+    T(tag, ctype, mul, *) \
+    T(tag, ctype, div, /)
+#define WALK_PRIMITIVE_TYPES(T, T2) \
+    T(i8, int8_t, T2) \
+    T(i16, int16_t, T2) \
+    T(i32, int32_t, T2) \
+    T(i64, int64_t, T2) \
+    T(u8, uint8_t, T2) \
+    T(u16, uint16_t, T2) \
+    T(u32, uint32_t, T2) \
+    T(u64, uint64_t, T2) \
+    T(r32, float, T2) \
+    T(r64, double, T2)
+WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, DEF_BINOP_FUNC)
 
 #if defined __cplusplus
 }
@@ -325,6 +345,8 @@ bool bangra_r64_eq(double a, double b) { return a == b; }
 bool bangra_r64_ne(double a, double b) { return a != b; }
 bool bangra_r64_lt(double a, double b) { return a <  b; }
 bool bangra_r64_gt(double a, double b) { return a >  b; }
+
+WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, IMPL_BINOP_FUNC)
 
 //------------------------------------------------------------------------------
 // MAIN

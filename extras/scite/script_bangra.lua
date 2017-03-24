@@ -24,18 +24,18 @@ local function bangra_symbols()
     return {
     -- keywords and macros
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
-        "let true false fn quote with ::* ::@ call escape do dump-syntax"
-            .. " syntax-extend if else elseif loop repeat none assert qquote"
-            .. " unquote unquote-splice globals return splice continuation"
-            .. " try except define in for empty-list empty-tuple raise"
-            .. " yield xlet cc/call fn/cc null"
+    "let true false fn quote with ::* ::@ call escape do dump-syntax"
+        .. " syntax-extend if else elseif loop repeat none assert qquote"
+        .. " unquote unquote-splice globals return splice continuation"
+        .. " try except define in for empty-list empty-tuple raise"
+        .. " yield xlet cc/call fn/cc null break"
         ),
 
     -- builtin and global functions
     FUNCTIONS = splitstr(getprop("functions.bangra_lang") or
     "external branch print repr tupleof import-c eval structof typeof"
         .. " macro block-macro block-scope-macro cons expand empty?"
-        .. " dump list-head? countof tableof slice none? list-atom?"
+        .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate bitcast element-type"
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
