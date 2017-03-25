@@ -29,14 +29,15 @@ Comments
 ^^^^^^^^
 
 Line comments are skipped by the lexer. A comment token is recognized by its
-``#`` prefix and scanned until the next newline character. Here are some
-examples for valid comments::
+``#`` prefix and scanned until the first non-whitespace character with a lower
+indentation. Some examples for valid comments::
 
-    #mostly harmless
-    # 123
-    #"test"
-    #(an unresolved tension
-    ## #(another comment)# ##
+    #comment that is effectively on a single line
+    # this comment continues
+     in the next line because it has a higher indentation,
+     and so also doubles as block comment
+            # comments don't need to respect indentation rules
+    but this line is not a comment
 
 Strings
 ^^^^^^^
@@ -65,8 +66,8 @@ whitespace as delimiter and is often understood on a language level as a label
 or bindable name. Symbols may contain any character from the UTF-8 character set
 except whitespace and any character from the set ``#;()[]{},``. A symbol always
 terminates when one of these characters is encountered. Any symbol that parses
-as a number is also excluded. Like strings, symbols are stored as
-zero-terminated string arrays and share almost all string API functions.
+as a number is also excluded. Two symbols sharing the same sequence of
+characters always map to the same value.
 
 Here are some examples for valid symbols::
 
@@ -85,9 +86,10 @@ Numbers
 ^^^^^^^
 
 Numbers come in two forms: integers and reals. The parser understands integers
-in the range -(2^63) to 2^64-1 and records them as signed 64-bit values. Reals
-are floating point numbers parsed and stored as IEEE 754 binary64 values, which
-guarantees integer precision up to 52-bit.
+in the range -(2^63) to 2^64-1 and records them as signed 32-bit values unless
+the value is too big, in which case it will be extended to 64-bit signed, then
+64-bit unsigned. Reals are floating point numbers parsed and stored as
+IEEE 754 binary32 values.
 
 Here are some examples for valid numbers::
 
@@ -124,19 +126,19 @@ Here are some examples for valid lists::
 Naked & Coated Lists
 --------------------
 
-Every Bangra source file is parsed as a top level list, where the head element
-is the language name.
+Every Bangra source file is parsed as a tree of expresion lists.
 
-The classic notation (what we will call *coated notation*) uses the syntax known
-to `Lisp <http://en.wikipedia.org/wiki/Lisp_(programming_language)>`_ and
+The classic notation (what we will call *coated notation*) uses a syntax close
+to what `Lisp <http://en.wikipedia.org/wiki/Lisp_(programming_language)>`_ and
 `Scheme <http://en.wikipedia.org/wiki/Scheme_(programming_language)>`_ users
-as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>`_::
+know as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>`_::
 
     # there must not be any tokens outside the parentheses guarding the
-    # top level list.
+      top level list.
 
     # nested lists as nested expressions:
-    (print (.. "Hello" "World") 303)
+      note the mandatory preceeding escape token to prevent autowrapping
+    \ (print (.. "Hello" "World") 303 606 909)
 
 As a modern alternative, Bangra offers a *naked notation* where the scope of
 lists is implicitly balanced by indentation, an approach used by
@@ -149,17 +151,18 @@ other languages.
 This source parses as the same list in the coated example::
 
     # nesting is implied by indentation.
-    # a sub paragraph continues the list.
+       a sub paragraph continues the list.
     print
         # nested arguments must be indendent by four spaces.
-        # tabs are not permitted.
+          tabs are not permitted.
 
-        # multiple elements on a single line without sub-paragraph are wrapped
-        # in a list.
+        # elements on a single line with or without sub-paragraph are wrapped
+          in a list.
         .. "Hello" "World"
 
-        # single arguments are appended to the parent list
-        303
+        # values that should not be wrapped have to be prefixed with an
+          escape token which causes a continuation of the parent list
+        \ 303 606 909
 
 Mixing Modes
 ^^^^^^^^^^^^
@@ -168,12 +171,12 @@ Naked lists can contain coated lists, and coated lists can
 contain naked lists::
 
     # compute the value of (1 + 2 + (3 * 4)) and print the result
-    (print
+    \ (print
         (+ 1 2
             (3 * 4)))
 
     # the same list in naked notation.
-    # indented lists are spliced into the parent list:
+      indented lists are appended to the parent list:
     print
         + 1 2
             3 * 4
@@ -183,7 +186,7 @@ contain naked lists::
         + 1 2 (3 * 4)
 
     # and a coated list can contain naked parts.
-    # the escape character \ enters naked mode at its indentation level.
+      the escape character \ enters naked mode at its indentation level.
     print
         (+ 1 2
             \ 3 * 4) # parsed as (+ 1 2 (3 * 4))
@@ -191,73 +194,45 @@ contain naked lists::
 Because it is more convenient for users without specialized editors to write
 in naked notation, and balancing parentheses can be challenging for beginners,
 the author suggests to use coated notation sparingly and in good taste.
-Purists and Scheme enthusiasts may however prefer to keep only the top level
-naked, as in most Lisp-like languages, and work exclusively with coated lists
-otherwise.
+Purists and Scheme enthusiasts may however prefer to work with coated lists
+exclusively.
 
 Therefore Bangra's reference documentation describes all available symbols in
 coated notation, while code examples make ample use of naked notation.
-
-Block Comments
---------------
-
-In addition to ``# single line comments``, Bangra recognizes and strips a special
-kind of multi-line comment.
-
-A list beginning with a symbol that starts with a ``///`` (triple slash)
-describes a block comment. Block comments have to remain syntactically
-consistent. Here are some examples for valid block comments::
-
-    # block comments in coated notation
-    (///this comment
-        will be removed)
-    (///
-        # commenting out whole sections
-        (function ()
-            true)
-        (function ()
-            false))
-
-    # block comments in naked notation
-    ///this comment
-        will be removed
-
-    ///
-        # commenting out whole sections
-        function ()
-            true
-        function ()
-            false
 
 List Separators
 ---------------
 
 Both naked and coated lists support a special control character, the list
 separator `;` (semicolon). Known as statement separator in other languages,
-it wraps all elements from the previous `;` or beginning of list in a new list,
-and allows to reduce the amount of required parentheses in complex trees.
+it groups atoms into separate lists, and permits to reduce the amount of
+required parentheses or lines in complex trees.
+
+In addition, it is possible to list-wrap the first element of a list in naked
+mode by starting the head of the block with `;`.
 
 Here are some examples::
 
     # in coated notation
-    (print a; print (a;b;); print c;)
+    \ (print a; print (a;b;); print c;)
     # parses as
-    ((print a) (print ((a) (b))) (print c))
+    \ ((print a) (print ((a) (b))) (print c))
 
     # in naked notation
-    print a;
-        print b; print c;
-            print d;
+    ;
+        print a; print b
+        ;
+            print c; print d
     # parses as
-    ((print a) (print b) ((print c) (print d)))
+    \ ((print a) (print b) ((print c) (print d)))
 
-There's a caveat though: if trailing elements aren't terminated with `;`,
-they're not going to be wrapped::
+There's a caveat with semicolons in coated mode tho though: if trailing elements
+aren't terminated with `;`, they're not going to be wrapped::
 
     # in coated notation
-    print a; print (a;b;); print c
+    \ (print a; print (a;b;); print c)
     # parses as
-    ((print a) (print ((a) (b))) print c)
+    \ ((print a) (print ((a) (b))) print c)
 
 Pitfalls of Naked Notation
 --------------------------
@@ -281,46 +256,18 @@ wrapped in a single list::
 
     print 42
 
-A single element on its own line is always taken as-is::
+A single element on its own line is also wrapped::
 
     print           # (print
-        42          #       42)
+        (42)        #       (42))
 
-What happens when we want to call functions without arguments? Consider this example::
+The statement above will translate into an error at runtime because numbers
+can not be called. One can make use of the ``\`` (splice-line) control
+character, which is only available in naked notation and splices the line
+starting at the next token into the active list::
 
-    # a coated list in a new scope, describing an expression
-    # printing a new line, followed by the number 42
-    (do
-        (print)
-        (print 42))
-
-A naive naked transcription would probably look like this, and be very wrong::
-
-    do
-        # suprisingly, the new line is never printed, why?
-        print
-        print 42
-
-Translating the naked list back to coated reveals what is going on::
-
-    (do
-        # interpreted as a symbol, not as an expression
-        print
-        (print 42))
-
-The straightforward fix to this problem would be to explicitly wrap the single
-element in parentheses::
-
-    do
-        (print)
-        print 42
-
-Nudists might however want to use the list separator `;` (semicolon) which
-forces the line to be wrapped in a list and therefore has the same effect::
-
-    do
-        print;
-        print 42
+    print           # (print
+        \ 42        #       42)
 
 Wrap-Around Lines
 ^^^^^^^^^^^^^^^^^
@@ -332,7 +279,7 @@ column limit (typically 80 or 100).
 In coated lists, the problem is easily corrected::
 
     # import many symbols from an external module into the active namespace
-    (import-from "OpenGL"
+    \ (import-from "OpenGL"
         glBindBuffer GL_UNIFORM_BUFFER glClear GL_COLOR_BUFFER_BIT
         GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram
         glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP)
@@ -347,7 +294,7 @@ The naked approach interprets each new line as a nested list::
 
     # coated equivalent of the term above; each line is interpreted
     # as a function call and fails.
-    (import-from "OpenGL"
+    \ (import-from "OpenGL"
         (glBindBuffer GL_UNIFORM_BUFFER glClear GL_COLOR_BUFFER_BIT)
         (GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram)
         (glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP))
@@ -371,9 +318,8 @@ which is not the worst solution::
         glDisable
         GL_TRIANGLE_STRIP
 
-A terse approach would be to make use of the ``\`` (splice-line) control
-character, which is only available in naked notation and splices the line
-starting at the next token into the active list::
+A terse approach would be to make use of the splice-line control character
+once more::
 
     # correct solution using splice-line, postfix style
     import-from "OpenGL" \
@@ -381,9 +327,9 @@ starting at the next token into the active list::
         GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram \
         glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP
 
-Unlike in other languages, ``\`` splices at the token level rather than the
-character level, and can therefore also be placed at the beginning of nested
-lines, where the parent is still the active list::
+Unlike in other languages, and as previously demonstrated, ``\`` splices at the
+token level rather than the character level, and can therefore also be placed
+at the beginning of nested lines, where the parent is still the active list::
 
     # correct solution using splice-line, prefix style
     import-from "OpenGL"
@@ -398,7 +344,7 @@ While naked notation is ideal for writing nested lists that accumulate
 at the tail::
 
     # coated
-    (a b c
+    \ (a b c
         (d e f
             (g h i))
         (j k l))
@@ -412,22 +358,12 @@ at the tail::
 ...there are complications when additional elements need to be spliced back into
 the parent list::
 
-    (a b c
+    \ (a b c
         (d e f
             (g h i))
         j k l)
 
-A simple but valid approach would be to make use of the single-element rule again
-and put each tail element on a separate line::
-
-    a b c
-        d e f
-            g h i
-        j
-        k
-        l
-
-But we can also reuse the splice-line control character to this end::
+Once again, we can reuse the splice-line control character to get what we want::
 
     a b c
         d e f
@@ -440,25 +376,28 @@ Left-Hand Nesting
 When using infix notation, conditional blocks or functions producing functions,
 lists occur that nest at the head level rather than the tail::
 
-    ((((a b)
+    \ ((((a b)
         c d)
             e f)
                 g h)
 
-While this list tree is easy to describe in coated notation, it can not be
-described in pure naked notation. Though these situations seldom occur, a mix
-of multiple techniques may act as a compromise::
+The equivalent naked mode version makes extensive use of list separator and
+splice-line characters to describe the same tree::
 
     # equivalent structure
-    (a b; c d) e f;
+    ;
+        ;
+            ;
+                a b
+                \ c d
+            \ e f
         \ g h
 
 A more complex tree which also requires splicing elements back into the parent
-list can be realized with the same combo of line comment and splice-line
-control character::
+list can be realized with the same combo of list separator and splice-line::
 
     # coated
-    (a
+    \ (a
         ((b
             (c d)) e)
         f g
@@ -466,13 +405,15 @@ control character::
 
     # naked
     a
-        b (c d);
-            e
+        ;
+            b
+                c d
+            \ e
         \ f g
         h i
 
 While this example demonstrates the versatile usefulness of splice-line and
-list separator, less seasoned users may prefer to express similar trees in
-partial coated notation instead.
+list separator, expressing similar trees in partially coated notation might
+often be easier on the eyes.
 
 As so often, the best format is the one that fits the context.
