@@ -1969,6 +1969,9 @@ local function ListBuilder(lexer)
         prev = List(value, prev)
         assert(prev)
     end
+    function cls.is_empty()
+        return prev == EOL
+    end
     function cls.reset_start()
         eol = prev
     end
@@ -1985,16 +1988,6 @@ local function ListBuilder(lexer)
         prev = List(syntax(Any(reverse_list_inplace(prev, eol)),anchor), eol)
         assert(prev)
         cls.reset_start()
-    end
-    function cls.is_single_result()
-        return (prev ~= EOL) and (prev.next == EOL)
-    end
-    function cls.get_single_result()
-        if (prev ~= EOL) then
-            return prev.at
-        else
-            return none
-        end
     end
     function cls.get_result()
         return reverse_list_inplace(prev)
@@ -2090,12 +2083,12 @@ local function parse(lexer)
                 end
                 if (column ~= subcolumn) then
                     if ((column + 4) ~= subcolumn) then
+                        print(column, subcolumn)
                         location_error("indentations must nest by 4 spaces.")
                     end
                 end
 
                 escape = false
-                builder.reset_start()
                 lineno = lexer.lineno
                 -- keep adding elements while we're in the same line
                 while ((lexer.token ~= Token.eof)
@@ -2104,15 +2097,9 @@ local function parse(lexer)
                     builder.append(parse_naked(subcolumn, end_token))
                 end
             elseif (lexer.token == Token.statement) then
-                if builder.is_expression_empty() then
-                    lexer:read_token()
-                else
-                    builder.split(lexer:anchor())
-                    lexer:read_token()
-                    -- if we are in the same line, continue in parent
-                    if (lexer.lineno == lineno) then
-                        break
-                    end
+                lexer:read_token()
+                if not builder.is_empty() then
+                    break
                 end
             else
                 builder.append(parse_any())
@@ -2126,23 +2113,49 @@ local function parse(lexer)
             end
         end
 
-        if (builder.is_single_result()) then
-            return builder.get_single_result()
-        else
-            return syntax(Any(builder.get_result()), anchor)
-        end
+        return syntax(Any(builder.get_result()), anchor)
     end
 
     local function parse_root()
         lexer:read_token()
+        local lineno = 0
+        local escape = false
+
         local anchor = lexer:anchor()
         local builder = ListBuilder(lexer)
+
         while (lexer.token ~= Token.eof) do
-            if (lexer.token == Token.none) then
+            if lexer.token == Token.none then
                 break
+            elseif (lexer.token == Token.escape) then
+                escape = true
+                lexer:read_token()
+                if (lexer.lineno <= lineno) then
+                    location_error("escape character is not at end of line")
+                end
+                lineno = lexer.lineno
+            elseif (lexer.lineno > lineno) then
+                if (lexer:column() ~= 1) then
+                    location_error("indentation mismatch")
+                end
+
+                escape = false
+                lineno = lexer.lineno
+                -- keep adding elements while we're in the same line
+                while ((lexer.token ~= Token.eof)
+                        and (lexer.token ~= Token.none)
+                        and (lexer.lineno == lineno)) do
+                    builder.append(parse_naked(1, Token.none))
+                end
+            elseif (lexer.token == Token.statement) then
+                location_error("unexpected statement token")
+            else
+                builder.append(parse_any())
+                lineno = lexer.next_lineno
+                lexer:read_token()
             end
-            builder.append(parse_naked(1, Token.none))
         end
+
         return syntax(Any(builder.get_result()), anchor)
     end
 
@@ -4874,12 +4887,13 @@ end -- do
 --------------------------------------------------------------------------------
 
 local macro_test2 = [[
+
 print "result:"
     call
         fn/cc (return tuple)
             call
                 fn/cc (_ f1 f2)
-                    f1; f2;
+                    f1; f2
                     return true
                 tuple 1 2 3
                 tuple 4 5 6
@@ -4888,10 +4902,11 @@ print "result:"
             return
                 fn/cc (_)
                     print "captured:" vars...
-                    _;
+                    _
 
 
-true
+
+\ true
 ]]
 
 local macro_test = [[
@@ -4915,7 +4930,9 @@ print "this"
 print "is"
 print "dog"
 
-((fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!")
+print "hi"
+
+(fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!"
 
 ;
     fn/cc testf (_ x y z w)
@@ -4942,7 +4959,7 @@ print "varargs:"
     call
         fn/cc (_)
             _ 1 2 3
-    "test"
+    \ "test"
     call
         fn/cc (_)
             _ 1 2 3 4
@@ -4994,7 +5011,7 @@ function test (a b)
 ]]
 
 local function test_lexer()
-    local src = SourceFile.open("<test>", macro_test2)
+    local src = SourceFile.open("<test>", macro_test)
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local result,expr = parse(lexer)

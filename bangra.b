@@ -46,7 +46,7 @@ syntax-extend def-quote-set (return env)
                                             fn/cc (_)
                                                 _ args
                                 slice expr 1
-                            env
+                            \ env
                     slice (@ expr 0) 1
     set-scope-symbol! env
         symbol "set!"
@@ -74,7 +74,7 @@ syntax-extend def-quote-set (return env)
                                                         escape param
                                                 slice (@ expr 0) 2
                                         slice expr 1
-                                    env
+                                    \ env
                             get-scope-symbol env name name
                     @ (@ expr 0) 1
     return env
@@ -111,8 +111,8 @@ syntax-extend def-? (return env)
             return
                 eval
                     list-load path
-                    globals;
-                    path
+                    globals
+                    \ path
     set-scope-symbol! env
         quote macro
         fn/cc macro (return f)
@@ -123,7 +123,7 @@ syntax-extend def-? (return env)
                             cons
                                 f (@ expr 0) env
                                 slice expr 1
-                            env
+                            \ env
     set-scope-symbol! env
         quote block-macro
         fn/cc block-macro (return f)
@@ -132,7 +132,7 @@ syntax-extend def-? (return env)
                     fn/cc (return expr env)
                         return
                             f expr env
-                            env
+                            \ env
     set-scope-symbol! env
         quote dump-syntax
         block-scope-macro
@@ -146,10 +146,10 @@ syntax-extend def-? (return env)
                                 escape
                                     @ e 0
                                 slice expr 1
-                            env
+                            \ env
                     expand
                         slice (@ expr 0) 1
-                        env
+                        \ env
     set-scope-symbol! env
         quote ?
         block-scope-macro
@@ -178,7 +178,7 @@ syntax-extend def-? (return env)
                             parameter (quote ret-true)
                         datum->syntax
                             parameter (quote ret-false)
-                    env
+                    \ env
     #set-scope-symbol! env
         quote :
         block-scope-macro
@@ -191,7 +191,7 @@ syntax-extend def-? (return env)
                                     ==
                                         typeof
                                             @ (@ expr 0) 1
-                                        symbol
+                                        \ symbol
                                     fn/cc ()
                                         list quote
                                             @ (@ expr 0) 1
@@ -205,7 +205,7 @@ syntax-extend def-? (return env)
                                     fn/cc ()
                                         slice (@ expr 0) 2
                         slice expr 1
-                    env
+                    \ env
     return env
 
 syntax-extend def-list-defs (return env)
@@ -214,20 +214,20 @@ syntax-extend def-list-defs (return env)
             return
                 ? (list? (syntax->datum expr))
                     ? (empty? expr)
-                        false
+                        \ false
                         call
                             fn/cc (_ head)
                                 ? (symbol? (syntax->datum head))
                                     _ (== head name)
                                     _ false
                             @ expr 0
-                    false
+                    \ false
     set-scope-symbol! env (quote list-atom?)
         fn/cc list-atom? (return x)
             return
                 ? (list? (syntax->datum x))
                     empty? x
-                    true
+                    \ true
     # unwrap single item from list or prepend 'do' clause to list
     set-scope-symbol! env (quote syntax-do)
         fn/cc syntax-do (return expr)
@@ -255,7 +255,7 @@ syntax-extend def-qquote (return env)
                                 syntax-list
                                     datum->syntax quote
                                         syntax->anchor x
-                                    x
+                                    \ x
                                 ? (syntax-head? x (quote unquote))
                                     syntax-do (slice x 1)
                                     ? (syntax-head? x (quote qquote))
@@ -347,7 +347,7 @@ define let
                         parameter (quote _)
                     @ (@ expr 0) 1
                     slice expr 1
-                env
+                \ env
 
 # a standard function declaration that supports recursion
   (fn [name] (param ...) body ...)
@@ -370,7 +370,7 @@ define fn
                     return
                         syntax-cons
                             syntax-cons
-                                retparam
+                                \ retparam
                                 @ expr param-idx
                             syntax-list
                                 syntax-list retparam
@@ -388,7 +388,7 @@ define fn
                         cons
                             syntax-list
                                 wrap set!
-                                decl
+                                \ decl
                                 syntax-cons
                                     wrap fn/cc
                                     syntax-cons
@@ -396,12 +396,12 @@ define fn
                                         make-params-body 2
                             ? (empty? rest)
                                 list decl
-                                rest
+                                \ rest
                     cons
                         syntax-cons
                             wrap fn/cc
                             make-params-body 1
-                        rest
+                        \ rest
 
 define xpcall
     fn xpcall (func xfunc)
@@ -412,13 +412,13 @@ define xpcall
         call
             fn/cc try (finally)
                 fn except (exc aframe args)
-                    cleanup;
+                    cleanup
                     finally
                         xfunc exc
                 set-exception-handler! except
                 let result =
-                    func;
-                cleanup;
+                    func
+                cleanup
                 finally result
 
 define raise
@@ -430,7 +430,7 @@ define try
         fn expand-try (expr env)
             ? (not (syntax-head? (@ expr 1) (quote except)))
                 error "except block missing"
-                true
+                \ true
             cons
                 qquote
                     xpcall
@@ -458,7 +458,8 @@ define _
             qquote
                 call
                     fn/cc ((unquote ret))
-                        unquote ret;
+                        ;
+                            unquote ret
                             unquote-splice
                                 slice expr 1
 
@@ -468,7 +469,7 @@ define assert
         fn assert (expr)
             qquote
                 ? (unquote (@ expr 1))
-                    true
+                    \ true
                     error
                         unquote
                             ? (empty? (slice expr 2))
@@ -591,7 +592,7 @@ define if
             slice topexpr 1
         let next-expr =
             ? (empty? rest-expr)
-                rest-expr
+                \ rest-expr
                 @ rest-expr 0
         ? (syntax-head? next-expr (quote elseif))
             do
@@ -609,7 +610,7 @@ define if
                 cons
                     make-branch
                         syntax-eol expr
-                    rest-expr
+                    \ rest-expr
     block-macro if-rec
 
 syntax-extend def-let-xlet (return env)
@@ -631,7 +632,7 @@ syntax-extend def-let-xlet (return env)
                 fn (args rest)
                     return
                         cons (@ expr 0) args
-                        rest
+                        \ rest
                 find=
                     slice expr 1
 
@@ -648,7 +649,7 @@ syntax-extend def-let-xlet (return env)
                     # prepare quotable values from declarations
                     fn handle-pairs (pairs)
                         if (empty? pairs)
-                            rest
+                            \ rest
                         else
                             let pair =
                                 @ pairs 0
@@ -712,7 +713,7 @@ syntax-extend def-let-xlet (return env)
                         if (empty? pairs)
                             return
                                 syntax-eol expr
-                                rest
+                                \ rest
                         else
                             call
                                 fn (args rest)
@@ -731,7 +732,7 @@ syntax-extend def-let-xlet (return env)
                                                     unquote name
                                                     unquote
                                                         @ pair 2
-                                            rest
+                                            \ rest
                                 handle-pairs
                                     slice pairs 1
 
@@ -773,7 +774,7 @@ syntax-extend def-let-xlet (return env)
                                                         qquote
                                                             set! (unquote name)
                                                                 unquote value
-                                                        rest
+                                                        \ rest
                                                     syntax->anchor expr
     return env
 
@@ -799,10 +800,10 @@ syntax-extend stage-test1b (return env)
             print "doing some stuff!"
             #raise "bang"
             print "no longer doing stuff"
-            606
+            \ 606
         except (err)
             print "error raised:" err
-            303
+            \ 303
     print "et voila"
 
     return env
@@ -833,7 +834,7 @@ define syntax-infix-rules
         set-scope-symbol! spec (quote prec) prec
         set-scope-symbol! spec (quote order) order
         set-scope-symbol! spec (quote name) name
-        spec
+        \ spec
 
 define define-infix-op
     macro
@@ -897,7 +898,7 @@ syntax-extend stage-3 (return env)
                 .. "#ifx:" (string op)
         ? (symbol? op)
             get-scope-symbol env key
-            none
+            \ none
 
     fn has-infix-ops (infix-table expr)
         # any expression whose second argument matches an infix operator
@@ -914,7 +915,7 @@ syntax-extend stage-3 (return env)
                 .. (string token)
                     " is not an infix operator, but embedded in an infix expression"
         elseif (pred (. op prec) prec)
-            op
+            \ op
         else none
 
     fn rtl-infix-op (infix-table token prec pred)
@@ -928,7 +929,7 @@ syntax-extend stage-3 (return env)
             and
                 == (. op order) <
                 pred (. op prec) prec
-            op
+            \ op
         else none
 
     fn parse-infix-expr (infix-table lhs state mprec)
@@ -962,24 +963,19 @@ syntax-extend stage-3 (return env)
                                     break rhs state
                                 else
                                     repeat
-                                        parse-infix-expr
-                                            infix-table
-                                            rhs
-                                            state
+                                        parse-infix-expr infix-table rhs state
                                             . nextop prec
                     repeat
-                        list (. op name) lhs
-                            next-rhs
-                        next-state
+                        list (. op name) lhs next-rhs
+                        \ next-state
 
     let bangra =
         tableof
             : path
-                list
-                    "./?.b"
+                list "./?.b"
                     .. interpreter-dir "/?.b"
             : modules
-                tableof;
+                tableof
     fn make-module-path (pattern name)
         fold (iter pattern) ""
             fn (out val)
@@ -987,8 +983,7 @@ syntax-extend stage-3 (return env)
                     ? (== val "?") name val
 
     fn find-module (name)
-        assert (symbol? name)
-            "module name must be symbol"
+        assert (symbol? name) "module name must be symbol"
         let content =
             @ (. bangra modules) name
         if (none? content)
@@ -1002,7 +997,7 @@ syntax-extend stage-3 (return env)
                     let module-path =
                         make-module-path
                             @ pattern 0
-                            namestr
+                            \ namestr
                     let expr =
                         list-load module-path
                     if (not (none? expr))
@@ -1010,21 +1005,20 @@ syntax-extend stage-3 (return env)
                             scope (globals)
                         set-scope-symbol! eval-scope
                             quote module-path
-                            module-path
+                            \ module-path
                         let fun =
                             eval expr eval-scope module-path
                         let content =
-                            fun;
+                            fun
                         set-scope-symbol! (. bangra modules) name content
-                        content
+                        \ content
                     else
                         repeat
                             slice pattern 1
                 else
                     error
                         .. "module not found: " namestr
-        else
-            content
+        else content
 
     fn make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
@@ -1043,7 +1037,7 @@ syntax-extend stage-3 (return env)
                                 list op
                                     @ tail 0
                                     @ tail 1
-                                rest
+                                \ rest
 
     set-scope-symbol! env (quote bangra) bangra
     set-scope-symbol! env (quote require) find-module
@@ -1055,7 +1049,7 @@ syntax-extend stage-3 (return env)
                 error "type argument expected."
             bitcast
                 tag-type (typeof value)
-                value
+                \ value
 
     set-scope-symbol! env (quote disqualify)
         fn disqualify (tag-type value)
@@ -1068,7 +1062,7 @@ syntax-extend stage-3 (return env)
                         \ "; type not related to " (string tag-type) "."
             bitcast
                 element-type t
-                value
+                \ value
 
     set-scope-symbol! env (quote and)
         make-expand-multi-op-ltr and
@@ -1099,7 +1093,7 @@ syntax-extend stage-3 (return env)
                         list let (quote name) (quote =)
                             cons do exprlist
                         list set-scope-symbol! subscope (list quote name) (quote name)
-                        subscope
+                        \ subscope
                     slice expr 1
 
     set-scope-symbol! env scope-list-wildcard-symbol
@@ -1135,13 +1129,12 @@ syntax-extend stage-3 (return env)
                                 list (do @) self
                                     list quote name
                                 cons self rest
-                        self-arg
+                        \ self-arg
                     slice topexpr 1
             # infix operator support
             elseif (has-infix-ops env expr)
                 cons
-                    parse-infix-expr env
-                        \ (@ expr 0) (slice expr 1) 0
+                    parse-infix-expr env (@ expr 0) (slice expr 1) 0
                     slice topexpr 1
 
     set-scope-symbol! env scope-symbol-wildcard-symbol
@@ -1285,7 +1278,7 @@ syntax-extend stage-5 (_ env)
                 fn (x)
                     if (< x to)
                         tupleof x (+ x step)
-                from
+                \ from
 
     fn zip (a b)
         let iter-a init-a = (disqualify iterator (iter a))
@@ -1310,7 +1303,7 @@ syntax-extend stage-5 (_ env)
             tupleof
                 fn (x)
                     tupleof x (+ x step)
-                from
+                \ from
 
     fn enumerate (x from step)
         zip (infrange from step) (iter x)
@@ -1324,12 +1317,12 @@ syntax-extend stage-5 (_ env)
         let expr =
             ? (syntax-head? fullexpr (quote with))
                 slice fullexpr 1
-                fullexpr
+                \ fullexpr
         loop (expr)
             if (empty? expr)
                 tupleof
-                    list;
-                    list;
+                    list
+                    list
             else
                 let args names =
                     repeat (slice expr 1)
@@ -1371,17 +1364,16 @@ syntax-extend stage-5 (_ env)
                                             parameter (quote _)
                                             names
                                         slice expr 2
-                            cons param-repeat
-                                args
+                            cons param-repeat args
             : for
                 block-macro
                     fn (block-expr)
                         fn iter-expr (expr)
                             assert (not (empty? expr))
-                                "syntax: (for let-name ... in iter-expr body-expr ...)"
+                                \ "syntax: (for let-name ... in iter-expr body-expr ...)"
                             if (syntax-head? expr (quote in))
                                 tupleof
-                                    list;
+                                    list
                                     slice expr 1
                             else
                                 let names rest =
@@ -1391,7 +1383,7 @@ syntax-extend stage-5 (_ env)
                                     cons
                                         @ expr 0
                                         names
-                                    rest
+                                    \ rest
 
                         let expr = (@ block-expr 0)
                         let dest-names rest =
@@ -1444,7 +1436,7 @@ syntax-extend stage-5 (_ env)
                                         (unquote param-for)
                                             splice (disqualify iterator (iter (unquote src-expr)))
                                             unquote-splice extra-args
-                                block-rest
+                                \ block-rest
 
                         let body = (slice rest 1)
                         if (syntax-head? (@ body 0) (quote with))
@@ -1502,7 +1494,7 @@ syntax-extend stage-5 (_ env)
                                                 head
                                         tupleof
                                             cons func-expr defs
-                                            defs-rest
+                                            \ defs-rest
                                     else
                                         tupleof (list func-expr) rest
                                 if (k == 0)
@@ -1517,7 +1509,7 @@ syntax-extend stage-5 (_ env)
                                 cons
                                     cons fn/cc
                                         make-params-body 1
-                                    rest
+                                    \ rest
 
                         fn (topexpr)
                             parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
@@ -1538,7 +1530,7 @@ syntax-extend stage-6 (_ env)
                     external (splice v)
                     v
             repeat;
-        lib
+        \ lib
 
     .. env
         tableof
@@ -1591,7 +1583,7 @@ syntax-extend stage-7 (_ env)
                 qquote
                     syntax-extend (_ env)
                         (unquote capture-scope) env
-                        env
+                        \ env
         loop
             with
                 preload = ""
@@ -1605,7 +1597,7 @@ syntax-extend stage-7 (_ env)
                         ? (empty? cmdlist) promptstr
                             repeat-string (countof promptstr) "."
                         " "
-                    preload
+                    \ preload
 
             if ((typeof cmd) != void)
                 let terminated? =
@@ -1624,7 +1616,7 @@ syntax-extend stage-7 (_ env)
                             let f =
                                 eval
                                     .. (list (cons do expr)) expression-suffix
-                                    state.scope
+                                    \ state.scope
                             let result = (f)
                             if ((typeof result) != void)
                                 print (.. idstr "= " (repr result))
@@ -1634,15 +1626,14 @@ syntax-extend stage-7 (_ env)
                         except (e)
                             print "error:" e
                         ""
-                    else
-                        cmdlist
+                    else cmdlist
                 repeat preload cmdlist
     set-scope-symbol! env
         : read-eval-print-loop
-    env
+    return env
 
-syntax-extend stage-final (_ env)
+syntax-extend stage-final (return env)
     set-globals! env
-    env
+    return env
 
 none
