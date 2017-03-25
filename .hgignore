@@ -8,6 +8,7 @@ syntax: glob
 *.def
 *.pyc
 *.orig
+*.bin.h
 
 syntax: regexp
 
@@ -17,7 +18,3 @@ syntax: regexp
 ^bangra$
 ^bangra[.]h$
 ^doc/_build/
-^wip/bangra_luasrc
-^wip/bangra_lua\.h
-^wip/bangra_lua\.bin\.h
-

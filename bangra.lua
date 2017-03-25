@@ -547,8 +547,8 @@ typedef union {
     void *ptr;
 } cast_t;
 
-unsigned char wip_bangra_h[];
-unsigned int wip_bangra_h_len;
+unsigned char bangra_h[];
+unsigned int bangra_h_len;
 ]]
 
 local cast_t = typeof('cast_t')
@@ -569,7 +569,7 @@ local function zstr_from_buffer(ptr, size)
 end
 
 do
-    cdef(cstr(zstr_from_buffer(C.wip_bangra_h, C.wip_bangra_h_len)))
+    cdef(cstr(zstr_from_buffer(C.bangra_h, C.bangra_h_len)))
 end
 
 local off_t = typeof('__off_t')
