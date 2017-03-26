@@ -361,7 +361,10 @@ define fn
             let decl-anchor =
                 syntax->anchor decl
             let retparam =
-                quote return
+                datum->syntax
+                    syntax->datum
+                        quote return
+                    \ decl-anchor
             let wrap =
                 fn/cc (return val)
                     return (datum->syntax val decl-anchor)
@@ -795,16 +798,17 @@ syntax-extend stage-test1b (return env)
 
     #error "fuck"
 
-    print
-        try
-            print "doing some stuff!"
-            #raise "bang"
-            print "no longer doing stuff"
-            \ 606
-        except (err)
-            print "error raised:" err
-            \ 303
-    print "et voila"
+    #do
+        print
+            try
+                print "doing some stuff!"
+                #raise "bang"
+                print "no longer doing stuff"
+                \ 606
+            except (err)
+                print "error raised:" err
+                \ 303
+        print "et voila"
 
     return env
 
@@ -836,6 +840,7 @@ define syntax-infix-rules
         set-scope-symbol! spec (quote name) name
         \ spec
 
+#define-infix-op or 100 > or
 define define-infix-op
     macro
         fn expand-define-infix-op (expr)
@@ -851,27 +856,28 @@ define define-infix-op
             qquote
                 syntax-extend define-infix-op (return local-scope)
                     set-scope-symbol! local-scope
-                        unquote infix-symbol
+                        quote
+                            unquote infix-symbol
                         syntax-infix-rules
                             unquote prec
                             unquote order
-                            unquote dest-name
+                            quote
+                                unquote dest-name
                     return local-scope
 
 syntax-extend stage-3 (return env)
 
-    fn fold (it init f)
-        let next =
-            @ it 0
-        let st =
-            next (@ it 1)
+    fn fold (f init next it)
+        let val it =
+            next it
         let out = init
-        loop (out st)
-            if (none? st) out
+        loop (out val it)
+            if (none? it)
+                return out
             else
                 repeat
-                    f out (@ st 0)
-                    next (@ st 1)
+                    f out val
+                    next it
 
     fn iter (s)
         let ls =
@@ -893,11 +899,13 @@ syntax-extend stage-3 (return env)
             countof s
 
     fn get-ifx-op (env op)
+        let sym =
+            syntax->datum op
         let key =
-            symbol
-                .. "#ifx:" (string op)
-        ? (symbol? op)
-            get-scope-symbol env key
+        ? (symbol? sym)
+            get-scope-symbol env
+                symbol
+                    .. "#ifx:" (string sym)
             \ none
 
     fn has-infix-ops (infix-table expr)
@@ -970,17 +978,19 @@ syntax-extend stage-3 (return env)
                         \ next-state
 
     let bangra =
-        tableof
-            : path
-                list "./?.b"
-                    .. interpreter-dir "/?.b"
-            : modules
-                tableof
+        scope
+    set-scope-symbol! bangra (quote path)
+        list "./?.b"
+            .. interpreter-dir "/?.b"
+    set-scope-symbol! bangra (quote modules)
+        scope
     fn make-module-path (pattern name)
-        fold (iter pattern) ""
+        fold
             fn (out val)
                 .. out
                     ? (== val "?") name val
+            \ ""
+            iter pattern
 
     fn find-module (name)
         assert (symbol? name) "module name must be symbol"
@@ -1024,17 +1034,20 @@ syntax-extend stage-3 (return env)
         # (op a b c ...) -> (op (op (op a b) c) ...)
         macro
             fn (expr)
+                let wrapped-op =
+                    datum->syntax op
+                        syntax->anchor expr
                 let tail =
                     slice expr 1
                 loop (tail)
                     let rest =
                         slice tail 2
                     if (empty? rest)
-                        cons op tail
+                        syntax-cons wrapped-op tail
                     else
                         repeat
-                            cons
-                                list op
+                            syntax-cons
+                                syntax-list wrapped-op
                                     @ tail 0
                                     @ tail 1
                                 \ rest
@@ -1047,7 +1060,7 @@ syntax-extend stage-3 (return env)
         fn qualify (tag-type value)
             assert (== (typeof tag-type) type)
                 error "type argument expected."
-            bitcast
+            cast
                 tag-type (typeof value)
                 \ value
 
@@ -1060,8 +1073,8 @@ syntax-extend stage-3 (return env)
                 error
                     .. "can not unqualify value of type " (string t)
                         \ "; type not related to " (string tag-type) "."
-            bitcast
-                element-type t
+            cast
+                . t element-type
                 \ value
 
     set-scope-symbol! env (quote and)
@@ -1097,7 +1110,7 @@ syntax-extend stage-3 (return env)
                     slice expr 1
 
     set-scope-symbol! env scope-list-wildcard-symbol
-        fn (topexpr env)
+        fn expand-any-list (topexpr env)
             let expr =
                 @ topexpr 0
             let head =
@@ -1113,8 +1126,10 @@ syntax-extend stage-3 (return env)
                         == (slice headstr 0 1) "."
 
                 let name =
-                    symbol
-                        slice headstr 1
+                    datum->syntax
+                        symbol
+                            slice headstr 1
+                        syntax->anchor head
                 let self-arg =
                     @ expr 1
                 let rest =
@@ -1138,29 +1153,36 @@ syntax-extend stage-3 (return env)
                     slice topexpr 1
 
     set-scope-symbol! env scope-symbol-wildcard-symbol
-        fn (topexpr env)
+        fn expand-any-symbol (topexpr env)
             let sym =
                 @ topexpr 0
+            let sym-anchor =
+                syntax->anchor sym
             let it =
                 iter-r
                     string sym
             fn finalize-head (out)
                 cons
-                    symbol
-                        @ out 0
+                    datum->syntax
+                        symbol
+                            @ out 0
+                        \ sym-anchor
                     slice out 1
             # return tokenized list if string contains a dot and it's not the
               concat operator
             if
                 and
                     none? (get-scope-symbol env sym)
-                    fold it false
+                    fold
                         fn (out k)
                             if (== k ".") true
                             else out
+                        \ false
+                        iter-r
+                            string sym
                 cons
                     finalize-head
-                        fold it (list "")
+                        fold
                             fn (out k)
                                 if (== k ".")
                                     cons ""
@@ -1171,98 +1193,105 @@ syntax-extend stage-3 (return env)
                                     cons
                                         .. k (@ out 0)
                                         slice out 1
+                            list ""
+                            iter-r
+                                string sym
                     slice topexpr 1
-
-    set-syntax-infix-op! env ":" (syntax-infix-rules 70 > :)
-    set-syntax-infix-op! env "or" (syntax-infix-rules 100 > or)
-    set-syntax-infix-op! env "and" (syntax-infix-rules 200 > and)
-    set-syntax-infix-op! env "|" (syntax-infix-rules 240 > |)
-    set-syntax-infix-op! env "^" (syntax-infix-rules 250 > ^)
-    set-syntax-infix-op! env "&" (syntax-infix-rules 260 > &)
-    set-syntax-infix-op! env "<" (syntax-infix-rules 300 > <)
-    set-syntax-infix-op! env ">" (syntax-infix-rules 300 > >)
-    set-syntax-infix-op! env "<=" (syntax-infix-rules 300 > <=)
-    set-syntax-infix-op! env ">=" (syntax-infix-rules 300 > >=)
-    set-syntax-infix-op! env "!=" (syntax-infix-rules 300 > !=)
-    set-syntax-infix-op! env "==" (syntax-infix-rules 300 > ==)
-    #set-syntax-infix-op! env "is" (syntax-infix-rules 300 > is)
-    set-syntax-infix-op! env ".." (syntax-infix-rules 400 < ..)
-    set-syntax-infix-op! env "<<" (syntax-infix-rules 450 > <<)
-    set-syntax-infix-op! env ">>" (syntax-infix-rules 450 > >>)
-    set-syntax-infix-op! env "-" (syntax-infix-rules 500 > -)
-    set-syntax-infix-op! env "+" (syntax-infix-rules 500 > +)
-    set-syntax-infix-op! env "%" (syntax-infix-rules 600 > %)
-    set-syntax-infix-op! env "/" (syntax-infix-rules 600 > /)
-    set-syntax-infix-op! env "//" (syntax-infix-rules 600 > //)
-    set-syntax-infix-op! env "*" (syntax-infix-rules 600 > *)
-    set-syntax-infix-op! env "**" (syntax-infix-rules 700 < **)
-    set-syntax-infix-op! env "." (syntax-infix-rules 800 > .)
-    set-syntax-infix-op! env "@" (syntax-infix-rules 800 > @)
-    #set-syntax-infix-op! env ".=" (syntax-infix-rules 800 > .=)
-     set-syntax-infix-op! env "@=" (syntax-infix-rules 800 > @=)
-     set-syntax-infix-op! env "=@" (syntax-infix-rules 800 > =@)
     return env
 
-syntax-extend stage-5 (_ env)
+#define-infix-op : 70 > :
+define-infix-op or 100 > or
+define-infix-op and 200 > and
+#define-infix-op | 240 > |
+#define-infix-op ^ 250 > ^
+#define-infix-op & 260 > &
+define-infix-op < 300 > <
+define-infix-op > 300 > >
+define-infix-op <= 300 > <=
+define-infix-op >= 300 > >=
+define-infix-op != 300 > !=
+define-infix-op == 300 > ==
+#define-infix-op is 300 > is
+define-infix-op .. 400 < ..
+#define-infix-op << 450 > <<
+#define-infix-op >> 450 > >>
+define-infix-op - 500 > -
+define-infix-op + 500 > +
+#define-infix-op % 600 > %
+define-infix-op / 600 > /
+#define-infix-op // 600 > //
+define-infix-op * 600 > *
+#define-infix-op ** 700 < **
+define-infix-op . 800 > .
+define-infix-op @ 800 > @
+#define-infix-op .= 800 > .=
+#define-infix-op @= 800 > @=
+#define-infix-op =@ 800 > =@
+
+syntax-extend stage-5 (return env)
 
     fn iterator? (x)
         (typeof x) < iterator
 
+    fn new-iterator (next start)
+        qualify iterator (fn (f) (f next start))
+
     fn countable-rslice-iter (l)
         if ((countof l) != 0)
-            tupleof (@ l 0) (slice l 1)
+            return (@ l 0) (slice l 1)
 
-    fn countable-iter (x)
-        let c i = x
-        if (i < (countof c))
-            tupleof (@ c i) (tupleof c (i + 1))
+    fn countable-iter (f)
+        f
+            fn (c i)
+                if (i < (countof c))
+                    return (@ c i)
+                        fn (f)
+                            f c (i + 1)
 
-    fn table-iter (x)
-        let t = (@ x 0)
-        let key-value =
-            next-key t
-                @ x 1
-        if (not (none? key-value))
-            tupleof key-value
-                tupleof t (@ key-value 0)
+    fn scope-iter (f)
+        f
+            fn (t k)
+                let key value =
+                    next-scope-symbol t k
+                if (not (none? key))
+                    return key value
+                        fn (f)
+                            f t key
 
     fn gen-yield-iter (callee)
         let caller-return = none
-        fn yield-iter (ret)
-            # store caller continuation in state
-            set! caller-return return
-            if (none? ret) # first invocation
-                # invoke callee with yield function as first argument
-                callee
-                    fn/cc (ret value)
-                        # continue caller
-                        caller-return
-                            tupleof value ret
-                # callee has returned for good
-                  resume caller - we're done here.
-                cc/call none caller-return none
-            else # continue callee
-                cc/call none ret
+        let yield-iter =
+            fn/cc yield-iter (return ret)
+                # store caller continuation in state
+                set! caller-return return
+                branch (none? ret) # first invocation
+                    fn/cc (_)
+                        # invoke callee with yield function as first argument
+                        callee
+                            fn/cc (ret value)
+                                # continue caller
+                                caller-return value ret
+                        # callee has returned for good
+                          resume caller - we're done here.
+                        cc/call none caller-return
+                    fn/cc (_)
+                        # continue callee
+                        cc/call none ret
 
-        qualify iterator
-            tupleof yield-iter none
+        new-iterator yield-iter none
 
     fn iter (x)
         if (iterator? x) x
         else
             let t = (typeof x)
             if (<= t list)
-                qualify iterator
-                    tupleof countable-rslice-iter x
-            elseif (< t tuple)
-                qualify iterator
-                    tupleof countable-iter (tupleof x 0)
-            elseif (<= t table)
-                qualify iterator
-                    tupleof table-iter (tupleof x none)
+                new-iterator countable-rslice-iter x
+            elseif (<= t scope)
+                new-iterator scope-iter
+                    fn (f) (f x none)
             elseif (<= t string)
-                qualify iterator
-                    tupleof countable-iter (tupleof x 0)
+                new-iterator countable-iter
+                    fn (f) (f x 0)
             elseif (<= t closure)
                 gen-yield-iter x
             else
@@ -1273,44 +1302,42 @@ syntax-extend stage-5 (_ env)
         let step = (? (none? c) 1 c)
         let from = (? (none? b) 0 a)
         let to = (? (none? b) a b)
-        qualify iterator
-            tupleof
-                fn (x)
-                    if (< x to)
-                        tupleof x (+ x step)
-                \ from
+        new-iterator
+            fn (x)
+                if (< x to)
+                    return x (+ x step)
+            \ from
 
     fn zip (a b)
         let iter-a init-a = (disqualify iterator (iter a))
         let iter-b init-b = (disqualify iterator (iter b))
-        qualify iterator
-            tupleof
-                fn (x)
-                    let state-a = (iter-a (@ x 0))
-                    let state-b = (iter-b (@ x 1))
-                    if (not (or (none? state-a) (none? state-b)))
-                        let at-a next-a = state-a
-                        let at-b next-b = state-b
-                        tupleof
-                            tupleof at-a at-b
-                            tupleof next-a next-b
-                tupleof init-a init-b
+        new-iterator
+            fn (f)
+                f
+                    fn (a b)
+                        let at-a... next-a = (iter-a a)
+                        let at-b... next-b = (iter-b b)
+                        if (not (or (none? next-a) (none? next-b)))
+                            return at-a... at-b...
+                                fn (f)
+                                    f next-a next-b
+            fn (f)
+                f init-a init-b
 
     fn infrange (a b)
         let step = (? (none? b) 1 b)
         let from = (? (none? a) 0 a)
-        qualify iterator
-            tupleof
-                fn (x)
-                    tupleof x (+ x step)
-                \ from
+        new-iterator
+            fn (x)
+                return x (+ x step)
+            \ from
 
     fn enumerate (x from step)
         zip (infrange from step) (iter x)
 
     fn =? (x)
         and
-            == (typeof x) symbol
+            symbol? x
             == x (quote =)
 
     fn parse-loop-args (fullexpr)
@@ -1318,19 +1345,19 @@ syntax-extend stage-5 (_ env)
             ? (syntax-head? fullexpr (quote with))
                 slice fullexpr 1
                 \ fullexpr
+        let expr-eol =
+            syntax-eol expr
         loop (expr)
             if (empty? expr)
-                tupleof
-                    list
-                    list
+                break expr-eol expr-eol
             else
                 let args names =
                     repeat (slice expr 1)
                 let elem = (@ expr 0)
                 if (symbol? elem)
-                    tupleof
-                        cons elem args
-                        cons elem names
+                    break
+                        syntax-cons elem args
+                        syntax-cons elem names
                 else
                     # initializer
                     assert
@@ -1339,189 +1366,218 @@ syntax-extend stage-5 (_ env)
                             (countof elem) >= (u64 3)
                             =? (@ elem 1)
                         error "illegal initializer"
-                    tupleof
-                        cons (cons do (slice elem 2)) args
-                        cons (@ elem 0) names
-    .. env
-        tableof
-            : iter
-            : iterator?
-            : range
-            : zip
-            : enumerate
-            : loop # better loop with support for initializers
-                macro
-                    fn loop (expr)
-                        let param-repeat = (quote repeat)
-                        let args names =
-                            parse-loop-args (@ expr 1)
-                        list do
-                            list let param-repeat (quote =) none
-                            list set! param-repeat
+                    break
+                        syntax-cons (@ elem 2) args
+                        syntax-cons (@ elem 0) names
+
+    set-scope-symbol! env (quote iter) iter
+    set-scope-symbol! env (quote iterator?) iterator?
+    set-scope-symbol! env (quote range) range
+    set-scope-symbol! env (quote zip) zip
+    set-scope-symbol! env (quote enumerate) enumerate
+    set-scope-symbol! env (quote loop)
+        # better loop with support for initializers
+        macro
+            fn loop (expr)
+                let expr-anchor = (syntax->anchor expr)
+                let param-repeat =
+                    quote repeat
+                let param-break =
+                    quote break
+                let args names =
+                    parse-loop-args (@ expr 1)
+                qquote
+                    do
+                        xlet (unquote param-repeat) =
+                            fn/cc ((unquote param-break) (unquote-splice names))
+                                ;
+                                    unquote param-break
+                                    unquote
+                                        syntax-do (slice expr 2)
+                        ;
+                            unquote param-repeat
+                            unquote-splice args
+
+    set-scope-symbol! env (quote for)
+        block-macro
+            fn (block-expr)
+                fn iter-expr (expr)
+                    assert (not (empty? expr))
+                        \ "syntax: (for let-name ... in iter-expr body-expr ...)"
+                    if (syntax-head? expr (quote in))
+                        return
+                            syntax-list
+                            slice expr 1
+                    else
+                        let names rest =
+                            iter-expr
+                                slice expr 1
+                        return
+                            cons
+                                @ expr 0
+                                names
+                            \ rest
+
+                let expr = (@ block-expr 0)
+                let dest-names rest =
+                    iter-expr (slice expr 1)
+                let src-expr = (@ rest 0)
+                let block-rest else-block =
+                    let remainder =
+                        (slice block-expr 1)
+                    if
+                        and
+                            not (empty? remainder)
+                            syntax-head? (@ remainder 0) (quote else)
+                        _ (slice remainder 1) (slice (@ remainder 0) 1)
+                    else
+                        _ remainder (list none)
+
+                fn generate-template (body extra-args extra-names)
+                    let param-ret =
+                        datum->syntax (parameter (quote return))
+                    let param-inner-ret =
+                        datum->syntax (parameter (quote return))
+                    let param-iter =
+                        datum->syntax (parameter (quote iter))
+                    let param-state =
+                        datum->syntax (parameter (quote state))
+                    let param-for =
+                        datum->syntax (parameter (quote for-loop))
+                    let param-at =
+                        datum->syntax (parameter (quote at...))
+                    let param-next =
+                        datum->syntax (parameter (quote next))
+                    cons
+                        qquote
+                            do
+                                xlet (unquote param-for) =
+                                    fn/cc (
+                                        (unquote param-ret)
+                                        (unquote param-iter)
+                                        (unquote param-state)
+                                        (unquote-splice extra-names))
+                                        let (unquote param-at) (unquote param-next) =
+                                            (unquote param-iter) (unquote param-state)
+                                        ;
+                                            unquote param-ret
+                                            ? (== (unquote param-next) none)
+                                                unquote syntax-do else-block
+                                                do
+                                                    xlet repeat =
+                                                        fn/cc (
+                                                            (unquote param-inner-ret)
+                                                            (unquote-splice extra-names))
+                                                            ;
+                                                                unquote param-inner-ret
+                                                                ;
+                                                                    unquote param-for
+                                                                    unquote param-iter
+                                                                    unquote param-next
+                                                                    unquote-splice extra-names
+                                                    let (unquote-splice dest-names) =
+                                                        unquote param-at
+                                                    unquote-splice body
+                                ;
+                                    unquote param-for
+                                    splice (disqualify iterator (iter (unquote src-expr)))
+                                    unquote-splice extra-args
+                        \ block-rest
+
+                let body = (slice rest 1)
+                if (syntax-head? (@ body 0) (quote with))
+                    let args names =
+                        parse-loop-args (@ body 0)
+                    # read extra state params
+                    generate-template
+                        slice body 1
+                        \ args names
+                else
+                    let expr-eol =
+                        syntax-eol expr
+                    # no extra state params
+                    generate-template body
+                        syntax-eol expr-eol expr-eol
+
+    set-scope-symbol! env (quote fn)
+        # an extended version of function that permits chaining
+          sequential cross-dependent declarations with a `with` keyword
+          (fn [name] (param ...) body ...) with (fn ...) ...
+        block-macro
+            do
+                fn parse-funcdef (topexpr k head)
+                    let expr =
+                        @ topexpr 0
+                    assert (syntax-head? expr head)
+                        "function definition expected after 'with'"
+                    let decl =
+                        @ (@ topexpr 0) 1
+                    let retparam =
+                        quote return
+                    let make-params-body =
+                        fn (param-idx)
+                            cons
+                                cons
+                                    retparam
+                                    @ expr param-idx
+                                slice expr (+ param-idx 1)
+                    let rest =
+                        slice topexpr 1
+                    if (symbol? decl)
+                        # build single xlet assignment
+                        let func-expr =
+                            list decl (quote =)
                                 cons fn/cc
                                     cons
-                                        cons
-                                            parameter (quote _)
-                                            names
-                                        slice expr 2
-                            cons param-repeat args
-            : for
-                block-macro
-                    fn (block-expr)
-                        fn iter-expr (expr)
-                            assert (not (empty? expr))
-                                \ "syntax: (for let-name ... in iter-expr body-expr ...)"
-                            if (syntax-head? expr (quote in))
-                                tupleof
-                                    list
-                                    slice expr 1
+                                        @ expr 1
+                                        make-params-body 2
+                        let result-body result-rest =
+                            if (empty? rest)
+                                _
+                                    list func-expr
+                                    list decl
+                            elseif (syntax-head? rest (quote with))
+                                let defs defs-rest =
+                                    parse-funcdef
+                                        slice rest 1
+                                        k + 1
+                                        head
+                                _
+                                    cons func-expr defs
+                                    \ defs-rest
                             else
-                                let names rest =
-                                    iter-expr
-                                        slice expr 1
-                                tupleof
-                                    cons
-                                        @ expr 0
-                                        names
-                                    \ rest
-
-                        let expr = (@ block-expr 0)
-                        let dest-names rest =
-                            iter-expr (slice expr 1)
-                        let src-expr = (@ rest 0)
-                        let block-rest else-block =
-                            let remainder =
-                                (slice block-expr 1)
-                            if
-                                and
-                                    not (empty? remainder)
-                                    syntax-head? (@ remainder 0) (quote else)
-                                tupleof (slice remainder 1) (slice (@ remainder 0) 1)
-                            else
-                                tupleof remainder (list none)
-
-                        fn generate-template (body extra-args extra-names)
-                            let param-iter = (parameter (quote iter))
-                            let param-state = (parameter (quote state))
-                            let param-for = (parameter (quote for-loop))
-                            let param-at-next = (parameter (quote at-next))
+                                _ (list func-expr) rest
+                        if (k == 0)
                             cons
-                                qquote
-                                    do
-                                        let (unquote param-for) = none
-                                        set! (unquote param-for)
-                                            fn/cc (
-                                                (unquote (parameter (quote _)))
-                                                (unquote param-iter)
-                                                (unquote param-state)
-                                                (unquote-splice extra-names))
-                                                let (unquote param-at-next) =
-                                                    (unquote param-iter) (unquote param-state)
-                                                ? (== (unquote param-at-next) none)
-                                                    do
-                                                        unquote-splice else-block
-                                                    do
-                                                        let repeat = none
-                                                        set! repeat
-                                                            fn/cc (
-                                                                (unquote (parameter (quote _)))
-                                                                (unquote-splice extra-names))
-                                                                (unquote param-for)
-                                                                    unquote param-iter
-                                                                    @ (unquote param-at-next) 1
-                                                                    unquote-splice extra-names
-                                                        let (unquote-splice dest-names) =
-                                                            @ (unquote param-at-next) 0
-                                                        unquote-splice body
-                                        (unquote param-for)
-                                            splice (disqualify iterator (iter (unquote src-expr)))
-                                            unquote-splice extra-args
-                                \ block-rest
-
-                        let body = (slice rest 1)
-                        if (syntax-head? (@ body 0) (quote with))
-                            let args names =
-                                parse-loop-args (@ body 0)
-                            # read extra state params
-                            generate-template
-                                slice body 1
-                                \ args names
+                                syntax-cons
+                                    quote xlet
+                                    \ result-body
+                                \ result-rest
                         else
-                            # no extra state params
-                            generate-template body (list) (list)
+                            _ result-body result-rest
+                    else
+                        assert (k == 0)
+                            "unnamed function can not be chained"
+                        # regular, unchained form
+                        cons
+                            syntax-cons
+                                quote fn/cc
+                                make-params-body 1
+                            \ rest
 
-            # an extended version of function that permits chaining
-              sequential cross-dependent declarations with a `with` keyword
-              (fn [name] (param ...) body ...) with (fn ...) ...
-            : fn
-                block-macro
-                    do
-                        fn parse-funcdef (topexpr k head)
-                            let expr =
-                                @ topexpr 0
-                            assert (syntax-head? expr head)
-                                "function definition expected after 'with'"
-                            let decl =
-                                @ (@ topexpr 0) 1
-                            let retparam =
-                                quote return
-                            let make-params-body =
-                                fn (param-idx)
-                                    cons
-                                        cons
-                                            retparam
-                                            @ expr param-idx
-                                        slice expr (+ param-idx 1)
-                            let rest =
-                                slice topexpr 1
-                            if (symbol? decl)
-                                # build single xlet assignment
-                                let func-expr =
-                                    list decl (quote =)
-                                        cons fn/cc
-                                            cons
-                                                @ expr 1
-                                                make-params-body 2
-                                let result =
-                                    if (empty? rest)
-                                        tupleof (list func-expr)
-                                            list decl
-                                    elseif (syntax-head? rest (quote with))
-                                        let defs defs-rest =
-                                            parse-funcdef
-                                                slice rest 1
-                                                k + 1
-                                                head
-                                        tupleof
-                                            cons func-expr defs
-                                            \ defs-rest
-                                    else
-                                        tupleof (list func-expr) rest
-                                if (k == 0)
-                                    cons
-                                        cons xlet (@ result 0)
-                                        @ result 1
-                                else result
-                            else
-                                assert (k == 0)
-                                    "unnamed function can not be chained"
-                                # regular, unchained form
-                                cons
-                                    cons fn/cc
-                                        make-params-body 1
-                                    \ rest
+                fn (topexpr)
+                    parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
 
-                        fn (topexpr)
-                            parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
+    return env
 
 syntax-extend stage-6 (_ env)
     let void* =
         pointer void
     let null =
-        bitcast void*
+        cast void*
             uint64 0
     fn null? (x)
-        (bitcast uint64 x) == 0
+        (cast uint64 x) == 0
     fn extern-library (cdefs)
         let lib = (tableof)
         for k v in cdefs

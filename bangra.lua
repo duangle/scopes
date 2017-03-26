@@ -22,8 +22,9 @@ SOFTWARE.
 --]]
 
 local global_opts = {
-    trace_execution = false,
-    print_lua_traceback = false
+    trace_execution = false, -- print each statement being executed
+    print_lua_traceback = false, -- print lua traceback on any error
+    stack_limit = 65536 -- recursion limit
 }
 
 --------------------------------------------------------------------------------
@@ -676,16 +677,54 @@ local function assert_boolean(x) assert_luatype("boolean", x) end
 local function assert_cdata(x) assert_luatype("cdata", x) end
 local function assert_function(x) assert_luatype("function", x) end
 
-local function safecall(f1, f2)
-    local function fwd_xpcall_dest(result, ...)
-        if result then
-            return ...
+--------------------------------------------------------------------------------
+-- CC EXCEPTIONS
+--------------------------------------------------------------------------------
+
+local xpcallcc
+local errorcc
+do
+    local _xpcallcc_handler
+
+    local function default_finally (...)
+        return ...
+    end
+
+    errorcc = function (exc)
+        if _xpcallcc_handler then
+            return _xpcallcc_handler(exc)
         else
-            return f2(...)
+            print(traceback("uncaught error: " .. tostring(exc), 2))
+            os.exit(1)
         end
     end
-    return fwd_xpcall_dest(xpcall(f1, function(err) return err end))
+
+    xpcallcc = function (func, xfunc, ffinally)
+        assert(func)
+        assert(xfunc)
+        ffinally = ffinally or default_finally
+        local old_handler = _xpcallcc_handler
+        local function cleanup ()
+            _xpcallcc_handler = old_handler
+        end
+        local function finally (...)
+            cleanup()
+            return ffinally(...)
+        end
+        local function except (exc)
+            cleanup()
+            return xfunc(exc, ffinally)
+        end
+        _xpcallcc_handler = except
+        return func(finally)
+    end
 end
+
+rawset(_G, "error", errorcc)
+rawset(_G, "xpcall", null)
+rawset(_G, "pcall", null)
+
+--------------------------------------------------------------------------------
 
 local function protect(obj)
     local mt = getmetatable(obj)
@@ -1016,11 +1055,21 @@ local function with_anchor(anchor, f)
     set_active_anchor(_anchor)
 end
 
-local function location_error(msg)
-    if type(msg) == "string" then
-        msg = {msg = msg, anchor = get_active_anchor()}
+local function exception(exc)
+    if type(exc) ~= "table" then
+        return {
+            msg = tostring(exc),
+            anchor = get_active_anchor()
+        }
+    else
+        return exc
     end
-    error(msg)
+end
+
+local function location_error(exc)
+    exc = exception(exc)
+    exc.interpreter_error = true
+    error(exc)
 end
 
 local function unwrap(_type, value)
@@ -1126,6 +1175,8 @@ local function define_types(def)
     def('Builtin')
 
     def('Scope')
+
+    def('Tag')
 
     def('Symbol')
     def('List')
@@ -1767,7 +1818,10 @@ do
                         file.length, C._PROT_READ, C._MAP_PRIVATE, file.fd, 0)
                     if (file.ptr ~= MAP_FAILED) then
                         file_cache[path] = file
-                        file._close_token = ffi.gc(new(gc_token), cls.close)
+                        file._close_token = ffi.gc(new(gc_token),
+                            function ()
+                                file:close()
+                            end)
                         return file
                     end
                 end
@@ -1849,35 +1903,6 @@ function Anchor:stream_source_line(writer, indent)
     end
 end
 
---------------------------------------------------------------------------------
-
-local debugger
-local function location_error_handler(err)
-    local is_complex_msg = type(err) == "table" and err.msg
-    local w = string_writer()
-    if global_opts.print_lua_traceback or not is_complex_msg then
-        w(traceback("",3))
-        w('\n\n')
-    end
-    debugger.stream_traceback(w)
-    if is_complex_msg then
-        if err.quoted then
-            -- return as-is
-            return err.msg
-        end
-        if err.anchor then
-            err.anchor:stream_message_with_source(w, err.msg)
-        else
-            w(err.msg)
-            w('\n')
-        end
-        return w()
-    else
-        w(tostring(err))
-        print(w())
-        os.exit(1)
-    end
-end
 
 --------------------------------------------------------------------------------
 -- S-EXPR PARSER
@@ -2159,12 +2184,7 @@ local function parse(lexer)
         return syntax(Any(builder.get_result()), anchor)
     end
 
-    return xpcall(
-        function()
-            return parse_root()
-        end,
-        location_error_handler
-    )
+    return parse_root()
 end
 
 --------------------------------------------------------------------------------
@@ -2189,7 +2209,7 @@ local FUNCTIONS = set(split(
         .. " macro block-macro block-scope-macro cons expand empty?"
         .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
-        .. " va-arg va-countof range zip enumerate bitcast element-type"
+        .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
@@ -2212,7 +2232,7 @@ local TYPES = set(split(
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
         .. " pointer struct enum bool uint tag qualifier syntax-list"
-        .. " syntax-symbol syntax anchor"
+        .. " syntax-symbol syntax anchor scope"
         .. " iterator type table size_t usize_t ssize_t void*"
     ))
 
@@ -2300,6 +2320,10 @@ stream_expr = function(writer, e, format)
         end
     end
 
+    local function islist(value)
+        return (value.type == Type.List) or (value.type == Type.SyntaxList)
+    end
+
     local function walk(e, depth, maxdepth, naked)
         assert_any(e)
 
@@ -2353,9 +2377,9 @@ stream_expr = function(writer, e, format)
                 return
             end
             local offset = 0
+            --local numsublists = 0
             if (naked) then
-                local single = (it.next == EOL)
-                if is_nested(it.at) then
+                if islist(it.at) then
                     writer(";")
                     writer('\n')
                     goto print_sparse
@@ -2366,8 +2390,16 @@ stream_expr = function(writer, e, format)
                 walk(it.at, depth, maxdepth, naked)
                 it = it.next
                 offset = offset + 1
-                while (it ~= EOL) do
-                    if (is_nested(it.at)) then
+                while it ~= EOL do
+                    --[[
+                    if islist(it.at) then
+                        numsublists = numsublists + 1
+                        if numsublists >= 2 then
+                            break
+                        end
+                    end
+                    --]]
+                    if is_nested(it.at) then
                         break
                     end
                     writer(' ')
@@ -2375,20 +2407,14 @@ stream_expr = function(writer, e, format)
                     offset = offset + 1
                     it = it.next
                 end
-                if single then
-                    writer(";")
-                end
                 writer('\n')
             ::print_sparse::
                 while (it ~= EOL) do
                     local depth = depth + 1
                     naked = true
                     local value = it.at
-                    if ((value.type ~= Type.List) -- not a list
-                        and (offset >= 1) -- not first element in list
-                        and (it.next ~= EOL) -- not last element in list
-                        and not(is_nested(it.next.at))) then -- next element can be terse packed too
-                        single = false
+                    if not islist(value) -- not a list
+                        and (offset >= 1) then -- not first element in list
                         stream_indent(writer, depth)
                         writer("\\ ")
                         goto print_terse
@@ -2988,7 +3014,7 @@ end
 -- DEBUG SERVICES
 --------------------------------------------------------------------------------
 
-debugger = {}
+local debugger = {}
 do
     local stack = {}
     local cls = debugger
@@ -3073,6 +3099,9 @@ do
                 anchor = flow.anchor
                 set_active_anchor(last_anchor)
             end
+        end
+        if #stack >= global_opts.stack_limit then
+            location_error("stack overflow")
         end
         table.insert(stack, { anchor, frame, cont, dest, ... })
         if false then
@@ -3255,7 +3284,7 @@ call = function(frame, cont, dest, ...)
         if func ~= null then
             return call(frame, cont, func, ...)
         else
-            error("can not apply type "
+            location_error("can not apply type "
                 .. ty.displayname)
         end
     else
@@ -3457,26 +3486,44 @@ local function expand_macro(env, handler, topit)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
-    local result,_0,_1 = xpcall(function()
+    return xpcallcc(function(cont)
         return execute(function(result_list, result_scope)
             --print(handler, result_list, result_scope)
             if (is_none(result_list)) then
-                return EOL
+                return cont(EOL)
             end
             result_list = unwrap(Type.List, result_list)
             result_scope = result_scope and unwrap(Type.Scope, result_scope)
             if result_list ~= EOL and result_scope == null then
-                error(tostring(handler) .. " did not return a scope")
+                location_error(tostring(handler) .. " did not return a scope")
             end
-            if not is_quote_type(result_list.at.type) then
-                assert_syntax(result_list.at)
+            --[[
+            -- validate result completely wrapped in syntax
+            local todo = {result_list.at}
+            local k = 1
+            while k <= #todo do
+                local elem = todo[k]
+                if not is_quote_type(elem.type) then
+                    if not is_syntax_type(elem.type) then
+                        location_error("syntax objects missing in expanded macro")
+                    end
+                    if elem.type == Type.SyntaxList then
+                        elem = unsyntax(elem).value
+                        while elem ~= EOL do
+                            table.insert(todo, elem.at)
+                            elem = elem.next
+                        end
+                    end
+                end
+                k = k + 1
+                assert(k < global_opts.stack_limit, "possible circular reference encountered")
             end
-            return result_list, result_scope
+            --]]
+            return cont(result_list, result_scope)
         end, handler,  Any(topit), Any(env))
-    end, location_error_handler)
-    if result then
-        return _0,_1
-    else
+    end,
+    function (exc, cont)
+        exc = exception(exc)
         local w = string_writer()
         assert_syntax(topit.at)
         local anchor = topit.at.value.anchor
@@ -3486,17 +3533,17 @@ local function expand_macro(env, handler, topit)
         fmt.maxdepth = 3
         fmt.maxlength = 5
         stream_expr(w, topit.at, fmt)
-        w(_0)
-        quote_error(w())
-    end
+        exc.macros = (exc.macros or "") .. w()
+        error(exc)
+    end)
 end
 
 expand = function(env, topit)
     assert_scope(env)
     assert_list(topit)
     local result = none
-::process::
     assert(topit ~= EOL)
+::process::
     local expr = topit.at
     if (is_quote_type(expr.type)) then
         -- remove qualifier and return as-is
@@ -3531,6 +3578,7 @@ expand = function(env, topit)
                 topit = result_list
                 env = result_env
                 assert_scope(env)
+                assert(topit ~= EOL)
                 goto process
             elseif result_scope then
                 return EOL, env
@@ -3540,7 +3588,7 @@ expand = function(env, topit)
         local default_handler = env:lookup(Symbol.ListWildcard)
         if default_handler then
             local result = expand_wildcard(env, default_handler, topit)
-            if result then
+            if result ~= EOL then
                 topit = result
                 goto process
             end
@@ -3556,11 +3604,12 @@ expand = function(env, topit)
             local default_handler = env:lookup(Symbol.SymbolWildcard)
             if default_handler then
                 local result = expand_wildcard(env, default_handler, topit)
-                if result then
+                if result ~= EOL then
                     topit = result
                     goto process
                 end
             end
+            set_active_anchor(anchor)
             location_error(
                 format("no value bound to name '%s' in scope", value.name))
         end
@@ -3580,14 +3629,12 @@ expand_root = function(expr, scope)
         expr = unsyntax(expr)
     end
     expr = unwrap(Type.List, expr)
-    return xpcall(function()
-        local result = Any(expand_expr_list(scope or globals, expr))
-        if anchor then
-            return syntax(result, anchor)
-        else
-            return result
-        end
-    end, location_error_handler)
+    local result = Any(expand_expr_list(scope or globals, expr))
+    if anchor then
+        return syntax(result, anchor)
+    else
+        return result
+    end
 end
 
 end -- do
@@ -3627,7 +3674,7 @@ do
         end
         assert(#arguments >= 2)
         if (state == null) then
-            error("can not define body: continuation already exited.")
+            location_error("can not define body: continuation already exited.")
         end
         assert(#state.arguments == 0)
         state.arguments = arguments
@@ -3686,7 +3733,7 @@ local function compile_expr_list(it, dest, anchor)
     assert_anchor(anchor)
     if (it == EOL) then
         if is_none(dest) then
-            error("expression list has no instructions")
+            location_error("expression list has no instructions")
         end
         return write_dest(dest, syntax(none, anchor))
     else
@@ -3702,7 +3749,7 @@ local function compile_expr_list(it, dest, anchor)
         end
     end
     if not is_none(dest) then
-        error("unreachable branch")
+        location_error("unreachable branch")
     end
     return none
 end
@@ -3847,31 +3894,52 @@ end
 compile = function(sxexpr, dest, anchor)
     assert_any(dest)
     assert_any(sxexpr)
-    if (is_quote_type(sxexpr.type)) then
-        -- write as-is
-        return write_dest(dest, sxexpr)
-    end
-    assert_syntax(sxexpr)
-
-    local anchor = sxexpr.value.anchor
-    local expr = unsyntax(sxexpr)
-
-    if (expr.type == Type.List) then
-        local slist = expr.value
-        if (slist == EOL) then
-            location_error("empty expression")
+    return xpcallcc(function(cont)
+        if (is_quote_type(sxexpr.type)) then
+            -- write as-is
+            return cont(write_dest(dest, sxexpr))
         end
-        local head = slist.at
-        assert_syntax(head)
-        head = unsyntax(head)
-        if (head.type == Type.Form) then
-            return head.value(sxexpr, dest)
+        assert_syntax(sxexpr)
+
+        local anchor = sxexpr.value.anchor
+        local expr = unsyntax(sxexpr)
+
+        set_active_anchor(anchor)
+
+        if (expr.type == Type.List) then
+            local slist = expr.value
+            if (slist == EOL) then
+                location_error("empty expression")
+            end
+            local head = slist.at
+            assert_syntax(head)
+            head = unsyntax(head)
+            if (head.type == Type.Form) then
+                return cont(head.value(sxexpr, dest))
+            else
+                return cont(compile_implicit_call(slist, dest, anchor))
+            end
         else
-            return compile_implicit_call(slist, dest, anchor)
+            return cont(write_dest(dest, sxexpr))
         end
-    else
-        return write_dest(dest, sxexpr)
-    end
+    end,
+    function (exc, cont)
+        exc = exception(exc)
+        if not exc.compile then
+            local w = string_writer()
+            if is_quote_type(sxexpr.type) then
+                sxexpr = unquote(sxexpr)
+            end
+            assert_syntax(sxexpr)
+            local anchor = sxexpr.value.anchor
+            anchor:stream_message_with_source(w, 'while translating expression')
+            local fmt = StreamValueFormat()
+            fmt.naked = true
+            stream_expr(w, sxexpr, fmt)
+            exc.compile = w()
+        end
+        error(exc)
+    end)
 end
 
 --------------------------------------------------------------------------------
@@ -3927,12 +3995,14 @@ end
 do -- reduce number of locals
 
 local function safecontcall(callfunc, errfunc)
-    return safecall(function()
+    return xpcallcc(
+    function(cont)
         return callfunc(Any(Builtin(
             function(_frame, _cont, _self, ...)
-                return ...
+                return cont(...)
             end, Symbol.ReturnSafecall)))
-    end, errfunc)
+    end,
+    errfunc)
 end
 
 local function checkargs(mincount, maxcount, ...)
@@ -4012,12 +4082,20 @@ builtins["true"] = bool(true)
 builtins["false"] = bool(false)
 builtins["none"] = none
 
+builtins["scope-list-wildcard-symbol"] = Symbol.ListWildcard
+builtins["scope-symbol-wildcard-symbol"] = Symbol.SymbolWildcard
+
+builtins["interpreter-dir"] = cstr(C.bangra_interpreter_dir)
+builtins["interpreter-path"] = cstr(C.bangra_interpreter_path)
+
 -- types
 --------------------------------------------------------------------------------
 
 builtins.void = Type.Void
 builtins.any = Type.Any
 builtins.bool = Type.Bool
+builtins.tag = Type.Tag
+builtins.type = Type.Type
 
 builtins.i8 = Type.I8
 builtins.i16 = Type.I16
@@ -4037,6 +4115,7 @@ builtins.symbol = Type.Symbol
 builtins.list = Type.List
 builtins.parameter = Type.Parameter
 builtins.string = Type.String
+builtins.closure = Type.Closure
 
 builtins["syntax-list"] = Type.SyntaxList
 builtins["syntax-symbol"] = Type.SyntaxSymbol
@@ -4063,17 +4142,20 @@ end
 local function ordered_branch(frame, cont, self, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
+    local function compare_error()
+        location_error("types "
+            .. a.type.displayname
+            .. " and "
+            .. b.type.displayname
+            .. " are incomparable")
+    end
     local function unordered()
         local rcmp = b.type:lookup(Symbol.Compare)
         if rcmp then
             return call(frame, cont, rcmp, b, a,
                 equal_cont, unordered_cont, greater_cont, less_cont)
         else
-            error("types "
-                .. a.type.displayname
-                .. " and "
-                .. b.type.displayname
-                .. " are incomparable")
+            compare_error()
         end
     end
     local cmp = a.type:lookup(Symbol.Compare)
@@ -4181,7 +4263,6 @@ end)
 
 builtins["syntax->datum"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
-    assert_syntax(value)
     return (unsyntax(value))
 end)
 
@@ -4218,12 +4299,13 @@ end)
 builtin_op(Type.String, Symbol.ApplyType,
     wrap_simple_builtin(function(value)
         checkargs(1,1,value)
+        value = unsyntax(value)
         local ty = value.type
         -- todo: types should do that conversion
         if ty == Type.String then
-            return value.value
+            return value
         elseif ty == Type.Symbol then
-            return value.value.name
+            return Any(value.value.name)
         else
             return Any(format_any_value(value.type, value.value))
         end
@@ -4262,6 +4344,48 @@ builtin_op(Type.Parameter, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
         checkargs(1,1,name)
         return Any(Parameter(name))
+    end))
+
+builtin_op(Type.Scope, Symbol.ApplyType,
+    wrap_simple_builtin(function(parent)
+        checkargs(0,1,parent)
+        if parent then
+            return Any(Scope(unwrap(Type.Scope, parent)))
+        else
+            return Any(Scope())
+        end
+    end))
+
+builtin_op(Type.Tag, Symbol.ApplyType,
+    wrap_simple_builtin(function(symbol)
+        checkargs(1,1,symbol)
+        local sym = unwrap(Type.Symbol,unsyntax(symbol))
+        local cls = Type(sym.name)
+        cls:set_super(Type.Tag)
+
+        local cache = {}
+        cls:bind(Any(Symbol.ApplyType),
+            Any(Builtin(wrap_simple_builtin(function(_type)
+                checkargs(1,1,_type)
+                _type = unwrap(Type.Type, _type)
+                local val = cache[_type]
+                if not val then
+                    val = Type(
+                        cls.name .. "[" .. _type.name .. "]",
+                        cls.displayname
+                        .. ansi(STYLE.OPERATOR, "[")
+                        .. _type.displayname
+                        .. ansi(STYLE.OPERATOR, "]"))
+                    val:set_element_type(_type)
+                    val:set_super(cls)
+                    function val:format_value(value)
+                        return format_any_value(self:element_type(), value)
+                    end
+                    cache[_type] = val
+                end
+                return Any(val)
+            end), Symbol.ApplyType)))
+        return Any(cls)
     end))
 
 each_numerical_type(function(T)
@@ -4320,17 +4444,28 @@ builtins['>='] = function(frame, cont, self, a, b)
         return_true, return_false, return_false, return_true)
 end
 
+builtin_op(Type.Void, Symbol.Compare,
+    function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        if a.type == b.type then
+            return call(frame, cont, equal_cont)
+        else
+            return call(frame, cont, unordered_cont)
+        end
+    end)
+
 local function compare_func(T)
     builtin_op(T, Symbol.Compare,
         function(frame, cont, self, a, b,
             equal_cont, unordered_cont, less_cont, greater_cont)
-            a = unwrap(T, a)
-            b = unwrap(T, b)
-            if (a == b) then
-                return call(frame, cont, equal_cont)
-            else
-                return call(frame, cont, unordered_cont)
+            if a.type == T and b.type == T then
+                a = unwrap(T, a)
+                b = unwrap(T, b)
+                if (a == b) then
+                    return call(frame, cont, equal_cont)
+                end
             end
+            return call(frame, cont, unordered_cont)
         end)
 end
 
@@ -4339,21 +4474,27 @@ compare_func(Type.Symbol)
 compare_func(Type.Parameter)
 compare_func(Type.Flow)
 
-each_numerical_type(function(T)
+local function ordered_compare_func(T)
     builtin_op(T, Symbol.Compare,
         function(frame, cont, self, a, b,
             equal_cont, unordered_cont, less_cont, greater_cont)
-            a = unwrap(T, a)
-            b = unwrap(T, b)
-            if (a == b) then
-                return call(frame, cont, equal_cont)
-            elseif (a < b) then
-                return call(frame, cont, less_cont)
-            else
-                return call(frame, cont, greater_cont)
+            if a.type == T and b.type == T then
+                a = unwrap(T, a)
+                b = unwrap(T, b)
+                if (a == b) then
+                    return call(frame, cont, equal_cont)
+                elseif (a < b) then
+                    return call(frame, cont, less_cont)
+                else
+                    return call(frame, cont, greater_cont)
+                end
             end
+            return call(frame, cont, unordered_cont)
         end)
-end, {ints=true})
+end
+
+each_numerical_type(ordered_compare_func, {ints=true})
+ordered_compare_func(Type.String)
 
 local function compare_real_func(T, base)
     local eq = C[base .. '_eq']
@@ -4362,17 +4503,18 @@ local function compare_real_func(T, base)
     builtin_op(T, Symbol.Compare,
         function(frame, cont, self, a, b,
             equal_cont, unordered_cont, less_cont, greater_cont)
-            a = unwrap(T, a)
-            b = unwrap(T, b)
-            if eq(a,b) then
-                return call(frame, cont, equal_cont)
-            elseif lt(a,b) then
-                return call(frame, cont, less_cont)
-            elseif gt(a,b) then
-                return call(frame, cont, greater_cont)
-            else
-                return call(frame, cont, unordered_cont)
+            if a.type == T and b.type == T then
+                a = unwrap(T, a)
+                b = unwrap(T, b)
+                if eq(a,b) then
+                    return call(frame, cont, equal_cont)
+                elseif lt(a,b) then
+                    return call(frame, cont, less_cont)
+                elseif gt(a,b) then
+                    return call(frame, cont, greater_cont)
+                end
             end
+            return call(frame, cont, unordered_cont)
         end)
 end
 
@@ -4382,45 +4524,50 @@ compare_real_func(Type.R64, 'bangra_r64')
 builtin_op(Type.List, Symbol.Compare,
     function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
-        local x = unwrap(Type.List, a)
-        local y = unwrap(Type.List, b)
-        local function loop()
-            if (x == y) then
-                return call(frame, cont, equal_cont)
-            elseif (x == EOL) then
-                return call(frame, cont, less_cont)
-            elseif (y == EOL) then
-                return call(frame, cont, greater_cont)
+        if a.type == Type.List and b.type == Type.List then
+            local x = unwrap(Type.List, a)
+            local y = unwrap(Type.List, b)
+            local function loop()
+                if (x == y) then
+                    return call(frame, cont, equal_cont)
+                elseif (x == EOL) then
+                    return call(frame, cont, less_cont)
+                elseif (y == EOL) then
+                    return call(frame, cont, greater_cont)
+                end
+                return ordered_branch(frame, cont, none, x.at, y.at,
+                    Any(Builtin(function()
+                        x = x.next
+                        y = y.next
+                        return loop()
+                    end, Symbol.CompareListNext)),
+                    unordered_cont, less_cont, greater_cont)
             end
-            return ordered_branch(frame, cont, none, x.at, y.at,
-                Any(Builtin(function()
-                    x = x.next
-                    y = y.next
-                    return loop()
-                end, Symbol.CompareListNext)),
-                unordered_cont, less_cont, greater_cont)
+            return loop()
+        else
+            return call(frame, cont, unordered_cont)
         end
-        return loop()
     end)
 
 builtin_op(Type.Type, Symbol.Compare,
     function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
-        local x = unwrap(Type.Type, a)
-        local y = unwrap(Type.Type, b)
-        if x == y then
-            return call(frame, cont, equal_cont)
-        else
-            local xs = x:super()
-            local ys = y:super()
-            if xs == y then
-                return call(frame, cont, less_cont)
-            elseif ys == x then
-                return call(frame, cont, greater_cont)
+        if a.type == Type.Type and b.type == Type.Type then
+            local x = unwrap(Type.Type, a)
+            local y = unwrap(Type.Type, b)
+            if x == y then
+                return call(frame, cont, equal_cont)
             else
-                return call(frame, cont, unordered_cont)
+                local xs = x:super()
+                local ys = y:super()
+                if xs == y then
+                    return call(frame, cont, less_cont)
+                elseif ys == x then
+                    return call(frame, cont, greater_cont)
+                end
             end
         end
+        return call(frame, cont, unordered_cont)
     end)
 
 builtin_op(Type.Syntax, Symbol.Compare,
@@ -4628,6 +4775,13 @@ countof_func(Type.Syntax)
 local at = builtin_forward(Symbol.At, "is not indexable")
 builtins[Symbol.At] = at
 
+builtin_op(Type.String, Symbol.At,
+    wrap_simple_builtin(function(x, i)
+        checkargs(2,2,x,i)
+        x = unwrap(Type.String, x)
+        i = tonumber(unwrap_integer(i)) + 1
+        return Any(x:sub(i,i))
+    end))
 builtin_op(Type.List, Symbol.At,
     wrap_simple_builtin(function(x, i)
         checkargs(2,2,x,i)
@@ -4716,6 +4870,22 @@ builtins["get-scope-symbol"] = wrap_simple_builtin(function(scope, key, defvalue
     key = unwrap(Type.Symbol, unsyntax(key))
 
     return scope:lookup(key) or defvalue or none
+end)
+
+builtins["next-scope-symbol"] = wrap_simple_builtin(function(scope, key)
+    checkargs(1, 2, scope, key)
+    scope = unwrap(Type.Scope, scope)
+    if is_null_or_none(key) then
+        key = null
+    else
+        key = unwrap(Type.Symbol, unsyntax(key))
+    end
+    local _,value = next(scope.symbols, key)
+    if value == null then
+        return
+    else
+        return value[1], value[2]
+    end
 end)
 
 -- data manipulation
@@ -5014,71 +5184,38 @@ local function test_lexer()
     local src = SourceFile.open("<test>", macro_test)
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
-    local result,expr = parse(lexer)
-    if result then
-        print("parsed result:")
-        stream_expr(stdout_writer, expr, StreamValueFormat(true))
-        local result,expexpr = expand_root(expr)
-        if result then
-            print("expanded result:")
-            stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
-            local func = compile_root(expexpr, "main")
-            print("generated IL:")
-            stream_il(stdout_writer, func)
-            print("executing",func)
-            local result,err = xpcall(
-                function()
-                    execute(
-                        function(...)
-                            print(...)
-                        end,
-                        func)
-                end, location_error_handler)
-            if not result then
-                print(err)
-            end
-        else
-            print(expexpr)
-        end
-    else
-        print(expr)
-    end
+    local expr = parse(lexer)
+    print("parsed result:")
+    stream_expr(stdout_writer, expr, StreamValueFormat(true))
+    local expexpr = expand_root(expr)
+    print("expanded result:")
+    stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
+    local func = compile_root(expexpr, "main")
+    print("generated IL:")
+    stream_il(stdout_writer, func)
+    print("executing",func)
+    execute(
+        function(...)
+            print(...)
+        end,
+        func)
 end
 
 local function test_bangra()
     local src = SourceFile.open("bangra.b")
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
-    local result,expr = parse(lexer)
-    if result then
-        --stream_expr(stdout_writer, expr, StreamValueFormat(true))
-        local result,expexpr = expand_root(expr)
-        if result then
-            --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
-            local func = compile_root(expexpr, "main")
-            execute(
-                function(...)
-                    print(...)
-                end,
-                func)
-            print("executing",func)
-            local result,err = xpcall(
-                function()
-                    execute(
-                        function(...)
-                            print(...)
-                        end,
-                        func)
-                end, location_error_handler)
-            if not result then
-                print(err)
-            end
-        else
-            print(expexpr)
-        end
-    else
-        print(expr)
-    end
+    local expr = parse(lexer)
+    --stream_expr(stdout_writer, expr, StreamValueFormat(true))
+    local expexpr = expand_root(expr)
+    --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
+    local func = compile_root(expexpr, "main")
+    print("executing",func)
+    execute(
+        function(...)
+            print(...)
+        end,
+        func)
 end
 
 local function test_ansicolors()
@@ -5098,14 +5235,47 @@ local function test_list()
 end
 
 do
-    local result,err = xpcall(function()
-        --test_list()
-        --test_lexer()
-        test_bangra()
-        --test_ansicolors()
-    end,
-    location_error_handler)
-    if not result then
-        print(err)
-    end
+    xpcallcc(
+        function(cont)
+            --test_list()
+            --test_lexer()
+            test_bangra()
+            --test_ansicolors()
+            return cont()
+        end,
+        function (err, cont)
+            local is_complex_msg = type(err) == "table" and err.msg
+            local w = string_writer()
+            if is_complex_msg then
+                if err.macros then
+                    w(err.macros)
+                end
+                if err.compile then
+                    w(err.compile)
+                end
+            end
+            if global_opts.print_lua_traceback
+                or not is_complex_msg
+                or not err.interpreter_error then
+                w(traceback("",3))
+                w('\n\n')
+            end
+            debugger.stream_traceback(w)
+            if is_complex_msg then
+                if err.quoted then
+                    -- return as-is
+                    return err.msg
+                end
+                if err.anchor then
+                    err.anchor:stream_message_with_source(w, err.msg)
+                else
+                    w(err.msg)
+                    w('\n')
+                end
+            else
+                w(tostring(err))
+            end
+            print(w())
+            os.exit(1)
+        end)
 end

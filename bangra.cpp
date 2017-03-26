@@ -87,6 +87,11 @@ enum {
     BANGRA_VERSION_PATCH = 0,
 };
 
+const char *bangra_interpreter_path;
+const char *bangra_interpreter_dir;
+size_t bangra_argc;
+char **bangra_argv;
+
 // C namespace exports
 int unescape_string(char *buf);
 int escape_string(char *buf, const char *str, int strcount, const char *quote_chars);
@@ -156,6 +161,18 @@ WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, DEF_BINOP_FUNC)
 #include <libgen.h>
 
 #include <cstdlib>
+//#include <string>
+
+#include <llvm-c/Core.h>
+#include <llvm-c/ExecutionEngine.h>
+
+#include "llvm/IR/Module.h"
+
+#include "clang/Frontend/CompilerInstance.h"
+#include "clang/AST/RecursiveASTVisitor.h"
+#include "clang/AST/RecordLayout.h"
+#include "clang/CodeGen/CodeGenAction.h"
+#include "clang/Frontend/MultiplexConsumer.h"
 
 extern "C" {
 #include <lua.h>
@@ -348,6 +365,18 @@ bool bangra_r64_gt(double a, double b) { return a >  b; }
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, IMPL_BINOP_FUNC)
 
+// This function isn't referenced outside its translation unit, but it
+// can't use the "static" keyword because its address is used for
+// GetMainExecutable (since some platforms don't support taking the
+// address of main, and some platforms can't implement GetMainExecutable
+// without being given the address of a function in the main executable).
+std::string GetExecutablePath(const char *Argv0) {
+  // This just needs to be some symbol in the binary; C++ doesn't
+  // allow taking the address of ::main however.
+  void *MainAddr = (void*) (intptr_t) GetExecutablePath;
+  return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
+}
+
 //------------------------------------------------------------------------------
 // MAIN
 //------------------------------------------------------------------------------
@@ -465,6 +494,22 @@ static int pmain(lua_State *L) {
 
 int main(int argc, char *argv[]) {
     setup_stdio();
+    bangra_argc = argc;
+    bangra_argv = argv;
+
+    bangra_interpreter_path = nullptr;
+    bangra_interpreter_dir = nullptr;
+    if (argv) {
+        if (argv[0]) {
+            std::string loader = GetExecutablePath(argv[0]);
+            // string must be kept resident
+            bangra_interpreter_path = strdup(loader.c_str());
+        } else {
+            bangra_interpreter_path = strdup("");
+        }
+
+        bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
+    }
 
     // Create VM state
     lua_State *L = lua_open();

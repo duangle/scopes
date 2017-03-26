@@ -37,7 +37,7 @@ local function bangra_symbols()
         .. " macro block-macro block-scope-macro cons expand empty?"
         .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
-        .. " va-arg va-countof range zip enumerate bitcast element-type"
+        .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
@@ -61,7 +61,7 @@ local function bangra_symbols()
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
         .. " pointer struct enum bool uint tag qualifier syntax-list"
-        .. " syntax-symbol syntax anchor"
+        .. " syntax-symbol syntax anchor scope"
         .. " iterator type table size_t usize_t ssize_t void*"
         )
     }
