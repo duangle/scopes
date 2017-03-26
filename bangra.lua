@@ -1185,7 +1185,7 @@ local function define_types(def)
     def('Form')
     def('Parameter')
     def('Flow')
-    def('Table')
+    def('VarArgs')
 
     def('Closure')
     def('Frame')
@@ -1356,13 +1356,9 @@ do
         local t = type(value)
         if t == 'table' then
             local mt = getmetatable(value)
-            if mt == null then
-                return Type.Table, value
-            else
-                local ty = MT_TYPE_MAP[mt]
-                if ty ~= null then
-                    return ty, value
-                end
+            local ty = MT_TYPE_MAP[mt]
+            if ty ~= null then
+                return ty, value
             end
         elseif t == 'string' then
             return Type.String, value
@@ -2214,6 +2210,7 @@ local FUNCTIONS = set(split(
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
+        .. " syntax-error"
     ))
 
 -- builtin and global functions with side effects
@@ -3187,7 +3184,7 @@ local function call_flow(frame, cont, flow, ...)
                 assert(rbuf[k])
                 argvalues[k - srci + 1] = rbuf[k]
             end
-            tmpargs[dsti] = Any(argvalues)
+            tmpargs[dsti] = Any(Type.VarArgs, argvalues)
             srci = srci + vargsize
         elseif srci <= rcount then
             tmpargs[dsti] = rbuf[srci]
@@ -3229,7 +3226,7 @@ local function call_flow(frame, cont, flow, ...)
         end
         if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
-            local args = unwrap(Type.Table, arg)
+            local args = unwrap(Type.VarArgs, arg)
             if i == numflowargs then
                 -- splice as-is
                 for k=1,#args do
@@ -3533,7 +3530,7 @@ local function expand_macro(env, handler, topit)
         fmt.maxdepth = 3
         fmt.maxlength = 5
         stream_expr(w, topit.at, fmt)
-        exc.macros = (exc.macros or "") .. w()
+        exc.macros = w() .. (exc.macros or "")
         error(exc)
     end)
 end
@@ -4175,6 +4172,14 @@ builtins.error = function(frame, cont, self, msg)
     return location_error(unwrap(Type.String, msg))
 end
 
+builtins["syntax-error"] = function(frame, cont, self, sxobj, msg)
+    checkargs(2,2, sxobj, msg)
+    assert_syntax(sxobj)
+    local _,anchor = unsyntax(sxobj)
+    set_active_anchor(anchor)
+    return location_error(unwrap(Type.String, msg))
+end
+
 local _exception_handler = none
 builtins["set-exception-handler!"] = wrap_simple_builtin(function(handler)
     _exception_handler = handler
@@ -4192,12 +4197,16 @@ builtins["list-load"] = wrap_simple_builtin(function(path)
     local src = SourceFile.open(path)
     local ptr = src:strptr()
     local lexer = Lexer.init(ptr, ptr + src.length, path)
-    local result,expr = parse(lexer)
-    if result then
-        return expr
-    else
-        error(expr)
-    end
+    return parse(lexer)
+end)
+
+builtins["list-parse"] = wrap_simple_builtin(function(s, path)
+    checkargs(2,2, s, path)
+    path = unwrap(Type.String, path)
+    s = unwrap(Type.String, s)
+    local ptr = rawstring(s)
+    local lexer = Lexer.init(ptr, ptr + #s, path)
+    return parse(lexer)
 end)
 
 builtins.expand = wrap_simple_builtin(function(expr, scope)
@@ -4913,6 +4922,11 @@ end
 -- auxiliary utilities
 --------------------------------------------------------------------------------
 
+builtins.repr = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    return Any(tostring(value))
+end)
+
 builtins.dump = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     local fmt = StreamValueFormat()
@@ -4939,6 +4953,38 @@ builtins.print = wrap_simple_builtin(function(...)
     end
     writer('\n')
 end)
+
+builtins.prompt = wrap_simple_builtin(function(s, pre)
+    checkargs(1,2,s,pre)
+    s = unwrap(Type.String, s)
+    if pre then
+        pre = unwrap(Type.String, pre)
+        C.linenoisePreloadBuffer(pre)
+    end
+    local r = C.linenoise(s)
+    if r == NULL then
+        return none
+    end
+    C.linenoiseHistoryAdd(r)
+    return Any(cstr(r))
+end)
+
+builtins["globals"] = wrap_simple_builtin(function()
+    return Any(globals)
+end)
+
+builtins["set-globals!"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    globals = unwrap(Type.Scope, value)
+end)
+
+builtins["interpreter-version"] = function(frame, cont, dest)
+    return call(frame, none, cont,
+        Any(int(C.BANGRA_VERSION_MAJOR)),
+        Any(int(C.BANGRA_VERSION_MINOR)),
+        Any(int(C.BANGRA_VERSION_PATCH)))
+end
+
 
 --------------------------------------------------------------------------------
 -- GLOBALS
@@ -5040,7 +5086,6 @@ local function init_globals()
     for name,value in pairs(builtins) do
         decl_builtin(name, value)
     end
-    globals:bind(Any(Symbol("globals")), Any(globals))
 
     for _,entry in ipairs(builtin_ops) do
         local _type,name,value = unpack(entry)

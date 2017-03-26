@@ -37,9 +37,11 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #ifdef _WIN32
 #include "mman.h"
 #include "stdlib_ex.h"
+#include "external/linenoise-ng/include/linenoise.h"
 #else
 #include <sys/mman.h>
 #include <unistd.h>
+#include "external/linenoise-ng/include/linenoise.h"
 #endif
 #include <ctype.h>
 #include <stdint.h>
@@ -146,13 +148,11 @@ WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, DEF_BINOP_FUNC)
 #include <windows.h>
 #include "stdlib_ex.h"
 #include "dlfcn.h"
-#include "external/linenoise-ng/include/linenoise.h"
 #else
 // for backtrace
 #include <execinfo.h>
 #include <dlfcn.h>
 //#include "external/linenoise/linenoise.h"
-#include "external/linenoise-ng/include/linenoise.h"
 #endif
 #include <assert.h>
 #include <sys/stat.h>

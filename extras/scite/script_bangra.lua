@@ -42,6 +42,7 @@ local function bangra_symbols()
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
+        .. " syntax-error"
         ),
 
     -- builtin and global functions with side effects
