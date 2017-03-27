@@ -7,7 +7,7 @@ while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symli
 done
 DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 cd $DIR
-MODE=debug
+MODE=release
 if [ $MODE = "release" ]; then
     echo Building release version...
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
@@ -29,7 +29,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
-&& luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h -g \
+&& luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h \
 && clang++ \
     -o $DIR/bangra \
     $DIR/bangra.cpp \

@@ -1062,23 +1062,10 @@ syntax-extend stage-3 (return env)
         make-expand-multi-op-ltr @
     set-scope-symbol! env (quote ..)
         make-expand-multi-op-ltr ..
-
-    set-scope-symbol! env (quote define)
-        block-macro
-            fn (expr env)
-                let name =
-                    @ (@ expr 0) 1
-                let exprlist =
-                    slice (@ expr 0) 2
-                let subscope =
-                    parameter (quote env)
-                cons
-                    list syntax-extend (list (parameter (quote _)) subscope)
-                        list let (quote name) (quote =)
-                            cons do exprlist
-                        list set-scope-symbol! subscope (list quote name) (quote name)
-                        \ subscope
-                    slice expr 1
+    set-scope-symbol! env (quote +)
+        make-expand-multi-op-ltr +
+    set-scope-symbol! env (quote *)
+        make-expand-multi-op-ltr *
 
     set-scope-symbol! env scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
@@ -1588,6 +1575,7 @@ syntax-extend stage-7 (return env)
             .. (string vmin) "." (string vmaj)
                 ? (vpatch == 0) ""
                     .. "." (string vpatch)
+                \ " (" interpreter-timestamp ")"
         let state = (scope)
         fn reset-state ()
             let repl-env = (scope (globals))
@@ -1617,12 +1605,13 @@ syntax-extend stage-7 (return env)
                 cmdlist = ""
             let idstr = (make-idstr)
             let id = (symbol idstr)
-            let promptstr = (.. idstr ">")
+            let promptstr = (.. idstr " ▶")
+            let promptlen = ((countof idstr) + (size_t 2))
             let cmd =
                 prompt
                     ..
                         ? (empty? cmdlist) promptstr
-                            repeat-string (countof promptstr) "."
+                            repeat-string promptlen "."
                         \ " "
                     \ preload
             if (none? cmd)
@@ -1634,7 +1623,7 @@ syntax-extend stage-7 (return env)
             let preload =
                 if terminated? ""
                 else (get-leading-spaces cmd)
-            let slevel = none
+            let slevel = (stack-level)
             let cmdlist =
                 if terminated?
                     try
@@ -1645,6 +1634,7 @@ syntax-extend stage-7 (return env)
                         let code =
                             .. expr
                                 syntax-list expression-suffix
+                        set! slevel (stack-level)
                         let f = (eval code eval-env)
                         set! slevel (stack-level)
                         let result... = (f)
@@ -1658,9 +1648,8 @@ syntax-extend stage-7 (return env)
                                     (get-scope-symbol state (quote counter)) + 1
                                 repeat
                     except (e)
-                        if (not (none? slevel))
-                            print
-                                traceback slevel 4
+                        print
+                            traceback slevel 2
                         print "error:" e
                     \ ""
                 else cmdlist
@@ -1673,5 +1662,3 @@ syntax-extend stage-final (return env)
     return env
 
 read-eval-print-loop
-
-\ none

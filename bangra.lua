@@ -22,6 +22,11 @@ SOFTWARE.
 --]]
 
 local global_opts = {
+    -- semver style versioning
+    version_major = 0,
+    version_minor = 6,
+    version_patch = 0,
+
     trace_execution = false, -- print each statement being executed
     print_lua_traceback = false, -- print lua traceback on any error
     stack_limit = 65536 -- recursion limit
@@ -4131,6 +4136,7 @@ builtins["scope-symbol-wildcard-symbol"] = Symbol.SymbolWildcard
 
 builtins["interpreter-dir"] = cstr(C.bangra_interpreter_dir)
 builtins["interpreter-path"] = cstr(C.bangra_interpreter_path)
+builtins["interpreter-timestamp"] = cstr(C.bangra_compile_time_date())
 
 -- types
 --------------------------------------------------------------------------------
@@ -5176,9 +5182,9 @@ end)
 
 builtins["interpreter-version"] = function(frame, cont, dest)
     return call(frame, none, cont,
-        Any(int(C.BANGRA_VERSION_MAJOR)),
-        Any(int(C.BANGRA_VERSION_MINOR)),
-        Any(int(C.BANGRA_VERSION_PATCH)))
+        Any(int(global_opts.version_major)),
+        Any(int(global_opts.version_minor)),
+        Any(int(global_opts.version_patch)))
 end
 
 builtins['stack-level'] = wrap_simple_builtin(function()
@@ -5197,6 +5203,15 @@ builtins.traceback = wrap_simple_builtin(function(limit, trunc)
     local w = string_writer()
     debugger.stream_traceback(w, opts)
     return Any(w())
+end)
+
+builtins.args = wrap_simple_builtin(function()
+    local result = {}
+    local count = tonumber(C.bangra_argc)
+    for i=0,count-1 do
+        table.insert(result, Any(cstr(C.bangra_argv[i])))
+    end
+    return unpack(result)
 end)
 
 --------------------------------------------------------------------------------
@@ -5236,15 +5251,15 @@ end
 function Type.Void:format_value(x, styler)
     return styler(STYLE.KEYWORD, "none")
 end
-function Type.Symbol:format_symbol(x, styler)
+function Type.Symbol:format_value(x, styler)
     return styler(STYLE.SYMBOL,
         escape_string(x.name, SYMBOL_ESCAPE_CHARS))
 end
-function Type.String:format_symbol(x, styler)
+function Type.String:format_value(x, styler)
     return styler(STYLE.STRING,
         '"' .. escape_string(x, "\"") .. '"')
 end
-function Type.Builtin:format_symbol(x)
+function Type.Builtin:format_value(x)
     return tostring(x)
 end
 
@@ -5311,236 +5326,61 @@ init_globals()
 end -- do
 
 --------------------------------------------------------------------------------
--- TESTING
+-- MAIN
 --------------------------------------------------------------------------------
 
-local macro_test2 = [[
-
-print "result:"
-    call
-        fn/cc (return tuple)
-            call
-                fn/cc (_ f1 f2)
-                    f1; f2
-                    return true
-                tuple 1 2 3
-                tuple 4 5 6
-
-        fn/cc (return vars...)
-            return
-                fn/cc (_)
-                    print "captured:" vars...
-                    _
-
-
-
-\ true
-]]
-
-local macro_test = [[
-do
-    print 1 2 3
-    print "hello world"
-print
-    == 3 4
-    == 3 3
-    != 3 3
-    != 3 4
-print
-    == 1.0 1.0
-    == 1.0 1.1
-    < 10.0 5.0
-    < 5.0 10.0
-    != 1.0 1.0
-
-print "yes"
-print "this"
-print "is"
-print "dog"
-
-print "hi"
-
-(fn/cc (_ x y z w) (print x y z w) (_ x y)) "yes" "this" "is" "dog!"
-
-;
-    fn/cc testf (_ x y z w)
-        print "heyy"
-        print "hooo"
-        call
-            fn/cc subf (_ x y)
-                print "hoo"
-                _ x y
-            \ 2 3
-        print x y z w
-        _ x y
-    \ "yes" "this" "is" "dog!"
-
-do
-    print
-        i64 5
-
-    print
-        == (r32 5) 5.0
-    #error "oh my god"
-
-print "varargs:"
-    call
-        fn/cc (_)
-            _ 1 2 3
-    \ "test"
-    call
-        fn/cc (_)
-            _ 1 2 3 4
-
-print
-    countof "test"
-;
-    fn/cc more-testing (_ x y)
-        ordered-branch 3 4
-            fn/cc (_)
-                _ "=="
-            fn/cc (_)
-                _ "!="
-            fn/cc (_)
-                print "hey"
-                print "crash here"
-                _ "<"
-            fn/cc (_)
-                _ ">"
-        _;
-    \ 3 4
-
-]]
-
-local lexer_test = [[
-test
-    test test
-numbers -1 0x7fffffff 0xffffffff 0xffffffffff 0x7fffffffffffffff
-    \ 0xffffffffffffffff 0.00012345 1 2 3.5 10.0 1001.0 1001.1 1001.001
-    \ 1. .1 0.1 .01 0.01 1e-22 3.1415914159141591415914159 inf nan 1.33
-    \ 1.0 0.0 "te\"st\n\ttest!" test
-test (1 2; 3 4; 5 6)
-
-cond
-    i == 0;
-        print "yes"
-    i == 1;
-        print "no"
-
-function test (a b)
-    assert (a != b)
-    + a b
-
-; more more
-    one
-    two
-    three
-; test test test
-]]
-
-local function test_lexer()
-    local src = SourceFile.open("<test>", macro_test)
-    local ptr = src:strptr()
-    local lexer = Lexer.init(ptr, ptr + src.length, src.path)
-    local expr = parse(lexer)
-    print("parsed result:")
-    stream_expr(stdout_writer, expr, StreamValueFormat(true))
-    return expand_root(expr, null, function(expexpr)
-        print("expanded result:")
-        stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
-        local func = compile_root(expexpr, "main")
-        print("generated IL:")
-        stream_il(stdout_writer, func)
-        print("executing",func)
-        execute(
-            function(...)
-                print(...)
-                os.exit(0)
-            end,
-            func)
-    end)
-end
-
-local function test_bangra()
-    local src = SourceFile.open("bangra.b")
-    local ptr = src:strptr()
-    local lexer = Lexer.init(ptr, ptr + src.length, src.path)
-    local expr = parse(lexer)
-    --stream_expr(stdout_writer, expr, StreamValueFormat(true))
-    return expand_root(expr, null, function(expexpr)
-        --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
-        local func = compile_root(expexpr, "main")
-        print("executing",func)
-        execute(
-            function(...)
-                print(...)
-                os.exit(0)
-            end,
-            func)
-    end)
-end
-
-local function test_ansicolors()
-    for k,v in pairs(ANSI) do
-        if type(v) == "string" then
-            print(ansi_styler(v, k))
-        end
-    end
-    print(ansi_styler(ANSI.COLOR_RGB(0x4080ff), "yes"))
-
-end
-
-local function test_list()
-    local l = List(Any(int(5)), EOL)
-    print(l.next)
-    --print(EOL.next)
-end
-
-do
-    xpcallcc(
-        function(cont)
-            --test_list()
-            --test_lexer()
-            test_bangra()
-            --test_ansicolors()
-            return cont()
-        end,
-        function (err, cont)
-            local is_complex_msg = type(err) == "table" and err.msg
-            local w = string_writer()
-            if is_complex_msg then
-                if err.macros then
-                    w(err.macros)
-                end
-                if err.compile then
-                    w(err.compile)
-                end
-            end
-            if global_opts.print_lua_traceback
-                or not is_complex_msg
-                or not err.interpreter_error then
-                w(traceback("",3))
-                w('\n\n')
-            end
-            debugger.stream_traceback(w)
-            if is_complex_msg then
-                if err.quoted then
-                    -- return as-is
-                    return err.msg
-                end
-                if err.anchor then
-                    err.anchor:stream_message_with_source(w, err.msg)
-                else
-                    w(err.msg)
-                    w('\n')
-                end
-            else
-                w(tostring(err))
-            end
-            print(w())
-            return cont()
-        end,
-        function ()
-            os.exit(1)
+xpcallcc(
+    function(cont)
+        local basedir = cstr(C.bangra_interpreter_dir)
+        local srcpath = basedir .. "/bangra.b"
+        local src = SourceFile.open(srcpath)
+        local ptr = src:strptr()
+        local lexer = Lexer.init(ptr, ptr + src.length, src.path)
+        local expr = parse(lexer)
+        return expand_root(expr, null, function(expexpr)
+            local func = compile_root(expexpr, "main")
+            return execute(
+                function()
+                    os.exit(0)
+                end,
+                func)
         end)
-end
+    end,
+    function (err, cont)
+        local is_complex_msg = type(err) == "table" and err.msg
+        local w = string_writer()
+        if is_complex_msg then
+            if err.macros then
+                w(err.macros)
+            end
+            if err.compile then
+                w(err.compile)
+            end
+        end
+        if global_opts.print_lua_traceback
+            or not is_complex_msg
+            or not err.interpreter_error then
+            w(traceback("",3))
+            w('\n\n')
+        end
+        debugger.stream_traceback(w)
+        if is_complex_msg then
+            if err.quoted then
+                -- return as-is
+                return err.msg
+            end
+            if err.anchor then
+                err.anchor:stream_message_with_source(w, err.msg)
+            else
+                w(err.msg)
+                w('\n')
+            end
+        else
+            w(tostring(err))
+        end
+        print(w())
+        return cont()
+    end,
+    function ()
+        os.exit(1)
+    end)

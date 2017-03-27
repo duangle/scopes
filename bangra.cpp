@@ -82,13 +82,6 @@ EXPORT_DEFINES
 #undef EXPORT_DEFINES
 };
 
-enum {
-    // semver style versioning
-    BANGRA_VERSION_MAJOR = 0,
-    BANGRA_VERSION_MINOR = 6,
-    BANGRA_VERSION_PATCH = 0,
-};
-
 const char *bangra_interpreter_path;
 const char *bangra_interpreter_dir;
 size_t bangra_argc;
@@ -111,6 +104,8 @@ bool bangra_r64_eq(double a, double b);
 bool bangra_r64_ne(double a, double b);
 bool bangra_r64_lt(double a, double b);
 bool bangra_r64_gt(double a, double b);
+
+const char *bangra_compile_time_date();
 
 #define DEF_BINOP_FUNC(tag, ctype, name, op) \
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b);
@@ -205,6 +200,7 @@ namespace blobs {
 // #pragma GCC diagnostic ignored "-Wmissing-braces"
 // this one is only enabled for code cleanup
 // #pragma GCC diagnostic ignored "-Wunused-function"
+#pragma GCC diagnostic ignored "-Wdate-time"
 
 //------------------------------------------------------------------------------
 // UTILITIES
@@ -364,6 +360,10 @@ bool bangra_r64_lt(double a, double b) { return a <  b; }
 bool bangra_r64_gt(double a, double b) { return a >  b; }
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, IMPL_BINOP_FUNC)
+
+const char *bangra_compile_time_date() {
+    return __DATE__ ", " __TIME__;
+}
 
 // This function isn't referenced outside its translation unit, but it
 // can't use the "static" keyword because its address is used for
