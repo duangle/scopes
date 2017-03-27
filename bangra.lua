@@ -685,13 +685,11 @@ local xpcallcc
 local errorcc
 local _xpcallcc_handler
 do
-    local function default_finally (...)
-        return ...
-    end
-
     errorcc = function (exc)
         if _xpcallcc_handler then
-            return _xpcallcc_handler(exc)
+            _xpcallcc_handler(exc)
+            error("can't return after error")
+            --os.exit(1)
         else
             print(traceback("uncaught error: " .. tostring(exc), 2))
             os.exit(1)
@@ -701,7 +699,7 @@ do
     xpcallcc = function (func, xfunc, ffinally)
         assert(func)
         assert(xfunc)
-        ffinally = ffinally or default_finally
+        assert(ffinally)
         local old_handler = _xpcallcc_handler
         local function cleanup ()
             _xpcallcc_handler = old_handler
@@ -3371,11 +3369,11 @@ local expand_root
 
 local function wrap_expand_builtin(f)
     return function(frame, cont, dest, topit, env)
-        local cur_list, cur_env = f(
-            unwrap(Type.Scope, env),
-            unwrap(Type.List, topit))
-        assert(cur_env)
-        return call(frame, none, cont, Any(cur_list), Any(cur_env))
+        return f(unwrap(Type.Scope, env), unwrap(Type.List, topit),
+            function (cur_list, cur_env)
+                assert(cur_env)
+                return call(frame, none, cont, Any(cur_list), Any(cur_env))
+            end)
     end
 end
 
@@ -3395,25 +3393,29 @@ local function toparameter(env, value)
     end
 end
 
-local function expand_expr_list(env, it)
+local function expand_expr_list(env, it, cont)
     assert_scope(env)
     assert_list(it)
 
-    local l = EOL
-    while (it ~= EOL) do
-        local nextlist,nextscope = expand(env, it)
-        assert_list(nextlist)
-        if (nextlist == EOL) then
-            break
+    local function process(env, it, l)
+        if it == EOL then
+            return cont(reverse_list_inplace(l))
         end
-        l = List(nextlist.at, l)
-        it = nextlist.next
-        env = nextscope
+        return expand(env, it, function(nextlist,nextscope)
+            assert_list(nextlist)
+            if (nextlist == EOL) then
+                return cont(reverse_list_inplace(l))
+            end
+            return process(
+                nextscope,
+                nextlist.next,
+                List(nextlist.at, l))
+        end)
     end
-    return reverse_list_inplace(l)
+    return process(env, it, EOL)
 end
 
-expand_continuation = function(env, topit)
+expand_continuation = function(env, topit, cont)
     assert_scope(env)
     assert_list(topit)
     verify_at_parameter_count(topit, 1, -1)
@@ -3458,51 +3460,63 @@ expand_continuation = function(env, topit)
         param = param.next
     end
 
-    return List(
-            quote(syntax(Any(
-                List(
-                    syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw),
-                    List(
-                        sym,
-                        List(
-                            syntax(Any(reverse_list_inplace(outargs)),
-                                anchor_params),
-                            expand_expr_list(subenv, it))))), anchor)),
-            topit.next), env
+    return expand_expr_list(subenv, it, function(result)
+        result = List(syntax(Any(reverse_list_inplace(outargs)), anchor_params), result)
+        result = List(sym, result)
+        result = List(syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw), result)
+        return cont(List(quote(syntax(Any(result), anchor)), topit.next), env)
+    end)
 end
 
-expand_syntax_extend = function(env, topit)
-    local cur_list, cur_env = expand_continuation(env, topit)
-
-    local expr = cur_list.at
-    local anchor = expr.value.anchor
-
-    local fun = unsyntax(compile(unquote(expr), none))
-    local nextenv = execute(
-        function(expr_env)
-            return unwrap(Type.Scope, expr_env)
-        end,
-        fun, Any(env))
-
-    return cur_list.next, nextenv
+expand_syntax_extend = function(env, topit, cont)
+    assert(cont)
+    return expand_continuation(env, topit, function(cur_list, cur_env)
+        local expr = cur_list.at
+        local anchor = expr.value.anchor
+        local fun = unsyntax(compile(unquote(expr), none))
+        return execute(
+            function(expr_env)
+                return cont(cur_list.next, unwrap(Type.Scope, expr_env))
+            end,
+            fun, Any(env))
+    end)
 end
 
-local function expand_wildcard(env, handler, topit)
+local function expand_wildcard(env, handler, topit, cont)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
-    return execute(function(result)
-        if (is_none(result)) then
-            return EOL
-        end
-        return unwrap(Type.List, result)
-    end, handler, Any(topit), Any(env))
+    assert(cont)
+    return xpcallcc(function(cont)
+        return execute(function(result)
+            if (is_none(result)) then
+                return cont(EOL)
+            end
+            return cont(unwrap(Type.List, result))
+        end, handler, Any(topit), Any(env))
+    end,
+    function (exc, cont)
+        exc = exception(exc)
+        local w = string_writer()
+        assert_syntax(topit.at)
+        local anchor = topit.at.value.anchor
+        anchor:stream_message_with_source(w, 'while expanding wildcard macro')
+        local fmt = StreamValueFormat()
+        fmt.naked = true
+        fmt.maxdepth = 3
+        fmt.maxlength = 5
+        stream_expr(w, topit.at, fmt)
+        exc.macros = w() .. (exc.macros or "")
+        error(exc)
+    end,
+    cont)
 end
 
-local function expand_macro(env, handler, topit)
+local function expand_macro(env, handler, topit, cont)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
+    assert(cont)
     return xpcallcc(function(cont)
         return execute(function(result_list, result_scope)
             --print(handler, result_list, result_scope)
@@ -3544,7 +3558,7 @@ local function expand_macro(env, handler, topit)
         local w = string_writer()
         assert_syntax(topit.at)
         local anchor = topit.at.value.anchor
-        anchor:stream_message_with_source(w, 'while expanding expression')
+        anchor:stream_message_with_source(w, 'while expanding macro')
         local fmt = StreamValueFormat()
         fmt.naked = true
         fmt.maxdepth = 3
@@ -3552,106 +3566,127 @@ local function expand_macro(env, handler, topit)
         stream_expr(w, topit.at, fmt)
         exc.macros = w() .. (exc.macros or "")
         error(exc)
-    end)
+    end,
+    cont)
 end
 
-expand = function(env, topit)
+expand = function(env, topit, cont)
     assert_scope(env)
     assert_list(topit)
     local result = none
     assert(topit ~= EOL)
-::process::
-    local expr = topit.at
-    if (is_quote_type(expr.type)) then
-        -- remove qualifier and return as-is
-        return List(unquote(expr), topit.next), env
-    end
-    assert_syntax(expr)
-    local anchor = expr.value.anchor
-    set_active_anchor(anchor)
-    expr = unsyntax(expr)
-    if (is_quote_type(expr.type)) then
-        location_error("syntax must not wrap quote")
-    end
-    if (expr.type == Type.List) then
-        local list = expr.value
-        if (list == EOL) then
-            location_error("expression is empty")
+
+    local function process(env, topit)
+        local expr = topit.at
+        if (is_quote_type(expr.type)) then
+            -- remove qualifier and return as-is
+            return cont(List(unquote(expr), topit.next), env)
         end
-
-        local head = list.at
-        assert_syntax(head)
-        local head_anchor = expr.value.anchor
-        head = unsyntax(head)
-
-        -- resolve symbol
-        if (head.type == Type.Symbol) then
-            head = env:lookup(head.value) or none
+        assert_syntax(expr)
+        local anchor = expr.value.anchor
+        set_active_anchor(anchor)
+        expr = unsyntax(expr)
+        if (is_quote_type(expr.type)) then
+            location_error("syntax must not wrap quote")
         end
-
-        if (is_macro_type(head.type)) then
-            local result_list,result_env = expand_macro(env, unmacro(head), topit)
-            if (result_list ~= EOL) then
-                topit = result_list
-                env = result_env
-                assert_scope(env)
-                assert(topit ~= EOL)
-                goto process
-            elseif result_env then
-                return EOL, env
+        if (expr.type == Type.List) then
+            local list = expr.value
+            if (list == EOL) then
+                location_error("expression is empty")
             end
-        end
 
-        local default_handler = env:lookup(Symbol.ListWildcard)
-        if default_handler then
-            local result = expand_wildcard(env, default_handler, topit)
-            if result ~= EOL then
-                topit = result
-                goto process
+            local head = list.at
+            assert_syntax(head)
+            local head_anchor = expr.value.anchor
+            head = unsyntax(head)
+
+            -- resolve symbol
+            if (head.type == Type.Symbol) then
+                head = env:lookup(head.value) or none
             end
-        end
 
-        local it = unwrap(Type.List, expr)
-        result = syntax(Any(expand_expr_list(env, it)), anchor)
-        topit = topit.next
-    elseif expr.type == Type.Symbol then
-        local value = expr.value
-        result = env:lookup(value)
-        if result == null then
-            local default_handler = env:lookup(Symbol.SymbolWildcard)
-            if default_handler then
-                local result = expand_wildcard(env, default_handler, topit)
-                if result ~= EOL then
-                    topit = result
-                    goto process
+            local function expand_list()
+                return expand_expr_list(env,
+                    unwrap(Type.List, expr),
+                    function (result)
+                        return cont(List(syntax(Any(result), anchor),
+                            topit.next), env)
+                    end)
+            end
+
+            local function expand_wildcard_list()
+                local default_handler = env:lookup(Symbol.ListWildcard)
+                if default_handler then
+                    return expand_wildcard(env, default_handler, topit,
+                        function (result)
+                            if result ~= EOL then
+                                return process(env, result)
+                            end
+                            return expand_list()
+                        end)
+                end
+                return expand_list()
+            end
+
+            if (is_macro_type(head.type)) then
+                return expand_macro(env, unmacro(head), topit,
+                    function (result_list,result_env)
+                        if (result_list ~= EOL) then
+                            assert_scope(result_env)
+                            assert(result_list ~= EOL)
+                            return process(result_env, result_list)
+                        elseif result_env then
+                            return cont(EOL, env)
+                        else
+                            return expand_wildcard_list()
+                        end
+                    end)
+            end
+
+            return expand_wildcard_list()
+        elseif expr.type == Type.Symbol then
+            local value = expr.value
+            local result = env:lookup(value)
+            if result == null then
+                local function missing_symbol_error()
+                    set_active_anchor(anchor)
+                    location_error(
+                        format("no value bound to name '%s' in scope", value.name))
+                end
+                local default_handler = env:lookup(Symbol.SymbolWildcard)
+                if default_handler then
+                    expand_wildcard(env, default_handler, topit, function(result)
+                        if result ~= EOL then
+                            return process(env, result)
+                        end
+                        return missing_symbol_error()
+                    end)
+                    return missing_symbol_error()
                 end
             end
-            set_active_anchor(anchor)
-            location_error(
-                format("no value bound to name '%s' in scope", value.name))
+            return cont(List(syntax(result, anchor), topit.next), env)
+        else
+            return cont(List(topit.at, topit.next), env)
         end
-        result = syntax(result, anchor)
-        topit = topit.next
-    else
-        result = topit.at
-        topit = topit.next
     end
-    return List(result, topit), env
+    return process(env, topit)
 end
 
-expand_root = function(expr, scope)
+expand_root = function(expr, scope, cont)
     local anchor
     if is_syntax_type(expr.type) then
         anchor = expr.value.anchor
         expr = unsyntax(expr)
     end
     expr = unwrap(Type.List, expr)
-    local result = Any(expand_expr_list(scope or globals, expr))
-    if anchor then
-        return syntax(result, anchor)
-    else
-        return result
-    end
+    return expand_expr_list(scope or globals, expr, function(result)
+        result = Any(result)
+        if anchor then
+            return cont(syntax(result, anchor))
+        else
+            return cont(result)
+        end
+    end)
 end
 
 end -- do
@@ -3956,6 +3991,9 @@ compile = function(sxexpr, dest, anchor)
             exc.compile = w()
         end
         error(exc)
+    end,
+    function (...)
+        return ...
     end)
 end
 
@@ -4010,17 +4048,6 @@ end
 --------------------------------------------------------------------------------
 
 do -- reduce number of locals
-
-local function safecontcall(callfunc, errfunc)
-    return xpcallcc(
-    function(cont)
-        return callfunc(Any(Builtin(
-            function(_frame, _cont, _self, ...)
-                return cont(...)
-            end, Symbol.ReturnSafecall)))
-    end,
-    errfunc)
-end
 
 local function checkargs(mincount, maxcount, ...)
     if ((mincount <= 0) and (maxcount == -1)) then
@@ -4207,7 +4234,7 @@ builtins.xpcall = function(frame, cont, self, func, xfunc)
     return xpcallcc(function(cont)
             return call(frame,
                 Any(Builtin(function(_frame, _cont, _self, ...)
-                    return cont(...)
+                    return cont(_frame, ...)
                 end, Symbol.XPCallReturn)), func)
         end,
         function(exc, cont)
@@ -4220,10 +4247,10 @@ builtins.xpcall = function(frame, cont, self, func, xfunc)
             end
             return call(frame,
                 Any(Builtin(function(_frame, _cont, _self, ...)
-                    return cont(...)
+                    return cont(_frame, ...)
                 end, Symbol.XPCallReturn)), xfunc, exc)
         end,
-        function(...)
+        function(frame, ...)
             return call(frame, none, cont, ...)
         end)
 end
@@ -4256,18 +4283,19 @@ builtins["list-parse"] = wrap_simple_builtin(function(s, path)
     return parse(lexer)
 end)
 
-builtins.expand = wrap_simple_builtin(function(expr, scope)
+builtins.expand = function(frame, cont, self, expr, scope)
     checkargs(2,2, expr, scope)
     local _scope = unwrap(Type.Scope, scope)
-    local result,expexpr = expand_root(expr, _scope)
-    if result then
-        return expexpr, scope
-    else
-        error(expexpr)
-    end
-end)
+    return expand_root(expr, _scope, function(expexpr)
+        if result then
+            return call(frame, none, cont, expexpr, scope)
+        else
+            error(expexpr)
+        end
+    end)
+end
 
-builtins.eval = wrap_simple_builtin(function(expr, scope, path)
+builtins.eval = function(frame, cont, self, expr, scope, path)
     checkargs(1,3, expr, scope, path)
     if scope then
         scope = unwrap(Type.Scope, scope)
@@ -4279,9 +4307,10 @@ builtins.eval = wrap_simple_builtin(function(expr, scope, path)
     else
         path = "<eval>"
     end
-    local expexpr = expand_root(expr, scope)
-    return compile_root(expexpr, path)
-end)
+    return expand_root(expr, scope, function(expexpr)
+        return call(frame, none, cont, compile_root(expexpr, path))
+    end)
+end
 
 builtins.escape = wrap_simple_builtin(function(value)
     checkargs(1,1, value)
@@ -5416,18 +5445,20 @@ local function test_lexer()
     local expr = parse(lexer)
     print("parsed result:")
     stream_expr(stdout_writer, expr, StreamValueFormat(true))
-    local expexpr = expand_root(expr)
-    print("expanded result:")
-    stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
-    local func = compile_root(expexpr, "main")
-    print("generated IL:")
-    stream_il(stdout_writer, func)
-    print("executing",func)
-    execute(
-        function(...)
-            print(...)
-        end,
-        func)
+    return expand_root(expr, null, function(expexpr)
+        print("expanded result:")
+        stream_expr(stdout_writer, expexpr, StreamValueFormat(true))
+        local func = compile_root(expexpr, "main")
+        print("generated IL:")
+        stream_il(stdout_writer, func)
+        print("executing",func)
+        execute(
+            function(...)
+                print(...)
+                os.exit(0)
+            end,
+            func)
+    end)
 end
 
 local function test_bangra()
@@ -5436,15 +5467,17 @@ local function test_bangra()
     local lexer = Lexer.init(ptr, ptr + src.length, src.path)
     local expr = parse(lexer)
     --stream_expr(stdout_writer, expr, StreamValueFormat(true))
-    local expexpr = expand_root(expr)
-    --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
-    local func = compile_root(expexpr, "main")
-    print("executing",func)
-    execute(
-        function(...)
-            print(...)
-        end,
-        func)
+    return expand_root(expr, null, function(expexpr)
+        --stream_expr(stdout_writer, Any(expexpr), StreamValueFormat(true))
+        local func = compile_root(expexpr, "main")
+        print("executing",func)
+        execute(
+            function(...)
+                print(...)
+                os.exit(0)
+            end,
+            func)
+    end)
 end
 
 local function test_ansicolors()
@@ -5505,6 +5538,9 @@ do
                 w(tostring(err))
             end
             print(w())
+            return cont()
+        end,
+        function ()
             os.exit(1)
         end)
 end
