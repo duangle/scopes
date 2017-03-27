@@ -683,9 +683,8 @@ local function assert_function(x) assert_luatype("function", x) end
 
 local xpcallcc
 local errorcc
+local _xpcallcc_handler
 do
-    local _xpcallcc_handler
-
     local function default_finally (...)
         return ...
     end
@@ -815,17 +814,25 @@ LOCATION = ANSI.COLOR_GRAY30,
 }
 end
 
-local is_tty = (C.isatty(C.fileno(C.stdout)) == 1)
-local support_ansi = is_tty
-local ansi
-if is_tty then
-    local reset = ANSI.RESET
-    ansi = function(style, x) return style .. x .. reset end
-else
-    ansi = function(style, x) return x end
+local function ansi_styler(style, x)
+    return style .. x .. ANSI.RESET
 end
 
-repr = function(x)
+local function plain_styler(style, x)
+    return x
+end
+
+local is_tty = (C.isatty(C.fileno(C.stdout)) == 1)
+local support_ansi = is_tty
+local default_styler
+if support_ansi then
+    default_styler = ansi_styler
+else
+    default_styler = plain_styler
+end
+
+repr = function(x, styler)
+    styler = styler or default_styler
     local visited = {}
     local function _repr(x, maxd)
         if type(x) == "table" then
@@ -837,44 +844,44 @@ repr = function(x)
                 return mt.__tostring(x)
             end
             visited[x] = x
-            local s = ansi(STYLE.OPERATOR,"{")
+            local s = styler(STYLE.OPERATOR,"{")
             if maxd <= 0 then
-                s = s .. ansi(STYLE.COMMENT, "...")
+                s = s .. styler(STYLE.COMMENT, "...")
             else
                 local n = ''
                 for k,v in pairs(x) do
                     if n ~= '' then
-                        n = n .. ansi(STYLE.OPERATOR,",")
+                        n = n .. styler(STYLE.OPERATOR,",")
                     end
                     k = _repr(k, maxd - 1)
-                    n = n .. k .. ansi(STYLE.OPERATOR, "=") .. _repr(v, maxd - 1)
+                    n = n .. k .. styler(STYLE.OPERATOR, "=") .. _repr(v, maxd - 1)
                 end
                 if mt then
                     if n ~= '' then
-                        n = n .. ansi(STYLE.OPERATOR,",")
+                        n = n .. styler(STYLE.OPERATOR,",")
                     end
                     if mt.__class then
-                        n = n .. ansi(STYLE.KEYWORD, "class")
-                            .. ansi(STYLE.OPERATOR, "=")
+                        n = n .. styler(STYLE.KEYWORD, "class")
+                            .. styler(STYLE.OPERATOR, "=")
                             .. tostring(mt.__class)
                     else
-                        n = n .. ansi(STYLE.KEYWORD, "meta")
-                            .. ansi(STYLE.OPERATOR, "=")
+                        n = n .. styler(STYLE.KEYWORD, "meta")
+                            .. styler(STYLE.OPERATOR, "=")
                             .. _repr(mt, maxd - 1)
                     end
                 end
                 s = s .. n
             end
-            s = s .. ansi(STYLE.OPERATOR,"}")
+            s = s .. styler(STYLE.OPERATOR,"}")
             return s
         elseif type(x) == "number" then
-            return ansi(STYLE.NUMBER, tostring(x))
+            return styler(STYLE.NUMBER, tostring(x))
         elseif type(x) == "boolean" then
-            return ansi(STYLE.KEYWORD, tostring(x))
+            return styler(STYLE.KEYWORD, tostring(x))
         elseif type(x) == "string" then
-            return ansi(STYLE.STRING, format("%q", x))
+            return styler(STYLE.STRING, format("%q", x))
         elseif type(x) == "nil" then
-            return ansi(STYLE.KEYWORD, "null")
+            return styler(STYLE.KEYWORD, "null")
         end
         return tostring(x)
     end
@@ -921,7 +928,7 @@ do
         end
     })
     function cls:__tostring()
-        return ansi(STYLE.SYMBOL, self.name)
+        return default_styler(STYLE.SYMBOL, self.name)
     end
 end
 
@@ -955,8 +962,12 @@ local function define_symbols(def)
     def({RCompare='rcompare'})
     def({SliceForwarder='slice-forwarder'})
     def({JoinForwarder='join-forwarder'})
+    def({RCast='rcast'})
+    def({ROp='rop'})
     def({CompareListNext="compare-list-next"})
     def({ReturnSafecall='return-safecall'})
+    def({ReturnError='return-error'})
+    def({XPCallReturn='xpcall-return'})
 
 end
 
@@ -999,15 +1010,16 @@ do
             .. ':' .. format("%i", self.lineno)
             .. ':' .. format("%i", self.column)
     end
-    function cls:stream_message_with_source(writer, msg)
-        writer(ansi(STYLE.LOCATION, self:format_plain() .. ":"))
+    function cls:stream_message_with_source(writer, msg, styler)
+        styler = styler or default_styler
+        writer(styler(STYLE.LOCATION, self:format_plain() .. ":"))
         writer(" ")
         writer(msg)
         writer("\n")
-        self:stream_source_line(writer)
+        self:stream_source_line(writer, styler)
     end
     function cls:__tostring()
-        return ansi(STYLE.LOCATION, self:format_plain())
+        return default_styler(STYLE.LOCATION, self:format_plain())
     end
 end
 
@@ -1112,10 +1124,10 @@ do
             count = count + 1
         end
         return
-            ansi(STYLE.KEYWORD, "scope")
-            .. ansi(STYLE.COMMENT, "<")
+            default_styler(STYLE.KEYWORD, "scope")
+            .. default_styler(STYLE.COMMENT, "<")
             .. format("%i symbols", count)
-            .. ansi(STYLE.COMMENT, ">")
+            .. default_styler(STYLE.COMMENT, ">")
     end
     function cls:bind(sxname, value)
         local name = unwrap(Type.Symbol, unsyntax(sxname))
@@ -1203,7 +1215,7 @@ do
             idx = idx + 1
             return setmetatable({
                 name = name,
-                displayname = displayname or ansi(STYLE.TYPE, name),
+                displayname = displayname or default_styler(STYLE.TYPE, name),
                 index = idx,
                 scope = Scope()
             }, Type)
@@ -1261,13 +1273,13 @@ do
                 val = Type(
                     self.name .. "[" .. _type.name .. "]",
                     self.displayname
-                    .. ansi(STYLE.OPERATOR, "[")
+                    .. default_styler(STYLE.OPERATOR, "[")
                     .. _type.displayname
-                    .. ansi(STYLE.OPERATOR, "]"))
+                    .. default_styler(STYLE.OPERATOR, "]"))
                 val:set_element_type(_type)
                 val:set_super(self)
-                function val:format_value(value)
-                    return format_any_value(self:element_type(), value)
+                function val:format_value(value, styler)
+                    return format_any_value(self:element_type(), value, styler)
                 end
                 cache[_type] = val
                 if on_create then
@@ -1281,13 +1293,13 @@ do
     Type.Macro = make_qualifier_type("macro")
     Type.Quote = make_qualifier_type("quote")
     Type.Syntax = make_qualifier_type("syntax", function(val)
-        function val:format_value(value)
+        function val:format_value(value, styler)
             return
-                ansi(STYLE.LOCATION,
+                styler(STYLE.LOCATION,
                     tostring(value.anchor:format_plain()) .. ":")
                 .. format_any_value(
                     self:element_type(),
-                    value.datum)
+                    value.datum, styler)
         end
     end)
     Type.SizeT = Type.U64
@@ -1343,11 +1355,11 @@ local MT_TYPE_MAP = {
     [Anchor] = Type.Anchor
 }
 
-format_any_value = function(_type, x)
+format_any_value = function(_type, x, styler)
     if rawget(_type, 'format_value') then
-        return _type:format_value(x)
+        return _type:format_value(x, styler)
     else
-        return repr(x)
+        return repr(x, styler)
     end
 end
 
@@ -1416,10 +1428,10 @@ do
 end
 function Any.__tostring(self)
     if getmetatable(self.type) ~= Type then
-        return ansi(STYLE.ERROR, "corrupted value")
+        return default_styler(STYLE.ERROR, "corrupted value")
     else
-        return format_any_value(self.type, self.value)
-            .. ansi(STYLE.OPERATOR, ":")
+        return format_any_value(self.type, self.value, default_styler)
+            .. default_styler(STYLE.OPERATOR, ":")
             .. self.type.displayname
     end
 end
@@ -1496,7 +1508,7 @@ do
         end
         function cls:__tostring()
             return
-                ansi(STYLE.COMMENT,
+                default_styler(STYLE.COMMENT,
                     self.anchor:format_plain()
                     .. ":")
                 .. tostring(self.datum)
@@ -1847,7 +1859,7 @@ do
         return cast(rawstring, self.ptr)
     end
     local CR = ord('\n')
-    function cls:stream_line(writer, offset, indent)
+    function cls:stream_line(writer, offset, styler, indent)
         local str = self:strptr()
         if (offset >= self.length) then
             writer("<cannot display location in source file>\n")
@@ -1886,16 +1898,16 @@ do
             for i=1,column do
                 writer(' ')
             end
-            writer(ansi(STYLE.OPERATOR, '^'))
+            writer(styler(STYLE.OPERATOR, '^'))
             writer("\n")
         end
     end
 end
 
-function Anchor:stream_source_line(writer, indent)
+function Anchor:stream_source_line(writer, styler, indent)
     local sf = SourceFile.open(self.path)
     if sf then
-        sf:stream_line(writer, self.offset, indent)
+        sf:stream_line(writer, self.offset, styler, indent)
     end
 end
 
@@ -2221,7 +2233,7 @@ local SFXFUNCTIONS = set(split(
 -- builtin operator functions that can also be used as infix
 local OPERATORS = set(split(
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-        .. " *= /= %= ^= &= |= ~= <- ? := // << >>"
+        .. " *= /= %= ^= &= |= ~= <- ? := // << >> ==? !=? >? >=? <? <=?"
     ))
 
 local TYPES = set(split(
@@ -2245,6 +2257,7 @@ local function StreamValueFormat(naked, depth, opts)
     opts.operators = opts.operators or OPERATORS
     opts.types = opts.types or TYPES
     opts.anchors = opts.anchors or "line"
+    opts.styler = opts.styler or default_styler
     return opts
 end
 
@@ -2291,6 +2304,7 @@ stream_expr = function(writer, e, format)
     local naked = format.naked
     local line_anchors = (format.anchors == "line")
     local atom_anchors = (format.anchors == "all")
+    local styler = format.styler
 
     local last_anchor
 
@@ -2310,10 +2324,10 @@ stream_expr = function(writer, e, format)
                 str = "::" .. ANCHOR_SEP
             end
 
-            writer(ansi(STYLE.COMMENT, str))
+            writer(styler(STYLE.COMMENT, str))
             last_anchor = anchor
         else
-            --writer(ansi(STYLE.ERROR, "?"))
+            --writer(styler(STYLE.ERROR, "?"))
         end
     end
 
@@ -2358,16 +2372,16 @@ stream_expr = function(writer, e, format)
 
             local it = e.value
             if (it == EOL) then
-                writer(ansi(STYLE.OPERATOR,"()"))
+                writer(styler(STYLE.OPERATOR,"()"))
                 if (naked) then
                     writer('\n')
                 end
                 return
             end
             if maxdepth == 0 then
-                writer(ansi(STYLE.OPERATOR,"("))
-                writer(ansi(STYLE.COMMENT,"<...>"))
-                writer(ansi(STYLE.OPERATOR,")"))
+                writer(styler(STYLE.OPERATOR,"("))
+                writer(styler(STYLE.COMMENT,"<...>"))
+                writer(styler(STYLE.OPERATOR,")"))
                 if (naked) then
                     writer('\n')
                 end
@@ -2429,20 +2443,20 @@ stream_expr = function(writer, e, format)
             else
                 depth = depth + 1
                 naked = false
-                writer(ansi(STYLE.OPERATOR,'('))
+                writer(styler(STYLE.OPERATOR,'('))
                 while (it ~= EOL) do
                     if (offset > 0) then
                         writer(' ')
                     end
                     if (offset >= maxlength) then
-                        writer(ansi(STYLE.COMMENT,"..."))
+                        writer(styler(STYLE.COMMENT,"..."))
                         break
                     end
                     walk(it.at, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
                 end
-                writer(ansi(STYLE.OPERATOR,')'))
+                writer(styler(STYLE.OPERATOR,')'))
                 if (naked) then
                     writer('\n')
                 end
@@ -2457,11 +2471,9 @@ stream_expr = function(writer, e, format)
                     or (format.operators[name] and STYLE.OPERATOR)
                     or (format.types[name] and STYLE.TYPE)
                     or STYLE.SYMBOL
-                if (style and support_ansi) then writer(style) end
-                writer(escape_string(name, SYMBOL_ESCAPE_CHARS))
-                if (style and support_ansi) then writer(ANSI.RESET) end
+                writer(styler(style, escape_string(name, SYMBOL_ESCAPE_CHARS)))
             else
-                writer(format_any_value(e.type, e.value))
+                writer(format_any_value(e.type, e.value, styler))
             end
             if
                 quoted
@@ -2470,7 +2482,7 @@ stream_expr = function(writer, e, format)
                 and e.type ~= Type.String
                 and e.type ~= Type.Symbol
                 and e.type ~= Type.Parameter) then
-                writer(ansi(STYLE.OPERATOR, ":"))
+                writer(styler(STYLE.OPERATOR, ":"))
                 writer(tostring(otype))
             end
             if (naked) then
@@ -2528,9 +2540,9 @@ do
     end
     function cls:__tostring()
         if self.name ~= Symbol.Unnamed then
-            return ansi(STYLE.FUNCTION, self.name.name)
+            return default_styler(STYLE.FUNCTION, self.name.name)
         else
-            return ansi(STYLE.ERROR, tostring(self.func))
+            return default_styler(STYLE.ERROR, tostring(self.func))
         end
     end
 end
@@ -2549,7 +2561,7 @@ do
         return self.func(...)
     end
     function cls:__tostring()
-        return ansi(STYLE.KEYWORD, self.name.name)
+        return default_styler(STYLE.KEYWORD, self.name.name)
     end
 end
 
@@ -2584,18 +2596,18 @@ do
             (function()
                 if self.flow ~= null then
                     return tostring(self.flow)
-                        .. ansi(STYLE.OPERATOR, "@")
-                        .. ansi(STYLE.NUMBER, self.index - 1)
+                        .. default_styler(STYLE.OPERATOR, "@")
+                        .. default_styler(STYLE.NUMBER, self.index - 1)
                 else
                     return ""
                 end
             end)()
-            .. ansi(STYLE.COMMENT, "%")
-            .. ansi(STYLE.SYMBOL, self.name.name)
+            .. default_styler(STYLE.COMMENT, "%")
+            .. default_styler(STYLE.SYMBOL, self.name.name)
             ..
                 (function()
                     if self.vararg then
-                        return ansi(STYLE.KEYWORD, "…")
+                        return default_styler(STYLE.KEYWORD, "…")
                     else
                         return ""
                     end
@@ -2603,7 +2615,7 @@ do
             ..
                 (function()
                     if self.type ~= Type.Any then
-                        return ansi(STYLE.OPERATOR, ":")
+                        return default_styler(STYLE.OPERATOR, ":")
                             .. self.type.displayname
                     else
                         return ""
@@ -2652,10 +2664,10 @@ do
 
     function cls:__tostring()
         return
-            ansi(STYLE.KEYWORD, "λ")
-            .. ansi(STYLE.SYMBOL, self.name.name)
-            .. ansi(STYLE.OPERATOR, "#")
-            .. ansi(STYLE.NUMBER, self.uid)
+            default_styler(STYLE.KEYWORD, "λ")
+            .. default_styler(STYLE.SYMBOL, self.name.name)
+            .. default_styler(STYLE.OPERATOR, "#")
+            .. default_styler(STYLE.NUMBER, self.uid)
     end
 
     function cls:append_parameter(param)
@@ -2726,11 +2738,11 @@ do -- compact hashtables as much as one can where possible
     end
     function cls:__tostring()
         return
-            ansi(STYLE.KEYWORD, "frame")
-            .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.OPERATOR, "#")
-            .. ansi(STYLE.NUMBER, tostring(self.index))
-            .. ansi(STYLE.COMMENT, ">")
+            default_styler(STYLE.KEYWORD, "frame")
+            .. default_styler(STYLE.COMMENT, "<")
+            .. default_styler(STYLE.OPERATOR, "#")
+            .. default_styler(STYLE.NUMBER, tostring(self.index))
+            .. default_styler(STYLE.COMMENT, ">")
     end
     function cls:bind(flow, values)
         assert_flow(flow)
@@ -2799,11 +2811,11 @@ do -- clone frame for every mapping
     end
     function cls:__tostring()
         return
-            ansi(STYLE.KEYWORD, "frame")
-            .. ansi(STYLE.COMMENT, "<")
-            .. ansi(STYLE.OPERATOR, "#")
-            .. ansi(STYLE.NUMBER, tostring(self.index))
-            .. ansi(STYLE.COMMENT, ">")
+            default_styler(STYLE.KEYWORD, "frame")
+            .. default_styler(STYLE.COMMENT, "<")
+            .. default_styler(STYLE.OPERATOR, "#")
+            .. default_styler(STYLE.NUMBER, tostring(self.index))
+            .. default_styler(STYLE.COMMENT, ">")
     end
     function cls:bind(flow, values)
         assert_flow(flow)
@@ -2862,9 +2874,9 @@ do
     end
     function cls:__tostring()
         return tostring(self.frame)
-            .. ansi(STYLE.OPERATOR, "[")
+            .. default_styler(STYLE.OPERATOR, "[")
             .. tostring(self.flow)
-            .. ansi(STYLE.OPERATOR, "]")
+            .. default_styler(STYLE.OPERATOR, "]")
     end
 end
 
@@ -2877,6 +2889,7 @@ do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
         local enter_closures = opts.enter_closures or false
+        local styler = opts.styler or default_styler
 
         local last_anchor
         local function stream_anchor(anchor)
@@ -2895,20 +2908,20 @@ do
                     str = "::" .. ANCHOR_SEP
                 end
 
-                writer(ansi(STYLE.COMMENT, str))
+                writer(styler(STYLE.COMMENT, str))
                 last_anchor = anchor
             else
-                --writer(ansi(STYLE.ERROR, "?"))
+                --writer(styler(STYLE.ERROR, "?"))
             end
         end
 
         local visited = {}
         local stream_any
         local function stream_flow_label(aflow)
-            writer(ansi(STYLE.KEYWORD, "λ"))
-            writer(ansi(STYLE.SYMBOL, aflow.name.name))
-            writer(ansi(STYLE.OPERATOR, "#"))
-            writer(ansi(STYLE.NUMBER, tostring(aflow.uid)))
+            writer(styler(STYLE.KEYWORD, "λ"))
+            writer(styler(STYLE.SYMBOL, aflow.name.name))
+            writer(styler(STYLE.OPERATOR, "#"))
+            writer(styler(STYLE.NUMBER, tostring(aflow.uid)))
         end
 
         local function stream_param_label(param, aflow)
@@ -2916,14 +2929,14 @@ do
                 stream_flow_label(param.flow)
             end
             if param.name == Symbol.Unnamed then
-                writer(ansi(STYLE.OPERATOR, "@"))
-                writer(ansi(STYLE.NUMBER, tostring(param.index)))
+                writer(styler(STYLE.OPERATOR, "@"))
+                writer(styler(STYLE.NUMBER, tostring(param.index)))
             else
-                writer(ansi(STYLE.COMMENT, "%"))
-                writer(ansi(STYLE.SYMBOL, param.name.name))
+                writer(styler(STYLE.COMMENT, "%"))
+                writer(styler(STYLE.SYMBOL, param.name.name))
             end
             if param.vararg then
-                writer(ansi(STYLE.KEYWORD, "…"))
+                writer(styler(STYLE.KEYWORD, "…"))
             end
         end
 
@@ -2949,23 +2962,23 @@ do
             end
             visited[aflow] = true
             stream_anchor(aflow.anchor)
-            writer(ansi(STYLE.KEYWORD, "fn/cc"))
+            writer(styler(STYLE.KEYWORD, "fn/cc"))
             writer(" ")
-            writer(ansi(STYLE.SYMBOL, aflow.name.name))
-            writer(ansi(STYLE.OPERATOR, "#"))
-            writer(ansi(STYLE.NUMBER, tostring(aflow.uid)))
+            writer(styler(STYLE.SYMBOL, aflow.name.name))
+            writer(styler(STYLE.OPERATOR, "#"))
+            writer(styler(STYLE.NUMBER, tostring(aflow.uid)))
             writer(" ")
-            writer(ansi(STYLE.OPERATOR, "("))
+            writer(styler(STYLE.OPERATOR, "("))
             for i,param in ipairs(aflow.parameters) do
                 if i > 1 then
                     writer(" ")
                 end
                 stream_param_label(param, aflow)
             end
-            writer(ansi(STYLE.OPERATOR, ")"))
+            writer(styler(STYLE.OPERATOR, ")"))
             writer("\n    ")
             if #aflow.arguments == 0 then
-                writer(ansi(STYLE.ERROR, "empty"))
+                writer(styler(STYLE.ERROR, "empty"))
             else
                 if aflow.body_anchor then
                     stream_anchor(aflow.body_anchor)
@@ -2980,7 +2993,7 @@ do
                 end
                 local cont = aflow.arguments[1]
                 if not is_none(cont) then
-                    writer(ansi(STYLE.COMMENT,CONT_SEP))
+                    writer(styler(STYLE.COMMENT,CONT_SEP))
                     stream_argument(cont, aflow)
                 end
             end
@@ -3019,9 +3032,16 @@ do
     function cls.dump_traceback()
         cls.stream_traceback(stderr_writer)
     end
-    function cls.stream_traceback(writer)
+    function cls.stack_level()
+        return #stack
+    end
+    function cls.stream_traceback(writer, opts)
+        opts = opts or {}
+        local styler = opts.styler or default_styler
+        local start = opts.stack_start or 1
+        local endn = max(0, opts.stack_end or 0)
         writer("Traceback (most recent call last):\n")
-        for i=1,#stack do
+        for i=start,#stack - endn do
             local entry = stack[i]
             local anchor = entry[1]
             local frame = entry[2]
@@ -3041,13 +3061,13 @@ do
                     writer('  File ')
                     writer(repr(anchor.path))
                     writer(', line ')
-                    writer(ansi(STYLE.NUMBER, tostring(anchor.lineno)))
+                    writer(styler(STYLE.NUMBER, tostring(anchor.lineno)))
                     if flow.name ~= Symbol.Unnamed then
                         writer(', in ')
                         writer(tostring(flow.name))
                     end
                     writer('\n')
-                    anchor:stream_source_line(writer)
+                    anchor:stream_source_line(writer, styler)
                 end
             end
         end
@@ -3146,7 +3166,7 @@ local function dump_trace(writer, frame, cont, dest, ...)
         writer(repr(select(i, ...)))
     end
     if not is_none(cont) then
-        writer(ansi(STYLE.COMMENT, CONT_SEP))
+        writer(default_styler(STYLE.COMMENT, CONT_SEP))
         writer(repr(cont))
     end
 end
@@ -3199,7 +3219,7 @@ local function call_flow(frame, cont, flow, ...)
 
     if global_opts.trace_execution then
         local w = string_writer()
-        w(ansi(STYLE.KEYWORD, "flow "))
+        w(default_styler(STYLE.KEYWORD, "flow "))
         dump_trace(w, frame, unpack(flow.arguments))
         if flow.body_anchor then
             flow.body_anchor:stream_message_with_source(stderr_writer, w())
@@ -3253,7 +3273,7 @@ end
 
 call = function(frame, cont, dest, ...)
     if global_opts.trace_execution then
-        stderr_writer(ansi(STYLE.KEYWORD, "trace "))
+        stderr_writer(default_styler(STYLE.KEYWORD, "trace "))
         dump_trace(stderr_writer, frame, cont, dest, ...)
         stderr_writer('\n')
     end
@@ -3293,11 +3313,11 @@ end
 local function execute(cont, dest, ...)
     assert_function(cont)
     assert_any(dest)
-    local wrapped_cont = Any(Builtin(function(frame, _cont, dest, ...)
-        assert_frame(frame)
-        return cont(...)
-    end, Symbol.ExecuteReturn))
-    return call(Frame(), wrapped_cont, dest, ...)
+    return call(Frame(),
+        Any(Builtin(function(frame, _cont, dest, ...)
+            assert_frame(frame)
+            return cont(...)
+        end, Symbol.ExecuteReturn)), dest, ...)
 end
 
 --------------------------------------------------------------------------------
@@ -3577,7 +3597,7 @@ expand = function(env, topit)
                 assert_scope(env)
                 assert(topit ~= EOL)
                 goto process
-            elseif result_scope then
+            elseif result_env then
                 return EOL, env
             end
         end
@@ -4107,6 +4127,8 @@ builtins.u64 = Type.U64
 builtins.r32 = Type.R32
 builtins.r64 = Type.R64
 
+builtins.size_t = Type.U64
+
 builtins.scope = Type.Scope
 builtins.symbol = Type.Symbol
 builtins.list = Type.List
@@ -4180,12 +4202,37 @@ builtins["syntax-error"] = function(frame, cont, self, sxobj, msg)
     return location_error(unwrap(Type.String, msg))
 end
 
-local _exception_handler = none
+builtins.xpcall = function(frame, cont, self, func, xfunc)
+    checkargs(2,2, func, xfunc)
+    return xpcallcc(function(cont)
+            return call(frame,
+                Any(Builtin(function(_frame, _cont, _self, ...)
+                    return cont(...)
+                end, Symbol.XPCallReturn)), func)
+        end,
+        function(exc, cont)
+            if getmetatable(exc) ~= Any then
+                if type(exc) == "table" then
+                    exc = Any(exc.msg)
+                else
+                    exc = Any(exc)
+                end
+            end
+            return call(frame,
+                Any(Builtin(function(_frame, _cont, _self, ...)
+                    return cont(...)
+                end, Symbol.XPCallReturn)), xfunc, exc)
+        end,
+        function(...)
+            return call(frame, none, cont, ...)
+        end)
+end
+
 builtins["set-exception-handler!"] = wrap_simple_builtin(function(handler)
-    _exception_handler = handler
+    _xpcallcc_handler = handler
 end)
 builtins["get-exception-handler"] = wrap_simple_builtin(function(handler)
-    return _exception_handler
+    return _xpcallcc_handler
 end)
 
 -- constructors
@@ -4201,8 +4248,8 @@ builtins["list-load"] = wrap_simple_builtin(function(path)
 end)
 
 builtins["list-parse"] = wrap_simple_builtin(function(s, path)
-    checkargs(2,2, s, path)
-    path = unwrap(Type.String, path)
+    checkargs(1,2, s, path)
+    path = path and unwrap(Type.String, path) or "<string>"
     s = unwrap(Type.String, s)
     local ptr = rawstring(s)
     local lexer = Lexer.init(ptr, ptr + #s, path)
@@ -4221,25 +4268,19 @@ builtins.expand = wrap_simple_builtin(function(expr, scope)
 end)
 
 builtins.eval = wrap_simple_builtin(function(expr, scope, path)
-    local argcount = checkargs(1,3, expr, scope, path)
-    local scope
-    if argcount > 1 then
+    checkargs(1,3, expr, scope, path)
+    if scope then
         scope = unwrap(Type.Scope, scope)
     else
         scope = globals
     end
-    local path
-    if argcount > 2 then
+    if path then
         path = unwrap(Type.String, path)
     else
         path = "<eval>"
     end
-    local result,expexpr = expand_root(unwrap(Type.List, expr), scope)
-    if result then
-        return compile_root(expexpr, path)
-    else
-        error(expexpr)
-    end
+    local expexpr = expand_root(expr, scope)
+    return compile_root(expexpr, path)
 end)
 
 builtins.escape = wrap_simple_builtin(function(value)
@@ -4316,7 +4357,7 @@ builtin_op(Type.String, Symbol.ApplyType,
         elseif ty == Type.Symbol then
             return Any(value.value.name)
         else
-            return Any(format_any_value(value.type, value.value))
+            return Any(format_any_value(value.type, value.value, plain_styler))
         end
     end))
 
@@ -4382,18 +4423,40 @@ builtin_op(Type.Tag, Symbol.ApplyType,
                     val = Type(
                         cls.name .. "[" .. _type.name .. "]",
                         cls.displayname
-                        .. ansi(STYLE.OPERATOR, "[")
+                        .. default_styler(STYLE.OPERATOR, "[")
                         .. _type.displayname
-                        .. ansi(STYLE.OPERATOR, "]"))
+                        .. default_styler(STYLE.OPERATOR, "]"))
                     val:set_element_type(_type)
                     val:set_super(cls)
-                    function val:format_value(value)
-                        return format_any_value(self:element_type(), value)
+                    function val:format_value(value, styler)
+                        return format_any_value(self:element_type(), value, styler)
                     end
                     cache[_type] = val
                 end
                 return Any(val)
             end), Symbol.ApplyType)))
+
+        cls:bind(Any(Symbol.Cast),
+            Any(Builtin(wrap_simple_builtin(function(fromtype, totype, value)
+                fromtype = unwrap(Type.Type, fromtype)
+                totype = unwrap(Type.Type, totype)
+                local fromsuper = fromtype:lookup(Symbol.Super)
+                local tosuper = totype:lookup(Symbol.Super)
+                fromsuper = fromsuper and unwrap(Type.Type, fromsuper)
+                tosuper = tosuper and unwrap(Type.Type, tosuper)
+                if fromsuper == cls then
+                    local fromelemtype = fromtype:element_type()
+                    if fromelemtype == totype then
+                        return Any(totype, value.value)
+                    end
+                elseif tosuper == cls then
+                    local toelemtype = totype:element_type()
+                    if toelemtype == fromtype then
+                        return Any(totype, value.value)
+                    end
+                end
+            end), Symbol.Cast)))
+
         return Any(cls)
     end))
 
@@ -4428,27 +4491,83 @@ end, Symbol("return-true")))
 local return_false = Any(Builtin(function(frame, cont, self)
     return call(frame, none, cont, any_false)
 end, Symbol("return-false")))
+local function unordered_error (a, b)
+    return location_error("illegal ordered comparison of values of type "
+        .. a.type.displayname
+        .. " and type "
+        .. b.type.displayname)
+end
+-- ordered comparisons
 builtins['=='] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
-        return_true, return_false, return_false, return_false)
+        return_true,
+        Any(Builtin(function(frame, cont, self)
+                return unordered_error(a, b)
+            end, Symbol.ReturnError)),
+        return_false, return_false)
 end
 builtins['!='] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
-        return_false, return_true, return_true, return_true)
+        return_false,
+        Any(Builtin(function(frame, cont, self)
+                return unordered_error(a, b)
+            end, Symbol.ReturnError)),
+        return_true, return_true)
 end
 builtins['<'] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
-        return_false, return_false, return_true, return_false)
+        return_false,
+        Any(Builtin(function(frame, cont, self)
+                return unordered_error(a, b)
+            end, Symbol.ReturnError)),
+        return_true, return_false)
 end
 builtins['<='] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
-        return_true, return_false, return_true, return_false)
+        return_true,
+        Any(Builtin(function(frame, cont, self)
+                return unordered_error(a, b)
+            end, Symbol.ReturnError)),
+        return_true, return_false)
 end
 builtins['>'] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
-        return_false, return_false, return_false, return_true)
+        return_false,
+        Any(Builtin(function(frame, cont, self)
+                return unordered_error(a, b)
+            end, Symbol.ReturnError)),
+        return_false, return_true)
 end
 builtins['>='] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_true,
+        Any(Builtin(function(frame, cont, self)
+                return unordered_error(a, b)
+            end, Symbol.ReturnError)),
+        return_false, return_true)
+end
+-- unordered comparisons
+builtins['==?'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_true, return_false, return_false, return_false)
+end
+builtins['!=?'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_false, return_true, return_true, return_true)
+end
+builtins['<?'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_false, return_false, return_true, return_false)
+end
+builtins['<=?'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_true, return_false, return_true, return_false)
+end
+builtins['>?'] = function(frame, cont, self, a, b)
+    return ordered_branch(frame, cont, self, a, b,
+        return_false, return_false, return_false, return_true)
+end
+builtins['>=?'] = function(frame, cont, self, a, b)
     return ordered_branch(frame, cont, self, a, b,
         return_true, return_false, return_false, return_true)
 end
@@ -4591,8 +4710,8 @@ builtin_op(Type.Syntax, Symbol.Compare,
 -- cast
 --------------------------------------------------------------------------------
 
-any_cast = function(frame, cont, self, value, totype)
-    checkargs(2,2, value, totype)
+any_cast = function(frame, cont, self, totype, value)
+    checkargs(2,2, totype, value)
     local fromtype = Any(value.type)
     local func = value.type:lookup(Symbol.Cast)
     local function fallback_call(err)
@@ -4605,17 +4724,27 @@ any_cast = function(frame, cont, self, value, totype)
         end
         func = desttype:lookup(Symbol.Cast)
         if func ~= null then
-            return call(frame, none, cont, safecontcall(function(cont)
-                return call(frame, cont, func, fromtype, totype, value)
-            end, errmsg))
+            return call(frame,
+                Any(Builtin(function(_frame, _cont, _dest, result)
+                    if result == null then
+                        errmsg()
+                    else
+                        return call(frame, none, cont, result)
+                    end
+                end, Symbol.RCast)), func, fromtype, totype, value)
         else
             errmsg()
         end
     end
     if func ~= null then
-        return call(frame, none, cont, safecontcall(function(cont)
-            return call(frame, cont, func, fromtype, totype, value)
-        end, fallback_call))
+        return call(frame,
+            Any(Builtin(function(_frame, _cont, _dest, result)
+                if result == null then
+                    return fallback_call()
+                else
+                    return call(frame, none, cont, result)
+                end
+            end, Symbol.RCast)), func, fromtype, totype, value)
     end
     return fallback_call()
 end
@@ -4640,7 +4769,6 @@ local default_casts = wrap_simple_builtin(function(fromtype, totype, value)
             end
         end
     end
-    error("incompatible types")
 end)
 
 each_numerical_type(function(T)
@@ -4656,23 +4784,36 @@ local function builtin_forward_op2(name, errmsg)
     return function(frame, cont, self, a, b, ...)
         checkargs(2,2, a, b, ...)
         local func = a.type:lookup(name)
+        local function print_errmsg()
+            error("can not " .. errmsg .. " values of type "
+                .. a.type.displayname
+                .. " and "
+                .. b.type.displayname)
+        end
         local function fallback_call(err)
             func = b.type:lookup(name)
             if func ~= null then
-                return call(frame, cont, func, a, b, any_true)
+                return call(frame,
+                    Any(Builtin(function(_frame, _cont, _dest, result)
+                        if result == null then
+                            print_errmsg()
+                        else
+                            return call(frame, none, cont, result)
+                        end
+                    end, Symbol.ROp)), func, a, b, any_true)
             else
-                error("can not " .. errmsg .. " values of type "
-                    .. a.type.displayname
-                    .. " and "
-                    .. b.type.displayname)
+                print_errmsg()
             end
         end
         if func ~= null then
-            local result = safecontcall(
-                function(cont)
-                    return call(frame, cont, func, a, b, any_false)
-                end, fallback_call)
-            return call(frame, none, cont, result)
+            return call(frame,
+            Any(Builtin(function(_frame, _cont, _dest, result)
+                if result == null then
+                    return fallback_call()
+                else
+                    return call(frame, none, cont, result)
+                end
+            end, Symbol.ROp)), func, a, b, any_false)
         end
         return fallback_call()
     end
@@ -4766,6 +4907,12 @@ builtins.typeof = wrap_simple_builtin(function(value)
     return Any(value.type)
 end)
 
+builtins["element-type"] = wrap_simple_builtin(function(_type)
+    checkargs(1,1, _type)
+    _type = unwrap(Type.Type, _type)
+    return Any(_type:element_type())
+end)
+
 local countof = builtin_forward(Symbol.CountOf, "is not countable")
 builtins.countof = countof
 
@@ -4814,14 +4961,14 @@ builtins.slice = function(frame, cont, self, obj, start_index, end_index)
         Any(Builtin(function(_frame, _cont, self, l)
             l = unwrap_integer(l)
             local i0 = unwrap_integer(start_index)
-            if (i0 < size_t(0)) then
+            if (i0 < int64_t(0)) then
                 i0 = i0 + l
             end
             i0 = min(max(i0, size_t(0)), l)
             local i1
             if end_index then
                 i1 = unwrap_integer(end_index)
-                if (i1 < size_t(0)) then
+                if (i1 < int64_t(0)) then
                     i1 = i1 + l
                 end
                 i1 = min(max(i1, i0), l)
@@ -4872,6 +5019,15 @@ builtin_op(Type.List, Symbol.Slice,
         return Any(list)
     end))
 
+builtin_op(Type.String, Symbol.Slice,
+    wrap_simple_builtin(function(value, i0, i1)
+        checkargs(3,3,value,i0,i1)
+        value = unwrap(Type.String, value)
+        i0 = tonumber(unwrap_integer(i0)) + 1
+        i1 = tonumber(unwrap_integer(i1))
+        return Any(value:sub(i0, i1))
+    end))
+
 builtins["get-scope-symbol"] = wrap_simple_builtin(function(scope, key, defvalue)
     checkargs(2, 3, scope, key, defvalue)
 
@@ -4919,6 +5075,17 @@ builtins["bind!"] = function(frame, cont, self, param, value)
     return call(frame, none, cont)
 end
 
+-- varargs
+--------------------------------------------------------------------------------
+
+builtins["va-arg"] = wrap_simple_builtin(function(index, ...)
+    return select(tonumber(unwrap_integer(index)) + 1, ...)
+end)
+
+builtins["va-countof"] = wrap_simple_builtin(function(...)
+    return Any(size_t(select('#', ...)))
+end)
+
 -- auxiliary utilities
 --------------------------------------------------------------------------------
 
@@ -4948,7 +5115,7 @@ builtins.print = wrap_simple_builtin(function(...)
         if arg.type == Type.String then
             writer(arg.value)
         else
-            writer(format_any_value(arg.type, arg.value))
+            writer(format_any_value(arg.type, arg.value, default_styler))
         end
     end
     writer('\n')
@@ -4985,6 +5152,23 @@ builtins["interpreter-version"] = function(frame, cont, dest)
         Any(int(C.BANGRA_VERSION_PATCH)))
 end
 
+builtins['stack-level'] = wrap_simple_builtin(function()
+    return Any(int32_t(debugger.stack_level()))
+end)
+
+builtins.traceback = wrap_simple_builtin(function(limit, trunc)
+    checkargs(0, 2, limit, trunc)
+    local opts = {}
+    if limit then
+        opts.stack_start = tonumber(unwrap_integer(limit))
+    end
+    if trunc then
+        opts.stack_end = tonumber(unwrap_integer(trunc))
+    end
+    local w = string_writer()
+    debugger.stream_traceback(w, opts)
+    return Any(w())
+end)
 
 --------------------------------------------------------------------------------
 -- GLOBALS
@@ -5020,15 +5204,15 @@ local function decl_builtin(name, value)
     globals:bind(prepare_builtin_value(name, value))
 end
 
-function Type.Void:format_value()
-    return ansi(STYLE.KEYWORD, "none")
+function Type.Void:format_value(x, styler)
+    return styler(STYLE.KEYWORD, "none")
 end
-function Type.Symbol:format_symbol(x)
-    return ansi(STYLE.SYMBOL,
+function Type.Symbol:format_symbol(x, styler)
+    return styler(STYLE.SYMBOL,
         escape_string(x.name, SYMBOL_ESCAPE_CHARS))
 end
-function Type.String:format_symbol(x)
-    return ansi(STYLE.STRING,
+function Type.String:format_symbol(x, styler)
+    return styler(STYLE.STRING,
         '"' .. escape_string(x, "\"") .. '"')
 end
 function Type.Builtin:format_symbol(x)
@@ -5045,16 +5229,16 @@ local function init_globals()
         _type:bind(Any(Symbol.Super), Any(Type.Integer))
         _type.ctype = ctype
         if _type == Type.Bool then
-            function _type:format_value(x)
+            function _type:format_value(x, styler)
                 if x == bool(true) then
-                    return ansi(STYLE.KEYWORD, "true")
+                    return styler(STYLE.KEYWORD, "true")
                 else
-                    return ansi(STYLE.KEYWORD, "false")
+                    return styler(STYLE.KEYWORD, "false")
                 end
             end
         else
-            function _type:format_value(x)
-                return ansi(STYLE.NUMBER, cformat(fmt, x))
+            function _type:format_value(x, styler)
+                return styler(STYLE.NUMBER, cformat(fmt, x))
             end
         end
     end
@@ -5065,8 +5249,8 @@ local function init_globals()
         _type:bind(Any(Symbol.Bitwidth), Any(int(refct.size * 8)))
         _type:bind(Any(Symbol.Super), Any(Type.Real))
         _type.ctype = ctype
-        function _type:format_value(x)
-            return ansi(STYLE.NUMBER, cformat("%g", x))
+        function _type:format_value(x, styler)
+            return styler(STYLE.NUMBER, cformat("%g", x))
         end
     end
     configure_int_type(Type.Bool, bool)
@@ -5266,10 +5450,10 @@ end
 local function test_ansicolors()
     for k,v in pairs(ANSI) do
         if type(v) == "string" then
-            print(ansi(v, k))
+            print(ansi_styler(v, k))
         end
     end
-    print(ansi(ANSI.COLOR_RGB(0x4080ff), "yes"))
+    print(ansi_styler(ANSI.COLOR_RGB(0x4080ff), "yes"))
 
 end
 

@@ -76,7 +76,7 @@ syntax-extend def-quote-set (return env)
                                         slice expr 1
                                     \ env
                             branch
-                                == (typeof (syntax->datum name)) parameter
+                                ==? (typeof (syntax->datum name)) parameter
                                 fn/cc (_)
                                     _ (syntax->datum name)
                                 fn/cc (_)
@@ -89,27 +89,22 @@ syntax-extend def-? (return env)
         quote symbol?
         fn/cc symbol? (return x)
             return
-                == (typeof x) symbol
+                ==? (typeof x) symbol
     set-scope-symbol! env
         quote list?
         fn/cc list? (return x)
             return
-                == (typeof x) list
+                ==? (typeof x) list
     set-scope-symbol! env
         quote none?
         fn/cc none? (return x)
             return
-                == x none
+                ==? x none
     set-scope-symbol! env
         quote empty?
         fn/cc empty? (return x)
             return
                 == (countof x) (u64 0)
-    set-scope-symbol! env
-        quote key?
-        fn/cc key? (return x y)
-            return
-                != (@ x y) none
     set-scope-symbol! env
         quote load
         fn/cc load (return path)
@@ -223,7 +218,7 @@ syntax-extend def-list-defs (return env)
                         call
                             fn/cc (_ head)
                                 ? (symbol? (syntax->datum head))
-                                    _ (== head name)
+                                    _ (==? head name)
                                     _ false
                             @ expr 0
                     \ false
@@ -411,27 +406,9 @@ define fn
                             make-params-body 1
                         \ rest
 
-define xpcall
-    fn xpcall (func xfunc)
-        let old_handler =
-            get-exception-handler;
-        fn cleanup ()
-            set-exception-handler! old_handler
-        call
-            fn/cc try (finally)
-                fn except (exc aframe args)
-                    cleanup
-                    finally
-                        xfunc exc
-                set-exception-handler! except
-                let result =
-                    func
-                cleanup
-                finally result
-
 define raise
     fn/cc raise (_ x)
-        cc/call none (get-exception-handler) x
+        error x
 
 define try
     block-macro
@@ -615,7 +592,7 @@ syntax-extend def-let-xlet (return env)
     fn =? (x)
         and
             symbol? (syntax->datum x)
-            == x (quote =)
+            ==? x (quote =)
 
     # iterate until we hit the = symbol, after which
       the body follows
@@ -643,7 +620,7 @@ syntax-extend def-let-xlet (return env)
                 let rest = (slice topexpr 1)
                 let body = (slice expr 1)
                 let argtype = (typeof (syntax->datum (@ body 0)))
-                if (== argtype list)
+                if (==? argtype list)
                     # prepare quotable values from declarations
                     fn handle-pairs (pairs)
                         if (empty? pairs)
@@ -702,7 +679,7 @@ syntax-extend def-let-xlet (return env)
                 let argtype = (typeof (syntax->datum (@ body 0)))
                 let xlet-return =
                     datum->syntax (parameter (quote xlet-return))
-                if (== argtype list)
+                if (==? argtype list)
                     # multiple variables with support for recursion
                       and circular dependencies
 
@@ -909,7 +886,7 @@ syntax-extend stage-3 (return env)
           is treated as an infix expression.
         and
             not (empty? (slice expr 2))
-            != (get-ifx-op infix-table (@ expr 1)) none
+            !=? (get-ifx-op infix-table (@ expr 1)) none
 
     fn infix-op (infix-table token prec pred)
         let op =
@@ -1052,8 +1029,9 @@ syntax-extend stage-3 (return env)
         fn qualify (tag-type value)
             assert (== (typeof tag-type) type)
                 error "type argument expected."
-            cast value
+            cast
                 tag-type (typeof value)
+                \ value
 
     set-scope-symbol! env (quote disqualify)
         fn disqualify (tag-type value)
@@ -1064,8 +1042,9 @@ syntax-extend stage-3 (return env)
                 error
                     .. "can not unqualify value of type " (string t)
                         \ "; type not related to " (string tag-type) "."
-            cast value
-                . t element-type
+            cast
+                element-type t
+                \ value
 
     set-scope-symbol! env (quote and)
         make-expand-multi-op-ltr and
@@ -1197,12 +1176,21 @@ define-infix-op and 200 > and
 #define-infix-op | 240 > |
 #define-infix-op ^ 250 > ^
 #define-infix-op & 260 > &
+
 define-infix-op < 300 > <
 define-infix-op > 300 > >
 define-infix-op <= 300 > <=
 define-infix-op >= 300 > >=
 define-infix-op != 300 > !=
 define-infix-op == 300 > ==
+
+define-infix-op <? 300 > <?
+define-infix-op >? 300 > >?
+define-infix-op <=? 300 > <=?
+define-infix-op >=? 300 > >=?
+define-infix-op !=? 300 > !=?
+define-infix-op ==? 300 > ==?
+
 #define-infix-op is 300 > is
 define-infix-op .. 400 < ..
 #define-infix-op << 450 > <<
@@ -1223,32 +1211,32 @@ define-infix-op @ 800 > @
 syntax-extend stage-5 (return env)
 
     fn iterator? (x)
-        (typeof x) < iterator
+        (typeof x) <? iterator
 
     fn new-iterator (next start)
-        qualify iterator (fn (f) (f next start))
+        qualify iterator
+            fn iterator-tuple ()
+                return next start
 
     fn countable-rslice-iter (l)
         if ((countof l) != 0)
             return (@ l 0) (slice l 1)
 
     fn countable-iter (f)
-        f
-            fn (c i)
-                if (i < (countof c))
-                    return (@ c i)
-                        fn (f)
-                            f c (i + 1)
+        let c i = (f)
+        if (i < (countof c))
+            return (@ c i)
+                fn ()
+                    return c (i + (size_t 1))
 
     fn scope-iter (f)
-        f
-            fn (t k)
-                let key value =
-                    next-scope-symbol t k
-                if (not (none? key))
-                    return key value
-                        fn (f)
-                            f t key
+        let t k = (f)
+        let key value =
+            next-scope-symbol t k
+        if (not (none? key))
+            return key value
+                fn ()
+                    return t key
 
     fn gen-yield-iter (callee)
         let caller-return = none
@@ -1276,23 +1264,24 @@ syntax-extend stage-5 (return env)
         if (iterator? x) x
         else
             let t = (typeof x)
-            if (<= t list)
+            if (<=? t list)
                 new-iterator countable-rslice-iter x
-            elseif (<= t scope)
+            elseif (<=? t scope)
                 new-iterator scope-iter
-                    fn (f) (f x none)
-            elseif (<= t string)
+                    fn () (return x none)
+            elseif (<=? t string)
                 new-iterator countable-iter
-                    fn (f) (f x 0)
-            elseif (<= t closure)
+                    fn () (return x (size_t 0))
+            elseif (<=? t closure)
                 gen-yield-iter x
             else
                 error
                     .. "don't know how to iterate " (string x)
 
     fn range (a b c)
-        let step = (? (none? c) 1 c)
-        let from = (? (none? b) 0 a)
+        let num-type = (typeof a)
+        let step = (? (none? c) (num-type 1) c)
+        let from = (? (none? b) (num-type 0) a)
         let to = (? (none? b) a b)
         new-iterator
             fn (x)
@@ -1301,24 +1290,27 @@ syntax-extend stage-5 (return env)
             \ from
 
     fn zip (a b)
-        let iter-a init-a = (disqualify iterator (iter a))
-        let iter-b init-b = (disqualify iterator (iter b))
+        let iter-a init-a = ((disqualify iterator (iter a)))
+        let iter-b init-b = ((disqualify iterator (iter b)))
         new-iterator
             fn (f)
-                f
-                    fn (a b)
-                        let at-a... next-a = (iter-a a)
-                        let at-b... next-b = (iter-b b)
-                        if (not (or (none? next-a) (none? next-b)))
-                            return at-a... at-b...
-                                fn (f)
-                                    f next-a next-b
-            fn (f)
-                f init-a init-b
+                let a b = (f)
+                let at-a... next-a = (iter-a a)
+                let at-b... next-b = (iter-b b)
+                if (not (or (none? next-a) (none? next-b)))
+                    return at-a... at-b...
+                        fn ()
+                            return next-a next-b
+            fn ()
+                return init-a init-b
 
     fn infrange (a b)
-        let step = (? (none? b) 1 b)
-        let from = (? (none? a) 0 a)
+        let num-type =
+            ? (none? a)
+                ? (none? b) int (typeof b)
+                \ (typeof a)
+        let step = (? (none? b) (num-type 1) b)
+        let from = (? (none? a) (num-type 0) a)
         new-iterator
             fn (x)
                 return x (+ x step)
@@ -1330,7 +1322,7 @@ syntax-extend stage-5 (return env)
     fn =? (x)
         and
             symbol? (syntax->datum x)
-            == x (quote =)
+            ==? x (quote =)
 
     fn parse-loop-args (fullexpr)
         let expr =
@@ -1459,7 +1451,7 @@ syntax-extend stage-5 (return env)
                                             (unquote param-iter) (unquote param-state)
                                         ;
                                             unquote param-ret
-                                            ? (== (unquote param-next) none)
+                                            ? (==? (unquote param-next) none)
                                                 unquote
                                                     syntax-do else-block
                                                 do
@@ -1480,7 +1472,7 @@ syntax-extend stage-5 (return env)
                                     unquote-splice
                                         syntax-eol expr
                                 let iter-val state-val =
-                                    disqualify iterator (iter (unquote src-expr))
+                                    (disqualify iterator (iter (unquote src-expr)))
                                 ;
                                     unquote param-for
                                     \ iter-val state-val
@@ -1608,22 +1600,22 @@ syntax-extend stage-7 (return env)
         # appending this to an expression before evaluation captures the env
           table so it can be used for the next expression.
         let expression-suffix =
-            list
-                qquote
-                    syntax-extend (_ env)
-                        ;
-                            unquote
-                                datum->syntax capture-scope
-                                    active-anchor
-                            \ env
+            qquote
+                syntax-extend (return env)
+                    ;
+                        unquote
+                            datum->syntax capture-scope
+                                active-anchor
                         \ env
+                    return env
+        fn make-idstr ()
+            .. "$"
+                string (get-scope-symbol state (quote counter))
         loop
             with
                 preload = ""
                 cmdlist = ""
-            let idstr =
-                .. "$"
-                    string (get-scope-symbol state (quote counter))
+            let idstr = (make-idstr)
             let id = (symbol idstr)
             let promptstr = (.. idstr ">")
             let cmd =
@@ -1633,39 +1625,46 @@ syntax-extend stage-7 (return env)
                             repeat-string (countof promptstr) "."
                         \ " "
                     \ preload
-
-            if ((typeof cmd) != void)
-                let terminated? =
-                    or (not (has-chars cmd))
-                        (empty? cmdlist) and ((slice cmd -1) == ";")
-                let cmdlist = (.. cmdlist cmd "\n")
-                let preload =
-                    if terminated? ""
-                    else (get-leading-spaces cmd)
-                let cmdlist =
-                    if terminated?
-                        try
-                            let expr = (list-parse cmdlist)
-                            if (none? expr)
-                                error "parsing failed"
-                            let eval-env =
-                                get-scope-symbol state env
-                            let f =
-                                eval
-                                    .. (list (cons do expr)) expression-suffix
-                                    \ eval-env
-                            let result = (f)
-                            if ((typeof result) != void)
-                                print (.. idstr "= " (repr result))
-                                set-scope-symbol! eval-env id result
+            if (none? cmd)
+                break
+            let terminated? =
+                or (not (has-chars cmd))
+                    (empty? cmdlist) and ((slice cmd 0 1) == "\\")
+            let cmdlist = (.. cmdlist cmd "\n")
+            let preload =
+                if terminated? ""
+                else (get-leading-spaces cmd)
+            let slevel = none
+            let cmdlist =
+                if terminated?
+                    try
+                        let expr = (list-parse cmdlist)
+                        if (none? expr)
+                            error "parsing failed"
+                        let eval-env = (get-scope-symbol state (quote env))
+                        let code =
+                            .. expr
+                                syntax-list expression-suffix
+                        let f = (eval code eval-env)
+                        set! slevel (stack-level)
+                        let result... = (f)
+                        if (not (none? result...))
+                            for i in (range (va-countof result...))
+                                let idstr = (make-idstr)
+                                let value = (va-arg i result...)
+                                print (.. idstr "= " (repr value))
+                                set-scope-symbol! eval-env id value
                                 set-scope-symbol! state (quote counter)
-                                    + 1
-                                        get-scope-symbol state (quote counter)
-                        except (e)
-                            print "error:" e
-                        ""
-                    else cmdlist
-                repeat preload cmdlist
+                                    (get-scope-symbol state (quote counter)) + 1
+                                repeat
+                    except (e)
+                        if (not (none? slevel))
+                            print
+                                traceback slevel 4
+                        print "error:" e
+                    \ ""
+                else cmdlist
+            repeat preload cmdlist
     set-scope-symbol! env (quote read-eval-print-loop) read-eval-print-loop
     return env
 

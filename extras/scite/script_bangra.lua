@@ -52,8 +52,8 @@ local function bangra_symbols()
 
     -- builtin operator functions that can also be used as infix
     OPERATORS = splitstr(getprop("operators.bangra_lang") or
-        "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-            .. " *= /= %= ^= &= |= ~= <- ? := // << >>"
+    "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
+        .. " *= /= %= ^= &= |= ~= <- ? := // << >> ==? !=? >? >=? <? <=?"
         ),
 
 
