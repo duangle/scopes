@@ -29,7 +29,9 @@ local global_opts = {
 
     trace_execution = false, -- print each statement being executed
     print_lua_traceback = false, -- print lua traceback on any error
-    stack_limit = 65536 -- recursion limit
+    stack_limit = 65536, -- recursion limit
+
+    debug = false, -- updated by bangra_is_debug() further down
 }
 
 --------------------------------------------------------------------------------
@@ -580,6 +582,7 @@ do
     cdef(cstr(zstr_from_buffer(C.bangra_h, C.bangra_h_len)))
 end
 
+global_opts.debug = C.bangra_is_debug()
 local off_t = typeof('__off_t')
 
 local function stderr_writer(x)
@@ -694,9 +697,7 @@ local _xpcallcc_handler
 do
     errorcc = function (exc)
         if _xpcallcc_handler then
-            _xpcallcc_handler(exc)
-            error("can't return after error")
-            --os.exit(1)
+            return _xpcallcc_handler(exc)
         else
             print(traceback("uncaught error: " .. tostring(exc), 2))
             os.exit(1)
@@ -2223,7 +2224,7 @@ local FUNCTIONS = set(split(
         .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate cast element-type"
-        .. " qualify disqualify iter iterator? list? symbol? parse-c"
+        .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
@@ -2893,8 +2894,17 @@ local stream_il
 do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
-        local enter_closures = opts.enter_closures or false
+        local follow_closures = true
+        local follow_params = true
+        if opts.follow_closures ~= null then
+            follow_closures = opts.follow_closures
+        end
+        if opts.follow_params ~= null then
+            follow_params = opts.follow_params
+        end
         local styler = opts.styler or default_styler
+        local line_anchors = (opts.anchors == "line")
+        local atom_anchors = (opts.anchors == "all")
 
         local last_anchor
         local function stream_anchor(anchor)
@@ -2945,15 +2955,25 @@ do
             end
         end
 
-        local function stream_argument(arg, aflow)
+        local function stream_argument(arg, aflow, aframe)
             if is_syntax_type(arg.type) then
                 local anchor
                 arg,anchor = unsyntax(arg)
-                stream_anchor(anchor)
+                if atom_anchors then
+                    stream_anchor(anchor)
+                end
             end
 
             if arg.type == Type.Parameter then
                 stream_param_label(arg.value, aflow)
+                if aframe and follow_params then
+                    local param = arg.value
+                    local value = aframe:get(param.flow, param.index)
+                    if value then
+                        writer(styler(STYLE.OPERATOR, "="))
+                        writer(tostring(value))
+                    end
+                end
             elseif arg.type == Type.Flow then
                 stream_flow_label(arg.value)
             else
@@ -2966,7 +2986,9 @@ do
                 return
             end
             visited[aflow] = true
-            stream_anchor(aflow.anchor)
+            if line_anchors then
+                stream_anchor(aflow.anchor)
+            end
             writer(styler(STYLE.KEYWORD, "fn/cc"))
             writer(" ")
             writer(styler(STYLE.SYMBOL, aflow.name.name))
@@ -2985,7 +3007,7 @@ do
             if #aflow.arguments == 0 then
                 writer(styler(STYLE.ERROR, "empty"))
             else
-                if aflow.body_anchor then
+                if line_anchors and aflow.body_anchor then
                     stream_anchor(aflow.body_anchor)
                     writer(' ')
                 end
@@ -2994,34 +3016,44 @@ do
                         writer(" ")
                     end
                     local arg = aflow.arguments[i]
-                    stream_argument(arg, aflow)
+                    stream_argument(arg, aflow, aframe)
                 end
                 local cont = aflow.arguments[1]
-                if not is_none(cont) then
+                if not is_none(unsyntax(cont)) then
                     writer(styler(STYLE.COMMENT,CONT_SEP))
-                    stream_argument(cont, aflow)
+                    stream_argument(cont, aflow, aframe)
                 end
             end
             writer("\n")
 
-            --print(flow_decl_label(aflow, aframe))
-
             for i,arg in ipairs(aflow.arguments) do
                 arg = unsyntax(arg)
-                stream_any(arg)
+                stream_any(arg, aframe)
             end
         end
         local function stream_closure(aclosure)
-            stream_flow(aclosure.entry, aclosure.frame)
+            stream_flow(aclosure.flow, aclosure.frame)
         end
         stream_any = function(afunc, aframe)
             if afunc.type == Type.Flow then
                 stream_flow(afunc.value, aframe)
-            elseif afunc.type == Type.Closure and enter_closures then
+            elseif afunc.type == Type.Closure and follow_closures then
                 stream_closure(afunc.value)
+            elseif aframe and afunc.type == Type.Parameter and follow_params then
+                local param = afunc.value
+                local value = aframe:get(param.flow, param.index)
+                if value then
+                    stream_any(value, aframe)
+                end
             end
         end
-        stream_any(afunc)
+        if afunc.type == Type.Flow then
+            stream_flow(afunc.value, aframe)
+        elseif afunc.type == Type.Closure then
+            stream_closure(afunc.value)
+        else
+            error("can't descend into type " .. afunc.type.displayname)
+        end
     end
 end
 
@@ -3360,14 +3392,10 @@ end
 
 --------------------------------------------------------------------------------
 
--- new descending approach for compiler to optimize tail calls:
--- 1. each function is called with a flow node as target argument; it represents
---    a continuation that should be called with the resulting value.
-
 local globals
 
 local expand
-local compile
+local translate
 
 local expand_continuation
 local expand_syntax_extend
@@ -3480,7 +3508,7 @@ expand_syntax_extend = function(env, topit, cont)
     return expand_continuation(env, topit, function(cur_list, cur_env)
         local expr = cur_list.at
         local anchor = expr.value.anchor
-        local fun = unsyntax(compile(unquote(expr), none))
+        local fun = unsyntax(translate(unquote(expr), none))
         return execute(
             function(expr_env)
                 return cont(cur_list.next, unwrap(Type.Scope, expr_env))
@@ -3699,10 +3727,10 @@ end
 end -- do
 
 --------------------------------------------------------------------------------
--- COMPILER
+-- IL TRANSLATOR
 --------------------------------------------------------------------------------
 
-local compile_root
+local translate_root
 
 do
 local builder = {}
@@ -3734,6 +3762,8 @@ do
         assert(#arguments >= 2)
         if (state == null) then
             location_error("can not define body: continuation already exited.")
+            --print("warning: can not define body: continuation already exited.")
+            return
         end
         assert(#state.arguments == 0)
         state.arguments = arguments
@@ -3770,7 +3800,7 @@ local function write_dest(dest, value)
 end
 
 -- for return values that don't need to be stored
-local function compile_to_none(sxvalue)
+local function translate_to_none(sxvalue)
     assert_syntax(sxvalue)
     local anchor = sxvalue.value.anchor
     local value = unsyntax(sxvalue)
@@ -3778,15 +3808,15 @@ local function compile_to_none(sxvalue)
         -- complex expression
         local next = Flow.create_continuation(
             syntax(Any(Symbol.Unnamed), anchor))
-        compile(sxvalue, Any(next))
+        translate(sxvalue, Any(next))
         builder.continue_at(next)
     else
         -- constant value - technically we could just ignore it
-        compile(sxvalue, none)
+        translate(sxvalue, none)
     end
 end
 
-local function compile_expr_list(it, dest, anchor)
+local function translate_expr_list(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
     assert_anchor(anchor)
@@ -3799,10 +3829,10 @@ local function compile_expr_list(it, dest, anchor)
         while (it ~= EOL) do
             local next = it.next
             if next == EOL then -- last element goes to dest
-                return compile(it.at, dest)
+                return translate(it.at, dest)
             else
                 -- write to unused parameter
-                compile_to_none(it.at)
+                translate_to_none(it.at)
             end
             it = next
         end
@@ -3813,7 +3843,7 @@ local function compile_expr_list(it, dest, anchor)
     return none
 end
 
-local function compile_do(it, dest)
+local function translate_do(it, dest)
     assert_syntax(it)
     assert_any(dest)
 
@@ -3821,10 +3851,10 @@ local function compile_do(it, dest)
     it = unwrap(Type.List, unsyntax(it))
 
     it = it.next
-    return compile_expr_list(it, dest, anchor)
+    return translate_expr_list(it, dest, anchor)
 end
 
-local function compile_continuation(it, dest, anchor)
+local function translate_continuation(it, dest, anchor)
     assert_syntax(it)
     assert_any(dest)
 
@@ -3844,7 +3874,7 @@ local function compile_continuation(it, dest, anchor)
 
     it = it.next
 
-    return builder.with(function()
+    local func = builder.with(function()
         local func = Flow.create_empty_function(func_name, anchor)
 
         builder.continue_at(func)
@@ -3860,56 +3890,84 @@ local function compile_continuation(it, dest, anchor)
             set_active_anchor(params_anchor)
             location_error("explicit continuation parameter missing")
         end
-        compile_expr_list(it, none, anchor)
+        translate_expr_list(it, none, anchor)
         if #func.arguments == 0 then
             location_error("function does not return")
         end
-        return write_dest(dest, syntax(Any(func), anchor))
+
+        return func
     end)
+    return write_dest(dest, syntax(Any(func), anchor))
 end
 
-local function compile_to_parameter(sxvalue)
+local function translate_to_parameter(sxvalue)
     local value = unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
-        return compile(sxvalue, Any(Symbol.Unnamed))
+        return translate(sxvalue, Any(Symbol.Unnamed))
     else
         -- constant value - can be inserted directly
-        return compile(sxvalue, none)
+        return translate(sxvalue, none)
     end
 end
 
-local function compile_implicit_call(it, dest, anchor)
+local function translate_implicit_call(it, dest, anchor)
     assert_list(it)
     assert_any(dest)
 
-    local callable = compile_to_parameter(it.at)
+    local callable = translate_to_parameter(it.at)
     it = it.next
 
-    local args = { dest, callable }
-    while (it ~= EOL) do
-        table.insert(args, compile_to_parameter(it.at))
-        it = it.next
+    local is_return = false
+    local is_forward_return = false
+    local ncallable = unsyntax(callable)
+    if ncallable.type == Type.Parameter then
+        local param = ncallable.value
+        if param.index == 1 then
+            -- return continuation is being called
+            is_return = true
+            if it.count == 1 then -- only one argument?
+                -- can be forwarded
+                is_forward_return = true
+            end
+        end
     end
 
-    if (dest.type == Type.Symbol) then
-        local sxdest = syntax(dest, anchor)
-        local next = Flow.create_continuation(sxdest)
-        local param = Parameter(sxdest, Type.Any)
-        param.vararg = true
-        next:append_parameter(param)
-        -- patch dest to an actual function
-        args[1] = Any(next)
-        builder.br(args, anchor)
-        builder.continue_at(next)
-        return Any(next.parameters[PARAM_Arg0])
+    if is_forward_return then
+        -- return continuation called with single argument
+        -- we can directly forward this argument
+        return translate(it.at, callable)
     else
-        builder.br(args, anchor)
-        return none
+        if is_return then
+            -- return continuations are terminal
+            dest = none
+        end
+
+        local args = { dest, callable }
+        while (it ~= EOL) do
+            table.insert(args, translate_to_parameter(it.at))
+            it = it.next
+        end
+
+        if (dest.type == Type.Symbol) then
+            local sxdest = syntax(dest, anchor)
+            local next = Flow.create_continuation(sxdest)
+            local param = Parameter(sxdest, Type.Any)
+            param.vararg = true
+            next:append_parameter(param)
+            -- patch dest to an actual function
+            args[1] = Any(next)
+            builder.br(args, anchor)
+            builder.continue_at(next)
+            return Any(next.parameters[PARAM_Arg0])
+        else
+            builder.br(args, anchor)
+            return none
+        end
     end
 end
 
-local function compile_call(it, dest, anchor)
+local function translate_call(it, dest, anchor)
     assert_syntax(it)
     assert_any(dest)
 
@@ -3917,10 +3975,10 @@ local function compile_call(it, dest, anchor)
     it = unwrap(Type.List, unsyntax(it))
 
     it = it.next
-    return compile_implicit_call(it, dest, anchor)
+    return translate_implicit_call(it, dest, anchor)
 end
 
-local function compile_contcall(it, dest, anchor)
+local function translate_contcall(it, dest, anchor)
     assert_syntax(it)
     --assert_any(dest)
     --assert(not is_none(dest))
@@ -3933,15 +3991,15 @@ local function compile_contcall(it, dest, anchor)
         location_error("continuation expected")
     end
     local args = {}
-    table.insert(args, compile_to_parameter(it.at))
+    table.insert(args, translate_to_parameter(it.at))
     it = it.next
     if (it == EOL) then
         location_error("callable expected")
     end
-    table.insert(args, compile_to_parameter(it.at))
+    table.insert(args, translate_to_parameter(it.at))
     it = it.next
     while (it ~= EOL) do
-        table.insert(args, compile_to_parameter(it.at))
+        table.insert(args, translate_to_parameter(it.at))
         it = it.next
     end
     builder.br(args, anchor)
@@ -3950,7 +4008,7 @@ end
 
 --------------------------------------------------------------------------------
 
-compile = function(sxexpr, dest, anchor)
+translate = function(sxexpr, dest)
     assert_any(dest)
     assert_any(sxexpr)
     return xpcallcc(function(cont)
@@ -3976,7 +4034,7 @@ compile = function(sxexpr, dest, anchor)
             if (head.type == Type.Form) then
                 return cont(head.value(sxexpr, dest))
             else
-                return cont(compile_implicit_call(slist, dest, anchor))
+                return cont(translate_implicit_call(slist, dest, anchor))
             end
         else
             return cont(write_dest(dest, sxexpr))
@@ -3984,7 +4042,7 @@ compile = function(sxexpr, dest, anchor)
     end,
     function (exc, cont)
         exc = exception(exc)
-        if not exc.compile then
+        if not exc.translate then
             local w = string_writer()
             if is_quote_type(sxexpr.type) then
                 sxexpr = unquote(sxexpr)
@@ -3995,7 +4053,7 @@ compile = function(sxexpr, dest, anchor)
             local fmt = StreamValueFormat()
             fmt.naked = true
             stream_expr(w, sxexpr, fmt)
-            exc.compile = w()
+            exc.translate = w()
         end
         error(exc)
     end,
@@ -4007,7 +4065,7 @@ end
 --------------------------------------------------------------------------------
 
 -- path must be resident
-compile_root = function(expr, name)
+translate_root = function(expr, name)
     assert_syntax(expr)
     assert_string(name)
 
@@ -4018,7 +4076,7 @@ compile_root = function(expr, name)
     local ret = mainfunc.parameters[PARAM_Cont]
     builder.continue_at(mainfunc)
 
-    compile_expr_list(expr, Any(ret), anchor)
+    translate_expr_list(expr, Any(ret), anchor)
 
     return Any(mainfunc)
 end
@@ -4026,10 +4084,10 @@ end
 -- special forms
 --------------------------------------------------------------------------------
 
-builtins.call = Form(compile_call, Symbol("call"))
-builtins["cc/call"] = Form(compile_contcall, Symbol("cc/call"))
-builtins[Symbol.ContinuationForm] = Form(compile_continuation, Symbol("fn/cc"))
-builtins["do"] = Form(compile_do, Symbol("do"))
+builtins.call = Form(translate_call, Symbol("call"))
+builtins["cc/call"] = Form(translate_contcall, Symbol("cc/call"))
+builtins[Symbol.ContinuationForm] = Form(translate_continuation, Symbol("fn/cc"))
+builtins["do"] = Form(translate_do, Symbol("do"))
 
 end -- do
 
@@ -4174,6 +4232,8 @@ builtins.closure = Type.Closure
 builtins["syntax-list"] = Type.SyntaxList
 builtins["syntax-symbol"] = Type.SyntaxSymbol
 
+builtins["debug-build?"] = Any(bool(global_opts.debug))
+
 -- builtin macros
 --------------------------------------------------------------------------------
 
@@ -4316,7 +4376,7 @@ builtins.eval = function(frame, cont, self, expr, scope, path)
         path = "<eval>"
     end
     return expand_root(expr, scope, function(expexpr)
-        return call(frame, none, cont, compile_root(expexpr, path))
+        return call(frame, none, cont, translate_root(expexpr, path))
     end)
 end
 
@@ -5056,6 +5116,11 @@ builtins.dump = wrap_simple_builtin(function(value)
     return value
 end)
 
+builtins["dump-IL"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    stream_il(stdout_writer, value)
+end)
+
 builtins.print = wrap_simple_builtin(function(...)
     local writer = stdout_writer
     for i=1,select('#', ...) do
@@ -5249,12 +5314,17 @@ xpcallcc(
     function(cont)
         local basedir = cstr(C.bangra_interpreter_dir)
         local srcpath = basedir .. "/bangra.b"
-        local src = SourceFile.open(srcpath, cstr(C.bangra_b, C.bangra_b_len))
+        local src
+        if global_opts.debug then
+            src = SourceFile.open(srcpath)
+        else
+            src = SourceFile.open(srcpath, cstr(C.bangra_b, C.bangra_b_len))
+        end
         local ptr = src:strptr()
         local lexer = Lexer.init(ptr, ptr + src.length, src.path)
         local expr = parse(lexer)
         return expand_root(expr, null, function(expexpr)
-            local func = compile_root(expexpr, "main")
+            local func = translate_root(expexpr, "main")
             return execute(
                 function()
                     os.exit(0)
@@ -5269,8 +5339,8 @@ xpcallcc(
             if err.macros then
                 w(err.macros)
             end
-            if err.compile then
-                w(err.compile)
+            if err.translate then
+                w(err.translate)
             end
         end
         if global_opts.print_lua_traceback

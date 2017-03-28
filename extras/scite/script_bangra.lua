@@ -38,7 +38,7 @@ local function bangra_symbols()
         .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate cast element-type"
-        .. " qualify disqualify iter iterator? list? symbol? parse-c"
+        .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"

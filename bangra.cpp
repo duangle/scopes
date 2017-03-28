@@ -53,6 +53,8 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define STB_SPRINTF_DECORATE(name) stb_##name
 #include "external/stb_sprintf.h"
 
+#include <ffi.h>
+
 #if defined __cplusplus
 extern "C" {
 #endif
@@ -104,6 +106,8 @@ bool bangra_r64_eq(double a, double b);
 bool bangra_r64_ne(double a, double b);
 bool bangra_r64_lt(double a, double b);
 bool bangra_r64_gt(double a, double b);
+
+bool bangra_is_debug();
 
 const char *bangra_compile_time_date();
 
@@ -362,6 +366,14 @@ bool bangra_r64_gt(double a, double b) { return a >  b; }
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_OPS, IMPL_BINOP_FUNC)
 
+bool bangra_is_debug() {
+#ifdef BANGRA_DEBUG
+        return true;
+#else
+        return false;
+#endif
+}
+
 const char *bangra_compile_time_date() {
     return __DATE__ ", " __TIME__;
 }
@@ -471,8 +483,13 @@ static int handle_script(lua_State *L, char **argv, int n) {
     int status;
     int narg = getargs(L, argv, n);  /* collect arguments */
     lua_setglobal(L, "arg");
+#ifdef BANGRA_DEBUG
+    char fullpath[1024];
+    stb_snprintf(fullpath, 1024, "%s/%s", bangra_interpreter_dir, "bangra.lua");
+    status = luaL_loadfile(L, fullpath);
+#else
     status = luaL_loadbuffer(L, (const char *)blobs::luaJIT_BC_bangra, luaJIT_BC_bangra_SIZE, "main");
-    //status = luaL_loadfile(L, "bangra.lua");
+#endif
     lua_insert(L, -(narg+1));
     if (status == 0) {
         status = docall(L, narg, 0);

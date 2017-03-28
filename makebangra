@@ -7,18 +7,20 @@ while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symli
 done
 DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
 cd $DIR
-MODE=release
+MODE=debug
 if [ $MODE = "release" ]; then
     echo Building release version...
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
     OPT_G=
     OPT_O=-O3
+    OPT_MODE=
 else
     echo Building debug version...
     #PATH=$DIR/../../llvm/build/bin:$PATH
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
     OPT_G=-g
     OPT_O=-O0
+    OPT_MODE=-DBANGRA_DEBUG
 fi
 clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
 && xxd -i bangra.h $DIR/bangra.bin.h \
@@ -30,18 +32,18 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
-&& $DIR/luajit/bin/luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h \
+&& $DIR/luajit/bin/luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h -g \
 && clang++ \
     -o $DIR/bangra \
     $DIR/bangra.cpp \
     -pedantic \
     $OPT_G -rdynamic \
     -ferror-limit=1 \
-    -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
+    $OPT_MODE -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
     -D_GLIBCXX_USE_CXX11_ABI=0 \
     -lpthread -lm -ldl -ltinfo -lz \
     -I$DIR/luajit/include/luajit-2.1 $DIR/luajit/lib/libluajit-5.1.a \
-    -I$DIR/libffi/include $DIR/libffi/.libs/libffi.a \
+    -I$DIR/libffi/include \
     -I$DIR \
     -lclangFrontend -lclangDriver \
     -lclangSerialization -lclangCodeGen -lclangParse -lclangSema \
@@ -51,6 +53,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     `llvm-config --cxxflags` \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
+    $DIR/libffi/.libs/libffi.a \
     $DIR/coro.o $DIR/linenoise.o $DIR/ConvertUTF.o $DIR/wcwidth.o \
     `llvm-config --libs engine passes option objcarcopts coverage support` \
     -Wl,--no-whole-archive \

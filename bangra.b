@@ -1301,6 +1301,17 @@ syntax-extend stage-5 (return env)
                 error
                     .. "don't know how to iterate " (string x)
 
+    fn varargs-iter (f)
+        let args... = (f)
+        if (> (va-countof args) (size_t 0))
+            let first rest... = args...
+            return first
+                fn () rest...
+
+    fn va-iter (args...)
+        new-iterator varargs-iter
+            fn () args...
+
     fn range (a b c)
         let num-type = (typeof a)
         let step = (? (none? c) (num-type 1) c)
@@ -1379,6 +1390,7 @@ syntax-extend stage-5 (return env)
                         syntax-cons (@ elem 0) names
 
     set-scope-symbol! env (quote iter) iter
+    set-scope-symbol! env (quote va-iter) va-iter
     set-scope-symbol! env (quote iterator?) iterator?
     set-scope-symbol! env (quote range) range
     set-scope-symbol! env (quote zip) zip
@@ -1611,7 +1623,9 @@ syntax-extend stage-7 (return env)
             .. (string vmin) "." (string vmaj)
                 ? (vpatch == 0) ""
                     .. "." (string vpatch)
-                \ " (" interpreter-timestamp ")"
+                \ " ("
+                ? debug-build? "debug build, " ""
+                \ interpreter-timestamp ")"
         let state = (scope)
         fn reset-state ()
             let repl-env = (scope (globals))
