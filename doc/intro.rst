@@ -10,13 +10,20 @@ You can either download a binary distribution of Bangra from the
 How to build Bangra on Linux:
 
 * You need build-essentials, clang 3.9, libclang 3.9 and LLVM 3.9 installed
-* put ``clang++`` and ``llvm-config`` in your path OR extract the clang distro into
+* Put ``clang++`` and ``llvm-config`` in your path OR extract the clang distro into
   the repo folder and rename it to ``clang``.
 * You also need the latest source distribution of
-  `libffi <https://sourceware.org/libffi/>`_.
-* build libffi using `./configure --enable-shared=no --enable-static=yes && make` and
-  softlink the generated build folder (e.g. `x86_64-unknown-linux-gnu`) as `libffi`
-  in the repo folder.
+  `libffi <https://sourceware.org/libffi/>`_
+  and `LuaJIT <http://luajit.org/download.html>`_ (``2.1.0-beta2`` or later).
+* Build libffi using ``./configure --enable-shared=no --enable-static=yes && make`` and
+  softlink or copy the generated build folder (e.g. ``x86_64-unknown-linux-gnu``)
+  as ``libffi`` in the repo folder.
+* Edit ``src/Makefile`` in the luajit source folder and uncomment the line that
+  enables ``LUAJIT_ENABLE_LUA52COMPAT``. Build and install luajit to a ``luajit``
+  subdirectory in the distro folder using ``make PREFIX=/full/path/to/bangra/luajit``
+  and ``make PREFIX=/full/path/to/bangra/luajit install``. Softlinking or copying
+  is not enough as some paths have been hardcoded. Make sure the generated
+  binary in the ``bin`` folder has been softlinked to ``luajit``.
 
 * execute ``./makebangra``
 

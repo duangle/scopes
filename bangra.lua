@@ -24,7 +24,7 @@ SOFTWARE.
 local global_opts = {
     -- semver style versioning
     version_major = 0,
-    version_minor = 6,
+    version_minor = 7,
     version_patch = 0,
 
     trace_execution = false, -- print each statement being executed
@@ -555,6 +555,8 @@ typedef union {
 
 unsigned char bangra_h[];
 unsigned int bangra_h_len;
+unsigned char bangra_b[];
+unsigned int bangra_b_len;
 ]]
 
 local cast_t = typeof('cast_t')
@@ -2225,7 +2227,7 @@ local FUNCTIONS = set(split(
         .. " get-exception-handler xpcall error sizeof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
-        .. " syntax-error"
+        .. " syntax-error ordered-branch"
     ))
 
 -- builtin and global functions with side effects
@@ -4500,7 +4502,7 @@ each_numerical_type(function(T)
         wrap_simple_builtin(function(x)
             checkargs(1,1,x)
             local xs = x.type:super()
-            if xs ~= Type.Integer and xs ~= Type.Float then
+            if xs ~= Type.Integer and xs ~= Type.Real then
                 error("Unable to apply type "
                     .. T.displayname .. " to value of type "
                     .. x.type.displayname)
@@ -4520,92 +4522,6 @@ builtin_op(Type.Syntax, Symbol.ApplyType,
 
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
-local return_true = Any(Builtin(function(frame, cont, self)
-    return call(frame, none, cont, any_true)
-end, Symbol("return-true")))
-local return_false = Any(Builtin(function(frame, cont, self)
-    return call(frame, none, cont, any_false)
-end, Symbol("return-false")))
-local function unordered_error (a, b)
-    return location_error("illegal ordered comparison of values of type "
-        .. a.type.displayname
-        .. " and type "
-        .. b.type.displayname)
-end
--- ordered comparisons
-builtins['=='] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_true,
-        Any(Builtin(function(frame, cont, self)
-                return unordered_error(a, b)
-            end, Symbol.ReturnError)),
-        return_false, return_false)
-end
-builtins['!='] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_false,
-        Any(Builtin(function(frame, cont, self)
-                return unordered_error(a, b)
-            end, Symbol.ReturnError)),
-        return_true, return_true)
-end
-builtins['<'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_false,
-        Any(Builtin(function(frame, cont, self)
-                return unordered_error(a, b)
-            end, Symbol.ReturnError)),
-        return_true, return_false)
-end
-builtins['<='] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_true,
-        Any(Builtin(function(frame, cont, self)
-                return unordered_error(a, b)
-            end, Symbol.ReturnError)),
-        return_true, return_false)
-end
-builtins['>'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_false,
-        Any(Builtin(function(frame, cont, self)
-                return unordered_error(a, b)
-            end, Symbol.ReturnError)),
-        return_false, return_true)
-end
-builtins['>='] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_true,
-        Any(Builtin(function(frame, cont, self)
-                return unordered_error(a, b)
-            end, Symbol.ReturnError)),
-        return_false, return_true)
-end
--- unordered comparisons
-builtins['==?'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_true, return_false, return_false, return_false)
-end
-builtins['!=?'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_false, return_true, return_true, return_true)
-end
-builtins['<?'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_false, return_false, return_true, return_false)
-end
-builtins['<=?'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_true, return_false, return_true, return_false)
-end
-builtins['>?'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_false, return_false, return_false, return_true)
-end
-builtins['>=?'] = function(frame, cont, self, a, b)
-    return ordered_branch(frame, cont, self, a, b,
-        return_true, return_false, return_false, return_true)
-end
 
 builtin_op(Type.Void, Symbol.Compare,
     function(frame, cont, self, a, b,
@@ -5298,14 +5214,14 @@ local function init_globals()
         end
     end
     configure_int_type(Type.Bool, bool)
-    configure_int_type(Type.U8, uint8_t, "%d")
-    configure_int_type(Type.U16, uint16_t, "%d")
-    configure_int_type(Type.U32, uint32_t, "%d")
-    configure_int_type(Type.U64, uint64_t, "%lld")
-    configure_int_type(Type.I8, int8_t, "%u")
-    configure_int_type(Type.I16, int16_t, "%u")
-    configure_int_type(Type.I32, int32_t, "%u")
-    configure_int_type(Type.I64, int64_t, "%llu")
+    configure_int_type(Type.U8, uint8_t, "%u")
+    configure_int_type(Type.U16, uint16_t, "%u")
+    configure_int_type(Type.U32, uint32_t, "%u")
+    configure_int_type(Type.U64, uint64_t, "%llu")
+    configure_int_type(Type.I8, int8_t, "%d")
+    configure_int_type(Type.I16, int16_t, "%d")
+    configure_int_type(Type.I32, int32_t, "%d")
+    configure_int_type(Type.I64, int64_t, "%lld")
 
     configure_real_type(Type.R32, float)
     configure_real_type(Type.R64, double)
@@ -5333,7 +5249,7 @@ xpcallcc(
     function(cont)
         local basedir = cstr(C.bangra_interpreter_dir)
         local srcpath = basedir .. "/bangra.b"
-        local src = SourceFile.open(srcpath)
+        local src = SourceFile.open(srcpath, cstr(C.bangra_b, C.bangra_b_len))
         local ptr = src:strptr()
         local lexer = Lexer.init(ptr, ptr + src.length, src.path)
         local expr = parse(lexer)

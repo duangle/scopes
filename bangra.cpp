@@ -175,6 +175,7 @@ extern "C" {
 #include <lauxlib.h>
 
 #include "bangra.bin.h"
+#include "bangra.b.bin.h"
 
 } // extern "C"
 
@@ -470,8 +471,8 @@ static int handle_script(lua_State *L, char **argv, int n) {
     int status;
     int narg = getargs(L, argv, n);  /* collect arguments */
     lua_setglobal(L, "arg");
-    //status = luaL_loadbuffer(L, (const char *)blobs::luaJIT_BC_bangra, luaJIT_BC_bangra_SIZE, "main");
-    status = luaL_loadfile(L, "bangra.lua");
+    status = luaL_loadbuffer(L, (const char *)blobs::luaJIT_BC_bangra, luaJIT_BC_bangra_SIZE, "main");
+    //status = luaL_loadfile(L, "bangra.lua");
     lua_insert(L, -(narg+1));
     if (status == 0) {
         status = docall(L, narg, 0);

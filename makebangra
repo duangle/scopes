@@ -22,6 +22,7 @@ else
 fi
 clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
 && xxd -i bangra.h $DIR/bangra.bin.h \
+&& xxd -i bangra.b $DIR/bangra.b.bin.h \
 && clang -c -o $DIR/coro.o $DIR/external/coro/coro.c $OPT_G $OPT_O \
 && clang -c -o $DIR/linenoise.o $DIR/external/linenoise-ng/src/linenoise.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
@@ -29,7 +30,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
-&& luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h \
+&& $DIR/luajit/bin/luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h \
 && clang++ \
     -o $DIR/bangra \
     $DIR/bangra.cpp \
@@ -39,7 +40,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
     -D_GLIBCXX_USE_CXX11_ABI=0 \
     -lpthread -lm -ldl -ltinfo -lz \
-    -I$DIR/luajit/src $DIR/luajit/src/libluajit.a \
+    -I$DIR/luajit/include/luajit-2.1 $DIR/luajit/lib/libluajit-5.1.a \
     -I$DIR/libffi/include $DIR/libffi/.libs/libffi.a \
     -I$DIR \
     -lclangFrontend -lclangDriver \

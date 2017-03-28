@@ -25,6 +25,72 @@
     if found, executes it.
 
 syntax-extend def-quote-set (return env)
+    call
+        fn/cc (return return-true return-false unordered-error)
+            set-scope-symbol! env (symbol "==")
+                fn/cc == (return a b)
+                    return (ordered-branch a b return-true
+                            (fn/cc (_) (cc/call none unordered-error a b))
+                            return-false return-false)
+            set-scope-symbol! env (symbol "!=")
+                fn/cc != (return a b)
+                    return (ordered-branch a b return-false
+                            (fn/cc (_) (cc/call none unordered-error a b))
+                            return-true return-true)
+            set-scope-symbol! env (symbol "<")
+                fn/cc < (return a b)
+                    return (ordered-branch a b return-false
+                            (fn/cc (_) (cc/call none unordered-error a b))
+                            return-true return-false)
+            set-scope-symbol! env (symbol "<=")
+                fn/cc <= (return a b)
+                    return (ordered-branch a b return-true
+                            (fn/cc (_) (cc/call none unordered-error a b))
+                            return-true return-false)
+            set-scope-symbol! env (symbol ">")
+                fn/cc > (return a b)
+                    return (ordered-branch a b return-false
+                            (fn/cc (_) (cc/call none unordered-error a b))
+                            return-false return-true)
+            set-scope-symbol! env (symbol ">=")
+                fn/cc >= (return a b)
+                    return (ordered-branch a b return-true
+                            (fn/cc (_) (cc/call none unordered-error a b))
+                            return-false return-true)
+            set-scope-symbol! env (symbol "==?")
+                fn/cc == (return a b)
+                    return (ordered-branch a b return-true return-false
+                            return-false return-false)
+            set-scope-symbol! env (symbol "!=?")
+                fn/cc != (return a b)
+                    return (ordered-branch a b return-false return-true
+                            return-true return-true)
+            set-scope-symbol! env (symbol "<?")
+                fn/cc < (return a b)
+                    return (ordered-branch a b return-false return-false
+                            return-true return-false)
+            set-scope-symbol! env (symbol "<=?")
+                fn/cc <= (return a b)
+                    return (ordered-branch a b return-true return-false
+                            return-true return-false)
+            set-scope-symbol! env (symbol ">?")
+                fn/cc > (return a b)
+                    return (ordered-branch a b return-false return-false
+                            return-false return-true)
+            set-scope-symbol! env (symbol ">=?")
+                fn/cc >= (return a b)
+                    return (ordered-branch a b return-true return-false
+                            return-false return-true)
+            return
+        fn/cc return-true (return) (return true)
+        fn/cc return-false (return) (return false)
+        fn/cc unordered-error (return a b)
+            error
+                .. "illegal ordered comparison of values of types "
+                    .. (repr (typeof a))
+                        .. " and "
+                            repr (typeof b)
+
     set-scope-symbol! env
         symbol "quote"
         block-scope-macro
@@ -39,12 +105,12 @@ syntax-extend def-quote-set (return env)
                                     escape
                                         # keep wrapped in list if multiple
                                             arguments
-                                        branch
-                                            == (slice args 1) (list)
+                                        ordered-branch (list) (slice args 1)
                                             fn/cc (_)
                                                 _ (@ args 0)
-                                            fn/cc (_)
-                                                _ args
+                                            fn/cc (_) (_ args)
+                                            fn/cc (_) (_ args)
+                                            fn/cc (_) (_ args)
                                 slice expr 1
                             \ env
                     slice (@ expr 0) 1
@@ -56,11 +122,11 @@ syntax-extend def-quote-set (return env)
                     fn/cc (_ name)
                         call
                             fn/cc (_ param)
-                                branch
-                                    == (typeof param) parameter
+                                ordered-branch (typeof param) parameter
                                     fn/cc (_) (_ none)
                                     fn/cc (_)
                                         error "set! requires parameter argument"
+                                    \ none none # never reached
                                 return
                                     cons
                                         syntax-cons
@@ -75,12 +141,10 @@ syntax-extend def-quote-set (return env)
                                                 slice (@ expr 0) 2
                                         slice expr 1
                                     \ env
-                            branch
-                                ==? (typeof (syntax->datum name)) parameter
-                                fn/cc (_)
-                                    _ (syntax->datum name)
-                                fn/cc (_)
-                                    _ (get-scope-symbol env name name)
+                            ordered-branch (typeof (syntax->datum name)) parameter
+                                fn/cc (_) (_ (syntax->datum name))
+                                fn/cc (_) (_ (get-scope-symbol env name name))
+                                \ none none # never reached
                     @ (@ expr 0) 1
     return env
 
