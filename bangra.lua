@@ -3072,6 +3072,9 @@ do
     function cls.stack_level()
         return #stack
     end
+    function cls.clear_traceback()
+        stack = {}
+    end
     function cls.stream_traceback(writer, opts)
         opts = opts or {}
         local styler = opts.styler or default_styler
@@ -4612,6 +4615,7 @@ compare_func(Type.Bool)
 compare_func(Type.Symbol)
 compare_func(Type.Parameter)
 compare_func(Type.Flow)
+compare_func(Type.Closure)
 
 local function ordered_compare_func(T)
     builtin_op(T, Symbol.Compare,
@@ -5172,6 +5176,10 @@ builtins['stack-level'] = wrap_simple_builtin(function()
     return Any(int32_t(debugger.stack_level()))
 end)
 
+builtins['clear-traceback'] = wrap_simple_builtin(function()
+    debugger.clear_traceback()
+end)
+
 builtins.traceback = wrap_simple_builtin(function(limit, trunc)
     checkargs(0, 2, limit, trunc)
     local opts = {}
@@ -5193,6 +5201,12 @@ builtins.args = wrap_simple_builtin(function()
         table.insert(result, Any(cstr(C.bangra_argv[i])))
     end
     return unpack(result)
+end)
+
+builtins.exit = wrap_simple_builtin(function(code)
+    checkargs(1, 1, code)
+    code = tonumber(unwrap_integer(code))
+    os.exit(code)
 end)
 
 --------------------------------------------------------------------------------

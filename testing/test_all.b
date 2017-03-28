@@ -1,12 +1,13 @@
-set-key! bangra
-    : path
-        cons
-            .. interpreter-dir "/testing/?.b"
-            bangra.path
+
+set-scope-symbol! bangra
+    quote path
+    cons
+        .. interpreter-dir "/testing/?.b"
+        get-scope-symbol bangra (quote path)
 
 let
     modules =
-        quote
+        syntax->datum (quote
             test_array
             test_assorted
             test_iterator
@@ -15,28 +16,33 @@ let
             test_loop
             test_scope
             test_semicolon
-            test_xlet
+            test_xlet)
     total =
-        countof modules
+        int (countof modules)
 
 for module in modules
     with
         failed = 0
+    let module = (syntax->datum module)
 
-    print;
+    print
     print "* running:" module
     print "***********************************************"
     let ok =
-        try
-            require module
-            true
-        except (e)
-            print "error running module:" e
-            false
+        do
+            try
+                clear-traceback
+                require module
+                \ true
+            except (e)
+                print
+                    traceback
+                print "error running module:" e
+                \ false
     repeat
         ? ok failed (failed + 1)
 else
-    print;
+    print
     print total "tests executed," (total - failed) "succeeded," failed "failed."
 
 print "done."

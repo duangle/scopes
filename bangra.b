@@ -730,10 +730,12 @@ syntax-extend def-let-xlet (return env)
                                 fn (args rest)
                                     let pair =
                                         @ pairs 0
-                                    assert
-                                        and (=? (@ pair 1))
-                                            == (countof pair) (u64 3)
-                                        "syntax: xlet (<name> = <expression>) ..."
+                                    if
+                                        not
+                                            and (=? (@ pair 1))
+                                                == (countof pair) (u64 3)
+                                        syntax-error pair
+                                            \ "syntax: xlet (<name> = <expression>) ..."
                                     let name = (@ pair 0)
                                     return
                                         syntax-cons name args
@@ -846,8 +848,8 @@ define loop
 
 define syntax-infix-rules
     fn syntax-infix-rules (prec order name)
-        fn spec (f)
-            f prec order name
+        fn spec ()
+            return prec order name
 
 #define-infix-op or 100 > or
 define define-infix-op
@@ -932,9 +934,8 @@ syntax-extend stage-3 (return env)
                 .. (string token)
                     " is not an infix operator, but embedded in an infix expression"
         else
-            op
-                fn (op-prec)
-                    ? (pred op-prec prec) op none
+            let op-prec = (op)
+            ? (pred op-prec prec) op none
 
     fn rtl-infix-op (infix-table token prec pred)
         let op =
@@ -944,9 +945,8 @@ syntax-extend stage-3 (return env)
                 .. (string token)
                     " is not an infix operator, but embedded in an infix expression"
         else
-            op
-                fn (op-prec op-order)
-                    ? (and (== op-order <) (pred op-prec prec)) op none
+            let op-prec op-order = (op)
+            ? (and (==? op-order <) (pred op-prec prec)) op none
 
     fn parse-infix-expr (infix-table lhs state mprec)
         loop (lhs state)
@@ -956,7 +956,7 @@ syntax-extend stage-3 (return env)
             let op = (infix-op infix-table la mprec >=)
             if (none? op)
                 break lhs state
-            let op-prec op-order op-name = (op _)
+            let op-prec op-order op-name = (op)
             let next-state = (slice state 1)
             let rhs = (@ next-state 0)
             let state = (slice next-state 1)
@@ -969,10 +969,10 @@ syntax-extend stage-3 (return env)
                     let nextop =
                         ? (none? lop)
                             rtl-infix-op infix-table ra op-prec ==
-                            lop
+                            \ lop
                     if (none? nextop)
                         break rhs state
-                    let nextop-prec = (nextop _)
+                    let nextop-prec = (nextop)
                     repeat
                         parse-infix-expr infix-table rhs state
                             \ nextop-prec
@@ -998,15 +998,17 @@ syntax-extend stage-3 (return env)
             iter pattern
 
     fn find-module (name)
+        let name = (syntax->datum name)
         assert (symbol? name) "module name must be symbol"
         let content =
-            @ (. bangra modules) name
+            get-scope-symbol
+                get-scope-symbol bangra (quote modules)
+                \ name
         if (none? content)
             let namestr =
                 string name
             let pattern =
-                @ bangra
-                    quote path
+                get-scope-symbol bangra (quote path)
             loop (pattern)
                 if (not (empty? pattern))
                     let module-path =
@@ -1025,7 +1027,9 @@ syntax-extend stage-3 (return env)
                             eval expr eval-scope module-path
                         let content =
                             fun
-                        set-scope-symbol! (. bangra modules) name content
+                        set-scope-symbol!
+                            get-scope-symbol bangra (quote modules)
+                            \ name content
                         \ content
                     else
                         repeat
@@ -1175,21 +1179,23 @@ syntax-extend stage-3 (return env)
                         iter-r
                             string sym
                 cons
-                    finalize-head
-                        fold
-                            fn (out k)
-                                if (== k ".")
-                                    cons ""
+                    datum->syntax
+                        finalize-head
+                            fold
+                                fn (out k)
+                                    if (== k ".")
+                                        cons ""
+                                            cons
+                                                quote .
+                                                finalize-head out
+                                    else
                                         cons
-                                            quote .
-                                            finalize-head out
-                                else
-                                    cons
-                                        .. k (@ out 0)
-                                        slice out 1
-                            list ""
-                            iter-r
-                                string sym
+                                            .. k (@ out 0)
+                                            slice out 1
+                                list ""
+                                iter-r
+                                    string sym
+                        \ sym-anchor
                     slice topexpr 1
     return env
 
@@ -1242,7 +1248,7 @@ syntax-extend stage-5 (return env)
                 return next start
 
     fn countable-rslice-iter (l)
-        if ((countof l) != 0)
+        if (not (empty? l))
             return (@ l 0) (slice l 1)
 
     fn countable-iter (f)
@@ -1563,12 +1569,11 @@ syntax-extend stage-5 (return env)
                                 _
                                     syntax-list func-expr
                                     syntax-list decl
-                            elseif (syntax-head? rest (quote with))
+                            elseif
+                                and (list? (syntax->datum (@ rest 0)))
+                                    syntax-head? (@ rest 0) (quote with)
                                 let defs defs-rest =
-                                    parse-funcdef
-                                        slice rest 1
-                                        k + 1
-                                        head
+                                    parse-funcdef (slice rest 1) (k + 1) head
                                 _
                                     syntax-cons func-expr defs
                                     \ defs-rest
@@ -1711,4 +1716,68 @@ syntax-extend stage-final (return env)
     set-globals! env
     return env
 
-read-eval-print-loop
+fn print-help (exename)
+    print "usage:" exename "[option [...]] [filename]
+Options:
+   -h, --help                  print this text and exit.
+   -v, --version               print program version and exit.
+   --                          terminate option list."
+    exit 0
+
+fn print-version (total)
+    let vmin vmaj vpatch = (interpreter-version)
+    print "Bangra"
+        .. (string vmin) "." (string vmaj)
+            ? (vpatch == 0) ""
+                .. "." (string vpatch)
+            \ " ("
+            ? debug-build? "debug build, " ""
+            \ interpreter-timestamp ")"
+    print "Executable path:" interpreter-path
+    exit 0
+
+fn run-main (args...)
+    # running in interpreter mode
+    let sourcepath = none
+    let parse-options = true
+    loop
+        with
+            i = 1
+        let arg = (va-arg i args...)
+        if (not (none? arg))
+            if (parse-options and ((@ arg 0) == "-"))
+                if (arg == "--help" or arg == "-h")
+                    print-help (va-arg 0 args...)
+                elseif (arg == "--version" or arg == "-v")
+                    print-version
+                elseif (arg == "--")
+                    set! parse-options false
+                else
+                    print
+                        .. "unrecognized option: " arg
+                            \ ". Try --help for help."
+                    exit 1
+            elseif (none? sourcepath)
+                set! sourcepath arg
+            else
+                print
+                    .. "unrecognized argument: " arg
+                        \ ". Try --help for help."
+                exit 1
+            repeat (i + 1)
+
+    if (none? sourcepath)
+        read-eval-print-loop
+    else
+        let expr =
+            list-load sourcepath
+        let eval-scope =
+            scope (globals)
+        set-scope-symbol! eval-scope (quote module-path) sourcepath
+        let fun =
+            eval expr eval-scope sourcepath
+        clear-traceback
+        fun
+        exit 0
+
+run-main (args)
