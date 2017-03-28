@@ -20,9 +20,8 @@
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
 
-    boot script
-    the bangra executable looks for a boot file at path/to/executable.b and,
-    if found, executes it.
+    This is the bangra boot script. It implements the remaining standard
+    functions and macros, parses the command-line and then enters the REPL.
 
 syntax-extend def-quote-set (return env)
     call
@@ -58,27 +57,27 @@ syntax-extend def-quote-set (return env)
                             (fn/cc (_) (cc/call none unordered-error a b))
                             return-false return-true)
             set-scope-symbol! env (symbol "==?")
-                fn/cc == (return a b)
+                fn/cc ==? (return a b)
                     return (ordered-branch a b return-true return-false
                             return-false return-false)
             set-scope-symbol! env (symbol "!=?")
-                fn/cc != (return a b)
+                fn/cc !=? (return a b)
                     return (ordered-branch a b return-false return-true
                             return-true return-true)
             set-scope-symbol! env (symbol "<?")
-                fn/cc < (return a b)
+                fn/cc <? (return a b)
                     return (ordered-branch a b return-false return-false
                             return-true return-false)
             set-scope-symbol! env (symbol "<=?")
-                fn/cc <= (return a b)
+                fn/cc <=? (return a b)
                     return (ordered-branch a b return-true return-false
                             return-true return-false)
             set-scope-symbol! env (symbol ">?")
-                fn/cc > (return a b)
+                fn/cc >? (return a b)
                     return (ordered-branch a b return-false return-false
                             return-false return-true)
             set-scope-symbol! env (symbol ">=?")
-                fn/cc >= (return a b)
+                fn/cc >=? (return a b)
                     return (ordered-branch a b return-true return-false
                             return-false return-true)
             return
@@ -242,33 +241,6 @@ syntax-extend def-? (return env)
                             parameter (quote ret-true)
                         datum->syntax
                             parameter (quote ret-false)
-                    \ env
-    #set-scope-symbol! env
-        quote :
-        block-scope-macro
-            fn/cc : (return expr env)
-                return
-                    cons
-                        cons tupleof
-                            cons
-                                branch
-                                    ==
-                                        typeof
-                                            @ (@ expr 0) 1
-                                        \ symbol
-                                    fn/cc ()
-                                        list quote
-                                            @ (@ expr 0) 1
-                                    fn/cc ()
-                                        @ (@ expr 0) 1
-                                branch
-                                    == (slice (@ expr 0) 2) (list)
-                                    fn/cc ()
-                                        list
-                                            @ (@ expr 0) 1
-                                    fn/cc ()
-                                        slice (@ expr 0) 2
-                        slice expr 1
                     \ env
     return env
 
