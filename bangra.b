@@ -159,6 +159,11 @@ syntax-extend def-? (return env)
             return
                 ==? (typeof x) list
     set-scope-symbol! env
+        quote type?
+        fn/cc type? (return x)
+            return
+                ==? (typeof x) type
+    set-scope-symbol! env
         quote none?
         fn/cc none? (return x)
             return
@@ -344,15 +349,15 @@ define let
     block-scope-macro
         fn/cc let (return expr env)
             branch
-                == (typeof (@ (@ expr 0) 2)) syntax-symbol
+                ==? (typeof (@ (@ expr 0) 2)) syntax-symbol
                 fn/cc (_) (_)
                 fn/cc (_)
-                    error "syntax: let <var> = <expr>"
+                    syntax-error (@ expr 0) "syntax: let <var> = <expr>"
             branch
-                == (@ (@ expr 0) 2) (quote =)
+                ==? (@ (@ expr 0) 2) (quote =)
                 fn/cc (_) (_)
                 fn/cc (_)
-                    error "syntax: let <var> = <expr>"
+                    syntax-error (@ expr 0) "syntax: let <var> = <expr>"
             return
                 call
                     fn/cc (_ cont-param param-name rest)
@@ -495,6 +500,24 @@ define assert
                             syntax-eol expr
                     unquote-splice
                         syntax-eol expr
+
+
+define sizeof
+    let sym = (symbol "size")
+    fn/cc sizeof (return x)
+        assert (type? x) "type expected"
+        let size =
+            @ x sym
+        return
+            ? (none? size) (size_t 0) size
+
+define alignof
+    let sym = (symbol "alignment")
+    fn/cc alignof (return x)
+        assert (type? x) "type expected"
+        return
+            @ x sym
+
 define ::@
     block-macro
         fn ::@ (expr)
@@ -1602,7 +1625,7 @@ syntax-extend stage-5 (return env)
 
     return env
 
-syntax-extend stage-7 (return env)
+define read-eval-print-loop
     fn repeat-string (n c)
         for i in (range n)
             with (s = "")
@@ -1622,7 +1645,7 @@ syntax-extend stage-7 (return env)
             else (repeat)
         else false
 
-    fn read-eval-print-loop ()
+    fn ()
         let vmin vmaj vpatch = (interpreter-version)
         print "Bangra"
             .. (string vmin) "." (string vmaj)
@@ -1709,8 +1732,6 @@ syntax-extend stage-7 (return env)
                     \ ""
                 else cmdlist
             repeat preload cmdlist
-    set-scope-symbol! env (quote read-eval-print-loop) read-eval-print-loop
-    return env
 
 syntax-extend stage-final (return env)
     set-globals! env
@@ -1774,6 +1795,7 @@ fn run-main (args...)
         let eval-scope =
             scope (globals)
         set-scope-symbol! eval-scope (quote module-path) sourcepath
+        clear-traceback
         let fun =
             eval expr eval-scope sourcepath
         clear-traceback

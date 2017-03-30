@@ -962,6 +962,7 @@ local function define_symbols(def)
     def({Sub='-'})
     def({Mul='*'})
     def({Div='/'})
+    def({Repr='repr'})
 
     -- ad-hoc builtin names
     def({ExecuteReturn='execute-return'})
@@ -1158,7 +1159,6 @@ end
 --------------------------------------------------------------------------------
 
 local is_none
-local format_any_value
 
 local function assert_type(x)
     if getmetatable(x) == Type then
@@ -1257,11 +1257,21 @@ do
         assert_type(_type)
         self:bind(Any(Symbol.ElementType), Any(_type))
     end
+    function cls:size()
+        local sz = self:lookup(Symbol.Size)
+        if sz then
+            return sz and unwrap(Type.SizeT, sz)
+        else
+            return 0
+        end
+    end
     function cls:__call(...)
         return self:__call(...)
     end
-
     function cls:__tostring()
+        return self.displayname
+    end
+    function cls:repr(styler)
         return self.displayname
     end
 
@@ -1285,7 +1295,7 @@ do
                 val:set_element_type(_type)
                 val:set_super(self)
                 function val:format_value(value, styler)
-                    return format_any_value(self:element_type(), value, styler)
+                    return self:element_type():format_value(value, styler)
                 end
                 cache[_type] = val
                 if on_create then
@@ -1303,9 +1313,7 @@ do
             return
                 styler(STYLE.LOCATION,
                     tostring(value.anchor:format_plain()) .. ":")
-                .. format_any_value(
-                    self:element_type(),
-                    value.datum, styler)
+                .. self:element_type():format_value(value.datum, styler)
         end
     end)
     Type.SizeT = Type.U64
@@ -1361,14 +1369,6 @@ local MT_TYPE_MAP = {
     [Anchor] = Type.Anchor
 }
 
-format_any_value = function(_type, x, styler)
-    if rawget(_type, 'format_value') then
-        return _type:format_value(x, styler)
-    else
-        return repr(x, styler)
-    end
-end
-
 do
     local function wrap(value)
         local t = type(value)
@@ -1413,6 +1413,7 @@ do
         error("unable to wrap " .. repr(value))
     end
 
+    Any.__index = Any
     setmetatable(Any, {
         __call = function(cls, arg1, arg2)
             local _type = arg1
@@ -1432,14 +1433,30 @@ do
         end
     })
 end
-function Any.__tostring(self)
+
+function Any:has_expression_type()
+    local t = self.type
+    return t == Type.I32
+        or t == Type.R32
+        or t == Type.String
+        or t == Type.Symbol
+        or t == Type.Parameter
+end
+
+function Any:repr(styler)
     if getmetatable(self.type) ~= Type then
-        return default_styler(STYLE.ERROR, "corrupted value")
+        return styler(STYLE.ERROR, "corrupted value")
     else
-        return format_any_value(self.type, self.value, default_styler)
-            .. default_styler(STYLE.OPERATOR, ":")
-            .. self.type.displayname
+        local s = self.type:format_value(self.value, styler)
+        if not self:has_expression_type() then
+            s = s .. styler(STYLE.OPERATOR, ":") .. self.type.displayname
+        end
+        return s
     end
+end
+
+function Any.__tostring(self)
+    return self:repr(default_styler)
 end
 
 local function assert_any_type(_type, value)
@@ -2220,20 +2237,21 @@ local KEYWORDS = set(split(
     -- builtin and global functions
 local FUNCTIONS = set(split(
     "external branch print repr tupleof import-c eval structof typeof"
-        .. " macro block-macro block-scope-macro cons expand empty?"
+        .. " macro block-macro block-scope-macro cons expand empty? type?"
         .. " dump syntax-head? countof tableof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
-        .. " get-exception-handler xpcall error sizeof prompt null?"
+        .. " get-exception-handler xpcall error sizeof alignof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
-        .. " syntax-error ordered-branch"
+        .. " syntax-error ordered-branch alloc"
     ))
 
 -- builtin and global functions with side effects
 local SFXFUNCTIONS = set(split(
-    "set-scope-symbol! set-globals! set-exception-handler! bind! set!"
+    "set-scope-symbol! set-type-symbol! set-globals! set-exception-handler!"
+        .. " bind! set!"
     ))
 
 -- builtin operator functions that can also be used as infix
@@ -2479,15 +2497,9 @@ stream_expr = function(writer, e, format)
                     or STYLE.SYMBOL
                 writer(styler(style, escape_string(name, SYMBOL_ESCAPE_CHARS)))
             else
-                writer(format_any_value(e.type, e.value, styler))
+                writer(e.type:format_value(e.value, styler))
             end
-            if
-                quoted
-                or (e.type ~= Type.I32
-                and e.type ~= Type.R32
-                and e.type ~= Type.String
-                and e.type ~= Type.Symbol
-                and e.type ~= Type.Parameter) then
+            if quoted or not e:has_expression_type() then
                 writer(styler(STYLE.OPERATOR, ":"))
                 writer(tostring(otype))
             end
@@ -3358,6 +3370,26 @@ local function execute(cont, dest, ...)
             assert_frame(frame)
             return cont(...)
         end, Symbol.ExecuteReturn)), dest, ...)
+end
+
+function Type:format_value(value, styler)
+    local reprf = self:lookup(Symbol.Repr)
+    if reprf then
+        local result
+        execute(function(value)
+            result = unwrap(Type.String, value)
+        end, reprf, Any(self, value))
+        return result
+    end
+    if type(value) == "table" then
+        local mt = getmetatable(value)
+        if mt and rawget(mt, 'repr') then
+            return mt.repr(value, styler)
+        end
+    end
+    return styler(STYLE.OPERATOR, "[")
+        .. tostring(self:size()) .. " bytes"
+        .. styler(STYLE.OPERATOR, "]")
 end
 
 --------------------------------------------------------------------------------
@@ -4336,6 +4368,19 @@ end)
 -- constructors
 --------------------------------------------------------------------------------
 
+builtins["alloc"] = wrap_simple_builtin(function(_type)
+    checkargs(1,1, _type)
+    _type = unwrap(Type.Type, _type)
+    local size = _type:lookup(Symbol.Size)
+    if size then
+        size = tonumber(unwrap(Type.SizeT, size))
+    else
+        size = 0
+    end
+    local buf = new(typeof('$[$]', uint8_t, size))
+    return Any(_type, buf)
+end)
+
 builtins["list-load"] = wrap_simple_builtin(function(path)
     checkargs(1,1, path)
     path = unwrap(Type.String, path)
@@ -4457,7 +4502,7 @@ builtin_op(Type.String, Symbol.ApplyType,
         elseif ty == Type.Symbol then
             return Any(value.value.name)
         else
-            return Any(format_any_value(value.type, value.value, plain_styler))
+            return Any(value.type:format_value(value.value, plain_styler))
         end
     end))
 
@@ -4471,6 +4516,12 @@ builtin_op(Type.List, Symbol.ApplyType,
     wrap_simple_builtin(function(...)
         checkargs(0,-1,...)
         return Any(List.from_args(...))
+    end))
+
+builtin_op(Type.Type, Symbol.ApplyType,
+    wrap_simple_builtin(function(name)
+        checkargs(1,1,name)
+        return Any(Type(unwrap(Type.String, name)))
     end))
 
 builtin_op(Type.SyntaxList, Symbol.ApplyType,
@@ -4529,7 +4580,7 @@ builtin_op(Type.Tag, Symbol.ApplyType,
                     val:set_element_type(_type)
                     val:set_super(cls)
                     function val:format_value(value, styler)
-                        return format_any_value(self:element_type(), value, styler)
+                        return self:element_type():format_value(value, styler)
                     end
                     cache[_type] = val
                 end
@@ -4917,6 +4968,11 @@ end)
 -- interrogation
 --------------------------------------------------------------------------------
 
+builtins["type-index"] = wrap_simple_builtin(function(_type)
+    checkargs(1,1, _type)
+    return Any(size_t(unwrap(Type.Type, _type).index))
+end)
+
 builtins.typeof = wrap_simple_builtin(function(value)
     checkargs(1,1, value)
     return Any(value.type)
@@ -4946,6 +5002,20 @@ countof_func(Type.Syntax)
 local at = builtin_forward(Symbol.At, "is not indexable")
 builtins[Symbol.At] = at
 
+builtin_op(Type.Scope, Symbol.At,
+    wrap_simple_builtin(function(x, name)
+        checkargs(2,2,x,name)
+        x = unwrap(Type.Scope, x)
+        name = unwrap(Type.Symbol, unsyntax(name))
+        return x:lookup(name)
+    end))
+builtin_op(Type.Type, Symbol.At,
+    wrap_simple_builtin(function(x, name)
+        checkargs(2,2,x,name)
+        x = unwrap(Type.Type, x)
+        name = unwrap(Type.Symbol, unsyntax(name))
+        return x:lookup(name)
+    end))
 builtin_op(Type.String, Symbol.At,
     wrap_simple_builtin(function(x, i)
         checkargs(2,2,x,i)
@@ -5077,6 +5147,12 @@ builtins["set-scope-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     atable:bind(key, value)
 end)
 
+builtins["set-type-symbol!"] = wrap_simple_builtin(function(dest, key, value)
+    checkargs(3,3, dest, key, value)
+    local atable = unwrap(Type.Type, dest)
+    atable:bind(key, value)
+end)
+
 builtins["bind!"] = function(frame, cont, self, param, value)
     checkargs(2,2, param, value)
     if is_quote_type(param.type) then
@@ -5135,7 +5211,7 @@ builtins.print = wrap_simple_builtin(function(...)
         if arg.type == Type.String then
             writer(arg.value)
         else
-            writer(format_any_value(arg.type, arg.value, default_styler))
+            writer(arg:repr(default_styler))
         end
     end
     writer('\n')
