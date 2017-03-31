@@ -1208,6 +1208,9 @@ local function define_types(def)
     def('Closure')
     def('Frame')
     def('Anchor')
+
+    def('BuiltinMacro')
+    def('Macro')
 end
 
 do
@@ -1306,7 +1309,6 @@ do
         end
         return cls
     end
-    Type.Macro = make_qualifier_type("macro")
     Type.Quote = make_qualifier_type("quote")
     Type.Syntax = make_qualifier_type("syntax", function(val)
         function val:format_value(value, styler)
@@ -1326,7 +1328,11 @@ end
 
 local function is_macro_type(_type)
     assert_type(_type)
-    return _type:super() == Type.Macro
+    if _type == Type.BuiltinMacro
+        or _type == Type.Macro then
+        return true
+    end
+    return false
 end
 
 local function each_numerical_type(f, opts)
@@ -1503,8 +1509,26 @@ end
 local function quote(x) return qualify(Type.Quote, x) end
 local function unquote(x) return unqualify(Type.Quote, x) end
 
-local function macro(x) return qualify(Type.Macro, x) end
-local function unmacro(x) return unqualify(Type.Macro, x) end
+local function macro(x)
+    assert_any(x)
+    if x.type == Type.Builtin then
+        return Any(Type.BuiltinMacro, x.value)
+    elseif x.type == Type.Closure then
+        return Any(Type.Macro, x.value)
+    else
+        error("type " .. repr(x.type) .. " can not be a macro")
+    end
+end
+local function unmacro(x)
+    assert_any(x)
+    if x.type == Type.BuiltinMacro then
+        return Any(Type.Builtin, x.value)
+    elseif x.type == Type.Macro then
+        return Any(Type.Closure, x.value)
+    else
+        error("type " .. repr(x.type) .. " is not a macro macro")
+    end
+end
 
 local function is_syntax_type(_type)
     assert_type(_type)
