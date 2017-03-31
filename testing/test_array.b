@@ -2,7 +2,7 @@
 let T =
     type "mytype"
 
-print
+print "tid:"
     type-index T
 
 set-type-symbol! T (quote repr)

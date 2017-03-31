@@ -967,6 +967,7 @@ local function define_symbols(def)
     -- ad-hoc builtin names
     def({ExecuteReturn='execute-return'})
     def({RCompare='rcompare'})
+    def({CountOfForwarder='countof-forwarder'})
     def({SliceForwarder='slice-forwarder'})
     def({JoinForwarder='join-forwarder'})
     def({RCast='rcast'})
@@ -983,6 +984,7 @@ do
         local key, value = next(kv)
         Symbol[key] = Symbol(value)
     end)
+    protect(Symbol)
 end
 
 --------------------------------------------------------------------------------
@@ -1104,7 +1106,7 @@ local function unwrap(_type, value)
     end
 end
 
-local unsyntax
+local maybe_unsyntax
 local Type = {}
 
 local Scope = class("Scope")
@@ -1137,7 +1139,7 @@ do
             .. default_styler(STYLE.COMMENT, ">")
     end
     function cls:bind(sxname, value)
-        local name = unwrap(Type.Symbol, unsyntax(sxname))
+        local name = unwrap(Type.Symbol, maybe_unsyntax(sxname))
         assert_any(value)
         self.symbols[name] = { sxname, value }
     end
@@ -1211,6 +1213,8 @@ local function define_types(def)
 
     def('BuiltinMacro')
     def('Macro')
+
+    def('Syntax')
 end
 
 do
@@ -1310,7 +1314,7 @@ do
         return cls
     end
     Type.Quote = make_qualifier_type("quote")
-    Type.Syntax = make_qualifier_type("syntax", function(val)
+    --[[Type.Syntax = make_qualifier_type("syntax", function(val)
         function val:format_value(value, styler)
             return
                 styler(STYLE.LOCATION,
@@ -1318,6 +1322,7 @@ do
                 .. self:element_type():format_value(value.datum, styler)
         end
     end)
+    --]]
     Type.SizeT = Type.U64
 end
 
@@ -1530,64 +1535,56 @@ local function unmacro(x)
     end
 end
 
-local function is_syntax_type(_type)
-    assert_type(_type)
-    return _type:super() == Type.Syntax
-end
-
-local function assert_syntax(x)
-    assert_any(x)
-    if is_syntax_type(x.type) then
+local Syntax = {}
+MT_TYPE_MAP[Syntax] = Type.Syntax
+local assert_syntax = function(x)
+    if getmetatable(x) == Syntax then
         return x
     else
         location_error("expected syntax, got " .. repr(x))
     end
 end
-
-local syntax
 do
-    local Syntax = {}
-    do
-        Syntax.__index = Syntax
-        local cls = Syntax
-        function cls:__len()
-            return #self.datum
+    local cls = Syntax
+    cls.__index = cls
+    setmetatable(Syntax, {
+        __call = function(cls, datum, anchor)
+            assert_any(datum)
+            assert_anchor(anchor)
+            return setmetatable({
+                datum = datum,
+                anchor = anchor
+            }, Syntax)
         end
-        function cls:__tostring()
-            return
-                default_styler(STYLE.COMMENT,
-                    self.anchor:format_plain()
-                    .. ":")
-                .. tostring(self.datum)
-        end
+    })
+    function cls:__len()
+        assert(false, "can't call len on syntax")
     end
-
-    syntax = function(x, anchor)
-        assert_any(x)
-        assert(not is_syntax_type(x.type))
-        assert_anchor(anchor)
-        x = qualify(Type.Syntax, x)
-        x.value = setmetatable({
-            datum = x.value,
-            anchor = anchor
-        }, Syntax)
-        return x
+    function cls:repr(styler)
+        return
+            styler(STYLE.COMMENT, self.anchor:format_plain() .. ":")
+            .. self.datum.type:format_value(self.datum.value, styler)
     end
-    unsyntax = function(x)
-        assert_any(x)
-        if is_syntax_type(x.type) then
-            local anchor = x.value.anchor
-            x = unqualify(Type.Syntax, x)
-            x.value = x.value.datum
-            return x, anchor
-        else
-            return x
-        end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
 end
 
-Type.SyntaxList = Type.Syntax(Type.List)
-Type.SyntaxSymbol = Type.Syntax(Type.Symbol)
+local function unsyntax(x)
+    assert_any(x)
+    x = unwrap(Type.Syntax, x)
+    return x.datum, x.anchor
+end
+
+maybe_unsyntax = function(x)
+    assert_any(x)
+    if x.type == Type.Syntax then
+        local anchor = x.value.anchor
+        return x.value.datum, anchor
+    else
+        return x
+    end
+end
 
 --------------------------------------------------------------------------------
 -- S-EXPR LEXER / TOKENIZER
@@ -2045,7 +2042,7 @@ local function ListBuilder(lexer)
     local cls = {}
     function cls.append(value)
         assert_any(value)
-        assert_syntax(value)
+        unwrap(Type.Syntax, value)
         prev = List(value, prev)
         assert(prev)
     end
@@ -2065,7 +2062,7 @@ local function ListBuilder(lexer)
         end
         -- reverse what we have, up to last split point and wrap result
         -- in cell
-        prev = List(syntax(Any(reverse_list_inplace(prev, eol)),anchor), eol)
+        prev = List(Any(Syntax(Any(reverse_list_inplace(prev, eol)),anchor)), eol)
         assert(prev)
         cls.reset_start()
     end
@@ -2111,25 +2108,25 @@ local function parse(lexer)
         assert(lexer.token ~= Token.eof)
         local anchor = lexer:anchor()
         if (lexer.token == Token.open) then
-            return syntax(Any(parse_list(Token.close)), anchor)
+            return Any(Syntax(Any(parse_list(Token.close)), anchor))
         elseif (lexer.token == Token.square_open) then
             local list = parse_list(Token.square_close)
             local sym = get_symbol("[")
-            return syntax(Any(List(wrap(sym), list)), anchor)
+            return Any(Syntax(Any(List(wrap(sym), list)), anchor))
         elseif (lexer.token == Token.curly_open) then
             local list = parse_list(Token.curly_close)
             local sym = get_symbol("{")
-            return syntax(Any(List(wrap(sym), list)), anchor)
+            return Any(Syntax(Any(List(wrap(sym), list)), anchor))
         elseif ((lexer.token == Token.close)
             or (lexer.token == Token.square_close)
             or (lexer.token == Token.curly_close)) then
             location_error("stray closing bracket")
         elseif (lexer.token == Token.string) then
-            return syntax(lexer:get_string(), anchor)
+            return Any(Syntax(lexer:get_string(), anchor))
         elseif (lexer.token == Token.symbol) then
-            return syntax(lexer:get_symbol(), anchor)
+            return Any(Syntax(lexer:get_symbol(), anchor))
         elseif (lexer.token == Token.number) then
-            return syntax(lexer:get_number(), anchor)
+            return Any(Syntax(lexer:get_number(), anchor))
         else
             error("unexpected token: %c (%i)",
                 tochar(lexer.cursor[0]), lexer.cursor[0])
@@ -2193,7 +2190,7 @@ local function parse(lexer)
             end
         end
 
-        return syntax(Any(builder.get_result()), anchor)
+        return Any(Syntax(Any(builder.get_result()), anchor))
     end
 
     local function parse_root()
@@ -2236,7 +2233,7 @@ local function parse(lexer)
             end
         end
 
-        return syntax(Any(builder.get_result()), anchor)
+        return Any(Syntax(Any(builder.get_result()), anchor))
     end
 
     return parse_root()
@@ -2269,7 +2266,7 @@ local FUNCTIONS = set(split(
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
-        .. " syntax-error ordered-branch alloc"
+        .. " syntax-error ordered-branch alloc syntax-list"
     ))
 
 -- builtin and global functions with side effects
@@ -2288,8 +2285,7 @@ local TYPES = set(split(
         "int i8 i16 i32 i64 u8 u16 u32 u64 void string"
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
-        .. " pointer struct enum bool uint tag qualifier syntax-list"
-        .. " syntax-symbol syntax anchor scope"
+        .. " pointer struct enum bool uint tag qualifier syntax anchor scope"
         .. " iterator type table size_t usize_t ssize_t void*"
     ))
 
@@ -2317,16 +2313,11 @@ local simple_types = set({
 })
 
 local function is_nested(e)
-    if is_syntax_type(e.type) then
-        e = unsyntax(e)
-    end
+    e = maybe_unsyntax(e)
     if (e.type == Type.List) then
         local it = e.value
         while (it ~= EOL) do
-            local q = it.at
-            if is_syntax_type(q.type) then
-                q = unsyntax(q)
-            end
+            local q = maybe_unsyntax(it.at)
             if simple_types[q.type] == null then
                 return true
             end
@@ -2380,7 +2371,8 @@ stream_expr = function(writer, e, format)
     end
 
     local function islist(value)
-        return (value.type == Type.List) or (value.type == Type.SyntaxList)
+        value = maybe_unsyntax(value)
+        return value.type == Type.List
     end
 
     local function walk(e, depth, maxdepth, naked)
@@ -2394,7 +2386,7 @@ stream_expr = function(writer, e, format)
             quoted = true
         end
 
-        if is_syntax_type(e.type) then
+        if e.type == Type.Syntax then
             anchor = e.value.anchor
             e = unsyntax(e)
         end
@@ -2619,7 +2611,6 @@ end
 do
     local cls = Parameter
     function cls:init(name, _type)
-        assert_syntax(name)
         local name,anchor = unsyntax(name)
         name = unwrap(Type.Symbol, name)
         assert_symbol(name)
@@ -2687,7 +2678,6 @@ do
     local unique_id_counter = 1
 
     function cls:init(name)
-        assert_syntax(name)
         local name,anchor = unsyntax(name)
         name = unwrap(Type.Symbol, name)
         assert_symbol(name)
@@ -2731,12 +2721,12 @@ do
     -- a function that eventually returns
     function cls.create_function(name)
         local value = Flow(name)
-        local sym, anchor = unsyntax(name)
+        local sym, anchor = maybe_unsyntax(name)
         sym = unwrap(Type.Symbol, sym)
         -- continuation is always first argument
         -- this argument will be called when the function is done
         value:append_parameter(
-            Parameter(syntax(Any(Symbol("return-" .. sym.name)),anchor),
+            Parameter(Any(Syntax(Any(Symbol("return-" .. sym.name)),anchor)),
                 Type.Any))
         return value
     end
@@ -2992,7 +2982,7 @@ do
         end
 
         local function stream_argument(arg, aflow, aframe)
-            if is_syntax_type(arg.type) then
+            if arg.type == Type.Syntax then
                 local anchor
                 arg,anchor = unsyntax(arg)
                 if atom_anchors then
@@ -3055,7 +3045,7 @@ do
                     stream_argument(arg, aflow, aframe)
                 end
                 local cont = aflow.arguments[1]
-                if not is_none(unsyntax(cont)) then
+                if not is_none(maybe_unsyntax(cont)) then
                     writer(styler(STYLE.COMMENT,CONT_SEP))
                     stream_argument(cont, aflow, aframe)
                 end
@@ -3063,7 +3053,7 @@ do
             writer("\n")
 
             for i,arg in ipairs(aflow.arguments) do
-                arg = unsyntax(arg)
+                arg = maybe_unsyntax(arg)
                 stream_any(arg, aframe)
             end
         end
@@ -3318,7 +3308,7 @@ local function call_flow(frame, cont, flow, ...)
         if is_quote_type(arg.type) then
             arg = unquote(arg)
         else
-            arg = unsyntax(arg)
+            arg = maybe_unsyntax(arg)
         end
         if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
@@ -3444,7 +3434,6 @@ local function verify_at_parameter_count(topit, mincount, maxcount)
     assert_list(topit)
     assert(topit ~= EOL)
     local val = topit.at
-    assert_syntax(val)
     verify_list_parameter_count(
         unwrap(Type.List, unsyntax(val)), mincount, maxcount)
 end
@@ -3475,15 +3464,13 @@ do
 
 local function toparameter(env, value)
     assert_scope(env)
-    assert_syntax(value)
-    local anchor = value.value.anchor
-    local _value = unsyntax(value)
+    local _value, anchor = unsyntax(value)
     if _value.type == Type.Parameter then
         return value
     else
         local param = Any(Parameter(value, Type.Any))
         env:bind(value, param)
-        return syntax(param, anchor)
+        return Any(Syntax(param, anchor))
     end
 end
 
@@ -3516,32 +3503,28 @@ expand_continuation = function(env, topit, cont)
 
     local it = topit.at
 
-    assert_syntax(it)
-    local anchor = it.value.anchor
-    it = unwrap(Type.List, unsyntax(it))
+    local nit,anchor = unsyntax(it)
+    it = unwrap(Type.List, nit)
 
-    assert_syntax(it.at)
-    local anchor_kw = it.at.value.anchor
+    local _,anchor_kw = unsyntax(it.at)
 
     it = it.next
 
     local sym
     assert(it ~= EOL)
 
-    assert_syntax(it.at)
     local trysym = unsyntax(it.at)
     if (trysym.type == Type.Symbol) then
         sym = it.at
         it = it.next
         assert(it ~= EOL)
     else
-        sym = syntax(Any(Symbol.Unnamed), anchor_kw)
+        sym = Any(Syntax(Any(Symbol.Unnamed), anchor_kw))
     end
 
     local params = it.at
-    assert_syntax(params)
-    local anchor_params = params.value.anchor
-    params = unwrap(Type.List, unsyntax(params))
+    local nparams,anchor_params = unsyntax(params)
+    params = unwrap(Type.List, nparams)
 
     it = it.next
 
@@ -3555,10 +3538,10 @@ expand_continuation = function(env, topit, cont)
     end
 
     return expand_expr_list(subenv, it, function(result)
-        result = List(syntax(Any(reverse_list_inplace(outargs)), anchor_params), result)
+        result = List(Any(Syntax(Any(reverse_list_inplace(outargs)), anchor_params)), result)
         result = List(sym, result)
-        result = List(syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw), result)
-        return cont(List(quote(syntax(Any(result), anchor)), topit.next), env)
+        result = List(Any(Syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw)), result)
+        return cont(List(quote(Any(Syntax(Any(result), anchor))), topit.next), env)
     end)
 end
 
@@ -3567,7 +3550,7 @@ expand_syntax_extend = function(env, topit, cont)
     return expand_continuation(env, topit, function(cur_list, cur_env)
         local expr = cur_list.at
         local anchor = expr.value.anchor
-        local fun = unsyntax(translate(unquote(expr), none))
+        local fun = maybe_unsyntax(translate(unquote(expr), none))
         return execute(
             function(expr_env)
                 return cont(cur_list.next, unwrap(Type.Scope, expr_env))
@@ -3592,8 +3575,7 @@ local function expand_wildcard(env, handler, topit, cont)
     function (exc, cont)
         exc = exception(exc)
         local w = string_writer()
-        assert_syntax(topit.at)
-        local anchor = topit.at.value.anchor
+        local _,anchor = unsyntax(topit.at)
         anchor:stream_message_with_source(w, 'while expanding wildcard macro')
         local fmt = StreamValueFormat()
         fmt.naked = true
@@ -3629,11 +3611,12 @@ local function expand_macro(env, handler, topit, cont)
             while k <= #todo do
                 local elem = todo[k]
                 if not is_quote_type(elem.type) then
-                    if not is_syntax_type(elem.type) then
+                    if elem.type ~= Type.Syntax then
                         location_error("syntax objects missing in expanded macro")
                     end
-                    if elem.type == Type.SyntaxList then
-                        elem = unsyntax(elem).value
+                    elem = unsyntax(elem)
+                    if elem.type == Type.List then
+                        elem = elem.value
                         while elem ~= EOL do
                             table.insert(todo, elem.at)
                             elem = elem.next
@@ -3650,8 +3633,7 @@ local function expand_macro(env, handler, topit, cont)
     function (exc, cont)
         exc = exception(exc)
         local w = string_writer()
-        assert_syntax(topit.at)
-        local anchor = topit.at.value.anchor
+        local _, anchor = unsyntax(topit.at)
         anchor:stream_message_with_source(w, 'while expanding macro')
         local fmt = StreamValueFormat()
         fmt.naked = true
@@ -3676,10 +3658,9 @@ expand = function(env, topit, cont)
             -- remove qualifier and return as-is
             return cont(List(unquote(expr), topit.next), env)
         end
-        assert_syntax(expr)
-        local anchor = expr.value.anchor
+        local anchor
+        expr,anchor = unsyntax(expr)
         set_active_anchor(anchor)
-        expr = unsyntax(expr)
         if (is_quote_type(expr.type)) then
             location_error("syntax must not wrap quote")
         end
@@ -3690,9 +3671,8 @@ expand = function(env, topit, cont)
             end
 
             local head = list.at
-            assert_syntax(head)
-            local head_anchor = expr.value.anchor
-            head = unsyntax(head)
+            local head_anchor
+            head, head_anchor = unsyntax(head)
 
             -- resolve symbol
             if (head.type == Type.Symbol) then
@@ -3703,7 +3683,7 @@ expand = function(env, topit, cont)
                 return expand_expr_list(env,
                     unwrap(Type.List, expr),
                     function (result)
-                        return cont(List(syntax(Any(result), anchor),
+                        return cont(List(Any(Syntax(Any(result), anchor)),
                             topit.next), env)
                     end)
             end
@@ -3755,10 +3735,11 @@ expand = function(env, topit, cont)
                         end
                         return missing_symbol_error()
                     end)
+                else
                     return missing_symbol_error()
                 end
             end
-            return cont(List(syntax(result, anchor), topit.next), env)
+            return cont(List(Any(Syntax(result, anchor)), topit.next), env)
         else
             return cont(List(topit.at, topit.next), env)
         end
@@ -3768,15 +3749,14 @@ end
 
 expand_root = function(expr, scope, cont)
     local anchor
-    if is_syntax_type(expr.type) then
-        anchor = expr.value.anchor
-        expr = unsyntax(expr)
+    if expr.type == Type.Syntax then
+        expr, anchor = unsyntax(expr)
     end
     expr = unwrap(Type.List, expr)
     return expand_expr_list(scope or globals, expr, function(result)
         result = Any(result)
         if anchor then
-            return cont(syntax(result, anchor))
+            return cont(Any(Syntax(result, anchor)))
         else
             return cont(result)
         end
@@ -3849,7 +3829,7 @@ local function write_dest(dest, value)
             if (is_quote_type(v.type)) then
                 v = unquote(v)
             end
-            if (is_syntax_type(v.type)) then
+            if (v.type == Type.Syntax) then
                 v,anchor = unsyntax(v)
             end
             builder.br({none, dest, value}, anchor)
@@ -3860,13 +3840,11 @@ end
 
 -- for return values that don't need to be stored
 local function translate_to_none(sxvalue)
-    assert_syntax(sxvalue)
-    local anchor = sxvalue.value.anchor
-    local value = unsyntax(sxvalue)
+    local value, anchor = unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
         local next = Flow.create_continuation(
-            syntax(Any(Symbol.Unnamed), anchor))
+            Any(Syntax(Any(Symbol.Unnamed), anchor)))
         translate(sxvalue, Any(next))
         builder.continue_at(next)
     else
@@ -3883,7 +3861,7 @@ local function translate_expr_list(it, dest, anchor)
         if is_none(dest) then
             location_error("expression list has no instructions")
         end
-        return write_dest(dest, syntax(none, anchor))
+        return write_dest(dest, Any(Syntax(none, anchor)))
     else
         while (it ~= EOL) do
             local next = it.next
@@ -3903,22 +3881,22 @@ local function translate_expr_list(it, dest, anchor)
 end
 
 local function translate_do(it, dest)
-    assert_syntax(it)
     assert_any(dest)
 
-    local anchor = it.value.anchor
-    it = unwrap(Type.List, unsyntax(it))
+    local anchor
+    it, anchor = unsyntax(it)
+    it = unwrap(Type.List, it)
 
     it = it.next
     return translate_expr_list(it, dest, anchor)
 end
 
 local function translate_continuation(it, dest, anchor)
-    assert_syntax(it)
     assert_any(dest)
 
-    local anchor = it.value.anchor
-    it = unwrap(Type.List, unsyntax(it))
+    local anchor
+    it, anchor = unsyntax(it)
+    it = unwrap(Type.List, it)
 
     it = it.next
 
@@ -3927,9 +3905,8 @@ local function translate_continuation(it, dest, anchor)
     it = it.next
 
     local expr_parameters = it.at
-    assert_syntax(expr_parameters)
-    local params_anchor = expr_parameters.value.anchor
-    expr_parameters = unsyntax(it.at)
+    local params_anchor
+    expr_parameters, params_anchor = unsyntax(expr_parameters)
 
     it = it.next
 
@@ -3941,7 +3918,6 @@ local function translate_continuation(it, dest, anchor)
         local params = unwrap(Type.List, expr_parameters)
         while (params ~= EOL) do
             local param = params.at
-            assert_syntax(param)
             func:append_parameter(unwrap(Type.Parameter, unsyntax(param)))
             params = params.next
         end
@@ -3956,11 +3932,11 @@ local function translate_continuation(it, dest, anchor)
 
         return func
     end)
-    return write_dest(dest, syntax(Any(func), anchor))
+    return write_dest(dest, Any(Syntax(Any(func), anchor)))
 end
 
 local function translate_to_parameter(sxvalue)
-    local value = unsyntax(sxvalue)
+    local value = maybe_unsyntax(sxvalue)
     if (value.type == Type.List) then
         -- complex expression
         return translate(sxvalue, Any(Symbol.Unnamed))
@@ -3979,7 +3955,7 @@ local function translate_implicit_call(it, dest, anchor)
 
     local is_return = false
     local is_forward_return = false
-    local ncallable = unsyntax(callable)
+    local ncallable = maybe_unsyntax(callable)
     if ncallable.type == Type.Parameter then
         local param = ncallable.value
         if param.index == 1 then
@@ -4009,7 +3985,7 @@ local function translate_implicit_call(it, dest, anchor)
         end
 
         if (dest.type == Type.Symbol) then
-            local sxdest = syntax(dest, anchor)
+            local sxdest = Any(Syntax(dest, anchor))
             local next = Flow.create_continuation(sxdest)
             local param = Parameter(sxdest, Type.Any)
             param.vararg = true
@@ -4027,23 +4003,23 @@ local function translate_implicit_call(it, dest, anchor)
 end
 
 local function translate_call(it, dest, anchor)
-    assert_syntax(it)
     assert_any(dest)
 
-    local anchor = it.value.anchor
-    it = unwrap(Type.List, unsyntax(it))
+    local anchor
+    it, anchor = unsyntax(it)
+    it = unwrap(Type.List, it)
 
     it = it.next
     return translate_implicit_call(it, dest, anchor)
 end
 
 local function translate_contcall(it, dest, anchor)
-    assert_syntax(it)
     --assert_any(dest)
     --assert(not is_none(dest))
 
-    local anchor = it.value.anchor
-    it = unwrap(Type.List, unsyntax(it))
+    local anchor
+    it, anchor = unsyntax(it)
+    it = unwrap(Type.List, it)
 
     it = it.next
     if (it == EOL) then
@@ -4075,10 +4051,7 @@ translate = function(sxexpr, dest)
             -- write as-is
             return cont(write_dest(dest, sxexpr))
         end
-        assert_syntax(sxexpr)
-
-        local anchor = sxexpr.value.anchor
-        local expr = unsyntax(sxexpr)
+        local expr, anchor = unsyntax(sxexpr)
 
         set_active_anchor(anchor)
 
@@ -4087,9 +4060,7 @@ translate = function(sxexpr, dest)
             if (slist == EOL) then
                 location_error("empty expression")
             end
-            local head = slist.at
-            assert_syntax(head)
-            head = unsyntax(head)
+            local head = unsyntax(slist.at)
             if (head.type == Type.Form) then
                 return cont(head.value(sxexpr, dest))
             else
@@ -4106,8 +4077,7 @@ translate = function(sxexpr, dest)
             if is_quote_type(sxexpr.type) then
                 sxexpr = unquote(sxexpr)
             end
-            assert_syntax(sxexpr)
-            local anchor = sxexpr.value.anchor
+            local _, anchor = unsyntax(sxexpr)
             anchor:stream_message_with_source(w, 'while translating expression')
             local fmt = StreamValueFormat()
             fmt.naked = true
@@ -4125,13 +4095,13 @@ end
 
 -- path must be resident
 translate_root = function(expr, name)
-    assert_syntax(expr)
     assert_string(name)
 
-    local anchor = expr.value.anchor
-    expr = unwrap(Type.List, unsyntax(expr))
+    local anchor
+    expr, anchor = unsyntax(expr)
+    expr = unwrap(Type.List, expr)
 
-    local mainfunc = Flow.create_function(syntax(Any(Symbol(name)), anchor))
+    local mainfunc = Flow.create_function(Any(Syntax(Any(Symbol(name)), anchor)))
     local ret = mainfunc.parameters[PARAM_Cont]
     builder.continue_at(mainfunc)
 
@@ -4151,7 +4121,7 @@ builtins["do"] = Form(translate_do, Symbol("do"))
 end -- do
 
 function Anchor.extract(value)
-    if is_syntax_type(value.type) then
+    if value.type == Type.Syntax then
         return value.value.anchor
     elseif value.type == Type.Parameter then
         local anchor = value.value.anchor
@@ -4288,9 +4258,6 @@ builtins.parameter = Type.Parameter
 builtins.string = Type.String
 builtins.closure = Type.Closure
 
-builtins["syntax-list"] = Type.SyntaxList
-builtins["syntax-symbol"] = Type.SyntaxSymbol
-
 builtins["debug-build?"] = Any(bool(global_opts.debug))
 
 -- builtin macros
@@ -4350,7 +4317,6 @@ end
 
 builtins["syntax-error"] = function(frame, cont, self, sxobj, msg)
     checkargs(2,2, sxobj, msg)
-    assert_syntax(sxobj)
     local _,anchor = unsyntax(sxobj)
     set_active_anchor(anchor)
     return location_error(unwrap(Type.String, msg))
@@ -4472,22 +4438,20 @@ end)
 builtins["syntax-cons"] = wrap_simple_builtin(function(at, next)
     checkargs(2,2, at, next)
     if not is_quote_type(at.type) then
-        assert_syntax(at)
+        unwrap(Type.Syntax, at)
     end
-    assert_syntax(next)
     local next, next_anchor = unsyntax(next)
     next = unwrap(Type.List, next)
-    return syntax(Any(List(at, next)), next_anchor)
+    return Any(Syntax(Any(List(at, next)), next_anchor))
 end)
 
 builtins["syntax->datum"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
-    return (unsyntax(value))
+    return (maybe_unsyntax(value))
 end)
 
 builtins["syntax->anchor"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
-    assert_syntax(value)
     local _,anchor = unsyntax(value)
     return Any(anchor)
 end)
@@ -4499,7 +4463,7 @@ end)
 builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
     checkargs(1,2,value,anchor)
 
-    if is_syntax_type(value.type) then
+    if value.type == Type.Syntax then
         location_error("argument must not be syntax")
     end
     if is_null_or_none(anchor) then
@@ -4512,13 +4476,13 @@ builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
     else
         anchor = unwrap(Type.Anchor, anchor)
     end
-    return syntax(value,anchor)
+    return Any(Syntax(value,anchor))
 end)
 
 builtin_op(Type.String, Symbol.ApplyType,
     wrap_simple_builtin(function(value)
         checkargs(1,1,value)
-        value = unsyntax(value)
+        value = maybe_unsyntax(value)
         local ty = value.type
         -- todo: types should do that conversion
         if ty == Type.String then
@@ -4548,22 +4512,21 @@ builtin_op(Type.Type, Symbol.ApplyType,
         return Any(Type(unwrap(Type.String, name)))
     end))
 
-builtin_op(Type.SyntaxList, Symbol.ApplyType,
-    wrap_simple_builtin(function(...)
-        checkargs(0,-1,...)
-        local vacount = select('#', ...)
-        for i=1,vacount do
-            assert_syntax(select(i, ...))
-        end
-        local anchor
-        if vacount > 0 then
-            local _
-            _,anchor = unsyntax(select(1, ...))
-        else
-            anchor = get_active_anchor()
-        end
-        return syntax(Any(List.from_args(...)), anchor)
-    end))
+builtins["syntax-list"] = wrap_simple_builtin(function(...)
+    checkargs(0,-1,...)
+    local vacount = select('#', ...)
+    for i=1,vacount do
+        unwrap(Type.Syntax, select(i, ...))
+    end
+    local anchor
+    if vacount > 0 then
+        local _
+        _,anchor = maybe_unsyntax(select(1, ...))
+    else
+        anchor = get_active_anchor()
+    end
+    return Any(Syntax(Any(List.from_args(...)), anchor))
+end)
 
 builtin_op(Type.Parameter, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
@@ -4584,7 +4547,7 @@ builtin_op(Type.Scope, Symbol.ApplyType,
 builtin_op(Type.Tag, Symbol.ApplyType,
     wrap_simple_builtin(function(symbol)
         checkargs(1,1,symbol)
-        local sym = unwrap(Type.Symbol,unsyntax(symbol))
+        local sym = unwrap(Type.Symbol,maybe_unsyntax(symbol))
         local cls = Type(sym.name)
         cls:set_super(Type.Tag)
 
@@ -4791,8 +4754,8 @@ builtin_op(Type.Type, Symbol.Compare,
 builtin_op(Type.Syntax, Symbol.Compare,
     function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
-        local x = unsyntax(a)
-        local y = unsyntax(b)
+        local x = maybe_unsyntax(a)
+        local y = maybe_unsyntax(b)
         return ordered_branch(frame, cont, none,
             x, y, equal_cont, unordered_cont, less_cont, greater_cont)
     end)
@@ -4935,15 +4898,13 @@ builtin_op(Type.List, Symbol.Join,
 builtin_op(Type.Syntax, Symbol.Join,
     function(frame, cont, self, a, b)
         checkargs(2,2,a,b)
-        assert_syntax(a)
-        assert_syntax(b)
         local aa, ba
         a,aa = unsyntax(a)
         b,ba = unsyntax(b)
         local join = builtins[Symbol.Join]
         return join(frame,
             Any(Builtin(function(_frame, _cont, _dest, l)
-                return call(_frame, none, cont, syntax(l, aa))
+                return call(_frame, none, cont, Any(Syntax(l, aa)))
             end, Symbol.JoinForwarder)),
             none, a, b)
     end)
@@ -5021,7 +4982,6 @@ end
 
 countof_func(Type.String)
 countof_func(Type.List)
-countof_func(Type.Syntax)
 
 local at = builtin_forward(Symbol.At, "is not indexable")
 builtins[Symbol.At] = at
@@ -5030,14 +4990,14 @@ builtin_op(Type.Scope, Symbol.At,
     wrap_simple_builtin(function(x, name)
         checkargs(2,2,x,name)
         x = unwrap(Type.Scope, x)
-        name = unwrap(Type.Symbol, unsyntax(name))
+        name = unwrap(Type.Symbol, maybe_unsyntax(name))
         return x:lookup(name)
     end))
 builtin_op(Type.Type, Symbol.At,
     wrap_simple_builtin(function(x, name)
         checkargs(2,2,x,name)
         x = unwrap(Type.Type, x)
-        name = unwrap(Type.Symbol, unsyntax(name))
+        name = unwrap(Type.Symbol, maybe_unsyntax(name))
         return x:lookup(name)
     end))
 builtin_op(Type.String, Symbol.At,
@@ -5059,7 +5019,7 @@ builtin_op(Type.List, Symbol.At,
     end))
 builtin_op(Type.Syntax, Symbol.At,
     function(frame, cont, self, value, ...)
-        value = unsyntax(value)
+        value = maybe_unsyntax(value)
         return at(frame, cont, none, value, ...)
     end)
 
@@ -5088,12 +5048,18 @@ builtins.slice = function(frame, cont, self, obj, start_index, end_index)
         end, Symbol.SliceForwarder)), countof, obj)
 end
 
+builtin_op(Type.Syntax, Symbol.CountOf,
+    function(frame, cont, self, value, ...)
+        local value, anchor = unsyntax(value)
+        return countof(frame, cont, none, value, ...)
+    end)
+
 builtin_op(Type.Syntax, Symbol.Slice,
     function(frame, cont, self, value, ...)
         local value, anchor = unsyntax(value)
         return fwd_slice(frame,
             Any(Builtin(function(_frame, _cont, _self, l)
-                return call(frame, none, cont, syntax(l, anchor))
+                return call(frame, none, cont, Any(Syntax(l, anchor)))
             end, Symbol.SliceForwarder)), none, value, ...)
     end)
 
@@ -5141,7 +5107,7 @@ builtins["get-scope-symbol"] = wrap_simple_builtin(function(scope, key, defvalue
     checkargs(2, 3, scope, key, defvalue)
 
     scope = unwrap(Type.Scope, scope)
-    key = unwrap(Type.Symbol, unsyntax(key))
+    key = unwrap(Type.Symbol, maybe_unsyntax(key))
 
     return scope:lookup(key) or defvalue or none
 end)
@@ -5152,7 +5118,7 @@ builtins["next-scope-symbol"] = wrap_simple_builtin(function(scope, key)
     if is_null_or_none(key) then
         key = null
     else
-        key = unwrap(Type.Symbol, unsyntax(key))
+        key = unwrap(Type.Symbol, maybe_unsyntax(key))
     end
     local _,value = next(scope.symbols, key)
     if value == null then

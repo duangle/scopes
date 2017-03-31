@@ -42,7 +42,7 @@ local function bangra_symbols()
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
-        .. " syntax-error ordered-branch alloc"
+        .. " syntax-error ordered-branch alloc syntax-list"
         ),
 
     -- builtin and global functions with side effects
@@ -62,8 +62,7 @@ local function bangra_symbols()
         "int i8 i16 i32 i64 u8 u16 u32 u64 void string"
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
-        .. " pointer struct enum bool uint tag qualifier syntax-list"
-        .. " syntax-symbol syntax anchor scope"
+        .. " pointer struct enum bool uint tag qualifier syntax anchor scope"
         .. " iterator type table size_t usize_t ssize_t void*"
         )
     }

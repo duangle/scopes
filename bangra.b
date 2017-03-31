@@ -349,7 +349,7 @@ define let
     block-scope-macro
         fn/cc let (return expr env)
             branch
-                ==? (typeof (@ (@ expr 0) 2)) syntax-symbol
+                symbol? (syntax->datum (@ (@ expr 0) 2))
                 fn/cc (_) (_)
                 fn/cc (_)
                     syntax-error (@ expr 0) "syntax: let <var> = <expr>"
