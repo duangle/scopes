@@ -28,7 +28,7 @@ local function bangra_symbols()
         .. " syntax-extend if else elseif loop repeat none assert qquote"
         .. " unquote unquote-splice globals return splice continuation"
         .. " try except define in for empty-list empty-tuple raise"
-        .. " yield xlet cc/call fn/cc null break"
+        .. " yield xlet cc/call fn/cc null break quote-syntax"
         ),
 
     -- builtin and global functions
@@ -42,7 +42,8 @@ local function bangra_symbols()
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
-        .. " syntax-error ordered-branch alloc syntax-list"
+        .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
+        .. " syntax-unquote syntax-quoted?"
         ),
 
     -- builtin and global functions with side effects

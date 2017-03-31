@@ -940,7 +940,8 @@ end
 
 local function define_symbols(def)
     def({Unnamed=''})
-    def({ContinuationForm='form:fn/cc'})
+    def({ContinuationForm='form-fn/cc'})
+    def({QuoteForm='form-quote'})
 
     def({ListWildcard='#list'})
     def({SymbolWildcard='#symbol'})
@@ -1286,49 +1287,7 @@ do
         cls[name] = Type(string.lower(name))
     end)
 
-    local function make_qualifier_type(name, on_create)
-        local cls = Type(name)
-        local cache = {}
-        function cls:__call(_type)
-            assert_type(_type)
-            local val = cache[_type]
-            if not val then
-                val = Type(
-                    self.name .. "[" .. _type.name .. "]",
-                    self.displayname
-                    .. default_styler(STYLE.OPERATOR, "[")
-                    .. _type.displayname
-                    .. default_styler(STYLE.OPERATOR, "]"))
-                val:set_element_type(_type)
-                val:set_super(self)
-                function val:format_value(value, styler)
-                    return self:element_type():format_value(value, styler)
-                end
-                cache[_type] = val
-                if on_create then
-                    on_create(val)
-                end
-            end
-            return val
-        end
-        return cls
-    end
-    Type.Quote = make_qualifier_type("quote")
-    --[[Type.Syntax = make_qualifier_type("syntax", function(val)
-        function val:format_value(value, styler)
-            return
-                styler(STYLE.LOCATION,
-                    tostring(value.anchor:format_plain()) .. ":")
-                .. self:element_type():format_value(value.datum, styler)
-        end
-    end)
-    --]]
     Type.SizeT = Type.U64
-end
-
-local function is_quote_type(_type)
-    assert_type(_type)
-    return _type:super() == Type.Quote
 end
 
 local function is_macro_type(_type)
@@ -1445,22 +1404,22 @@ do
     })
 end
 
-function Any:has_expression_type()
-    local t = self.type
+local function is_expression_type(t)
     return t == Type.I32
         or t == Type.R32
         or t == Type.String
         or t == Type.Symbol
         or t == Type.Parameter
+        or t == Type.List
 end
 
 function Any:repr(styler)
     if getmetatable(self.type) ~= Type then
         return styler(STYLE.ERROR, "corrupted value")
     else
-        local s = self.type:format_value(self.value, styler)
-        if not self:has_expression_type() then
-            s = s .. styler(STYLE.OPERATOR, ":") .. self.type.displayname
+        local s = self.type:format_value(self.value, styler) or "<format failed>"
+        if not is_expression_type(self.type) then
+            s = s .. styler(STYLE.OPERATOR, ":") .. (self.type.displayname or "<displayname failed>")
         end
         return s
     end
@@ -1494,25 +1453,6 @@ end
 --------------------------------------------------------------------------------
 -- SYNTAX OBJECTS
 --------------------------------------------------------------------------------
-
-local function qualify(qualifier_type, x)
-    assert_any(x)
-    return Any(qualifier_type(x.type), x.value)
-end
-
-local function unqualify(qualifier_type, x)
-    assert_any(x)
-    if (x.type:super() ~= qualifier_type) then
-        location_error("attempting to unqualify type "
-            .. repr(qualifier_type)
-            .. " from unrelated type "
-            .. repr(x.type))
-    end
-    return Any(x.type:element_type(), x.value)
-end
-
-local function quote(x) return qualify(Type.Quote, x) end
-local function unquote(x) return unqualify(Type.Quote, x) end
 
 local function macro(x)
     assert_any(x)
@@ -1548,12 +1488,13 @@ do
     local cls = Syntax
     cls.__index = cls
     setmetatable(Syntax, {
-        __call = function(cls, datum, anchor)
+        __call = function(cls, datum, anchor, quoted)
             assert_any(datum)
             assert_anchor(anchor)
             return setmetatable({
                 datum = datum,
-                anchor = anchor
+                anchor = anchor,
+                quoted = quoted or false
             }, Syntax)
         end
     })
@@ -1561,9 +1502,15 @@ do
         assert(false, "can't call len on syntax")
     end
     function cls:repr(styler)
+        local prefix = self.anchor:format_plain() .. ":"
+        if self.quoted then
+            prefix = prefix .. "'"
+        end
         return
-            styler(STYLE.COMMENT, self.anchor:format_plain() .. ":")
-            .. self.datum.type:format_value(self.datum.value, styler)
+            styler(STYLE.COMMENT, prefix)
+            .. styler(STYLE.COMMENT, '[')
+            .. self.datum:repr(styler)
+            .. styler(STYLE.COMMENT, ']')
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2078,6 +2025,7 @@ local function parse(lexer)
 
     -- parses a list to its terminator and returns a handle to the first cell
     local function parse_list(end_token)
+        local start_anchor = lexer:anchor()
         local builder = ListBuilder(lexer)
         lexer:read_token()
         while (true) do
@@ -2088,7 +2036,8 @@ local function parse(lexer)
                 lexer:read_token()
                 builder.append(parse_naked(column, end_token))
             elseif (lexer.token == Token.eof) then
-                location_error("missing closing bracket")
+                set_active_anchor(start_anchor)
+                location_error("unclosed open bracket")
                 -- point to beginning of list
                 --error_origin = builder.getAnchor();
             elseif (lexer.token == Token.statement) then
@@ -2160,7 +2109,6 @@ local function parse(lexer)
                 end
                 if (column ~= subcolumn) then
                     if ((column + 4) ~= subcolumn) then
-                        print(column, subcolumn)
                         location_error("indentations must nest by 4 spaces.")
                     end
                 end
@@ -2252,7 +2200,7 @@ local KEYWORDS = set(split(
         .. " syntax-extend if else elseif loop repeat none assert qquote"
         .. " unquote unquote-splice globals return splice continuation"
         .. " try except define in for empty-list empty-tuple raise"
-        .. " yield xlet cc/call fn/cc null break"
+        .. " yield xlet cc/call fn/cc null break quote-syntax"
     ))
 
     -- builtin and global functions
@@ -2266,7 +2214,8 @@ local FUNCTIONS = set(split(
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
-        .. " syntax-error ordered-branch alloc syntax-list"
+        .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
+        .. " syntax-unquote syntax-quoted?"
     ))
 
 -- builtin and global functions with side effects
@@ -2347,7 +2296,7 @@ stream_expr = function(writer, e, format)
 
     local last_anchor
 
-    local function stream_anchor(anchor)
+    local function stream_anchor(anchor, quoted)
         if anchor then
             local str
             if not last_anchor or last_anchor.path ~= anchor.path then
@@ -2362,7 +2311,9 @@ stream_expr = function(writer, e, format)
             else
                 str = "::" .. ANCHOR_SEP
             end
-
+            if quoted then
+                str = "'" .. str
+            end
             writer(styler(STYLE.COMMENT, str))
             last_anchor = anchor
         else
@@ -2381,31 +2332,24 @@ stream_expr = function(writer, e, format)
         local quoted = false
 
         local anchor
-        if is_quote_type(e.type) then
-            e = unquote(e)
-            quoted = true
-        end
-
         if e.type == Type.Syntax then
             anchor = e.value.anchor
+            quoted = e.value.quoted
             e = unsyntax(e)
         end
 
         local otype = e.type
-        if quoted then
-            otype = Type.Quote(otype)
-        end
 
         if (naked) then
             stream_indent(writer, depth)
         end
         if atom_anchors then
-            stream_anchor(anchor)
+            stream_anchor(anchor, quoted)
         end
 
         if (e.type == Type.List) then
             if naked and line_anchors and not atom_anchors then
-                stream_anchor(anchor)
+                stream_anchor(anchor, quoted)
             end
 
             maxdepth = maxdepth - 1
@@ -2515,8 +2459,11 @@ stream_expr = function(writer, e, format)
             else
                 writer(e.type:format_value(e.value, styler))
             end
-            if quoted or not e:has_expression_type() then
+            if quoted or not is_expression_type(otype) then
                 writer(styler(STYLE.OPERATOR, ":"))
+                if quoted then
+                    writer(styler(STYLE.COMMENT, "'"))
+                end
                 writer(tostring(otype))
             end
             if (naked) then
@@ -2528,9 +2475,10 @@ stream_expr = function(writer, e, format)
 end
 end -- do
 
-function List.__tostring(self)
+function List:repr(styler)
     local s = ""
     local fmt = StreamValueFormat(false)
+    fmt.styler = styler
     fmt.maxdepth = 5
     fmt.maxlength = 10
     stream_expr(
@@ -2539,6 +2487,10 @@ function List.__tostring(self)
         end,
         Any(self), fmt)
     return s
+end
+
+function List:__tostring()
+    return self:repr(default_styler)
 end
 
 --------------------------------------------------------------------------------
@@ -2572,12 +2524,15 @@ do
     function cls:__call(...)
         return self.func(...)
     end
-    function cls:__tostring()
+    function cls:repr(styler)
         if self.name ~= Symbol.Unnamed then
-            return default_styler(STYLE.FUNCTION, self.name.name)
+            return styler(STYLE.FUNCTION, self.name.name)
         else
-            return default_styler(STYLE.ERROR, tostring(self.func))
+            return styler(STYLE.ERROR, tostring(self.func))
         end
+    end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
 end
 
@@ -2594,8 +2549,11 @@ do
     function cls:__call(...)
         return self.func(...)
     end
+    function cls:repr(styler)
+        return styler(STYLE.KEYWORD, self.name.name)
+    end
     function cls:__tostring()
-        return default_styler(STYLE.KEYWORD, self.name.name)
+        return self:repr(default_styler)
     end
 end
 
@@ -2624,23 +2582,23 @@ do
         self.anchor = anchor
         self.vararg = endswith(name.name, "...")
     end
-    function cls:__tostring()
+    function cls:repr(styler)
         return
             (function()
                 if self.flow ~= null then
                     return tostring(self.flow)
-                        .. default_styler(STYLE.OPERATOR, "@")
-                        .. default_styler(STYLE.NUMBER, self.index - 1)
+                        .. styler(STYLE.OPERATOR, "@")
+                        .. styler(STYLE.NUMBER, self.index - 1)
                 else
                     return ""
                 end
             end)()
-            .. default_styler(STYLE.COMMENT, "%")
-            .. default_styler(STYLE.SYMBOL, self.name.name)
+            .. styler(STYLE.COMMENT, "%")
+            .. styler(STYLE.SYMBOL, self.name.name)
             ..
                 (function()
                     if self.vararg then
-                        return default_styler(STYLE.KEYWORD, "…")
+                        return styler(STYLE.KEYWORD, "…")
                     else
                         return ""
                     end
@@ -2648,12 +2606,15 @@ do
             ..
                 (function()
                     if self.type ~= Type.Any then
-                        return default_styler(STYLE.OPERATOR, ":")
+                        return styler(STYLE.OPERATOR, ":")
                             .. self.type.displayname
                     else
                         return ""
                     end
                 end)()
+    end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
 end
 
@@ -2694,12 +2655,16 @@ do
         self.body_anchor = anchor
     end
 
-    function cls:__tostring()
+    function cls:repr(styler)
         return
-            default_styler(STYLE.KEYWORD, "λ")
-            .. default_styler(STYLE.SYMBOL, self.name.name)
-            .. default_styler(STYLE.OPERATOR, "#")
-            .. default_styler(STYLE.NUMBER, self.uid)
+            styler(STYLE.KEYWORD, "λ")
+            .. styler(STYLE.SYMBOL, self.name.name)
+            .. styler(STYLE.OPERATOR, "#")
+            .. styler(STYLE.NUMBER, self.uid)
+    end
+
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
 
     function cls:append_parameter(param)
@@ -2768,13 +2733,16 @@ do -- compact hashtables as much as one can where possible
             self.map = frame.map
         end
     end
-    function cls:__tostring()
+    function cls:repr(styler)
         return
-            default_styler(STYLE.KEYWORD, "frame")
-            .. default_styler(STYLE.COMMENT, "<")
-            .. default_styler(STYLE.OPERATOR, "#")
-            .. default_styler(STYLE.NUMBER, tostring(self.index))
-            .. default_styler(STYLE.COMMENT, ">")
+            styler(STYLE.KEYWORD, "frame")
+            .. styler(STYLE.COMMENT, "<")
+            .. styler(STYLE.OPERATOR, "#")
+            .. styler(STYLE.NUMBER, tostring(self.index))
+            .. styler(STYLE.COMMENT, ">")
+    end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
     function cls:bind(flow, values)
         assert_flow(flow)
@@ -2841,13 +2809,16 @@ do -- clone frame for every mapping
         self.parent = frame
         self.map = {}
     end
-    function cls:__tostring()
+    function cls:repr(styler)
         return
-            default_styler(STYLE.KEYWORD, "frame")
-            .. default_styler(STYLE.COMMENT, "<")
-            .. default_styler(STYLE.OPERATOR, "#")
-            .. default_styler(STYLE.NUMBER, tostring(self.index))
-            .. default_styler(STYLE.COMMENT, ">")
+            styler(STYLE.KEYWORD, "frame")
+            .. styler(STYLE.COMMENT, "<")
+            .. styler(STYLE.OPERATOR, "#")
+            .. styler(STYLE.NUMBER, tostring(self.index))
+            .. styler(STYLE.COMMENT, ">")
+    end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
     function cls:bind(flow, values)
         assert_flow(flow)
@@ -2904,11 +2875,14 @@ do
         self.flow = flow
         self.frame = frame
     end
-    function cls:__tostring()
+    function cls:repr(styler)
         return tostring(self.frame)
-            .. default_styler(STYLE.OPERATOR, "[")
+            .. styler(STYLE.OPERATOR, "[")
             .. tostring(self.flow)
-            .. default_styler(STYLE.OPERATOR, "]")
+            .. styler(STYLE.OPERATOR, "]")
+    end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
 end
 
@@ -3305,12 +3279,15 @@ local function call_flow(frame, cont, flow, ...)
     local numflowargs = #flow.arguments
     for i=1,numflowargs do
         local arg = flow.arguments[i]
-        if is_quote_type(arg.type) then
-            arg = unquote(arg)
-        else
-            arg = maybe_unsyntax(arg)
+        local quoted = false
+        if arg.type == Type.Syntax then
+            quoted = arg.value.quoted
+            arg = arg.value.datum
         end
-        if arg.type == Type.Parameter and arg.value.vararg then
+        if quoted then
+            wbuf[idx] = arg
+            idx = idx + 1
+        elseif arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
             local args = unwrap(Type.VarArgs, arg)
             if i == numflowargs then
@@ -3541,7 +3518,7 @@ expand_continuation = function(env, topit, cont)
         result = List(Any(Syntax(Any(reverse_list_inplace(outargs)), anchor_params)), result)
         result = List(sym, result)
         result = List(Any(Syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw)), result)
-        return cont(List(quote(Any(Syntax(Any(result), anchor))), topit.next), env)
+        return cont(List(Any(Syntax(Any(result), anchor, true)), topit.next), env)
     end)
 end
 
@@ -3550,7 +3527,7 @@ expand_syntax_extend = function(env, topit, cont)
     return expand_continuation(env, topit, function(cur_list, cur_env)
         local expr = cur_list.at
         local anchor = expr.value.anchor
-        local fun = maybe_unsyntax(translate(unquote(expr), none))
+        local fun = maybe_unsyntax(translate(expr, none))
         return execute(
             function(expr_env)
                 return cont(cur_list.next, unwrap(Type.Scope, expr_env))
@@ -3610,10 +3587,10 @@ local function expand_macro(env, handler, topit, cont)
             local k = 1
             while k <= #todo do
                 local elem = todo[k]
-                if not is_quote_type(elem.type) then
-                    if elem.type ~= Type.Syntax then
-                        location_error("syntax objects missing in expanded macro")
-                    end
+                if elem.type ~= Type.Syntax then
+                    location_error("syntax objects missing in expanded macro")
+                end
+                if not elem.value.quoted then
                     elem = unsyntax(elem)
                     if elem.type == Type.List then
                         elem = elem.value
@@ -3654,16 +3631,14 @@ expand = function(env, topit, cont)
 
     local function process(env, topit)
         local expr = topit.at
-        if (is_quote_type(expr.type)) then
+        local sx = unwrap(Type.Syntax, expr)
+        if sx.quoted then
             -- remove qualifier and return as-is
-            return cont(List(unquote(expr), topit.next), env)
+            return cont(List(expr, topit.next), env)
         end
         local anchor
         expr,anchor = unsyntax(expr)
         set_active_anchor(anchor)
-        if (is_quote_type(expr.type)) then
-            location_error("syntax must not wrap quote")
-        end
         if (expr.type == Type.List) then
             local list = expr.value
             if (list == EOL) then
@@ -3747,6 +3722,25 @@ expand = function(env, topit, cont)
     return process(env, topit)
 end
 
+
+local function inplace_deep_unquote_syntax(elem)
+    local todo = {elem}
+    local k = 1
+    while k <= #todo do
+        local elem = unwrap(Type.Syntax, todo[k])
+        elem.quoted = false
+        elem = elem.datum
+        if elem.type == Type.List then
+            elem = elem.value
+            while elem ~= EOL do
+                table.insert(todo, elem.at)
+                elem = elem.next
+            end
+        end
+        k = k + 1
+    end
+end
+
 expand_root = function(expr, scope, cont)
     local anchor
     if expr.type == Type.Syntax then
@@ -3756,10 +3750,10 @@ expand_root = function(expr, scope, cont)
     return expand_expr_list(scope or globals, expr, function(result)
         result = Any(result)
         if anchor then
-            return cont(Any(Syntax(result, anchor)))
-        else
-            return cont(result)
+            result = Any(Syntax(result, anchor))
+            inplace_deep_unquote_syntax(result)
         end
+        return cont(result)
     end)
 end
 
@@ -3824,14 +3818,7 @@ local function write_dest(dest, value)
             -- a known value is returned - no need to generate code
             return value
         else
-            local v = value
-            local anchor
-            if (is_quote_type(v.type)) then
-                v = unquote(v)
-            end
-            if (v.type == Type.Syntax) then
-                v,anchor = unsyntax(v)
-            end
+            local _,anchor = maybe_unsyntax(value)
             builder.br({none, dest, value}, anchor)
         end
     end
@@ -3889,6 +3876,15 @@ local function translate_do(it, dest)
 
     it = it.next
     return translate_expr_list(it, dest, anchor)
+end
+
+local function translate_quote(it, dest)
+    assert_any(dest)
+    it = unwrap(Type.List, unsyntax(it))
+    it = it.next
+    local sx = unwrap(Type.Syntax, it.at)
+    sx.quoted = true
+    return write_dest(dest, it.at)
 end
 
 local function translate_continuation(it, dest, anchor)
@@ -4047,10 +4043,12 @@ translate = function(sxexpr, dest)
     assert_any(dest)
     assert_any(sxexpr)
     return xpcallcc(function(cont)
-        if (is_quote_type(sxexpr.type)) then
+        local sx = unwrap(Type.Syntax, sxexpr)
+        --[[if sx.quoted then
             -- write as-is
             return cont(write_dest(dest, sxexpr))
         end
+        --]]
         local expr, anchor = unsyntax(sxexpr)
 
         set_active_anchor(anchor)
@@ -4074,9 +4072,6 @@ translate = function(sxexpr, dest)
         exc = exception(exc)
         if not exc.translate then
             local w = string_writer()
-            if is_quote_type(sxexpr.type) then
-                sxexpr = unquote(sxexpr)
-            end
             local _, anchor = unsyntax(sxexpr)
             anchor:stream_message_with_source(w, 'while translating expression')
             local fmt = StreamValueFormat()
@@ -4117,6 +4112,7 @@ builtins.call = Form(translate_call, Symbol("call"))
 builtins["cc/call"] = Form(translate_contcall, Symbol("cc/call"))
 builtins[Symbol.ContinuationForm] = Form(translate_continuation, Symbol("fn/cc"))
 builtins["do"] = Form(translate_do, Symbol("do"))
+builtins[Symbol.QuoteForm] = Form(translate_quote, Symbol("quote"))
 
 end -- do
 
@@ -4393,7 +4389,7 @@ builtins.expand = function(frame, cont, self, expr, scope)
     checkargs(2,2, expr, scope)
     local _scope = unwrap(Type.Scope, scope)
     return expand_root(expr, _scope, function(expexpr)
-        if result then
+        if expexpr then
             return call(frame, none, cont, expexpr, scope)
         else
             error(expexpr)
@@ -4418,9 +4414,22 @@ builtins.eval = function(frame, cont, self, expr, scope, path)
     end)
 end
 
-builtins.escape = wrap_simple_builtin(function(value)
+builtins["syntax-quote"] = wrap_simple_builtin(function(value)
     checkargs(1,1, value)
-    return quote(value)
+    value = unwrap(Type.Syntax, value)
+    return Any(Syntax(value.datum, value.anchor, true))
+end)
+
+builtins["syntax-unquote"] = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    value = unwrap(Type.Syntax, value)
+    return Any(Syntax(value.datum, value.anchor, false))
+end)
+
+builtins["syntax-quoted?"] = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    value = unwrap(Type.Syntax, value)
+    return Any(bool(value.quoted))
 end)
 
 builtins["block-scope-macro"] = wrap_simple_builtin(function(func)
@@ -4437,9 +4446,7 @@ end)
 
 builtins["syntax-cons"] = wrap_simple_builtin(function(at, next)
     checkargs(2,2, at, next)
-    if not is_quote_type(at.type) then
-        unwrap(Type.Syntax, at)
-    end
+    unwrap(Type.Syntax, at)
     local next, next_anchor = unsyntax(next)
     next = unwrap(Type.List, next)
     return Any(Syntax(Any(List(at, next)), next_anchor))
@@ -4463,9 +4470,6 @@ end)
 builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
     checkargs(1,2,value,anchor)
 
-    if value.type == Type.Syntax then
-        location_error("argument must not be syntax")
-    end
     if is_null_or_none(anchor) then
         anchor = Anchor.extract(value)
         if anchor == null then
@@ -5145,9 +5149,6 @@ end)
 
 builtins["bind!"] = function(frame, cont, self, param, value)
     checkargs(2,2, param, value)
-    if is_quote_type(param.type) then
-        param = unquote(param)
-    end
     param = unwrap(Type.Parameter, param)
     if not param.flow then
         error("can't rebind unbound parameter")
@@ -5273,6 +5274,11 @@ builtins.exit = wrap_simple_builtin(function(code)
     checkargs(1, 1, code)
     code = tonumber(unwrap_integer(code))
     os.exit(code)
+end)
+
+builtins['set-debug-trace!'] = wrap_simple_builtin(function(value)
+    checkargs(1, 1, value)
+    global_opts.trace_execution = unwrap(Type.Bool, value) == bool(true)
 end)
 
 --------------------------------------------------------------------------------
