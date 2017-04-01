@@ -7,7 +7,7 @@ set-scope-symbol! bangra
 
 let
     modules =
-        syntax->datum (quote
+        quote (
             test_array
             test_assorted
             test_iterator

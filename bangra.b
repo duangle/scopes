@@ -28,62 +28,62 @@ syntax-extend def-quote (return env)
         fn/cc (return return-true return-false unordered-error)
             set-scope-symbol! env (symbol "==")
                 fn/cc == (return a b)
-                    return (ordered-branch a b return-true
-                            (fn/cc (_) (cc/call none unordered-error a b))
-                            return-false return-false)
+                    ordered-branch a b return-true
+                        fn/cc (_) (cc/call none unordered-error a b)
+                        \ return-false return-false
             set-scope-symbol! env (symbol "!=")
                 fn/cc != (return a b)
-                    return (ordered-branch a b return-false
-                            (fn/cc (_) (cc/call none unordered-error a b))
-                            return-true return-true)
+                    ordered-branch a b return-false
+                        fn/cc (_) (cc/call none unordered-error a b)
+                        \ return-true return-true
             set-scope-symbol! env (symbol "<")
                 fn/cc < (return a b)
-                    return (ordered-branch a b return-false
-                            (fn/cc (_) (cc/call none unordered-error a b))
-                            return-true return-false)
+                    ordered-branch a b return-false
+                        fn/cc (_) (cc/call none unordered-error a b)
+                        \ return-true return-false
             set-scope-symbol! env (symbol "<=")
                 fn/cc <= (return a b)
-                    return (ordered-branch a b return-true
-                            (fn/cc (_) (cc/call none unordered-error a b))
-                            return-true return-false)
+                    ordered-branch a b return-true
+                        fn/cc (_) (cc/call none unordered-error a b)
+                        \ return-true return-false
             set-scope-symbol! env (symbol ">")
                 fn/cc > (return a b)
-                    return (ordered-branch a b return-false
-                            (fn/cc (_) (cc/call none unordered-error a b))
-                            return-false return-true)
+                    ordered-branch a b return-false
+                        fn/cc (_) (cc/call none unordered-error a b)
+                        \ return-false return-true
             set-scope-symbol! env (symbol ">=")
                 fn/cc >= (return a b)
-                    return (ordered-branch a b return-true
-                            (fn/cc (_) (cc/call none unordered-error a b))
-                            return-false return-true)
+                    ordered-branch a b return-true
+                        fn/cc (_) (cc/call none unordered-error a b)
+                        \ return-false return-true
             set-scope-symbol! env (symbol "==?")
                 fn/cc ==? (return a b)
-                    return (ordered-branch a b return-true return-false
-                            return-false return-false)
+                    ordered-branch a b return-true return-false
+                        \ return-false return-false
             set-scope-symbol! env (symbol "!=?")
                 fn/cc !=? (return a b)
-                    return (ordered-branch a b return-false return-true
-                            return-true return-true)
+                    ordered-branch a b return-false return-true
+                        \ return-true return-true
             set-scope-symbol! env (symbol "<?")
                 fn/cc <? (return a b)
-                    return (ordered-branch a b return-false return-false
-                            return-true return-false)
+                    ordered-branch a b return-false return-false
+                        \ return-true return-false
             set-scope-symbol! env (symbol "<=?")
                 fn/cc <=? (return a b)
-                    return (ordered-branch a b return-true return-false
-                            return-true return-false)
+                    ordered-branch a b return-true return-false
+                        \ return-true return-false
             set-scope-symbol! env (symbol ">?")
                 fn/cc >? (return a b)
-                    return (ordered-branch a b return-false return-false
-                            return-false return-true)
+                    ordered-branch a b return-false return-false
+                        \ return-false return-true
             set-scope-symbol! env (symbol ">=?")
                 fn/cc >=? (return a b)
-                    return (ordered-branch a b return-true return-false
-                            return-false return-true)
+                    ordered-branch a b return-true return-false
+                        \ return-false return-true
             return
-        fn/cc return-true (return) (return true)
-        fn/cc return-false (return) (return false)
-        fn/cc unordered-error (return a b)
+        fn/cc return-true (_) true
+        fn/cc return-false (_) false
+        fn/cc unordered-error (_ a b)
             error
                 .. "illegal ordered comparison of values of types "
                     .. (repr (typeof a))
@@ -262,16 +262,18 @@ syntax-extend def-? (return env)
                                         datum->syntax branch
                                             syntax->anchor (@ expr 0)
                                         @ (@ expr 0) 1
-                                        syntax-list
+                                        syntax-cons
                                             datum->syntax fn/cc expr-anchor
-                                            syntax-list ret-true
-                                            syntax-list ret-true
-                                                @ (@ expr 0) 2
-                                        syntax-list
+                                            syntax-cons
+                                                syntax-list ret-true
+                                                syntax-list
+                                                    @ (@ expr 0) 2
+                                        syntax-cons
                                             datum->syntax fn/cc expr-anchor
-                                            syntax-list ret-false
-                                            syntax-list ret-false
-                                                @ (@ expr 0) 3
+                                            syntax-cons
+                                                syntax-list ret-false
+                                                syntax-list
+                                                    @ (@ expr 0) 3
                                     slice expr 1
                         datum->syntax
                             parameter
@@ -408,14 +410,9 @@ define let
                                             ;
                                                 unquote cont-param
                                                 unquote param-name
-                                            ;
-                                                unquote cont-param
-                                                unquote
-                                                    syntax-do
-                                                        datum->syntax rest
-                                                            syntax->anchor (@ expr 0)
-                                                unquote-splice
-                                                    syntax-eol (@ expr 0)
+                                            unquote-splice
+                                                datum->syntax rest
+                                                    syntax->anchor (@ expr 0)
                                         unquote
                                             syntax-do
                                                 slice (@ expr 0) 3
@@ -446,45 +443,40 @@ define fn
                         quote return
                     \ decl-anchor
             let wrap =
-                fn/cc (return val)
-                    return (datum->syntax val decl-anchor)
+                fn/cc (_ val)
+                    datum->syntax val decl-anchor
             let make-params-body =
-                fn/cc (return param-idx)
-                    return
+                fn/cc (_ param-idx)
+                    syntax-cons
                         syntax-cons
-                            syntax-cons
-                                \ retparam
-                                @ expr param-idx
-                            syntax-list
-                                syntax-list retparam
-                                    syntax-cons (wrap do)
-                                        slice expr (+ param-idx 1)
+                            \ retparam
+                            @ expr param-idx
+                        slice expr (+ param-idx 1)
             let rest =
                 slice topexpr 1
-            return
-                ? (symbol? (syntax->datum decl))
+            ? (symbol? (syntax->datum decl))
+                cons
+                    syntax-list
+                        wrap let
+                        \ decl (quote-syntax =)
+                        wrap none
                     cons
                         syntax-list
-                            wrap let
-                            \ decl (quote-syntax =)
-                            wrap none
-                        cons
-                            syntax-list
-                                wrap set!
-                                \ decl
+                            wrap set!
+                            \ decl
+                            syntax-cons
+                                wrap fn/cc
                                 syntax-cons
-                                    wrap fn/cc
-                                    syntax-cons
-                                        @ expr 1
-                                        make-params-body 2
-                            ? (empty? rest)
-                                list decl
-                                \ rest
-                    cons
-                        syntax-cons
-                            wrap fn/cc
-                            make-params-body 1
-                        \ rest
+                                    @ expr 1
+                                    make-params-body 2
+                        ? (empty? rest)
+                            list decl
+                            \ rest
+                cons
+                    syntax-cons
+                        wrap fn/cc
+                        make-params-body 1
+                    \ rest
 
 define raise
     fn/cc raise (_ x)
@@ -545,8 +537,7 @@ define sizeof
         assert (type? x) "type expected"
         let size =
             @ x sym
-        return
-            ? (none? size) (size_t 0) size
+        ? (none? size) (size_t 0) size
 
 define alignof
     let sym = (symbol "alignment")
@@ -597,13 +588,9 @@ define and
                     fn/cc ((unquote ret) (unquote tmp))
                         branch (unquote tmp)
                             fn/cc ((unquote ret-true))
-                                ;
-                                    unquote ret
-                                    unquote (@ expr 2)
+                                unquote (@ expr 2)
                             fn/cc ((unquote ret-false))
-                                ;
-                                    unquote ret
-                                    unquote tmp
+                                unquote tmp
                     unquote (@ expr 1)
                     unquote-splice
                         syntax-eol expr
@@ -620,13 +607,9 @@ define or
                     fn/cc ((unquote ret) (unquote tmp))
                         branch (unquote tmp)
                             fn/cc ((unquote ret-true))
-                                ;
-                                    unquote ret
-                                    unquote tmp
+                                unquote tmp
                             fn/cc ((unquote ret-false))
-                                ;
-                                    unquote ret
-                                    unquote (@ expr 2)
+                                unquote (@ expr 2)
                     unquote (@ expr 1)
                     unquote-splice
                         syntax-eol expr
@@ -645,19 +628,9 @@ define if
             qquote
                 branch (unquote cond)
                     fn/cc ((unquote ret-then))
-                        ;
-                            unquote ret-then
-                            unquote
-                                syntax-do then-exprlist
-                            unquote-splice
-                                syntax-eol then-exprlist
+                        unquote-splice then-exprlist
                     fn/cc ((unquote ret-else))
-                        ;
-                            unquote ret-else
-                            unquote
-                                syntax-do else-exprlist
-                            unquote-splice
-                                syntax-eol else-exprlist
+                        unquote-splice else-exprlist
                     unquote-splice
                         syntax-eol expr
         let rest-expr =
@@ -747,16 +720,9 @@ syntax-extend def-let-xlet (return env)
                                                 unquote-splice
                                                     datum->syntax args
                                                         syntax->anchor body
-                                            ;
-                                                unquote cont-param
-                                                unquote
-                                                    syntax-do
-                                                        datum->syntax rest
-                                                            syntax->anchor expr
-                                                unquote-splice
-                                                    syntax-eol expr
                                             unquote-splice
-                                                syntax-eol expr
+                                                datum->syntax rest
+                                                    syntax->anchor expr
                                         unquote-splice init
                                         # force enclosing list to use anchor
                                           of original expression
@@ -819,12 +785,9 @@ syntax-extend def-let-xlet (return env)
                                             ;
                                                 unquote xlet-return
                                                 unquote-splice argnames
-                                            ;
-                                                unquote xlet-return
-                                                unquote
-                                                    syntax-do
-                                                        datum->syntax xlet-rest
-                                                            syntax->anchor expr
+                                            unquote-splice
+                                                datum->syntax xlet-rest
+                                                    syntax->anchor expr
                                         unquote-splice
                                             syntax-eol expr
                         handle-pairs body
@@ -842,17 +805,14 @@ syntax-extend def-let-xlet (return env)
                                     ;
                                         unquote xlet-return
                                         unquote name
-                                    ;
-                                        unquote xlet-return
-                                        unquote
-                                            syntax-do
-                                                datum->syntax
-                                                    cons
-                                                        qquote
-                                                            set! (unquote name)
-                                                                unquote value
-                                                        \ rest
-                                                    syntax->anchor expr
+                                    unquote-splice
+                                        datum->syntax
+                                            cons
+                                                qquote
+                                                    set! (unquote name)
+                                                        unquote value
+                                                \ rest
+                                            syntax->anchor expr
                                 unquote-splice
                                     syntax-eol expr
     return env
@@ -869,10 +829,8 @@ define loop
                 do
                     xlet (unquote param-repeat) =
                         fn/cc ((unquote param-break) (unquote-splice (@ expr 1)))
-                            ;
-                                unquote param-break
-                                unquote
-                                    syntax-do (slice expr 2)
+                            unquote-splice
+                                slice expr 2
                     ;
                         unquote param-repeat
                         unquote-splice (@ expr 1)
@@ -1447,10 +1405,8 @@ syntax-extend stage-5 (return env)
                     do
                         xlet (unquote param-repeat) =
                             fn/cc ((unquote param-break) (unquote-splice names))
-                                ;
-                                    unquote param-break
-                                    unquote
-                                        syntax-do (slice expr 2)
+                                unquote-splice
+                                    slice expr 2
                         ;
                             unquote param-repeat
                             unquote-splice args
@@ -1532,12 +1488,10 @@ syntax-extend stage-5 (return env)
                                                             (unquote param-inner-ret)
                                                             (unquote-splice extra-names))
                                                             ;
-                                                                unquote param-inner-ret
-                                                                ;
-                                                                    unquote param-for
-                                                                    unquote param-iter
-                                                                    unquote param-next
-                                                                    unquote-splice extra-names
+                                                                unquote param-for
+                                                                unquote param-iter
+                                                                unquote param-next
+                                                                unquote-splice extra-names
                                                     let (unquote-splice dest-names) =
                                                         unquote param-at
                                                     unquote-splice body
@@ -1581,10 +1535,7 @@ syntax-extend stage-5 (return env)
                             syntax-cons
                                 syntax-cons retparam
                                     @ expr param-idx
-                                syntax-list
-                                    syntax-list retparam
-                                        syntax-do
-                                            slice expr (+ param-idx 1)
+                                slice expr (+ param-idx 1)
                     let rest =
                         slice topexpr 1
                     if (symbol? (syntax->datum decl))

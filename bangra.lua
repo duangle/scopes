@@ -3982,7 +3982,35 @@ local function translate_continuation(state, it, cont, anchor)
         set_active_anchor(params_anchor)
         location_error("explicit continuation parameter missing")
     end
+    --[[
     return translate_stmt_list(func, it, function()
+        assert(#func.arguments > 0)
+        return cont(state, anchor, Any(Syntax(Any(func), anchor)))
+    end, anchor)
+    ]]
+    local dest = Any(func.parameters[1])
+
+    return translate_expr_list(func, it,
+    function(_state, _anchor, value, value_is_call)
+        assert_anchor(_anchor)
+        if value_is_call then
+            local args = value
+            local is_return = is_return_callable(args)
+            local next
+            if not args[1] then
+                if is_return then
+                    args[1] = none
+                else
+                    args[1] = dest
+                end
+            end
+            br(_state, args, _anchor)
+        elseif value == null then
+            br(_state, {none, dest}, _anchor)
+        else
+            local _,_anchor = maybe_unsyntax(value)
+            br(_state, {none, dest, value}, _anchor)
+        end
         assert(#func.arguments > 0)
         return cont(state, anchor, Any(Syntax(Any(func), anchor)))
     end, anchor)
@@ -4010,14 +4038,14 @@ local function translate_argument_list(state, it, cont, anchor, explicit_ret)
                         if is_return then
                             -- parent call will never finish
                             -- we flatten recursions of return(return(return(...)))
-                            if #args == 2 -- must be first argument in parent
-                                and is_return_callable(args) -- parent is also returning
-                                and it.next == EOL then -- must also be last argument in parent
-                                return cont(state, anchor, value, value_is_call)
-                            else
+--~                             if #args == 2 -- must be first argument in parent
+--~                                 and is_return_callable(args) -- parent is also returning
+--~                                 and it.next == EOL then -- must also be last argument in parent
+--~                                 return cont(state, anchor, value, value_is_call)
+--~                             else
                                 set_active_anchor(anchor)
                                 location_error("unexpected return in argument list")
-                            end
+--~                             end
                         end
 
                         local sxdest = Any(Syntax(Any(Symbol.Unnamed), anchor))
