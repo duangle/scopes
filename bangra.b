@@ -255,7 +255,7 @@ syntax-extend def-? (return env)
             fn/cc ? (return expr env)
                 return
                     call
-                        fn/cc (_ ret-true ret-false)
+                        fn/cc (_ ret-true ret-false expr-anchor)
                             _
                                 cons
                                     syntax-list
@@ -263,12 +263,12 @@ syntax-extend def-? (return env)
                                             syntax->anchor (@ expr 0)
                                         @ (@ expr 0) 1
                                         syntax-list
-                                            datum->syntax fn/cc (active-anchor)
+                                            datum->syntax fn/cc expr-anchor
                                             syntax-list ret-true
                                             syntax-list ret-true
                                                 @ (@ expr 0) 2
                                         syntax-list
-                                            datum->syntax fn/cc (active-anchor)
+                                            datum->syntax fn/cc expr-anchor
                                             syntax-list ret-false
                                             syntax-list ret-false
                                                 @ (@ expr 0) 3
@@ -283,6 +283,8 @@ syntax-extend def-? (return env)
                                 datum->syntax
                                     quote ret-false
                                     syntax->anchor (@ expr 0)
+                        syntax->anchor
+                            @ expr 0
                     \ env
     return env
 
