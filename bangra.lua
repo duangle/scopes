@@ -3527,16 +3527,15 @@ expand_syntax_extend = function(env, topit, cont)
     return expand_continuation(env, topit, function(cur_list, cur_env)
         local expr = cur_list.at
         local anchor = expr.value.anchor
-        local _, fun = translate(null, expr,
-            function(state, anchor, value)
-                return state, value
+        return translate(null, expr,
+            function(_state, _anchor, fun)
+                fun = maybe_unsyntax(fun)
+                return execute(
+                    function(expr_env)
+                        return cont(cur_list.next, unwrap(Type.Scope, expr_env))
+                    end,
+                    fun, Any(env))
             end)
-        local fun = maybe_unsyntax(fun)
-        return execute(
-            function(expr_env)
-                return cont(cur_list.next, unwrap(Type.Scope, expr_env))
-            end,
-            fun, Any(env))
     end)
 end
 
@@ -3792,65 +3791,51 @@ end
 
 --------------------------------------------------------------------------------
 
--- used 3 times
-local function make_callable_dest(dest)
+local function is_return_callable(args)
+    local callable = args[2]
+    local argcount = #args - 2
+    local is_return = false
+    local is_forward_return = false
+    local ncallable = maybe_unsyntax(callable)
+    if ncallable.type == Type.Parameter then
+        local param = ncallable.value
+        if param.index == 1 then
+            -- return continuation is being called
+            is_return = true
+            if argcount == 1 then -- only one argument?
+                -- can be forwarded
+                is_forward_return = true
+            end
+        end
+    end
+    return is_return, is_forward_return
+end
+
+-- used 2 times
+local function make_callable_dest(dest, cont)
     return function(state, anchor, value, value_is_call)
         assert_anchor(anchor)
         if value_is_call then
             local args = value
-            local is_return = args[1]
-            if is_return then
-                -- return continuations are terminal
-                args[1] = none
-            else
-                args[1] = dest
+            local is_return = is_return_callable(args)
+            if not args[1] then
+                -- todo: must not override existing cont arg
+                if is_return then
+                    args[1] = none
+                else
+                    -- return continuations are terminal
+                    args[1] = dest
+                end
             end
             br(state, args, anchor)
-            return
+            return cont()
         elseif value == null then
             br(state, {none, dest}, anchor)
-            return
+            return cont()
         else
             local _,anchor = maybe_unsyntax(value)
             br(state, {none, dest, value}, anchor)
-            return
-        end
-    end
-end
-
--- used once
-local function make_constant_dest()
-    return function(state, anchor, value, value_is_call)
-        assert_anchor(anchor)
-        if value_is_call then
-            local args = value
-            local sxdest = Any(Syntax(Any(Symbol.Unnamed), anchor))
-            local next = Flow.create_continuation(sxdest)
-            local param = Parameter(sxdest, Type.Any)
-            param.vararg = true
-            next:append_parameter(param)
-            args[1] = Any(next)
-            br(state, args, anchor)
-            return next, Any(next.parameters[PARAM_Arg0])
-        else
-            -- a known value is returned - no need to generate code
-            return state, value
-        end
-    end
-end
-
--- used three times
-local function make_embedded_dest()
-    -- dest == none
-    return function(state, anchor, value, value_is_call)
-        assert_anchor(anchor)
-        if value_is_call then
-            local args = value
-            args[1] = none
-            br(state, args, anchor)
-            return
-        else
-            return state, value
+            return cont()
         end
     end
 end
@@ -3862,30 +3847,37 @@ local function translate_expr_list(state, it, cont, anchor)
     if (it == EOL) then
         return cont(state, anchor)
     else
-        while (it ~= EOL) do
-            local next = it.next
-            if next == EOL then -- last element goes to cont
+        local function loop(state, it)
+            if it.next == EOL then -- last element goes to cont
                 return translate(state, it.at, cont)
             else
                 local sxvalue = it.at
                 local value, anchor = unsyntax(sxvalue)
-                if (value.type == Type.List) then
-                    -- complex expression
-                    -- continuation and results are ignored
-                    local next = Flow.create_continuation(
-                        Any(Syntax(Any(Symbol.Unnamed), anchor)))
-                    translate(state, sxvalue, make_callable_dest(Any(next)))
-                    state = next
-                else
-                    -- constant value - walk to verify, but do not generate code
-                    translate(state, sxvalue, make_embedded_dest())
-                end
-
+                return translate(state, sxvalue,
+                    function(state, _anchor, value, value_is_call)
+                        assert_anchor(_anchor)
+                        if value_is_call then
+                            local args = value
+                            local is_return = is_return_callable(args)
+                            -- complex expression
+                            -- continuation and results are ignored
+                            local next = Flow.create_continuation(
+                                Any(Syntax(Any(Symbol.Unnamed), _anchor)))
+                            if is_return then
+                                set_active_anchor(anchor)
+                                location_error("return call is not last expression")
+                            else
+                                args[1] = Any(next)
+                            end
+                            br(state, args, _anchor)
+                            state = next
+                        end
+                        return loop(state, it.next)
+                    end)
             end
-            it = next
         end
+        return loop(state, it)
     end
-    error("unreachable path")
 end
 
 local function translate_do(state, it, cont)
@@ -3906,6 +3898,57 @@ local function translate_quote(state, it, cont)
     local sx = unwrap(Type.Syntax, it.at)
     sx.quoted = true
     return cont(state, anchor, it.at)
+end
+
+local function translate_stmt_list(state, it, cont, anchor)
+    assert_list(it)
+    assert_anchor(anchor)
+    if (it == EOL) then
+        set_active_anchor(anchor)
+        location_error("empty statement list")
+    else
+        local function loop(state, it)
+            if it == EOL then
+                return cont()
+            else
+                local sxvalue = it.at
+                local value, anchor = unsyntax(sxvalue)
+                return translate(state, sxvalue,
+                    function(state, _anchor, value, value_is_call)
+                        assert_anchor(_anchor)
+                        if value_is_call then
+                            local args = value
+                            local is_return = is_return_callable(args)
+                            local next
+                            if not args[1] then
+                                if it.next == EOL then
+                                    args[1] = none
+                                else
+                                    -- continuation and results are ignored
+                                    next = Flow.create_continuation(
+                                        Any(Syntax(Any(Symbol.Unnamed), _anchor)))
+                                    if is_return then
+                                        set_active_anchor(anchor)
+                                        location_error("return call is not last expression in statement list")
+                                    else
+                                        args[1] = Any(next)
+                                    end
+                                end
+                            end
+                            br(state, args, _anchor)
+                            state = next
+                        else
+                            if it.next == EOL then
+                                set_active_anchor(anchor)
+                                location_error("statement list must end with continuation")
+                            end
+                        end
+                        return loop(state, it.next)
+                    end)
+            end
+        end
+        return loop(state, it)
+    end
 end
 
 local function translate_continuation(state, it, cont, anchor)
@@ -3939,64 +3982,74 @@ local function translate_continuation(state, it, cont, anchor)
         set_active_anchor(params_anchor)
         location_error("explicit continuation parameter missing")
     end
-    local laststate = translate_expr_list(func, it, make_embedded_dest(), anchor)
-    assert(laststate == null) -- we should be all done here
-    if #func.arguments == 0 then
-        location_error("function does not return")
-    end
-
-    return cont(state, anchor, Any(Syntax(Any(func), anchor)))
+    return translate_stmt_list(func, it, function()
+        assert(#func.arguments > 0)
+        return cont(state, anchor, Any(Syntax(Any(func), anchor)))
+    end, anchor)
 end
 
-local function translate_to_parameter(state, sxvalue)
-    local value = maybe_unsyntax(sxvalue)
-    if (value.type == Type.List) then
-        -- complex expression
-        return translate(state, sxvalue, make_constant_dest())
-    else
-        -- constant value - can be inserted directly
-        return translate(state, sxvalue, make_embedded_dest())
+local function translate_argument_list(state, it, cont, anchor, explicit_ret)
+    local args = {}
+    if not explicit_ret then
+        table.insert(args, false)
     end
+    local function loop(state, it)
+        if (it == EOL) then
+            return cont(state, anchor, args, true)
+        else
+            local sxvalue = it.at
+            local value = maybe_unsyntax(sxvalue)
+            -- complex expression
+            return translate(state, sxvalue,
+                function(state, anchor, value, value_is_call)
+                    assert_anchor(anchor)
+                    local arg
+                    if value_is_call then
+                        local _args = value
+                        local is_return = is_return_callable(_args)
+                        if is_return then
+                            -- parent call will never finish
+                            -- we flatten recursions of return(return(return(...)))
+                            if #args == 2 -- must be first argument in parent
+                                and is_return_callable(args) -- parent is also returning
+                                and it.next == EOL then -- must also be last argument in parent
+                                return cont(state, anchor, value, value_is_call)
+                            else
+                                set_active_anchor(anchor)
+                                location_error("unexpected return in argument list")
+                            end
+                        end
+
+                        local sxdest = Any(Syntax(Any(Symbol.Unnamed), anchor))
+                        local next = Flow.create_continuation(sxdest)
+                        local param = Parameter(sxdest, Type.Any)
+                        param.vararg = true
+                        next:append_parameter(param)
+                        _args[1] = Any(next)
+                        br(state, _args, anchor)
+                        state = next
+                        arg = Any(next.parameters[PARAM_Arg0])
+                    else
+                        -- a known value is returned - no need to generate code
+                        arg = value
+                    end
+                    table.insert(args, arg)
+                    return loop(state, it.next)
+                end)
+        end
+    end
+    return loop(state, it)
 end
 
 local function translate_implicit_call(state, it, cont, anchor)
     assert_list(it)
     assert_function(cont)
 
-    local callable
-    state, callable = translate_to_parameter(state, it.at)
-    it = it.next
-
-    local is_return = false
-    local is_forward_return = false
-    local ncallable = maybe_unsyntax(callable)
-    if ncallable.type == Type.Parameter then
-        local param = ncallable.value
-        if param.index == 1 then
-            -- return continuation is being called
-            is_return = true
-            if it.count == 1 then -- only one argument?
-                -- can be forwarded
-                is_forward_return = true
-            end
-        end
+    local count = it.count
+    if count < 1 then
+        location_error("callable expected")
     end
-
-    if is_forward_return then
-        -- return continuation called with single argument
-        -- we can directly forward this argument
-        return translate(state, it.at, make_callable_dest(callable))
-    else
-        local args = { is_return, callable }
-        while (it ~= EOL) do
-            local argparam
-            state, argparam = translate_to_parameter(state, it.at)
-            table.insert(args, argparam)
-            it = it.next
-        end
-
-        return cont(state, anchor, args, true)
-    end
+    return translate_argument_list(state, it, cont, anchor, false)
 end
 
 local function translate_call(state, it, cont, anchor)
@@ -4022,15 +4075,7 @@ local function translate_contcall(state, it, cont, anchor)
     elseif count < 2 then
         location_error("callable expected")
     end
-    local args = {}
-    local param
-    while (it ~= EOL) do
-        state, param = translate_to_parameter(state, it.at)
-        table.insert(args, param)
-        it = it.next
-    end
-    br(state, args, anchor)
-    return
+    return translate_argument_list(state, it, cont, anchor, true)
 end
 
 --------------------------------------------------------------------------------
@@ -4038,9 +4083,7 @@ end
 translate = function(state, sxexpr, destcont)
     assert_function(destcont)
     assert_any(sxexpr)
-    local result_state
-    local result_value
-    xpcallcc(function(cont)
+    return xpcallcc(function(cont)
         local sx = unwrap(Type.Syntax, sxexpr)
         local expr, anchor = unsyntax(sxexpr)
 
@@ -4053,12 +4096,12 @@ translate = function(state, sxexpr, destcont)
             end
             local head = unsyntax(slist.at)
             if (head.type == Type.Form) then
-                return cont(head.value(state, sxexpr, destcont))
+                return head.value(state, sxexpr, cont)
             else
-                return cont(translate_implicit_call(state, slist, destcont, anchor))
+                return translate_implicit_call(state, slist, cont, anchor)
             end
         else
-            return cont(destcont(state, anchor, sxexpr))
+            return cont(state, anchor, sxexpr)
         end
     end,
     function (exc, cont)
@@ -4075,15 +4118,14 @@ translate = function(state, sxexpr, destcont)
         error(exc)
     end,
     function (...)
-        result_state, result_value = ...
+        return destcont(...)
     end)
-    return result_state, result_value
 end
 
 --------------------------------------------------------------------------------
 
 -- path must be resident
-translate_root = function(expr, name)
+translate_root = function(expr, name, cont)
     assert_string(name)
 
     local anchor
@@ -4093,9 +4135,11 @@ translate_root = function(expr, name)
     local mainfunc = Flow.create_function(Any(Syntax(Any(Symbol(name)), anchor)))
     local ret = mainfunc.parameters[PARAM_Cont]
 
-    translate_expr_list(mainfunc, expr, make_callable_dest(Any(ret)), anchor)
-
-    return Any(mainfunc)
+    return translate_expr_list(mainfunc, expr,
+        make_callable_dest(Any(ret), function()
+            return cont(Any(mainfunc))
+        end),
+        anchor)
 end
 
 -- special forms
@@ -4403,7 +4447,9 @@ builtins.eval = function(frame, cont, self, expr, scope, path)
         path = "<eval>"
     end
     return expand_root(expr, scope, function(expexpr)
-        return call(frame, none, cont, translate_root(expexpr, path))
+        return translate_root(expexpr, path, function(result)
+                return call(frame, none, cont, result)
+            end)
     end)
 end
 
@@ -5403,12 +5449,13 @@ xpcallcc(
         local lexer = Lexer.init(ptr, ptr + src.length, src.path)
         local expr = parse(lexer)
         return expand_root(expr, null, function(expexpr)
-            local func = translate_root(expexpr, "main")
-            return execute(
-                function()
-                    os.exit(0)
-                end,
-                func)
+            return translate_root(expexpr, "main", function(func)
+                return execute(
+                    function()
+                        os.exit(0)
+                    end,
+                    func)
+            end)
         end)
     end,
     function (err, cont)
