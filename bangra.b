@@ -1463,12 +1463,12 @@ syntax-extend stage-5 (return env)
                             unquote param-repeat
                             unquote-splice args
 
-    set-scope-symbol! env (quote for)
+    set-scope-symbol! env (quote loop-for)
         block-macro
             fn (block-expr)
                 fn iter-expr (expr)
                     assert (not (empty? expr))
-                        \ "syntax: (for let-name ... in iter-expr body-expr ...)"
+                        \ "syntax: (loop-for let-name ... in iter-expr body-expr ...)"
                     if (syntax-head? expr (quote in))
                         return
                             syntax-list
@@ -1636,12 +1636,12 @@ syntax-extend stage-5 (return env)
 
 define read-eval-print-loop
     fn repeat-string (n c)
-        for i in (range n)
+        loop-for i in (range n)
             with (s = "")
             repeat (s .. c)
         else s
     fn get-leading-spaces (s)
-        for c in s
+        loop-for c in s
             with (out = "")
             if (c == " ")
                 repeat (out .. c)
@@ -1649,7 +1649,7 @@ define read-eval-print-loop
         else out
 
     fn has-chars (s)
-        for i in s
+        loop-for i in s
             if (i != " ") true
             else (repeat)
         else false
@@ -1729,7 +1729,7 @@ define read-eval-print-loop
                         set! slevel (stack-level)
                         let result... = (f)
                         if (not (none? result...))
-                            for i in (range (va-countof result...))
+                            loop-for i in (range (va-countof result...))
                                 let idstr = (make-idstr)
                                 let value = (va-arg i result...)
                                 print (.. idstr "= " (repr value))

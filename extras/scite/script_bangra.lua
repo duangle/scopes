@@ -27,7 +27,7 @@ local function bangra_symbols()
     "let true false fn quote with ::* ::@ call escape do dump-syntax"
         .. " syntax-extend if else elseif loop repeat none assert qquote"
         .. " unquote unquote-splice globals return splice continuation"
-        .. " try except define in for empty-list empty-tuple raise"
+        .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax"
         ),
 
