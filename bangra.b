@@ -1477,24 +1477,22 @@ syntax-extend stage-5 (return env)
                                         (unquote-splice extra-names))
                                         let (unquote param-at) (unquote param-next) =
                                             (unquote param-iter) (unquote param-state)
-                                        ;
-                                            unquote param-ret
-                                            ? (==? (unquote param-next) none)
-                                                unquote
-                                                    syntax-do else-block
-                                                do
-                                                    xlet repeat =
-                                                        fn/cc (
-                                                            (unquote param-inner-ret)
-                                                            (unquote-splice extra-names))
-                                                            ;
-                                                                unquote param-for
-                                                                unquote param-iter
-                                                                unquote param-next
-                                                                unquote-splice extra-names
-                                                    let (unquote-splice dest-names) =
-                                                        unquote param-at
-                                                    unquote-splice body
+                                        ? (==? (unquote param-next) none)
+                                            unquote
+                                                syntax-do else-block
+                                            do
+                                                xlet repeat =
+                                                    fn/cc (
+                                                        (unquote param-inner-ret)
+                                                        (unquote-splice extra-names))
+                                                        ;
+                                                            unquote param-for
+                                                            unquote param-iter
+                                                            unquote param-next
+                                                            unquote-splice extra-names
+                                                let (unquote-splice dest-names) =
+                                                    unquote param-at
+                                                unquote-splice body
                                     unquote-splice
                                         syntax-eol expr
                                 let iter-val state-val =
