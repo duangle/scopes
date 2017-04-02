@@ -1153,7 +1153,9 @@ syntax-extend stage-3 (return env)
                                     if (== k ".")
                                         cons ""
                                             cons
-                                                quote .
+                                                datum->syntax
+                                                    quote .
+                                                    \ sym-anchor
                                                 finalize-head out
                                     else
                                         cons
@@ -1204,68 +1206,71 @@ define-infix-op @ 800 > @
 #define-infix-op @= 800 > @=
 #define-infix-op =@ 800 > =@
 
-syntax-extend def-tag (return env)
+syntax-extend def-qualifier (return env)
 
-    let tag =
-        type "tag"
+    let qualifier =
+        type "qualifier"
 
-    set-type-symbol! tag (quote apply-type)
+    set-type-symbol! qualifier (quote apply-type)
         fn new-qualifier (name)
             assert (symbol? name) "symbol expected"
-            let qualifier =
+            let aqualifier =
                 type
-                    .. "tag[" (string name) "]"
+                    .. "qualifier[" (string name) "]"
 
-            set-type-symbol! qualifier (quote super) tag
-            set-type-symbol! qualifier (quote apply-type)
+            set-type-symbol! aqualifier (quote super) qualifier
+            set-type-symbol! aqualifier (quote cast)
+                fn cast-qualifier (fromtype totype value)
+                    if (fromtype <? aqualifier)
+                        let fromelemtype = fromtype.element-type
+                        if (fromelemtype ==? totype)
+                            bitcast totype value
+                    elseif (totype <? aqualifier)
+                        let toelemtype = totype.element-type
+                        if (toelemtype ==? fromtype)
+                            bitcast totype value
+            set-type-symbol! aqualifier (quote apply-type)
                 fn new-typed-qualifier (element-type)
                     let typed-qualifier =
                         type
                             .. (string name) "[" (string element-type) "]"
                     if (none? (. typed-qualifier complete))
-                        set-type-symbol! typed-qualifier (quote super) qualifier
+                        set-type-symbol! typed-qualifier (quote super) aqualifier
                         set-type-symbol! typed-qualifier (quote element-type) element-type
-                        set-type-symbol! typed-qualifier (quote cast)
-                            fn cast-qualifier (fromtype totype value)
-                                let
-                                    fromsuper = (. fromtype super)
-                                    tosuper = (. totype super)
-                                if (fromsuper ==? qualifier)
-                                    let fromelemtype = (. fromtype element-type)
-                                    if (fromelemtype ==? totype)
-                                        bitcast totype value
-                                elseif (tosuper ==? qualifier)
-                                    let toelemtype = (. totype element-type)
-                                    if (toelemtype ==? fromtype)
-                                        bitcast totype value
                         set-type-symbol! typed-qualifier (quote complete) true
 
                     return typed-qualifier
+            set-type-symbol! aqualifier (quote complete) true
 
-            return qualifier
+            return aqualifier
 
-    set-scope-symbol! env (quote tag) tag
+    set-scope-symbol! env (quote qualifier) qualifier
     set-scope-symbol! env (quote iterator)
-        tag (quote iterator)
+        qualifier (quote iterator)
     set-scope-symbol! env (quote qualify)
-        fn qualify (tag-type value)
-            assert (== (typeof tag-type) type)
-                error "type argument expected."
+        fn qualify (qualifier-type value)
+            assert
+                qualifier-type <? qualifier
+                error
+                    .. "qualifier type expected, got "
+                        repr qualifier-type
             cast
-                tag-type (typeof value)
+                qualifier-type (typeof value)
                 \ value
 
     set-scope-symbol! env (quote disqualify)
-        fn disqualify (tag-type value)
-            assert (== (typeof tag-type) type)
-                error "type argument expected."
+        fn disqualify (qualifier-type value)
+            assert
+                qualifier-type <? qualifier
+                error
+                    .. "qualifier type expected, got "
+                        repr qualifier-type
             let t = (typeof value)
-            if (not (< t tag-type))
+            if (not (t <? qualifier-type))
                 error
                     .. "can not unqualify value of type " (string t)
-                        \ "; type not related to " (string tag-type) "."
-            cast
-                element-type t
+                        \ "; type not related to " (string qualifier-type) "."
+            cast t.element-type
                 \ value
 
     return env
