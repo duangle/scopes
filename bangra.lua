@@ -783,40 +783,40 @@ end
 }
 
 local SUPPORT_ISO_8613_3 = not WIN32
-local STYLE
+local Style
 if SUPPORT_ISO_8613_3 then
 local BG = ANSI.COLOR_RGB(0x2D2D2D, true)
-STYLE = {
-FOREGROUND = ANSI.COLOR_RGB(0xCCCCCC),
-BACKGROUND = ANSI.COLOR_RGB(0x2D2D2D, true),
-SYMBOL = ANSI.COLOR_RGB(0xCCCCCC),
-STRING = ANSI.COLOR_RGB(0xCC99CC),
-NUMBER = ANSI.COLOR_RGB(0x99CC99),
-KEYWORD = ANSI.COLOR_RGB(0x6699CC),
-FUNCTION = ANSI.COLOR_RGB(0xFFCC66),
-SFXFUNCTION = ANSI.COLOR_RGB(0xCC6666),
-OPERATOR = ANSI.COLOR_RGB(0x66CCCC),
-INSTRUCTION = ANSI.COLOR_YELLOW,
-TYPE = ANSI.COLOR_RGB(0xF99157),
-COMMENT = ANSI.COLOR_RGB(0x999999),
-ERROR = ANSI.COLOR_XRED,
-LOCATION = ANSI.COLOR_RGB(0x999999),
+Style = {
+Foreground = ANSI.COLOR_RGB(0xCCCCCC),
+Background = ANSI.COLOR_RGB(0x2D2D2D, true),
+Symbol = ANSI.COLOR_RGB(0xCCCCCC),
+String = ANSI.COLOR_RGB(0xCC99CC),
+Number = ANSI.COLOR_RGB(0x99CC99),
+Keyword = ANSI.COLOR_RGB(0x6699CC),
+Function = ANSI.COLOR_RGB(0xFFCC66),
+SfxFunction = ANSI.COLOR_RGB(0xCC6666),
+Operator = ANSI.COLOR_RGB(0x66CCCC),
+Instruction = ANSI.COLOR_YELLOW,
+Type = ANSI.COLOR_RGB(0xF99157),
+Comment = ANSI.COLOR_RGB(0x999999),
+Error = ANSI.COLOR_XRED,
+Location = ANSI.COLOR_RGB(0x999999),
 }
 else
-STYLE = {
-FOREGROUND = ANSI.COLOR_WHITE,
-BACKGROUND = ANSI.RESET,
-STRING = ANSI.COLOR_XMAGENTA,
-NUMBER = ANSI.COLOR_XGREEN,
-KEYWORD = ANSI.COLOR_XBLUE,
-FUNCTION = ANSI.COLOR_GREEN,
-SFXFUNCTION = ANSI.COLOR_RED,
-OPERATOR = ANSI.COLOR_XCYAN,
-INSTRUCTION = ANSI.COLOR_YELLOW,
-TYPE = ANSI.COLOR_XYELLOW,
-COMMENT = ANSI.COLOR_GRAY30,
-ERROR = ANSI.COLOR_XRED,
-LOCATION = ANSI.COLOR_GRAY30,
+Style = {
+Foreground = ANSI.COLOR_WHITE,
+Background = ANSI.RESET,
+String = ANSI.COLOR_XMAGENTA,
+Number = ANSI.COLOR_XGREEN,
+Keyword = ANSI.COLOR_XBLUE,
+Function = ANSI.COLOR_GREEN,
+SfxFunction = ANSI.COLOR_RED,
+Operator = ANSI.COLOR_XCYAN,
+Instruction = ANSI.COLOR_YELLOW,
+Type = ANSI.COLOR_XYELLOW,
+Comment = ANSI.COLOR_GRAY30,
+Error = ANSI.COLOR_XRED,
+Location = ANSI.COLOR_GRAY30,
 }
 end
 
@@ -850,44 +850,44 @@ repr = function(x, styler)
                 return mt.__tostring(x)
             end
             visited[x] = x
-            local s = styler(STYLE.OPERATOR,"{")
+            local s = styler(Style.Operator,"{")
             if maxd <= 0 then
-                s = s .. styler(STYLE.COMMENT, "...")
+                s = s .. styler(Style.Comment, "...")
             else
                 local n = ''
                 for k,v in pairs(x) do
                     if n ~= '' then
-                        n = n .. styler(STYLE.OPERATOR,",")
+                        n = n .. styler(Style.Operator,",")
                     end
                     k = _repr(k, maxd - 1)
-                    n = n .. k .. styler(STYLE.OPERATOR, "=") .. _repr(v, maxd - 1)
+                    n = n .. k .. styler(Style.Operator, "=") .. _repr(v, maxd - 1)
                 end
                 if mt then
                     if n ~= '' then
-                        n = n .. styler(STYLE.OPERATOR,",")
+                        n = n .. styler(Style.Operator,",")
                     end
                     if mt.__class then
-                        n = n .. styler(STYLE.KEYWORD, "class")
-                            .. styler(STYLE.OPERATOR, "=")
+                        n = n .. styler(Style.Keyword, "class")
+                            .. styler(Style.Operator, "=")
                             .. tostring(mt.__class)
                     else
-                        n = n .. styler(STYLE.KEYWORD, "meta")
-                            .. styler(STYLE.OPERATOR, "=")
+                        n = n .. styler(Style.Keyword, "meta")
+                            .. styler(Style.Operator, "=")
                             .. _repr(mt, maxd - 1)
                     end
                 end
                 s = s .. n
             end
-            s = s .. styler(STYLE.OPERATOR,"}")
+            s = s .. styler(Style.Operator,"}")
             return s
         elseif type(x) == "number" then
-            return styler(STYLE.NUMBER, tostring(x))
+            return styler(Style.Number, tostring(x))
         elseif type(x) == "boolean" then
-            return styler(STYLE.KEYWORD, tostring(x))
+            return styler(Style.Keyword, tostring(x))
         elseif type(x) == "string" then
-            return styler(STYLE.STRING, format("%q", x))
+            return styler(Style.String, format("%q", x))
         elseif type(x) == "nil" then
-            return styler(STYLE.KEYWORD, "null")
+            return styler(Style.Keyword, "null")
         end
         return tostring(x)
     end
@@ -902,7 +902,7 @@ local builtins = {}
 local builtin_ops = {}
 
 --------------------------------------------------------------------------------
--- SYMBOL
+-- Symbol
 --------------------------------------------------------------------------------
 
 local SYMBOL_ESCAPE_CHARS = "[]{}()\""
@@ -934,7 +934,7 @@ do
         end
     })
     function cls:__tostring()
-        return default_styler(STYLE.SYMBOL, self.name)
+        return default_styler(Style.Symbol, self.name)
     end
 end
 
@@ -1022,14 +1022,14 @@ do
     end
     function cls:stream_message_with_source(writer, msg, styler)
         styler = styler or default_styler
-        writer(styler(STYLE.LOCATION, self:format_plain() .. ":"))
+        writer(styler(Style.Location, self:format_plain() .. ":"))
         writer(" ")
         writer(msg)
         writer("\n")
         self:stream_source_line(writer, styler)
     end
     function cls:__tostring()
-        return default_styler(STYLE.LOCATION, self:format_plain())
+        return default_styler(Style.Location, self:format_plain())
     end
 end
 
@@ -1134,10 +1134,10 @@ do
             count = count + 1
         end
         return
-            default_styler(STYLE.KEYWORD, "scope")
-            .. default_styler(STYLE.COMMENT, "<")
+            default_styler(Style.Keyword, "scope")
+            .. default_styler(Style.Comment, "<")
             .. format("%i symbols", count)
-            .. default_styler(STYLE.COMMENT, ">")
+            .. default_styler(Style.Comment, ">")
     end
     function cls:bind(sxname, value)
         local name = unwrap(Type.Symbol, maybe_unsyntax(sxname))
@@ -1158,7 +1158,7 @@ do
 end
 
 --------------------------------------------------------------------------------
--- TYPE
+-- Type
 --------------------------------------------------------------------------------
 
 local is_none
@@ -1204,13 +1204,13 @@ local function define_types(def)
     def('Form')
     def('Parameter')
     def('Flow')
-    def('VarArgs')
+    def('VarArgs', 'va-list')
 
     def('Closure')
     def('Frame')
     def('Anchor')
 
-    def('BuiltinMacro')
+    def('BuiltinMacro', 'builtin-macro')
     def('Macro')
 
     def('Syntax')
@@ -1218,19 +1218,18 @@ end
 
 do
     Type.__index = Type
-    local idx = 0
     local typemap = {}
 
     local cls = Type
     setmetatable(Type, {
         __call = function(cls, name)
+            assert_symbol(name)
             local ty = typemap[name]
             if ty == null then
-                local k = idx
-                idx = idx + 1
                 ty = setmetatable({
-                    name = name,
-                    index = idx,
+                    name = name.name,
+                    index = name.index,
+                    symbol = name,
                     scope = Scope()
                 }, Type)
                 typemap[name] = ty
@@ -1283,11 +1282,12 @@ do
         return self:repr(default_styler)
     end
     function cls:repr(styler)
-        return styler(STYLE.TYPE, self.name)
+        return styler(Style.Type, self.name)
     end
 
-    define_types(function(name)
-        cls[name] = Type(string.lower(name))
+    define_types(function(name, internalname)
+        internalname = internalname or string.lower(name)
+        cls[name] = Type(Symbol(internalname))
     end)
 
     Type.SizeT = Type.U64
@@ -1418,11 +1418,11 @@ end
 
 function Any:repr(styler)
     if getmetatable(self.type) ~= Type then
-        return styler(STYLE.ERROR, "corrupted value")
+        return styler(Style.Error, "corrupted value")
     else
         local s = self.type:format_value(self.value, styler) or "<format failed>"
         if not is_expression_type(self.type) then
-            s = s .. styler(STYLE.OPERATOR, ":") .. (self.type:repr(styler) or "<displayname failed>")
+            s = s .. styler(Style.Operator, ":") .. (self.type:repr(styler) or "<displayname failed>")
         end
         return s
     end
@@ -1510,10 +1510,10 @@ do
             prefix = prefix .. "'"
         end
         return
-            styler(STYLE.COMMENT, prefix)
-            .. styler(STYLE.COMMENT, '[')
+            styler(Style.Comment, prefix)
+            .. styler(Style.Comment, '[')
             .. self.datum:repr(styler)
-            .. styler(STYLE.COMMENT, ']')
+            .. styler(Style.Comment, ']')
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -1892,7 +1892,7 @@ do
             for i=1,column do
                 writer(' ')
             end
-            writer(styler(STYLE.OPERATOR, '^'))
+            writer(styler(Style.Operator, '^'))
             writer("\n")
         end
     end
@@ -2317,10 +2317,10 @@ stream_expr = function(writer, e, format)
             if quoted then
                 str = "'" .. str
             end
-            writer(styler(STYLE.COMMENT, str))
+            writer(styler(Style.Comment, str))
             last_anchor = anchor
         else
-            --writer(styler(STYLE.ERROR, "?"))
+            --writer(styler(Style.Error, "?"))
         end
     end
 
@@ -2359,16 +2359,16 @@ stream_expr = function(writer, e, format)
 
             local it = e.value
             if (it == EOL) then
-                writer(styler(STYLE.OPERATOR,"()"))
+                writer(styler(Style.Operator,"()"))
                 if (naked) then
                     writer('\n')
                 end
                 return
             end
             if maxdepth == 0 then
-                writer(styler(STYLE.OPERATOR,"("))
-                writer(styler(STYLE.COMMENT,"<...>"))
-                writer(styler(STYLE.OPERATOR,")"))
+                writer(styler(Style.Operator,"("))
+                writer(styler(Style.Comment,"<...>"))
+                writer(styler(Style.Operator,")"))
                 if (naked) then
                     writer('\n')
                 end
@@ -2430,20 +2430,20 @@ stream_expr = function(writer, e, format)
             else
                 depth = depth + 1
                 naked = false
-                writer(styler(STYLE.OPERATOR,'('))
+                writer(styler(Style.Operator,'('))
                 while (it ~= EOL) do
                     if (offset > 0) then
                         writer(' ')
                     end
                     if (offset >= maxlength) then
-                        writer(styler(STYLE.COMMENT,"..."))
+                        writer(styler(Style.Comment,"..."))
                         break
                     end
                     walk(it.at, depth, maxdepth, naked)
                     offset = offset + 1
                     it = it.next
                 end
-                writer(styler(STYLE.OPERATOR,')'))
+                writer(styler(Style.Operator,')'))
                 if (naked) then
                     writer('\n')
                 end
@@ -2452,20 +2452,20 @@ stream_expr = function(writer, e, format)
             if (e.type == Type.Symbol) then
                 local name = e.value.name
                 local style =
-                    (format.keywords[name] and STYLE.KEYWORD)
-                    or (format.functions[name] and STYLE.FUNCTION)
-                    or (format.sfxfunctions[name] and STYLE.SFXFUNCTION)
-                    or (format.operators[name] and STYLE.OPERATOR)
-                    or (format.types[name] and STYLE.TYPE)
-                    or STYLE.SYMBOL
+                    (format.keywords[name] and Style.Keyword)
+                    or (format.functions[name] and Style.Function)
+                    or (format.sfxfunctions[name] and Style.SfxFunction)
+                    or (format.operators[name] and Style.Operator)
+                    or (format.types[name] and Style.Type)
+                    or Style.Symbol
                 writer(styler(style, escape_string(name, SYMBOL_ESCAPE_CHARS)))
             else
                 writer(e.type:format_value(e.value, styler))
             end
             if quoted or not is_expression_type(otype) then
-                writer(styler(STYLE.OPERATOR, ":"))
+                writer(styler(Style.Operator, ":"))
                 if quoted then
-                    writer(styler(STYLE.COMMENT, "'"))
+                    writer(styler(Style.Comment, "'"))
                 end
                 writer(tostring(otype))
             end
@@ -2529,9 +2529,9 @@ do
     end
     function cls:repr(styler)
         if self.name ~= Symbol.Unnamed then
-            return styler(STYLE.FUNCTION, self.name.name)
+            return styler(Style.Function, self.name.name)
         else
-            return styler(STYLE.ERROR, tostring(self.func))
+            return styler(Style.Error, tostring(self.func))
         end
     end
     function cls:__tostring()
@@ -2553,7 +2553,7 @@ do
         return self.func(...)
     end
     function cls:repr(styler)
-        return styler(STYLE.KEYWORD, self.name.name)
+        return styler(Style.Keyword, self.name.name)
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2590,18 +2590,18 @@ do
             (function()
                 if self.flow ~= null then
                     return tostring(self.flow)
-                        .. styler(STYLE.OPERATOR, "@")
-                        .. styler(STYLE.NUMBER, self.index - 1)
+                        .. styler(Style.Operator, "@")
+                        .. styler(Style.Number, self.index - 1)
                 else
                     return ""
                 end
             end)()
-            .. styler(STYLE.COMMENT, "%")
-            .. styler(STYLE.SYMBOL, self.name.name)
+            .. styler(Style.Comment, "%")
+            .. styler(Style.Symbol, self.name.name)
             ..
                 (function()
                     if self.vararg then
-                        return styler(STYLE.KEYWORD, "…")
+                        return styler(Style.Keyword, "…")
                     else
                         return ""
                     end
@@ -2609,7 +2609,7 @@ do
             ..
                 (function()
                     if self.type ~= Type.Any then
-                        return styler(STYLE.OPERATOR, ":")
+                        return styler(Style.Operator, ":")
                             .. self.type:repr(styler)
                     else
                         return ""
@@ -2660,10 +2660,10 @@ do
 
     function cls:repr(styler)
         return
-            styler(STYLE.KEYWORD, "λ")
-            .. styler(STYLE.SYMBOL, self.name.name)
-            .. styler(STYLE.OPERATOR, "#")
-            .. styler(STYLE.NUMBER, self.uid)
+            styler(Style.Keyword, "λ")
+            .. styler(Style.Symbol, self.name.name)
+            .. styler(Style.Operator, "#")
+            .. styler(Style.Number, self.uid)
     end
 
     function cls:__tostring()
@@ -2738,11 +2738,11 @@ do -- compact hashtables as much as one can where possible
     end
     function cls:repr(styler)
         return
-            styler(STYLE.KEYWORD, "frame")
-            .. styler(STYLE.COMMENT, "<")
-            .. styler(STYLE.OPERATOR, "#")
-            .. styler(STYLE.NUMBER, tostring(self.index))
-            .. styler(STYLE.COMMENT, ">")
+            styler(Style.Keyword, "frame")
+            .. styler(Style.Comment, "<")
+            .. styler(Style.Operator, "#")
+            .. styler(Style.Number, tostring(self.index))
+            .. styler(Style.Comment, ">")
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2814,11 +2814,11 @@ do -- clone frame for every mapping
     end
     function cls:repr(styler)
         return
-            styler(STYLE.KEYWORD, "frame")
-            .. styler(STYLE.COMMENT, "<")
-            .. styler(STYLE.OPERATOR, "#")
-            .. styler(STYLE.NUMBER, tostring(self.index))
-            .. styler(STYLE.COMMENT, ">")
+            styler(Style.Keyword, "frame")
+            .. styler(Style.Comment, "<")
+            .. styler(Style.Operator, "#")
+            .. styler(Style.Number, tostring(self.index))
+            .. styler(Style.Comment, ">")
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2880,9 +2880,9 @@ do
     end
     function cls:repr(styler)
         return tostring(self.frame)
-            .. styler(STYLE.OPERATOR, "[")
+            .. styler(Style.Operator, "[")
             .. tostring(self.flow)
-            .. styler(STYLE.OPERATOR, "]")
+            .. styler(Style.Operator, "]")
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2926,20 +2926,20 @@ do
                     str = "::" .. ANCHOR_SEP
                 end
 
-                writer(styler(STYLE.COMMENT, str))
+                writer(styler(Style.Comment, str))
                 last_anchor = anchor
             else
-                --writer(styler(STYLE.ERROR, "?"))
+                --writer(styler(Style.Error, "?"))
             end
         end
 
         local visited = {}
         local stream_any
         local function stream_flow_label(aflow)
-            writer(styler(STYLE.KEYWORD, "λ"))
-            writer(styler(STYLE.SYMBOL, aflow.name.name))
-            writer(styler(STYLE.OPERATOR, "#"))
-            writer(styler(STYLE.NUMBER, tostring(aflow.uid)))
+            writer(styler(Style.Keyword, "λ"))
+            writer(styler(Style.Symbol, aflow.name.name))
+            writer(styler(Style.Operator, "#"))
+            writer(styler(Style.Number, tostring(aflow.uid)))
         end
 
         local function stream_param_label(param, aflow)
@@ -2947,14 +2947,14 @@ do
                 stream_flow_label(param.flow)
             end
             if param.name == Symbol.Unnamed then
-                writer(styler(STYLE.OPERATOR, "@"))
-                writer(styler(STYLE.NUMBER, tostring(param.index)))
+                writer(styler(Style.Operator, "@"))
+                writer(styler(Style.Number, tostring(param.index)))
             else
-                writer(styler(STYLE.COMMENT, "%"))
-                writer(styler(STYLE.SYMBOL, param.name.name))
+                writer(styler(Style.Comment, "%"))
+                writer(styler(Style.Symbol, param.name.name))
             end
             if param.vararg then
-                writer(styler(STYLE.KEYWORD, "…"))
+                writer(styler(Style.Keyword, "…"))
             end
         end
 
@@ -2973,7 +2973,7 @@ do
                     local param = arg.value
                     local value = aframe:get(param.flow, param.index)
                     if value then
-                        writer(styler(STYLE.OPERATOR, "="))
+                        writer(styler(Style.Operator, "="))
                         writer(tostring(value))
                     end
                 end
@@ -2992,23 +2992,23 @@ do
             if line_anchors then
                 stream_anchor(aflow.anchor)
             end
-            writer(styler(STYLE.KEYWORD, "fn/cc"))
+            writer(styler(Style.Keyword, "fn/cc"))
             writer(" ")
-            writer(styler(STYLE.SYMBOL, aflow.name.name))
-            writer(styler(STYLE.OPERATOR, "#"))
-            writer(styler(STYLE.NUMBER, tostring(aflow.uid)))
+            writer(styler(Style.Symbol, aflow.name.name))
+            writer(styler(Style.Operator, "#"))
+            writer(styler(Style.Number, tostring(aflow.uid)))
             writer(" ")
-            writer(styler(STYLE.OPERATOR, "("))
+            writer(styler(Style.Operator, "("))
             for i,param in ipairs(aflow.parameters) do
                 if i > 1 then
                     writer(" ")
                 end
                 stream_param_label(param, aflow)
             end
-            writer(styler(STYLE.OPERATOR, ")"))
+            writer(styler(Style.Operator, ")"))
             writer("\n    ")
             if #aflow.arguments == 0 then
-                writer(styler(STYLE.ERROR, "empty"))
+                writer(styler(Style.Error, "empty"))
             else
                 if line_anchors and aflow.body_anchor then
                     stream_anchor(aflow.body_anchor)
@@ -3023,7 +3023,7 @@ do
                 end
                 local cont = aflow.arguments[1]
                 if not is_none(maybe_unsyntax(cont)) then
-                    writer(styler(STYLE.COMMENT,CONT_SEP))
+                    writer(styler(Style.Comment,CONT_SEP))
                     stream_argument(cont, aflow, aframe)
                 end
             end
@@ -3104,7 +3104,7 @@ do
                     writer('  File ')
                     writer(repr(anchor.path))
                     writer(', line ')
-                    writer(styler(STYLE.NUMBER, tostring(anchor.lineno)))
+                    writer(styler(Style.Number, tostring(anchor.lineno)))
                     if flow.name ~= Symbol.Unnamed then
                         writer(', in ')
                         writer(tostring(flow.name))
@@ -3209,7 +3209,7 @@ local function dump_trace(writer, frame, cont, dest, ...)
         writer(repr(select(i, ...)))
     end
     if not is_none(cont) then
-        writer(default_styler(STYLE.COMMENT, CONT_SEP))
+        writer(default_styler(Style.Comment, CONT_SEP))
         writer(repr(cont))
     end
 end
@@ -3262,7 +3262,7 @@ local function call_flow(frame, cont, flow, ...)
 
     if global_opts.trace_execution then
         local w = string_writer()
-        w(default_styler(STYLE.KEYWORD, "flow "))
+        w(default_styler(Style.Keyword, "flow "))
         dump_trace(w, frame, unpack(flow.arguments))
         if flow.body_anchor then
             flow.body_anchor:stream_message_with_source(stderr_writer, w())
@@ -3319,7 +3319,7 @@ end
 
 call = function(frame, cont, dest, ...)
     if global_opts.trace_execution then
-        stderr_writer(default_styler(STYLE.KEYWORD, "trace "))
+        stderr_writer(default_styler(Style.Keyword, "trace "))
         dump_trace(stderr_writer, frame, cont, dest, ...)
         stderr_writer('\n')
     end
@@ -3381,9 +3381,9 @@ function Type:format_value(value, styler)
             return mt.repr(value, styler)
         end
     end
-    return styler(STYLE.OPERATOR, "[")
+    return styler(Style.Operator, "[")
         .. tostring(self:size()) .. " bytes"
-        .. styler(STYLE.OPERATOR, "]")
+        .. styler(Style.Operator, "]")
 end
 
 --------------------------------------------------------------------------------
@@ -4291,6 +4291,14 @@ builtins["interpreter-dir"] = cstr(C.bangra_interpreter_dir)
 builtins["interpreter-path"] = cstr(C.bangra_interpreter_path)
 builtins["interpreter-timestamp"] = cstr(C.bangra_compile_time_date())
 
+do
+    local style = Scope()
+    for k,v in pairs(Style) do
+        style:bind(Any(Symbol(k)), Any(v))
+    end
+    builtins["Style"] = style
+end
+
 -- types
 --------------------------------------------------------------------------------
 
@@ -4582,7 +4590,7 @@ builtin_op(Type.List, Symbol.ApplyType,
 builtin_op(Type.Type, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
         checkargs(1,1,name)
-        return Any(Type(unwrap(Type.String, name)))
+        return Any(Type(unwrap(Type.Symbol, name)))
     end))
 
 builtins["syntax-list"] = wrap_simple_builtin(function(...)
@@ -5310,6 +5318,14 @@ builtins['set-debug-trace!'] = wrap_simple_builtin(function(value)
     global_opts.trace_execution = unwrap(Type.Bool, value) == bool(true)
 end)
 
+builtins['default-styler'] = wrap_simple_builtin(function(style, text)
+    checkargs(2, 2, style, text)
+
+    return Any(default_styler(
+        unwrap(Type.String, style),
+        unwrap(Type.String, text)))
+end)
+
 --------------------------------------------------------------------------------
 -- GLOBALS
 --------------------------------------------------------------------------------
@@ -5345,14 +5361,14 @@ local function decl_builtin(name, value)
 end
 
 function Type.Void:format_value(x, styler)
-    return styler(STYLE.KEYWORD, "none")
+    return styler(Style.Keyword, "none")
 end
 function Type.Symbol:format_value(x, styler)
-    return styler(STYLE.SYMBOL,
+    return styler(Style.Symbol,
         escape_string(x.name, SYMBOL_ESCAPE_CHARS))
 end
 function Type.String:format_value(x, styler)
-    return styler(STYLE.STRING,
+    return styler(Style.String,
         '"' .. escape_string(x, "\"") .. '"')
 end
 function Type.Builtin:format_value(x)
@@ -5371,14 +5387,14 @@ local function init_globals()
         if _type == Type.Bool then
             function _type:format_value(x, styler)
                 if x == bool(true) then
-                    return styler(STYLE.KEYWORD, "true")
+                    return styler(Style.Keyword, "true")
                 else
-                    return styler(STYLE.KEYWORD, "false")
+                    return styler(Style.Keyword, "false")
                 end
             end
         else
             function _type:format_value(x, styler)
-                return styler(STYLE.NUMBER, cformat(fmt, x))
+                return styler(Style.Number, cformat(fmt, x))
             end
         end
     end
@@ -5390,7 +5406,7 @@ local function init_globals()
         _type:bind(Any(Symbol.Super), Any(Type.Real))
         _type.ctype = ctype
         function _type:format_value(x, styler)
-            return styler(STYLE.NUMBER, cformat("%g", x))
+            return styler(Style.Number, cformat("%g", x))
         end
     end
     configure_int_type(Type.Bool, bool)

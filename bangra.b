@@ -1209,14 +1209,16 @@ define-infix-op @ 800 > @
 syntax-extend def-qualifier (return env)
 
     let qualifier =
-        type "qualifier"
+        type
+            quote qualifier
 
     set-type-symbol! qualifier (quote apply-type)
         fn new-qualifier (name)
             assert (symbol? name) "symbol expected"
             let aqualifier =
                 type
-                    .. "qualifier[" (string name) "]"
+                    symbol
+                        .. "qualifier[" (string name) "]"
 
             set-type-symbol! aqualifier (quote super) qualifier
             set-type-symbol! aqualifier (quote cast)
@@ -1233,7 +1235,8 @@ syntax-extend def-qualifier (return env)
                 fn new-typed-qualifier (element-type)
                     let typed-qualifier =
                         type
-                            .. (string name) "[" (string element-type) "]"
+                            symbol
+                                .. (string name) "[" (string element-type) "]"
                     if (none? (. typed-qualifier complete))
                         set-type-symbol! typed-qualifier (quote super) aqualifier
                         set-type-symbol! typed-qualifier (quote element-type) element-type
@@ -1689,7 +1692,10 @@ define read-eval-print-loop
                 cmdlist = ""
             let idstr = (make-idstr)
             let id = (symbol idstr)
-            let promptstr = (.. idstr " ▶")
+            let styler = default-styler
+            let promptstr =
+                .. idstr " "
+                    styler Style.Comment "▶"
             let promptlen = ((countof idstr) + (size_t 2))
             let cmd =
                 prompt
