@@ -978,6 +978,8 @@ syntax-extend stage-3 (return env)
             .. interpreter-dir "/?.b"
     set-scope-symbol! bangra (quote modules)
         scope
+    set-scope-symbol! env (quote bangra) bangra
+
     fn make-module-path (pattern name)
         fold
             fn (out val)
@@ -1027,6 +1029,7 @@ syntax-extend stage-3 (return env)
                     error
                         .. "module not found: " namestr
         else content
+    set-scope-symbol! env (quote require) find-module
 
     fn make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
@@ -1049,31 +1052,6 @@ syntax-extend stage-3 (return env)
                                     @ tail 0
                                     @ tail 1
                                 \ rest
-
-    set-scope-symbol! env (quote bangra) bangra
-    set-scope-symbol! env (quote require) find-module
-    set-scope-symbol! env (quote iterator)
-        tag (quote iterator)
-    set-scope-symbol! env (quote qualify)
-        fn qualify (tag-type value)
-            assert (== (typeof tag-type) type)
-                error "type argument expected."
-            cast
-                tag-type (typeof value)
-                \ value
-
-    set-scope-symbol! env (quote disqualify)
-        fn disqualify (tag-type value)
-            assert (== (typeof tag-type) type)
-                error "type argument expected."
-            let t = (typeof value)
-            if (not (< t tag-type))
-                error
-                    .. "can not unqualify value of type " (string t)
-                        \ "; type not related to " (string tag-type) "."
-            cast
-                element-type t
-                \ value
 
     set-scope-symbol! env (quote and)
         make-expand-multi-op-ltr and
@@ -1225,6 +1203,72 @@ define-infix-op @ 800 > @
 #define-infix-op .= 800 > .=
 #define-infix-op @= 800 > @=
 #define-infix-op =@ 800 > =@
+
+syntax-extend def-tag (return env)
+
+    let tag =
+        type "tag"
+
+    set-type-symbol! tag (quote apply-type)
+        fn new-qualifier (name)
+            assert (symbol? name) "symbol expected"
+            let qualifier =
+                type
+                    .. "tag[" (string name) "]"
+
+            set-type-symbol! qualifier (quote super) tag
+            set-type-symbol! qualifier (quote apply-type)
+                fn new-typed-qualifier (element-type)
+                    let typed-qualifier =
+                        type
+                            .. (string name) "[" (string element-type) "]"
+                    if (none? (. typed-qualifier complete))
+                        set-type-symbol! typed-qualifier (quote super) qualifier
+                        set-type-symbol! typed-qualifier (quote element-type) element-type
+                        set-type-symbol! typed-qualifier (quote cast)
+                            fn cast-qualifier (fromtype totype value)
+                                let
+                                    fromsuper = (. fromtype super)
+                                    tosuper = (. totype super)
+                                if (fromsuper ==? qualifier)
+                                    let fromelemtype = (. fromtype element-type)
+                                    if (fromelemtype ==? totype)
+                                        bitcast totype value
+                                elseif (tosuper ==? qualifier)
+                                    let toelemtype = (. totype element-type)
+                                    if (toelemtype ==? fromtype)
+                                        bitcast totype value
+                        set-type-symbol! typed-qualifier (quote complete) true
+
+                    return typed-qualifier
+
+            return qualifier
+
+    set-scope-symbol! env (quote tag) tag
+    set-scope-symbol! env (quote iterator)
+        tag (quote iterator)
+    set-scope-symbol! env (quote qualify)
+        fn qualify (tag-type value)
+            assert (== (typeof tag-type) type)
+                error "type argument expected."
+            cast
+                tag-type (typeof value)
+                \ value
+
+    set-scope-symbol! env (quote disqualify)
+        fn disqualify (tag-type value)
+            assert (== (typeof tag-type) type)
+                error "type argument expected."
+            let t = (typeof value)
+            if (not (< t tag-type))
+                error
+                    .. "can not unqualify value of type " (string t)
+                        \ "; type not related to " (string tag-type) "."
+            cast
+                element-type t
+                \ value
+
+    return env
 
 syntax-extend stage-5 (return env)
 

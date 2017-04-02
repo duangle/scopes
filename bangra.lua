@@ -1100,9 +1100,9 @@ local function unwrap(_type, value)
         return value.value
     else
         location_error("type "
-            .. _type.displayname
+            .. tostring(_type)
             .. " expected, got "
-            .. value.type.displayname
+            .. tostring(value.type)
             )
     end
 end
@@ -1197,8 +1197,6 @@ local function define_types(def)
 
     def('Scope')
 
-    def('Tag')
-
     def('Symbol')
     def('List')
     def('String')
@@ -1221,18 +1219,23 @@ end
 do
     Type.__index = Type
     local idx = 0
+    local typemap = {}
 
     local cls = Type
     setmetatable(Type, {
-        __call = function(cls, name, displayname)
-            local k = idx
-            idx = idx + 1
-            return setmetatable({
-                name = name,
-                displayname = displayname or default_styler(STYLE.TYPE, name),
-                index = idx,
-                scope = Scope()
-            }, Type)
+        __call = function(cls, name)
+            local ty = typemap[name]
+            if ty == null then
+                local k = idx
+                idx = idx + 1
+                ty = setmetatable({
+                    name = name,
+                    index = idx,
+                    scope = Scope()
+                }, Type)
+                typemap[name] = ty
+            end
+            return ty
         end
     })
     protect(cls)
@@ -1277,10 +1280,10 @@ do
         return self:__call(...)
     end
     function cls:__tostring()
-        return self.displayname
+        return self:repr(default_styler)
     end
     function cls:repr(styler)
-        return self.displayname
+        return styler(STYLE.TYPE, self.name)
     end
 
     define_types(function(name)
@@ -1419,7 +1422,7 @@ function Any:repr(styler)
     else
         local s = self.type:format_value(self.value, styler) or "<format failed>"
         if not is_expression_type(self.type) then
-            s = s .. styler(STYLE.OPERATOR, ":") .. (self.type.displayname or "<displayname failed>")
+            s = s .. styler(STYLE.OPERATOR, ":") .. (self.type:repr(styler) or "<displayname failed>")
         end
         return s
     end
@@ -1435,9 +1438,9 @@ local function assert_any_type(_type, value)
         return value.value
     else
         error("type "
-            .. _type.displayname
+            .. tostring(_type)
             .. " expected, got "
-            .. value.type.displayname
+            .. tostring(value.type)
             )
     end
 end
@@ -2607,7 +2610,7 @@ do
                 (function()
                     if self.type ~= Type.Any then
                         return styler(STYLE.OPERATOR, ":")
-                            .. self.type.displayname
+                            .. self.type:repr(styler)
                     else
                         return ""
                     end
@@ -3052,7 +3055,7 @@ do
         elseif afunc.type == Type.Closure then
             stream_closure(afunc.value)
         else
-            error("can't descend into type " .. afunc.type.displayname)
+            error("can't descend into type " .. tostring(afunc.type))
         end
     end
 end
@@ -3345,11 +3348,11 @@ call = function(frame, cont, dest, ...)
             return call(frame, cont, func, ...)
         else
             location_error("can not apply type "
-                .. ty.displayname)
+                .. tostring(ty))
         end
     else
         location_error("don't know how to apply value of type "
-            .. dest.type.displayname)
+            .. tostring(dest.type))
     end
 end
 
@@ -4252,7 +4255,7 @@ local function builtin_forward(name, errmsg)
         local func = value.type:lookup(name)
         if func == null then
             location_error("type "
-                .. value.type.displayname
+                .. tostring(value.type)
                 .. " " .. errmsg)
         end
         return call(frame, cont, func, value, ...)
@@ -4294,7 +4297,6 @@ builtins["interpreter-timestamp"] = cstr(C.bangra_compile_time_date())
 builtins.void = Type.Void
 builtins.any = Type.Any
 builtins.bool = Type.Bool
-builtins.tag = Type.Tag
 builtins.type = Type.Type
 
 builtins.i8 = Type.I8
@@ -4345,9 +4347,9 @@ local function ordered_branch(frame, cont, self, a, b,
     checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
     local function compare_error()
         location_error("types "
-            .. a.type.displayname
+            .. tostring(a.type)
             .. " and "
-            .. b.type.displayname
+            .. tostring(b.type)
             .. " are incomparable")
     end
     local function unordered()
@@ -4615,60 +4617,6 @@ builtin_op(Type.Scope, Symbol.ApplyType,
         end
     end))
 
-builtin_op(Type.Tag, Symbol.ApplyType,
-    wrap_simple_builtin(function(symbol)
-        checkargs(1,1,symbol)
-        local sym = unwrap(Type.Symbol,maybe_unsyntax(symbol))
-        local cls = Type(sym.name)
-        cls:set_super(Type.Tag)
-
-        local cache = {}
-        cls:bind(Any(Symbol.ApplyType),
-            Any(Builtin(wrap_simple_builtin(function(_type)
-                checkargs(1,1,_type)
-                _type = unwrap(Type.Type, _type)
-                local val = cache[_type]
-                if not val then
-                    val = Type(
-                        cls.name .. "[" .. _type.name .. "]",
-                        cls.displayname
-                        .. default_styler(STYLE.OPERATOR, "[")
-                        .. _type.displayname
-                        .. default_styler(STYLE.OPERATOR, "]"))
-                    val:set_element_type(_type)
-                    val:set_super(cls)
-                    function val:format_value(value, styler)
-                        return self:element_type():format_value(value, styler)
-                    end
-                    cache[_type] = val
-                end
-                return Any(val)
-            end), Symbol.ApplyType)))
-
-        cls:bind(Any(Symbol.Cast),
-            Any(Builtin(wrap_simple_builtin(function(fromtype, totype, value)
-                fromtype = unwrap(Type.Type, fromtype)
-                totype = unwrap(Type.Type, totype)
-                local fromsuper = fromtype:lookup(Symbol.Super)
-                local tosuper = totype:lookup(Symbol.Super)
-                fromsuper = fromsuper and unwrap(Type.Type, fromsuper)
-                tosuper = tosuper and unwrap(Type.Type, tosuper)
-                if fromsuper == cls then
-                    local fromelemtype = fromtype:element_type()
-                    if fromelemtype == totype then
-                        return Any(totype, value.value)
-                    end
-                elseif tosuper == cls then
-                    local toelemtype = totype:element_type()
-                    if toelemtype == fromtype then
-                        return Any(totype, value.value)
-                    end
-                end
-            end), Symbol.Cast)))
-
-        return Any(cls)
-    end))
-
 each_numerical_type(function(T)
     builtin_op(T, Symbol.ApplyType,
         wrap_simple_builtin(function(x)
@@ -4676,8 +4624,8 @@ each_numerical_type(function(T)
             local xs = x.type:super()
             if xs ~= Type.Integer and xs ~= Type.Real then
                 error("Unable to apply type "
-                    .. T.displayname .. " to value of type "
-                    .. x.type.displayname)
+                    .. tostring(T) .. " to value of type "
+                    .. tostring(x.type))
             end
             return Any(T.ctype(x.value))
         end))
@@ -4842,9 +4790,9 @@ any_cast = function(frame, cont, self, totype, value)
         local desttype = unwrap(Type.Type, totype)
         local function errmsg()
             location_error("can not cast from type "
-                .. value.type.displayname
+                .. tostring(value.type)
                 .. " to "
-                .. desttype.displayname)
+                .. tostring(desttype))
         end
         func = desttype:lookup(Symbol.Cast)
         if func ~= null then
@@ -4873,6 +4821,20 @@ any_cast = function(frame, cont, self, totype, value)
     return fallback_call()
 end
 builtins.cast = any_cast
+
+builtins.bitcast = wrap_simple_builtin(function(totype, value)
+    checkargs(2,2, totype, value)
+    local fromtype = value.type
+    totype = unwrap(Type.Type, totype)
+    local fromsize = fromtype:size()
+    local tosize = totype:size()
+    if fromsize ~= tosize then
+        location_error(
+            "cannot bitcast: size mismatch ("
+            .. tostring(fromsize) .. " != " .. tostring(tosize) ")")
+    end
+    return Any(totype, value.value)
+end)
 
 local default_casts = wrap_simple_builtin(function(fromtype, totype, value)
     fromtype = unwrap(Type.Type, fromtype)
@@ -4910,9 +4872,9 @@ local function builtin_forward_op2(name, errmsg)
         local func = a.type:lookup(name)
         local function print_errmsg()
             error("can not " .. errmsg .. " values of type "
-                .. a.type.displayname
+                .. tostring(a.type)
                 .. " and "
-                .. b.type.displayname)
+                .. tostring(b.type))
         end
         local function fallback_call(err)
             func = b.type:lookup(name)
