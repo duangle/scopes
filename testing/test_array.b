@@ -1,6 +1,12 @@
 
+define somelist
+    quote (1 2 3 4)
+
+print somelist
+
 let T =
-    type "mytype"
+    type
+        quote mytype
 
 print "tid:"
     type-index T
@@ -27,7 +33,7 @@ print
     alignof int
 
 print
-    tag (symbol "hi")
+    qualifier (symbol "hi")
 
 #
     do

@@ -27,63 +27,63 @@ syntax-extend def-quote (return env)
     call
         fn/cc (return return-true return-false unordered-error)
             set-scope-symbol! env (symbol "==")
-                fn/cc == (return a b)
+                fn/cc "==" (return a b)
                     ordered-branch a b return-true
                         fn/cc (_) (cc/call none unordered-error a b)
                         \ return-false return-false
             set-scope-symbol! env (symbol "!=")
-                fn/cc != (return a b)
+                fn/cc "!=" (return a b)
                     ordered-branch a b return-false
                         fn/cc (_) (cc/call none unordered-error a b)
                         \ return-true return-true
             set-scope-symbol! env (symbol "<")
-                fn/cc < (return a b)
+                fn/cc "<" (return a b)
                     ordered-branch a b return-false
                         fn/cc (_) (cc/call none unordered-error a b)
                         \ return-true return-false
             set-scope-symbol! env (symbol "<=")
-                fn/cc <= (return a b)
+                fn/cc "<=" (return a b)
                     ordered-branch a b return-true
                         fn/cc (_) (cc/call none unordered-error a b)
                         \ return-true return-false
             set-scope-symbol! env (symbol ">")
-                fn/cc > (return a b)
+                fn/cc ">" (return a b)
                     ordered-branch a b return-false
                         fn/cc (_) (cc/call none unordered-error a b)
                         \ return-false return-true
             set-scope-symbol! env (symbol ">=")
-                fn/cc >= (return a b)
+                fn/cc ">=" (return a b)
                     ordered-branch a b return-true
                         fn/cc (_) (cc/call none unordered-error a b)
                         \ return-false return-true
             set-scope-symbol! env (symbol "==?")
-                fn/cc ==? (return a b)
+                fn/cc "==?" (return a b)
                     ordered-branch a b return-true return-false
                         \ return-false return-false
             set-scope-symbol! env (symbol "!=?")
-                fn/cc !=? (return a b)
+                fn/cc "!=?" (return a b)
                     ordered-branch a b return-false return-true
                         \ return-true return-true
             set-scope-symbol! env (symbol "<?")
-                fn/cc <? (return a b)
+                fn/cc "<?" (return a b)
                     ordered-branch a b return-false return-false
                         \ return-true return-false
             set-scope-symbol! env (symbol "<=?")
-                fn/cc <=? (return a b)
+                fn/cc "<=?" (return a b)
                     ordered-branch a b return-true return-false
                         \ return-true return-false
             set-scope-symbol! env (symbol ">?")
-                fn/cc >? (return a b)
+                fn/cc ">?" (return a b)
                     ordered-branch a b return-false return-false
                         \ return-false return-true
             set-scope-symbol! env (symbol ">=?")
-                fn/cc >=? (return a b)
+                fn/cc ">=?" (return a b)
                     ordered-branch a b return-true return-false
                         \ return-false return-true
             return
-        fn/cc return-true (_) true
-        fn/cc return-false (_) false
-        fn/cc unordered-error (_ a b)
+        fn/cc "return-true" (_) true
+        fn/cc "return-false" (_) false
+        fn/cc "unordered-error" (_ a b)
             error
                 .. "illegal ordered comparison of values of types "
                     .. (repr (typeof a))
@@ -93,7 +93,7 @@ syntax-extend def-quote (return env)
     set-scope-symbol! env
         symbol "quote"
         block-scope-macro
-            fn/cc quote (return expr env)
+            fn/cc "expand-quote" (return expr env)
                 call
                     fn/cc (_ args)
                         return
@@ -117,12 +117,12 @@ syntax-extend def-quote (return env)
     set-scope-symbol! env
         symbol "quote-syntax"
         block-scope-macro
-            fn/cc quote-syntax (return expr env)
+            fn/cc "expand-quote-syntax" (return expr env)
                 call
                     fn/cc (_ args)
                         return
                             cons
-                                # wrap twice
+                                # wrap syntax object in another syntax object
                                 datum->syntax
                                     # keep wrapped in list if multiple
                                         arguments
@@ -142,7 +142,7 @@ syntax-extend def-set (return env)
     set-scope-symbol! env
         symbol "set!"
         block-scope-macro
-            fn/cc set! (return expr env)
+            fn/cc "expand-set!" (return expr env)
                 call
                     fn/cc (_ name expr-anchor)
                         call
@@ -157,13 +157,13 @@ syntax-extend def-set (return env)
                                         syntax-cons
                                             datum->syntax bind! expr-anchor
                                             syntax-cons
-                                                # stop macro expansion
-                                                syntax-cons
+                                                # wrap parameter in closure to
+                                                  prevent evaluation
+                                                syntax-list
                                                     datum->syntax
-                                                        quote form-quote
+                                                        fn/cc (_)
+                                                            _ param
                                                         \ expr-anchor
-                                                    syntax-list
-                                                        datum->syntax param expr-anchor
                                                 slice (@ expr 0) 2
                                         slice expr 1
                                     \ env
@@ -180,7 +180,7 @@ syntax-extend def-dump-syntax (return env)
     set-scope-symbol! env
         quote dump-syntax
         block-scope-macro
-            fn/cc dump-syntax (return expr env)
+            fn/cc "expand-dump-syntax" (return expr env)
                 call
                     fn/cc (_ e env)
                         dump
@@ -198,32 +198,32 @@ syntax-extend def-dump-syntax (return env)
 syntax-extend def-? (return env)
     set-scope-symbol! env
         quote symbol?
-        fn/cc symbol? (return x)
+        fn/cc "symbol?" (return x)
             return
                 ==? (typeof x) symbol
     set-scope-symbol! env
         quote list?
-        fn/cc list? (return x)
+        fn/cc "list?" (return x)
             return
                 ==? (typeof x) list
     set-scope-symbol! env
         quote type?
-        fn/cc type? (return x)
+        fn/cc "type?" (return x)
             return
                 ==? (typeof x) type
     set-scope-symbol! env
         quote none?
-        fn/cc none? (return x)
+        fn/cc "none?" (return x)
             return
                 ==? x none
     set-scope-symbol! env
         quote empty?
-        fn/cc empty? (return x)
+        fn/cc "empty?" (return x)
             return
                 == (countof x) (u64 0)
     set-scope-symbol! env
         quote load
-        fn/cc load (return path)
+        fn/cc "load" (return path)
             return
                 eval
                     list-load path
@@ -231,7 +231,7 @@ syntax-extend def-? (return env)
                     \ path
     set-scope-symbol! env
         quote macro
-        fn/cc macro (return f)
+        fn/cc "macro" (return f)
             return
                 block-scope-macro
                     fn/cc (return expr env)
@@ -242,7 +242,7 @@ syntax-extend def-? (return env)
                             \ env
     set-scope-symbol! env
         quote block-macro
-        fn/cc block-macro (return f)
+        fn/cc "block-macro" (return f)
             return
                 block-scope-macro
                     fn/cc (return expr env)
@@ -252,7 +252,7 @@ syntax-extend def-? (return env)
     set-scope-symbol! env
         quote ?
         block-scope-macro
-            fn/cc ? (return expr env)
+            fn/cc "expand-?" (return expr env)
                 return
                     call
                         fn/cc (_ ret-true ret-false expr-anchor)
@@ -292,7 +292,7 @@ syntax-extend def-? (return env)
 
 syntax-extend def-list-defs (return env)
     set-scope-symbol! env (quote syntax-head?)
-        fn/cc syntax-head? (return expr name)
+        fn/cc "syntax-head?" (return expr name)
             return
                 ? (list? (syntax->datum expr))
                     ? (empty? expr)
@@ -305,21 +305,21 @@ syntax-extend def-list-defs (return env)
                             @ expr 0
                     \ false
     set-scope-symbol! env (quote list-atom?)
-        fn/cc list-atom? (return x)
+        fn/cc "list-atom?" (return x)
             return
                 ? (list? (syntax->datum x))
                     empty? x
                     \ true
     # unwrap single item from list or prepend 'do' clause to list
     set-scope-symbol! env (quote syntax-do)
-        fn/cc syntax-do (return expr)
+        fn/cc "syntax-do" (return expr)
             return
                 ? (== (countof expr) (u64 1))
                     @ expr 0
                     syntax-cons (datum->syntax do (syntax->anchor expr)) expr
     # build a list terminator tagged with a desired anchor from an expression
     set-scope-symbol! env (quote syntax-eol)
-        fn/cc syntax-eol (return expr)
+        fn/cc "syntax-eol" (return expr)
             return
                 datum->syntax (list) (syntax->anchor expr)
     return env
@@ -361,7 +361,7 @@ syntax-extend def-qquote (return env)
                                                     qquote-1 (slice x 1)
                 return
                     macro
-                        fn/cc qquote (return expr)
+                        fn/cc "expand-qquote" (return expr)
                             return
                                 ? (empty? (slice expr 2))
                                     qquote-1 (@ expr 1)
@@ -371,24 +371,23 @@ syntax-extend def-qquote (return env)
 syntax-extend def-define (return env)
     set-scope-symbol! env (quote define)
         block-macro
-            fn/cc expand-define (return topexpr env)
-                return
-                    cons
-                        qquote
-                            syntax-extend define (return local-scope)
-                                set-scope-symbol! local-scope
-                                    quote
-                                        unquote (@ (@ topexpr 0) 1)
-                                    unquote
-                                        syntax-do (slice (@ topexpr 0) 2)
-                                return local-scope
-                        slice topexpr 1
+            fn/cc "expand-define" (return topexpr env)
+                cons
+                    qquote
+                        syntax-extend define (return local-scope)
+                            set-scope-symbol! local-scope
+                                quote
+                                    unquote (@ (@ topexpr 0) 1)
+                                unquote
+                                    syntax-do (slice (@ topexpr 0) 2)
+                            return local-scope
+                    slice topexpr 1
     return env
 
 # a lofi version of let so we get some sugar early
 define let
     block-scope-macro
-        fn/cc let (return expr env)
+        fn/cc "expand-let" (return expr env)
             branch
                 symbol? (syntax->datum (@ (@ expr 0) 2))
                 fn/cc (_) (_)
@@ -402,24 +401,23 @@ define let
             return
                 call
                     fn/cc (_ cont-param param-name rest)
-                        _
-                            list
-                                qquote
-                                    ;
-                                        fn/cc
-                                            ;
-                                                unquote cont-param
-                                                unquote param-name
-                                            unquote-splice
-                                                datum->syntax rest
-                                                    syntax->anchor (@ expr 0)
-                                        unquote
-                                            syntax-do
-                                                slice (@ expr 0) 3
-                                        # force enclosing list to use anchor
-                                          of original expression
+                        list
+                            qquote
+                                ;
+                                    fn/cc
+                                        ;
+                                            unquote cont-param
+                                            unquote param-name
                                         unquote-splice
-                                            syntax-eol (@ expr 0)
+                                            datum->syntax rest
+                                                syntax->anchor (@ expr 0)
+                                    unquote
+                                        syntax-do
+                                            slice (@ expr 0) 3
+                                    # force enclosing list to use anchor
+                                      of original expression
+                                    unquote-splice
+                                        syntax-eol (@ expr 0)
                     datum->syntax
                         parameter (quote-syntax _)
                     @ (@ expr 0) 1
@@ -430,7 +428,7 @@ define let
   (fn [name] (param ...) body ...)
 define fn
     block-macro
-        fn/cc fn (return topexpr)
+        fn/cc "expand-fn" (return topexpr)
             let expr =
                 @ topexpr 0
             let decl =
@@ -479,7 +477,7 @@ define fn
                     \ rest
 
 define raise
-    fn/cc raise (_ x)
+    fn/cc "raise" (_ x)
         error x
 
 define try
@@ -533,7 +531,7 @@ define assert
 
 define sizeof
     let sym = (symbol "size")
-    fn/cc sizeof (return x)
+    fn/cc "sizeof" (return x)
         assert (type? x) "type expected"
         let size =
             @ x sym
@@ -541,7 +539,7 @@ define sizeof
 
 define alignof
     let sym = (symbol "alignment")
-    fn/cc alignof (return x)
+    fn/cc "alignof" (return x)
         assert (type? x) "type expected"
         return
             @ x sym
@@ -840,30 +838,25 @@ define syntax-infix-rules
         fn spec ()
             return prec order name
 
-#define-infix-op or 100 > or
 define define-infix-op
-    macro
-        fn expand-define-infix-op (expr)
-            let name = (@ expr 1)
-            let prec = (@ expr 2)
-            let order = (@ expr 3)
+    block-macro
+        fn expand-define-infix-op (topexpr env)
+            let expr rest =
+                @ topexpr 0
+                slice topexpr 1
+            let name =
+                syntax->datum (@ expr 1)
+            let prec =
+                syntax->datum (@ expr 2)
+            let order =
+                syntax->datum (@ expr 3)
             let dest-name = (@ expr 4)
             let infix-symbol =
-                datum->syntax
-                    symbol
-                        .. "#ifx:" (string name)
-                    syntax->anchor expr
-            qquote
-                syntax-extend define-infix-op (return local-scope)
-                    set-scope-symbol! local-scope
-                        quote
-                            unquote infix-symbol
-                        syntax-infix-rules
-                            unquote prec
-                            unquote order
-                            quote-syntax
-                                unquote dest-name
-                    return local-scope
+                symbol
+                    .. "#ifx:" (string name)
+            set-scope-symbol! env infix-symbol
+                syntax-infix-rules prec (@ env order) dest-name
+            return rest env
 
 syntax-extend stage-3 (return env)
 
@@ -1102,6 +1095,7 @@ syntax-extend stage-3 (return env)
                 let self =
                     parameter
                         quote self
+                error "todo"
                 cons
                     list
                         list fn/cc (list (parameter (quote _)) self)
@@ -1207,7 +1201,6 @@ define-infix-op @ 800 > @
 #define-infix-op =@ 800 > =@
 
 syntax-extend def-qualifier (return env)
-
     let qualifier =
         type
             quote qualifier
@@ -1311,7 +1304,7 @@ syntax-extend stage-5 (return env)
     fn gen-yield-iter (callee)
         let caller-return = none
         let yield-iter =
-            fn/cc yield-iter (return ret)
+            fn/cc "yield-iter" (return ret)
                 # store caller continuation in state
                 set! caller-return return
                 branch (none? ret) # first invocation

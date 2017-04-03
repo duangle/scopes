@@ -28,7 +28,8 @@ local global_opts = {
     version_patch = 0,
 
     trace_execution = false, -- print each statement being executed
-    print_lua_traceback = false, -- print lua traceback on any error
+    print_lua_traceback = true, -- print lua traceback on any error
+    validate_macros = false, -- validate each macro result
     stack_limit = 65536, -- recursion limit
 
     debug = false, -- updated by bangra_is_debug() further down
@@ -940,7 +941,7 @@ end
 
 local function define_symbols(def)
     def({Unnamed=''})
-    def({ContinuationForm='form-fn/cc'})
+    def({FnCCForm='form-fn-body'})
     def({QuoteForm='form-quote'})
 
     def({ListWildcard='#list'})
@@ -1128,16 +1129,32 @@ do
         end
         self.parent = scope
     end
-    function cls:__tostring()
+    function cls:count()
         local count = 0
         for k,v in pairs(self.symbols) do
             count = count + 1
         end
+        return count
+    end
+    function cls:totalcount()
+        local count = 0
+        while self do
+            count = count + self:count()
+            self = self.parent
+        end
+        return count
+    end
+    function cls:repr(styler)
+        local totalcount = self:totalcount()
+        local count = self:count()
         return
-            default_styler(Style.Keyword, "scope")
-            .. default_styler(Style.Comment, "<")
-            .. format("%i symbols", count)
-            .. default_styler(Style.Comment, ">")
+            styler(Style.Keyword, "scope")
+            .. styler(Style.Comment, "<")
+            .. format("%i+%i symbols", count, totalcount - count)
+            .. styler(Style.Comment, ">")
+    end
+    function cls:__tostring()
+        return self:repr(default_styler)
     end
     function cls:bind(sxname, value)
         local name = unwrap(Type.Symbol, maybe_unsyntax(sxname))
@@ -2201,7 +2218,7 @@ local CONT_SEP = " ⮕ "
 local KEYWORDS = set(split(
     "let true false fn quote with ::* ::@ call escape do dump-syntax"
         .. " syntax-extend if else elseif loop repeat none assert qquote"
-        .. " unquote unquote-splice globals return splice continuation"
+        .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax"
     ))
@@ -2585,36 +2602,32 @@ do
         self.anchor = anchor
         self.vararg = endswith(name.name, "...")
     end
+    function cls:local_repr(styler)
+        local name
+        if self.name ~= Symbol.Unnamed or self.index <= 0 then
+            name = styler(Style.Comment, "%")
+                .. styler(Style.Symbol, self.name.name)
+        else
+            name = styler(Style.Operator, "@")
+                .. styler(Style.Number, self.index - 1)
+        end
+        if self.vararg then
+            name = name .. styler(Style.Keyword, "…")
+        end
+        if self.type ~= Type.Any then
+            name = name .. styler(Style.Operator, ":")
+                .. self.type:repr(styler)
+        end
+        return name
+    end
     function cls:repr(styler)
-        return
-            (function()
-                if self.flow ~= null then
-                    return tostring(self.flow)
-                        .. styler(Style.Operator, "@")
-                        .. styler(Style.Number, self.index - 1)
-                else
-                    return ""
-                end
-            end)()
-            .. styler(Style.Comment, "%")
-            .. styler(Style.Symbol, self.name.name)
-            ..
-                (function()
-                    if self.vararg then
-                        return styler(Style.Keyword, "…")
-                    else
-                        return ""
-                    end
-                end)()
-            ..
-                (function()
-                    if self.type ~= Type.Any then
-                        return styler(Style.Operator, ":")
-                            .. self.type:repr(styler)
-                    else
-                        return ""
-                    end
-                end)()
+        local name
+        if self.flow then
+            name = self.flow:short_repr(styler)
+        else
+            name = styler(Style.Comment, '<unbound>')
+        end
+        return name .. self:local_repr(styler)
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2658,12 +2671,25 @@ do
         self.body_anchor = anchor
     end
 
-    function cls:repr(styler)
+    function cls:short_repr(styler)
         return
             styler(Style.Keyword, "λ")
             .. styler(Style.Symbol, self.name.name)
             .. styler(Style.Operator, "#")
             .. styler(Style.Number, self.uid)
+    end
+
+    function cls:repr(styler)
+        local name = self:short_repr(styler)
+            .. styler(Style.Operator, "(")
+        for _,param in ipairs(self.parameters) do
+            if _ > 1 then
+                name = name .. " "
+            end
+            name = name .. param:local_repr(styler)
+        end
+        name = name .. styler(Style.Operator, ")")
+        return name
     end
 
     function cls:__tostring()
@@ -3282,15 +3308,10 @@ local function call_flow(frame, cont, flow, ...)
     local numflowargs = #flow.arguments
     for i=1,numflowargs do
         local arg = flow.arguments[i]
-        local quoted = false
         if arg.type == Type.Syntax then
-            quoted = arg.value.quoted
             arg = arg.value.datum
         end
-        if quoted then
-            wbuf[idx] = arg
-            idx = idx + 1
-        elseif arg.type == Type.Parameter and arg.value.vararg then
+        if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
             local args = unwrap(Type.VarArgs, arg)
             if i == numflowargs then
@@ -3425,7 +3446,7 @@ local globals
 local expand
 local translate
 
-local expand_continuation
+local expand_fn_cc
 local expand_syntax_extend
 
 local expand_root
@@ -3446,11 +3467,11 @@ local function toparameter(env, value)
     assert_scope(env)
     local _value, anchor = unsyntax(value)
     if _value.type == Type.Parameter then
-        return value
+        return _value.value
     else
-        local param = Any(Parameter(value, Type.Any))
-        env:bind(value, param)
-        return Any(Syntax(param, anchor))
+        local param = Parameter(value, Type.Any)
+        env:bind(value, Any(param))
+        return param
     end
 end
 
@@ -3476,7 +3497,7 @@ local function expand_expr_list(env, it, cont)
     return process(env, it, EOL)
 end
 
-expand_continuation = function(env, topit, cont)
+expand_fn_cc = function(env, topit, cont)
     assert_scope(env)
     assert_list(topit)
     verify_at_parameter_count(topit, 1, -1)
@@ -3490,45 +3511,76 @@ expand_continuation = function(env, topit, cont)
 
     it = it.next
 
-    local sym
+    local func_name
     assert(it ~= EOL)
 
-    local trysym = unsyntax(it.at)
-    if (trysym.type == Type.Symbol) then
-        sym = it.at
+    local scopekey
+
+    local tryfunc_name = unsyntax(it.at)
+    if (tryfunc_name.type == Type.Symbol) then
+        func_name = it.at
         it = it.next
-        assert(it ~= EOL)
+        scopekey = tryfunc_name
+    elseif (tryfunc_name.type == Type.String) then
+        func_name = Any(Syntax(Any(Symbol(tryfunc_name.value)), anchor_kw))
+        it = it.next
     else
-        sym = Any(Syntax(Any(Symbol.Unnamed), anchor_kw))
+        func_name = Any(Syntax(Any(Symbol.Unnamed), anchor_kw))
     end
 
-    local params = it.at
-    local nparams,anchor_params = unsyntax(params)
-    params = unwrap(Type.List, nparams)
+    local expr_parameters = it.at
+    local params_anchor
+    expr_parameters, params_anchor = unsyntax(expr_parameters)
 
     it = it.next
 
+    local func = Flow.create_empty_function(func_name, anchor)
+    if scopekey then
+        env:bind(scopekey, Any(func))
+    end
+
     local subenv = Scope(env)
 
-    local outargs = EOL
-    local param = params
-    while (param ~= EOL) do
-        outargs = List(toparameter(subenv, param.at), outargs)
-        param = param.next
+    local params = unwrap(Type.List, expr_parameters)
+    while (params ~= EOL) do
+        func:append_parameter(toparameter(subenv, params.at))
+        params = params.next
+    end
+    if (#func.parameters == 0) then
+        set_active_anchor(params_anchor)
+        location_error("explicit continuation parameter missing")
     end
 
     return expand_expr_list(subenv, it, function(result)
-        result = List(Any(Syntax(Any(reverse_list_inplace(outargs)), anchor_params)), result)
-        result = List(sym, result)
-        result = List(Any(Syntax(globals:lookup(Symbol.ContinuationForm) or none, anchor_kw)), result)
+        result = List(Any(Syntax(Any(func), anchor, true)), result)
+        result = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), result)
         return cont(List(Any(Syntax(Any(result), anchor, true)), topit.next), env)
     end)
 end
 
+local function inplace_deep_unquote_syntax(elem)
+    local todo = {elem}
+    local k = 1
+    while k <= #todo do
+        local elem = unwrap(Type.Syntax, todo[k])
+        elem.quoted = false
+        elem = elem.datum
+        if elem.type == Type.List then
+            elem = elem.value
+            while elem ~= EOL do
+                table.insert(todo, elem.at)
+                elem = elem.next
+            end
+        end
+        k = k + 1
+    end
+end
+
 expand_syntax_extend = function(env, topit, cont)
     assert(cont)
-    return expand_continuation(env, topit, function(cur_list, cur_env)
+    return expand_fn_cc(Scope(env), topit, function(cur_list, cur_env)
         local expr = cur_list.at
+        inplace_deep_unquote_syntax(expr)
         local anchor = expr.value.anchor
         return translate(null, expr,
             function(_state, _anchor, fun)
@@ -3542,7 +3594,8 @@ expand_syntax_extend = function(env, topit, cont)
     end)
 end
 
-local function expand_wildcard(env, handler, topit, cont)
+local function expand_wildcard(label, env, handler, topit, cont)
+    assert_string(label)
     assert_scope(env)
     assert_any(handler)
     assert_list(topit)
@@ -3552,6 +3605,11 @@ local function expand_wildcard(env, handler, topit, cont)
             if result == null or is_none(result) then
                 return cont(EOL)
             end
+            if result.type ~= Type.List then
+                location_error(label
+                    .. " macro returned unexpected value of type "
+                    .. tostring(result.type))
+            end
             return cont(unwrap(Type.List, result))
         end, handler, Any(topit), Any(env))
     end,
@@ -3559,7 +3617,8 @@ local function expand_wildcard(env, handler, topit, cont)
         exc = exception(exc)
         local w = string_writer()
         local _,anchor = unsyntax(topit.at)
-        anchor:stream_message_with_source(w, 'while expanding wildcard macro')
+        anchor:stream_message_with_source(w,
+            'while expanding ' .. label .. ' macro')
         local fmt = StreamValueFormat()
         fmt.naked = true
         fmt.maxdepth = 3
@@ -3587,29 +3646,29 @@ local function expand_macro(env, handler, topit, cont)
             if result_list ~= EOL and result_scope == null then
                 location_error(tostring(handler) .. " did not return a scope")
             end
-            --[[
-            -- validate result completely wrapped in syntax
-            local todo = {result_list.at}
-            local k = 1
-            while k <= #todo do
-                local elem = todo[k]
-                if elem.type ~= Type.Syntax then
-                    location_error("syntax objects missing in expanded macro")
-                end
-                if not elem.value.quoted then
-                    elem = unsyntax(elem)
-                    if elem.type == Type.List then
-                        elem = elem.value
-                        while elem ~= EOL do
-                            table.insert(todo, elem.at)
-                            elem = elem.next
+            if global_opts.validate_macros then
+                -- validate result completely wrapped in syntax
+                local todo = {result_list.at}
+                local k = 1
+                while k <= #todo do
+                    local elem = todo[k]
+                    if elem.type ~= Type.Syntax then
+                        location_error("syntax objects missing in expanded macro")
+                    end
+                    if not elem.value.quoted then
+                        elem = unsyntax(elem)
+                        if elem.type == Type.List then
+                            elem = elem.value
+                            while elem ~= EOL do
+                                table.insert(todo, elem.at)
+                                elem = elem.next
+                            end
                         end
                     end
+                    k = k + 1
+                    assert(k < global_opts.stack_limit, "possible circular reference encountered")
                 end
-                k = k + 1
-                assert(k < global_opts.stack_limit, "possible circular reference encountered")
             end
-            --]]
             return cont(result_list, result_scope)
         end, handler,  Any(topit), Any(env))
     end,
@@ -3639,7 +3698,7 @@ expand = function(env, topit, cont)
         local expr = topit.at
         local sx = unwrap(Type.Syntax, expr)
         if sx.quoted then
-            -- remove qualifier and return as-is
+            -- return as-is
             return cont(List(expr, topit.next), env)
         end
         local anchor
@@ -3664,7 +3723,7 @@ expand = function(env, topit, cont)
                 return expand_expr_list(env,
                     unwrap(Type.List, expr),
                     function (result)
-                        return cont(List(Any(Syntax(Any(result), anchor)),
+                        return cont(List(Any(Syntax(Any(result), anchor, true)),
                             topit.next), env)
                     end)
             end
@@ -3672,7 +3731,8 @@ expand = function(env, topit, cont)
             local function expand_wildcard_list()
                 local default_handler = env:lookup(Symbol.ListWildcard)
                 if default_handler then
-                    return expand_wildcard(env, default_handler, topit,
+                    return expand_wildcard("wildcard list",
+                        env, default_handler, topit,
                         function (result)
                             if result ~= EOL then
                                 return process(env, result)
@@ -3710,7 +3770,8 @@ expand = function(env, topit, cont)
                 end
                 local default_handler = env:lookup(Symbol.SymbolWildcard)
                 if default_handler then
-                    expand_wildcard(env, default_handler, topit, function(result)
+                    return expand_wildcard("wildcard symbol",
+                        env, default_handler, topit, function(result)
                         if result ~= EOL then
                             return process(env, result)
                         end
@@ -3720,31 +3781,19 @@ expand = function(env, topit, cont)
                     return missing_symbol_error()
                 end
             end
-            return cont(List(Any(Syntax(result, anchor)), topit.next), env)
+            if result.type == Type.List then
+                -- quote lists
+                result = List(Any(Syntax(result, anchor, true)), EOL)
+                result = List(Any(Syntax(globals:lookup(Symbol.QuoteForm), anchor, true)), result)
+                result = Any(result)
+            end
+            result = Any(Syntax(result, anchor, true))
+            return cont(List(result, topit.next), env)
         else
-            return cont(List(topit.at, topit.next), env)
+            return cont(List(Any(Syntax(expr, anchor, true)), topit.next), env)
         end
     end
     return process(env, topit)
-end
-
-
-local function inplace_deep_unquote_syntax(elem)
-    local todo = {elem}
-    local k = 1
-    while k <= #todo do
-        local elem = unwrap(Type.Syntax, todo[k])
-        elem.quoted = false
-        elem = elem.datum
-        if elem.type == Type.List then
-            elem = elem.value
-            while elem ~= EOL do
-                table.insert(todo, elem.at)
-                elem = elem.next
-            end
-        end
-        k = k + 1
-    end
 end
 
 expand_root = function(expr, scope, cont)
@@ -3903,58 +3952,8 @@ local function translate_quote(state, it, cont)
     return cont(state, anchor, it.at)
 end
 
-local function translate_stmt_list(state, it, cont, anchor)
-    assert_list(it)
-    assert_anchor(anchor)
-    if (it == EOL) then
-        set_active_anchor(anchor)
-        location_error("empty statement list")
-    else
-        local function loop(state, it)
-            if it == EOL then
-                return cont()
-            else
-                local sxvalue = it.at
-                local value, anchor = unsyntax(sxvalue)
-                return translate(state, sxvalue,
-                    function(state, _anchor, value, value_is_call)
-                        assert_anchor(_anchor)
-                        if value_is_call then
-                            local args = value
-                            local is_return = is_return_callable(args)
-                            local next
-                            if not args[1] then
-                                if it.next == EOL then
-                                    args[1] = none
-                                else
-                                    -- continuation and results are ignored
-                                    next = Flow.create_continuation(
-                                        Any(Syntax(Any(Symbol.Unnamed), _anchor)))
-                                    if is_return then
-                                        set_active_anchor(anchor)
-                                        location_error("return call is not last expression in statement list")
-                                    else
-                                        args[1] = Any(next)
-                                    end
-                                end
-                            end
-                            br(state, args, _anchor)
-                            state = next
-                        else
-                            if it.next == EOL then
-                                set_active_anchor(anchor)
-                                location_error("statement list must end with continuation")
-                            end
-                        end
-                        return loop(state, it.next)
-                    end)
-            end
-        end
-        return loop(state, it)
-    end
-end
-
-local function translate_continuation(state, it, cont, anchor)
+-- (fn/cc <flow without body> expr ...)
+local function translate_fn_cc(state, it, cont, anchor)
     assert_function(cont)
 
     local anchor
@@ -3962,35 +3961,9 @@ local function translate_continuation(state, it, cont, anchor)
     it = unwrap(Type.List, it)
 
     it = it.next
-
-    local func_name = it.at
-
+    local func = unwrap(Type.Flow, unsyntax(it.at))
     it = it.next
 
-    local expr_parameters = it.at
-    local params_anchor
-    expr_parameters, params_anchor = unsyntax(expr_parameters)
-
-    it = it.next
-
-    local func = Flow.create_empty_function(func_name, anchor)
-
-    local params = unwrap(Type.List, expr_parameters)
-    while (params ~= EOL) do
-        local param = params.at
-        func:append_parameter(unwrap(Type.Parameter, unsyntax(param)))
-        params = params.next
-    end
-    if (#func.parameters == 0) then
-        set_active_anchor(params_anchor)
-        location_error("explicit continuation parameter missing")
-    end
-    --[[
-    return translate_stmt_list(func, it, function()
-        assert(#func.arguments > 0)
-        return cont(state, anchor, Any(Syntax(Any(func), anchor)))
-    end, anchor)
-    ]]
     local dest = Any(func.parameters[1])
 
     return translate_expr_list(func, it,
@@ -4039,16 +4012,8 @@ local function translate_argument_list(state, it, cont, anchor, explicit_ret)
                         local _args = value
                         local is_return = is_return_callable(_args)
                         if is_return then
-                            -- parent call will never finish
-                            -- we flatten recursions of return(return(return(...)))
---~                             if #args == 2 -- must be first argument in parent
---~                                 and is_return_callable(args) -- parent is also returning
---~                                 and it.next == EOL then -- must also be last argument in parent
---~                                 return cont(state, anchor, value, value_is_call)
---~                             else
-                                set_active_anchor(anchor)
-                                location_error("unexpected return in argument list")
---~                             end
+                            set_active_anchor(anchor)
+                            location_error("unexpected return in argument list")
                         end
 
                         local sxdest = Any(Syntax(Any(Symbol.Unnamed), anchor))
@@ -4178,7 +4143,7 @@ end
 
 builtins.call = Form(translate_call, Symbol("call"))
 builtins["cc/call"] = Form(translate_contcall, Symbol("cc/call"))
-builtins[Symbol.ContinuationForm] = Form(translate_continuation, Symbol("fn/cc"))
+builtins[Symbol.FnCCForm] = Form(translate_fn_cc, Symbol("fn-body"))
 builtins["do"] = Form(translate_do, Symbol("do"))
 builtins[Symbol.QuoteForm] = Form(translate_quote, Symbol("quote"))
 
@@ -4334,7 +4299,7 @@ builtins["debug-build?"] = Any(bool(global_opts.debug))
 -- builtin macros
 --------------------------------------------------------------------------------
 
-builtins["fn/cc"] = builtin_macro(expand_continuation)
+builtins["fn/cc"] = builtin_macro(expand_fn_cc)
 builtins["syntax-extend"] = builtin_macro(expand_syntax_extend)
 
 -- flow control
