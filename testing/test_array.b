@@ -1,4 +1,38 @@
 
+define array
+    type (quote array)
+
+fn assert-type (value atype)
+    assert ((typeof value) ==? atype)
+        .. (string atype) "expected"
+
+fn align (offset align)
+    assert-type offset size_t
+    assert-type align size_t
+    (offset + align - (size_t 1)) & (~ (align - (size_t 1)))
+
+print
+    align
+        size_t 3
+        size_t 4
+
+set-type-symbol! array (quote apply-type)
+    fn apply-array-type (count element)
+        assert-type count size_t
+        assert-type element type
+        let etype =
+            type (symbol (.. "[" (string count) " x " (string element) "]"))
+        let alignment =
+            alignof element
+        set-type-symbol! etype (quote size)
+            (align (sizeof element) alignment) * count
+        set-type-symbol! etype (quote alignment) alignment
+        \ etype
+
+print
+    array (size_t 4) int
+
+
 define somelist
     quote (1 2 3 4)
 

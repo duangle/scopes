@@ -20,7 +20,7 @@ let
     total =
         int (countof modules)
 
-for module in modules
+loop-for module in modules
     with
         failed = 0
     let module = (syntax->datum module)

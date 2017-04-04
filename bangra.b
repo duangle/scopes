@@ -962,6 +962,8 @@ syntax-extend
         make-expand-multi-op-ltr +
     set-scope-symbol! syntax-scope (quote *)
         make-expand-multi-op-ltr *
+    set-scope-symbol! syntax-scope (quote |)
+        make-expand-multi-op-ltr |
 
     set-scope-symbol! syntax-scope scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
@@ -1061,9 +1063,9 @@ syntax-extend
 #define-infix-op : 70 > :
 define-infix-op or 100 > or
 define-infix-op and 200 > and
-#define-infix-op | 240 > |
-#define-infix-op ^ 250 > ^
-#define-infix-op & 260 > &
+define-infix-op | 240 > |
+define-infix-op ^ 250 > ^
+define-infix-op & 260 > &
 
 define-infix-op < 300 > <
 define-infix-op > 300 > >
@@ -1081,11 +1083,11 @@ define-infix-op ==? 300 > ==?
 
 #define-infix-op is 300 > is
 define-infix-op .. 400 < ..
-#define-infix-op << 450 > <<
-#define-infix-op >> 450 > >>
+define-infix-op << 450 > <<
+define-infix-op >> 450 > >>
 define-infix-op - 500 > -
 define-infix-op + 500 > +
-#define-infix-op % 600 > %
+define-infix-op % 600 > %
 define-infix-op / 600 > /
 #define-infix-op // 600 > //
 define-infix-op * 600 > *

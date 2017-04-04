@@ -966,6 +966,13 @@ local function define_symbols(def)
     def({Sub='-'})
     def({Mul='*'})
     def({Div='/'})
+    def({Mod='%'})
+    def({BitAnd='&'})
+    def({BitOr='|'})
+    def({BitXor='^'})
+    def({BitNot='~'})
+    def({LShift='<<'})
+    def({RShift='>>'})
     def({Repr='repr'})
 
     -- ad-hoc builtin names
@@ -1324,7 +1331,7 @@ end
 local function each_numerical_type(f, opts)
     if opts == null then
         opts = {
-            floats = true,
+            reals = true,
             ints = true,
         }
     end
@@ -1332,7 +1339,7 @@ local function each_numerical_type(f, opts)
         opts.signed = true
         opts.unsigned = true
     end
-    if opts.floats then
+    if opts.reals then
         f(Type.R32, float)
         f(Type.R64, double)
     end
@@ -4779,6 +4786,30 @@ end)
 -- join
 --------------------------------------------------------------------------------
 
+local function builtin_forward_op1(name, errmsg)
+    assert_symbol(name)
+    assert_string(errmsg)
+    return function(frame, cont, self, x, ...)
+        checkargs(1,-1, x, ...)
+        local func = x.type:lookup(name)
+        local function print_errmsg()
+            error("can not " .. errmsg .. " value of type "
+                .. tostring(x.type))
+        end
+        if func ~= null then
+            return call(frame,
+            Any(Builtin(function(_frame, _cont, _dest, result)
+                if result == null then
+                    return print_errmsg()
+                else
+                    return call(frame, none, cont, result)
+                end
+            end, Symbol.ROp)), func, x, ...)
+        end
+        return print_errmsg()
+    end
+end
+
 local function builtin_forward_op2(name, errmsg)
     assert_symbol(name)
     assert_string(errmsg)
@@ -4864,11 +4895,33 @@ builtins[Symbol.Add] = builtin_forward_op2(Symbol.Add, "add")
 builtins[Symbol.Sub] = builtin_forward_op2(Symbol.Sub, "subtract")
 builtins[Symbol.Mul] = builtin_forward_op2(Symbol.Mul, "multiply")
 builtins[Symbol.Div] = builtin_forward_op2(Symbol.Div, "divide")
+builtins[Symbol.Mod] = builtin_forward_op2(Symbol.Mod, "modulate")
+builtins[Symbol.BitAnd] = builtin_forward_op2(Symbol.BitAnd, "and-combine")
+builtins[Symbol.BitOr] = builtin_forward_op2(Symbol.BitOr, "or-combine")
+builtins[Symbol.BitXor] = builtin_forward_op2(Symbol.BitXor, "xor")
+builtins[Symbol.BitNot] = builtin_forward_op1(Symbol.BitNot, "bitwise-negate")
+builtins[Symbol.LShift] = builtin_forward_op1(Symbol.LShift, "left-shift")
+builtins[Symbol.RShift] = builtin_forward_op1(Symbol.RShift, "right-shift")
 
-each_numerical_type(function(T, ctype)
+--def({BitNot='~'})
+
+local function opmaker(T, ctype)
     local atype = typeof('$[$]', ctype, 1)
     local rtype = typeof('$&', ctype)
-    local function arithmetic_op(sym, opname)
+    local function arithmetic_op1(sym, opname)
+        local op = C["bangra_" .. T.name .. "_" .. opname]
+        assert(op)
+
+        builtin_op(T, sym,
+            wrap_simple_builtin(function(x)
+                checkargs(1,1,x)
+                x = unwrap(T, x)
+                local srcval = new(atype)
+                op(srcval, x)
+                return Any(cast(ctype, cast(rtype, srcval)))
+            end))
+    end
+    local function arithmetic_op2(sym, opname)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
@@ -4882,11 +4935,47 @@ each_numerical_type(function(T, ctype)
                 return Any(cast(ctype, cast(rtype, srcval)))
             end))
     end
-    arithmetic_op(Symbol.Add, "add")
-    arithmetic_op(Symbol.Sub, "sub")
-    arithmetic_op(Symbol.Mul, "mul")
-    arithmetic_op(Symbol.Div, "div")
+    local function arithmetic_shiftop(sym, opname)
+        local op = C["bangra_" .. T.name .. "_" .. opname]
+        assert(op)
+
+        builtin_op(T, sym,
+            wrap_simple_builtin(function(a,b)
+                checkargs(2,2,a,b)
+                a = unwrap(T, a)
+                b = unwrap(Type.I32, b)
+                local srcval = new(atype)
+                op(srcval, a, b)
+                return Any(cast(ctype, cast(rtype, srcval)))
+            end))
+    end
+    return {
+        op1 = arithmetic_op1,
+        op2 = arithmetic_op2,
+        shiftop = arithmetic_shiftop
+    }
+end
+
+each_numerical_type(function(T, ctype)
+    local make = opmaker(T, ctype)
+
+    make.op2(Symbol.Add, "add")
+    make.op2(Symbol.Sub, "sub")
+    make.op2(Symbol.Mul, "mul")
+    make.op2(Symbol.Div, "div")
+    make.op2(Symbol.Mod, "mod")
 end)
+
+each_numerical_type(function(T, ctype)
+    local make = opmaker(T, ctype)
+
+    make.op2(Symbol.BitAnd, "band")
+    make.op2(Symbol.BitOr, "bor")
+    make.op2(Symbol.BitXor, "bxor")
+    make.op1(Symbol.BitNot, "bnot")
+    make.shiftop(Symbol.LShift, "shl")
+    make.shiftop(Symbol.RShift, "shr")
+end, {ints = true})
 
 builtins["not"] = wrap_simple_builtin(function(value)
     checkargs(1,1, value)
