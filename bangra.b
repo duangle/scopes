@@ -1091,7 +1091,7 @@ define-infix-op % 600 > %
 define-infix-op / 600 > /
 #define-infix-op // 600 > //
 define-infix-op * 600 > *
-#define-infix-op ** 700 < **
+define-infix-op ** 700 < **
 define-infix-op . 800 > .
 define-infix-op @ 800 > @
 #define-infix-op .= 800 > .=

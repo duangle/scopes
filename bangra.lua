@@ -973,6 +973,7 @@ local function define_symbols(def)
     def({BitNot='~'})
     def({LShift='<<'})
     def({RShift='>>'})
+    def({Pow='**'})
     def({Repr='repr'})
 
     -- ad-hoc builtin names
@@ -4902,6 +4903,7 @@ builtins[Symbol.BitXor] = builtin_forward_op2(Symbol.BitXor, "xor")
 builtins[Symbol.BitNot] = builtin_forward_op1(Symbol.BitNot, "bitwise-negate")
 builtins[Symbol.LShift] = builtin_forward_op1(Symbol.LShift, "left-shift")
 builtins[Symbol.RShift] = builtin_forward_op1(Symbol.RShift, "right-shift")
+builtins[Symbol.Pow] = builtin_forward_op2(Symbol.Pow, "exponentiate")
 
 --def({BitNot='~'})
 
@@ -4964,6 +4966,7 @@ each_numerical_type(function(T, ctype)
     make.op2(Symbol.Mul, "mul")
     make.op2(Symbol.Div, "div")
     make.op2(Symbol.Mod, "mod")
+    make.op2(Symbol.Pow, "pow")
 end)
 
 each_numerical_type(function(T, ctype)

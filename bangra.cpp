@@ -124,6 +124,11 @@ const char *bangra_compile_time_date();
 #define IMPL_BINOP_FUNC(tag, ctype, name, op) \
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b) { *out = a op b; }
 
+#define DEF_WRAP_BINOP_FUNC(tag, ctype, name, op) \
+    void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b);
+#define IMPL_WRAP_BINOP_FUNC(tag, ctype, name, op) \
+    void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b) { *out = op(a, b); }
+
 #define DEF_SHIFTOP_FUNC(tag, ctype, name, op) \
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, int b);
 #define IMPL_SHIFTOP_FUNC(tag, ctype, name, op) \
@@ -134,6 +139,9 @@ const char *bangra_compile_time_date();
     T(tag, ctype, sub, -) \
     T(tag, ctype, mul, *) \
     T(tag, ctype, div, /)
+#define WALK_ARITHMETIC_WRAP_BINOPS(tag, ctype, T) \
+    T(tag, ctype, pow, powimpl)
+
 #define WALK_INTEGER_ARITHMETIC_BINOPS(tag, ctype, T) \
     T(tag, ctype, bor, |) \
     T(tag, ctype, bxor, ^) \
@@ -162,6 +170,7 @@ const char *bangra_compile_time_date();
     WALK_REAL_TYPES(T, T2)
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_BINOPS, DEF_BINOP_FUNC)
+WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_WRAP_BINOPS, DEF_WRAP_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_BINOPS, DEF_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_UNOPS, DEF_UNOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, DEF_SHIFTOP_FUNC)
@@ -387,6 +396,20 @@ int escape_string(char *buf, const char *str, int strcount, const char *quote_ch
     }
 }
 
+float powimpl(float a, float b) { return std::pow(a, b); }
+double powimpl(double a, double b) { return std::pow(a, b); }
+// thx to fabian for this one
+template<typename T>
+inline T powimpl(T base, T exponent) {
+    T result = 1, cur = base;
+    while (exponent) {
+        if (exponent & 1) result *= cur;
+        cur *= cur;
+        exponent >>= 1;
+    }
+    return result;
+}
+
 bool bangra_r32_eq(float a, float b) { return a == b; }
 bool bangra_r32_ne(float a, float b) { return a != b; }
 bool bangra_r32_lt(float a, float b) { return a <  b; }
@@ -401,6 +424,7 @@ void bangra_r32_mod(float *out, float a, float b) { *out = std::fmod(a,b); }
 void bangra_r64_mod(double *out, double a, double b) { *out = std::fmod(a,b); }
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_BINOPS, IMPL_BINOP_FUNC)
+WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_WRAP_BINOPS, IMPL_WRAP_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_BINOPS, IMPL_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_UNOPS, IMPL_UNOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, IMPL_SHIFTOP_FUNC)
