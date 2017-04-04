@@ -1443,7 +1443,10 @@ syntax-extend
                         \ block-rest
 
                 let body = (slice rest 1)
-                if (syntax-head? (@ body 0) (quote with))
+                if
+                    and
+                        not (empty? body)
+                        syntax-head? (@ body 0) (quote with)
                     # read extra state params
                     generate-template
                         slice body 1
@@ -1453,84 +1456,105 @@ syntax-extend
                     generate-template body expr-eol expr-eol
     \ syntax-scope
 
-define fn
-    # an extended version of function that permits chaining
-      sequential cross-dependent declarations with a `with` keyword
-      and binds the function itself to `recur`
-      (fn [name] (param ...) body ...) with (fn ...) ...
-    block-macro
-        do
+syntax-extend
+    fn make-function-body (env decl paramdef body expr-anchor nextfunc)
+        if (not (list? (syntax->datum paramdef)))
+            syntax-error paramdef "parameter list expected"
+        let retparam =
+            quote-syntax return
+        let func =
+            flow
+                ? (none? decl)
+                    datum->syntax
+                        symbol ""
+                        \ expr-anchor
+                    \ decl
+        let retparam = (parameter retparam)
+        flow-append-parameter! func retparam
+        if (not (none? decl))
+            set-scope-symbol! env decl func
+        let subenv = (scope env)
+        set-scope-symbol! subenv (quote recur) func
+        set-scope-symbol! subenv (quote return) retparam
+        loop-for param-name in (syntax->datum paramdef)
+            let param = (parameter param-name)
+            set-scope-symbol! subenv (syntax->datum param-name) param
+            flow-append-parameter! func param
+            repeat
+        fn (rest)
+            cons
+                @
+                    expand
+                        list
+                            syntax-cons
+                                quote-syntax form-fn-body
+                                syntax-cons
+                                    datum->syntax func expr-anchor
+                                    \ body
+                        \ subenv
+                    \ 0
+                nextfunc rest
+
+    # chains cross-dependent function declarations.
+      (xfn (name (param ...) body ...) ...)
+    set-scope-symbol! syntax-scope (quote xfn)
+        block-macro
             fn (topexpr env)
-                fn parse-funcdef (topexpr k head nextfunc)
+                fn parse-funcdef (topexpr nextfunc)
                     let expr =
                         @ topexpr 0
-                    let expr-anchor =
-                        syntax->anchor expr
-                    assert (syntax-head? expr head)
-                        "function definition expected after 'with'"
                     let decl =
+                        @ expr 0
+                    if (not (symbol? (syntax->datum decl)))
+                        syntax-error decl "symbol expected"
+                    let paramdef =
                         @ expr 1
-                    let retparam =
-                        quote-syntax return
-                    fn make-params-body (name body)
-                        let func =
-                            flow
-                                ? (none? name)
-                                    datum->syntax
-                                        symbol ""
-                                        \ expr-anchor
-                                    \ name
-                        let retparam = (parameter retparam)
-                        flow-append-parameter! func retparam
-                        if (not (none? name))
-                            set-scope-symbol! env name func
-                        let subenv = (scope env)
-                        set-scope-symbol! subenv (quote recur) func
-                        set-scope-symbol! subenv (quote return) retparam
-                        loop-for param-name in (syntax->datum (@ body 0))
-                            let param = (parameter param-name)
-                            set-scope-symbol! subenv (syntax->datum param-name) param
-                            flow-append-parameter! func param
-                            repeat
-                        fn (rest)
-                            cons
-                                @
-                                    expand
-                                        list
-                                            syntax-cons
-                                                quote-syntax form-fn-body
-                                                syntax-cons
-                                                    datum->syntax func expr-anchor
-                                                    slice body 1
-                                        \ subenv
-                                    \ 0
-                                nextfunc rest
-
                     let rest =
                         slice topexpr 1
-                    if (symbol? (syntax->datum decl))
-                        let f =
-                            make-params-body decl
-                                slice expr 2
-                        if
-                            and
-                                not (empty? rest)
-                                syntax-head? (@ rest 0) (quote with)
-                            parse-funcdef (slice rest 1) (k + 1) head f
-                        else
-                            return f rest
+                    let expr-anchor =
+                        syntax->anchor expr
+                    let complete-fn-decl =
+                        make-function-body env decl paramdef (slice expr 2)
+                            \ expr-anchor nextfunc
+                    if (not (empty? rest))
+                        parse-funcdef rest complete-fn-decl
                     else
-                        assert (k == 0)
-                            "unnamed function can not be chained"
-                        # regular, unchained form
-                        return
-                            make-params-body none
-                                slice expr 1
-                            \ rest
-                let result-f result-rest =
-                    parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
+                        return complete-fn-decl
+                call
+                    parse-funcdef (slice (@ topexpr 0) 1)
                         fn (rest) rest
-                result-f result-rest
+                    slice topexpr 1
+
+    # an extended version of fn that binds the function itself to `recur`
+      (fn [name] (param ...) body ...) with (fn ...) ...
+    set-scope-symbol! syntax-scope (quote fn)
+        block-macro
+            fn (topexpr env)
+                let expr =
+                    @ topexpr 0
+                let expr-anchor =
+                    syntax->anchor expr
+                let decl =
+                    @ expr 1
+                let retparam =
+                    quote-syntax return
+                let rest =
+                    slice topexpr 1
+                fn make-params-body (name body)
+                    fn tailf (rest) rest
+                    call
+                        make-function-body env name (@ body 0) (slice body 1)
+                            \ expr-anchor tailf
+                        \ rest
+
+                if (symbol? (syntax->datum decl))
+                    make-params-body decl
+                        slice expr 2
+                else
+                    # regular, unchained form
+                    make-params-body none
+                        slice expr 1
+    \ syntax-scope
 
 define read-eval-print-loop
     fn repeat-string (n c)

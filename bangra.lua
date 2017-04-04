@@ -2218,7 +2218,7 @@ local CONT_SEP = " ⮕ "
 
 -- keywords and macros
 local KEYWORDS = set(split(
-    "let true false fn quote with ::* ::@ call escape do dump-syntax"
+    "let true false fn xfn quote with ::* ::@ call escape do dump-syntax"
         .. " syntax-extend if else elseif loop repeat none assert qquote"
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
