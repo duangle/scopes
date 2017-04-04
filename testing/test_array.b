@@ -4,6 +4,14 @@ define somelist
 
 print somelist
 
+fn myf (a b)
+    print myf
+    print recur
+    + a b
+
+print
+    myf 1 2
+
 let T =
     type
         quote mytype

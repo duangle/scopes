@@ -943,9 +943,11 @@ local function define_symbols(def)
     def({Unnamed=''})
     def({FnCCForm='form-fn-body'})
     def({QuoteForm='form-quote'})
+    def({SyntaxScope='syntax-scope'})
 
     def({ListWildcard='#list'})
     def({SymbolWildcard='#symbol'})
+    def({ThisFnCC='#this-fn/cc'})
 
     def({Compare='compare'})
     def({CountOf='countof'})
@@ -2220,7 +2222,7 @@ local KEYWORDS = set(split(
         .. " syntax-extend if else elseif loop repeat none assert qquote"
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
-        .. " yield xlet cc/call fn/cc null break quote-syntax"
+        .. " yield xlet cc/call fn/cc null break quote-syntax recur"
     ))
 
     -- builtin and global functions
@@ -2747,6 +2749,7 @@ end
 ----[[
 do -- compact hashtables as much as one can where possible
     local cls = Frame
+    local uid = 1
     function cls:init(frame)
         if (frame == null) then
             self.parent = null
@@ -2761,14 +2764,11 @@ do -- compact hashtables as much as one can where possible
             self.index = frame.index + 1
             self.map = frame.map
         end
+        self.uid = uid
+        uid = uid + 1
     end
     function cls:repr(styler)
-        return
-            styler(Style.Keyword, "frame")
-            .. styler(Style.Comment, "<")
-            .. styler(Style.Operator, "#")
-            .. styler(Style.Number, tostring(self.index))
-            .. styler(Style.Comment, ">")
+        return format("0x%08x#%i", self.uid, self.index)
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -2824,75 +2824,6 @@ do -- compact hashtables as much as one can where possible
         return defvalue
     end
 end
---]]
---[[
-do -- clone frame for every mapping
-    local cls = Frame
-    function cls:init(frame)
-        if frame ~= null then
-            assert_frame(frame)
-            self.index = frame.index + 1
-        else
-            self.index = 0
-        end
-        self.parent = frame
-        self.map = {}
-    end
-    function cls:repr(styler)
-        return
-            styler(Style.Keyword, "frame")
-            .. styler(Style.Comment, "<")
-            .. styler(Style.Operator, "#")
-            .. styler(Style.Number, tostring(self.index))
-            .. styler(Style.Comment, ">")
-    end
-    function cls:__tostring()
-        return self:repr(default_styler)
-    end
-    function cls:bind(flow, values)
-        assert_flow(flow)
-        assert_table(values)
-        self = Frame(self)
-        self.map[flow] = values
-        return self
-    end
-    function cls:rebind(cont, index, value)
-        assert_flow(cont)
-        assert_number(index)
-        assert_any(value)
-        local ptr = self
-        while ptr do
-            local entry = ptr.map[cont]
-            if (entry ~= null) then
-                local values = entry
-                assert (index <= #values)
-                values[index] = value
-                return
-            end
-            ptr = ptr.parent
-        end
-    end
-
-    function cls:get(cont, index, defvalue)
-        assert_number(index)
-        if cont then
-            assert_flow(cont)
-            -- parameter is bound - attempt resolve
-            local ptr = self
-            while ptr do
-                local entry = ptr.map[cont]
-                if (entry ~= null) then
-                    local values = entry
-                    assert (index <= #values)
-                    return values[index]
-                end
-                ptr = ptr.parent
-            end
-        end
-        return defvalue
-    end
-end
---]]
 
 local Closure = class("Closure")
 MT_TYPE_MAP[Closure] = Type.Closure
@@ -2905,9 +2836,10 @@ do
         self.frame = frame
     end
     function cls:repr(styler)
-        return tostring(self.frame)
-            .. styler(Style.Operator, "[")
-            .. tostring(self.flow)
+        return styler(Style.Operator, "[")
+            .. self.flow:repr(styler)
+            .. styler(Style.Comment, ":")
+            .. self.frame:repr(styler)
             .. styler(Style.Operator, "]")
     end
     function cls:__tostring()
@@ -3463,18 +3395,6 @@ end
 
 do
 
-local function toparameter(env, value)
-    assert_scope(env)
-    local _value, anchor = unsyntax(value)
-    if _value.type == Type.Parameter then
-        return _value.value
-    else
-        local param = Parameter(value, Type.Any)
-        env:bind(value, Any(param))
-        return param
-    end
-end
-
 local function expand_expr_list(env, it, cont)
     assert_scope(env)
     assert_list(it)
@@ -3536,10 +3456,25 @@ expand_fn_cc = function(env, topit, cont)
 
     local func = Flow.create_empty_function(func_name, anchor)
     if scopekey then
+        -- named self-binding
         env:bind(scopekey, Any(func))
     end
+    -- hidden self-binding for subsequent macros
+    env:bind(Any(Symbol.ThisFnCC), Any(func))
 
     local subenv = Scope(env)
+
+    local function toparameter(env, value)
+        assert_scope(env)
+        local _value, anchor = unsyntax(value)
+        if _value.type == Type.Parameter then
+            return _value.value
+        else
+            local param = Parameter(value, Type.Any)
+            env:bind(value, Any(param))
+            return param
+        end
+    end
 
     local params = unwrap(Type.List, expr_parameters)
     while (params ~= EOL) do
@@ -3558,38 +3493,38 @@ expand_fn_cc = function(env, topit, cont)
     end)
 end
 
-local function inplace_deep_unquote_syntax(elem)
-    local todo = {elem}
-    local k = 1
-    while k <= #todo do
-        local elem = unwrap(Type.Syntax, todo[k])
-        elem.quoted = false
-        elem = elem.datum
-        if elem.type == Type.List then
-            elem = elem.value
-            while elem ~= EOL do
-                table.insert(todo, elem.at)
-                elem = elem.next
-            end
-        end
-        k = k + 1
-    end
-end
-
 expand_syntax_extend = function(env, topit, cont)
-    assert(cont)
-    return expand_fn_cc(Scope(env), topit, function(cur_list, cur_env)
-        local expr = cur_list.at
-        inplace_deep_unquote_syntax(expr)
-        local anchor = expr.value.anchor
+    assert_scope(env)
+    assert_list(topit)
+    verify_at_parameter_count(topit, 1, -1)
+
+    local it = topit.at
+
+    local nit,anchor = unsyntax(it)
+    it = unwrap(Type.List, nit)
+
+    local _,anchor_kw = unsyntax(it.at)
+    it = it.next
+
+    local func_name = Any(Syntax(Any(Symbol.Unnamed), anchor))
+    local func = Flow.create_empty_function(func_name)
+    func:append_parameter(Parameter(func_name, Type.Any))
+
+    local subenv = Scope(env)
+    subenv:bind(Any(Symbol.SyntaxScope), Any(env))
+
+    return expand_expr_list(subenv, it, function(expr)
+        expr = List(Any(Syntax(Any(func), anchor, true)), expr)
+        expr = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), expr)
+        expr = Any(Syntax(Any(expr), anchor, true))
         return translate(null, expr,
             function(_state, _anchor, fun)
                 fun = maybe_unsyntax(fun)
                 return execute(
                     function(expr_env)
-                        return cont(cur_list.next, unwrap(Type.Scope, expr_env))
+                        return cont(topit.next, unwrap(Type.Scope, expr_env))
                     end,
-                    fun, Any(env))
+                    fun)
             end)
     end)
 end
@@ -3806,7 +3741,6 @@ expand_root = function(expr, scope, cont)
         result = Any(result)
         if anchor then
             result = Any(Syntax(result, anchor))
-            inplace_deep_unquote_syntax(result)
         end
         return cont(result)
     end)
@@ -4251,6 +4185,7 @@ builtins["none"] = none
 
 builtins["scope-list-wildcard-symbol"] = Symbol.ListWildcard
 builtins["scope-symbol-wildcard-symbol"] = Symbol.SymbolWildcard
+builtins["scope-this-fn/cc-symbol"] = Symbol.ThisFnCC
 
 builtins["interpreter-dir"] = cstr(C.bangra_interpreter_dir)
 builtins["interpreter-path"] = cstr(C.bangra_interpreter_path)
@@ -4291,6 +4226,7 @@ builtins.scope = Type.Scope
 builtins.symbol = Type.Symbol
 builtins.list = Type.List
 builtins.parameter = Type.Parameter
+builtins.flow = Type.Flow
 builtins.string = Type.String
 builtins.closure = Type.Closure
 
@@ -4556,6 +4492,12 @@ builtin_op(Type.Type, Symbol.ApplyType,
     wrap_simple_builtin(function(name)
         checkargs(1,1,name)
         return Any(Type(unwrap(Type.Symbol, name)))
+    end))
+
+builtin_op(Type.Flow, Symbol.ApplyType,
+    wrap_simple_builtin(function(name)
+        checkargs(1,1,name)
+        return Any(Flow(name))
     end))
 
 builtins["syntax-list"] = wrap_simple_builtin(function(...)
@@ -5158,6 +5100,13 @@ builtins["bind!"] = function(frame, cont, self, param, value)
     frame:rebind(param.flow, param.index, value)
     return call(frame, none, cont)
 end
+
+builtins["flow-append-parameter!"] = wrap_simple_builtin(function(flow, param)
+    checkargs(2,2, flow, param)
+    flow = unwrap(Type.Flow, flow)
+    param = unwrap(Type.Parameter, param)
+    flow:append_parameter(param)
+end)
 
 -- varargs
 --------------------------------------------------------------------------------

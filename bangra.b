@@ -23,77 +23,75 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
-syntax-extend def-quote (return env)
-    call
-        fn/cc (return return-true return-false unordered-error)
-            set-scope-symbol! env (symbol "==")
-                fn/cc "==" (return a b)
-                    ordered-branch a b return-true
-                        fn/cc (_) (cc/call none unordered-error a b)
-                        \ return-false return-false
-            set-scope-symbol! env (symbol "!=")
-                fn/cc "!=" (return a b)
-                    ordered-branch a b return-false
-                        fn/cc (_) (cc/call none unordered-error a b)
-                        \ return-true return-true
-            set-scope-symbol! env (symbol "<")
-                fn/cc "<" (return a b)
-                    ordered-branch a b return-false
-                        fn/cc (_) (cc/call none unordered-error a b)
-                        \ return-true return-false
-            set-scope-symbol! env (symbol "<=")
-                fn/cc "<=" (return a b)
-                    ordered-branch a b return-true
-                        fn/cc (_) (cc/call none unordered-error a b)
-                        \ return-true return-false
-            set-scope-symbol! env (symbol ">")
-                fn/cc ">" (return a b)
-                    ordered-branch a b return-false
-                        fn/cc (_) (cc/call none unordered-error a b)
-                        \ return-false return-true
-            set-scope-symbol! env (symbol ">=")
-                fn/cc ">=" (return a b)
-                    ordered-branch a b return-true
-                        fn/cc (_) (cc/call none unordered-error a b)
-                        \ return-false return-true
-            set-scope-symbol! env (symbol "==?")
-                fn/cc "==?" (return a b)
-                    ordered-branch a b return-true return-false
-                        \ return-false return-false
-            set-scope-symbol! env (symbol "!=?")
-                fn/cc "!=?" (return a b)
-                    ordered-branch a b return-false return-true
-                        \ return-true return-true
-            set-scope-symbol! env (symbol "<?")
-                fn/cc "<?" (return a b)
-                    ordered-branch a b return-false return-false
-                        \ return-true return-false
-            set-scope-symbol! env (symbol "<=?")
-                fn/cc "<=?" (return a b)
-                    ordered-branch a b return-true return-false
-                        \ return-true return-false
-            set-scope-symbol! env (symbol ">?")
-                fn/cc ">?" (return a b)
-                    ordered-branch a b return-false return-false
-                        \ return-false return-true
-            set-scope-symbol! env (symbol ">=?")
-                fn/cc ">=?" (return a b)
-                    ordered-branch a b return-true return-false
-                        \ return-false return-true
-            return
-        fn/cc "return-true" (_) true
-        fn/cc "return-false" (_) false
-        fn/cc "unordered-error" (_ a b)
-            error
-                .. "illegal ordered comparison of values of types "
-                    .. (repr (typeof a))
-                        .. " and "
-                            repr (typeof b)
+syntax-extend
+    fn/cc return-true (_) true
+    fn/cc return-false (_) false
+    fn/cc unordered-error (_ a b)
+        error
+            .. "illegal ordered comparison of values of types "
+                .. (repr (typeof a))
+                    .. " and "
+                        repr (typeof b)
 
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope (symbol "==")
+        fn/cc "==" (return a b)
+            ordered-branch a b return-true
+                fn/cc (_) (cc/call none unordered-error a b)
+                \ return-false return-false
+    set-scope-symbol! syntax-scope (symbol "!=")
+        fn/cc "!=" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call none unordered-error a b)
+                \ return-true return-true
+    set-scope-symbol! syntax-scope (symbol "<")
+        fn/cc "<" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call none unordered-error a b)
+                \ return-true return-false
+    set-scope-symbol! syntax-scope (symbol "<=")
+        fn/cc "<=" (return a b)
+            ordered-branch a b return-true
+                fn/cc (_) (cc/call none unordered-error a b)
+                \ return-true return-false
+    set-scope-symbol! syntax-scope (symbol ">")
+        fn/cc ">" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call none unordered-error a b)
+                \ return-false return-true
+    set-scope-symbol! syntax-scope (symbol ">=")
+        fn/cc ">=" (return a b)
+            ordered-branch a b return-true
+                fn/cc (_) (cc/call none unordered-error a b)
+                \ return-false return-true
+    set-scope-symbol! syntax-scope (symbol "==?")
+        fn/cc "==?" (return a b)
+            ordered-branch a b return-true return-false
+                \ return-false return-false
+    set-scope-symbol! syntax-scope (symbol "!=?")
+        fn/cc "!=?" (return a b)
+            ordered-branch a b return-false return-true
+                \ return-true return-true
+    set-scope-symbol! syntax-scope (symbol "<?")
+        fn/cc "<?" (return a b)
+            ordered-branch a b return-false return-false
+                \ return-true return-false
+    set-scope-symbol! syntax-scope (symbol "<=?")
+        fn/cc "<=?" (return a b)
+            ordered-branch a b return-true return-false
+                \ return-true return-false
+    set-scope-symbol! syntax-scope (symbol ">?")
+        fn/cc ">?" (return a b)
+            ordered-branch a b return-false return-false
+                \ return-false return-true
+    set-scope-symbol! syntax-scope (symbol ">=?")
+        fn/cc ">=?" (return a b)
+            ordered-branch a b return-true return-false
+                \ return-false return-true
+
+    set-scope-symbol! syntax-scope
         symbol "quote"
         block-scope-macro
-            fn/cc "expand-quote" (return expr env)
+            fn/cc "expand-quote" (return expr syntax-scope)
                 call
                     fn/cc (_ args)
                         return
@@ -112,12 +110,12 @@ syntax-extend def-quote (return env)
                                             fn/cc (_) (_ args)
                                             fn/cc (_) (_ args)
                                 slice expr 1
-                            \ env
+                            \ syntax-scope
                     slice (@ expr 0) 1
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         symbol "quote-syntax"
         block-scope-macro
-            fn/cc "expand-quote-syntax" (return expr env)
+            fn/cc "expand-quote-syntax" (return expr syntax-scope)
                 call
                     fn/cc (_ args)
                         return
@@ -134,12 +132,12 @@ syntax-extend def-quote (return env)
                                         fn/cc (_) (_ args)
                                     syntax->anchor args
                                 slice expr 1
-                            \ env
+                            \ syntax-scope
                     slice (@ expr 0) 1
-    return env
+    \ syntax-scope
 
-syntax-extend def-set (return env)
-    set-scope-symbol! env
+syntax-extend
+    set-scope-symbol! syntax-scope
         symbol "set!"
         block-scope-macro
             fn/cc "expand-set!" (return expr env)
@@ -173,11 +171,10 @@ syntax-extend def-set (return env)
                                 \ none none # never reached
                     @ (@ expr 0) 1
                     syntax->anchor (@ expr 0)
+    \ syntax-scope
 
-    return env
-
-syntax-extend def-dump-syntax (return env)
-    set-scope-symbol! env
+syntax-extend
+    set-scope-symbol! syntax-scope
         quote dump-syntax
         block-scope-macro
             fn/cc "expand-dump-syntax" (return expr env)
@@ -193,35 +190,35 @@ syntax-extend def-dump-syntax (return env)
                     expand
                         slice (@ expr 0) 1
                         \ env
-    return env
+    \ syntax-scope
 
-syntax-extend def-? (return env)
-    set-scope-symbol! env
+syntax-extend
+    set-scope-symbol! syntax-scope
         quote symbol?
         fn/cc "symbol?" (return x)
             return
                 ==? (typeof x) symbol
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote list?
         fn/cc "list?" (return x)
             return
                 ==? (typeof x) list
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote type?
         fn/cc "type?" (return x)
             return
                 ==? (typeof x) type
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote none?
         fn/cc "none?" (return x)
             return
                 ==? x none
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote empty?
         fn/cc "empty?" (return x)
             return
                 == (countof x) (u64 0)
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote load
         fn/cc "load" (return path)
             return
@@ -229,7 +226,7 @@ syntax-extend def-? (return env)
                     list-load path
                     globals
                     \ path
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote macro
         fn/cc "macro" (return f)
             return
@@ -240,7 +237,7 @@ syntax-extend def-? (return env)
                                 f (@ expr 0) env
                                 slice expr 1
                             \ env
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote block-macro
         fn/cc "block-macro" (return f)
             return
@@ -249,7 +246,7 @@ syntax-extend def-? (return env)
                         return
                             f expr env
                             \ env
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote ?
         block-scope-macro
             fn/cc "expand-?" (return expr env)
@@ -288,10 +285,10 @@ syntax-extend def-? (return env)
                         syntax->anchor
                             @ expr 0
                     \ env
-    return env
+    \ syntax-scope
 
-syntax-extend def-list-defs (return env)
-    set-scope-symbol! env (quote syntax-head?)
+syntax-extend
+    set-scope-symbol! syntax-scope (quote syntax-head?)
         fn/cc "syntax-head?" (return expr name)
             return
                 ? (list? (syntax->datum expr))
@@ -304,85 +301,79 @@ syntax-extend def-list-defs (return env)
                                     _ false
                             @ expr 0
                     \ false
-    set-scope-symbol! env (quote list-atom?)
+    set-scope-symbol! syntax-scope (quote list-atom?)
         fn/cc "list-atom?" (return x)
             return
                 ? (list? (syntax->datum x))
                     empty? x
                     \ true
     # unwrap single item from list or prepend 'do' clause to list
-    set-scope-symbol! env (quote syntax-do)
+    set-scope-symbol! syntax-scope (quote syntax-do)
         fn/cc "syntax-do" (return expr)
             return
                 ? (== (countof expr) (u64 1))
                     @ expr 0
                     syntax-cons (datum->syntax do (syntax->anchor expr)) expr
     # build a list terminator tagged with a desired anchor from an expression
-    set-scope-symbol! env (quote syntax-eol)
+    set-scope-symbol! syntax-scope (quote syntax-eol)
         fn/cc "syntax-eol" (return expr)
             return
                 datum->syntax (list) (syntax->anchor expr)
-    return env
+    \ syntax-scope
 
-syntax-extend def-qquote (return env)
+syntax-extend
+    fn/cc qquote-1 (_ x)
+        ? (list-atom? x)
+            syntax-list
+                datum->syntax quote-syntax
+                    syntax->anchor x
+                \ x
+            ? (syntax-head? x (quote unquote))
+                syntax-do (slice x 1)
+                ? (syntax-head? x (quote qquote))
+                    qquote-1 (qquote-1 (@ x 1))
+                    ? (list-atom? (@ x 0))
+                        syntax-list
+                            datum->syntax syntax-cons
+                                syntax->anchor (@ x 0)
+                            qquote-1 (@ x 0)
+                            qquote-1 (slice x 1)
+                        ? (syntax-head? (@ x 0) (quote unquote-splice))
+                            syntax-list
+                                datum->syntax (do ..)
+                                    syntax->anchor (@ x 0)
+                                syntax-do (slice (@ x 0) 1)
+                                qquote-1 (slice x 1)
+                            syntax-list
+                                datum->syntax syntax-cons
+                                    syntax->anchor (@ x 0)
+                                qquote-1 (@ x 0)
+                                qquote-1 (slice x 1)
     # quasiquote support
       (qquote expr [...])
-    set-scope-symbol! env (quote qquote)
-        call
-            fn/cc (return qquote-1)
-                set! qquote-1
-                    fn/cc (return x)
-                        return
-                            ? (list-atom? x)
-                                syntax-list
-                                    datum->syntax quote-syntax
-                                        syntax->anchor x
-                                    \ x
-                                ? (syntax-head? x (quote unquote))
-                                    syntax-do (slice x 1)
-                                    ? (syntax-head? x (quote qquote))
-                                        qquote-1 (qquote-1 (@ x 1))
-                                        ? (list-atom? (@ x 0))
-                                            syntax-list
-                                                datum->syntax syntax-cons
-                                                    syntax->anchor (@ x 0)
-                                                qquote-1 (@ x 0)
-                                                qquote-1 (slice x 1)
-                                            ? (syntax-head? (@ x 0) (quote unquote-splice))
-                                                syntax-list
-                                                    datum->syntax (do ..)
-                                                        syntax->anchor (@ x 0)
-                                                    syntax-do (slice (@ x 0) 1)
-                                                    qquote-1 (slice x 1)
-                                                syntax-list
-                                                    datum->syntax syntax-cons
-                                                        syntax->anchor (@ x 0)
-                                                    qquote-1 (@ x 0)
-                                                    qquote-1 (slice x 1)
-                return
-                    macro
-                        fn/cc "expand-qquote" (return expr)
-                            return
-                                ? (empty? (slice expr 2))
-                                    qquote-1 (@ expr 1)
-                                    qquote-1 (slice expr 1)
-    return env
+    set-scope-symbol! syntax-scope (quote qquote)
+        macro
+            fn/cc "expand-qquote" (_ expr)
+                ? (empty? (slice expr 2))
+                    qquote-1 (@ expr 1)
+                    qquote-1 (slice expr 1)
+    \ syntax-scope
 
-syntax-extend def-define (return env)
-    set-scope-symbol! env (quote define)
+syntax-extend
+    set-scope-symbol! syntax-scope (quote define)
         block-macro
             fn/cc "expand-define" (return topexpr env)
                 cons
                     qquote
-                        syntax-extend define (return local-scope)
-                            set-scope-symbol! local-scope
+                        syntax-extend
+                            set-scope-symbol! syntax-scope
                                 quote
                                     unquote (@ (@ topexpr 0) 1)
                                 unquote
                                     syntax-do (slice (@ topexpr 0) 2)
-                            return local-scope
+                            \ syntax-scope
                     slice topexpr 1
-    return env
+    \ syntax-scope
 
 # a lofi version of let so we get some sugar early
 define let
@@ -424,15 +415,16 @@ define let
                     slice expr 1
                 \ env
 
-# a standard function declaration that supports recursion
+# a standard function declaration with implicit continuation argument
   (fn [name] (param ...) body ...)
+  an extended implementation follows further down
 define fn
     block-macro
         fn/cc "expand-fn" (return topexpr)
             let expr =
                 @ topexpr 0
             let decl =
-                @ (@ topexpr 0) 1
+                @ expr 1
             let decl-anchor =
                 syntax->anchor decl
             let retparam =
@@ -440,36 +432,24 @@ define fn
                     syntax->datum
                         quote return
                     \ decl-anchor
-            let wrap =
-                fn/cc (_ val)
-                    datum->syntax val decl-anchor
-            let make-params-body =
-                fn/cc (_ param-idx)
+            fn/cc wrap (_ val)
+                datum->syntax val decl-anchor
+            fn/cc make-params-body (_ param-idx)
+                syntax-cons
                     syntax-cons
-                        syntax-cons
-                            \ retparam
-                            @ expr param-idx
-                        slice expr (+ param-idx 1)
+                        \ retparam
+                        @ expr param-idx
+                    slice expr (+ param-idx 1)
             let rest =
                 slice topexpr 1
             ? (symbol? (syntax->datum decl))
                 cons
-                    syntax-list
-                        wrap let
-                        \ decl (quote-syntax =)
-                        wrap none
-                    cons
-                        syntax-list
-                            wrap set!
+                    syntax-cons
+                        wrap fn/cc
+                        syntax-cons
                             \ decl
-                            syntax-cons
-                                wrap fn/cc
-                                syntax-cons
-                                    @ expr 1
-                                    make-params-body 2
-                        ? (empty? rest)
-                            list decl
-                            \ rest
+                            make-params-body 2
+                    \ rest
                 cons
                     syntax-cons
                         wrap fn/cc
@@ -656,7 +636,7 @@ define if
                     \ rest-expr
     block-macro if-rec
 
-syntax-extend def-let-xlet (return env)
+syntax-extend
     fn =? (x)
         and
             symbol? (syntax->datum x)
@@ -679,7 +659,7 @@ syntax-extend def-let-xlet (return env)
                 find=
                     slice expr 1
 
-    set-scope-symbol! env
+    set-scope-symbol! syntax-scope
         quote let
         # support for multiple declarations in one let env
         block-macro
@@ -728,92 +708,7 @@ syntax-extend def-let-xlet (return env)
                                             syntax-eol expr
                         find= body
 
-    set-scope-symbol! env
-        quote xlet
-        block-macro
-            # a late-binding let with support for recursion and
-              function-level cross dependencies. comparable to letrec.
-            fn (topexpr env)
-                let expr = (@ topexpr 0)
-                let rest = (slice topexpr 1)
-                let body = (slice expr 1)
-                let argtype = (typeof (syntax->datum (@ body 0)))
-                let xlet-return =
-                    datum->syntax (parameter (quote-syntax xlet-return))
-                if (==? argtype list)
-                    # multiple variables with support for recursion
-                      and circular dependencies
-
-                    # prepare quotable values from declarations
-                    fn handle-pairs (pairs)
-                        if (empty? pairs)
-                            return
-                                syntax-eol expr
-                                \ rest
-                        else
-                            call
-                                fn (args rest)
-                                    let pair =
-                                        @ pairs 0
-                                    if
-                                        not
-                                            and (=? (@ pair 1))
-                                                == (countof pair) (u64 3)
-                                        syntax-error pair
-                                            \ "syntax: xlet (<name> = <expression>) ..."
-                                    let name = (@ pair 0)
-                                    return
-                                        syntax-cons name args
-                                        cons
-                                            qquote
-                                                set!
-                                                    unquote name
-                                                    unquote
-                                                        @ pair 2
-                                            \ rest
-                                handle-pairs
-                                    slice pairs 1
-
-                    call
-                        fn (argnames xlet-rest)
-                            list
-                                qquote
-                                    call
-                                        fn/cc
-                                            ;
-                                                unquote xlet-return
-                                                unquote-splice argnames
-                                            unquote-splice
-                                                datum->syntax xlet-rest
-                                                    syntax->anchor expr
-                                        unquote-splice
-                                            syntax-eol expr
-                        handle-pairs body
-
-                else
-                    assert (=? (@ expr 2))
-                        "syntax: xlet <parameter> = <expression>"
-                    let name = (@ expr 1)
-                    let value = (@ expr 3)
-                    # regular form with support for recursion
-                    list
-                        qquote
-                            call
-                                fn/cc
-                                    ;
-                                        unquote xlet-return
-                                        unquote name
-                                    unquote-splice
-                                        datum->syntax
-                                            cons
-                                                qquote
-                                                    set! (unquote name)
-                                                        unquote value
-                                                \ rest
-                                            syntax->anchor expr
-                                unquote-splice
-                                    syntax-eol expr
-    return env
+    \ syntax-scope
 
 define loop
     macro
@@ -825,10 +720,11 @@ define loop
                 quote-syntax break
             qquote
                 do
-                    xlet (unquote param-repeat) =
-                        fn/cc ((unquote param-break) (unquote-splice (@ expr 1)))
-                            unquote-splice
-                                slice expr 2
+                    fn/cc (unquote param-repeat) (
+                        (unquote param-break)
+                        (unquote-splice (@ expr 1)))
+                        unquote-splice
+                            slice expr 2
                     ;
                         unquote param-repeat
                         unquote-splice (@ expr 1)
@@ -858,7 +754,7 @@ define define-infix-op
                 syntax-infix-rules prec (@ env order) dest-name
             return rest env
 
-syntax-extend stage-3 (return env)
+syntax-extend
 
     fn fold (f init next it)
         let val it =
@@ -971,7 +867,7 @@ syntax-extend stage-3 (return env)
             .. interpreter-dir "/?.b"
     set-scope-symbol! bangra (quote modules)
         scope
-    set-scope-symbol! env (quote bangra) bangra
+    set-scope-symbol! syntax-scope (quote bangra) bangra
 
     fn make-module-path (pattern name)
         fold
@@ -1022,7 +918,7 @@ syntax-extend stage-3 (return env)
                     error
                         .. "module not found: " namestr
         else content
-    set-scope-symbol! env (quote require) find-module
+    set-scope-symbol! syntax-scope (quote require) find-module
 
     fn make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
@@ -1046,28 +942,28 @@ syntax-extend stage-3 (return env)
                                     @ tail 1
                                 \ rest
 
-    set-scope-symbol! env (quote and)
+    set-scope-symbol! syntax-scope (quote and)
         make-expand-multi-op-ltr and
-    set-scope-symbol! env (quote or)
+    set-scope-symbol! syntax-scope (quote or)
         make-expand-multi-op-ltr or
-    set-scope-symbol! env (quote max)
+    set-scope-symbol! syntax-scope (quote max)
         make-expand-multi-op-ltr
             fn (a b)
                 ? (> b a) b a
-    set-scope-symbol! env (quote min)
+    set-scope-symbol! syntax-scope (quote min)
         make-expand-multi-op-ltr
             fn (a b)
                 ? (< b a) b a
-    set-scope-symbol! env (quote @)
+    set-scope-symbol! syntax-scope (quote @)
         make-expand-multi-op-ltr @
-    set-scope-symbol! env (quote ..)
+    set-scope-symbol! syntax-scope (quote ..)
         make-expand-multi-op-ltr ..
-    set-scope-symbol! env (quote +)
+    set-scope-symbol! syntax-scope (quote +)
         make-expand-multi-op-ltr +
-    set-scope-symbol! env (quote *)
+    set-scope-symbol! syntax-scope (quote *)
         make-expand-multi-op-ltr *
 
-    set-scope-symbol! env scope-list-wildcard-symbol
+    set-scope-symbol! syntax-scope scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
             let expr =
                 @ topexpr 0
@@ -1111,7 +1007,7 @@ syntax-extend stage-3 (return env)
                     parse-infix-expr env (@ expr 0) (slice expr 1) 0
                     slice topexpr 1
 
-    set-scope-symbol! env scope-symbol-wildcard-symbol
+    set-scope-symbol! syntax-scope scope-symbol-wildcard-symbol
         fn expand-any-symbol (topexpr env)
             let sym =
                 @ topexpr 0
@@ -1160,7 +1056,7 @@ syntax-extend stage-3 (return env)
                                     string sym
                         \ sym-anchor
                     slice topexpr 1
-    return env
+    \ syntax-scope
 
 #define-infix-op : 70 > :
 define-infix-op or 100 > or
@@ -1200,7 +1096,7 @@ define-infix-op @ 800 > @
 #define-infix-op @= 800 > @=
 #define-infix-op =@ 800 > =@
 
-syntax-extend def-qualifier (return env)
+syntax-extend
     let qualifier =
         type
             quote qualifier
@@ -1240,10 +1136,10 @@ syntax-extend def-qualifier (return env)
 
             return aqualifier
 
-    set-scope-symbol! env (quote qualifier) qualifier
-    set-scope-symbol! env (quote iterator)
+    set-scope-symbol! syntax-scope (quote qualifier) qualifier
+    set-scope-symbol! syntax-scope (quote iterator)
         qualifier (quote iterator)
-    set-scope-symbol! env (quote qualify)
+    set-scope-symbol! syntax-scope (quote qualify)
         fn qualify (qualifier-type value)
             assert
                 qualifier-type <? qualifier
@@ -1254,7 +1150,7 @@ syntax-extend def-qualifier (return env)
                 qualifier-type (typeof value)
                 \ value
 
-    set-scope-symbol! env (quote disqualify)
+    set-scope-symbol! syntax-scope (quote disqualify)
         fn disqualify (qualifier-type value)
             assert
                 qualifier-type <? qualifier
@@ -1269,9 +1165,9 @@ syntax-extend def-qualifier (return env)
             cast t.element-type
                 \ value
 
-    return env
+    \ syntax-scope
 
-syntax-extend stage-5 (return env)
+syntax-extend
 
     fn iterator? (x)
         (typeof x) <? iterator
@@ -1429,13 +1325,13 @@ syntax-extend stage-5 (return env)
                         syntax-cons (@ elem 2) args
                         syntax-cons (@ elem 0) names
 
-    set-scope-symbol! env (quote iter) iter
-    set-scope-symbol! env (quote va-iter) va-iter
-    set-scope-symbol! env (quote iterator?) iterator?
-    set-scope-symbol! env (quote range) range
-    set-scope-symbol! env (quote zip) zip
-    set-scope-symbol! env (quote enumerate) enumerate
-    set-scope-symbol! env (quote loop)
+    set-scope-symbol! syntax-scope (quote iter) iter
+    set-scope-symbol! syntax-scope (quote va-iter) va-iter
+    set-scope-symbol! syntax-scope (quote iterator?) iterator?
+    set-scope-symbol! syntax-scope (quote range) range
+    set-scope-symbol! syntax-scope (quote zip) zip
+    set-scope-symbol! syntax-scope (quote enumerate) enumerate
+    set-scope-symbol! syntax-scope (quote loop)
         # better loop with support for initializers
         macro
             fn loop (expr)
@@ -1448,15 +1344,16 @@ syntax-extend stage-5 (return env)
                     parse-loop-args (@ expr 1)
                 qquote
                     do
-                        xlet (unquote param-repeat) =
-                            fn/cc ((unquote param-break) (unquote-splice names))
-                                unquote-splice
-                                    slice expr 2
+                        fn/cc (unquote param-repeat) (
+                            (unquote param-break)
+                            (unquote-splice names))
+                            unquote-splice
+                                slice expr 2
                         ;
                             unquote param-repeat
                             unquote-splice args
 
-    set-scope-symbol! env (quote loop-for)
+    set-scope-symbol! syntax-scope (quote loop-for)
         block-macro
             fn (block-expr)
                 fn iter-expr (expr)
@@ -1506,7 +1403,8 @@ syntax-extend stage-5 (return env)
                     let param-state =
                         datum->syntax (parameter (quote-syntax state))
                     let param-for =
-                        datum->syntax (parameter (quote-syntax for-loop))
+                        datum->syntax (symbol "#loop-for")
+                            syntax->anchor expr
                     let param-at =
                         datum->syntax (parameter (quote-syntax at...))
                     let param-next =
@@ -1514,32 +1412,28 @@ syntax-extend stage-5 (return env)
                     cons
                         qquote
                             do
-                                xlet (unquote param-for) =
-                                    fn/cc (
-                                        (unquote param-ret)
-                                        (unquote param-iter)
-                                        (unquote param-state)
-                                        (unquote-splice extra-names))
-                                        let (unquote param-at) (unquote param-next) =
-                                            (unquote param-iter) (unquote param-state)
-                                        ? (==? (unquote param-next) none)
-                                            unquote
-                                                syntax-do else-block
-                                            do
-                                                xlet repeat =
-                                                    fn/cc (
-                                                        (unquote param-inner-ret)
-                                                        (unquote-splice extra-names))
-                                                        ;
-                                                            unquote param-for
-                                                            unquote param-iter
-                                                            unquote param-next
-                                                            unquote-splice extra-names
-                                                let (unquote-splice dest-names) =
-                                                    unquote param-at
-                                                unquote-splice body
-                                    unquote-splice
-                                        syntax-eol expr
+                                fn/cc (unquote param-for) (
+                                    (unquote param-ret)
+                                    (unquote param-iter)
+                                    (unquote param-state)
+                                    (unquote-splice extra-names))
+                                    let (unquote param-at) (unquote param-next) =
+                                        (unquote param-iter) (unquote param-state)
+                                    ? (==? (unquote param-next) none)
+                                        unquote
+                                            syntax-do else-block
+                                        do
+                                            fn/cc repeat (
+                                                (unquote param-inner-ret)
+                                                (unquote-splice extra-names))
+                                                ;
+                                                    unquote param-for
+                                                    unquote param-iter
+                                                    unquote param-next
+                                                    unquote-splice extra-names
+                                            let (unquote-splice dest-names) =
+                                                unquote param-at
+                                            unquote-splice body
                                 let iter-val state-val =
                                     (disqualify iterator (iter (unquote src-expr)))
                                 ;
@@ -1557,75 +1451,86 @@ syntax-extend stage-5 (return env)
                 else
                     # no extra state params
                     generate-template body expr-eol expr-eol
+    \ syntax-scope
 
-    set-scope-symbol! env (quote fn)
-        # an extended version of function that permits chaining
-          sequential cross-dependent declarations with a `with` keyword
-          (fn [name] (param ...) body ...) with (fn ...) ...
-        block-macro
-            do
-                fn parse-funcdef (topexpr k head)
+define fn
+    # an extended version of function that permits chaining
+      sequential cross-dependent declarations with a `with` keyword
+      and binds the function itself to `recur`
+      (fn [name] (param ...) body ...) with (fn ...) ...
+    block-macro
+        do
+            fn (topexpr env)
+                fn parse-funcdef (topexpr k head nextfunc)
                     let expr =
                         @ topexpr 0
+                    let expr-anchor =
+                        syntax->anchor expr
                     assert (syntax-head? expr head)
                         "function definition expected after 'with'"
                     let decl =
-                        @ (@ topexpr 0) 1
+                        @ expr 1
                     let retparam =
                         quote-syntax return
-                    let make-params-body =
-                        fn (param-idx)
-                            syntax-cons
-                                syntax-cons retparam
-                                    @ expr param-idx
-                                slice expr (+ param-idx 1)
+                    fn make-params-body (name body)
+                        let func =
+                            flow
+                                ? (none? name)
+                                    datum->syntax
+                                        symbol ""
+                                        \ expr-anchor
+                                    \ name
+                        let retparam = (parameter retparam)
+                        flow-append-parameter! func retparam
+                        if (not (none? name))
+                            set-scope-symbol! env name func
+                        let subenv = (scope env)
+                        set-scope-symbol! subenv (quote recur) func
+                        set-scope-symbol! subenv (quote return) retparam
+                        loop-for param-name in (syntax->datum (@ body 0))
+                            let param = (parameter param-name)
+                            set-scope-symbol! subenv (syntax->datum param-name) param
+                            flow-append-parameter! func param
+                            repeat
+                        fn (rest)
+                            cons
+                                @
+                                    expand
+                                        list
+                                            syntax-cons
+                                                quote-syntax form-fn-body
+                                                syntax-cons
+                                                    datum->syntax func expr-anchor
+                                                    slice body 1
+                                        \ subenv
+                                    \ 0
+                                nextfunc rest
+
                     let rest =
                         slice topexpr 1
                     if (symbol? (syntax->datum decl))
-                        # build single xlet assignment
-                        let func-expr =
-                            qquote
-                                (unquote decl) =
-                                    fn/cc (unquote (@ expr 1))
-                                        unquote-splice
-                                            make-params-body 2
-                        let result-body result-rest =
-                            if (empty? rest)
-                                _
-                                    syntax-list func-expr
-                                    syntax-list decl
-                            elseif
-                                and (list? (syntax->datum (@ rest 0)))
-                                    syntax-head? (@ rest 0) (quote with)
-                                let defs defs-rest =
-                                    parse-funcdef (slice rest 1) (k + 1) head
-                                _
-                                    syntax-cons func-expr defs
-                                    \ defs-rest
-                            else
-                                _ (syntax-list func-expr) rest
-                        if (k == 0)
-                            cons
-                                syntax-cons
-                                    quote-syntax xlet
-                                    \ result-body
-                                \ result-rest
+                        let f =
+                            make-params-body decl
+                                slice expr 2
+                        if
+                            and
+                                not (empty? rest)
+                                syntax-head? (@ rest 0) (quote with)
+                            parse-funcdef (slice rest 1) (k + 1) head f
                         else
-                            _ result-body result-rest
+                            return f rest
                     else
                         assert (k == 0)
                             "unnamed function can not be chained"
                         # regular, unchained form
-                        cons
-                            syntax-cons
-                                quote-syntax fn/cc
-                                make-params-body 1
+                        return
+                            make-params-body none
+                                slice expr 1
                             \ rest
-
-                fn (topexpr)
+                let result-f result-rest =
                     parse-funcdef topexpr 0 (@ (@ topexpr 0) 0)
-
-    return env
+                        fn (rest) rest
+                result-f result-rest
 
 define read-eval-print-loop
     fn repeat-string (n c)
@@ -1669,13 +1574,13 @@ define read-eval-print-loop
           table so it can be used for the next expression.
         let expression-suffix =
             qquote
-                syntax-extend (return env)
+                syntax-extend
                     ;
                         unquote
                             datum->syntax capture-scope
                                 active-anchor
-                        \ env
-                    return env
+                        \ syntax-scope
+                    \ syntax-scope
         fn make-idstr ()
             .. "$"
                 string (get-scope-symbol state (quote counter))
@@ -1738,9 +1643,9 @@ define read-eval-print-loop
                 else cmdlist
             repeat preload cmdlist
 
-syntax-extend stage-final (return env)
-    set-globals! env
-    return env
+syntax-extend
+    set-globals! syntax-scope
+    \ syntax-scope
 
 fn print-help (exename)
     print "usage:" exename "[option [...]] [filename]
