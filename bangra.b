@@ -1241,7 +1241,7 @@ syntax-extend
 
     fn varargs-iter (f)
         let args... = (f)
-        if (> (va-countof args) (size_t 0))
+        if (> (va-countof args...) (size_t 0))
             let first rest... = args...
             return first
                 fn () rest...

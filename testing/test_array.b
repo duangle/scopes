@@ -11,27 +11,38 @@ fn align (offset align)
     assert-type align size_t
     (offset + align - (size_t 1)) & (~ (align - (size_t 1)))
 
-print
-    align
-        size_t 3
-        size_t 4
-
 set-type-symbol! array (quote apply-type)
     fn apply-array-type (count element)
         assert-type count size_t
         assert-type element type
         let etype =
             type (symbol (.. "[" (string count) " x " (string element) "]"))
-        let alignment =
-            alignof element
-        set-type-symbol! etype (quote size)
-            (align (sizeof element) alignment) * count
-        set-type-symbol! etype (quote alignment) alignment
+        if (none? (. etype complete))
+            let alignment = (alignof element)
+            let stride = (align (sizeof element) alignment)
+            set-type-symbol! etype (quote size) (stride * count)
+            set-type-symbol! etype (quote alignment) alignment
+            set-type-symbol! etype (quote apply-type)
+                fn apply-typed-array-type (args...)
+                    let self =
+                        alloc etype
+                    let argcount = (va-countof args...)
+                    assert (argcount == count)
+                        .. (string (int count)) " elements expected, got "
+                            string (int argcount)
+                    loop-for i arg in (enumerate (va-iter args...))
+                        print i arg
+                        repeat
+
+                    \ self
+            set-type-symbol! etype (quote complete) true
+
         \ etype
 
-print
+let a4xint =
     array (size_t 4) int
-
+print
+    a4xint 1 2 3 4
 
 define somelist
     quote (1 2 3 4)
