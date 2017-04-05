@@ -29,6 +29,7 @@ local function bangra_symbols()
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax recur"
+        .. " fn-types"
         ),
 
     -- builtin and global functions
@@ -44,7 +45,7 @@ local function bangra_symbols()
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
-        .. " zip-fill"
+        .. " zip-fill integer? callable?"
         ),
 
     -- builtin and global functions with side effects
@@ -65,7 +66,7 @@ local function bangra_symbols()
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
         .. " pointer struct enum bool uint qualifier syntax anchor scope"
-        .. " iterator type size_t usize_t ssize_t void*"
+        .. " iterator type size_t usize_t ssize_t void* callable"
         )
     }
 end

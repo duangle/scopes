@@ -28,7 +28,7 @@ local global_opts = {
     version_patch = 0,
 
     trace_execution = false, -- print each statement being executed
-    print_lua_traceback = true, -- print lua traceback on any error
+    print_lua_traceback = false, -- print lua traceback on any error
     validate_macros = false, -- validate each macro result
     stack_limit = 65536, -- recursion limit
 
@@ -1204,6 +1204,7 @@ local function define_types(def)
     def('Void')
     def('Any')
     def('Type')
+    def('Callable')
 
     def('Bool')
 
@@ -2234,6 +2235,7 @@ local KEYWORDS = set(split(
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax recur"
+        .. " fn-types"
     ))
 
     -- builtin and global functions
@@ -2249,7 +2251,7 @@ local FUNCTIONS = set(split(
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
-        .. " zip-fill"
+        .. " zip-fill integer? callable?"
     ))
 
 -- builtin and global functions with side effects
@@ -2269,7 +2271,7 @@ local TYPES = set(split(
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
         .. " pointer struct enum bool uint qualifier syntax anchor scope"
-        .. " iterator type size_t usize_t ssize_t void*"
+        .. " iterator type size_t usize_t ssize_t void* callable"
     ))
 
 local function StreamValueFormat(naked, depth, opts)
@@ -4241,6 +4243,9 @@ builtins.parameter = Type.Parameter
 builtins.flow = Type.Flow
 builtins.string = Type.String
 builtins.closure = Type.Closure
+builtins.integer = Type.Integer
+builtins.real = Type.Real
+builtins.callable = Type.Callable
 
 builtins["debug-build?"] = Any(bool(global_opts.debug))
 
@@ -5476,6 +5481,10 @@ function Type.Builtin:format_value(x)
 end
 
 local function init_globals()
+    Type.Builtin:bind(Any(Symbol.Super), Any(Type.Callable))
+    Type.Flow:bind(Any(Symbol.Super), Any(Type.Callable))
+    Type.Closure:bind(Any(Symbol.Super), Any(Type.Callable))
+
     local function configure_int_type(_type, ctype, fmt)
         local refct = reflect.typeof(ctype)
         _type:bind(Any(Symbol.Size), Any(size_t(refct.size)))

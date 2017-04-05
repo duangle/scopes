@@ -194,6 +194,21 @@ syntax-extend
 
 syntax-extend
     set-scope-symbol! syntax-scope
+        quote callable?
+        fn/cc "callable?" (return x)
+            return
+                <? (typeof x) callable
+    set-scope-symbol! syntax-scope
+        quote integer?
+        fn/cc "integer?" (return x)
+            return
+                <? (typeof x) integer
+    set-scope-symbol! syntax-scope
+        quote real?
+        fn/cc "real?" (return x)
+            return
+                <? (typeof x) real
+    set-scope-symbol! syntax-scope
         quote symbol?
         fn/cc "symbol?" (return x)
             return
@@ -1686,6 +1701,50 @@ syntax-extend
                     make-params-body none
                         slice expr 1
     \ syntax-scope
+
+# (fn-types type ...)
+define fn-types
+    fn assert-type (param-name atype value...)
+        if (not (none? atype))
+            if (callable? atype)
+                assert (atype value...)
+                    .. param-name ": value of type " (string (typeof value...)) " failed predicate"
+            else
+                let valuetype = (typeof value...)
+                assert (valuetype ==? atype)
+                    .. param-name ": "
+                        \ (string atype) " expected, not " (string valuetype)
+    macro
+        fn (expr env)
+            let assert-type-fn =
+                datum->syntax assert-type (syntax->anchor expr)
+            syntax-do
+                loop-for i param expected-type-arg in
+                    enumerate
+                        zip-fill
+                            flow-parameters env.recur
+                            syntax->datum expr
+                            quote-syntax none
+                    let param-label =
+                        .. "parameter #" (string i) " '"
+                            \ (string (parameter-name param)) "'"
+                    if (i == 0)
+                        continue
+                    else
+                        syntax-cons
+                            qquote
+                                (unquote assert-type-fn)
+                                    unquote
+                                        datum->syntax param-label
+                                            parameter-anchor param
+                                    unquote expected-type-arg
+                                    unquote
+                                        datum->syntax param
+                                            parameter-anchor param
+                                    unquote-splice
+                                        syntax-eol expr
+                            continue
+                else (syntax-eol expr)
 
 define read-eval-print-loop
     fn repeat-string (n c)

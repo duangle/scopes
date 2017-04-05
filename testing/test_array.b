@@ -2,38 +2,14 @@
 define array
     type (quote array)
 
-fn assert-type (value atype)
-    assert ((typeof value) ==? atype)
-        .. (string atype) "expected"
-
-# (checkargs type ...)
-define checkargs
-    macro
-        fn (expr env)
-            loop-for i param expected-type in
-                enumerate
-                    zip-fill
-                        flow-parameters env.recur
-                        syntax->datum
-                            slice expr 1
-                        quote-syntax any
-                print i param expected-type
-                continue
-
-            qquote (do)
-
-
-
 fn align (offset align)
-    checkargs size_t size_t
-    assert-type offset size_t
-    assert-type align size_t
-    (offset + align - (size_t 1)) & (~ (align - (size_t 1)))
+    let T = (typeof offset)
+    fn-types integer? T
+    (offset + align - (T 1)) & (~ (align - (T 1)))
 
 set-type-symbol! array (quote apply-type)
     fn apply-array-type (count element)
-        assert-type count size_t
-        assert-type element type
+        fn-types size_t type
         let etype =
             type (symbol (.. "[" (string count) " x " (string element) "]"))
         if (none? (. etype complete))
@@ -52,10 +28,8 @@ set-type-symbol! array (quote apply-type)
                     loop-for i arg in (enumerate (va-iter args...))
                         print i arg
                         continue
-
                     \ self
             set-type-symbol! etype (quote complete) true
-
         \ etype
 
 let a4xint =
