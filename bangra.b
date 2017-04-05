@@ -1218,46 +1218,51 @@ syntax-extend
                     return t key
                 \ key value
 
-    fn gen-yield-iter (callee)
-        let caller-return = none
-        let yield-iter =
-            fn/cc "yield-iter" (return ret)
-                # store caller continuation in state
-                set! caller-return return
-                branch (none? ret) # first invocation
-                    fn/cc (_)
-                        # invoke callee with yield function as first argument
-                        callee
-                            fn/cc (ret value)
-                                # continue caller
-                                caller-return ret value
-                        # callee has returned for good
-                          resume caller - we're done here.
-                        cc/call none caller-return
-                    fn/cc (_)
-                        # continue callee
-                        cc/call none ret
-
-        new-iterator yield-iter none
-
-    # TODO: allow types to overload iterator generation
     fn iter (x)
         if (iterator? x) x
         else
             let t = (typeof x)
-            if (<=? t list)
-                new-iterator countable-rslice-iter x
-            elseif (<=? t scope)
-                new-iterator scope-iter
-                    fn () (return x none)
-            elseif (<=? t string)
-                new-iterator countable-iter
-                    fn () (return x (size_t 0))
-            elseif (<=? t closure)
-                gen-yield-iter x
-            else
+            let make-iter = t.iter
+            if (none? make-iter)
                 error
                     .. "don't know how to iterate value of type " (string t)
+            else
+                new-iterator
+                    make-iter x
+
+    set-type-symbol! list (quote iter)
+        fn list-iter (self)
+            return countable-rslice-iter self
+    set-type-symbol! scope (quote iter)
+        fn scope-iter (self)
+            return scope-iter
+                fn () (return self none)
+    set-type-symbol! string (quote iter)
+        fn string-iter (self)
+            return countable-iter
+                fn () (return self (size_t 0))
+    set-type-symbol! closure (quote iter)
+        fn gen-yield-iter (callee)
+            let caller-return = none
+            let yield-iter =
+                fn/cc "yield-iter" (return ret)
+                    # store caller continuation in state
+                    set! caller-return return
+                    branch (none? ret) # first invocation
+                        fn/cc (_)
+                            # invoke callee with yield function as first argument
+                            callee
+                                fn/cc (ret value)
+                                    # continue caller
+                                    caller-return ret value
+                            # callee has returned for good
+                              resume caller - we're done here.
+                            cc/call none caller-return
+                        fn/cc (_)
+                            # continue callee
+                            cc/call none ret
+
+            return yield-iter none
 
     fn varargs-iter (f)
         let args... = (f)
@@ -1745,6 +1750,91 @@ define fn-types
                                         syntax-eol expr
                             continue
                 else (syntax-eol expr)
+
+#-------------------------------------------------------------------------------
+# C-compatible array type
+#-------------------------------------------------------------------------------
+
+define array
+    type (quote array)
+
+fn align (offset align)
+    let T = (typeof offset)
+    fn-types integer? T
+    (offset + align - (T 1)) & (~ (align - (T 1)))
+
+set-type-symbol! array (quote apply-type)
+    fn apply-array-type (element count)
+        fn-types type size_t
+        let etype =
+            type (symbol (.. "[" (string count) " x " (string element) "]"))
+        if (none? (. etype complete))
+            let sz = (sizeof element)
+            let alignment = (alignof element)
+            let stride = (align sz alignment)
+            set-type-symbol! etype (quote size) (stride * count)
+            set-type-symbol! etype (quote alignment) alignment
+            set-type-symbol! etype (quote apply-type)
+                fn apply-typed-array-type (args...)
+                    let self =
+                        alloc etype
+                    let argcount = (va-countof args...)
+                    assert (argcount == count)
+                        .. (string (int count)) " elements expected, got "
+                            string (int argcount)
+                    loop-for i arg in (enumerate (va-iter args...))
+                        let offset = (stride * (size_t i))
+                        copy-memory! self offset arg (size_t 0) sz
+                        continue
+                    \ self
+            set-type-symbol! etype (quote @)
+                fn array-type-at (self at)
+                    fn-types none integer?
+                    let offset = (stride * (size_t at))
+                    extract-memory element self offset
+            set-type-symbol! etype (quote countof)
+                fn array-countof (self) count
+            set-type-symbol! etype (quote slice)
+                fn array-type-at (self i0 i1)
+                    fn-types none size_t size_t
+                    let num = (i1 - i0)
+                    let offset = (stride * (size_t i0))
+                    let T = (array element num)
+                    extract-memory T self offset
+            set-type-symbol! etype (quote repr)
+                fn array-type-repr (self styler)
+                    loop
+                        with
+                            i = (size_t 0)
+                            s = (styler Style.Operator "[")
+                        if (i < count)
+                            continue
+                                i + (size_t 1)
+                                .. s
+                                    ? (i > (size_t 0)) " " ""
+                                    repr (@ self i) styler
+                        else
+                            .. s (styler Style.Operator "]")
+            set-type-symbol! etype (quote iter)
+                fn gen-array-type-iter (self)
+                    return
+                        fn countable-iter (i)
+                            if (i < count)
+                                return
+                                    i + (size_t 1)
+                                    @ self i
+                        size_t 0
+
+            set-type-symbol! etype (quote complete) true
+        \ etype
+
+fn arrayof (atype values...)
+    call
+        array atype
+            va-countof values...
+        \ values...
+
+#-------------------------------------------------------------------------------
 
 define read-eval-print-loop
     fn repeat-string (n c)

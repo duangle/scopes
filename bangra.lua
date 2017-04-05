@@ -975,6 +975,7 @@ local function define_symbols(def)
     def({RShift='>>'})
     def({Pow='**'})
     def({Repr='repr'})
+    def({Styler='styler'})
 
     -- ad-hoc builtin names
     def({ExecuteReturn='execute-return'})
@@ -2251,13 +2252,13 @@ local FUNCTIONS = set(split(
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
-        .. " zip-fill integer? callable?"
+        .. " zip-fill integer? callable? extract-memory"
     ))
 
 -- builtin and global functions with side effects
 local SFXFUNCTIONS = set(split(
     "set-scope-symbol! set-type-symbol! set-globals! set-exception-handler!"
-        .. " bind! set!"
+        .. " bind! set! copy-memory!"
     ))
 
 -- builtin operator functions that can also be used as infix
@@ -3339,7 +3340,12 @@ function Type:format_value(value, styler)
         local result
         execute(function(value)
             result = unwrap(Type.String, value)
-        end, reprf, Any(self, value))
+        end, reprf, Any(self, value), Any(Builtin(function(frame, cont, self, style, text)
+            return call(frame, none, cont,
+                Any(styler(
+                    unwrap(Type.String, style),
+                    unwrap(Type.String, text))))
+        end, Symbol.Styler)))
         return result
     end
     if type(value) == "table" then
@@ -5093,7 +5099,7 @@ builtins.slice = function(frame, cont, self, obj, start_index, end_index)
             else
                 i1 = l
             end
-            return fwd_slice(frame, cont, none, obj, Any(i0), Any(i1))
+            return fwd_slice(frame, cont, none, obj, Any(size_t(i0)), Any(size_t(i1)))
         end, Symbol.SliceForwarder)), countof, obj)
 end
 
@@ -5267,6 +5273,47 @@ builtins["parameter-type"] = wrap_simple_builtin(function(param)
     return Any(param.type)
 end)
 
+
+local valtoptr
+do
+    local supported = set({'int','float','struct'})
+    local passthru = set({'array'})
+    valtoptr = function(x)
+        local xtype = reflect.typeof(x).what
+        if passthru[xtype] then
+            return x
+        elseif not supported[xtype] then
+            error("C type category " .. xtype .. " not supported")
+        end
+        local T1 = typeof('$[$]', ffi.typeof(x), 1)
+        return(T1(x))
+    end
+end
+
+builtins["extract-memory"] = wrap_simple_builtin(function(_type, value, offset)
+    checkargs(3,3, _type, value, offset)
+    _type = unwrap(Type.Type, _type)
+    offset = unwrap(Type.SizeT, offset)
+    local dstsz = _type:size()
+    local srcsz = value.type:size()
+    value = value.value
+    assert(type(value) == "cdata", "source has no memory address")
+    value = valtoptr(value)
+    assert((offset + dstsz) <= srcsz, "source offset out of bounds")
+    local ctype = rawget(_type, 'ctype')
+    local ptr = value + offset
+    if ctype then
+        ptr = cast(typeof('$*', ctype), ptr)
+        ptr = cast(typeof('$&', ctype), ptr)
+        ptr = cast(ctype, ptr)
+        return Any(_type, ptr)
+    else
+        local buf = new(typeof('$[$]', uint8_t, tonumber(dstsz)))
+        ffi.copy(buf, ptr, dstsz)
+        return Any(_type, buf)
+    end
+end)
+
 -- data manipulation
 --------------------------------------------------------------------------------
 
@@ -5299,6 +5346,24 @@ builtins["flow-append-parameter!"] = wrap_simple_builtin(function(flow, param)
     flow:append_parameter(param)
 end)
 
+builtins["copy-memory!"] = wrap_simple_builtin(
+    function(dst, dstofs, src, srcofs, srcsz)
+        checkargs(5,5, dst, dstofs, src, srcofs, srcsz)
+        dstofs = unwrap(Type.SizeT, dstofs)
+        srcofs = unwrap(Type.SizeT, srcofs)
+        srcsz = unwrap(Type.SizeT, srcsz)
+        dst = dst.value
+        src = src.value
+        assert(type(dst) == "cdata", "destination has no memory address")
+        assert(type(src) == "cdata", "source has no memory address")
+        src = valtoptr(src)
+        assert((dstofs + srcsz) <= ffi.sizeof(dst), "destination offset out of bounds")
+        assert((srcofs + srcsz) <= ffi.sizeof(src), "source offset out of bounds")
+        ffi.copy(dst + dstofs, src + srcofs, srcsz)
+    end)
+
+--copy-memory! self offset arg (size_t 0) sz
+
 -- varargs
 --------------------------------------------------------------------------------
 
@@ -5312,11 +5377,6 @@ end)
 
 -- auxiliary utilities
 --------------------------------------------------------------------------------
-
-builtins.repr = wrap_simple_builtin(function(value)
-    checkargs(1,1,value)
-    return Any(tostring(value))
-end)
 
 builtins.dump = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
@@ -5332,6 +5392,21 @@ end)
 builtins["dump-IL"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     stream_il(stdout_writer, value)
+end)
+
+builtins.repr = wrap_simple_builtin(function(value, styler)
+    checkargs(1,2,value, styler)
+    if styler == null then
+        return Any(value.type:format_value(value.value, plain_styler))
+    else
+        return Any(value.type:format_value(value.value, function(style, text)
+            local result
+            execute(function(ret)
+                result = unwrap(Type.String, ret)
+            end, styler, Any(style), Any(text))
+            return result
+        end))
+    end
 end)
 
 builtins.print = wrap_simple_builtin(function(...)
