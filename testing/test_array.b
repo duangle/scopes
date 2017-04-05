@@ -6,25 +6,17 @@ fn assert-type (value atype)
     assert ((typeof value) ==? atype)
         .. (string atype) "expected"
 
-loop-for x y in
-    repeat
-        product
-            list 1 2 3
-            list 4 5 6
-        \ 3
-    print x y
-    continue
-
 # (checkargs type ...)
 define checkargs
     macro
         fn (expr env)
             loop-for i param expected-type in
                 enumerate
-                    zip
+                    zip-fill
                         flow-parameters env.recur
                         syntax->datum
                             slice expr 1
+                        quote-syntax any
                 print i param expected-type
                 continue
 

@@ -44,6 +44,7 @@ local function bangra_symbols()
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
+        .. " zip-fill"
         ),
 
     -- builtin and global functions with side effects

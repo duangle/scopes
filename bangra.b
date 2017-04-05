@@ -1270,10 +1270,14 @@ syntax-extend
     # repeats a sequence n times or indefinitely
     fn repeat (x n)
         let nextf init = ((disqualify iterator (iter x)))
+        let pred =
+            ? (none? n)
+                fn (i n) true
+                fn (i n) (i < n)
         new-iterator
             fn repeat-next (f)
                 let state i = (f)
-                if (i < n)
+                if (pred i n)
                     let next-state at... = (nextf state)
                     if (none? next-state) # iterator depleted?
                         # restart
@@ -1284,7 +1288,7 @@ syntax-extend
                     else
                         return
                             fn ()
-                                return next-state  i
+                                return next-state i
                             \ at...
             fn ()
                 return init 0
@@ -1355,7 +1359,44 @@ syntax-extend
             fn ()
                 return init-a init-b
 
-    fn infrange (a b)
+    fn zip-fill (a b a-fill b-fill...)
+        let b-fill... =
+            ? (none? b-fill...) a-fill b-fill...
+        new-iterator
+            fn (f)
+                let iter-a iter-b a b = (f)
+                let next-a at-a... =
+                    if (none? iter-a)
+                        _ none a-fill
+                    else
+                        iter-a a
+                let next-b at-b... =
+                    if (none? iter-b)
+                        _ none b-fill...
+                    else
+                        iter-b b
+                let k iter-a at-a... =
+                    if (none? next-a)
+                        _ 0 none a-fill
+                    else
+                        _ 1 iter-a at-a...
+                let k iter-b at-b... =
+                    if (none? next-b)
+                        _ k none b-fill...
+                    else
+                        _ (k + 1) iter-b at-b...
+                if (k > 0)
+                    return
+                        fn ()
+                            return iter-a iter-b next-a next-b
+                        \ at-a... at-b...
+            do
+                let iter-a init-a = ((disqualify iterator (iter a)))
+                let iter-b init-b = ((disqualify iterator (iter b)))
+                fn ()
+                    return iter-a iter-b init-a init-b
+
+    fn inf-range (a b)
         let num-type =
             ? (none? a)
                 ? (none? b) int (typeof b)
@@ -1368,7 +1409,7 @@ syntax-extend
             \ from
 
     fn enumerate (x from step)
-        zip (infrange from step) (iter x)
+        zip (inf-range from step) (iter x)
 
     fn =? (x)
         and
@@ -1414,7 +1455,10 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote product) product
     set-scope-symbol! syntax-scope (quote concat) concat
     set-scope-symbol! syntax-scope (quote zip) zip
+    set-scope-symbol! syntax-scope (quote zip-fill) zip-fill
     set-scope-symbol! syntax-scope (quote enumerate) enumerate
+    set-scope-symbol! syntax-scope (quote inf-range) inf-range
+    set-scope-symbol! syntax-scope (quote zip-fill) zip-fill
     set-scope-symbol! syntax-scope (quote loop)
         # better loop with support for initializers
         macro
