@@ -714,19 +714,19 @@ define loop
     macro
         fn loop (expr)
             let expr-anchor = (syntax->anchor expr)
-            let param-repeat =
-                quote-syntax repeat
+            let param-continue =
+                quote-syntax continue
             let param-break =
                 quote-syntax break
             qquote
                 do
-                    fn/cc (unquote param-repeat) (
+                    fn/cc (unquote param-continue) (
                         (unquote param-break)
                         (unquote-splice (@ expr 1)))
                         unquote-splice
                             slice expr 2
                     ;
-                        unquote param-repeat
+                        unquote param-continue
                         unquote-splice (@ expr 1)
 
 define syntax-infix-rules
@@ -764,7 +764,7 @@ syntax-extend
             if (none? it)
                 return out
             else
-                repeat
+                continue
                     f out val
                     next it
 
@@ -851,10 +851,10 @@ syntax-extend
                     if (none? nextop)
                         break rhs state
                     let nextop-prec = (nextop)
-                    repeat
+                    continue
                         parse-infix-expr infix-table rhs state
                             \ nextop-prec
-            repeat
+            continue
                 datum->syntax
                     list op-name lhs next-rhs
                     syntax->anchor la
@@ -912,7 +912,7 @@ syntax-extend
                             \ name content
                         \ content
                     else
-                        repeat
+                        continue
                             slice pattern 1
                 else
                     error
@@ -935,7 +935,7 @@ syntax-extend
                     if (empty? rest)
                         syntax-cons wrapped-op tail
                     else
-                        repeat
+                        continue
                             syntax-cons
                                 syntax-list wrapped-op
                                     @ tail 0
@@ -1174,6 +1174,8 @@ syntax-extend
     fn iterator? (x)
         (typeof x) <? iterator
 
+    # `start` is a private token passed to `next`, which is an iterator
+      function of the format (next token) -> next-token value ... | none
     fn new-iterator (next start)
         qualify iterator
             fn iterator-tuple ()
@@ -1181,23 +1183,25 @@ syntax-extend
 
     fn countable-rslice-iter (l)
         if (not (empty? l))
-            return (@ l 0) (slice l 1)
+            return (slice l 1) (@ l 0)
 
     fn countable-iter (f)
         let c i = (f)
         if (i < (countof c))
-            return (@ c i)
+            return
                 fn ()
                     return c (i + (size_t 1))
+                @ c i
 
     fn scope-iter (f)
         let t k = (f)
         let key value =
             next-scope-symbol t k
         if (not (none? key))
-            return key value
+            return
                 fn ()
                     return t key
+                \ key value
 
     fn gen-yield-iter (callee)
         let caller-return = none
@@ -1211,7 +1215,7 @@ syntax-extend
                         callee
                             fn/cc (ret value)
                                 # continue caller
-                                caller-return value ret
+                                caller-return ret value
                         # callee has returned for good
                           resume caller - we're done here.
                         cc/call none caller-return
@@ -1221,6 +1225,7 @@ syntax-extend
 
         new-iterator yield-iter none
 
+    # TODO: allow types to overload iterator generation
     fn iter (x)
         if (iterator? x) x
         else
@@ -1237,14 +1242,15 @@ syntax-extend
                 gen-yield-iter x
             else
                 error
-                    .. "don't know how to iterate " (string x)
+                    .. "don't know how to iterate value of type " (string t)
 
     fn varargs-iter (f)
         let args... = (f)
         if (> (va-countof args...) (size_t 0))
             let first rest... = args...
-            return first
+            return
                 fn () rest...
+                \ first
 
     fn va-iter (args...)
         new-iterator varargs-iter
@@ -1258,8 +1264,32 @@ syntax-extend
         new-iterator
             fn (x)
                 if (< x to)
-                    return x (+ x step)
+                    return (+ x step) x
             \ from
+
+    fn join (a b)
+        let iter-a init-a = ((disqualify iterator (iter a)))
+        let iter-b init-b = ((disqualify iterator (iter b)))
+        new-iterator
+            fn (f)
+                let next-iter next-init iter-f iter-state = (f)
+                let next-state at... = (iter-f iter-state)
+                if (none? next-state) # iterator depleted?
+                    if (none? next-iter) # no more iterators to walk?
+                        return
+                    else # start second iterator
+                        let next-state at... = (next-iter next-init)
+                        return
+                            fn ()
+                                return none none next-iter next-state
+                            \ at...
+                else # iterator not depleted yet
+                    return
+                        fn ()
+                            return next-iter next-init iter-f next-state
+                        \ at...
+            fn ()
+                return iter-b init-b iter-a init-a
 
     fn zip (a b)
         let iter-a init-a = ((disqualify iterator (iter a)))
@@ -1267,12 +1297,13 @@ syntax-extend
         new-iterator
             fn (f)
                 let a b = (f)
-                let at-a... next-a = (iter-a a)
-                let at-b... next-b = (iter-b b)
+                let next-a at-a... = (iter-a a)
+                let next-b at-b... = (iter-b b)
                 if (not (or (none? next-a) (none? next-b)))
-                    return at-a... at-b...
+                    return
                         fn ()
                             return next-a next-b
+                        \ at-a... at-b...
             fn ()
                 return init-a init-b
 
@@ -1285,7 +1316,7 @@ syntax-extend
         let from = (? (none? a) (num-type 0) a)
         new-iterator
             fn (x)
-                return x (+ x step)
+                return (+ x step) x
             \ from
 
     fn enumerate (x from step)
@@ -1308,7 +1339,7 @@ syntax-extend
                 break expr-eol expr-eol
             else
                 let args names =
-                    repeat (slice expr 1)
+                    continue (slice expr 1)
                 let elem = (@ expr 0)
                 if (symbol? elem)
                     break
@@ -1331,6 +1362,7 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote va-iter) va-iter
     set-scope-symbol! syntax-scope (quote iterator?) iterator?
     set-scope-symbol! syntax-scope (quote range) range
+    set-scope-symbol! syntax-scope (quote join) join
     set-scope-symbol! syntax-scope (quote zip) zip
     set-scope-symbol! syntax-scope (quote enumerate) enumerate
     set-scope-symbol! syntax-scope (quote loop)
@@ -1338,21 +1370,21 @@ syntax-extend
         macro
             fn loop (expr)
                 let expr-anchor = (syntax->anchor expr)
-                let param-repeat =
-                    quote-syntax repeat
+                let param-continue =
+                    quote-syntax continue
                 let param-break =
                     quote-syntax break
                 let args names =
                     parse-loop-args (@ expr 1)
                 qquote
                     do
-                        fn/cc (unquote param-repeat) (
+                        fn/cc (unquote param-continue) (
                             (unquote param-break)
                             (unquote-splice names))
                             unquote-splice
                                 slice expr 2
                         ;
-                            unquote param-repeat
+                            unquote param-continue
                             unquote-splice args
 
     set-scope-symbol! syntax-scope (quote loop-for)
@@ -1419,13 +1451,13 @@ syntax-extend
                                     (unquote param-iter)
                                     (unquote param-state)
                                     (unquote-splice extra-names))
-                                    let (unquote param-at) (unquote param-next) =
+                                    let (unquote param-next) (unquote param-at) =
                                         (unquote param-iter) (unquote param-state)
                                     ? (==? (unquote param-next) none)
                                         unquote
                                             syntax-do else-block
                                         do
-                                            fn/cc repeat (
+                                            fn/cc continue (
                                                 (unquote param-inner-ret)
                                                 (unquote-splice extra-names))
                                                 ;
@@ -1459,6 +1491,9 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    # extended function body macro expander that binds the function itself
+      to `recur` and a list of all parameters to `parameters` for further
+      macro processing.
     fn make-function-body (env decl paramdef body expr-anchor nextfunc)
         if (not (list? (syntax->datum paramdef)))
             syntax-error paramdef "parameter list expected"
@@ -1482,7 +1517,7 @@ syntax-extend
             let param = (parameter param-name)
             set-scope-symbol! subenv (syntax->datum param-name) param
             flow-append-parameter! func param
-            repeat
+            continue
         fn (rest)
             cons
                 @
@@ -1527,7 +1562,7 @@ syntax-extend
                         fn (rest) rest
                     slice topexpr 1
 
-    # an extended version of fn that binds the function itself to `recur`
+    # an extended version of fn
       (fn [name] (param ...) body ...) with (fn ...) ...
     set-scope-symbol! syntax-scope (quote fn)
         block-macro
@@ -1562,20 +1597,20 @@ define read-eval-print-loop
     fn repeat-string (n c)
         loop-for i in (range n)
             with (s = "")
-            repeat (s .. c)
+            continue (s .. c)
         else s
     fn get-leading-spaces (s)
         loop-for c in s
             with (out = "")
             if (c == " ")
-                repeat (out .. c)
+                continue (out .. c)
             else out
         else out
 
     fn has-chars (s)
         loop-for i in s
             if (i != " ") true
-            else (repeat)
+            else (continue)
         else false
 
     fn ()
@@ -1660,14 +1695,14 @@ define read-eval-print-loop
                                 set-scope-symbol! eval-env id value
                                 set-scope-symbol! state (quote counter)
                                     (get-scope-symbol state (quote counter)) + 1
-                                repeat
+                                continue
                     except (e)
                         print
                             traceback slevel 2
                         print "error:" e
                     \ ""
                 else cmdlist
-            repeat preload cmdlist
+            continue preload cmdlist
 
 syntax-extend
     set-globals! syntax-scope
@@ -1722,7 +1757,7 @@ fn run-main (args...)
                     .. "unrecognized argument: " arg
                         \ ". Try --help for help."
                 exit 1
-            repeat (i + 1)
+            continue (i + 1)
 
     if (none? sourcepath)
         read-eval-print-loop

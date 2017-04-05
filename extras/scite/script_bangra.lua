@@ -25,7 +25,7 @@ local function bangra_symbols()
     -- keywords and macros
     KEYWORDS = splitstr(getprop("keywords.bangra_lang") or
     "let true false fn xfn quote with ::* ::@ call escape do dump-syntax"
-        .. " syntax-extend if else elseif loop repeat none assert qquote"
+        .. " syntax-extend if else elseif loop continue none assert qquote"
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax recur"
@@ -43,7 +43,7 @@ local function bangra_symbols()
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
-        .. " syntax-unquote syntax-quoted? bitcast"
+        .. " syntax-unquote syntax-quoted? bitcast join repeat"
         ),
 
     -- builtin and global functions with side effects

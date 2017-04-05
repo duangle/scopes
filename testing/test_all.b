@@ -39,7 +39,7 @@ loop-for module in modules
                     traceback
                 print "error running module:" e
                 \ false
-    repeat
+    continue
         ? ok failed (failed + 1)
 else
     print

@@ -1039,8 +1039,11 @@ do
         writer("\n")
         self:stream_source_line(writer, styler)
     end
+    function cls:repr(styler)
+        return styler(Style.Location, self:format_plain())
+    end
     function cls:__tostring()
-        return default_styler(Style.Location, self:format_plain())
+        return self:repr(default_styler)
     end
 end
 
@@ -2227,7 +2230,7 @@ local CONT_SEP = " ⮕ "
 -- keywords and macros
 local KEYWORDS = set(split(
     "let true false fn xfn quote with ::* ::@ call escape do dump-syntax"
-        .. " syntax-extend if else elseif loop repeat none assert qquote"
+        .. " syntax-extend if else elseif loop continue none assert qquote"
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax recur"
@@ -2245,7 +2248,7 @@ local FUNCTIONS = set(split(
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
-        .. " syntax-unquote syntax-quoted? bitcast"
+        .. " syntax-unquote syntax-quoted? bitcast join repeat"
     ))
 
 -- builtin and global functions with side effects
@@ -5166,6 +5169,96 @@ builtins["next-scope-symbol"] = wrap_simple_builtin(function(scope, key)
     else
         return value[1], value[2]
     end
+end)
+
+builtins["closure-flow"] = wrap_simple_builtin(function(closure)
+    checkargs(1,1, closure)
+    closure = unwrap(Type.Closure, closure)
+    return Any(closure.flow)
+end)
+
+builtins["closure-frame"] = wrap_simple_builtin(function(closure)
+    checkargs(1,1, closure)
+    closure = unwrap(Type.Closure, closure)
+    return Any(closure.frame)
+end)
+
+builtins["flow-parameters"] = wrap_simple_builtin(function(flow)
+    checkargs(1,1, flow)
+    flow = unwrap(Type.Flow, flow)
+    local plist = flow.parameters
+    local psize = #plist
+    local function iter_param(i)
+        if i <= psize then
+            return List(Any(plist[i]), iter_param(i+1))
+        else
+            return EOL
+        end
+    end
+    return Any(iter_param(1))
+end)
+
+builtins["flow-arguments"] = wrap_simple_builtin(function(flow)
+    checkargs(1,1, flow)
+    flow = unwrap(Type.Flow, flow)
+    local plist = flow.arguments
+    local psize = #plist
+    local function iter_param(i)
+        if i <= psize then
+            return List(plist[i], iter_param(i+1))
+        else
+            return EOL
+        end
+    end
+    return Any(iter_param(1))
+end)
+
+builtins["flow-anchor"] = wrap_simple_builtin(function(flow)
+    checkargs(1,1, flow)
+    flow = unwrap(Type.Flow, flow)
+    if flow.anchor then
+        return Any(flow.anchor)
+    end
+end)
+
+builtins["flow-body-anchor"] = wrap_simple_builtin(function(flow)
+    checkargs(1,1, flow)
+    flow = unwrap(Type.Flow, flow)
+    if flow.body_anchor then
+        return Any(flow.body_anchor)
+    end
+end)
+
+builtins["flow-name"] = wrap_simple_builtin(function(flow)
+    checkargs(1,1, flow)
+    flow = unwrap(Type.Flow, flow)
+    return Any(flow.name)
+end)
+
+builtins["flow-uid"] = wrap_simple_builtin(function(flow)
+    checkargs(1,1, flow)
+    flow = unwrap(Type.Flow, flow)
+    return Any(size_t(flow.uid))
+end)
+
+builtins["parameter-name"] = wrap_simple_builtin(function(param)
+    checkargs(1,1, param)
+    param = unwrap(Type.Parameter, param)
+    return Any(param.name)
+end)
+
+builtins["parameter-anchor"] = wrap_simple_builtin(function(param)
+    checkargs(1,1, param)
+    param = unwrap(Type.Parameter, param)
+    if param.anchor then
+        return Any(param.anchor)
+    end
+end)
+
+builtins["parameter-type"] = wrap_simple_builtin(function(param)
+    checkargs(1,1, param)
+    param = unwrap(Type.Parameter, param)
+    return Any(param.type)
 end)
 
 -- data manipulation

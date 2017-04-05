@@ -6,7 +6,32 @@ fn assert-type (value atype)
     assert ((typeof value) ==? atype)
         .. (string atype) "expected"
 
+loop-for x in
+    join
+        list 1 2 3
+        list 4 5 6
+    print x
+    continue
+
+# (checkargs type ...)
+define checkargs
+    macro
+        fn (expr env)
+            loop-for i param expected-type in
+                enumerate
+                    zip
+                        flow-parameters env.recur
+                        syntax->datum
+                            slice expr 1
+                print i param expected-type
+                continue
+
+            qquote (do)
+
+
+
 fn align (offset align)
+    checkargs size_t size_t
     assert-type offset size_t
     assert-type align size_t
     (offset + align - (size_t 1)) & (~ (align - (size_t 1)))
@@ -32,7 +57,7 @@ set-type-symbol! array (quote apply-type)
                             string (int argcount)
                     loop-for i arg in (enumerate (va-iter args...))
                         print i arg
-                        repeat
+                        continue
 
                     \ self
             set-type-symbol! etype (quote complete) true
