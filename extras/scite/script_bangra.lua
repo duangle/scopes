@@ -43,7 +43,7 @@ local function bangra_symbols()
         .. " extern-library arrayof get-scope-symbol syntax-cons"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
-        .. " syntax-unquote syntax-quoted? bitcast join repeat"
+        .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
         ),
 
     -- builtin and global functions with side effects

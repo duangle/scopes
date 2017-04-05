@@ -6,11 +6,13 @@ fn assert-type (value atype)
     assert ((typeof value) ==? atype)
         .. (string atype) "expected"
 
-loop-for x in
-    join
-        list 1 2 3
-        list 4 5 6
-    print x
+loop-for x y in
+    repeat
+        product
+            list 1 2 3
+            list 4 5 6
+        \ 3
+    print x y
     continue
 
 # (checkargs type ...)

@@ -1267,7 +1267,55 @@ syntax-extend
                     return (+ x step) x
             \ from
 
-    fn join (a b)
+    # repeats a sequence n times or indefinitely
+    fn repeat (x n)
+        let nextf init = ((disqualify iterator (iter x)))
+        new-iterator
+            fn repeat-next (f)
+                let state i = (f)
+                if (i < n)
+                    let next-state at... = (nextf state)
+                    if (none? next-state) # iterator depleted?
+                        # restart
+                        return
+                            repeat-next
+                                fn ()
+                                    return init (i + 1)
+                    else
+                        return
+                            fn ()
+                                return next-state  i
+                            \ at...
+            fn ()
+                return init 0
+
+    # returns the cartesian product of two sequences
+    fn product (a b)
+        let a-iter a-init = ((disqualify iterator (iter a)))
+        let b-iter b-init = ((disqualify iterator (iter b)))
+        new-iterator
+            fn repeat-next (f)
+                let b-state a-next-state a-at... = (f)
+                if (not (none? a-next-state)) # first iterator not depleted?
+                    let b-next-state b-at... = (b-iter b-state)
+                    if (none? b-next-state) # second iterator depleted?
+                        let a-next-state a-at... = (a-iter a-next-state)
+                        # restart with next first iterator
+                        return
+                            repeat-next
+                                fn ()
+                                    return b-init a-next-state a-at...
+                    else
+                        return
+                            fn ()
+                                return b-next-state a-next-state a-at...
+                            \ a-at... b-at...
+            do
+                let a-next-state a-at... = (a-iter a-init)
+                fn ()
+                    return b-init a-next-state a-at...
+
+    fn concat (a b)
         let iter-a init-a = ((disqualify iterator (iter a)))
         let iter-b init-b = ((disqualify iterator (iter b)))
         new-iterator
@@ -1362,7 +1410,9 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote va-iter) va-iter
     set-scope-symbol! syntax-scope (quote iterator?) iterator?
     set-scope-symbol! syntax-scope (quote range) range
-    set-scope-symbol! syntax-scope (quote join) join
+    set-scope-symbol! syntax-scope (quote repeat) repeat
+    set-scope-symbol! syntax-scope (quote product) product
+    set-scope-symbol! syntax-scope (quote concat) concat
     set-scope-symbol! syntax-scope (quote zip) zip
     set-scope-symbol! syntax-scope (quote enumerate) enumerate
     set-scope-symbol! syntax-scope (quote loop)
