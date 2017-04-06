@@ -8,7 +8,6 @@ set-scope-symbol! bangra
 let
     modules =
         quote (
-            test_array
             test_assorted
             test_iterator
             test_batchfold
@@ -16,6 +15,7 @@ let
             test_loop
             test_scope
             test_semicolon
+            test_tuple_array
             test_xlet)
     total =
         int (countof modules)

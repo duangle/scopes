@@ -303,6 +303,18 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    set-scope-symbol! syntax-scope (quote do)
+        macro
+            fn/cc "expand-do" (return expr env)
+                call
+                    fn/cc (_ subenv)
+                        syntax-cons
+                            datum->syntax form-do (syntax->anchor expr)
+                            expand (slice expr 1) subenv
+                    scope env
+    \ syntax-scope
+
+syntax-extend
     set-scope-symbol! syntax-scope (quote syntax-head?)
         fn/cc "syntax-head?" (return expr name)
             return
@@ -1287,6 +1299,18 @@ syntax-extend
                     return (+ x step) x
             \ from
 
+    fn inf-range (a b)
+        let num-type =
+            ? (none? a)
+                ? (none? b) int (typeof b)
+                \ (typeof a)
+        let step = (? (none? b) (num-type 1) b)
+        let from = (? (none? a) (num-type 0) a)
+        new-iterator
+            fn (x)
+                return (+ x step) x
+            \ from
+
     # repeats a sequence n times or indefinitely
     fn repeat (x n)
         let nextf init = ((disqualify iterator (iter x)))
@@ -1416,18 +1440,6 @@ syntax-extend
                 fn ()
                     return iter-a iter-b init-a init-b
 
-    fn inf-range (a b)
-        let num-type =
-            ? (none? a)
-                ? (none? b) int (typeof b)
-                \ (typeof a)
-        let step = (? (none? b) (num-type 1) b)
-        let from = (? (none? a) (num-type 0) a)
-        new-iterator
-            fn (x)
-                return (+ x step) x
-            \ from
-
     fn enumerate (x from step)
         zip (inf-range from step) (iter x)
 
@@ -1543,7 +1555,7 @@ syntax-extend
 
                 fn generate-template (body extra-args extra-names)
                     let param-ret =
-                        datum->syntax (parameter (quote-syntax return))
+                        quote-syntax break
                     let param-inner-ret =
                         datum->syntax (parameter (quote-syntax return))
                     let param-iter =
@@ -1567,7 +1579,7 @@ syntax-extend
                                     (unquote-splice extra-names))
                                     let (unquote param-next) (unquote param-at) =
                                         (unquote param-iter) (unquote param-state)
-                                    ? (==? (unquote param-next) none)
+                                    ? (none? (unquote param-next))
                                         unquote
                                             syntax-do else-block
                                         do
@@ -1752,16 +1764,37 @@ define fn-types
                 else (syntax-eol expr)
 
 #-------------------------------------------------------------------------------
-# C-compatible array type
+# C types
 #-------------------------------------------------------------------------------
 
 define array
     type (quote array)
 
+define tuple
+    type (quote tuple)
+
+fn arrayof (atype values...)
+    call
+        array atype
+            va-countof values...
+        \ values...
+
+fn tupleof (values...)
+    call
+        tuple
+            loop-for value in (va-iter values...)
+                break (typeof value) (continue)
+            else
+                break
+        \ values...
+
 fn align (offset align)
     let T = (typeof offset)
     fn-types integer? T
     (offset + align - (T 1)) & (~ (align - (T 1)))
+
+# array implementation
+  --------------------
 
 set-type-symbol! array (quote apply-type)
     fn apply-array-type (element count)
@@ -1828,12 +1861,117 @@ set-type-symbol! array (quote apply-type)
             set-type-symbol! etype (quote complete) true
         \ etype
 
-fn arrayof (atype values...)
-    call
-        array atype
-            va-countof values...
-        \ values...
+# tuple implementation
+  --------------------
 
+set-type-symbol! tuple (quote apply-type)
+    fn apply-tuple-type (element-types...)
+        let count = (va-countof element-types...)
+        let etypes = (va-iter element-types...)
+        let etype =
+            loop-for i elemtype in (enumerate etypes)
+                with (s = "{")
+                assert ((typeof elemtype) ==? type) "type expected"
+                continue
+                    .. s
+                        ? (i == 0) "" " "
+                        string elemtype
+            else
+                type
+                    symbol
+                        .. s "}"
+        if (none? (. etype complete))
+            let sz alignment offsets... =
+                loop-for elemtype in etypes
+                    with
+                        offset = (size_t 0)
+                        max-alignment = (size_t 1)
+                    let sz = (sizeof elemtype)
+                    let alignment = (alignof elemtype)
+                    let aligned-offset = (align offset alignment)
+                    let total-size sum-alignment offsets... =
+                        continue
+                            aligned-offset + sz
+                            max max-alignment alignment
+                    break total-size sum-alignment aligned-offset offsets...
+                else
+                    break offset max-alignment
+
+            set-type-symbol! etype (quote size) sz
+            set-type-symbol! etype (quote alignment) alignment
+
+            set-type-symbol! etype (quote apply-type)
+                fn apply-typed-tuple-type (args...)
+                    let self =
+                        alloc etype
+                    let argcount = (va-countof args...)
+                    assert (argcount == count)
+                        .. (string (int count)) " elements expected, got "
+                            string (int argcount)
+                    loop-for i arg in (enumerate (va-iter args...))
+                        let offset = (va-arg i offsets...)
+                        let elemtype = (va-arg i element-types...)
+                        assert ((typeof arg) == elemtype)
+                            .. "type " (string elemtype) " expected, got "
+                                string (typeof arg)
+                        copy-memory! self offset arg (size_t 0) (sizeof elemtype)
+                        continue
+                    \ self
+                set-type-symbol! etype (quote @)
+                    fn tuple-at (self at)
+                        fn-types none integer?
+                        let offset = (va-arg at offsets...)
+                        let elemtype = (va-arg at element-types...)
+                        extract-memory elemtype self offset
+                set-type-symbol! etype (quote countof)
+                    fn tuple-countof (self) count
+                set-type-symbol! etype (quote slice)
+                    fn array-type-at (self i0 i1)
+                        fn-types none size_t size_t
+                        let num = (i1 - i0)
+                        let offset = (va-arg i0 offsets...)
+                        let sliced-types... =
+                            loop-for i elemtype in (enumerate etypes (size_t 0))
+                                if (i >= i1)
+                                    break
+                                elseif (i >= i0)
+                                    break elemtype (continue)
+                                else
+                                    continue
+                            else
+                                break
+                        let T =
+                            tuple sliced-types...
+                        extract-memory T self offset
+                set-type-symbol! etype (quote repr)
+                    fn array-type-repr (self styler)
+                        loop
+                            with
+                                i = (size_t 0)
+                                s = (styler Style.Operator "{")
+                            if (i < count)
+                                continue
+                                    i + (size_t 1)
+                                    .. s
+                                        ? (i > (size_t 0)) " " ""
+                                        repr (@ self i) styler
+                            else
+                                .. s (styler Style.Operator "}")
+                set-type-symbol! etype (quote iter)
+                    fn gen-array-type-iter (self)
+                        return
+                            fn countable-iter (i)
+                                if (i < count)
+                                    return
+                                        i + (size_t 1)
+                                        @ self i
+                            size_t 0
+
+                set-type-symbol! etype (quote complete) true
+        \ etype
+
+#-------------------------------------------------------------------------------
+# REPL
 #-------------------------------------------------------------------------------
 
 define read-eval-print-loop
@@ -1934,7 +2072,11 @@ define read-eval-print-loop
                             loop-for i in (range (va-countof result...))
                                 let idstr = (make-idstr)
                                 let value = (va-arg i result...)
-                                print (.. idstr "= " (repr value))
+                                print
+                                    .. idstr "= "
+                                        repr value default-styler
+                                        default-styler Style.Operator ":"
+                                        repr (typeof value) default-styler
                                 set-scope-symbol! eval-env id value
                                 set-scope-symbol! state (quote counter)
                                     (get-scope-symbol state (quote counter)) + 1
@@ -1950,6 +2092,10 @@ define read-eval-print-loop
 syntax-extend
     set-globals! syntax-scope
     \ syntax-scope
+
+#-------------------------------------------------------------------------------
+# main
+#-------------------------------------------------------------------------------
 
 fn print-help (exename)
     print "usage:" exename "[option [...]] [filename]

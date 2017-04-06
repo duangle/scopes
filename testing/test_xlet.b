@@ -35,8 +35,7 @@ let result =
         with
             i = 0
         if (i < 10)
-            print i
-            repeat (i + 1)
+            continue (i + 1)
         else
             break "done"
 
@@ -45,8 +44,7 @@ assert (result == "done")
 # above loop reformulated as an iterator
 let result =
     loop-for i in (range 10)
-        print i
-        repeat
+        continue
     else "done"
 
 assert (result == "done")

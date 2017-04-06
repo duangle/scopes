@@ -943,6 +943,7 @@ local function define_symbols(def)
     def({Unnamed=''})
     def({FnCCForm='form-fn-body'})
     def({QuoteForm='form-quote'})
+    def({DoForm='form-do'})
     def({SyntaxScope='syntax-scope'})
 
     def({ListWildcard='#list'})
@@ -3547,6 +3548,10 @@ expand_syntax_extend = function(env, topit, cont)
                 fun = maybe_unsyntax(fun)
                 return execute(
                     function(expr_env)
+                        if expr_env == null or expr_env.type ~= Type.Scope then
+                            set_active_anchor(anchor)
+                            location_error("syntax-extend did not evaluate to scope")
+                        end
                         return cont(topit.next, unwrap(Type.Scope, expr_env))
                     end,
                     fun)
@@ -4103,7 +4108,7 @@ end
 builtins.call = Form(translate_call, Symbol("call"))
 builtins["cc/call"] = Form(translate_contcall, Symbol("cc/call"))
 builtins[Symbol.FnCCForm] = Form(translate_fn_cc, Symbol("fn-body"))
-builtins["do"] = Form(translate_do, Symbol("do"))
+builtins[Symbol.DoForm] = Form(translate_do, Symbol("do"))
 builtins[Symbol.QuoteForm] = Form(translate_quote, Symbol("quote"))
 
 end -- do
@@ -5643,6 +5648,15 @@ xpcallcc(
         local ptr = src:strptr()
         local lexer = Lexer.init(ptr, ptr + src.length, src.path)
         local expr = parse(lexer)
+
+        --[[
+        do
+            local fmt = StreamValueFormat(true)
+            fmt.anchors = "none"
+            stream_expr(stdout_writer, expr, fmt)
+        end
+        --]]
+
         return expand_root(expr, null, function(expexpr)
             return translate_root(expexpr, "main", function(func)
                 return execute(
