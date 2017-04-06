@@ -2226,8 +2226,12 @@ end
 -- VALUE PRINTER
 --------------------------------------------------------------------------------
 
+local StreamValueFormat
+local stream_expr
+do
 local ANCHOR_SEP = ":"
 local CONT_SEP = " ⮕ "
+local INDENT_SEP = "⁞"
 
 -- keywords and macros
 local KEYWORDS = set(split(
@@ -2275,7 +2279,7 @@ local TYPES = set(split(
         .. " iterator type size_t usize_t ssize_t void* callable"
     ))
 
-local function StreamValueFormat(naked, depth, opts)
+StreamValueFormat = function(naked, depth, opts)
     opts = opts or {}
     opts.depth = depth or 0
     opts.naked = naked or false
@@ -2290,9 +2294,6 @@ local function StreamValueFormat(naked, depth, opts)
     opts.styler = opts.styler or default_styler
     return opts
 end
-
-local stream_expr
-do
 
 local simple_types = set({
     Type.Symbol, Type.String, Type.I32, Type.R32
@@ -2313,13 +2314,6 @@ local function is_nested(e)
     return false
 end
 
-local function stream_indent(writer, depth)
-    depth = depth or 0
-    for i=1,depth do
-        writer("    ")
-    end
-end
-
 stream_expr = function(writer, e, format)
     format = format or StreamValueFormat()
 
@@ -2332,6 +2326,17 @@ stream_expr = function(writer, e, format)
     local styler = format.styler
 
     local last_anchor
+
+    local function stream_indent(writer, depth)
+        depth = depth or 0
+        if depth >= 1 then
+            local indent = "    "
+            for i=2,depth do
+                indent = indent .. INDENT_SEP .. "   "
+            end
+            writer(styler(Style.Comment, indent))
+        end
+    end
 
     local function stream_anchor(anchor, quoted)
         if anchor then
