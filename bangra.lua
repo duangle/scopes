@@ -2250,7 +2250,7 @@ local KEYWORDS = set(split(
 local FUNCTIONS = set(split(
     "external branch print repr tupleof import-c eval structof typeof"
         .. " macro block-macro block-scope-macro cons expand empty? type?"
-        .. " dump syntax-head? countof tableof slice none? list-atom?"
+        .. " dump syntax-head? countof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
@@ -2260,6 +2260,7 @@ local FUNCTIONS = set(split(
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
         .. " zip-fill integer? callable? extract-memory box unbox pointerof"
+        .. " scopeof"
     ))
 
 -- builtin and global functions with side effects
@@ -4740,6 +4741,19 @@ builtin_op(Type.Type, Symbol.Compare,
         return call(frame, cont, unordered_cont)
     end)
 
+builtin_op(Type.Scope, Symbol.Compare,
+    function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        if a.type == Type.Scope and b.type == Type.Scope then
+            local x = unwrap(Type.Scope, a)
+            local y = unwrap(Type.Scope, b)
+            if (x == y) then
+                return call(frame, cont, equal_cont)
+            end
+        end
+        return call(frame, cont, unordered_cont)
+    end)
+
 builtin_op(Type.Syntax, Symbol.Compare,
     function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
@@ -5341,7 +5355,9 @@ builtins["box"] = wrap_simple_builtin(function(value)
     checkargs(1,1, value)
     if value.type == Type.Boxed then
         value = value.value
+        print(value)
         value = typeof('$*[$]',int8_t,1)(value)
+        print(value)
     else
         value = value.value
         if type(value) ~= "cdata" then

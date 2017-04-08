@@ -9,12 +9,11 @@ assert
 
 assert
     == bangra.test_module2 none
-    "module loaded twice"
-set-key! bangra
-    : test_module2 true
+    \ "module loaded twice"
+set-scope-symbol! bangra (quote test_module2) true
 
-tableof
-    compute :
+scopeof
+    compute =
         fn (x y)
             x + y
 

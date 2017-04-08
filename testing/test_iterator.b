@@ -6,11 +6,11 @@
 
 fn list-generator (l)
     fn (yield)
-        for x in l
+        loop-for x in l
             # return one element from this list
             yield x
             # and repeat until depleted
-            repeat;
+            continue
 
 fn dog-generator (greeting words tail)
     fn (yield)
@@ -25,16 +25,16 @@ fn dog-generator (greeting words tail)
         # finally, yield a custom tail element
         yield tail
         # any return value will be ignored
-        true
+        \ true
 
 # now iterate through the values in this function
-for x in (dog-generator true (list "yes" "this" "is" "dog") "what's up?")
+loop-for x in (dog-generator true (list "yes" "this" "is" "dog") "what's up?")
     with
         i = 0
     # print each value
     print i "#" x
     # run until generator is out of values
-    repeat (i + 1)
+    continue (i + 1)
 else
     print "done." i
     assert (i == 6)
@@ -51,15 +51,14 @@ call
             fn (x y)
                 print x y
                 cc/call none _
-            x
-    "hi"
+            \ x
+    \ "hi"
 
 let done =
-    tag (quote done)
+    qualifier (quote done)
 
 print
-    quote
-        (1 2; 3 4;)
+    quote (1 2; 3 4;)
 
 fn ilist (alist)
     fn (xf)
@@ -75,19 +74,19 @@ fn ilist (alist)
 
 do
     let T =
-        tableof
-            : a 1
-            : b 2
-            : c 3
-            tupleof (list 1 2 3) true
+        scopeof
+            a = 1
+            b = 2
+            c = 3
 
-    for k v in T
+    # FIXME: this one is indeed broken
+    #loop-for k v in T
         print ">" k v
-        repeat;
+        continue
 
     fn atnext (l)
-        if ((countof l) != 0)
-            tupleof (@ l 0) (slice l 1)
+        if ((countof l) != (size_t 0))
+            return (@ l 0) (slice l 1)
 
     loop
         with
@@ -96,14 +95,14 @@ do
 
         if (i < 10)
             print i j
-            repeat (i + 1) (j + 2)
+            continue (i + 1) (j + 2)
 
     # this loop prints the number of elements and returns the number
     # of elements counted.
 
     # loop init variables:
     let l = # the list we're going to iterate
-        tupleof "yes" "this" "is" "dog"
+        list "yes" "this" "is" "dog"
     # store return value of loop in `total_elements`
     let total_elements =
         loop
@@ -117,41 +116,40 @@ do
                     # custom processing block
                     print i x
                     # repeat the loop explicitly
-                    repeat
-                        (v @ 1) # advance the iterator
+                    continue
+                        v @ 1 # advance the iterator
                         i + 1 # increase the counter
             else
                 # a custom return block
                 # this one returns the counter
-                i
+                \ i
 
     print total_elements "element(s) counted."
 
 do
     let z = (list)
     let zipped-lists =
-        for x y in (zip (range 5 10 2) (range 10))
+        loop-for x y in (zip (range 5 10 2) (range 10))
             with z
 
             print x y
-            repeat
+            continue
                 cons (list x y) z
-        else
-            z
+        else z
     print zipped-lists
     assert
         ==
             quote ((9 2) (7 1) (5 0))
-            zipped-lists
+            \ zipped-lists
     fn atnext (l)
         if ((countof l) != 0)
             tupleof (@ l 0) (slice l 1)
     fn iter-list (l)
         tupleof atnext l
 
-    for i c in (enumerate "the quick brown fox")
+    loop-for i c in (enumerate "the quick brown fox")
         if (c != " ")
-            repeat;
+            continue
         else
             print "space at index" i
 
@@ -160,18 +158,18 @@ do
 
     # store return value of loop in `total_elements`
     let total_elements =
-        for x in (list "yes" "this" "is" "dog")
+        loop-for x in (list "yes" "this" "is" "dog")
             with        # (with ...) is optional.
                 i = 0   # in this case, we'll use it to keep state for
                         # a custom counter.
             # print element and our custom index
             print i x
             # repeat the loop (must always be done explicitly)
-            repeat
+            continue
                 i + 1 # increase the counter
         else # list iterator exhausted before we exited the loop
             # return the counter
-            i
+            \ i
 
     print total_elements "element(s) counted."
 

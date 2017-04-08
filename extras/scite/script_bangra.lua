@@ -36,7 +36,7 @@ local function bangra_symbols()
     FUNCTIONS = splitstr(getprop("functions.bangra_lang") or
     "external branch print repr tupleof import-c eval structof typeof"
         .. " macro block-macro block-scope-macro cons expand empty? type?"
-        .. " dump syntax-head? countof tableof slice none? list-atom?"
+        .. " dump syntax-head? countof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
@@ -46,6 +46,7 @@ local function bangra_symbols()
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
         .. " zip-fill integer? callable? extract-memory box unbox pointerof"
+        .. " scopeof"
         ),
 
     -- builtin and global functions with side effects

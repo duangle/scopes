@@ -17,15 +17,16 @@ do
         (test-qualifier int) <? qualifier
 
 
-let C =
-    external
-        quote print_number
-        cfunction int
-            tuple int
-            \ false
+#do
+    let C =
+        external
+            quote print_number
+            cfunction int
+                tuple int
+                \ false
 
-print
-    C 400
+    print
+        C 400
 
 do
     let sc = (scope (globals))
@@ -122,12 +123,16 @@ let qquote-test =
         print
             unquote
                 let k = 1
-                k + 2
+                datum->syntax
+                    k + 2
+                    active-anchor
         unquote-splice
             let k = 2
             qquote
                 print
-                    unquote k
+                    unquote
+                        datum->syntax k
+                            active-anchor
                 print 1
 assert
     == qquote-test
@@ -138,8 +143,8 @@ assert
 
 let k = 3
 let T =
-    structof
-        test :
+    scopeof
+        test =
             fn (self a b)
                 + a b
 
@@ -183,13 +188,13 @@ do
         "slice failed"
 
 assert
-    == 3
+    == (size_t 3)
         countof "hi!"
 assert
-    == 0
+    == (size_t 0)
         countof ""
 assert
-    == 3
+    == (size_t 3)
         countof
             tupleof 1 2 3
 assert
@@ -208,17 +213,17 @@ let k = 1
 
 let V =
     structof
-        x : 0
-        y : 1
-        z :
+        x = 0
+        y = 1
+        z =
             structof
-                u : 0
-                v : 1
-                w :
+                u = 0
+                v = 1
+                w =
                     structof
-                        red : 0
-                        green : 1
-                        blue : 2
+                        red = 0
+                        green = 1
+                        blue = 2
 assert
     == V.z.w.blue
         V . z @ (quote w) . blue
@@ -336,22 +341,18 @@ do
             loop (i k)
                 if (i < 10)
                     print "#" i k
-                    repeat (i + 1) (k .. "!")
-                else
-                    k
+                    continue (i + 1) (k .. "!")
+                else k
         "loop failed"
 
 assert
     == 2
-        if (k == 0)
-            1
+        if (k == 0) 1
         elseif (k == 1)
             let q = 2
-            q
-        elseif (k == 2)
-            3
-        else
-            4
+            \ q
+        elseif (k == 2) 3
+        else 4
     "if-tree failed"
 
 assert
@@ -364,10 +365,9 @@ fn test-noparam (x y)
         x == none
     assert
         y == none
-    true
+    \ true
 test-noparam;
-fn test-extraparam ()
-    true
+fn test-extraparam () true
 test-extraparam 1 2 3
 
 
@@ -377,17 +377,17 @@ fn test-varargs (x y ...)
             x == 1
             y == 2
     assert
-        (va-countof ...) == 3
+        (va-countof ...) == (u64 3)
     assert
         and
             (va-arg 0 ...) == 3
             (va-arg 1 ...) == 4
             (va-arg 2 ...) == 5
-    list 1 2 ... 6
+    list 1 2 ...
 assert
     ==
         test-varargs 1 2 3 4 5
-        list 1 2 3 4 5 6
+        list 1 2 3 4 5
 
 # splice interface removed atm
 #assert
@@ -416,8 +416,7 @@ do
 
     # function declarations support recursion.
     fn q-func (x)
-        ? (x <= 0)
-            1
+        ? (x <= 0) 1
             x * (q-func (x - 1))
 
     print
@@ -431,8 +430,7 @@ do
         button-type-cancel  = (button-type-no + 1)
 
     fn b-func (x)
-        ? (x <= 0)
-            1
+        ? (x <= 0) 1
             x * (b-func (x - 1))
 
     print
@@ -441,46 +439,43 @@ do
     # multiple assignments by unpacking a tuple or other spliceable type,
     # no recursion.
     let x y z =
-        print "tuple unpacking!"
-        tupleof 1.0 1.5 2.0
+        do
+            print "tuple unpacking!"
+            _ 1.0 1.5 2.0
 
     # since let is implemented using vararg function parameters,
     # simple vararg matching can also be performed
-    let start center... end =
-        tupleof "(" 1 2 3 ")"
+    let start center... end = "(" 1 2 3 ")"
     assert
         and
             start == "("
             end == ")"
-            (tupleof center...) == (tupleof 1 2 3)
+            (va-arg 0 center...) == 1
+            (va-arg 1 center...) == 2
+            (va-arg 2 center...) == 3
 
-    let x y z =
-        tupleof 1 2 3
+    let x y z = 1 2 3
     print "HALLO" x y z
     assert
         ==
             list x y z
             list 1 2 3
 
-assert
-    and
-        i8 == i8
-        i8 <= i8
-        i8 != i8
-        not (i8 <? i8)
-        not (i8 <? i16)
-        not (i8 >? i16)
-        i8 < integer
-        i8 <= integer
-        integer > i8
-        integer >= i8
-        not (i8 <? real)
-        not (i8 >? real)
-        (pointer int) < pointer
-        (integer 8 true) == i8
-        (array int 8) < array
-        (vector float 4) < vector
-    "type operators failed"
+assert (i8 == i8)
+assert (i8 <= i8)
+assert (not (i8 <? i8))
+assert (not (i8 <? i16))
+assert (not (i8 >? i16))
+assert (i8 < integer)
+assert (i8 <= integer)
+assert (integer > i8)
+assert (integer >= i8)
+assert (not (i8 <? real))
+assert (not (i8 >? real))
+assert ((pointer int) < pointer)
+#assert ((integer 8 true) == i8)
+assert ((array int (size_t 8)) < array)
+assert ((vector float (size_t 4)) < vector)
 
 define TEST 5
 define TEST2
@@ -493,9 +488,6 @@ assert
         TEST == 5
         TEST2 == 6
         (TEST3 6) == 12
-
-print
-    struct (quote MyCustomType)
 
 dump-syntax
     do

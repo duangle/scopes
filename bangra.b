@@ -998,7 +998,7 @@ syntax-extend
         make-expand-multi-op-ltr |
 
     fn/cc selfcall (cont self name args...)
-        (@ (typeof self) name) self args...
+        (@ self name) self args...
 
     set-scope-symbol! syntax-scope scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
@@ -2225,6 +2225,53 @@ syntax-extend
                                 syntax-eol expr
 
 
+    \ syntax-scope
+
+#-------------------------------------------------------------------------------
+# scopeof
+#-------------------------------------------------------------------------------
+
+syntax-extend
+    fn build-scope (names...)
+        fn (values...)
+            let table = (scope)
+            loop-for key value in (zip (va-iter names...) (va-iter values...))
+                set-scope-symbol! table key value
+                continue
+            \ table
+
+    # (scopeof (key = value) ...)
+    set-scope-symbol! syntax-scope (quote scopeof)
+        macro
+            fn expand-scopeof (expr env)
+                qquote
+                    call
+                        (unquote (datum->syntax build-scope (syntax->anchor expr)))
+                            unquote-splice
+                                loop-for entry in (syntax->datum (slice expr 1))
+                                    if
+                                        not
+                                            and
+                                                (countof entry) == (size_t 3)
+                                                (@ entry 1) ==? (quote =)
+                                        syntax-error entry "syntax: (scopeof (key = value) ...)"
+                                    let key = (@ entry 0)
+                                    let value = (slice entry 2)
+                                    syntax-cons
+                                        qquote
+                                            quote
+                                                unquote key
+                                        continue
+                                else
+                                    syntax-eol expr
+                        unquote-splice
+                            loop-for entry in (syntax->datum (slice expr 1))
+                                let value = (slice entry 2)
+                                syntax-cons
+                                    syntax-do value
+                                    continue
+                            else
+                                syntax-eol expr
     \ syntax-scope
 
 #-------------------------------------------------------------------------------
