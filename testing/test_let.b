@@ -6,17 +6,14 @@ do
         y = 4 5 6
     let z = 7 8 9
 
-    assert (x == 3)
-    assert (y == 6)
-    assert (z == 9)
+    assert (x == 1)
+    assert (y == 4)
+    assert (z == 7)
 
 do
-    let x y z =
-        tupleof 1 2 3
-        tupleof 4 5 6
-        tupleof 7 8 9
+    let x y z = 1 2 3 4 5 6 7 8 9
 
-    assert (x == 7)
-    assert (y == 8)
-    assert (z == 9)
+    assert (x == 1)
+    assert (y == 2)
+    assert (z == 3)
 

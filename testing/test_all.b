@@ -10,7 +10,6 @@ let
         quote (
             test_assorted
             test_iterator
-            test_batchfold
             test_let
             test_loop
             test_pointer

@@ -2,17 +2,12 @@
 define isvar?
     macro
         fn isvar? (expr scope)
-            not (none? (find-scope-symbol scope (@ expr 1)))
+            datum->syntax
+                not (none? (@ scope (@ expr 1)))
+                syntax->anchor expr
 
 do
     let x = 5
-    assert (isvar? x)
-    assert (not (isvar? y))
-
-assert (not (isvar? x))
-
-do
-    xlet x = 5
     assert (isvar? x)
     assert (not (isvar? y))
 

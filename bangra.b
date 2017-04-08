@@ -1770,6 +1770,53 @@ define fn-types
                 else (syntax-eol expr)
 
 #-------------------------------------------------------------------------------
+# scopeof
+#-------------------------------------------------------------------------------
+
+syntax-extend
+    fn build-scope (names...)
+        fn (values...)
+            let table = (scope)
+            loop-for key value in (zip (va-iter names...) (va-iter values...))
+                set-scope-symbol! table key value
+                continue
+            \ table
+
+    # (scopeof (key = value) ...)
+    set-scope-symbol! syntax-scope (quote scopeof)
+        macro
+            fn expand-scopeof (expr env)
+                qquote
+                    call
+                        (unquote (datum->syntax build-scope (syntax->anchor expr)))
+                            unquote-splice
+                                loop-for entry in (syntax->datum (slice expr 1))
+                                    if
+                                        not
+                                            and
+                                                (countof entry) == (size_t 3)
+                                                (@ entry 1) ==? (quote =)
+                                        syntax-error entry "syntax: (scopeof (key = value) ...)"
+                                    let key = (@ entry 0)
+                                    let value = (slice entry 2)
+                                    syntax-cons
+                                        qquote
+                                            quote
+                                                unquote key
+                                        continue
+                                else
+                                    syntax-eol expr
+                        unquote-splice
+                            loop-for entry in (syntax->datum (slice expr 1))
+                                let value = (slice entry 2)
+                                syntax-cons
+                                    syntax-do value
+                                    continue
+                            else
+                                syntax-eol expr
+    \ syntax-scope
+
+#-------------------------------------------------------------------------------
 # C types
 #-------------------------------------------------------------------------------
 
@@ -1839,13 +1886,18 @@ set-type-symbol! pointer (quote apply-type)
                 ? ((addressof self) == (u64 0)) none
                     unbox element
                         bitcast boxed self
+            let methods =
+                scopeof
+                    getvalue = getvalue
+                    getaddress = addressof
 
             set-type-symbol! etype (quote super) pointer
             set-type-symbol! etype (quote apply-type)
                 fn apply-typed-pointer-type (value)
                     bitcast etype (box value)
-            set-type-symbol! etype (quote getvalue) getvalue
-            set-type-symbol! etype (quote getaddress) addressof
+            set-type-symbol! etype (quote @)
+                fn pointer-at (self name)
+                    @ methods name
             set-type-symbol! etype (quote repr)
                 fn pointer-type-repr (self styler)
                     ..
@@ -2225,53 +2277,6 @@ syntax-extend
                                 syntax-eol expr
 
 
-    \ syntax-scope
-
-#-------------------------------------------------------------------------------
-# scopeof
-#-------------------------------------------------------------------------------
-
-syntax-extend
-    fn build-scope (names...)
-        fn (values...)
-            let table = (scope)
-            loop-for key value in (zip (va-iter names...) (va-iter values...))
-                set-scope-symbol! table key value
-                continue
-            \ table
-
-    # (scopeof (key = value) ...)
-    set-scope-symbol! syntax-scope (quote scopeof)
-        macro
-            fn expand-scopeof (expr env)
-                qquote
-                    call
-                        (unquote (datum->syntax build-scope (syntax->anchor expr)))
-                            unquote-splice
-                                loop-for entry in (syntax->datum (slice expr 1))
-                                    if
-                                        not
-                                            and
-                                                (countof entry) == (size_t 3)
-                                                (@ entry 1) ==? (quote =)
-                                        syntax-error entry "syntax: (scopeof (key = value) ...)"
-                                    let key = (@ entry 0)
-                                    let value = (slice entry 2)
-                                    syntax-cons
-                                        qquote
-                                            quote
-                                                unquote key
-                                        continue
-                                else
-                                    syntax-eol expr
-                        unquote-splice
-                            loop-for entry in (syntax->datum (slice expr 1))
-                                let value = (slice entry 2)
-                                syntax-cons
-                                    syntax-do value
-                                    continue
-                            else
-                                syntax-eol expr
     \ syntax-scope
 
 #-------------------------------------------------------------------------------
