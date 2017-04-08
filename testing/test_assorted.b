@@ -7,47 +7,39 @@ assert
             quote test_module2
 
 print
-    min integer int8
+    min integer i8
     max 3 4 5
 
 do
     let test-qualifier =
-        tag (quote test)
+        qualifier (quote test)
     print
-        (test-qualifier int) < qualifier
+        (test-qualifier int) <? qualifier
 
-
-do
-    let T =
-        tableof
-            : (do print) 404
-    print
-        @ T print
 
 let C =
     external
         quote print_number
         cfunction int
             tuple int
-            false
+            \ false
 
 print
     C 400
 
 do
+    let sc = (scope (globals))
+    set-scope-symbol! sc (quote injected-var) 3
     let m =
         eval
             list-load
                 .. interpreter-dir "/testing/test_module.b"
-            tableof
-                tupleof scope-parent-symbol
-                    globals;
-                injected-var : 3
+            \ sc
     let t = (m)
     assert
         7 == (t.compute 4)
 
-do
+#do
     let z =
         ..
             tableof
@@ -88,20 +80,20 @@ assert
         and
             do
                 print "and#1"
-                true
+                \ true
             do
                 print "and#2"
-                true
+                \ true
             do
                 print "and#3"
-                true
+                \ true
             do
                 print "and#4"
-                false
+                \ false
             do
                 error "should never see this"
-                false
-        false
+                \ false
+        \ false
     "'and' for more than two arguments failed"
 
 assert
@@ -109,20 +101,20 @@ assert
         or
             do
                 print "or#1"
-                false
+                \ false
             do
                 print "or#2"
-                false
+                \ false
             do
                 print "or#3"
-                false
+                \ false
             do
                 print "or#4"
-                true
+                \ true
             do
                 error "should never see this"
-                true
-        true
+                \ true
+        \ true
     "'or' for more than two arguments failed"
 
 let qquote-test =
@@ -170,16 +162,14 @@ call print "hi"
 
 assert
     == "hheellll  wwrrlldd"
-        for k in "hello world"
+        loop-for k in "hello world"
             with
                 out = ""
-            repeat
-                if (k == "o")
-                    out
+            continue
+                if (k == "o") out
                 else
                     .. out k k
-        else
-            out
+        else out
 
 do
     let k = "abcdefghijklmnopqrstuvwxyz"
@@ -203,10 +193,10 @@ assert
         countof
             tupleof 1 2 3
 assert
-    == 1
+    == (size_t 1)
         countof
             structof
-                key : 123
+                key = 123
 
 assert
     1 + 2 * 3 == 7
@@ -241,24 +231,6 @@ assert
     and
         4 == (list 0 (list 1 2 (list 3 4) 5) 6) @ 1 @ 2 @ 1
         4 == (@ (list 0 (list 1 2 (list 3 4) 5) 6) 1 2 1)
-
-do
-    let T =
-        extern-library
-            parse-c
-                # todo: search path & embedded resources
-                .. interpreter-dir "/bangra.h"
-                tupleof;
-    print ">"
-        string T.bangra_interpreter_dir
-    print ">>"
-        string T.bangra_interpreter_path
-    assert
-        == "test"
-            string
-                rawstring "test"
-    print
-        T.print_number 302
 
 assert
     2 * 2 + 1 == 5
@@ -311,83 +283,50 @@ do
     assert
         (cont-test2 false) == none
 
-do
-    fn generator ()
-        let T =
-            tableof;
-        set-key! T
-            : run
-                fn (ret)
-                    let G =
-                        tableof
-                            : ret
-                    fn yield ()
-                        call/cc
-                            fn (cont)
-                                G.ret
-                                    fn (ret)
-                                        set-key! G
-                                            : ret
-                                        cont none
-                    print "step 1"
-                    yield;
-                    print "step 2"
-                    yield;
-                    print "step 3"
-                    yield;
-        fn step-gen ()
-            set-key! T
-                : run
-                    call/cc T.run
-    let g = (generator)
-    print "call 1:" (g)
-    print "call 2:" (g)
-    print "call 3:" (g)
-    print "done"
-
-print
-    hash "this string, hashed"
-    hash print
-    hash true
-    hash false
-    hash 0
-    hash int8
-print
-    hash 303
-    hash -303
-print
-    hash 0.0
-    hash 1.0
-    hash 1.5
-    hash
-        print
-
-assert
-    ==
-        hash "hello world"
-        hash
-            .. "hello" " " "world"
-
-do
-    let S = "the quick brown fox jumped over the lazy dog"
+## hashes are not part of core language atm
     print
+        hash "this string, hashed"
+        hash print
+        hash true
+        hash false
+        hash 0
+        hash int8
+    print
+        hash 303
+        hash -303
+    print
+        hash 0.0
+        hash 1.0
+        hash 1.5
+        hash
+            print
+
+    assert
         ==
+            hash "hello world"
             hash
-                tupleof S
-            hash S
+                .. "hello" " " "world"
 
-print
-    hash
-        tupleof
-            tupleof 1 2 3
-            tupleof 3 2 1
-    hash
-        tupleof 1 2 3 3 2 1
+    do
+        let S = "the quick brown fox jumped over the lazy dog"
+        print
+            ==
+                hash
+                    tupleof S
+                hash S
 
-print
-    hash
-        tupleof 3 5
-    hash 0x0000000500000003
+    print
+        hash
+            tupleof
+                tupleof 1 2 3
+                tupleof 3 2 1
+        hash
+            tupleof 1 2 3 3 2 1
+
+    print
+        hash
+            tupleof 3 5
+        hash 0x0000000500000003
 
 do
     let i = 0
@@ -450,7 +389,8 @@ assert
         test-varargs 1 2 3 4 5
         list 1 2 3 4 5 6
 
-assert
+# splice interface removed atm
+#assert
     ==
         list 1 2
             splice
@@ -524,20 +464,20 @@ do
 
 assert
     and
-        int8 == int8
-        int8 <= int8
-        int8 != int16
-        not (int8 < int8)
-        not (int8 < int16)
-        not (int8 > int16)
-        int8 < integer
-        int8 <= integer
-        integer > int8
-        integer >= int8
-        not (int8 < real)
-        not (int8 > real)
+        i8 == i8
+        i8 <= i8
+        i8 != i8
+        not (i8 <? i8)
+        not (i8 <? i16)
+        not (i8 >? i16)
+        i8 < integer
+        i8 <= integer
+        integer > i8
+        integer >= i8
+        not (i8 <? real)
+        not (i8 >? real)
         (pointer int) < pointer
-        (integer 8 true) == int8
+        (integer 8 true) == i8
         (array int 8) < array
         (vector float 4) < vector
     "type operators failed"

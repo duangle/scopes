@@ -1247,6 +1247,8 @@ local function define_types(def)
     def('Macro')
 
     def('Syntax')
+
+    def('Boxed')
 end
 
 do
@@ -2253,11 +2255,11 @@ local FUNCTIONS = set(split(
         .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
-        .. " extern-library arrayof get-scope-symbol syntax-cons"
+        .. " extern-library arrayof get-scope-symbol syntax-cons vectorof"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
-        .. " zip-fill integer? callable? extract-memory"
+        .. " zip-fill integer? callable? extract-memory box unbox pointerof"
     ))
 
 -- builtin and global functions with side effects
@@ -2277,7 +2279,7 @@ local TYPES = set(split(
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
         .. " pointer struct enum bool uint qualifier syntax anchor scope"
-        .. " iterator type size_t usize_t ssize_t void* callable"
+        .. " iterator type size_t usize_t ssize_t void* callable boxed"
     ))
 
 StreamValueFormat = function(naked, depth, opts)
@@ -2820,6 +2822,25 @@ do -- compact hashtables as much as one can where possible
                 return
             end
             ptr = ptr.parent
+        end
+    end
+
+    function cls:get_bank(cont)
+        if cont then
+            assert_flow(cont)
+            -- parameter is bound - attempt resolve
+            local ptr = self
+            while ptr do
+                ptr = ptr.owner
+                local entry = ptr.map[cont]
+                if (entry ~= null) then
+                    local entry_index,values = unpack(entry)
+                    if (self.index >= entry_index) then
+                        return values
+                    end
+                end
+                ptr = ptr.parent
+            end
         end
     end
 
@@ -4262,6 +4283,7 @@ builtins.closure = Type.Closure
 builtins.integer = Type.Integer
 builtins.real = Type.Real
 builtins.callable = Type.Callable
+builtins.boxed = Type.Boxed
 
 builtins["debug-build?"] = Any(bool(global_opts.debug))
 
@@ -4777,9 +4799,11 @@ builtins.bitcast = wrap_simple_builtin(function(totype, value)
     local fromsize = fromtype:size()
     local tosize = totype:size()
     if fromsize ~= tosize then
-        location_error(
-            "cannot bitcast: size mismatch ("
-            .. tostring(fromsize) .. " != " .. tostring(tosize) ")")
+        location_error("cannot bitcast: size mismatch ("
+            .. tostring(fromsize)
+            .. " != "
+            .. tostring(tosize)
+            .. ")")
     end
     return Any(totype, value.value)
 end)
@@ -5208,31 +5232,18 @@ end)
 builtins["flow-parameters"] = wrap_simple_builtin(function(flow)
     checkargs(1,1, flow)
     flow = unwrap(Type.Flow, flow)
+    local params = {}
     local plist = flow.parameters
-    local psize = #plist
-    local function iter_param(i)
-        if i <= psize then
-            return List(Any(plist[i]), iter_param(i+1))
-        else
-            return EOL
-        end
+    for i=1,#plist do
+        table.insert(params, Any(plist[i]))
     end
-    return Any(iter_param(1))
+    return unpack(params)
 end)
 
 builtins["flow-arguments"] = wrap_simple_builtin(function(flow)
     checkargs(1,1, flow)
     flow = unwrap(Type.Flow, flow)
-    local plist = flow.arguments
-    local psize = #plist
-    local function iter_param(i)
-        if i <= psize then
-            return List(plist[i], iter_param(i+1))
-        else
-            return EOL
-        end
-    end
-    return Any(iter_param(1))
+    return unpack(flow.arguments)
 end)
 
 builtins["flow-anchor"] = wrap_simple_builtin(function(flow)
@@ -5283,11 +5294,20 @@ builtins["parameter-type"] = wrap_simple_builtin(function(param)
     return Any(param.type)
 end)
 
+builtins["frame-values"] = wrap_simple_builtin(function(frame, flow)
+    checkargs(2,2, frame, flow)
+    frame = unwrap(Type.Frame, frame)
+    flow = unwrap(Type.Flow, flow)
+    local result = frame:get_bank(flow)
+    if result ~= null then
+        return unpack(result)
+    end
+end)
 
 local valtoptr
 do
     local supported = set({'int','float','struct'})
-    local passthru = set({'array'})
+    local passthru = set({'array', 'ptr'})
     valtoptr = function(x)
         local xtype = reflect.typeof(x).what
         if passthru[xtype] then
@@ -5300,6 +5320,47 @@ do
     end
 end
 
+local function ptrtoval(_type, ptr)
+    local ctype = rawget(_type, 'ctype')
+    if ctype then
+        ptr = cast(typeof('$*', ctype), ptr)
+        ptr = cast(typeof('$&', ctype), ptr)
+        ptr = cast(ctype, ptr)
+        return Any(_type, ptr)
+    else
+        local dstsz = _type:size()
+        local buf = new(typeof('$[$]', uint8_t, tonumber(dstsz)))
+        ffi.copy(buf, ptr, dstsz)
+        return Any(_type, buf)
+    end
+end
+
+-- we just keep all boxed values alive forever for now
+local keepalive = {}
+builtins["box"] = wrap_simple_builtin(function(value)
+    checkargs(1,1, value)
+    if value.type == Type.Boxed then
+        value = value.value
+        value = typeof('$*[$]',int8_t,1)(value)
+    else
+        value = value.value
+        if type(value) ~= "cdata" then
+            location_error("source is opaque")
+        end
+    end
+    value = valtoptr(value)
+    table.insert(keepalive, value)
+    value = cast(typeof('$*',int8_t), value)
+    return Any(Type.Boxed, value)
+end)
+
+builtins["unbox"] = wrap_simple_builtin(function(_type, value)
+    checkargs(2,2, _type, value)
+    _type = unwrap(Type.Type, _type)
+    value = unwrap(Type.Boxed, value)
+    return ptrtoval(_type, value)
+end)
+
 builtins["extract-memory"] = wrap_simple_builtin(function(_type, value, offset)
     checkargs(3,3, _type, value, offset)
     _type = unwrap(Type.Type, _type)
@@ -5307,21 +5368,15 @@ builtins["extract-memory"] = wrap_simple_builtin(function(_type, value, offset)
     local dstsz = _type:size()
     local srcsz = value.type:size()
     value = value.value
-    assert(type(value) == "cdata", "source has no memory address")
-    value = valtoptr(value)
-    assert((offset + dstsz) <= srcsz, "source offset out of bounds")
-    local ctype = rawget(_type, 'ctype')
-    local ptr = value + offset
-    if ctype then
-        ptr = cast(typeof('$*', ctype), ptr)
-        ptr = cast(typeof('$&', ctype), ptr)
-        ptr = cast(ctype, ptr)
-        return Any(_type, ptr)
-    else
-        local buf = new(typeof('$[$]', uint8_t, tonumber(dstsz)))
-        ffi.copy(buf, ptr, dstsz)
-        return Any(_type, buf)
+    if type(value) ~= "cdata" then
+        location_error("source is opaque")
     end
+    value = valtoptr(value)
+    if (offset + dstsz) > srcsz then
+        location_error("source offset out of bounds")
+    end
+    local ctype = rawget(_type, 'ctype')
+    return ptrtoval(_type, value + offset)
 end)
 
 -- data manipulation
@@ -5364,11 +5419,19 @@ builtins["copy-memory!"] = wrap_simple_builtin(
         srcsz = unwrap(Type.SizeT, srcsz)
         dst = dst.value
         src = src.value
-        assert(type(dst) == "cdata", "destination has no memory address")
-        assert(type(src) == "cdata", "source has no memory address")
+        if type(dst) ~= "cdata" then
+            location_error("destination is opaque")
+        end
+        if type(src) ~= "cdata" then
+            location_error("source is opaque")
+        end
         src = valtoptr(src)
-        assert((dstofs + srcsz) <= ffi.sizeof(dst), "destination offset out of bounds")
-        assert((srcofs + srcsz) <= ffi.sizeof(src), "source offset out of bounds")
+        if (dstofs + srcsz) > ffi.sizeof(dst) then
+            location_error("destination offset out of bounds")
+        end
+        if (srcofs + srcsz) > ffi.sizeof(src) then
+            location_error("source offset out of bounds")
+        end
         ffi.copy(dst + dstofs, src + srcofs, srcsz)
     end)
 
@@ -5569,6 +5632,15 @@ local function init_globals()
     Type.Builtin:bind(Any(Symbol.Super), Any(Type.Callable))
     Type.Flow:bind(Any(Symbol.Super), Any(Type.Callable))
     Type.Closure:bind(Any(Symbol.Super), Any(Type.Callable))
+
+    do
+        local ctype = typeof('void *')
+        local refct = reflect.typeof(ctype)
+        local _type = Type.Boxed
+        _type.ctype = ctype
+        _type:bind(Any(Symbol.Size), Any(size_t(refct.size)))
+        _type:bind(Any(Symbol.Alignment), Any(size_t(refct.alignment)))
+    end
 
     local function configure_int_type(_type, ctype, fmt)
         local refct = reflect.typeof(ctype)

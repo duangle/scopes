@@ -13,8 +13,11 @@ let
             test_batchfold
             test_let
             test_loop
+            test_pointer
             test_scope
             test_semicolon
+            test_structof
+            test_tableof
             test_tuple_array
             test_xlet)
     total =

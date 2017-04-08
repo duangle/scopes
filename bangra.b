@@ -204,6 +204,11 @@ syntax-extend
             return
                 <? (typeof x) integer
     set-scope-symbol! syntax-scope
+        quote closure?
+        fn/cc "closure?" (return x)
+            return
+                ==? (typeof x) closure
+    set-scope-symbol! syntax-scope
         quote real?
         fn/cc "real?" (return x)
             return
@@ -992,6 +997,9 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote |)
         make-expand-multi-op-ltr |
 
+    fn/cc selfcall (cont self name args...)
+        (@ (typeof self) name) self args...
+
     set-scope-symbol! syntax-scope scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
             let expr =
@@ -1003,7 +1011,7 @@ syntax-extend
             # method call syntax
             if
                 and
-                    symbol? head
+                    symbol? (syntax->datum head)
                     and
                         none? (get-scope-symbol env head)
                         == (slice headstr 0 1) "."
@@ -1019,16 +1027,15 @@ syntax-extend
                     slice expr 2
                 let self =
                     parameter
-                        quote self
-                error "todo"
+                        quote-syntax self
                 cons
-                    list
-                        list fn/cc (list (parameter (quote _)) self)
-                            cons
-                                list (do @) self
-                                    list quote name
-                                cons self rest
-                        \ self-arg
+                    qquote
+                        unquote
+                            datum->syntax selfcall (syntax->anchor expr)
+                        unquote self-arg
+                        quote
+                            unquote name
+                        unquote-splice rest
                     slice topexpr 1
             # infix operator support
             elseif (has-infix-ops env expr)
@@ -1462,7 +1469,7 @@ syntax-extend
                 let args names =
                     continue (slice expr 1)
                 let elem = (@ expr 0)
-                if (symbol? elem)
+                if (symbol? (syntax->datum elem))
                     break
                         syntax-cons elem args
                         syntax-cons elem names
@@ -1549,9 +1556,7 @@ syntax-extend
                         _ (slice remainder 1) (slice (@ remainder 0) 1)
                     else
                         _ remainder
-                            syntax-list
-                                datum->syntax none
-                                    syntax->anchor expr
+                            syntax-eol expr
 
                 fn generate-template (body extra-args extra-names)
                     let param-ret =
@@ -1739,7 +1744,8 @@ define fn-types
                 loop-for i param expected-type-arg in
                     enumerate
                         zip-fill
-                            flow-parameters env.recur
+                            va-iter
+                                flow-parameters env.recur
                             syntax->datum expr
                             quote-syntax none
                     let param-label =
@@ -1770,12 +1776,27 @@ define fn-types
 define array
     type (quote array)
 
+define vector
+    type (quote vector)
+
 define tuple
     type (quote tuple)
+
+define struct
+    type (quote struct)
+
+define pointer
+    type (quote pointer)
 
 fn arrayof (atype values...)
     call
         array atype
+            va-countof values...
+        \ values...
+
+fn vectorof (atype values...)
+    call
+        vector atype
             va-countof values...
         \ values...
 
@@ -1788,10 +1809,52 @@ fn tupleof (values...)
                 break
         \ values...
 
+fn pointerof (value)
+    (pointer (typeof value)) value
+
 fn align (offset align)
     let T = (typeof offset)
     fn-types integer? T
     (offset + align - (T 1)) & (~ (align - (T 1)))
+
+# pointer implementation
+  ----------------------
+
+set-type-symbol! pointer (quote size) (sizeof boxed)
+set-type-symbol! pointer (quote alignment) (alignof boxed)
+
+set-type-symbol! pointer (quote apply-type)
+    fn apply-pointer-type (element)
+        fn-types type
+        let etype =
+            type (symbol (.. (repr element) "*"))
+        if (none? (. etype complete))
+            fn addressof (self)
+                @
+                    bitcast
+                        tuple u64
+                        tupleof self
+                    \ 0
+            fn getvalue (self)
+                ? ((addressof self) == (u64 0)) none
+                    unbox element
+                        bitcast boxed self
+
+            set-type-symbol! etype (quote super) pointer
+            set-type-symbol! etype (quote apply-type)
+                fn apply-typed-pointer-type (value)
+                    bitcast etype (box value)
+            set-type-symbol! etype (quote getvalue) getvalue
+            set-type-symbol! etype (quote getaddress) addressof
+            set-type-symbol! etype (quote repr)
+                fn pointer-type-repr (self styler)
+                    ..
+                        styler Style.Operator "&"
+                        repr
+                            getvalue self
+
+            set-type-symbol! etype (quote complete) true
+        \ etype
 
 # array implementation
   --------------------
@@ -1800,11 +1863,12 @@ set-type-symbol! array (quote apply-type)
     fn apply-array-type (element count)
         fn-types type size_t
         let etype =
-            type (symbol (.. "[" (string count) " x " (string element) "]"))
+            type (symbol (.. "[" (repr count) " x " (repr element) "]"))
         if (none? (. etype complete))
             let sz = (sizeof element)
             let alignment = (alignof element)
             let stride = (align sz alignment)
+            set-type-symbol! etype (quote super) array
             set-type-symbol! etype (quote size) (stride * count)
             set-type-symbol! etype (quote alignment) alignment
             set-type-symbol! etype (quote apply-type)
@@ -1861,6 +1925,75 @@ set-type-symbol! array (quote apply-type)
             set-type-symbol! etype (quote complete) true
         \ etype
 
+# vector implementation
+  ---------------------
+
+set-type-symbol! vector (quote apply-type)
+    fn apply-vector-type (element count)
+        fn-types type size_t
+        let etype =
+            type (symbol (.. "<" (repr count) " x " (repr element) ">"))
+        if (none? (. etype complete))
+            let sz = (sizeof element)
+            let alignment = (alignof element)
+            let stride = (align sz alignment)
+            set-type-symbol! etype (quote super) vector
+            set-type-symbol! etype (quote size) (stride * count)
+            set-type-symbol! etype (quote alignment) alignment
+            set-type-symbol! etype (quote apply-type)
+                fn apply-typed-vector-type (args...)
+                    let self =
+                        alloc etype
+                    let argcount = (va-countof args...)
+                    assert (argcount == count)
+                        .. (string (int count)) " elements expected, got "
+                            string (int argcount)
+                    loop-for i arg in (enumerate (va-iter args...))
+                        let offset = (stride * (size_t i))
+                        copy-memory! self offset arg (size_t 0) sz
+                        continue
+                    \ self
+            set-type-symbol! etype (quote @)
+                fn vector-type-at (self at)
+                    fn-types none integer?
+                    let offset = (stride * (size_t at))
+                    extract-memory element self offset
+            set-type-symbol! etype (quote countof)
+                fn vector-countof (self) count
+            set-type-symbol! etype (quote slice)
+                fn vector-type-at (self i0 i1)
+                    fn-types none size_t size_t
+                    let num = (i1 - i0)
+                    let offset = (stride * (size_t i0))
+                    let T = (vector element num)
+                    extract-memory T self offset
+            set-type-symbol! etype (quote repr)
+                fn vector-type-repr (self styler)
+                    loop
+                        with
+                            i = (size_t 0)
+                            s = (styler Style.Operator "<")
+                        if (i < count)
+                            continue
+                                i + (size_t 1)
+                                .. s
+                                    ? (i > (size_t 0)) " " ""
+                                    repr (@ self i) styler
+                        else
+                            .. s (styler Style.Operator ">")
+            set-type-symbol! etype (quote iter)
+                fn gen-vector-type-iter (self)
+                    return
+                        fn countable-iter (i)
+                            if (i < count)
+                                return
+                                    i + (size_t 1)
+                                    @ self i
+                        size_t 0
+
+            set-type-symbol! etype (quote complete) true
+        \ etype
+
 # tuple implementation
   --------------------
 
@@ -1875,7 +2008,7 @@ set-type-symbol! tuple (quote apply-type)
                 continue
                     .. s
                         ? (i == 0) "" " "
-                        string elemtype
+                        repr elemtype
             else
                 type
                     symbol
@@ -1897,6 +2030,7 @@ set-type-symbol! tuple (quote apply-type)
                 else
                     break offset max-alignment
 
+            set-type-symbol! etype (quote super) tuple
             set-type-symbol! etype (quote size) sz
             set-type-symbol! etype (quote alignment) alignment
 
@@ -1926,7 +2060,7 @@ set-type-symbol! tuple (quote apply-type)
                 set-type-symbol! etype (quote countof)
                     fn tuple-countof (self) count
                 set-type-symbol! etype (quote slice)
-                    fn array-type-at (self i0 i1)
+                    fn vector-type-at (self i0 i1)
                         fn-types none size_t size_t
                         let num = (i1 - i0)
                         let offset = (va-arg i0 offsets...)
@@ -1944,7 +2078,7 @@ set-type-symbol! tuple (quote apply-type)
                             tuple sliced-types...
                         extract-memory T self offset
                 set-type-symbol! etype (quote repr)
-                    fn array-type-repr (self styler)
+                    fn vector-type-repr (self styler)
                         loop
                             with
                                 i = (size_t 0)
@@ -1958,7 +2092,7 @@ set-type-symbol! tuple (quote apply-type)
                             else
                                 .. s (styler Style.Operator "}")
                 set-type-symbol! etype (quote iter)
-                    fn gen-array-type-iter (self)
+                    fn gen-vector-type-iter (self)
                         return
                             fn countable-iter (i)
                                 if (i < count)
@@ -1969,6 +2103,129 @@ set-type-symbol! tuple (quote apply-type)
 
                 set-type-symbol! etype (quote complete) true
         \ etype
+
+# struct implementation
+  ---------------------
+
+fn field (field-name field-type)
+    fn-types symbol? type?
+    fn ()
+        return field-name field-type
+
+set-type-symbol! struct (quote apply-type)
+    fn apply-struct-type (fields...)
+        let count = (va-countof fields...)
+        let fields = (va-iter fields...)
+        let etype =
+            loop-for i f in (enumerate fields)
+                with (s = "{")
+                assert (closure? f) "field expected"
+                let name elemtype = (f)
+                assert (symbol? name) "name expected"
+                assert (type? elemtype) "type expected"
+                continue
+                    .. s
+                        ? (i == 0) "" " "
+                        \ (repr name) "=" (repr elemtype)
+            else
+                type
+                    symbol
+                        .. s "}"
+        if (none? (. etype complete))
+            let etypes... =
+                loop-for f in fields
+                    let name elemtype = (f)
+                    break elemtype (continue)
+            let names... =
+                loop-for f in fields
+                    let name elemtype = (f)
+                    break name (continue)
+            let ttype = (tuple etypes...)
+            set-type-symbol! etype (quote super) struct
+            set-type-symbol! etype (quote size) ttype.size
+            set-type-symbol! etype (quote alignment) ttype.alignment
+            set-type-symbol! etype (quote apply-type)
+                fn struct-apply-type (values...)
+                    let stype = (ttype.apply-type values...)
+                    bitcast etype stype
+            set-type-symbol! etype (quote @)
+                fn struct-at (self at)
+                    if (symbol? at)
+                        loop-for i name in (enumerate (va-iter names...))
+                            if (name ==? at)
+                                break
+                                    ttype.@ self i
+                            else
+                                continue
+                        else
+                            error
+                                .. "no field named " (repr at) " in struct"
+                    else
+                        ttype.@ self at
+            set-type-symbol! etype (quote countof) ttype.countof
+            set-type-symbol! etype (quote repr)
+                fn struct-repr (self styler)
+                    loop-for i name in (enumerate (va-iter names...))
+                        with
+                            s = (styler Style.Operator "{")
+                        continue
+                            .. s
+                                ? (i > 0) " " ""
+                                repr name
+                                styler Style.Operator "="
+                                repr (@ self i) styler
+                    else
+                        .. s (styler Style.Operator "}")
+
+        \ etype
+
+syntax-extend
+    fn build-struct (names...)
+        fn (values...)
+            call
+                struct
+                    loop-for key value in (zip (va-iter names...) (va-iter values...))
+                        let value-type = (typeof value)
+                        break
+                            field key value-type
+                            continue
+                \ values...
+
+    # (structof (key = value) ...)
+    set-scope-symbol! syntax-scope (quote structof)
+        macro
+            fn expand-structof (expr env)
+                qquote
+                    call
+                        (unquote (datum->syntax build-struct (syntax->anchor expr)))
+                            unquote-splice
+                                loop-for entry in (syntax->datum (slice expr 1))
+                                    if
+                                        not
+                                            and
+                                                (countof entry) == (size_t 3)
+                                                (@ entry 1) ==? (quote =)
+                                        syntax-error entry "syntax: (structof (key = value) ...)"
+                                    let key = (@ entry 0)
+                                    let value = (slice entry 2)
+                                    syntax-cons
+                                        qquote
+                                            quote
+                                                unquote key
+                                        continue
+                                else
+                                    syntax-eol expr
+                        unquote-splice
+                            loop-for entry in (syntax->datum (slice expr 1))
+                                let value = (slice entry 2)
+                                syntax-cons
+                                    syntax-do value
+                                    continue
+                            else
+                                syntax-eol expr
+
+
+    \ syntax-scope
 
 #-------------------------------------------------------------------------------
 # REPL

@@ -41,11 +41,11 @@ local function bangra_symbols()
         .. " va-arg va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
-        .. " extern-library arrayof get-scope-symbol syntax-cons"
+        .. " extern-library arrayof get-scope-symbol syntax-cons vectorof"
         .. " datum->syntax syntax->datum syntax->anchor syntax-do"
         .. " syntax-error ordered-branch alloc syntax-list syntax-quote"
         .. " syntax-unquote syntax-quoted? bitcast concat repeat product"
-        .. " zip-fill integer? callable? extract-memory"
+        .. " zip-fill integer? callable? extract-memory box unbox pointerof"
         ),
 
     -- builtin and global functions with side effects
@@ -66,7 +66,7 @@ local function bangra_symbols()
         .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
         .. " frame closure flow integer real cfunction array tuple vector"
         .. " pointer struct enum bool uint qualifier syntax anchor scope"
-        .. " iterator type size_t usize_t ssize_t void* callable"
+        .. " iterator type size_t usize_t ssize_t void* callable boxed"
         )
     }
 end
