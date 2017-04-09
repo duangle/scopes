@@ -4500,12 +4500,12 @@ end)
 builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
     checkargs(1,2,value,anchor)
 
-    if is_null_or_none(anchor) then
+    if anchor == null then
         anchor = Anchor.extract(value)
         if anchor == null then
             location_error("argument of type "
                 .. repr(value.type)
-                .. " does not embed anchor")
+                .. " does not embed anchor, but no anchor was provided")
         end
     else
         anchor = unwrap(Type.Anchor, anchor)
@@ -5093,42 +5093,9 @@ builtins["syntax-at"] = function(frame, cont, self, value, ...)
     return at(frame, cont, none, value, ...)
 end
 
-local fwd_slice = builtin_forward(Symbol.Slice, "is not sliceable")
-builtins.slice = function(frame, cont, self, obj, start_index, end_index)
-    checkargs(2,3, obj, start_index, end_index)
-    return countof(frame,
-        Any(Builtin(function(_frame, _cont, self, l)
-            l = unwrap_integer(l)
-            local i0 = unwrap_integer(start_index)
-            if (i0 < int64_t(0)) then
-                i0 = i0 + l
-            end
-            i0 = min(max(i0, size_t(0)), l)
-            local i1
-            if end_index then
-                i1 = unwrap_integer(end_index)
-                if (i1 < int64_t(0)) then
-                    i1 = i1 + l
-                end
-                i1 = min(max(i1, i0), l)
-            else
-                i1 = l
-            end
-            return fwd_slice(frame, cont, none, obj, Any(size_t(i0)), Any(size_t(i1)))
-        end, Symbol.SliceForwarder)), countof, obj)
-end
-
 builtins["syntax-countof"] = function(frame, cont, self, value, ...)
     local value, anchor = unsyntax(value)
     return countof(frame, cont, none, value, ...)
-end
-
-builtins["syntax-slice"] = function(frame, cont, self, value, ...)
-    local value, anchor = unsyntax(value)
-    return fwd_slice(frame,
-        Any(Builtin(function(_frame, _cont, _self, l)
-            return call(frame, none, cont, Any(Syntax(l, anchor)))
-        end, Symbol.SliceForwarder)), none, value, ...)
 end
 
 builtins["list-slice"] = wrap_simple_builtin(function(value, i0, i1)

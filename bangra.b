@@ -28,6 +28,85 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    fn/cc no-op (_)
+    fn/cc unreachable (_)
+        error "unreachable branch"
+
+    fn/cc forward (_ name errmsg)
+        fn/cc (_ self values...)
+            call
+                fn/cc (_ func)
+                    type-compare (typeof func) void
+                        fn/cc (_)
+                            error
+                                .. "type "
+                                    string-new (typeof self)
+                                    \ " " errmsg
+                        fn/cc (_)
+                            func self values...
+                        \ unreachable unreachable
+                type-at (typeof self) name
+
+    call
+        fn/cc (_ forward-slice)
+            fn/cc syntax-slice (_ self values...)
+                call
+                    fn/cc (_ value loc)
+                        datum->syntax (forward-slice value values...) loc
+                    syntax->datum self
+                    syntax->anchor self
+
+            fn/cc slice (_ obj start-index end-index)
+                call
+                    fn/cc (_ zero count i0 i1)
+                        call
+                            fn/cc (_ i0 i1)
+                                call
+                                    fn/cc (_ i1)
+                                        forward-slice obj (u64-new i0) (u64-new i1)
+                                    i64-compare i1 zero
+                                        fn/cc (_) i1
+                                        \ unreachable
+                                        fn/cc (_)
+                                            call
+                                                fn/cc (_ i1)
+                                                    i64-compare i1 i0
+                                                        fn/cc (_) i1
+                                                        \ unreachable
+                                                        fn/cc (_) i0
+                                                        fn/cc (_) i1
+                                                i64+ i1 count
+                                        fn/cc (_) i1
+                            i64-compare i0 zero
+                                fn/cc (_) i0
+                                \ unreachable
+                                fn/cc (_)
+                                    i64-compare i0 (i64- zero count)
+                                        fn/cc (_) zero
+                                        \ unreachable
+                                        fn/cc (_) zero
+                                        fn/cc (_) (i64+ i0 count)
+                                fn/cc (_)
+                                    i64-compare i0 count
+                                        fn/cc (_) i0
+                                        \ unreachable
+                                        fn/cc (_) i0
+                                        fn/cc (_) count
+                            type-compare (typeof i1) void
+                                fn/cc (_) count
+                                fn/cc (_) (i64-new i1)
+                                \ unreachable unreachable
+                    i64-new 0
+                    i64-new
+                        countof obj
+                    i64-new start-index
+                    \ end-index
+
+            set-scope-symbol! syntax-scope (symbol "slice") slice
+            set-type-symbol! syntax (symbol "slice") syntax-slice
+
+        forward (symbol "slice") "is not sliceable"
+
     set-type-symbol! list (symbol "apply-type") list-new
     set-type-symbol! list (symbol "compare") list-compare
     set-type-symbol! list (symbol "@") list-at
@@ -36,16 +115,18 @@ syntax-extend
     set-type-symbol! syntax (symbol "compare") syntax-compare
     set-type-symbol! syntax (symbol "@") syntax-at
     set-type-symbol! syntax (symbol "countof") syntax-countof
-    set-type-symbol! syntax (symbol "slice") syntax-slice
+    \ syntax-scope
 
-    fn/cc return-true (_) true
-    fn/cc return-false (_) false
+syntax-extend
     fn/cc unordered-error (_ a b)
         error
             .. "illegal ordered comparison of values of types "
                 .. (repr (typeof a))
                     .. " and "
                         repr (typeof b)
+
+    fn/cc return-true (_) true
+    fn/cc return-false (_) false
 
     set-scope-symbol! syntax-scope (symbol "==")
         fn/cc "==" (return a b)
