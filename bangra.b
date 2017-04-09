@@ -24,6 +24,12 @@
     functions and macros, parses the command-line and then enters the REPL.
 
 syntax-extend
+    set-type-symbol! symbol (symbol-new "apply-type") symbol-new
+    \ syntax-scope
+
+syntax-extend
+    set-type-symbol! list (symbol "apply-type") list-new
+
     fn/cc return-true (_) true
     fn/cc return-false (_) false
     fn/cc unordered-error (_ a b)
@@ -87,7 +93,6 @@ syntax-extend
         fn/cc ">=?" (return a b)
             ordered-branch a b return-true return-false
                 \ return-false return-true
-
     set-scope-symbol! syntax-scope
         symbol "quote"
         block-scope-macro
@@ -137,6 +142,25 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    set-type-symbol! string (quote apply-type) string-new
+    set-type-symbol! type (quote apply-type) type-new
+    set-type-symbol! flow (quote apply-type) flow-new
+    set-type-symbol! parameter (quote apply-type) parameter-new
+    set-type-symbol! scope (quote apply-type) scope-new
+
+    set-type-symbol! i8 (quote apply-type) i8-new
+    set-type-symbol! i16 (quote apply-type) i16-new
+    set-type-symbol! i32 (quote apply-type) i32-new
+    set-type-symbol! i64 (quote apply-type) i64-new
+
+    set-type-symbol! u8 (quote apply-type) u8-new
+    set-type-symbol! u16 (quote apply-type) u16-new
+    set-type-symbol! u32 (quote apply-type) u32-new
+    set-type-symbol! u64 (quote apply-type) u64-new
+
+    set-type-symbol! r32 (quote apply-type) r32-new
+    set-type-symbol! r64 (quote apply-type) r64-new
+
     set-scope-symbol! syntax-scope
         symbol "set!"
         block-scope-macro

@@ -4517,44 +4517,39 @@ builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
     return Any(Syntax(value,anchor))
 end)
 
-builtin_op(Type.String, Symbol.ApplyType,
-    wrap_simple_builtin(function(value)
-        checkargs(1,1,value)
-        value = maybe_unsyntax(value)
-        local ty = value.type
-        -- todo: types should do that conversion
-        if ty == Type.String then
-            return value
-        elseif ty == Type.Symbol then
-            return Any(value.value.name)
-        else
-            return Any(value.type:format_value(value.value, plain_styler))
-        end
-    end))
+builtins["string-new"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    value = maybe_unsyntax(value)
+    local ty = value.type
+    -- todo: types should do that conversion
+    if ty == Type.String then
+        return value
+    elseif ty == Type.Symbol then
+        return Any(value.value.name)
+    else
+        return Any(value.type:format_value(value.value, plain_styler))
+    end
+end)
 
-builtin_op(Type.Symbol, Symbol.ApplyType,
-    wrap_simple_builtin(function(name)
-        checkargs(1,1,name)
-        return Any(Symbol(unwrap(Type.String, name)))
-    end))
+builtins["symbol-new"] = wrap_simple_builtin(function(name)
+    checkargs(1,1,name)
+    return Any(Symbol(unwrap(Type.String, name)))
+end)
 
-builtin_op(Type.List, Symbol.ApplyType,
-    wrap_simple_builtin(function(...)
-        checkargs(0,-1,...)
-        return Any(List.from_args(...))
-    end))
+builtins["list-new"] = wrap_simple_builtin(function(...)
+    checkargs(0,-1,...)
+    return Any(List.from_args(...))
+end)
 
-builtin_op(Type.Type, Symbol.ApplyType,
-    wrap_simple_builtin(function(name)
-        checkargs(1,1,name)
-        return Any(Type(unwrap(Type.Symbol, name)))
-    end))
+builtins["type-new"] = wrap_simple_builtin(function(name)
+    checkargs(1,1,name)
+    return Any(Type(unwrap(Type.Symbol, name)))
+end)
 
-builtin_op(Type.Flow, Symbol.ApplyType,
-    wrap_simple_builtin(function(name)
-        checkargs(1,1,name)
-        return Any(Flow(name))
-    end))
+builtins["flow-new"] = wrap_simple_builtin(function(name)
+    checkargs(1,1,name)
+    return Any(Flow(name))
+end)
 
 builtins["syntax-list"] = wrap_simple_builtin(function(...)
     checkargs(0,-1,...)
@@ -4572,44 +4567,35 @@ builtins["syntax-list"] = wrap_simple_builtin(function(...)
     return Any(Syntax(Any(List.from_args(...)), anchor))
 end)
 
-builtin_op(Type.Parameter, Symbol.ApplyType,
-    wrap_simple_builtin(function(name,_type)
-        checkargs(1,2,name,_type)
-        if _type then
-            _type = unwrap(Type.Type, _type)
-        end
-        return Any(Parameter(name, _type))
-    end))
-
-builtin_op(Type.Scope, Symbol.ApplyType,
-    wrap_simple_builtin(function(parent)
-        checkargs(0,1,parent)
-        if parent then
-            return Any(Scope(unwrap(Type.Scope, parent)))
-        else
-            return Any(Scope())
-        end
-    end))
-
-each_numerical_type(function(T)
-    builtin_op(T, Symbol.ApplyType,
-        wrap_simple_builtin(function(x)
-            checkargs(1,1,x)
-            local xs = x.type:super()
-            if xs ~= Type.Integer and xs ~= Type.Real then
-                error("Unable to apply type "
-                    .. tostring(T) .. " to value of type "
-                    .. tostring(x.type))
-            end
-            return Any(T.ctype(x.value))
-        end))
+builtins["parameter-new"] = wrap_simple_builtin(function(name,_type)
+    checkargs(1,2,name,_type)
+    if _type then
+        _type = unwrap(Type.Type, _type)
+    end
+    return Any(Parameter(name, _type))
 end)
 
-builtin_op(Type.Syntax, Symbol.ApplyType,
-    wrap_simple_builtin(function(_type)
-        checkargs(1,1,_type)
-        return Any(Type.Syntax(unwrap(Type.Type, _type)))
-    end))
+builtins["scope-new"] = wrap_simple_builtin(function(parent)
+    checkargs(0,1,parent)
+    if parent then
+        return Any(Scope(unwrap(Type.Scope, parent)))
+    else
+        return Any(Scope())
+    end
+end)
+
+each_numerical_type(function(T)
+    builtins[T.name .. "-new"] = wrap_simple_builtin(function(x)
+        checkargs(1,1,x)
+        local xs = x.type:super()
+        if xs ~= Type.Integer and xs ~= Type.Real then
+            error("Unable to apply type "
+                .. tostring(T) .. " to value of type "
+                .. tostring(x.type))
+        end
+        return Any(T.ctype(x.value))
+    end)
+end)
 
 -- comparisons
 --------------------------------------------------------------------------------
