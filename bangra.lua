@@ -4197,21 +4197,6 @@ local function builtin_macro(value)
     return macro(Any(Builtin(wrap_expand_builtin(value))))
 end
 
-local function builtin_forward(name, errmsg)
-    assert_symbol(name)
-    assert_string(errmsg)
-    return function(frame, cont, self, value, ...)
-        checkargs(1,1, value)
-        local func = value.type:lookup(name)
-        if func == null then
-            location_error("type "
-                .. tostring(value.type)
-                .. " " .. errmsg)
-        end
-        return call(frame, cont, func, value, ...)
-    end
-end
-
 local function unwrap_integer(value)
     local super = value.type:super()
     if super == Type.Integer then
@@ -4829,75 +4814,8 @@ end)
 -- join
 --------------------------------------------------------------------------------
 
-local function builtin_forward_op1(name, errmsg)
-    assert_symbol(name)
-    assert_string(errmsg)
-    return function(frame, cont, self, x, ...)
-        checkargs(1,-1, x, ...)
-        local func = x.type:lookup(name)
-        local function print_errmsg()
-            error("can not " .. errmsg .. " value of type "
-                .. tostring(x.type))
-        end
-        if func ~= null then
-            return call(frame,
-            Any(Builtin(function(_frame, _cont, _dest, result)
-                if result == null then
-                    return print_errmsg()
-                else
-                    return call(frame, none, cont, result)
-                end
-            end, Symbol.ROp)), func, x, ...)
-        end
-        return print_errmsg()
-    end
-end
-
-local function builtin_forward_op2(name, errmsg)
-    assert_symbol(name)
-    assert_string(errmsg)
-    return function(frame, cont, self, a, b, ...)
-        checkargs(2,2, a, b, ...)
-        local func = a.type:lookup(name)
-        local function print_errmsg()
-            error("can not " .. errmsg .. " values of type "
-                .. tostring(a.type)
-                .. " and "
-                .. tostring(b.type))
-        end
-        local function fallback_call(err)
-            func = b.type:lookup(name)
-            if func ~= null then
-                return call(frame,
-                    Any(Builtin(function(_frame, _cont, _dest, result)
-                        if result == null then
-                            print_errmsg()
-                        else
-                            return call(frame, none, cont, result)
-                        end
-                    end, Symbol.ROp)), func, a, b, any_true)
-            else
-                print_errmsg()
-            end
-        end
-        if func ~= null then
-            return call(frame,
-            Any(Builtin(function(_frame, _cont, _dest, result)
-                if result == null then
-                    return fallback_call()
-                else
-                    return call(frame, none, cont, result)
-                end
-            end, Symbol.ROp)), func, a, b, any_false)
-        end
-        return fallback_call()
-    end
-end
-
-builtins[Symbol.Join] = builtin_forward_op2(Symbol.Join, "join")
-
-builtins["string-join"] = wrap_simple_builtin(function(a, b, flipped)
-    checkargs(3,3,a,b,flipped)
+builtins["string-join"] = wrap_simple_builtin(function(a, b)
+    checkargs(2,2,a,b)
     a = unwrap(Type.String, a)
     b = unwrap(Type.String, b)
     return Any(a .. b)
@@ -4915,36 +4833,8 @@ builtins["list-join"] = wrap_simple_builtin(function(a, b)
     return Any(reverse_list_inplace(l, lb, lb))
 end)
 
-builtins["syntax-join"] = function(frame, cont, self, a, b)
-    checkargs(2,2,a,b)
-    local aa, ba
-    a,aa = unsyntax(a)
-    b,ba = unsyntax(b)
-    local join = builtins[Symbol.Join]
-    return join(frame,
-        Any(Builtin(function(_frame, _cont, _dest, l)
-            return call(_frame, none, cont, Any(Syntax(l, aa)))
-        end, Symbol.JoinForwarder)),
-        none, a, b)
-end
-
 -- arithmetic
 --------------------------------------------------------------------------------
-
-builtins[Symbol.Add] = builtin_forward_op2(Symbol.Add, "add")
-builtins[Symbol.Sub] = builtin_forward_op2(Symbol.Sub, "subtract")
-builtins[Symbol.Mul] = builtin_forward_op2(Symbol.Mul, "multiply")
-builtins[Symbol.Div] = builtin_forward_op2(Symbol.Div, "divide")
-builtins[Symbol.Mod] = builtin_forward_op2(Symbol.Mod, "modulate")
-builtins[Symbol.BitAnd] = builtin_forward_op2(Symbol.BitAnd, "and-combine")
-builtins[Symbol.BitOr] = builtin_forward_op2(Symbol.BitOr, "or-combine")
-builtins[Symbol.BitXor] = builtin_forward_op2(Symbol.BitXor, "xor")
-builtins[Symbol.BitNot] = builtin_forward_op1(Symbol.BitNot, "bitwise-negate")
-builtins[Symbol.LShift] = builtin_forward_op1(Symbol.LShift, "left-shift")
-builtins[Symbol.RShift] = builtin_forward_op1(Symbol.RShift, "right-shift")
-builtins[Symbol.Pow] = builtin_forward_op2(Symbol.Pow, "exponentiate")
-
---def({BitNot='~'})
 
 local function opmaker(T, ctype)
     local atype = typeof('$[$]', ctype, 1)
@@ -5045,9 +4935,6 @@ builtins["element-type"] = wrap_simple_builtin(function(_type)
     return Any(_type:element_type())
 end)
 
-local countof = builtin_forward(Symbol.CountOf, "is not countable")
-builtins.countof = countof
-
 local function countof_func(T)
     builtins[T.name .. "-countof"] = function(frame, cont, self, value)
         value = value.value
@@ -5057,9 +4944,6 @@ end
 
 countof_func(Type.String)
 countof_func(Type.List)
-
-local at = builtin_forward(Symbol.At, "is not indexable")
-builtins[Symbol.At] = at
 
 builtins["scope-at"] = wrap_simple_builtin(function(x, name)
     checkargs(2,2,x,name)
@@ -5088,15 +4972,6 @@ builtins["list-at"] = wrap_simple_builtin(function(x, i)
     end
     return x.at
 end)
-builtins["syntax-at"] = function(frame, cont, self, value, ...)
-    value = maybe_unsyntax(value)
-    return at(frame, cont, none, value, ...)
-end
-
-builtins["syntax-countof"] = function(frame, cont, self, value, ...)
-    local value, anchor = unsyntax(value)
-    return countof(frame, cont, none, value, ...)
-end
 
 builtins["list-slice"] = wrap_simple_builtin(function(value, i0, i1)
     checkargs(3,3,value,i0,i1)

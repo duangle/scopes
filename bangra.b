@@ -33,28 +33,83 @@ syntax-extend
         error "unreachable branch"
 
     fn/cc forward (_ name errmsg)
-        fn/cc (_ self values...)
+        fn/cc (_ x values...)
             call
-                fn/cc (_ func)
-                    type-compare (typeof func) void
+                fn/cc (_ x-func)
+                    type-compare (typeof x-func) void
                         fn/cc (_)
                             error
-                                .. "type "
-                                    string-new (typeof self)
-                                    \ " " errmsg
+                                string-join "can not "
+                                    string-join errmsg
+                                        string-join " value of type "
+                                            string-new (typeof x)
                         fn/cc (_)
-                            func self values...
+                            x-func x values...
                         \ unreachable unreachable
-                type-at (typeof self) name
+                type-at (typeof x) name
+
+    fn/cc forward-op2 (_ name errmsg)
+        fn/cc (_ a b)
+            fn/cc forward-op2-error (_)
+                error
+                    string-join "can not "
+                        string-join errmsg
+                            string-join " values of type "
+                                string-join
+                                    string-new (typeof a)
+                                    string-join " and " (string-new (typeof b))
+            fn/cc alt-forward-op2 (_)
+                call
+                    fn/cc (_ b-func)
+                        type-compare (typeof b-func) void
+                            \ forward-op2-error
+                            fn/cc (_)
+                                call
+                                    fn/cc (_ result...)
+                                        u64-compare (va-countof result...) (u64-new 0)
+                                        \ forward-op2-error
+                                        \ unreachable unreachable
+                                        fn/cc (_) result...
+                                    b-func a b true
+                            \ unreachable unreachable
+                    type-at (typeof b) name
+            call
+                fn/cc (_ a-func)
+                    type-compare (typeof a-func) void
+                        \ alt-forward-op2
+                        fn/cc (_)
+                            call
+                                fn/cc (_ result...)
+                                    u64-compare (va-countof result...) (u64-new 0)
+                                        \ alt-forward-op2
+                                        \ unreachable unreachable
+                                        fn/cc (_) result...
+                                a-func a b false
+                        \ unreachable unreachable
+                type-at (typeof a) name
 
     call
-        fn/cc (_ forward-slice)
+        fn/cc (_ forward-slice forward-at forward-countof forward-join)
             fn/cc syntax-slice (_ self values...)
                 call
                     fn/cc (_ value loc)
                         datum->syntax (forward-slice value values...) loc
                     syntax->datum self
                     syntax->anchor self
+
+            fn/cc syntax-at (_ self values...)
+                forward-at (syntax->datum self) values...
+
+            fn/cc syntax-countof (_ self)
+                forward-countof (syntax->datum self)
+
+            fn/cc syntax-join (_ a b)
+                call
+                    fn/cc (_ a b a-loc)
+                        datum->syntax (forward-join a b) a-loc
+                    syntax->datum a
+                    syntax->datum b
+                    syntax->anchor a
 
             fn/cc slice (_ obj start-index end-index)
                 call
@@ -98,14 +153,40 @@ syntax-extend
                                 \ unreachable unreachable
                     i64-new 0
                     i64-new
-                        countof obj
+                        forward-countof obj
                     i64-new start-index
                     \ end-index
 
             set-scope-symbol! syntax-scope (symbol "slice") slice
+            set-scope-symbol! syntax-scope (symbol "@") forward-at
+            set-scope-symbol! syntax-scope (symbol "countof") forward-countof
+            set-scope-symbol! syntax-scope (symbol "..") forward-join
             set-type-symbol! syntax (symbol "slice") syntax-slice
+            set-type-symbol! syntax (symbol "@") syntax-at
+            set-type-symbol! syntax (symbol "countof") syntax-countof
+            set-type-symbol! syntax (symbol "..") syntax-join
 
-        forward (symbol "slice") "is not sliceable"
+        forward (symbol "slice") "slice"
+        forward (symbol "@") "index"
+        forward (symbol "countof") "count"
+        forward-op2 (symbol "..") "join"
+
+    fn/cc set-forward-op2 (_ name errmsg)
+        set-scope-symbol! syntax-scope name (forward-op2 name errmsg)
+    set-forward-op2 (symbol "+") "add"
+    set-forward-op2 (symbol "-") "subtract"
+    set-forward-op2 (symbol "*") "multiply"
+    set-forward-op2 (symbol "/") "divide"
+    set-forward-op2 (symbol "%") "modulate"
+    set-forward-op2 (symbol "&") "and-combine"
+    set-forward-op2 (symbol "|") "or-combine"
+    set-forward-op2 (symbol "^") "xor"
+    set-forward-op2 (symbol "**") "exponentiate"
+    fn/cc set-forward (_ name errmsg)
+        set-scope-symbol! syntax-scope name (forward name errmsg)
+    set-forward (symbol "~") "bitwise-negate"
+    set-forward (symbol "<<") "left-shift"
+    set-forward (symbol ">>") "right-shift"
 
     set-type-symbol! list (symbol "apply-type") list-new
     set-type-symbol! list (symbol "compare") list-compare
@@ -113,8 +194,7 @@ syntax-extend
     set-type-symbol! list (symbol "countof") list-countof
     set-type-symbol! list (symbol "slice") list-slice
     set-type-symbol! syntax (symbol "compare") syntax-compare
-    set-type-symbol! syntax (symbol "@") syntax-at
-    set-type-symbol! syntax (symbol "countof") syntax-countof
+
     \ syntax-scope
 
 syntax-extend
@@ -278,7 +358,6 @@ syntax-extend
     #---
     set-type-symbol! string (quote ..) string-join
     set-type-symbol! list (quote ..) list-join
-    set-type-symbol! syntax (quote ..) syntax-join
 
     #---
     set-type-symbol! string (quote countof) string-countof
