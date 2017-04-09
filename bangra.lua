@@ -900,7 +900,6 @@ end
 --------------------------------------------------------------------------------
 
 local builtins = {}
-local builtin_ops = {}
 
 --------------------------------------------------------------------------------
 -- Symbol
@@ -4213,11 +4212,6 @@ local function builtin_forward(name, errmsg)
     end
 end
 
-local function builtin_op(_type, name, func)
-    print("todo: get rid of",_type, name, func)
-    table.insert(builtin_ops, {_type, name, func})
-end
-
 local function unwrap_integer(value)
     local super = value.type:super()
     if super == Type.Integer then
@@ -4826,9 +4820,11 @@ local default_casts = wrap_simple_builtin(function(fromtype, totype, value)
     end
 end)
 
+--[[
 each_numerical_type(function(T)
     builtin_op(T, Symbol.Cast, default_casts)
 end)
+]]
 
 -- join
 --------------------------------------------------------------------------------
@@ -4900,40 +4896,37 @@ end
 
 builtins[Symbol.Join] = builtin_forward_op2(Symbol.Join, "join")
 
-builtin_op(Type.String, Symbol.Join,
-    wrap_simple_builtin(function(a, b, flipped)
-        checkargs(3,3,a,b,flipped)
-        a = unwrap(Type.String, a)
-        b = unwrap(Type.String, b)
-        return Any(a .. b)
-    end))
+builtins["string-join"] = wrap_simple_builtin(function(a, b, flipped)
+    checkargs(3,3,a,b,flipped)
+    a = unwrap(Type.String, a)
+    b = unwrap(Type.String, b)
+    return Any(a .. b)
+end)
 
-builtin_op(Type.List, Symbol.Join,
-    wrap_simple_builtin(function(a, b)
-        checkargs(2,2,a,b)
-        local la = unwrap(Type.List, a)
-        local lb = unwrap(Type.List, b)
-        local l = lb
-        while (la ~= EOL) do
-            l = List(la.at, l)
-            la = la.next
-        end
-        return Any(reverse_list_inplace(l, lb, lb))
-    end))
+builtins["list-join"] = wrap_simple_builtin(function(a, b)
+    checkargs(2,2,a,b)
+    local la = unwrap(Type.List, a)
+    local lb = unwrap(Type.List, b)
+    local l = lb
+    while (la ~= EOL) do
+        l = List(la.at, l)
+        la = la.next
+    end
+    return Any(reverse_list_inplace(l, lb, lb))
+end)
 
-builtin_op(Type.Syntax, Symbol.Join,
-    function(frame, cont, self, a, b)
-        checkargs(2,2,a,b)
-        local aa, ba
-        a,aa = unsyntax(a)
-        b,ba = unsyntax(b)
-        local join = builtins[Symbol.Join]
-        return join(frame,
-            Any(Builtin(function(_frame, _cont, _dest, l)
-                return call(_frame, none, cont, Any(Syntax(l, aa)))
-            end, Symbol.JoinForwarder)),
-            none, a, b)
-    end)
+builtins["syntax-join"] = function(frame, cont, self, a, b)
+    checkargs(2,2,a,b)
+    local aa, ba
+    a,aa = unsyntax(a)
+    b,ba = unsyntax(b)
+    local join = builtins[Symbol.Join]
+    return join(frame,
+        Any(Builtin(function(_frame, _cont, _dest, l)
+            return call(_frame, none, cont, Any(Syntax(l, aa)))
+        end, Symbol.JoinForwarder)),
+        none, a, b)
+end
 
 -- arithmetic
 --------------------------------------------------------------------------------
@@ -4960,42 +4953,39 @@ local function opmaker(T, ctype)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
-        builtin_op(T, sym,
-            wrap_simple_builtin(function(x)
-                checkargs(1,1,x)
-                x = unwrap(T, x)
-                local srcval = new(atype)
-                op(srcval, x)
-                return Any(cast(ctype, cast(rtype, srcval)))
-            end))
+        builtins[T.name .. sym.name] = wrap_simple_builtin(function(x)
+            checkargs(1,1,x)
+            x = unwrap(T, x)
+            local srcval = new(atype)
+            op(srcval, x)
+            return Any(cast(ctype, cast(rtype, srcval)))
+        end)
     end
     local function arithmetic_op2(sym, opname)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
-        builtin_op(T, sym,
-            wrap_simple_builtin(function(a,b)
-                checkargs(2,2,a,b)
-                a = unwrap(T, a)
-                b = unwrap(T, b)
-                local srcval = new(atype)
-                op(srcval, a, b)
-                return Any(cast(ctype, cast(rtype, srcval)))
-            end))
+        builtins[T.name .. sym.name] = wrap_simple_builtin(function(a,b)
+            checkargs(2,2,a,b)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            local srcval = new(atype)
+            op(srcval, a, b)
+            return Any(cast(ctype, cast(rtype, srcval)))
+        end)
     end
     local function arithmetic_shiftop(sym, opname)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
-        builtin_op(T, sym,
-            wrap_simple_builtin(function(a,b)
-                checkargs(2,2,a,b)
-                a = unwrap(T, a)
-                b = unwrap(Type.I32, b)
-                local srcval = new(atype)
-                op(srcval, a, b)
-                return Any(cast(ctype, cast(rtype, srcval)))
-            end))
+        builtins[T.name .. sym.name] = wrap_simple_builtin(function(a,b)
+            checkargs(2,2,a,b)
+            a = unwrap(T, a)
+            b = unwrap(Type.I32, b)
+            local srcval = new(atype)
+            op(srcval, a, b)
+            return Any(cast(ctype, cast(rtype, srcval)))
+        end)
     end
     return {
         op1 = arithmetic_op1,
@@ -5059,11 +5049,10 @@ local countof = builtin_forward(Symbol.CountOf, "is not countable")
 builtins.countof = countof
 
 local function countof_func(T)
-    builtin_op(T, Symbol.CountOf,
-        function(frame, cont, self, value)
-            value = value.value
-            return call(frame, none, cont, Any(size_t(#value)))
-        end)
+    builtins[T.name .. "-countof"] = function(frame, cont, self, value)
+        value = value.value
+        return call(frame, none, cont, Any(size_t(#value)))
+    end
 end
 
 countof_func(Type.String)
@@ -5072,42 +5061,37 @@ countof_func(Type.List)
 local at = builtin_forward(Symbol.At, "is not indexable")
 builtins[Symbol.At] = at
 
-builtin_op(Type.Scope, Symbol.At,
-    wrap_simple_builtin(function(x, name)
-        checkargs(2,2,x,name)
-        x = unwrap(Type.Scope, x)
-        name = unwrap(Type.Symbol, maybe_unsyntax(name))
-        return x:lookup(name)
-    end))
-builtin_op(Type.Type, Symbol.At,
-    wrap_simple_builtin(function(x, name)
-        checkargs(2,2,x,name)
-        x = unwrap(Type.Type, x)
-        name = unwrap(Type.Symbol, maybe_unsyntax(name))
-        return x:lookup(name)
-    end))
-builtin_op(Type.String, Symbol.At,
-    wrap_simple_builtin(function(x, i)
-        checkargs(2,2,x,i)
-        x = unwrap(Type.String, x)
-        i = tonumber(unwrap_integer(i)) + 1
-        return Any(x:sub(i,i))
-    end))
-builtin_op(Type.List, Symbol.At,
-    wrap_simple_builtin(function(x, i)
-        checkargs(2,2,x,i)
-        x = unwrap(Type.List, x)
-        i = unwrap_integer(i)
-        for k=1,tonumber(i) do
-            x = x.next
-        end
-        return x.at
-    end))
-builtin_op(Type.Syntax, Symbol.At,
-    function(frame, cont, self, value, ...)
-        value = maybe_unsyntax(value)
-        return at(frame, cont, none, value, ...)
-    end)
+builtins["scope-at"] = wrap_simple_builtin(function(x, name)
+    checkargs(2,2,x,name)
+    x = unwrap(Type.Scope, x)
+    name = unwrap(Type.Symbol, maybe_unsyntax(name))
+    return x:lookup(name)
+end)
+builtins["type-at"] = wrap_simple_builtin(function(x, name)
+    checkargs(2,2,x,name)
+    x = unwrap(Type.Type, x)
+    name = unwrap(Type.Symbol, maybe_unsyntax(name))
+    return x:lookup(name)
+end)
+builtins["string-at"] = wrap_simple_builtin(function(x, i)
+    checkargs(2,2,x,i)
+    x = unwrap(Type.String, x)
+    i = tonumber(unwrap_integer(i)) + 1
+    return Any(x:sub(i,i))
+end)
+builtins["list-at"] = wrap_simple_builtin(function(x, i)
+    checkargs(2,2,x,i)
+    x = unwrap(Type.List, x)
+    i = unwrap_integer(i)
+    for k=1,tonumber(i) do
+        x = x.next
+    end
+    return x.at
+end)
+builtins["syntax-at"] = function(frame, cont, self, value, ...)
+    value = maybe_unsyntax(value)
+    return at(frame, cont, none, value, ...)
+end
 
 local fwd_slice = builtin_forward(Symbol.Slice, "is not sliceable")
 builtins.slice = function(frame, cont, self, obj, start_index, end_index)
@@ -5134,60 +5118,56 @@ builtins.slice = function(frame, cont, self, obj, start_index, end_index)
         end, Symbol.SliceForwarder)), countof, obj)
 end
 
-builtin_op(Type.Syntax, Symbol.CountOf,
-    function(frame, cont, self, value, ...)
-        local value, anchor = unsyntax(value)
-        return countof(frame, cont, none, value, ...)
-    end)
+builtins["syntax-countof"] = function(frame, cont, self, value, ...)
+    local value, anchor = unsyntax(value)
+    return countof(frame, cont, none, value, ...)
+end
 
-builtin_op(Type.Syntax, Symbol.Slice,
-    function(frame, cont, self, value, ...)
-        local value, anchor = unsyntax(value)
-        return fwd_slice(frame,
-            Any(Builtin(function(_frame, _cont, _self, l)
-                return call(frame, none, cont, Any(Syntax(l, anchor)))
-            end, Symbol.SliceForwarder)), none, value, ...)
-    end)
+builtins["syntax-slice"] = function(frame, cont, self, value, ...)
+    local value, anchor = unsyntax(value)
+    return fwd_slice(frame,
+        Any(Builtin(function(_frame, _cont, _self, l)
+            return call(frame, none, cont, Any(Syntax(l, anchor)))
+        end, Symbol.SliceForwarder)), none, value, ...)
+end
 
-builtin_op(Type.List, Symbol.Slice,
-    wrap_simple_builtin(function(value, i0, i1)
-        checkargs(3,3,value,i0,i1)
-        local list = unwrap(Type.List, value)
-        i0 = unwrap_integer(i0)
-        i1 = unwrap_integer(i1)
-        local i = int64_t(0)
-        while (i < i0) do
+builtins["list-slice"] = wrap_simple_builtin(function(value, i0, i1)
+    checkargs(3,3,value,i0,i1)
+    local list = unwrap(Type.List, value)
+    i0 = unwrap_integer(i0)
+    i1 = unwrap_integer(i1)
+    local i = int64_t(0)
+    while (i < i0) do
+        assert(list ~= EOL)
+        list = list.next
+        i = i + 1
+    end
+    local count = int64_t(0)
+    if list ~= EOL then
+        count = list.count
+    end
+    if (count ~= (i1 - i0)) then
+        -- need to chop off tail, which requires creating a new list
+        assert(list ~= EOL)
+        local outlist = EOL
+        while (i < i1) do
             assert(list ~= EOL)
+            outlist = List(list.at, outlist)
             list = list.next
             i = i + 1
         end
-        local count = int64_t(0)
-        if list ~= EOL then
-            count = list.count
-        end
-        if (count ~= (i1 - i0)) then
-            -- need to chop off tail, which requires creating a new list
-            assert(list ~= EOL)
-            local outlist = EOL
-            while (i < i1) do
-                assert(list ~= EOL)
-                outlist = List(list.at, outlist)
-                list = list.next
-                i = i + 1
-            end
-            list = reverse_list_inplace(outlist)
-        end
-        return Any(list)
-    end))
+        list = reverse_list_inplace(outlist)
+    end
+    return Any(list)
+end)
 
-builtin_op(Type.String, Symbol.Slice,
-    wrap_simple_builtin(function(value, i0, i1)
-        checkargs(3,3,value,i0,i1)
-        value = unwrap(Type.String, value)
-        i0 = tonumber(unwrap_integer(i0)) + 1
-        i1 = tonumber(unwrap_integer(i1))
-        return Any(value:sub(i0, i1))
-    end))
+builtins["string-slice"] = wrap_simple_builtin(function(value, i0, i1)
+    checkargs(3,3,value,i0,i1)
+    value = unwrap(Type.String, value)
+    i0 = tonumber(unwrap_integer(i0)) + 1
+    i1 = tonumber(unwrap_integer(i1))
+    return Any(value:sub(i0, i1))
+end)
 
 builtins["get-scope-symbol"] = wrap_simple_builtin(function(scope, key, defvalue)
     checkargs(2, 3, scope, key, defvalue)
@@ -5690,12 +5670,6 @@ local function init_globals()
     globals = Scope()
     for name,value in pairs(builtins) do
         decl_builtin(name, value)
-    end
-
-    for _,entry in ipairs(builtin_ops) do
-        local _type,name,value = unpack(entry)
-        name,value = prepare_builtin_value(name,value,_type)
-        _type:bind(name, value)
     end
 end
 

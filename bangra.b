@@ -30,7 +30,13 @@ syntax-extend
 syntax-extend
     set-type-symbol! list (symbol "apply-type") list-new
     set-type-symbol! list (symbol "compare") list-compare
+    set-type-symbol! list (symbol "@") list-at
+    set-type-symbol! list (symbol "countof") list-countof
+    set-type-symbol! list (symbol "slice") list-slice
     set-type-symbol! syntax (symbol "compare") syntax-compare
+    set-type-symbol! syntax (symbol "@") syntax-at
+    set-type-symbol! syntax (symbol "countof") syntax-countof
+    set-type-symbol! syntax (symbol "slice") syntax-slice
 
     fn/cc return-true (_) true
     fn/cc return-false (_) false
@@ -187,6 +193,55 @@ syntax-extend
 
     set-type-symbol! r32 (quote compare) r32-compare
     set-type-symbol! r64 (quote compare) r64-compare
+
+    #---
+    set-type-symbol! string (quote ..) string-join
+    set-type-symbol! list (quote ..) list-join
+    set-type-symbol! syntax (quote ..) syntax-join
+
+    #---
+    set-type-symbol! string (quote countof) string-countof
+
+    #---
+    set-type-symbol! scope (quote @) scope-at
+    set-type-symbol! type (quote @) type-at
+    set-type-symbol! string (quote @) string-at
+
+    #---
+    set-type-symbol! string (quote slice) string-slice
+    #---
+    set-type-symbol! i8 (quote ~) i8~; set-type-symbol! i16 (quote ~) i16~; set-type-symbol! i32 (quote ~) i32~; set-type-symbol! i64 (quote ~) i64~
+    set-type-symbol! u8 (quote ~) u8~; set-type-symbol! u16 (quote ~) u16~; set-type-symbol! u32 (quote ~) u32~; set-type-symbol! u64 (quote ~) u64~
+
+    set-type-symbol! i8 (quote +) i8+; set-type-symbol! i16 (quote +) i16+; set-type-symbol! i32 (quote +) i32+; set-type-symbol! i64 (quote +) i64+
+    set-type-symbol! u8 (quote +) u8+; set-type-symbol! u16 (quote +) u16+; set-type-symbol! u32 (quote +) u32+; set-type-symbol! u64 (quote +) u64+
+    set-type-symbol! i8 (quote -) i8-; set-type-symbol! i16 (quote -) i16-; set-type-symbol! i32 (quote -) i32-; set-type-symbol! i64 (quote -) i64-
+    set-type-symbol! u8 (quote -) u8-; set-type-symbol! u16 (quote -) u16-; set-type-symbol! u32 (quote -) u32-; set-type-symbol! u64 (quote -) u64-
+    set-type-symbol! i8 (quote *) i8*; set-type-symbol! i16 (quote *) i16*; set-type-symbol! i32 (quote *) i32*; set-type-symbol! i64 (quote *) i64*
+    set-type-symbol! u8 (quote *) u8*; set-type-symbol! u16 (quote *) u16*; set-type-symbol! u32 (quote *) u32*; set-type-symbol! u64 (quote *) u64*
+    set-type-symbol! i8 (quote /) i8/; set-type-symbol! i16 (quote /) i16/; set-type-symbol! i32 (quote /) i32/; set-type-symbol! i64 (quote /) i64/
+    set-type-symbol! u8 (quote /) u8/; set-type-symbol! u16 (quote /) u16/; set-type-symbol! u32 (quote /) u32/; set-type-symbol! u64 (quote /) u64/
+    set-type-symbol! i8 (quote %) i8%; set-type-symbol! i16 (quote %) i16%; set-type-symbol! i32 (quote %) i32%; set-type-symbol! i64 (quote %) i64%
+    set-type-symbol! u8 (quote %) u8%; set-type-symbol! u16 (quote %) u16%; set-type-symbol! u32 (quote %) u32%; set-type-symbol! u64 (quote %) u64%
+    set-type-symbol! i8 (quote **) i8**; set-type-symbol! i16 (quote **) i16**; set-type-symbol! i32 (quote **) i32**; set-type-symbol! i64 (quote **) i64**
+    set-type-symbol! u8 (quote **) u8**; set-type-symbol! u16 (quote **) u16**; set-type-symbol! u32 (quote **) u32**; set-type-symbol! u64 (quote **) u64**
+    set-type-symbol! i8 (quote &) i8&; set-type-symbol! i16 (quote &) i16&; set-type-symbol! i32 (quote &) i32&; set-type-symbol! i64 (quote &) i64&
+    set-type-symbol! u8 (quote &) u8&; set-type-symbol! u16 (quote &) u16&; set-type-symbol! u32 (quote &) u32&; set-type-symbol! u64 (quote &) u64&
+    set-type-symbol! i8 (quote |) i8|; set-type-symbol! i16 (quote |) i16|; set-type-symbol! i32 (quote |) i32|; set-type-symbol! i64 (quote |) i64|
+    set-type-symbol! u8 (quote |) u8|; set-type-symbol! u16 (quote |) u16|; set-type-symbol! u32 (quote |) u32|; set-type-symbol! u64 (quote |) u64|
+    set-type-symbol! i8 (quote ^) i8^; set-type-symbol! i16 (quote ^) i16^; set-type-symbol! i32 (quote ^) i32^; set-type-symbol! i64 (quote ^) i64^
+    set-type-symbol! u8 (quote ^) u8^; set-type-symbol! u16 (quote ^) u16^; set-type-symbol! u32 (quote ^) u32^; set-type-symbol! u64 (quote ^) u64^
+    set-type-symbol! i8 (quote <<) i8<<; set-type-symbol! i16 (quote <<) i16<<; set-type-symbol! i32 (quote <<) i32<<; set-type-symbol! i64 (quote <<) i64<<
+    set-type-symbol! u8 (quote <<) u8<<; set-type-symbol! u16 (quote <<) u16<<; set-type-symbol! u32 (quote <<) u32<<; set-type-symbol! u64 (quote <<) u64<<
+    set-type-symbol! i8 (quote >>) i8>>; set-type-symbol! i16 (quote >>) i16>>; set-type-symbol! i32 (quote >>) i32>>; set-type-symbol! i64 (quote >>) i64>>
+    set-type-symbol! u8 (quote >>) u8>>; set-type-symbol! u16 (quote >>) u16>>; set-type-symbol! u32 (quote >>) u32>>; set-type-symbol! u64 (quote >>) u64>>
+
+    set-type-symbol! r32 (quote +) r32+; set-type-symbol! r64 (quote +) r64+
+    set-type-symbol! r32 (quote -) r32-; set-type-symbol! r64 (quote -) r64-
+    set-type-symbol! r32 (quote *) r32*; set-type-symbol! r64 (quote *) r64*
+    set-type-symbol! r32 (quote /) r32/; set-type-symbol! r64 (quote /) r64/
+    set-type-symbol! r32 (quote %) r32%; set-type-symbol! r64 (quote %) r64%
+    set-type-symbol! r32 (quote **) r32**; set-type-symbol! r64 (quote **) r64**
 
     set-scope-symbol! syntax-scope
         symbol "set!"
