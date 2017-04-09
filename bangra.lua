@@ -4214,6 +4214,7 @@ local function builtin_forward(name, errmsg)
 end
 
 local function builtin_op(_type, name, func)
+    print("todo: get rid of",_type, name, func)
     table.insert(builtin_ops, {_type, name, func})
 end
 
@@ -4276,6 +4277,7 @@ builtins.size_t = Type.U64
 
 builtins.scope = Type.Scope
 builtins.symbol = Type.Symbol
+builtins.syntax = Type.Syntax
 builtins.list = Type.List
 builtins.parameter = Type.Parameter
 builtins.flow = Type.Flow
@@ -4603,29 +4605,27 @@ end)
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
 
-builtin_op(Type.Void, Symbol.Compare,
-    function(frame, cont, self, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == b.type then
-            return call(frame, cont, equal_cont)
-        else
-            return call(frame, cont, unordered_cont)
-        end
-    end)
+builtins["void-compare"] = function(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    if a.type == b.type then
+        return call(frame, cont, equal_cont)
+    else
+        return call(frame, cont, unordered_cont)
+    end
+end
 
 local function compare_func(T)
-    builtin_op(T, Symbol.Compare,
-        function(frame, cont, self, a, b,
-            equal_cont, unordered_cont, less_cont, greater_cont)
-            if a.type == T and b.type == T then
-                a = unwrap(T, a)
-                b = unwrap(T, b)
-                if (a == b) then
-                    return call(frame, cont, equal_cont)
-                end
+    builtins[T.name .. "-compare"] = function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        if a.type == T and b.type == T then
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a == b) then
+                return call(frame, cont, equal_cont)
             end
-            return call(frame, cont, unordered_cont)
-        end)
+        end
+        return call(frame, cont, unordered_cont)
+    end
 end
 
 compare_func(Type.Bool)
@@ -4635,22 +4635,21 @@ compare_func(Type.Flow)
 compare_func(Type.Closure)
 
 local function ordered_compare_func(T)
-    builtin_op(T, Symbol.Compare,
-        function(frame, cont, self, a, b,
-            equal_cont, unordered_cont, less_cont, greater_cont)
-            if a.type == T and b.type == T then
-                a = unwrap(T, a)
-                b = unwrap(T, b)
-                if (a == b) then
-                    return call(frame, cont, equal_cont)
-                elseif (a < b) then
-                    return call(frame, cont, less_cont)
-                else
-                    return call(frame, cont, greater_cont)
-                end
+    builtins[T.name .. "-compare"] = function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        if a.type == T and b.type == T then
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a == b) then
+                return call(frame, cont, equal_cont)
+            elseif (a < b) then
+                return call(frame, cont, less_cont)
+            else
+                return call(frame, cont, greater_cont)
             end
-            return call(frame, cont, unordered_cont)
-        end)
+        end
+        return call(frame, cont, unordered_cont)
+    end
 end
 
 each_numerical_type(ordered_compare_func, {ints=true})
@@ -4660,97 +4659,92 @@ local function compare_real_func(T, base)
     local eq = C[base .. '_eq']
     local lt = C[base .. '_lt']
     local gt = C[base .. '_gt']
-    builtin_op(T, Symbol.Compare,
-        function(frame, cont, self, a, b,
-            equal_cont, unordered_cont, less_cont, greater_cont)
-            if a.type == T and b.type == T then
-                a = unwrap(T, a)
-                b = unwrap(T, b)
-                if eq(a,b) then
-                    return call(frame, cont, equal_cont)
-                elseif lt(a,b) then
-                    return call(frame, cont, less_cont)
-                elseif gt(a,b) then
-                    return call(frame, cont, greater_cont)
-                end
+    builtins[T.name .. "-compare"] = function(frame, cont, self, a, b,
+        equal_cont, unordered_cont, less_cont, greater_cont)
+        if a.type == T and b.type == T then
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if eq(a,b) then
+                return call(frame, cont, equal_cont)
+            elseif lt(a,b) then
+                return call(frame, cont, less_cont)
+            elseif gt(a,b) then
+                return call(frame, cont, greater_cont)
             end
-            return call(frame, cont, unordered_cont)
-        end)
+        end
+        return call(frame, cont, unordered_cont)
+    end
 end
 
 compare_real_func(Type.R32, 'bangra_r32')
 compare_real_func(Type.R64, 'bangra_r64')
 
-builtin_op(Type.List, Symbol.Compare,
-    function(frame, cont, self, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == Type.List and b.type == Type.List then
-            local x = unwrap(Type.List, a)
-            local y = unwrap(Type.List, b)
-            local function loop()
-                if (x == y) then
-                    return call(frame, cont, equal_cont)
-                elseif (x == EOL) then
-                    return call(frame, cont, less_cont)
-                elseif (y == EOL) then
-                    return call(frame, cont, greater_cont)
-                end
-                return ordered_branch(frame, cont, none, x.at, y.at,
-                    Any(Builtin(function()
-                        x = x.next
-                        y = y.next
-                        return loop()
-                    end, Symbol.CompareListNext)),
-                    unordered_cont, less_cont, greater_cont)
-            end
-            return loop()
-        else
-            return call(frame, cont, unordered_cont)
-        end
-    end)
-
-builtin_op(Type.Type, Symbol.Compare,
-    function(frame, cont, self, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == Type.Type and b.type == Type.Type then
-            local x = unwrap(Type.Type, a)
-            local y = unwrap(Type.Type, b)
-            if x == y then
-                return call(frame, cont, equal_cont)
-            else
-                local xs = x:super()
-                local ys = y:super()
-                if xs == y then
-                    return call(frame, cont, less_cont)
-                elseif ys == x then
-                    return call(frame, cont, greater_cont)
-                end
-            end
-        end
-        return call(frame, cont, unordered_cont)
-    end)
-
-builtin_op(Type.Scope, Symbol.Compare,
-    function(frame, cont, self, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == Type.Scope and b.type == Type.Scope then
-            local x = unwrap(Type.Scope, a)
-            local y = unwrap(Type.Scope, b)
+builtins["list-compare"] = function(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    if a.type == Type.List and b.type == Type.List then
+        local x = unwrap(Type.List, a)
+        local y = unwrap(Type.List, b)
+        local function loop()
             if (x == y) then
                 return call(frame, cont, equal_cont)
+            elseif (x == EOL) then
+                return call(frame, cont, less_cont)
+            elseif (y == EOL) then
+                return call(frame, cont, greater_cont)
+            end
+            return ordered_branch(frame, cont, none, x.at, y.at,
+                Any(Builtin(function()
+                    x = x.next
+                    y = y.next
+                    return loop()
+                end, Symbol.CompareListNext)),
+                unordered_cont, less_cont, greater_cont)
+        end
+        return loop()
+    else
+        return call(frame, cont, unordered_cont)
+    end
+end
+
+builtins["type-compare"] = function(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    if a.type == Type.Type and b.type == Type.Type then
+        local x = unwrap(Type.Type, a)
+        local y = unwrap(Type.Type, b)
+        if x == y then
+            return call(frame, cont, equal_cont)
+        else
+            local xs = x:super()
+            local ys = y:super()
+            if xs == y then
+                return call(frame, cont, less_cont)
+            elseif ys == x then
+                return call(frame, cont, greater_cont)
             end
         end
-        return call(frame, cont, unordered_cont)
-    end)
+    end
+    return call(frame, cont, unordered_cont)
+end
 
-builtin_op(Type.Syntax, Symbol.Compare,
-    function(frame, cont, self, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        local x = maybe_unsyntax(a)
-        local y = maybe_unsyntax(b)
-        return ordered_branch(frame, cont, none,
-            x, y, equal_cont, unordered_cont, less_cont, greater_cont)
-    end)
+builtins["scope-compare"] = function(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    if a.type == Type.Scope and b.type == Type.Scope then
+        local x = unwrap(Type.Scope, a)
+        local y = unwrap(Type.Scope, b)
+        if (x == y) then
+            return call(frame, cont, equal_cont)
+        end
+    end
+    return call(frame, cont, unordered_cont)
+end
+
+builtins["syntax-compare"] = function(frame, cont, self, a, b,
+    equal_cont, unordered_cont, less_cont, greater_cont)
+    local x = maybe_unsyntax(a)
+    local y = maybe_unsyntax(b)
+    return ordered_branch(frame, cont, none,
+        x, y, equal_cont, unordered_cont, less_cont, greater_cont)
+end
 
 -- cast
 --------------------------------------------------------------------------------

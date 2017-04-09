@@ -29,6 +29,8 @@ syntax-extend
 
 syntax-extend
     set-type-symbol! list (symbol "apply-type") list-new
+    set-type-symbol! list (symbol "compare") list-compare
+    set-type-symbol! syntax (symbol "compare") syntax-compare
 
     fn/cc return-true (_) true
     fn/cc return-false (_) false
@@ -142,6 +144,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    #---
     set-type-symbol! string (quote apply-type) string-new
     set-type-symbol! type (quote apply-type) type-new
     set-type-symbol! flow (quote apply-type) flow-new
@@ -160,6 +163,30 @@ syntax-extend
 
     set-type-symbol! r32 (quote apply-type) r32-new
     set-type-symbol! r64 (quote apply-type) r64-new
+
+    #---
+    set-type-symbol! void (quote compare) void-compare
+    set-type-symbol! bool (quote compare) bool-compare
+    set-type-symbol! symbol (quote compare) symbol-compare
+    set-type-symbol! parameter (quote compare) parameter-compare
+    set-type-symbol! flow (quote compare) flow-compare
+    set-type-symbol! closure (quote compare) closure-compare
+    set-type-symbol! string (quote compare) string-compare
+    set-type-symbol! type (quote compare) type-compare
+    set-type-symbol! scope (quote compare) scope-compare
+
+    set-type-symbol! i8 (quote compare) i8-compare
+    set-type-symbol! i16 (quote compare) i16-compare
+    set-type-symbol! i32 (quote compare) i32-compare
+    set-type-symbol! i64 (quote compare) i64-compare
+
+    set-type-symbol! u8 (quote compare) u8-compare
+    set-type-symbol! u16 (quote compare) u16-compare
+    set-type-symbol! u32 (quote compare) u32-compare
+    set-type-symbol! u64 (quote compare) u64-compare
+
+    set-type-symbol! r32 (quote compare) r32-compare
+    set-type-symbol! r64 (quote compare) r64-compare
 
     set-scope-symbol! syntax-scope
         symbol "set!"
