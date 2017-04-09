@@ -2233,7 +2233,6 @@ local StreamValueFormat
 local stream_expr
 do
 local ANCHOR_SEP = ":"
-local CONT_SEP = " ⮕ "
 local INDENT_SEP = "⁞"
 
 -- keywords and macros
@@ -2895,6 +2894,7 @@ end
 --------------------------------------------------------------------------------
 
 local stream_il
+local CONT_SEP = " ⮕ "
 do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
@@ -3052,7 +3052,7 @@ do
             end
         end
         if afunc.type == Type.Flow then
-            stream_flow(afunc.value, aframe)
+            stream_flow(afunc.value)
         elseif afunc.type == Type.Closure then
             stream_closure(afunc.value)
         else
@@ -4573,9 +4573,12 @@ builtins["syntax-list"] = wrap_simple_builtin(function(...)
 end)
 
 builtin_op(Type.Parameter, Symbol.ApplyType,
-    wrap_simple_builtin(function(name)
-        checkargs(1,1,name)
-        return Any(Parameter(name))
+    wrap_simple_builtin(function(name,_type)
+        checkargs(1,2,name,_type)
+        if _type then
+            _type = unwrap(Type.Type, _type)
+        end
+        return Any(Parameter(name, _type))
     end))
 
 builtin_op(Type.Scope, Symbol.ApplyType,
