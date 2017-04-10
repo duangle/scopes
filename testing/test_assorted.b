@@ -251,16 +251,14 @@ assert
 
 print typeof
 
-let call/cc =
-    fn/cc call/cc (cont func)
-        func cont
+fn/cc call/cc (cont func)
+    cc/call none func cont
 
 assert
     call/cc
         fn (cont)
             print "entered function"
-            cont true
-            error "unreachable"
+            cc/call none cont true
     "call/cc failed"
 
 do

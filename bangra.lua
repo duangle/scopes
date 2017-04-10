@@ -2040,10 +2040,6 @@ local function ListBuilder(lexer)
         return (prev == EOL)
     end
     function cls.split(anchor)
-        -- if we haven't appended anything, that's an error
-        if (cls.is_expression_empty()) then
-            error("can't split empty expression")
-        end
         -- reverse what we have, up to last split point and wrap result
         -- in cell
         prev = List(Any(Syntax(Any(reverse_list_inplace(prev, eol)),anchor)), eol)
@@ -2754,7 +2750,7 @@ do
         local value = Flow(name)
         -- first argument is present, but unused
         value:append_parameter(
-            Parameter(name, Type.Any))
+            Parameter(name, Type.Void))
         return value
     end
 end
@@ -2921,6 +2917,10 @@ do
             else
                 writer(styler(Style.Comment, "%"))
                 writer(styler(Style.Symbol, param.name.name))
+            end
+            if param.type ~= Type.Any then
+                writer(styler(Style.Comment, ":"))
+                writer(param.type:repr(styler))
             end
             if param.vararg then
                 writer(styler(Style.Keyword, "…"))
@@ -3246,6 +3246,10 @@ local function call_flow(frame, cont, flow, ...)
     local tmpargs = {}
 
     -- copy over continuation argument
+    local cont_param = flow.parameters[PARAM_Cont]
+    if cont_param.type ~= Type.Any then
+        unwrap(cont_param.type, cont)
+    end
     tmpargs[PARAM_Cont] = cont
     local tcount = pcount - PARAM_Arg0 + 1
     local srci = ARG_Arg0
@@ -3253,6 +3257,9 @@ local function call_flow(frame, cont, flow, ...)
         local dsti = PARAM_Arg0 + i
         local param = flow.parameters[dsti]
         if param.vararg then
+            if param.type ~= Type.Any then
+                location_error("vararg parameter can't be typed")
+            end
             -- how many parameters after this one
             local remparams = tcount - i - 1
             -- how many varargs to capture
@@ -3265,9 +3272,16 @@ local function call_flow(frame, cont, flow, ...)
             tmpargs[dsti] = Any(Type.VarArgs, argvalues)
             srci = srci + vargsize
         elseif srci <= rcount then
-            tmpargs[dsti] = rbuf[srci]
+            local value = rbuf[srci]
+            if param.type ~= Type.Any then
+                unwrap(param.type, value)
+            end
+            tmpargs[dsti] = value
             srci = srci + 1
         else
+            if param.type ~= Type.Any then
+                unwrap(param.type, none)
+            end
             tmpargs[dsti] = none
         end
     end
@@ -3536,8 +3550,32 @@ expand_fn_cc = function(env, topit, cont)
         if _value.type == Type.Parameter then
             return _value.value
         else
-            local param = Parameter(value, Type.Any)
-            env:bind(value, Any(param))
+            local bind = true
+            local param
+            local _type = Type.Any
+            if _value.type == Type.List then
+                value = _value.value
+                local type_anchor
+                _type,type_anchor = unsyntax(value.next.at)
+                if (_type.type == Type.Symbol) then
+                    _type = env:lookup(_type.value)
+                    if _type == null then
+                        set_active_anchor(type_anchor)
+                        location_error("could not resolve type")
+                    end
+                end
+                _type = unwrap(Type.Type, _type)
+                value = value.at
+                _value, anchor = unsyntax(value)
+            end
+            if _value.type == Type.String then
+                value = Any(Syntax(Any(Symbol(_value.value)), anchor))
+                bind = false
+            end
+            param = Parameter(value, _type)
+            if bind then
+                env:bind(value, Any(param))
+            end
             return param
         end
     end
@@ -3849,10 +3887,17 @@ end
 
 local function is_return_callable(args)
     local callable = args[2]
+    local contarg = args[1]
     local argcount = #args - 2
     local is_return = false
     local is_forward_return = false
     local ncallable = maybe_unsyntax(callable)
+    if contarg then
+        contarg = maybe_unsyntax(contarg)
+        if contarg.type == Type.Void then
+            is_return = true
+        end
+    end
     if ncallable.type == Type.Parameter then
         local param = ncallable.value
         if param.index == 1 then
@@ -3957,7 +4002,7 @@ local function translate_quote(state, it, cont)
 end
 
 -- (fn/cc <flow without body> expr ...)
-local function translate_fn_cc(state, it, cont, anchor)
+local function translate_fn_body(state, it, cont, anchor)
     assert_function(cont)
 
     local anchor
@@ -4147,7 +4192,7 @@ end
 
 builtins.call = Form(translate_call, Symbol("call"))
 builtins["cc/call"] = Form(translate_contcall, Symbol("cc/call"))
-builtins[Symbol.FnCCForm] = Form(translate_fn_cc, Symbol("fn-body"))
+builtins[Symbol.FnCCForm] = Form(translate_fn_body, Symbol("fn-body"))
 builtins[Symbol.DoForm] = Form(translate_do, Symbol("do"))
 builtins[Symbol.QuoteForm] = Form(translate_quote, Symbol("quote"))
 

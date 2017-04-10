@@ -1541,7 +1541,7 @@ syntax-extend
                         callee
                             fn/cc (cont-callee value)
                                 # continue caller
-                                caller-return cont-callee value
+                                cc/call none caller-return cont-callee value
                         # callee has returned for good
                           resume caller - we're done here.
                         cc/call none caller-return
