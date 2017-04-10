@@ -317,6 +317,8 @@ syntax-extend
     set-type-symbol! flow (quote apply-type) flow-new
     set-type-symbol! parameter (quote apply-type) parameter-new
     set-type-symbol! scope (quote apply-type) scope-new
+    #set-type-symbol! frame (quote apply-type) frame-new
+    set-type-symbol! closure (quote apply-type) closure-new
 
     set-type-symbol! i8 (quote apply-type) i8-new
     set-type-symbol! i16 (quote apply-type) i16-new
@@ -1202,7 +1204,8 @@ syntax-extend
                             quote module-path
                             \ module-path
                         let fun =
-                            eval expr eval-scope module-path
+                            closure
+                                eval expr eval-scope module-path
                         let content =
                             fun
                         set-scope-symbol!
@@ -1529,23 +1532,22 @@ syntax-extend
     set-type-symbol! closure (quote iter)
         fn gen-yield-iter (callee)
             let caller-return = none
-            let yield-iter =
-                fn/cc "yield-iter" (return ret)
-                    # store caller continuation in state
-                    set! caller-return return
-                    branch (none? ret) # first invocation
-                        fn/cc (_)
-                            # invoke callee with yield function as first argument
-                            callee
-                                fn/cc (ret value)
-                                    # continue caller
-                                    caller-return ret value
-                            # callee has returned for good
-                              resume caller - we're done here.
-                            cc/call none caller-return
-                        fn/cc (_)
-                            # continue callee
-                            cc/call none ret
+            fn/cc yield-iter (return cont-callee)
+                # store caller continuation in state
+                set! caller-return return
+                branch (none? cont-callee) # first invocation
+                    fn/cc (_)
+                        # invoke callee with yield function as first argument
+                        callee
+                            fn/cc (cont-callee value)
+                                # continue caller
+                                caller-return cont-callee value
+                        # callee has returned for good
+                          resume caller - we're done here.
+                        cc/call none caller-return
+                    fn/cc (_)
+                        # continue callee
+                        cc/call none cont-callee
 
             return yield-iter none
 
@@ -2640,7 +2642,9 @@ define read-eval-print-loop
                             .. expr
                                 syntax-list expression-suffix
                         set! slevel (stack-level)
-                        let f = (eval code eval-env)
+                        let f =
+                            closure
+                                eval code eval-env
                         set! slevel (stack-level)
                         let result... = (f)
                         if (not (none? result...))
@@ -2733,7 +2737,8 @@ fn run-main (args...)
         set-scope-symbol! eval-scope (quote module-path) sourcepath
         clear-traceback
         let fun =
-            eval expr eval-scope sourcepath
+            closure
+                eval expr eval-scope sourcepath
         clear-traceback
         fun
         exit 0

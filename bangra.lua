@@ -2768,24 +2768,22 @@ local function assert_frame(x)
         error("expected frame, got " .. repr(x))
     end
 end
-----[[
 do -- compact hashtables as much as one can where possible
     local cls = Frame
     local uid = 1
-    function cls:init(frame)
+    function cls:init(frame, flow, values)
+        assert_flow(flow)
+        assert_table(values)
         if (frame == null) then
             self.parent = null
-            self.owner = self
-            -- flow -> {frame-idx, {values}}
-            self.map = {}
             self.index = 0
         else
             assert_frame(frame)
             self.parent = frame
-            self.owner = frame.owner
             self.index = frame.index + 1
-            self.map = frame.map
         end
+        -- flow -> {values}
+        self.map = { [flow] = values }
         self.uid = uid
         uid = uid + 1
     end
@@ -2795,72 +2793,36 @@ do -- compact hashtables as much as one can where possible
     function cls:__tostring()
         return self:repr(default_styler)
     end
-    function cls:bind(flow, values)
-        assert_flow(flow)
-        assert_table(values)
-        self = Frame(self)
-        if self.map[flow] then
-            self.map = {}
-            self.owner = self
-        end
-        self.map[flow] = { self.index, values }
-        return self
-    end
-    function cls:rebind(cont, index, value)
-        assert_flow(cont)
-        assert_number(index)
-        assert_any(value)
-        local ptr = self
-        while ptr do
-            ptr = ptr.owner
-            local entry = ptr.map[cont]
-            if (entry ~= null) then
-                local values = entry[2]
-                assert (index <= #values)
-                values[index] = value
-                return
-            end
-            ptr = ptr.parent
-        end
-    end
-
     function cls:get_bank(cont)
         if cont then
             assert_flow(cont)
             -- parameter is bound - attempt resolve
             local ptr = self
             while ptr do
-                ptr = ptr.owner
-                local entry = ptr.map[cont]
-                if (entry ~= null) then
-                    local entry_index,values = unpack(entry)
-                    if (self.index >= entry_index) then
-                        return values
-                    end
+                local values = ptr.map[cont]
+                if (values ~= null) then
+                    return values
                 end
                 ptr = ptr.parent
             end
         end
     end
 
+    function cls:rebind(cont, index, value)
+        assert_flow(cont)
+        assert_number(index)
+        assert_any(value)
+        local values = self:get_bank(cont)
+        if values then
+            values[index] = value
+        end
+    end
+
     function cls:get(cont, index, defvalue)
         assert_number(index)
-        if cont then
-            assert_flow(cont)
-            -- parameter is bound - attempt resolve
-            local ptr = self
-            while ptr do
-                ptr = ptr.owner
-                local entry = ptr.map[cont]
-                if (entry ~= null) then
-                    local entry_index,values = unpack(entry)
-                    assert (index <= #values)
-                    if (self.index >= entry_index) then
-                        return values[index]
-                    end
-                end
-                ptr = ptr.parent
-            end
+        local values = self:get_bank(cont)
+        if values then
+            return values[index]
         end
         return defvalue
     end
@@ -2872,16 +2834,23 @@ do
     local cls = Closure
     function cls:init(flow, frame)
         assert_flow(flow)
-        assert_frame(frame)
+        if frame ~= null then
+            assert_frame(frame)
+        end
         self.flow = flow
         self.frame = frame
     end
     function cls:repr(styler)
-        return styler(Style.Operator, "[")
+        local s = styler(Style.Operator, "[")
             .. self.flow:repr(styler)
             .. styler(Style.Comment, ":")
-            .. self.frame:repr(styler)
-            .. styler(Style.Operator, "]")
+        if self.frame ~= null then
+            s = s .. self.frame:repr(styler)
+        else
+            s = s .. styler(Style.Comment, "<none>")
+        end
+        s = s .. styler(Style.Operator, "]")
+        return s
     end
     function cls:__tostring()
         return self:repr(default_styler)
@@ -3061,6 +3030,50 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- FRAME PRINTER
+--------------------------------------------------------------------------------
+
+local stream_frame
+do
+    stream_frame = function(writer, frame, opts)
+        opts = opts or {}
+        local styler = opts.styler or default_styler
+
+        local function walk(frame)
+            assert_frame(frame)
+            if frame.parent then
+                walk(frame.parent)
+            end
+            writer(frame:repr(styler))
+            writer(styler(Style.Operator, ":"))
+            writer("\n")
+            for flow,values in pairs(frame.map) do
+                if true then --index == flow.index then
+                    writer("  ")
+                    writer(flow:repr(styler))
+                    writer(styler(Style.Operator, " →"))
+                    for i,val in ipairs(values) do
+                        if val.type == Type.VarArgs then
+                            for _,k in ipairs(val.value) do
+                                writer(" ")
+                                writer(k:repr(styler))
+                                writer(styler(Style.Keyword, "…"))
+                            end
+                        else
+                            writer(" ")
+                            writer(val:repr(styler))
+                        end
+                    end
+                    writer("\n")
+                end
+            end
+        end
+
+        walk(frame)
+    end
+end
+
+--------------------------------------------------------------------------------
 -- DEBUG SERVICES
 --------------------------------------------------------------------------------
 
@@ -3216,7 +3229,9 @@ end
 
 local call
 local function call_flow(frame, cont, flow, ...)
-    assert_frame(frame)
+    if frame ~= null then
+        assert_frame(frame)
+    end
     assert_any(cont)
     assert_flow(flow)
 
@@ -3257,7 +3272,7 @@ local function call_flow(frame, cont, flow, ...)
         end
     end
 
-    frame = frame:bind(flow, tmpargs)
+    frame = Frame(frame, flow, tmpargs)
     --set_anchor(frame, get_anchor(flow))
 
     if global_opts.trace_execution then
@@ -3318,7 +3333,9 @@ call = function(frame, cont, dest, ...)
         dump_trace(stderr_writer, frame, cont, dest, ...)
         stderr_writer('\n')
     end
-    assert_frame(frame)
+    if frame ~= null then
+        assert_frame(frame)
+    end
     assert_any(cont)
     assert_any(dest)
     for i=1,select('#', ...) do
@@ -3354,9 +3371,11 @@ end
 local function execute(cont, dest, ...)
     assert_function(cont)
     assert_any(dest)
-    return call(Frame(),
+    return call(null,
         Any(Builtin(function(frame, _cont, dest, ...)
-            assert_frame(frame)
+            if frame ~= null then
+                assert_frame(frame)
+            end
             return cont(...)
         end, Symbol.ExecuteReturn)), dest, ...)
 end
@@ -4260,6 +4279,7 @@ builtins.syntax = Type.Syntax
 builtins.list = Type.List
 builtins.parameter = Type.Parameter
 builtins.flow = Type.Flow
+builtins.frame = Type.Frame
 builtins.string = Type.String
 builtins.closure = Type.Closure
 builtins.integer = Type.Integer
@@ -4530,6 +4550,16 @@ end)
 builtins["flow-new"] = wrap_simple_builtin(function(name)
     checkargs(1,1,name)
     return Any(Flow(name))
+end)
+
+builtins["closure-new"] = wrap_simple_builtin(function(flow,frame)
+    checkargs(1,2,flow,frame)
+    if is_null_or_none(frame) then
+        frame = null
+    else
+        frame = unwrap(Type.Frame, frame)
+    end
+    return Any(Closure(unwrap(Type.Flow,flow),frame))
 end)
 
 builtins["syntax-list"] = wrap_simple_builtin(function(...)
@@ -5045,7 +5075,11 @@ end)
 builtins["closure-frame"] = wrap_simple_builtin(function(closure)
     checkargs(1,1, closure)
     closure = unwrap(Type.Closure, closure)
-    return Any(closure.frame)
+    if closure.frame ~= null then
+        return Any(closure.frame)
+    else
+        return none
+    end
 end)
 
 builtins["flow-parameters"] = wrap_simple_builtin(function(flow)
@@ -5286,6 +5320,11 @@ end)
 builtins["dump-IL"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     stream_il(stdout_writer, value)
+end)
+
+builtins["dump-frame"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    stream_frame(stdout_writer, unwrap(Type.Frame, value))
 end)
 
 builtins.repr = wrap_simple_builtin(function(value, styler)
