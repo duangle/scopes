@@ -1591,7 +1591,7 @@ local Token = {
 
 local get_token_name = make_get_enum_name(Token)
 
-local token_terminators = new(rawstring, "()[]{}\"';#")
+local token_terminators = new(rawstring, "()[]{}\"';#,")
 
 local Lexer = {}
 do
@@ -1646,6 +1646,10 @@ do
     function cls:newline()
         self.next_lineno = self.next_lineno + 1
         self.next_line = self.next_cursor
+    end
+    function cls:read_single_symbol()
+        self.string = self.cursor
+        self.string_len = self.next_cursor - self.cursor
     end
     function cls:read_symbol()
         local escape = false
@@ -1771,6 +1775,9 @@ do
         elseif (cc == '\\') then self.token = Token.escape
         elseif (cc == '"') then self.token = Token.string; self:read_string(c)
         elseif (cc == ';') then self.token = Token.statement
+        elseif (cc == ',') then
+            self.token = Token.symbol
+            self:read_single_symbol()
         else
             if (self:read_int64()
                 or self:read_uint64()

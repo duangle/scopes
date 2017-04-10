@@ -86,9 +86,9 @@ local dsl_table = {}
 
 REALCONST = splitstr("inf +inf -inf nan +nan -nan")
 
-local symbol_terminators = "()[]{}\"';#"
-local integer_terminators = "()[]{}\"';#"
-local real_terminators = "()[]{}\"';#."
+local symbol_terminators = "()[]{}\"';#,"
+local integer_terminators = "()[]{}\"';#,"
+local real_terminators = "()[]{}\"';#.,"
 
 local token_eof = 0
 local token_open = '('
@@ -335,6 +335,10 @@ local function Lexer()
                 break
             elseif (c == ';') then
                 token = token_statement
+                break
+            elseif (c == ',') then
+                token = token_symbol
+                readSingleSymbol()
                 break
             elseif readNumber() then
                 token = token_number
