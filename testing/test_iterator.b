@@ -55,7 +55,7 @@ call
     \ "hi"
 
 let done =
-    qualifier (quote done)
+    Qualifier (quote done)
 
 print
     quote (1 2; 3 4;)

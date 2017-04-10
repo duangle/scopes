@@ -7,14 +7,14 @@ assert
             quote test_module2
 
 print
-    min integer i8
+    min Integer i8
     max 3 4 5
 
 do
     let test-qualifier =
-        qualifier (quote test)
+        Qualifier (quote test)
     print
-        (test-qualifier int) <? qualifier
+        (test-qualifier int) <? Qualifier
 
 
 #do
@@ -29,7 +29,7 @@ do
         C 400
 
 do
-    let sc = (scope (globals))
+    let sc = (Scope (globals))
     set-scope-symbol! sc (quote injected-var) 3
     let m =
         eval
@@ -464,14 +464,14 @@ assert (i8 <= i8)
 assert (not (i8 <? i8))
 assert (not (i8 <? i16))
 assert (not (i8 >? i16))
-assert (i8 < integer)
-assert (i8 <= integer)
-assert (integer > i8)
-assert (integer >= i8)
-assert (not (i8 <? real))
-assert (not (i8 >? real))
+assert (i8 < Integer)
+assert (i8 <= Integer)
+assert (Integer > i8)
+assert (Integer >= i8)
+assert (not (i8 <? Real))
+assert (not (i8 >? Real))
 assert ((pointer int) < pointer)
-#assert ((integer 8 true) == i8)
+#assert ((Integer 8 true) == i8)
 assert ((array int (size_t 8)) < array)
 assert ((vector float (size_t 4)) < vector)
 

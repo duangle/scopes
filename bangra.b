@@ -24,7 +24,7 @@
     functions and macros, parses the command-line and then enters the REPL.
 
 syntax-extend
-    set-type-symbol! symbol (symbol-new "apply-type") symbol-new
+    set-type-symbol! Symbol (symbol-new "apply-type") symbol-new
     \ syntax-scope
 
 syntax-extend
@@ -36,7 +36,7 @@ syntax-extend
         fn/cc (_ x values...)
             call
                 fn/cc (_ x-func)
-                    type-compare (typeof x-func) void
+                    type-compare (typeof x-func) Nothing
                         fn/cc (_)
                             error
                                 string-join "can not "
@@ -61,7 +61,7 @@ syntax-extend
             fn/cc alt-forward-op2 (_)
                 call
                     fn/cc (_ b-func)
-                        type-compare (typeof b-func) void
+                        type-compare (typeof b-func) Nothing
                             \ forward-op2-error
                             fn/cc (_)
                                 call
@@ -75,7 +75,7 @@ syntax-extend
                     type-at (typeof b) name
             call
                 fn/cc (_ a-func)
-                    type-compare (typeof a-func) void
+                    type-compare (typeof a-func) Nothing
                         \ alt-forward-op2
                         fn/cc (_)
                             call
@@ -147,7 +147,7 @@ syntax-extend
                                         \ unreachable
                                         fn/cc (_) i0
                                         fn/cc (_) count
-                            type-compare (typeof i1) void
+                            type-compare (typeof i1) Nothing
                                 fn/cc (_) count
                                 fn/cc (_) (i64-new i1)
                                 \ unreachable unreachable
@@ -157,43 +157,43 @@ syntax-extend
                     i64-new start-index
                     \ end-index
 
-            set-scope-symbol! syntax-scope (symbol "slice") slice
-            set-scope-symbol! syntax-scope (symbol "@") forward-at
-            set-scope-symbol! syntax-scope (symbol "countof") forward-countof
-            set-scope-symbol! syntax-scope (symbol "..") forward-join
-            set-type-symbol! syntax (symbol "slice") syntax-slice
-            set-type-symbol! syntax (symbol "@") syntax-at
-            set-type-symbol! syntax (symbol "countof") syntax-countof
-            set-type-symbol! syntax (symbol "..") syntax-join
+            set-scope-symbol! syntax-scope (Symbol "slice") slice
+            set-scope-symbol! syntax-scope (Symbol "@") forward-at
+            set-scope-symbol! syntax-scope (Symbol "countof") forward-countof
+            set-scope-symbol! syntax-scope (Symbol "..") forward-join
+            set-type-symbol! Syntax (Symbol "slice") syntax-slice
+            set-type-symbol! Syntax (Symbol "@") syntax-at
+            set-type-symbol! Syntax (Symbol "countof") syntax-countof
+            set-type-symbol! Syntax (Symbol "..") syntax-join
 
-        forward (symbol "slice") "slice"
-        forward (symbol "@") "index"
-        forward (symbol "countof") "count"
-        forward-op2 (symbol "..") "join"
+        forward (Symbol "slice") "slice"
+        forward (Symbol "@") "index"
+        forward (Symbol "countof") "count"
+        forward-op2 (Symbol "..") "join"
 
     fn/cc set-forward-op2 (_ name errmsg)
         set-scope-symbol! syntax-scope name (forward-op2 name errmsg)
-    set-forward-op2 (symbol "+") "add"
-    set-forward-op2 (symbol "-") "subtract"
-    set-forward-op2 (symbol "*") "multiply"
-    set-forward-op2 (symbol "/") "divide"
-    set-forward-op2 (symbol "%") "modulate"
-    set-forward-op2 (symbol "&") "and-combine"
-    set-forward-op2 (symbol "|") "or-combine"
-    set-forward-op2 (symbol "^") "xor"
-    set-forward-op2 (symbol "**") "exponentiate"
+    set-forward-op2 (Symbol "+") "add"
+    set-forward-op2 (Symbol "-") "subtract"
+    set-forward-op2 (Symbol "*") "multiply"
+    set-forward-op2 (Symbol "/") "divide"
+    set-forward-op2 (Symbol "%") "modulate"
+    set-forward-op2 (Symbol "&") "and-combine"
+    set-forward-op2 (Symbol "|") "or-combine"
+    set-forward-op2 (Symbol "^") "xor"
+    set-forward-op2 (Symbol "**") "exponentiate"
     fn/cc set-forward (_ name errmsg)
         set-scope-symbol! syntax-scope name (forward name errmsg)
-    set-forward (symbol "~") "bitwise-negate"
-    set-forward (symbol "<<") "left-shift"
-    set-forward (symbol ">>") "right-shift"
+    set-forward (Symbol "~") "bitwise-negate"
+    set-forward (Symbol "<<") "left-shift"
+    set-forward (Symbol ">>") "right-shift"
 
-    set-type-symbol! list (symbol "apply-type") list-new
-    set-type-symbol! list (symbol "compare") list-compare
-    set-type-symbol! list (symbol "@") list-at
-    set-type-symbol! list (symbol "countof") list-countof
-    set-type-symbol! list (symbol "slice") list-slice
-    set-type-symbol! syntax (symbol "compare") syntax-compare
+    set-type-symbol! list (Symbol "apply-type") list-new
+    set-type-symbol! list (Symbol "compare") list-compare
+    set-type-symbol! list (Symbol "@") list-at
+    set-type-symbol! list (Symbol "countof") list-countof
+    set-type-symbol! list (Symbol "slice") list-slice
+    set-type-symbol! Syntax (Symbol "compare") syntax-compare
 
     \ syntax-scope
 
@@ -208,62 +208,62 @@ syntax-extend
     fn/cc return-true (_) true
     fn/cc return-false (_) false
 
-    set-scope-symbol! syntax-scope (symbol "==")
+    set-scope-symbol! syntax-scope (Symbol "==")
         fn/cc "==" (return a b)
             ordered-branch a b return-true
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-false return-false
-    set-scope-symbol! syntax-scope (symbol "!=")
+    set-scope-symbol! syntax-scope (Symbol "!=")
         fn/cc "!=" (return a b)
             ordered-branch a b return-false
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-true return-true
-    set-scope-symbol! syntax-scope (symbol "<")
+    set-scope-symbol! syntax-scope (Symbol "<")
         fn/cc "<" (return a b)
             ordered-branch a b return-false
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-true return-false
-    set-scope-symbol! syntax-scope (symbol "<=")
+    set-scope-symbol! syntax-scope (Symbol "<=")
         fn/cc "<=" (return a b)
             ordered-branch a b return-true
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-true return-false
-    set-scope-symbol! syntax-scope (symbol ">")
+    set-scope-symbol! syntax-scope (Symbol ">")
         fn/cc ">" (return a b)
             ordered-branch a b return-false
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-false return-true
-    set-scope-symbol! syntax-scope (symbol ">=")
+    set-scope-symbol! syntax-scope (Symbol ">=")
         fn/cc ">=" (return a b)
             ordered-branch a b return-true
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-false return-true
-    set-scope-symbol! syntax-scope (symbol "==?")
+    set-scope-symbol! syntax-scope (Symbol "==?")
         fn/cc "==?" (return a b)
             ordered-branch a b return-true return-false
                 \ return-false return-false
-    set-scope-symbol! syntax-scope (symbol "!=?")
+    set-scope-symbol! syntax-scope (Symbol "!=?")
         fn/cc "!=?" (return a b)
             ordered-branch a b return-false return-true
                 \ return-true return-true
-    set-scope-symbol! syntax-scope (symbol "<?")
+    set-scope-symbol! syntax-scope (Symbol "<?")
         fn/cc "<?" (return a b)
             ordered-branch a b return-false return-false
                 \ return-true return-false
-    set-scope-symbol! syntax-scope (symbol "<=?")
+    set-scope-symbol! syntax-scope (Symbol "<=?")
         fn/cc "<=?" (return a b)
             ordered-branch a b return-true return-false
                 \ return-true return-false
-    set-scope-symbol! syntax-scope (symbol ">?")
+    set-scope-symbol! syntax-scope (Symbol ">?")
         fn/cc ">?" (return a b)
             ordered-branch a b return-false return-false
                 \ return-false return-true
-    set-scope-symbol! syntax-scope (symbol ">=?")
+    set-scope-symbol! syntax-scope (Symbol ">=?")
         fn/cc ">=?" (return a b)
             ordered-branch a b return-true return-false
                 \ return-false return-true
     set-scope-symbol! syntax-scope
-        symbol "quote"
+        Symbol "quote"
         block-scope-macro
             fn/cc "expand-quote" (return expr syntax-scope)
                 call
@@ -272,7 +272,7 @@ syntax-extend
                             cons
                                 syntax-list
                                     datum->syntax
-                                        symbol "form-quote"
+                                        Symbol "form-quote"
                                         syntax->anchor args
                                     syntax-quote
                                         # keep wrapped in list if multiple
@@ -287,7 +287,7 @@ syntax-extend
                             \ syntax-scope
                     slice (@ expr 0) 1
     set-scope-symbol! syntax-scope
-        symbol "quote-syntax"
+        Symbol "quote-syntax"
         block-scope-macro
             fn/cc "expand-quote-syntax" (return expr syntax-scope)
                 call
@@ -314,11 +314,11 @@ syntax-extend
     #---
     set-type-symbol! string (quote apply-type) string-new
     set-type-symbol! type (quote apply-type) type-new
-    set-type-symbol! flow (quote apply-type) flow-new
-    set-type-symbol! parameter (quote apply-type) parameter-new
-    set-type-symbol! scope (quote apply-type) scope-new
+    set-type-symbol! Flow (quote apply-type) flow-new
+    set-type-symbol! Parameter (quote apply-type) parameter-new
+    set-type-symbol! Scope (quote apply-type) scope-new
     #set-type-symbol! frame (quote apply-type) frame-new
-    set-type-symbol! closure (quote apply-type) closure-new
+    set-type-symbol! Closure (quote apply-type) closure-new
 
     set-type-symbol! i8 (quote apply-type) i8-new
     set-type-symbol! i16 (quote apply-type) i16-new
@@ -334,15 +334,15 @@ syntax-extend
     set-type-symbol! r64 (quote apply-type) r64-new
 
     #---
-    set-type-symbol! void (quote compare) void-compare
+    set-type-symbol! Nothing (quote compare) nothing-compare
     set-type-symbol! bool (quote compare) bool-compare
-    set-type-symbol! symbol (quote compare) symbol-compare
-    set-type-symbol! parameter (quote compare) parameter-compare
-    set-type-symbol! flow (quote compare) flow-compare
-    set-type-symbol! closure (quote compare) closure-compare
+    set-type-symbol! Symbol (quote compare) symbol-compare
+    set-type-symbol! Parameter (quote compare) parameter-compare
+    set-type-symbol! Flow (quote compare) flow-compare
+    set-type-symbol! Closure (quote compare) closure-compare
     set-type-symbol! string (quote compare) string-compare
     set-type-symbol! type (quote compare) type-compare
-    set-type-symbol! scope (quote compare) scope-compare
+    set-type-symbol! Scope (quote compare) scope-compare
 
     set-type-symbol! i8 (quote compare) i8-compare
     set-type-symbol! i16 (quote compare) i16-compare
@@ -365,7 +365,7 @@ syntax-extend
     set-type-symbol! string (quote countof) string-countof
 
     #---
-    set-type-symbol! scope (quote @) scope-at
+    set-type-symbol! Scope (quote @) scope-at
     set-type-symbol! type (quote @) type-at
     set-type-symbol! string (quote @) string-at
 
@@ -406,14 +406,14 @@ syntax-extend
     set-type-symbol! r32 (quote **) r32**; set-type-symbol! r64 (quote **) r64**
 
     set-scope-symbol! syntax-scope
-        symbol "set!"
+        Symbol "set!"
         block-scope-macro
             fn/cc "expand-set!" (return expr env)
                 call
                     fn/cc (_ name expr-anchor)
                         call
                             fn/cc (_ param)
-                                ordered-branch (typeof param) parameter
+                                ordered-branch (typeof param) Parameter
                                     fn/cc (_) (_ none)
                                     fn/cc (_)
                                         error "set! requires parameter argument"
@@ -433,7 +433,7 @@ syntax-extend
                                                 slice (@ expr 0) 2
                                         slice expr 1
                                     \ env
-                            ordered-branch (typeof (syntax->datum name)) parameter
+                            ordered-branch (typeof (syntax->datum name)) Parameter
                                 fn/cc (_) (_ (syntax->datum name))
                                 fn/cc (_) (_ (get-scope-symbol env name name))
                                 \ none none # never reached
@@ -465,27 +465,27 @@ syntax-extend
         quote callable?
         fn/cc "callable?" (return x)
             return
-                <? (typeof x) callable
+                <? (typeof x) Callable
     set-scope-symbol! syntax-scope
         quote integer?
         fn/cc "integer?" (return x)
             return
-                <? (typeof x) integer
+                <? (typeof x) Integer
     set-scope-symbol! syntax-scope
         quote closure?
         fn/cc "closure?" (return x)
             return
-                ==? (typeof x) closure
+                ==? (typeof x) Closure
     set-scope-symbol! syntax-scope
         quote real?
         fn/cc "real?" (return x)
             return
-                <? (typeof x) real
+                <? (typeof x) Real
     set-scope-symbol! syntax-scope
         quote symbol?
         fn/cc "symbol?" (return x)
             return
-                ==? (typeof x) symbol
+                ==? (typeof x) Symbol
     set-scope-symbol! syntax-scope
         quote list?
         fn/cc "list?" (return x)
@@ -561,12 +561,12 @@ syntax-extend
                                                     @ (@ expr 0) 3
                                     slice expr 1
                         datum->syntax
-                            parameter
+                            Parameter
                                 datum->syntax
                                     quote ret-true
                                     syntax->anchor (@ expr 0)
                         datum->syntax
-                            parameter
+                            Parameter
                                 datum->syntax
                                     quote ret-false
                                     syntax->anchor (@ expr 0)
@@ -584,7 +584,7 @@ syntax-extend
                         syntax-cons
                             datum->syntax form-do (syntax->anchor expr)
                             expand (slice expr 1) subenv
-                    scope env
+                    Scope env
     \ syntax-scope
 
 syntax-extend
@@ -710,7 +710,7 @@ define let
                                     unquote-splice
                                         syntax-eol (@ expr 0)
                     datum->syntax
-                        parameter (quote-syntax _)
+                        Parameter (quote-syntax _)
                     @ (@ expr 0) 1
                     slice expr 1
                 \ env
@@ -810,7 +810,7 @@ define assert
 
 
 define sizeof
-    let sym = (symbol "size")
+    let sym = (Symbol "size")
     fn/cc "sizeof" (return x)
         assert (type? x) "type expected"
         let size =
@@ -818,7 +818,7 @@ define sizeof
         ? (none? size) (size_t 0) size
 
 define alignof
-    let sym = (symbol "alignment")
+    let sym = (Symbol "alignment")
     fn/cc "alignof" (return x)
         assert (type? x) "type expected"
         return
@@ -857,10 +857,10 @@ define .
 define and
     macro
         fn and (expr)
-            let tmp = (datum->syntax (parameter (quote-syntax tmp)))
-            let ret = (datum->syntax (parameter (quote-syntax and-return)))
-            let ret-true = (datum->syntax (parameter (quote-syntax ret-true)))
-            let ret-false = (datum->syntax (parameter (quote-syntax ret-false)))
+            let tmp = (datum->syntax (Parameter (quote-syntax tmp)))
+            let ret = (datum->syntax (Parameter (quote-syntax and-return)))
+            let ret-true = (datum->syntax (Parameter (quote-syntax ret-true)))
+            let ret-false = (datum->syntax (Parameter (quote-syntax ret-false)))
             qquote
                 ;
                     fn/cc ((unquote ret) (unquote tmp))
@@ -876,10 +876,10 @@ define and
 define or
     macro
         fn or (expr)
-            let tmp = (datum->syntax (parameter (quote-syntax tmp)))
-            let ret = (datum->syntax (parameter (quote-syntax or-return)))
-            let ret-true = (datum->syntax (parameter (quote-syntax ret-true)))
-            let ret-false = (datum->syntax (parameter (quote-syntax ret-false)))
+            let tmp = (datum->syntax (Parameter (quote-syntax tmp)))
+            let ret = (datum->syntax (Parameter (quote-syntax or-return)))
+            let ret-true = (datum->syntax (Parameter (quote-syntax ret-true)))
+            let ret-false = (datum->syntax (Parameter (quote-syntax ret-false)))
             qquote
                 ;
                     fn/cc ((unquote ret) (unquote tmp))
@@ -901,8 +901,8 @@ define if
         let then-exprlist =
             slice expr 2
         fn make-branch (else-exprlist)
-            let ret-then = (datum->syntax (parameter (quote-syntax ret-then)))
-            let ret-else = (datum->syntax (parameter (quote-syntax ret-else)))
+            let ret-then = (datum->syntax (Parameter (quote-syntax ret-then)))
+            let ret-else = (datum->syntax (Parameter (quote-syntax ret-else)))
             qquote
                 branch (unquote cond)
                     fn/cc ((unquote ret-then))
@@ -988,7 +988,7 @@ syntax-extend
                     call
                         fn (args init)
                             let cont-param =
-                                datum->syntax (parameter (quote-syntax let-return))
+                                datum->syntax (Parameter (quote-syntax let-return))
                             list
                                 qquote
                                     ;
@@ -1048,7 +1048,7 @@ define define-infix-op
                 syntax->datum (@ expr 3)
             let dest-name = (@ expr 4)
             let infix-symbol =
-                symbol
+                Symbol
                     .. "#ifx:" (string name)
             set-scope-symbol! env infix-symbol
                 syntax-infix-rules prec (@ env order) dest-name
@@ -1093,7 +1093,7 @@ syntax-extend
         let key =
         ? (symbol? sym)
             get-scope-symbol env
-                symbol
+                Symbol
                     .. "#ifx:" (string sym)
             \ none
 
@@ -1161,12 +1161,12 @@ syntax-extend
                 \ next-state
 
     let bangra =
-        scope
+        Scope
     set-scope-symbol! bangra (quote path)
         list "./?.b"
             .. interpreter-dir "/?.b"
     set-scope-symbol! bangra (quote modules)
-        scope
+        Scope
     set-scope-symbol! syntax-scope (quote bangra) bangra
 
     fn make-module-path (pattern name)
@@ -1199,12 +1199,12 @@ syntax-extend
                         list-load module-path
                     if (not (none? expr))
                         let eval-scope =
-                            scope (globals)
+                            Scope (globals)
                         set-scope-symbol! eval-scope
                             quote module-path
                             \ module-path
                         let fun =
-                            closure
+                            Closure
                                 eval expr eval-scope module-path
                         let content =
                             fun
@@ -1287,7 +1287,7 @@ syntax-extend
 
                 let name =
                     datum->syntax
-                        symbol
+                        Symbol
                             slice headstr 1
                         syntax->anchor head
                 let self-arg =
@@ -1295,7 +1295,7 @@ syntax-extend
                 let rest =
                     slice expr 2
                 let self =
-                    parameter
+                    Parameter
                         quote-syntax self
                 cons
                     qquote
@@ -1324,7 +1324,7 @@ syntax-extend
             fn finalize-head (out)
                 cons
                     datum->syntax
-                        symbol
+                        Symbol
                             @ out 0
                         \ sym-anchor
                     slice out 1
@@ -1402,19 +1402,19 @@ define-infix-op @ 800 > @
 #define-infix-op =@ 800 > =@
 
 syntax-extend
-    let qualifier =
+    let Qualifier =
         type
-            quote qualifier
+            quote Qualifier
 
-    set-type-symbol! qualifier (quote apply-type)
+    set-type-symbol! Qualifier (quote apply-type)
         fn new-qualifier (name)
             assert (symbol? name) "symbol expected"
             let aqualifier =
                 type
-                    symbol
-                        .. "qualifier[" (string name) "]"
+                    Symbol
+                        .. "Qualifier[" (string name) "]"
 
-            set-type-symbol! aqualifier (quote super) qualifier
+            set-type-symbol! aqualifier (quote super) Qualifier
             set-type-symbol! aqualifier (quote cast)
                 fn cast-qualifier (fromtype totype value)
                     if (fromtype <? aqualifier)
@@ -1429,7 +1429,7 @@ syntax-extend
                 fn new-typed-qualifier (element-type)
                     let typed-qualifier =
                         type
-                            symbol
+                            Symbol
                                 .. (string name) "[" (string element-type) "]"
                     if (none? (. typed-qualifier complete))
                         set-type-symbol! typed-qualifier (quote super) aqualifier
@@ -1441,13 +1441,13 @@ syntax-extend
 
             return aqualifier
 
-    set-scope-symbol! syntax-scope (quote qualifier) qualifier
-    set-scope-symbol! syntax-scope (quote iterator)
-        qualifier (quote iterator)
+    set-scope-symbol! syntax-scope (quote Qualifier) Qualifier
+    set-scope-symbol! syntax-scope (quote Iterator)
+        Qualifier (quote Iterator)
     set-scope-symbol! syntax-scope (quote qualify)
         fn qualify (qualifier-type value)
             assert
-                qualifier-type <? qualifier
+                qualifier-type <? Qualifier
                 error
                     .. "qualifier type expected, got "
                         repr qualifier-type
@@ -1458,7 +1458,7 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote disqualify)
         fn disqualify (qualifier-type value)
             assert
-                qualifier-type <? qualifier
+                qualifier-type <? Qualifier
                 error
                     .. "qualifier type expected, got "
                         repr qualifier-type
@@ -1475,12 +1475,12 @@ syntax-extend
 syntax-extend
 
     fn iterator? (x)
-        (typeof x) <? iterator
+        (typeof x) <? Iterator
 
     # `start` is a private token passed to `next`, which is an iterator
       function of the format (next token) -> next-token value ... | none
     fn new-iterator (next start)
-        qualify iterator
+        qualify Iterator
             fn iterator-tuple ()
                 return next start
 
@@ -1521,7 +1521,7 @@ syntax-extend
     set-type-symbol! list (quote iter)
         fn list-iter (self)
             return countable-rslice-iter self
-    set-type-symbol! scope (quote iter)
+    set-type-symbol! Scope (quote iter)
         fn scope-iter (self)
             return scope-iter
                 fn () (return self none)
@@ -1529,7 +1529,7 @@ syntax-extend
         fn string-iter (self)
             return countable-iter
                 fn () (return self (size_t 0))
-    set-type-symbol! closure (quote iter)
+    set-type-symbol! Closure (quote iter)
         fn gen-yield-iter (callee)
             let caller-return = none
             fn/cc yield-iter (return cont-callee)
@@ -1588,7 +1588,7 @@ syntax-extend
 
     # repeats a sequence n times or indefinitely
     fn repeat (x n)
-        let nextf init = ((disqualify iterator (iter x)))
+        let nextf init = ((disqualify Iterator (iter x)))
         let pred =
             ? (none? n)
                 fn (i n) true
@@ -1614,8 +1614,8 @@ syntax-extend
 
     # returns the cartesian product of two sequences
     fn product (a b)
-        let a-iter a-init = ((disqualify iterator (iter a)))
-        let b-iter b-init = ((disqualify iterator (iter b)))
+        let a-iter a-init = ((disqualify Iterator (iter a)))
+        let b-iter b-init = ((disqualify Iterator (iter b)))
         new-iterator
             fn repeat-next (f)
                 let b-state a-next-state a-at... = (f)
@@ -1639,8 +1639,8 @@ syntax-extend
                     return b-init a-next-state a-at...
 
     fn concat (a b)
-        let iter-a init-a = ((disqualify iterator (iter a)))
-        let iter-b init-b = ((disqualify iterator (iter b)))
+        let iter-a init-a = ((disqualify Iterator (iter a)))
+        let iter-b init-b = ((disqualify Iterator (iter b)))
         new-iterator
             fn (f)
                 let next-iter next-init iter-f iter-state = (f)
@@ -1663,8 +1663,8 @@ syntax-extend
                 return iter-b init-b iter-a init-a
 
     fn zip (a b)
-        let iter-a init-a = ((disqualify iterator (iter a)))
-        let iter-b init-b = ((disqualify iterator (iter b)))
+        let iter-a init-a = ((disqualify Iterator (iter a)))
+        let iter-b init-b = ((disqualify Iterator (iter b)))
         new-iterator
             fn (f)
                 let a b = (f)
@@ -1710,8 +1710,8 @@ syntax-extend
                             return iter-a iter-b next-a next-b
                         \ at-a... at-b...
             do
-                let iter-a init-a = ((disqualify iterator (iter a)))
-                let iter-b init-b = ((disqualify iterator (iter b)))
+                let iter-a init-a = ((disqualify Iterator (iter a)))
+                let iter-b init-b = ((disqualify Iterator (iter b)))
                 fn ()
                     return iter-a iter-b init-a init-b
 
@@ -1830,18 +1830,18 @@ syntax-extend
                     let param-ret =
                         quote-syntax break
                     let param-inner-ret =
-                        datum->syntax (parameter (quote-syntax return))
+                        datum->syntax (Parameter (quote-syntax return))
                     let param-iter =
-                        datum->syntax (parameter (quote-syntax iter))
+                        datum->syntax (Parameter (quote-syntax iter))
                     let param-state =
-                        datum->syntax (parameter (quote-syntax state))
+                        datum->syntax (Parameter (quote-syntax state))
                     let param-for =
-                        datum->syntax (symbol "#loop-for")
+                        datum->syntax (Symbol "#loop-for")
                             syntax->anchor expr
                     let param-at =
-                        datum->syntax (parameter (quote-syntax at...))
+                        datum->syntax (Parameter (quote-syntax at...))
                     let param-next =
-                        datum->syntax (parameter (quote-syntax next))
+                        datum->syntax (Parameter (quote-syntax next))
                     cons
                         qquote
                             do
@@ -1868,7 +1868,7 @@ syntax-extend
                                                 unquote param-at
                                             unquote-splice body
                                 let iter-val state-val =
-                                    (disqualify iterator (iter (unquote src-expr)))
+                                    (disqualify Iterator (iter (unquote src-expr)))
                                 ;
                                     unquote param-for
                                     \ iter-val state-val
@@ -1899,21 +1899,21 @@ syntax-extend
         let retparam =
             quote-syntax return
         let func =
-            flow
+            Flow
                 ? (none? decl)
                     datum->syntax
-                        symbol ""
+                        Symbol ""
                         \ expr-anchor
                     \ decl
-        let retparam = (parameter retparam)
+        let retparam = (Parameter retparam)
         flow-append-parameter! func retparam
         if (not (none? decl))
             set-scope-symbol! env decl func
-        let subenv = (scope env)
+        let subenv = (Scope env)
         set-scope-symbol! subenv (quote recur) func
         set-scope-symbol! subenv (quote return) retparam
         loop-for param-name in (syntax->datum paramdef)
-            let param = (parameter param-name)
+            let param = (Parameter param-name)
             set-scope-symbol! subenv (syntax->datum param-name) param
             flow-append-parameter! func param
             continue
@@ -2044,7 +2044,7 @@ define fn-types
 syntax-extend
     fn build-scope (names...)
         fn (values...)
-            let table = (scope)
+            let table = (Scope)
             loop-for key value in (zip (va-iter names...) (va-iter values...))
                 set-scope-symbol! table key value
                 continue
@@ -2135,14 +2135,14 @@ fn align (offset align)
 # pointer implementation
   ----------------------
 
-set-type-symbol! pointer (quote size) (sizeof boxed)
-set-type-symbol! pointer (quote alignment) (alignof boxed)
+set-type-symbol! pointer (quote size) (sizeof Boxed)
+set-type-symbol! pointer (quote alignment) (alignof Boxed)
 
 set-type-symbol! pointer (quote apply-type)
     fn apply-pointer-type (element)
         fn-types type
         let etype =
-            type (symbol (.. (repr element) "*"))
+            type (Symbol (.. (repr element) "*"))
         if (none? (. etype complete))
             fn addressof (self)
                 @
@@ -2153,7 +2153,7 @@ set-type-symbol! pointer (quote apply-type)
             fn getvalue (self)
                 ? ((addressof self) == (u64 0)) none
                     unbox element
-                        bitcast boxed self
+                        bitcast Boxed self
             let methods =
                 scopeof
                     getvalue = getvalue
@@ -2183,7 +2183,7 @@ set-type-symbol! array (quote apply-type)
     fn apply-array-type (element count)
         fn-types type size_t
         let etype =
-            type (symbol (.. "[" (repr count) " x " (repr element) "]"))
+            type (Symbol (.. "[" (repr count) " x " (repr element) "]"))
         if (none? (. etype complete))
             let sz = (sizeof element)
             let alignment = (alignof element)
@@ -2252,7 +2252,7 @@ set-type-symbol! vector (quote apply-type)
     fn apply-vector-type (element count)
         fn-types type size_t
         let etype =
-            type (symbol (.. "<" (repr count) " x " (repr element) ">"))
+            type (Symbol (.. "<" (repr count) " x " (repr element) ">"))
         if (none? (. etype complete))
             let sz = (sizeof element)
             let alignment = (alignof element)
@@ -2331,7 +2331,7 @@ set-type-symbol! tuple (quote apply-type)
                         repr elemtype
             else
                 type
-                    symbol
+                    Symbol
                         .. s "}"
         if (none? (. etype complete))
             let sz alignment offsets... =
@@ -2449,7 +2449,7 @@ set-type-symbol! struct (quote apply-type)
                         \ (repr name) "=" (repr elemtype)
             else
                 type
-                    symbol
+                    Symbol
                         .. s "}"
         if (none? (. etype complete))
             let etypes... =
@@ -2580,9 +2580,9 @@ define read-eval-print-loop
                 \ " ("
                 ? debug-build? "debug build, " ""
                 \ interpreter-timestamp ")"
-        let state = (scope)
+        let state = (Scope)
         fn reset-state ()
-            let repl-env = (scope (globals))
+            let repl-env = (Scope (globals))
             set-scope-symbol! repl-env (quote reset) reset-state
             set-scope-symbol! state (quote env) repl-env
             set-scope-symbol! state (quote counter) 1
@@ -2608,7 +2608,7 @@ define read-eval-print-loop
                 preload = ""
                 cmdlist = ""
             let idstr = (make-idstr)
-            let id = (symbol idstr)
+            let id = (Symbol idstr)
             let styler = default-styler
             let promptstr =
                 .. idstr " "
@@ -2643,7 +2643,7 @@ define read-eval-print-loop
                                 syntax-list expression-suffix
                         set! slevel (stack-level)
                         let f =
-                            closure
+                            Closure
                                 eval code eval-env
                         set! slevel (stack-level)
                         let result... = (f)
@@ -2733,11 +2733,11 @@ fn run-main (args...)
         let expr =
             list-load sourcepath
         let eval-scope =
-            scope (globals)
+            Scope (globals)
         set-scope-symbol! eval-scope (quote module-path) sourcepath
         clear-traceback
         let fun =
-            closure
+            Closure
                 eval expr eval-scope sourcepath
         clear-traceback
         fun

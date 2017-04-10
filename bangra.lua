@@ -1202,52 +1202,52 @@ local function assert_type(x)
     end
 end
 local function define_types(def)
-    def('Void')
-    def('Any')
-    def('Type')
-    def('Callable')
+    def('Nothing', 'Nothing')
+    def('Any', 'Any')
+    def('Type', 'type')
+    def('Callable', 'Callable')
 
-    def('Bool')
+    def('Bool', 'bool')
 
-    def('Integer')
-    def('Real')
+    def('Integer', 'Integer')
+    def('Real', 'Real')
 
-    def('I8')
-    def('I16')
-    def('I32')
-    def('I64')
+    def('I8', 'i8')
+    def('I16', 'i16')
+    def('I32', 'i32')
+    def('I64', 'i64')
 
-    def('U8')
-    def('U16')
-    def('U32')
-    def('U64')
+    def('U8', 'u8')
+    def('U16','u16')
+    def('U32', 'u32')
+    def('U64', 'u64')
 
-    def('R32')
-    def('R64')
+    def('R32', 'r32')
+    def('R64', 'r64')
 
-    def('Builtin')
+    def('Builtin', 'Builtin')
 
-    def('Scope')
+    def('Scope', 'Scope')
 
-    def('Symbol')
-    def('List')
-    def('String')
+    def('Symbol', 'Symbol')
+    def('List', 'list')
+    def('String', 'string')
 
-    def('Form')
-    def('Parameter')
-    def('Flow')
+    def('Form', 'Form')
+    def('Parameter', 'Parameter')
+    def('Flow', 'Flow')
     def('VarArgs', 'va-list')
 
-    def('Closure')
-    def('Frame')
-    def('Anchor')
+    def('Closure', 'Closure')
+    def('Frame', 'Frame')
+    def('Anchor', 'Anchor')
 
-    def('BuiltinMacro', 'builtin-macro')
-    def('Macro')
+    def('BuiltinMacro', 'BuiltinMacro')
+    def('Macro', 'Macro')
 
-    def('Syntax')
+    def('Syntax', 'Syntax')
 
-    def('Boxed')
+    def('Boxed', 'Boxed')
 end
 
 do
@@ -1320,7 +1320,6 @@ do
     end
 
     define_types(function(name, internalname)
-        internalname = internalname or string.lower(name)
         cls[name] = Type(Symbol(internalname))
     end)
 
@@ -1479,12 +1478,12 @@ local function assert_any_type(_type, value)
     end
 end
 
-local none = Any(Type.Void, NULL)
+local none = Any(Type.Nothing, NULL)
 is_none = function(value)
-    return value.type == Type.Void
+    return value.type == Type.Nothing
 end
 local is_null_or_none = function(value)
-    return value == null or value.type == Type.Void
+    return value == null or value.type == Type.Nothing
 end
 
 --------------------------------------------------------------------------------
@@ -2270,11 +2269,11 @@ local OPERATORS = set(split(
     ))
 
 local TYPES = set(split(
-        "int i8 i16 i32 i64 u8 u16 u32 u64 void string"
-        .. " rawstring opaque r16 r32 r64 half float double symbol list parameter"
-        .. " frame closure flow integer real cfunction array tuple vector"
-        .. " pointer struct enum bool uint qualifier syntax anchor scope"
-        .. " iterator type size_t usize_t ssize_t void* callable boxed"
+        "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string"
+        .. " r16 r32 r64 half float double Symbol list Parameter"
+        .. " Frame Closure Flow Integer Real array tuple vector"
+        .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
+        .. " Iterator type size_t usize_t ssize_t void* Callable Boxed"
     ))
 
 StreamValueFormat = function(naked, depth, opts)
@@ -2750,7 +2749,7 @@ do
         local value = Flow(name)
         -- first argument is present, but unused
         value:append_parameter(
-            Parameter(name, Type.Void))
+            Parameter(name, Type.Nothing))
         return value
     end
 end
@@ -3894,7 +3893,7 @@ local function is_return_callable(args)
     local ncallable = maybe_unsyntax(callable)
     if contarg then
         contarg = maybe_unsyntax(contarg)
-        if contarg.type == Type.Void then
+        if contarg.type == Type.Nothing then
             is_return = true
         end
     end
@@ -4298,39 +4297,11 @@ end
 -- types
 --------------------------------------------------------------------------------
 
-builtins.void = Type.Void
-builtins.any = Type.Any
-builtins.bool = Type.Bool
-builtins.type = Type.Type
-
-builtins.i8 = Type.I8
-builtins.i16 = Type.I16
-builtins.i32 = Type.I32
-builtins.i64 = Type.I64
-
-builtins.u8 = Type.U8
-builtins.u16 = Type.U16
-builtins.u32 = Type.U32
-builtins.u64 = Type.U64
-
-builtins.r32 = Type.R32
-builtins.r64 = Type.R64
+define_types(function(enum_name, lang_name)
+    builtins[lang_name] = Type[enum_name]
+end)
 
 builtins.size_t = Type.U64
-
-builtins.scope = Type.Scope
-builtins.symbol = Type.Symbol
-builtins.syntax = Type.Syntax
-builtins.list = Type.List
-builtins.parameter = Type.Parameter
-builtins.flow = Type.Flow
-builtins.frame = Type.Frame
-builtins.string = Type.String
-builtins.closure = Type.Closure
-builtins.integer = Type.Integer
-builtins.real = Type.Real
-builtins.callable = Type.Callable
-builtins.boxed = Type.Boxed
 
 builtins["debug-build?"] = Any(bool(global_opts.debug))
 
@@ -4641,7 +4612,7 @@ builtins["scope-new"] = wrap_simple_builtin(function(parent)
 end)
 
 each_numerical_type(function(T)
-    builtins[T.name .. "-new"] = wrap_simple_builtin(function(x)
+    builtins[T.name:lower() .. "-new"] = wrap_simple_builtin(function(x)
         checkargs(1,1,x)
         local xs = x.type:super()
         if xs ~= Type.Integer and xs ~= Type.Real then
@@ -4659,7 +4630,7 @@ end)
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
 
-builtins["void-compare"] = function(frame, cont, self, a, b,
+builtins["nothing-compare"] = function(frame, cont, self, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == b.type then
         return call(frame, cont, equal_cont)
@@ -4669,7 +4640,7 @@ builtins["void-compare"] = function(frame, cont, self, a, b,
 end
 
 local function compare_func(T)
-    builtins[T.name .. "-compare"] = function(frame, cont, self, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
@@ -4689,7 +4660,7 @@ compare_func(Type.Flow)
 compare_func(Type.Closure)
 
 local function ordered_compare_func(T)
-    builtins[T.name .. "-compare"] = function(frame, cont, self, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
@@ -4713,7 +4684,7 @@ local function compare_real_func(T, base)
     local eq = C[base .. '_eq']
     local lt = C[base .. '_lt']
     local gt = C[base .. '_gt']
-    builtins[T.name .. "-compare"] = function(frame, cont, self, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(frame, cont, self, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
@@ -5011,7 +4982,7 @@ builtins["element-type"] = wrap_simple_builtin(function(_type)
 end)
 
 local function countof_func(T)
-    builtins[T.name .. "-countof"] = function(frame, cont, self, value)
+    builtins[T.name:lower() .. "-countof"] = function(frame, cont, self, value)
         value = value.value
         return call(frame, none, cont, Any(size_t(#value)))
     end
@@ -5362,7 +5333,7 @@ builtins.dump = wrap_simple_builtin(function(value)
     return value
 end)
 
-builtins["dump-IL"] = wrap_simple_builtin(function(value)
+builtins["dump-flow"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     stream_il(stdout_writer, value)
 end)
@@ -5518,7 +5489,7 @@ local function decl_builtin(name, value)
     globals:bind(prepare_builtin_value(name, value))
 end
 
-function Type.Void:format_value(x, styler)
+function Type.Nothing:format_value(x, styler)
     return styler(Style.Keyword, "none")
 end
 function Type.Symbol:format_value(x, styler)
