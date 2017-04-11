@@ -470,6 +470,11 @@ syntax-extend
             return
                 == (typeof x) Symbol
     set-scope-symbol! syntax-scope
+        quote syntax?
+        fn/cc "syntax?" (return x)
+            return
+                == (typeof x) Syntax
+    set-scope-symbol! syntax-scope
         quote list?
         fn/cc "list?" (return x)
             return
@@ -520,41 +525,36 @@ syntax-extend
     set-scope-symbol! syntax-scope
         quote ?
         block-scope-macro
-            fn/cc "expand-?" (return expr env)
+            fn/cc "expand-?" (return topexpr env)
                 return
                     call
-                        fn/cc (_ ret-true ret-false expr-anchor)
-                            _
-                                cons
-                                    syntax-list
-                                        datum->syntax branch
-                                            @ expr 0
-                                        @ (@ expr 0) 1
-                                        syntax-cons
-                                            datum->syntax fn/cc expr-anchor
+                        fn/cc (_ expr rest)
+                            call
+                                fn/cc (_ ret-true ret-false expr-anchor)
+                                    cons
+                                        syntax-list
+                                            datum->syntax branch expr
+                                            @ expr 1
                                             syntax-cons
-                                                syntax-list ret-true
-                                                syntax-list
-                                                    @ (@ expr 0) 2
-                                        syntax-cons
-                                            datum->syntax fn/cc expr-anchor
+                                                datum->syntax fn/cc expr-anchor
+                                                syntax-cons
+                                                    syntax-list ret-true
+                                                    syntax-list
+                                                        @ expr 2
                                             syntax-cons
-                                                syntax-list ret-false
-                                                syntax-list
-                                                    @ (@ expr 0) 3
-                                    slice expr 1
-                        datum->syntax
-                            Parameter
+                                                datum->syntax fn/cc expr-anchor
+                                                syntax-cons
+                                                    syntax-list ret-false
+                                                    syntax-list
+                                                        @ expr 3
+                                        \ rest
                                 datum->syntax
-                                    quote ret-true
-                                    @ expr 0
-                        datum->syntax
-                            Parameter
+                                    Parameter (datum->syntax (quote _) expr)
                                 datum->syntax
-                                    quote ret-false
-                                    @ expr 0
-                        syntax->anchor
-                            @ expr 0
+                                    Parameter (datum->syntax (quote _) expr)
+                                syntax->anchor expr
+                        @ topexpr 0
+                        slice topexpr 1
                     \ env
     \ syntax-scope
 
@@ -605,14 +605,22 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    fn/cc syntax-wrap (_ loc x)
+        ? (syntax? x) x
+            datum->syntax x loc
+
     fn/cc syntax-qquote-1 (_ x)
         ? (list-atom? x)
             syntax-list
                 datum->syntax quote-syntax x
                 \ x
-            ? (syntax-head? x (quote unquote))
-                syntax-do (slice x 1)
-                ? (syntax-head? x (quote qquote))
+            ?
+                ? (syntax-head? x (quote unquote)) true
+                    syntax-head? x (quote curly-list)
+                syntax-list (datum->syntax syntax-wrap x)
+                    datum->syntax  (syntax->anchor x) x
+                    syntax-do (slice x 1)
+                ? (syntax-head? x (quote qquote-syntax))
                     syntax-qquote-1 (syntax-qquote-1 (@ x 1))
                     ? (list-atom? (@ x 0))
                         syntax-list
@@ -632,7 +640,7 @@ syntax-extend
       (qquote expr [...])
     set-scope-symbol! syntax-scope (quote qquote-syntax)
         macro
-            fn/cc "expand-qquote" (_ expr)
+            fn/cc "expand-qquote" (_ expr env)
                 ? (empty? (slice expr 2))
                     syntax-qquote-1 (@ expr 1)
                     syntax-qquote-1 (slice expr 1)
@@ -644,8 +652,8 @@ syntax-extend
             fn/cc "expand-define" (return topexpr env)
                 cons
                     qquote-syntax
-                        syntax-extend
-                            set-scope-symbol! syntax-scope
+                        {syntax-extend}
+                            {set-scope-symbol!} syntax-scope
                                 quote
                                     unquote (@ (@ topexpr 0) 1)
                                 unquote
@@ -674,7 +682,7 @@ define let
                         list
                             qquote-syntax
                                 ;
-                                    fn/cc
+                                    {fn/cc}
                                         ;
                                             unquote cont-param
                                             unquote param-name
@@ -746,11 +754,11 @@ define try
                 \ true
             cons
                 qquote-syntax
-                    xpcall
-                        fn ()
+                    {xpcall}
+                        {fn} ()
                             unquote-splice
                                 slice (@ expr 0) 1
-                        fn
+                        {fn}
                             unquote (@ (@ expr 1) 1)
                             unquote-splice
                                 slice (@ expr 1) 2
@@ -769,9 +777,9 @@ define assert
     macro
         fn assert (expr)
             qquote-syntax
-                ? (unquote (@ expr 1))
-                    \ true
-                    error
+                {?} (unquote (@ expr 1))
+                    \ {true}
+                    {error}
                         unquote
                             ? (empty? (slice expr 2))
                                 datum->syntax
@@ -825,7 +833,7 @@ define .
             let key = (@ expr 2)
             ? (symbol? (syntax->datum key))
                 qquote-syntax
-                    @ (unquote (@ expr 1))
+                    {@} (unquote (@ expr 1))
                         unquote
                             syntax-quote key
                         unquote-splice
@@ -841,11 +849,11 @@ define and
             let ret-false = (datum->syntax (Parameter (quote-syntax ret-false)))
             qquote-syntax
                 ;
-                    fn/cc ((unquote ret) (unquote tmp))
-                        branch (unquote tmp)
-                            fn/cc ((unquote ret-true))
+                    {fn/cc} ((unquote ret) (unquote tmp))
+                        {branch} (unquote tmp)
+                            {fn/cc} ((unquote ret-true))
                                 unquote (@ expr 2)
-                            fn/cc ((unquote ret-false))
+                            {fn/cc} ((unquote ret-false))
                                 unquote tmp
                     unquote (@ expr 1)
                     unquote-splice
@@ -860,11 +868,11 @@ define or
             let ret-false = (datum->syntax (Parameter (quote-syntax ret-false)))
             qquote-syntax
                 ;
-                    fn/cc ((unquote ret) (unquote tmp))
-                        branch (unquote tmp)
-                            fn/cc ((unquote ret-true))
+                    {fn/cc} ((unquote ret) (unquote tmp))
+                        {branch} (unquote tmp)
+                            {fn/cc} ((unquote ret-true))
                                 unquote tmp
-                            fn/cc ((unquote ret-false))
+                            {fn/cc} ((unquote ret-false))
                                 unquote (@ expr 2)
                     unquote (@ expr 1)
                     unquote-splice
@@ -882,10 +890,10 @@ define if
             let ret-then = (datum->syntax (Parameter (quote-syntax ret-then)))
             let ret-else = (datum->syntax (Parameter (quote-syntax ret-else)))
             qquote-syntax
-                branch (unquote cond)
-                    fn/cc ((unquote ret-then))
+                {branch} (unquote cond)
+                    {fn/cc} ((unquote ret-then))
                         unquote-splice then-exprlist
-                    fn/cc ((unquote ret-else))
+                    {fn/cc} ((unquote ret-else))
                         unquote-splice else-exprlist
                     unquote-splice
                         syntax-eol expr
@@ -970,7 +978,7 @@ syntax-extend
                             list
                                 qquote-syntax
                                     ;
-                                        fn/cc
+                                        {fn/cc}
                                             ;
                                                 unquote cont-param
                                                 unquote-splice
@@ -995,8 +1003,8 @@ define loop
             let param-break =
                 quote-syntax break
             qquote-syntax
-                do
-                    fn/cc (unquote param-continue) (
+                {do}
+                    {fn/cc} (unquote param-continue) (
                         (unquote param-break)
                         (unquote-splice (@ expr 1)))
                         unquote-splice
@@ -1277,7 +1285,7 @@ syntax-extend
                         unquote
                             datum->syntax selfcall expr
                         unquote self-arg
-                        quote
+                        {quote}
                             unquote name
                         unquote-splice rest
                     slice topexpr 1
@@ -1749,8 +1757,8 @@ syntax-extend
                 let args names =
                     parse-loop-args (@ expr 1)
                 qquote-syntax
-                    do
-                        fn/cc (unquote param-continue) (
+                    {do}
+                        {fn/cc} (unquote param-continue) (
                             (unquote param-break)
                             (unquote-splice names))
                             unquote-splice
@@ -1814,19 +1822,19 @@ syntax-extend
                         datum->syntax (Parameter (quote-syntax next))
                     cons
                         qquote-syntax
-                            do
-                                fn/cc (unquote param-for) (
+                            {do}
+                                {fn/cc} (unquote param-for) (
                                     (unquote param-ret)
                                     (unquote param-iter)
                                     (unquote param-state)
                                     (unquote-splice extra-names))
-                                    let (unquote param-next) (unquote param-at) =
+                                    {let} (unquote param-next) (unquote param-at) =
                                         (unquote param-iter) (unquote param-state)
-                                    ? (none? (unquote param-next))
+                                    {?} ({none?} (unquote param-next))
                                         unquote
                                             syntax-do else-block
-                                        do
-                                            fn/cc continue (
+                                        {do}
+                                            {fn/cc} continue (
                                                 (unquote param-inner-ret)
                                                 (unquote-splice extra-names))
                                                 ;
@@ -1834,10 +1842,10 @@ syntax-extend
                                                     unquote param-iter
                                                     unquote param-next
                                                     unquote-splice extra-names
-                                            let (unquote-splice dest-names) =
+                                            {let} (unquote-splice dest-names) =
                                                 unquote param-at
                                             unquote-splice body
-                                let iter-val state-val =
+                                {let} iter-val state-val =
                                     (disqualify Iterator (iter (unquote src-expr)))
                                 ;
                                     unquote param-for
@@ -1892,11 +1900,9 @@ syntax-extend
     # extended function body macro expander that binds the function itself
       to `recur` and a list of all parameters to `parameters` for further
       macro processing.
-    fn make-function-body (env decl paramdef body expr-anchor nextfunc)
+    fn make-function-body (env decl paramdef body expr-anchor nextfunc expanded-fn?)
         if (not (list? (syntax->datum paramdef)))
             syntax-error paramdef "parameter list expected"
-        let retparam =
-            quote-syntax return
         let func =
             Flow
                 ? (none? decl)
@@ -1904,17 +1910,20 @@ syntax-extend
                         Symbol ""
                         \ expr-anchor
                     \ decl
-        let retparam = (Parameter retparam)
-        flow-append-parameter! func retparam
         if (not (none? decl))
             set-scope-symbol! env decl func
         let subenv = (Scope env)
-        set-scope-symbol! subenv (quote recur) func
-        set-scope-symbol! subenv (quote return) retparam
         fn append-param (param-name param-type)
-            let param = (Parameter param-name param-type)
-            set-scope-symbol! subenv (syntax->datum param-name) param
-            flow-append-parameter! func param
+            let param-name-datum = (syntax->datum param-name)
+            flow-append-parameter! func
+                if ((typeof param-name-datum) == Parameter) param-name-datum
+                else
+                    let param = (Parameter param-name param-type)
+                    set-scope-symbol! subenv param-name-datum param
+                    \ param
+        if expanded-fn?
+            set-scope-symbol! subenv (quote recur) func
+            append-param (quote-syntax return) Any
         if (paramdef-has-types? paramdef)
             loop-for param-name param-type-expr in (tokenize-name-type-tuples paramdef)
                 let param-sym = (syntax->datum param-type-expr)
@@ -1965,7 +1974,7 @@ syntax-extend
                         syntax->anchor expr
                     let complete-fn-decl =
                         make-function-body env decl paramdef (slice expr 2)
-                            \ expr-anchor nextfunc
+                            \ expr-anchor nextfunc true
                     if (not (empty? rest))
                         parse-funcdef rest complete-fn-decl
                     else
@@ -1975,9 +1984,7 @@ syntax-extend
                         fn (rest) rest
                     slice topexpr 1
 
-    # an extended version of fn
-      (fn [name] (param ...) body ...) with (fn ...) ...
-    set-scope-symbol! syntax-scope (quote fn)
+    fn make-fn-macro (expanded-fn?)
         block-macro
             fn (topexpr env)
                 let expr =
@@ -1986,15 +1993,13 @@ syntax-extend
                     syntax->anchor expr
                 let decl =
                     @ expr 1
-                let retparam =
-                    quote-syntax return
                 let rest =
                     slice topexpr 1
                 fn make-params-body (name body)
                     fn tailf (rest) rest
                     call
                         make-function-body env name (@ body 0) (slice body 1)
-                            \ expr-anchor tailf
+                            \ expr-anchor tailf expanded-fn?
                         \ rest
 
                 if (symbol? (syntax->datum decl))
@@ -2004,6 +2009,16 @@ syntax-extend
                     # regular, unchained form
                     make-params-body none
                         slice expr 1
+
+    # an extended version of fn
+      (fn [name] (param ...) body ...)
+    set-scope-symbol! syntax-scope (quote fn)
+        make-fn-macro true
+
+    # an extended version of fn
+      (fn/cc [name] (param ...) body ...)
+    set-scope-symbol! syntax-scope (quote fn/cc)
+        make-fn-macro false
     \ syntax-scope
 
 # (fn-types type ...)
@@ -2029,13 +2044,15 @@ define fn-types
                             va-iter
                                 flow-parameters env.recur
                             syntax->datum expr
-                            quote-syntax none
-                    let param-label =
-                        .. "parameter #" (string i) " '"
-                            \ (string (parameter-name param)) "'"
+                            \ none
                     if (i == 0)
                         continue
                     else
+                        if (none? param)
+                            syntax-error expr "parameter count mismatch"
+                        let param-label =
+                            .. "parameter #" (string i) " '"
+                                \ (string (parameter-name param)) "'"
                         syntax-cons
                             qquote-syntax
                                 (unquote assert-type-fn)
@@ -2069,7 +2086,7 @@ syntax-extend
         macro
             fn expand-scopeof (expr env)
                 qquote-syntax
-                    call
+                    {call}
                         (unquote (datum->syntax build-scope expr))
                             unquote-splice
                                 loop-for entry in (syntax->datum (slice expr 1))
@@ -2083,7 +2100,7 @@ syntax-extend
                                     let value = (slice entry 2)
                                     syntax-cons
                                         qquote-syntax
-                                            quote
+                                            {quote}
                                                 unquote key
                                         continue
                                 else
@@ -2530,7 +2547,7 @@ syntax-extend
         macro
             fn expand-structof (expr env)
                 qquote-syntax
-                    call
+                    {call}
                         (unquote (datum->syntax build-struct expr))
                             unquote-splice
                                 loop-for entry in (syntax->datum (slice expr 1))
@@ -2544,7 +2561,7 @@ syntax-extend
                                     let value = (slice entry 2)
                                     syntax-cons
                                         qquote-syntax
-                                            quote
+                                            {quote}
                                                 unquote key
                                         continue
                                 else
@@ -2607,7 +2624,7 @@ define read-eval-print-loop
           table so it can be used for the next expression.
         let expression-suffix =
             qquote-syntax
-                syntax-extend
+                {syntax-extend}
                     ;
                         unquote
                             datum->syntax capture-scope

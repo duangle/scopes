@@ -2099,12 +2099,12 @@ local function parse(lexer)
             return Any(Syntax(Any(parse_list(Token.close)), anchor))
         elseif (lexer.token == Token.square_open) then
             local list = parse_list(Token.square_close)
-            local sym = get_symbol("[")
-            return Any(Syntax(Any(List(wrap(sym), list)), anchor))
+            local sym = Symbol("square-list")
+            return Any(Syntax(Any(List(Any(sym), list)), anchor))
         elseif (lexer.token == Token.curly_open) then
             local list = parse_list(Token.curly_close)
-            local sym = get_symbol("{")
-            return Any(Syntax(Any(List(wrap(sym), list)), anchor))
+            local sym = Symbol("curly-list")
+            return Any(Syntax(Any(List(Any(sym), list)), anchor))
         elseif ((lexer.token == Token.close)
             or (lexer.token == Token.square_close)
             or (lexer.token == Token.curly_close)) then
