@@ -14,7 +14,7 @@ do
     let test-qualifier =
         Qualifier (quote test)
     print
-        (test-qualifier int) <? Qualifier
+        (test-qualifier int) <: Qualifier
 
 
 #do
@@ -119,7 +119,7 @@ assert
     "'or' for more than two arguments failed"
 
 let qquote-test =
-    qquote
+    qquote-syntax
         print
             unquote
                 let k = 1
@@ -128,7 +128,7 @@ let qquote-test =
                     active-anchor
         unquote-splice
             let k = 2
-            qquote
+            qquote-syntax
                 print
                     unquote
                         datum->syntax k
@@ -461,19 +461,14 @@ do
 
 assert (i8 == i8)
 assert (i8 <= i8)
-assert (not (i8 <? i8))
-assert (not (i8 <? i16))
-assert (not (i8 >? i16))
-assert (i8 < Integer)
-assert (i8 <= Integer)
-assert (Integer > i8)
-assert (Integer >= i8)
-assert (not (i8 <? Real))
-assert (not (i8 >? Real))
-assert ((pointer int) < pointer)
-#assert ((Integer 8 true) == i8)
-assert ((array int (size_t 8)) < array)
-assert ((vector float (size_t 4)) < vector)
+assert (not (i8 <: i8))
+assert (not (i8 <: i16))
+assert (not (i16 <: i8))
+assert (i8 <: Integer)
+assert (not (i8 <: Real))
+assert ((pointer int) <: pointer)
+assert ((array int (size_t 8)) <: array)
+assert ((vector float (size_t 4)) <: vector)
 
 define TEST 5
 define TEST2

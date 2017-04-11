@@ -2272,7 +2272,7 @@ local SFXFUNCTIONS = set(split(
 -- builtin operator functions that can also be used as infix
 local OPERATORS = set(split(
     "+ - ++ -- * / % == != > >= < <= not and or = @ ** ^ & | ~ , . .. : += -="
-        .. " *= /= %= ^= &= |= ~= <- ? := // << >> ==? !=? >? >=? <? <=?"
+        .. " *= /= %= ^= &= |= ~= <- ? := // << >> <> <:"
     ))
 
 local TYPES = set(split(

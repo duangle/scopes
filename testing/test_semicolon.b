@@ -1,13 +1,13 @@
 
 do
     assert
-        ==?
+        ==
             quote
                 1 2; 3 4
             quote ((1 2) (3 4))
 
     assert
-        ==?
+        ==
             quote
                 1 2; 3
             quote ((1 2) (3))

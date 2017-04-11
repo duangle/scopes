@@ -211,13 +211,11 @@ syntax-extend
     set-scope-symbol! syntax-scope (Symbol "==")
         fn/cc "==" (return a b)
             ordered-branch a b return-true
-                fn/cc (_) (cc/call none unordered-error a b)
-                \ return-false return-false
+                \ return-false return-false return-false
     set-scope-symbol! syntax-scope (Symbol "!=")
         fn/cc "!=" (return a b)
             ordered-branch a b return-false
-                fn/cc (_) (cc/call none unordered-error a b)
-                \ return-true return-true
+                \ return-true return-true return-true
     set-scope-symbol! syntax-scope (Symbol "<")
         fn/cc "<" (return a b)
             ordered-branch a b return-false
@@ -238,30 +236,15 @@ syntax-extend
             ordered-branch a b return-true
                 fn/cc (_) (cc/call none unordered-error a b)
                 \ return-false return-true
-    set-scope-symbol! syntax-scope (Symbol "==?")
-        fn/cc "==?" (return a b)
-            ordered-branch a b return-true return-false
-                \ return-false return-false
-    set-scope-symbol! syntax-scope (Symbol "!=?")
-        fn/cc "!=?" (return a b)
-            ordered-branch a b return-false return-true
+    set-scope-symbol! syntax-scope (Symbol "<>")
+        fn/cc "<>" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call none unordered-error a b)
                 \ return-true return-true
-    set-scope-symbol! syntax-scope (Symbol "<?")
-        fn/cc "<?" (return a b)
+    set-scope-symbol! syntax-scope (Symbol "<:")
+        fn/cc "<:" (return a b)
             ordered-branch a b return-false return-false
                 \ return-true return-false
-    set-scope-symbol! syntax-scope (Symbol "<=?")
-        fn/cc "<=?" (return a b)
-            ordered-branch a b return-true return-false
-                \ return-true return-false
-    set-scope-symbol! syntax-scope (Symbol ">?")
-        fn/cc ">?" (return a b)
-            ordered-branch a b return-false return-false
-                \ return-false return-true
-    set-scope-symbol! syntax-scope (Symbol ">=?")
-        fn/cc ">=?" (return a b)
-            ordered-branch a b return-true return-false
-                \ return-false return-true
     set-scope-symbol! syntax-scope
         Symbol "quote"
         block-scope-macro
@@ -465,47 +448,47 @@ syntax-extend
         quote callable?
         fn/cc "callable?" (return x)
             return
-                <? (typeof x) Callable
+                <: (typeof x) Callable
     set-scope-symbol! syntax-scope
         quote integer?
         fn/cc "integer?" (return x)
             return
-                <? (typeof x) Integer
+                <: (typeof x) Integer
     set-scope-symbol! syntax-scope
         quote closure?
         fn/cc "closure?" (return x)
             return
-                ==? (typeof x) Closure
+                == (typeof x) Closure
     set-scope-symbol! syntax-scope
         quote real?
         fn/cc "real?" (return x)
             return
-                <? (typeof x) Real
+                <: (typeof x) Real
     set-scope-symbol! syntax-scope
         quote symbol?
         fn/cc "symbol?" (return x)
             return
-                ==? (typeof x) Symbol
+                == (typeof x) Symbol
     set-scope-symbol! syntax-scope
         quote list?
         fn/cc "list?" (return x)
             return
-                ==? (typeof x) list
+                == (typeof x) list
     set-scope-symbol! syntax-scope
         quote type?
         fn/cc "type?" (return x)
             return
-                ==? (typeof x) type
+                == (typeof x) type
     set-scope-symbol! syntax-scope
         quote none?
         fn/cc "none?" (return x)
             return
-                ==? x none
+                == x none
     set-scope-symbol! syntax-scope
         quote empty?
         fn/cc "empty?" (return x)
             return
-                == (countof x) (u64 0)
+                not (> (countof x) (u64 0))
     set-scope-symbol! syntax-scope
         quote load
         fn/cc "load" (return path)
@@ -597,7 +580,7 @@ syntax-extend
                         call
                             fn/cc (_ head)
                                 ? (symbol? (syntax->datum head))
-                                    _ (==? head name)
+                                    _ (== head name)
                                     _ false
                             @ expr 0
                     \ false
@@ -681,7 +664,7 @@ define let
                 fn/cc (_)
                     syntax-error (@ expr 0) "syntax: let <var> = <expr>"
             branch
-                ==? (@ (@ expr 0) 2) (quote =)
+                == (@ (@ expr 0) 2) (quote =)
                 fn/cc (_) (_)
                 fn/cc (_)
                     syntax-error (@ expr 0) "syntax: let <var> = <expr>"
@@ -935,7 +918,7 @@ syntax-extend
     fn =? (x)
         and
             symbol? (syntax->datum x)
-            ==? x (quote =)
+            == x (quote =)
 
     # iterate until we hit the = symbol, after which
       the body follows
@@ -963,7 +946,7 @@ syntax-extend
                 let rest = (slice topexpr 1)
                 let body = (slice expr 1)
                 let argtype = (typeof (syntax->datum (@ body 0)))
-                if (==? argtype list)
+                if (== argtype list)
                     # prepare quotable values from declarations
                     fn handle-pairs (pairs)
                         if (empty? pairs)
@@ -1095,7 +1078,7 @@ syntax-extend
           is treated as an infix expression.
         and
             not (empty? (slice expr 2))
-            !=? (get-ifx-op infix-table (@ expr 1)) none
+            != (get-ifx-op infix-table (@ expr 1)) none
 
     fn infix-op (infix-table token prec pred)
         let op =
@@ -1117,7 +1100,7 @@ syntax-extend
                     " is not an infix operator, but embedded in an infix expression"
         else
             let op-prec op-order = (op)
-            ? (and (==? op-order <) (pred op-prec prec)) op none
+            ? (and (== op-order <) (pred op-prec prec)) op none
 
     fn parse-infix-expr (infix-table lhs state mprec)
         loop (lhs state)
@@ -1369,12 +1352,8 @@ define-infix-op >= 300 > >=
 define-infix-op != 300 > !=
 define-infix-op == 300 > ==
 
-define-infix-op <? 300 > <?
-define-infix-op >? 300 > >?
-define-infix-op <=? 300 > <=?
-define-infix-op >=? 300 > >=?
-define-infix-op !=? 300 > !=?
-define-infix-op ==? 300 > ==?
+define-infix-op <: 300 > <:
+define-infix-op <> 300 > <>
 
 #define-infix-op is 300 > is
 define-infix-op .. 400 < ..
@@ -1409,13 +1388,13 @@ syntax-extend
             set-type-symbol! aqualifier (quote super) Qualifier
             set-type-symbol! aqualifier (quote cast)
                 fn cast-qualifier (fromtype totype value)
-                    if (fromtype <? aqualifier)
+                    if (fromtype <: aqualifier)
                         let fromelemtype = fromtype.element-type
-                        if (fromelemtype ==? totype)
+                        if (fromelemtype == totype)
                             bitcast totype value
-                    elseif (totype <? aqualifier)
+                    elseif (totype <: aqualifier)
                         let toelemtype = totype.element-type
-                        if (toelemtype ==? fromtype)
+                        if (toelemtype == fromtype)
                             bitcast totype value
             set-type-symbol! aqualifier (quote apply-type)
                 fn new-typed-qualifier (element-type)
@@ -1439,7 +1418,7 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote qualify)
         fn qualify (qualifier-type value)
             assert
-                qualifier-type <? Qualifier
+                qualifier-type <: Qualifier
                 error
                     .. "qualifier type expected, got "
                         repr qualifier-type
@@ -1450,12 +1429,12 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote disqualify)
         fn disqualify (qualifier-type value)
             assert
-                qualifier-type <? Qualifier
+                qualifier-type <: Qualifier
                 error
                     .. "qualifier type expected, got "
                         repr qualifier-type
             let t = (typeof value)
-            if (not (t <? qualifier-type))
+            if (not (t <: qualifier-type))
                 error
                     .. "can not unqualify value of type " (string t)
                         \ "; type not related to " (string qualifier-type) "."
@@ -1467,7 +1446,7 @@ syntax-extend
 syntax-extend
 
     fn iterator? (x)
-        (typeof x) <? Iterator
+        (typeof x) <: Iterator
 
     # `start` is a private token passed to `next`, which is an iterator
       function of the format (next token) -> next-token value ... | none
@@ -1713,7 +1692,7 @@ syntax-extend
     fn =? (x)
         and
             symbol? (syntax->datum x)
-            ==? x (quote =)
+            == x (quote =)
 
     fn parse-loop-args (fullexpr)
         let expr =
@@ -1883,9 +1862,9 @@ syntax-extend
 syntax-extend
     fn paramdef-has-types? (expr)
         loop-for token in (syntax->datum expr)
-            if (token ==? (quote ,))
+            if (token == (quote ,))
                 break true
-            elseif (token ==? (quote :))
+            elseif (token == (quote :))
                 break true
             else
                 continue
@@ -1900,13 +1879,13 @@ syntax-extend
                     break
                 let k expr = (split expr)
                 let eq expr = (split expr)
-                if (eq !=? (quote :))
+                if (eq != (quote :))
                     syntax-error eq "type separator expected"
                 let v expr = (split expr)
                 yield k v
                 if (not (empty? expr))
                     let token expr = (split expr)
-                    if (token !=? (quote ,))
+                    if (token != (quote ,))
                         syntax-error token "comma separator expected"
                     continue expr
 
@@ -1943,7 +1922,7 @@ syntax-extend
                     syntax-error param-type-expr
                         .. "symbol expected, not value of type " (repr (typeof param-sym))
                 let param-type = (@ env param-sym)
-                if ((typeof param-type) !=? type)
+                if ((typeof param-type) != type)
                     syntax-error param-type-expr
                         .. "type expected, not value of type " (repr (typeof param-type))
                 append-param param-name param-type
@@ -2036,7 +2015,7 @@ define fn-types
                     .. param-name ": value of type " (string (typeof value...)) " failed predicate"
             else
                 let valuetype = (typeof value...)
-                assert (valuetype ==? atype)
+                assert (valuetype == atype)
                     .. param-name ": "
                         \ (string atype) " expected, not " (string valuetype)
     macro
@@ -2098,7 +2077,7 @@ syntax-extend
                                         not
                                             and
                                                 (countof entry) == (size_t 3)
-                                                (@ entry 1) ==? (quote =)
+                                                (@ entry 1) == (quote =)
                                         syntax-error entry "syntax: (scopeof (key = value) ...)"
                                     let key = (@ entry 0)
                                     let value = (slice entry 2)
@@ -2359,7 +2338,7 @@ set-type-symbol! tuple (quote apply-type)
         let etype =
             loop-for i elemtype in (enumerate etypes)
                 with (s = "{")
-                assert ((typeof elemtype) ==? type) "type expected"
+                assert ((typeof elemtype) == type) "type expected"
                 continue
                     .. s
                         ? (i == 0) "" " "
@@ -2507,7 +2486,7 @@ set-type-symbol! struct (quote apply-type)
                 fn struct-at (self at)
                     if (symbol? at)
                         loop-for i name in (enumerate (va-iter names...))
-                            if (name ==? at)
+                            if (name == at)
                                 break
                                     ttype.@ self i
                             else
@@ -2559,7 +2538,7 @@ syntax-extend
                                         not
                                             and
                                                 (countof entry) == (size_t 3)
-                                                (@ entry 1) ==? (quote =)
+                                                (@ entry 1) == (quote =)
                                         syntax-error entry "syntax: (structof (key = value) ...)"
                                     let key = (@ entry 0)
                                     let value = (slice entry 2)
