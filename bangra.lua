@@ -3556,32 +3556,8 @@ expand_fn_cc = function(env, topit, cont)
         if _value.type == Type.Parameter then
             return _value.value
         else
-            local bind = true
-            local param
-            local _type = Type.Any
-            if _value.type == Type.List then
-                value = _value.value
-                local type_anchor
-                _type,type_anchor = unsyntax(value.next.at)
-                if (_type.type == Type.Symbol) then
-                    _type = env:lookup(_type.value)
-                    if _type == null then
-                        set_active_anchor(type_anchor)
-                        location_error("could not resolve type")
-                    end
-                end
-                _type = unwrap(Type.Type, _type)
-                value = value.at
-                _value, anchor = unsyntax(value)
-            end
-            if _value.type == Type.String then
-                value = Any(Syntax(Any(Symbol(_value.value)), anchor))
-                bind = false
-            end
-            param = Parameter(value, _type)
-            if bind then
-                env:bind(value, Any(param))
-            end
+            local param = Parameter(value, Type.Any)
+            env:bind(value, Any(param))
             return param
         end
     end

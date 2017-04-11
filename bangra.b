@@ -1539,9 +1539,9 @@ syntax-extend
                     fn/cc (_)
                         # invoke callee with yield function as first argument
                         callee
-                            fn/cc (cont-callee value)
+                            fn/cc (cont-callee values...)
                                 # continue caller
-                                cc/call none caller-return cont-callee value
+                                cc/call none caller-return cont-callee values...
                         # callee has returned for good
                           resume caller - we're done here.
                         cc/call none caller-return
@@ -1890,6 +1890,35 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    fn paramdef-has-types? (expr)
+        loop-for token in (syntax->datum expr)
+            if (token ==? (quote ,))
+                break true
+            elseif (token ==? (quote :))
+                break true
+            else
+                continue
+        else false
+
+    fn tokenize-name-type-tuples (expr)
+        fn split (expr)
+            return (@ expr 0) (slice expr 1)
+        fn (yield)
+            loop (expr)
+                if (empty? expr)
+                    break
+                let k expr = (split expr)
+                let eq expr = (split expr)
+                if (eq !=? (quote :))
+                    syntax-error eq "type separator expected"
+                let v expr = (split expr)
+                yield k v
+                if (not (empty? expr))
+                    let token expr = (split expr)
+                    if (token !=? (quote ,))
+                        syntax-error token "comma separator expected"
+                    continue expr
+
     # extended function body macro expander that binds the function itself
       to `recur` and a list of all parameters to `parameters` for further
       macro processing.
@@ -1912,11 +1941,26 @@ syntax-extend
         let subenv = (Scope env)
         set-scope-symbol! subenv (quote recur) func
         set-scope-symbol! subenv (quote return) retparam
-        loop-for param-name in (syntax->datum paramdef)
-            let param = (Parameter param-name)
+        fn append-param (param-name param-type)
+            let param = (Parameter param-name param-type)
             set-scope-symbol! subenv (syntax->datum param-name) param
             flow-append-parameter! func param
-            continue
+        if (paramdef-has-types? paramdef)
+            loop-for param-name param-type-expr in (tokenize-name-type-tuples paramdef)
+                let param-sym = (syntax->datum param-type-expr)
+                if (not (symbol? param-sym))
+                    syntax-error param-type-expr
+                        .. "symbol expected, not value of type " (repr (typeof param-sym))
+                let param-type = (@ env param-sym)
+                if ((typeof param-type) !=? type)
+                    syntax-error param-type-expr
+                        .. "type expected, not value of type " (repr (typeof param-type))
+                append-param param-name param-type
+                continue
+        else
+            loop-for param-name in (syntax->datum paramdef)
+                append-param param-name Any
+                continue
         fn (rest)
             cons
                 @
