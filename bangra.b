@@ -273,7 +273,7 @@ syntax-extend
                                 syntax-list
                                     datum->syntax
                                         Symbol "form-quote"
-                                        syntax->anchor args
+                                        \ args
                                     syntax-quote
                                         # keep wrapped in list if multiple
                                             arguments
@@ -304,7 +304,7 @@ syntax-extend
                                         fn/cc (_) (_ args)
                                         fn/cc (_) (_ args)
                                         fn/cc (_) (_ args)
-                                    syntax->anchor args
+                                    \ args
                                 slice expr 1
                             \ syntax-scope
                     slice (@ expr 0) 1
@@ -545,7 +545,7 @@ syntax-extend
                                 cons
                                     syntax-list
                                         datum->syntax branch
-                                            syntax->anchor (@ expr 0)
+                                            @ expr 0
                                         @ (@ expr 0) 1
                                         syntax-cons
                                             datum->syntax fn/cc expr-anchor
@@ -564,12 +564,12 @@ syntax-extend
                             Parameter
                                 datum->syntax
                                     quote ret-true
-                                    syntax->anchor (@ expr 0)
+                                    @ expr 0
                         datum->syntax
                             Parameter
                                 datum->syntax
                                     quote ret-false
-                                    syntax->anchor (@ expr 0)
+                                    @ expr 0
                         syntax->anchor
                             @ expr 0
                     \ env
@@ -582,7 +582,7 @@ syntax-extend
                 call
                     fn/cc (_ subenv)
                         syntax-cons
-                            datum->syntax form-do (syntax->anchor expr)
+                            datum->syntax form-do expr
                             expand (slice expr 1) subenv
                     Scope env
     \ syntax-scope
@@ -613,50 +613,46 @@ syntax-extend
             return
                 ? (== (countof expr) (u64 1))
                     @ expr 0
-                    syntax-cons (datum->syntax do (syntax->anchor expr)) expr
+                    syntax-cons (datum->syntax do expr) expr
     # build a list terminator tagged with a desired anchor from an expression
     set-scope-symbol! syntax-scope (quote syntax-eol)
         fn/cc "syntax-eol" (return expr)
             return
-                datum->syntax (list) (syntax->anchor expr)
+                datum->syntax (list) expr
     \ syntax-scope
 
 syntax-extend
-    fn/cc qquote-1 (_ x)
+    fn/cc syntax-qquote-1 (_ x)
         ? (list-atom? x)
             syntax-list
-                datum->syntax quote-syntax
-                    syntax->anchor x
+                datum->syntax quote-syntax x
                 \ x
             ? (syntax-head? x (quote unquote))
                 syntax-do (slice x 1)
                 ? (syntax-head? x (quote qquote))
-                    qquote-1 (qquote-1 (@ x 1))
+                    syntax-qquote-1 (syntax-qquote-1 (@ x 1))
                     ? (list-atom? (@ x 0))
                         syntax-list
-                            datum->syntax syntax-cons
-                                syntax->anchor (@ x 0)
-                            qquote-1 (@ x 0)
-                            qquote-1 (slice x 1)
+                            datum->syntax syntax-cons (@ x 0)
+                            syntax-qquote-1 (@ x 0)
+                            syntax-qquote-1 (slice x 1)
                         ? (syntax-head? (@ x 0) (quote unquote-splice))
                             syntax-list
-                                datum->syntax (do ..)
-                                    syntax->anchor (@ x 0)
+                                datum->syntax (do ..) (@ x 0)
                                 syntax-do (slice (@ x 0) 1)
-                                qquote-1 (slice x 1)
+                                syntax-qquote-1 (slice x 1)
                             syntax-list
-                                datum->syntax syntax-cons
-                                    syntax->anchor (@ x 0)
-                                qquote-1 (@ x 0)
-                                qquote-1 (slice x 1)
+                                datum->syntax syntax-cons (@ x 0)
+                                syntax-qquote-1 (@ x 0)
+                                syntax-qquote-1 (slice x 1)
     # quasiquote support
       (qquote expr [...])
-    set-scope-symbol! syntax-scope (quote qquote)
+    set-scope-symbol! syntax-scope (quote qquote-syntax)
         macro
             fn/cc "expand-qquote" (_ expr)
                 ? (empty? (slice expr 2))
-                    qquote-1 (@ expr 1)
-                    qquote-1 (slice expr 1)
+                    syntax-qquote-1 (@ expr 1)
+                    syntax-qquote-1 (slice expr 1)
     \ syntax-scope
 
 syntax-extend
@@ -664,7 +660,7 @@ syntax-extend
         block-macro
             fn/cc "expand-define" (return topexpr env)
                 cons
-                    qquote
+                    qquote-syntax
                         syntax-extend
                             set-scope-symbol! syntax-scope
                                 quote
@@ -693,15 +689,14 @@ define let
                 call
                     fn/cc (_ cont-param param-name rest)
                         list
-                            qquote
+                            qquote-syntax
                                 ;
                                     fn/cc
                                         ;
                                             unquote cont-param
                                             unquote param-name
                                         unquote-splice
-                                            datum->syntax rest
-                                                syntax->anchor (@ expr 0)
+                                            datum->syntax rest (@ expr 0)
                                     unquote
                                         syntax-do
                                             slice (@ expr 0) 3
@@ -767,7 +762,7 @@ define try
                 error "except block missing"
                 \ true
             cons
-                qquote
+                qquote-syntax
                     xpcall
                         fn ()
                             unquote-splice
@@ -790,7 +785,7 @@ define _
 define assert
     macro
         fn assert (expr)
-            qquote
+            qquote-syntax
                 ? (unquote (@ expr 1))
                     \ true
                     error
@@ -801,7 +796,7 @@ define assert
                                         string
                                             syntax->datum
                                                 @ expr 1
-                                    syntax->anchor expr
+                                    \ expr
                                 @ expr 2
                         unquote-splice
                             syntax-eol expr
@@ -846,7 +841,7 @@ define .
         fn . (expr)
             let key = (@ expr 2)
             ? (symbol? (syntax->datum key))
-                qquote
+                qquote-syntax
                     @ (unquote (@ expr 1))
                         unquote
                             syntax-quote key
@@ -861,7 +856,7 @@ define and
             let ret = (datum->syntax (Parameter (quote-syntax and-return)))
             let ret-true = (datum->syntax (Parameter (quote-syntax ret-true)))
             let ret-false = (datum->syntax (Parameter (quote-syntax ret-false)))
-            qquote
+            qquote-syntax
                 ;
                     fn/cc ((unquote ret) (unquote tmp))
                         branch (unquote tmp)
@@ -880,7 +875,7 @@ define or
             let ret = (datum->syntax (Parameter (quote-syntax or-return)))
             let ret-true = (datum->syntax (Parameter (quote-syntax ret-true)))
             let ret-false = (datum->syntax (Parameter (quote-syntax ret-false)))
-            qquote
+            qquote-syntax
                 ;
                     fn/cc ((unquote ret) (unquote tmp))
                         branch (unquote tmp)
@@ -903,7 +898,7 @@ define if
         fn make-branch (else-exprlist)
             let ret-then = (datum->syntax (Parameter (quote-syntax ret-then)))
             let ret-else = (datum->syntax (Parameter (quote-syntax ret-else)))
-            qquote
+            qquote-syntax
                 branch (unquote cond)
                     fn/cc ((unquote ret-then))
                         unquote-splice then-exprlist
@@ -979,7 +974,7 @@ syntax-extend
                             assert (=? (@ pair 1))
                                 "syntax: let (<name> = <expression>) ..."
                             cons
-                                qquote let
+                                qquote-syntax let
                                     unquote-splice pair
                                 handle-pairs
                                     slice pairs 1
@@ -990,17 +985,15 @@ syntax-extend
                             let cont-param =
                                 datum->syntax (Parameter (quote-syntax let-return))
                             list
-                                qquote
+                                qquote-syntax
                                     ;
                                         fn/cc
                                             ;
                                                 unquote cont-param
                                                 unquote-splice
-                                                    datum->syntax args
-                                                        syntax->anchor body
+                                                    datum->syntax args body
                                             unquote-splice
-                                                datum->syntax rest
-                                                    syntax->anchor expr
+                                                datum->syntax rest expr
                                         unquote-splice init
                                         # force enclosing list to use anchor
                                           of original expression
@@ -1018,7 +1011,7 @@ define loop
                 quote-syntax continue
             let param-break =
                 quote-syntax break
-            qquote
+            qquote-syntax
                 do
                     fn/cc (unquote param-continue) (
                         (unquote param-break)
@@ -1157,7 +1150,7 @@ syntax-extend
             continue
                 datum->syntax
                     list op-name lhs next-rhs
-                    syntax->anchor la
+                    \ la
                 \ next-state
 
     let bangra =
@@ -1226,8 +1219,7 @@ syntax-extend
         macro
             fn (expr)
                 let wrapped-op =
-                    datum->syntax op
-                        syntax->anchor expr
+                    datum->syntax op expr
                 let tail =
                     slice expr 1
                 loop (tail)
@@ -1289,7 +1281,7 @@ syntax-extend
                     datum->syntax
                         Symbol
                             slice headstr 1
-                        syntax->anchor head
+                        \ head
                 let self-arg =
                     @ expr 1
                 let rest =
@@ -1298,9 +1290,9 @@ syntax-extend
                     Parameter
                         quote-syntax self
                 cons
-                    qquote
+                    qquote-syntax
                         unquote
-                            datum->syntax selfcall (syntax->anchor expr)
+                            datum->syntax selfcall expr
                         unquote self-arg
                         quote
                             unquote name
@@ -1777,7 +1769,7 @@ syntax-extend
                     quote-syntax break
                 let args names =
                     parse-loop-args (@ expr 1)
-                qquote
+                qquote-syntax
                     do
                         fn/cc (unquote param-continue) (
                             (unquote param-break)
@@ -1836,14 +1828,13 @@ syntax-extend
                     let param-state =
                         datum->syntax (Parameter (quote-syntax state))
                     let param-for =
-                        datum->syntax (Symbol "#loop-for")
-                            syntax->anchor expr
+                        datum->syntax (Symbol "#loop-for") expr
                     let param-at =
                         datum->syntax (Parameter (quote-syntax at...))
                     let param-next =
                         datum->syntax (Parameter (quote-syntax next))
                     cons
-                        qquote
+                        qquote-syntax
                             do
                                 fn/cc (unquote param-for) (
                                     (unquote param-ret)
@@ -2051,7 +2042,7 @@ define fn-types
     macro
         fn (expr env)
             let assert-type-fn =
-                datum->syntax assert-type (syntax->anchor expr)
+                datum->syntax assert-type expr
             syntax-do
                 loop-for i param expected-type-arg in
                     enumerate
@@ -2067,7 +2058,7 @@ define fn-types
                         continue
                     else
                         syntax-cons
-                            qquote
+                            qquote-syntax
                                 (unquote assert-type-fn)
                                     unquote
                                         datum->syntax param-label
@@ -2098,9 +2089,9 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote scopeof)
         macro
             fn expand-scopeof (expr env)
-                qquote
+                qquote-syntax
                     call
-                        (unquote (datum->syntax build-scope (syntax->anchor expr)))
+                        (unquote (datum->syntax build-scope expr))
                             unquote-splice
                                 loop-for entry in (syntax->datum (slice expr 1))
                                     if
@@ -2112,7 +2103,7 @@ syntax-extend
                                     let key = (@ entry 0)
                                     let value = (slice entry 2)
                                     syntax-cons
-                                        qquote
+                                        qquote-syntax
                                             quote
                                                 unquote key
                                         continue
@@ -2559,9 +2550,9 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote structof)
         macro
             fn expand-structof (expr env)
-                qquote
+                qquote-syntax
                     call
-                        (unquote (datum->syntax build-struct (syntax->anchor expr)))
+                        (unquote (datum->syntax build-struct expr))
                             unquote-splice
                                 loop-for entry in (syntax->datum (slice expr 1))
                                     if
@@ -2573,7 +2564,7 @@ syntax-extend
                                     let key = (@ entry 0)
                                     let value = (slice entry 2)
                                     syntax-cons
-                                        qquote
+                                        qquote-syntax
                                             quote
                                                 unquote key
                                         continue
@@ -2636,7 +2627,7 @@ define read-eval-print-loop
         # appending this to an expression before evaluation captures the env
           table so it can be used for the next expression.
         let expression-suffix =
-            qquote
+            qquote-syntax
                 syntax-extend
                     ;
                         unquote

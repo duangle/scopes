@@ -2239,7 +2239,7 @@ local INDENT_SEP = "⁞"
 -- keywords and macros
 local KEYWORDS = set(split(
     "let true false fn xfn quote with ::* ::@ call escape do dump-syntax"
-        .. " syntax-extend if else elseif loop continue none assert qquote"
+        .. " syntax-extend if else elseif loop continue none assert qquote-syntax"
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax recur"
@@ -4511,6 +4511,8 @@ builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
                 .. repr(value.type)
                 .. " does not embed anchor, but no anchor was provided")
         end
+    elseif anchor.type == Type.Syntax then
+        anchor = anchor.value.anchor
     else
         anchor = unwrap(Type.Anchor, anchor)
     end
