@@ -1082,11 +1082,13 @@ syntax-extend
             \ none
 
     fn has-infix-ops (infix-table expr)
-        # any expression whose second argument matches an infix operator
-          is treated as an infix expression.
-        and
-            not (empty? (slice expr 2))
-            != (get-ifx-op infix-table (@ expr 1)) none
+        # any expression of which one odd argument matches an infix operator
+          has infix operations.
+        loop (expr)
+            if (< (countof expr) (u64 3)) false
+            elseif (none? (get-ifx-op infix-table (@ expr 1)))
+                continue (slice expr 1)
+            else true
 
     fn infix-op (infix-table token prec pred)
         let op =
@@ -1143,6 +1145,41 @@ syntax-extend
                     list op-name lhs next-rhs
                     \ la
                 \ next-state
+
+    # expand infix operators in impure list of arguments
+    fn parse-partial-infix-expr (infix-table expr)
+        fn split (x)
+            return (@ x 0) (slice x 1)
+        # Collect tokens in a sequence as long as every second token is
+          an infix operator.
+          When a sequence is complete and longer than 1, expand that sequence
+          as an infix expression list.
+          Lastly, expand the last ongoing sequence if it's longer than 1,
+          and only wrap in list if any previous sequences have been expanded.
+        let k = 0
+        loop (k expr)
+            if (< (countof expr) (u64 3)) expr
+            else
+                let infix-expr rest =
+                    loop (expr)
+                        let lhs expr1 = (split expr)
+                        let op expr2 = (split expr1)
+                        if (or (none? (get-ifx-op infix-table op))
+                            (empty? expr2))
+                            break (list lhs) expr1
+                        elseif (> (countof expr2) (u64 1))
+                            let result rest = (continue expr2)
+                            break (cons lhs (cons op result)) rest
+                        else
+                            break (list lhs op (@ expr2 0)) (slice expr2 1)
+                if (>= (countof infix-expr) (u64 3))
+                    let expanded-expr =
+                        parse-infix-expr infix-table (@ infix-expr 0) (slice infix-expr 1) 0
+                    if (and (empty? rest) (== k 0)) expanded-expr
+                    else
+                        syntax-cons expanded-expr (continue (+ k 1) rest)
+                else
+                    syntax-cons (@ infix-expr 0) (continue (+ k 1) rest)
 
     let bangra =
         Scope
@@ -1292,7 +1329,8 @@ syntax-extend
             # infix operator support
             elseif (has-infix-ops env expr)
                 cons
-                    parse-infix-expr env (@ expr 0) (slice expr 1) 0
+                    #parse-infix-expr env (@ expr 0) (slice expr 1) 0
+                    parse-partial-infix-expr env expr
                     slice topexpr 1
 
     set-scope-symbol! syntax-scope scope-symbol-wildcard-symbol
