@@ -1039,38 +1039,6 @@ define define-infix-op
             return rest env
 
 syntax-extend
-
-    fn fold (f init next it)
-        let val it =
-            next it
-        let out = init
-        loop (out val it)
-            if (none? it)
-                return out
-            else
-                continue
-                    f out val
-                    next it
-
-    fn iter (s)
-        let ls =
-            countof s
-        return
-            fn (i)
-                if (< i ls)
-                    return (@ s i) (+ i (u64 1))
-                else none
-            u64 0
-
-    fn iter-r (s)
-        return
-            fn (i)
-                if (> i (u64 0))
-                    let k = (- i (u64 1))
-                    return (@ s k) k
-                else none
-            countof s
-
     fn get-ifx-op (env op)
         let sym =
             syntax->datum op
@@ -1181,67 +1149,6 @@ syntax-extend
                 else
                     syntax-cons (@ infix-expr 0) (continue (+ k 1) rest)
 
-    let bangra =
-        Scope
-    set-scope-symbol! bangra (quote path)
-        list "./?.b"
-            .. interpreter-dir "/?.b"
-    set-scope-symbol! bangra (quote modules)
-        Scope
-    set-scope-symbol! syntax-scope (quote bangra) bangra
-
-    fn make-module-path (pattern name)
-        fold
-            fn (out val)
-                .. out
-                    ? (== val "?") name val
-            \ ""
-            iter pattern
-
-    fn find-module (name)
-        let name = (syntax->datum name)
-        assert (symbol? name) "module name must be symbol"
-        let content =
-            get-scope-symbol
-                get-scope-symbol bangra (quote modules)
-                \ name
-        if (none? content)
-            let namestr =
-                string name
-            let pattern =
-                get-scope-symbol bangra (quote path)
-            loop (pattern)
-                if (not (empty? pattern))
-                    let module-path =
-                        make-module-path
-                            @ pattern 0
-                            \ namestr
-                    let expr =
-                        list-load module-path
-                    if (not (none? expr))
-                        let eval-scope =
-                            Scope (globals)
-                        set-scope-symbol! eval-scope
-                            quote module-path
-                            \ module-path
-                        let fun =
-                            Closure
-                                eval expr eval-scope module-path
-                        let content =
-                            fun
-                        set-scope-symbol!
-                            get-scope-symbol bangra (quote modules)
-                            \ name content
-                        \ content
-                    else
-                        continue
-                            slice pattern 1
-                else
-                    error
-                        .. "module not found: " namestr
-        else content
-    set-scope-symbol! syntax-scope (quote require) find-module
-
     fn make-expand-multi-op-ltr (op)
         # (op a b c ...) -> (op (op (op a b) c) ...)
         macro
@@ -1289,6 +1196,62 @@ syntax-extend
     fn/cc selfcall (cont self name args...)
         (@ self name) self args...
 
+    fn has-dotted-symbols (env expr)
+        let expr = (syntax->datum expr)
+        loop (expr)
+            if (empty? expr)
+                break false
+            fn next ()
+                continue (slice expr 1)
+            let head = (syntax->datum (@ expr 0))
+            if (symbol? head)
+                if (none? (get-scope-symbol env head))
+                    let s = (string head)
+                    let sz = (countof s)
+                    let i = (size_t 0)
+                    loop (i)
+                        if (== i sz) (next)
+                        elseif (== (@ s i) ".") true
+                        else (continue (+ i (size_t 1)))
+                else (next)
+            else (next)
+
+    fn expand-dotted-symbols (env expr)
+        loop (expr)
+            if (empty? expr)
+                break expr
+            fn next ()
+                continue (slice expr 1)
+            let sxhead = (@ expr 0)
+            let head = (syntax->datum sxhead)
+            if (symbol? head)
+                if (none? (get-scope-symbol env head))
+                    let s = (string head)
+                    let sz = (countof s)
+                    let i = (size_t 0)
+                    loop (i)
+                        if (== i sz)
+                            syntax-cons sxhead (next)
+                        elseif (== (@ s i) ".")
+                            let dot = (datum->syntax (quote .) sxhead)
+                            fn head ()
+                                datum->syntax (Symbol (slice s 0 i)) sxhead
+                            fn rest ()
+                                syntax-cons
+                                    datum->syntax
+                                        Symbol (slice s (+ i (size_t 1)))
+                                        \ sxhead
+                                    next
+                            if (== i (size_t 0))
+                                syntax-cons dot (rest)
+                            elseif (== i (- sz (size_t 1)))
+                                syntax-cons (head) (syntax-cons dot (next))
+                            else
+                                syntax-cons (head) (syntax-cons dot (rest))
+                        else (continue (+ i (size_t 1)))
+                else (syntax-cons sxhead (next))
+            else (syntax-cons sxhead (next))
+
     set-scope-symbol! syntax-scope scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
             let expr =
@@ -1297,6 +1260,8 @@ syntax-extend
                 @ expr 0
             let headstr =
                 string head
+            fn finalize (expr)
+                cons expr (slice topexpr 1)
             # method call syntax
             if
                 and
@@ -1317,7 +1282,7 @@ syntax-extend
                 let self =
                     Parameter
                         quote-syntax self
-                cons
+                finalize
                     qquote-syntax
                         unquote
                             datum->syntax selfcall expr
@@ -1325,15 +1290,17 @@ syntax-extend
                         {quote}
                             unquote name
                         unquote-splice rest
-                    slice topexpr 1
+            # expand unbound symbols that contain dots
+            elseif (has-dotted-symbols env expr)
+                finalize
+                    expand-dotted-symbols env expr
             # infix operator support
             elseif (has-infix-ops env expr)
-                cons
+                finalize
                     #parse-infix-expr env (@ expr 0) (slice expr 1) 0
                     parse-partial-infix-expr env expr
-                    slice topexpr 1
 
-    set-scope-symbol! syntax-scope scope-symbol-wildcard-symbol
+    #set-scope-symbol! syntax-scope scope-symbol-wildcard-symbol
         fn expand-any-symbol (topexpr env)
             let sym =
                 @ topexpr 0
@@ -1349,8 +1316,7 @@ syntax-extend
                             @ out 0
                         \ sym-anchor
                     slice out 1
-            # return tokenized list if string contains a dot and it's not the
-              concat operator
+            # return tokenized list if string contains a dot
             if
                 and
                     none? (get-scope-symbol env sym)
@@ -2151,6 +2117,83 @@ syntax-extend
                                     continue
                             else
                                 syntax-eol expr
+    \ syntax-scope
+
+#-------------------------------------------------------------------------------
+# module loading
+#-------------------------------------------------------------------------------
+
+syntax-extend
+    let bangra =
+        Scope
+    set-scope-symbol! bangra (quote path)
+        list "./?.b"
+            .. interpreter-dir "/?.b"
+    set-scope-symbol! bangra (quote modules)
+        Scope
+    set-scope-symbol! syntax-scope (quote bangra) bangra
+
+    fn make-module-path (pattern name)
+        let sz = (countof pattern)
+        let i = (size_t 0)
+        loop (i)
+            if (i == sz)
+                break ""
+            let idx =
+                loop (i)
+                    if ((@ pattern i) == "?")
+                        break i
+                    elseif (i < sz)
+                        continue (i + (size_t 1))
+            if (none? idx)
+                slice pattern i
+            else
+                .. (slice pattern i idx) name
+                    continue (idx + (size_t 1))
+
+    fn find-module (name)
+        let name = (syntax->datum name)
+        assert (symbol? name) "module name must be symbol"
+        let content =
+            get-scope-symbol
+                get-scope-symbol bangra (quote modules)
+                \ name
+        if (none? content)
+            let namestr =
+                string name
+            let pattern =
+                get-scope-symbol bangra (quote path)
+            loop (pattern)
+                if (not (empty? pattern))
+                    let module-path =
+                        make-module-path
+                            @ pattern 0
+                            \ namestr
+                    let expr =
+                        list-load module-path
+                    if (not (none? expr))
+                        let eval-scope =
+                            Scope (globals)
+                        set-scope-symbol! eval-scope
+                            quote module-path
+                            \ module-path
+                        let fun =
+                            Closure
+                                eval expr eval-scope module-path
+                        let content =
+                            fun
+                        set-scope-symbol!
+                            get-scope-symbol bangra (quote modules)
+                            \ name content
+                        \ content
+                    else
+                        continue
+                            slice pattern 1
+                else
+                    error
+                        .. "module not found: " namestr
+        else content
+    set-scope-symbol! syntax-scope (quote require) find-module
     \ syntax-scope
 
 #-------------------------------------------------------------------------------
