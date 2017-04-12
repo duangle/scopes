@@ -562,12 +562,15 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote do)
         macro
             fn/cc "expand-do" (return expr env)
-                call
-                    fn/cc (_ subenv)
+                syntax-list
+                    syntax-cons
+                        datum->syntax fn/cc expr
                         syntax-cons
-                            datum->syntax form-do expr
-                            expand (slice expr 1) subenv
-                    Scope env
+                            syntax-list
+                                datum->syntax
+                                    Parameter
+                                        datum->syntax (quote _) expr
+                            slice expr 1
     \ syntax-scope
 
 syntax-extend
@@ -2124,13 +2127,11 @@ syntax-extend
 #-------------------------------------------------------------------------------
 
 syntax-extend
-    let bangra =
-        Scope
+    let bangra = (Scope)
     set-scope-symbol! bangra (quote path)
         list "./?.b"
             .. interpreter-dir "/?.b"
-    set-scope-symbol! bangra (quote modules)
-        Scope
+    set-scope-symbol! bangra (quote modules) (Scope)
     set-scope-symbol! syntax-scope (quote bangra) bangra
 
     fn make-module-path (pattern name)

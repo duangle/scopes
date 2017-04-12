@@ -2770,22 +2770,35 @@ local function assert_frame(x)
         error("expected frame, got " .. repr(x))
     end
 end
-do -- compact hashtables as much as one can where possible
+do
     local cls = Frame
     local uid = 1
     function cls:init(frame, flow, values)
         assert_flow(flow)
         assert_table(values)
-        if (frame == null) then
-            self.parent = null
-            self.index = 0
-        else
+        local parent = null
+        if (frame ~= null) then
             assert_frame(frame)
-            self.parent = frame
-            self.index = frame.index + 1
+            -- if this flow has already been bound before, all parent frames
+            -- up to this one are being shadowed by a new rebinding in scope,
+            -- so we can safely truncate
+            local earlier_frame = frame:find_frame(flow)
+            if earlier_frame then
+                frame = earlier_frame.parent
+            end
+            if frame ~= null then
+                parent = frame
+            end
         end
+        if parent then
+            self.index = parent.index + 1
+        else
+            self.index = 0
+        end
+        self.parent = parent
         -- flow -> {values}
-        self.map = { [flow] = values }
+        self.flow = flow
+        self.values = values
         self.uid = uid
         uid = uid + 1
     end
@@ -2795,17 +2808,23 @@ do -- compact hashtables as much as one can where possible
     function cls:__tostring()
         return self:repr(default_styler)
     end
-    function cls:get_bank(cont)
+    function cls:find_frame(cont)
         if cont then
             assert_flow(cont)
             -- parameter is bound - attempt resolve
-            local ptr = self
-            while ptr do
-                local values = ptr.map[cont]
-                if (values ~= null) then
-                    return values
+            while self do
+                if (cont == self.flow) then
+                    return self
                 end
-                ptr = ptr.parent
+                self = self.parent
+            end
+        end
+    end
+    function cls:get_bank(cont)
+        if cont then
+            self = self:find_frame(cont)
+            if self then
+                return self.values
             end
         end
     end
@@ -3053,26 +3072,24 @@ do
             writer(frame:repr(styler))
             writer(styler(Style.Operator, ":"))
             writer("\n")
-            for flow,values in pairs(frame.map) do
-                if true then --index == flow.index then
-                    writer("  ")
-                    writer(flow:repr(styler))
-                    writer(styler(Style.Operator, " →"))
-                    for i,val in ipairs(values) do
-                        if val.type == Type.VarArgs then
-                            for _,k in ipairs(val.value) do
-                                writer(" ")
-                                writer(k:repr(styler))
-                                writer(styler(Style.Keyword, "…"))
-                            end
-                        else
-                            writer(" ")
-                            writer(val:repr(styler))
-                        end
+            local flow = frame.flow
+            local values = frame.values
+            writer("  ")
+            writer(flow:repr(styler))
+            writer(styler(Style.Operator, " →"))
+            for i,val in ipairs(values) do
+                if val.type == Type.VarArgs then
+                    for _,k in ipairs(val.value) do
+                        writer(" ")
+                        writer(k:repr(styler))
+                        writer(styler(Style.Keyword, "…"))
                     end
-                    writer("\n")
+                else
+                    writer(" ")
+                    writer(val:repr(styler))
                 end
             end
+            writer("\n")
         end
 
         walk(frame)
@@ -3963,15 +3980,6 @@ local function translate_expr_list(state, it, cont, anchor)
     end
 end
 
-local function translate_do(state, it, cont)
-    assert_function(cont)
-    local anchor
-    it, anchor = unsyntax(it)
-    it = unwrap(Type.List, it)
-    it = it.next
-    return translate_expr_list(state, it, cont, anchor)
-end
-
 local function translate_quote(state, it, cont)
     assert_function(cont)
     local anchor
@@ -4175,7 +4183,6 @@ end
 builtins.call = Form(translate_call, Symbol("call"))
 builtins["cc/call"] = Form(translate_contcall, Symbol("cc/call"))
 builtins[Symbol.FnCCForm] = Form(translate_fn_body, Symbol("fn-body"))
-builtins[Symbol.DoForm] = Form(translate_do, Symbol("do"))
 builtins[Symbol.QuoteForm] = Form(translate_quote, Symbol("quote"))
 
 end -- do
