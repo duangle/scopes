@@ -493,7 +493,7 @@ syntax-extend
         quote empty?
         fn/cc "empty?" (return x)
             return
-                not (> (countof x) (u64 0))
+                not (> (countof x) (size_t 0))
     set-scope-symbol! syntax-scope
         quote load
         fn/cc "load" (return path)
@@ -597,7 +597,7 @@ syntax-extend
     set-scope-symbol! syntax-scope (quote syntax-do)
         fn/cc "syntax-do" (return expr)
             return
-                ? (== (countof expr) (u64 1))
+                ? (== (countof expr) (size_t 1))
                     @ expr 0
                     syntax-cons (datum->syntax do expr) expr
     # build a list terminator tagged with a desired anchor from an expression
@@ -882,48 +882,48 @@ define or
                         syntax-eol expr
 
 define if
-    fn if-rec (topexpr)
-        let expr =
-            @ topexpr 0
-        let cond =
-            @ expr 1
-        let then-exprlist =
-            slice expr 2
-        fn make-branch (else-exprlist)
-            let ret-then = (datum->syntax (Parameter (quote-syntax ret-then)))
-            let ret-else = (datum->syntax (Parameter (quote-syntax ret-else)))
-            qquote-syntax
-                {branch} (unquote cond)
-                    {fn/cc} ((unquote ret-then))
-                        unquote-splice then-exprlist
-                    {fn/cc} ((unquote ret-else))
-                        unquote-splice else-exprlist
-                    unquote-splice
-                        syntax-eol expr
-        let rest-expr =
-            slice topexpr 1
-        let next-expr =
-            ? (empty? rest-expr)
-                \ rest-expr
-                @ rest-expr 0
-        ? (syntax-head? next-expr (quote elseif))
-            do
-                let nextif =
-                    if-rec rest-expr
-                cons
-                    make-branch
-                        syntax-list (@ nextif 0)
-                    slice nextif 1
-            ? (syntax-head? next-expr (quote else))
-                cons
-                    make-branch
-                        slice next-expr 1
-                    slice topexpr 2
-                cons
-                    make-branch
-                        syntax-eol expr
+    block-macro
+        fn if-rec (topexpr env)
+            let expr =
+                @ topexpr 0
+            let cond =
+                @ expr 1
+            let then-exprlist =
+                slice expr 2
+            fn make-branch (else-exprlist)
+                let ret-then = (datum->syntax (Parameter (quote-syntax ret-then)))
+                let ret-else = (datum->syntax (Parameter (quote-syntax ret-else)))
+                qquote-syntax
+                    {branch} (unquote cond)
+                        {fn/cc} ((unquote ret-then))
+                            unquote-splice then-exprlist
+                        {fn/cc} ((unquote ret-else))
+                            unquote-splice else-exprlist
+                        unquote-splice
+                            syntax-eol expr
+            let rest-expr =
+                slice topexpr 1
+            let next-expr =
+                ? (empty? rest-expr)
                     \ rest-expr
-    block-macro if-rec
+                    @ rest-expr 0
+            ? (syntax-head? next-expr (quote elseif))
+                do
+                    let nextif =
+                        if-rec rest-expr env
+                    cons
+                        make-branch
+                            syntax-list (@ nextif 0)
+                        slice nextif 1
+                ? (syntax-head? next-expr (quote else))
+                    cons
+                        make-branch
+                            slice next-expr 1
+                        slice topexpr 2
+                    cons
+                        make-branch
+                            syntax-eol expr
+                        \ rest-expr
 
 syntax-extend
     fn =? (x)
@@ -1056,7 +1056,7 @@ syntax-extend
         # any expression of which one odd argument matches an infix operator
           has infix operations.
         loop (expr)
-            if (< (countof expr) (u64 3)) false
+            if (< (countof expr) (size_t 3)) false
             elseif (none? (get-ifx-op infix-table (@ expr 1)))
                 continue (slice expr 1)
             else true
@@ -1129,7 +1129,7 @@ syntax-extend
           and only wrap in list if any previous sequences have been expanded.
         let k = 0
         loop (k expr)
-            if (< (countof expr) (u64 3)) expr
+            if (< (countof expr) (size_t 3)) expr
             else
                 let infix-expr rest =
                     loop (expr)
@@ -1138,12 +1138,12 @@ syntax-extend
                         if (or (none? (get-ifx-op infix-table op))
                             (empty? expr2))
                             break (list lhs) expr1
-                        elseif (> (countof expr2) (u64 1))
+                        elseif (> (countof expr2) (size_t 1))
                             let result rest = (continue expr2)
                             break (cons lhs (cons op result)) rest
                         else
                             break (list lhs op (@ expr2 0)) (slice expr2 1)
-                if (>= (countof infix-expr) (u64 3))
+                if (>= (countof infix-expr) (size_t 3))
                     let expanded-expr =
                         parse-infix-expr infix-table (@ infix-expr 0) (slice infix-expr 1) 0
                     if (and (empty? rest) (== k 0)) expanded-expr
@@ -1733,7 +1733,7 @@ syntax-extend
                     assert
                         and
                             list? nelem
-                            (countof nelem) >= (u64 3)
+                            (countof nelem) >= (size_t 3)
                             =? (@ nelem 1)
                         syntax-error elem "illegal initializer"
                     break

@@ -2761,7 +2761,7 @@ do
     end
 end
 
-local Frame = class("Frame")
+local Frame = {}
 MT_TYPE_MAP[Frame] = Type.Frame
 local function assert_frame(x)
     if getmetatable(x) == Frame then
@@ -2772,36 +2772,48 @@ local function assert_frame(x)
 end
 do
     local cls = Frame
+    cls.__index = cls
     local uid = 1
-    function cls:init(frame, flow, values)
-        assert_flow(flow)
-        assert_table(values)
-        local parent = null
-        if (frame ~= null) then
-            assert_frame(frame)
-            -- if this flow has already been bound before, all parent frames
-            -- up to this one are being shadowed by a new rebinding in scope,
-            -- so we can safely truncate
-            local earlier_frame = frame:find_frame(flow)
-            if earlier_frame then
-                frame = earlier_frame.parent
+    setmetatable(Frame, {
+        __call =
+            function (cls, frame, flow, values)
+                assert_flow(flow)
+                assert_table(values)
+                if #flow.parameters == 1
+                    and flow.parameters[1].type == Type.Nothing then
+                    -- nothing is bound, skip frame
+                    return frame
+                end
+                local parent = null
+                local self = setmetatable({}, cls)
+                if (frame ~= null) then
+                    assert_frame(frame)
+                    -- if this flow has already been bound before, all parent frames
+                    -- up to this one are being shadowed by a new rebinding in scope,
+                    -- so we can safely truncate
+                    local earlier_frame = frame:find_frame(flow)
+                    if earlier_frame then
+                        frame = earlier_frame.parent
+                    end
+                    if frame ~= null then
+                        parent = frame
+                    end
+                end
+                if parent then
+                    self.index = parent.index + 1
+                else
+                    self.index = 0
+                end
+                self.anchor = flow.body_anchor or flow.anchor or get_active_anchor()
+                self.parent = parent
+                -- flow -> {values}
+                self.flow = flow
+                self.values = values
+                self.uid = uid
+                uid = uid + 1
+                return self
             end
-            if frame ~= null then
-                parent = frame
-            end
-        end
-        if parent then
-            self.index = parent.index + 1
-        else
-            self.index = 0
-        end
-        self.parent = parent
-        -- flow -> {values}
-        self.flow = flow
-        self.values = values
-        self.uid = uid
-        uid = uid + 1
-    end
+    })
     function cls:repr(styler)
         return format("0x%08x#%i", self.uid, self.index)
     end
@@ -3069,11 +3081,16 @@ do
             if frame.parent then
                 walk(frame.parent)
             end
-            writer(frame:repr(styler))
-            writer(styler(Style.Operator, ":"))
-            writer("\n")
             local flow = frame.flow
             local values = frame.values
+            local anchor = frame.anchor
+            if anchor then
+                writer(anchor:repr(styler))
+                writer(styler(Style.Comment, ":"))
+                writer(" ")
+            end
+            writer(frame:repr(styler))
+            writer("\n")
             writer("  ")
             writer(flow:repr(styler))
             writer(styler(Style.Operator, " →"))
@@ -5334,6 +5351,10 @@ builtins["dump-frame"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     stream_frame(stdout_writer, unwrap(Type.Frame, value))
 end)
+
+builtins["active-frame"] = function(frame, cont, self)
+    return call(frame, none, cont, Any(frame))
+end
 
 builtins.repr = wrap_simple_builtin(function(value, styler)
     checkargs(1,2,value, styler)
