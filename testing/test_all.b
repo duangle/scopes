@@ -9,6 +9,7 @@ let
     modules =
         quote (
             test_assorted
+            test_dots
             test_iterator
             test_let
             test_loop

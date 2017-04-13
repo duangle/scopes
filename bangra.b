@@ -965,8 +965,8 @@ syntax-extend
                         else
                             let pair =
                                 @ pairs 0
-                            assert (=? (@ pair 1))
-                                "syntax: let (<name> = <expression>) ..."
+                            if (not (=? (@ pair 1)))
+                                syntax-error (@ pair 1) "syntax: let (<name> = <expression>) ..."
                             cons
                                 qquote-syntax let
                                     unquote-splice pair
@@ -1031,9 +1031,9 @@ define define-infix-op
                 syntax->datum (@ expr 1)
             let prec =
                 syntax->datum (@ expr 2)
+            let dest-name = (@ expr 3)
             let order =
-                syntax->datum (@ expr 3)
-            let dest-name = (@ expr 4)
+                syntax->datum (@ expr 4)
             let infix-symbol =
                 Symbol
                     .. "#ifx:" (string name)
@@ -1052,7 +1052,7 @@ syntax-extend
                     .. "#ifx:" (string sym)
             \ none
 
-    fn has-infix-ops (infix-table expr)
+    fn has-infix-ops? (infix-table expr)
         # any expression of which one odd argument matches an infix operator
           has infix operations.
         loop (expr)
@@ -1199,7 +1199,18 @@ syntax-extend
     fn/cc selfcall (cont self name args...)
         (@ self name) self args...
 
-    fn has-dotted-symbols (env expr)
+    fn dotted-symbol? (env head)
+        if (none? (get-scope-symbol env head))
+            let s = (string head)
+            let sz = (countof s)
+            let i = (size_t 0)
+            loop (i)
+                if (== i sz) false
+                elseif (== (@ s i) ".") true
+                else (continue (+ i (size_t 1)))
+        else false
+
+    fn has-dotted-symbols? (env expr)
         let expr = (syntax->datum expr)
         loop (expr)
             if (empty? expr)
@@ -1208,14 +1219,7 @@ syntax-extend
                 continue (slice expr 1)
             let head = (syntax->datum (@ expr 0))
             if (symbol? head)
-                if (none? (get-scope-symbol env head))
-                    let s = (string head)
-                    let sz = (countof s)
-                    let i = (size_t 0)
-                    loop (i)
-                        if (== i sz) (next)
-                        elseif (== (@ s i) ".") true
-                        else (continue (+ i (size_t 1)))
+                if (dotted-symbol? env head) true
                 else (next)
             else (next)
 
@@ -1254,6 +1258,102 @@ syntax-extend
                         else (continue (+ i (size_t 1)))
                 else (syntax-cons sxhead (next))
             else (syntax-cons sxhead (next))
+
+    fn named-argument-tuple? (entry)
+        and (list? entry)
+            and (== (countof entry) (size_t 3))
+                and (symbol? (syntax->datum (@ entry 0)))
+                    == (@ entry 1) (quote =)
+
+    fn has-named-arguments? (env expr)
+        let expr = (syntax->datum expr)
+        if (empty? expr)
+            return false
+        let head = (syntax->datum (@ expr 0))
+        let head =
+            ? (symbol? head)
+                get-scope-symbol env head
+                \ head
+        let no-named-arguments? = (!= (typeof head) Flow)
+        let expr = (slice expr 1)
+        loop (expr)
+            if (empty? expr)
+                break false
+            let entry = (@ expr 0)
+            if (named-argument-tuple? (syntax->datum entry))
+                if no-named-arguments?
+                    syntax-error entry "invalid use of named arguments"
+                # rest must also be named
+                let expr = (slice expr 1)
+                loop (expr)
+                    if (empty? expr)
+                        break true
+                    let entry = (@ expr 0)
+                    if (not (named-argument-tuple? (syntax->datum entry)))
+                        syntax-error entry "named argument expected"
+                    continue (slice expr 1)
+            else
+                continue (slice expr 1)
+
+    fn expand-named-arguments (env expr)
+        let eol = (syntax-eol expr)
+        let expr = (syntax->datum expr)
+        let sxhead = (@ expr 0)
+        let head = (syntax->datum sxhead)
+        let head =
+            ? (symbol? head)
+                get-scope-symbol env head
+                \ head
+        let expr = (slice expr 1)
+        let params... = (flow-parameters head)
+        let pcount = (int (va-countof params...))
+
+        let idx = 1
+        syntax-cons
+            datum->syntax head sxhead
+            loop (idx expr)
+                if (empty? expr) expr
+                let sxentry = (@ expr 0)
+                let entry = (syntax->datum sxentry)
+                if (named-argument-tuple? entry)
+                    # create a mapping
+                    let map = (Scope)
+                    loop (expr)
+                        if (empty? expr)
+                            break
+                        let sxentry = (@ expr 0)
+                        let entry = (syntax->datum sxentry)
+                        let sxkey = (@ entry 0)
+                        let sxvalue = (@ entry 2)
+                        let key = (syntax->datum sxkey)
+                        if (none? (get-scope-symbol map key))
+                            set-scope-symbol! map key
+                                fn () (return sxkey sxvalue)
+                            continue (slice expr 1)
+                        else
+                            syntax-error sxentry "duplicate definition for named parameter"
+                    # map remaining parameters
+                    loop (idx)
+                        let param = (va@ idx params...)
+                        if (none? param)
+                            # complain about unused scope entries
+                            let key value = (next-scope-symbol map none)
+                            if (none? key)
+                                break eol
+                            else
+                                syntax-error (value) "no such named parameter"
+                        let param-name = (parameter-name param)
+                        let sxvalue = (get-scope-symbol map param-name)
+                        del-scope-symbol! map param-name
+                        syntax-cons
+                            ? (none? sxvalue)
+                                datum->syntax none eol
+                                va@ 1 (sxvalue)
+                            continue (+ idx 1)
+                else
+                    # regular argument
+                    syntax-cons sxentry
+                        continue (+ idx 1) (slice expr 1)
 
     set-scope-symbol! syntax-scope scope-list-wildcard-symbol
         fn expand-any-list (topexpr env)
@@ -1294,14 +1394,18 @@ syntax-extend
                             unquote name
                         unquote-splice rest
             # expand unbound symbols that contain dots
-            elseif (has-dotted-symbols env expr)
+            elseif (has-dotted-symbols? env expr)
                 finalize
                     expand-dotted-symbols env expr
             # infix operator support
-            elseif (has-infix-ops env expr)
+            elseif (has-infix-ops? env expr)
                 finalize
                     #parse-infix-expr env (@ expr 0) (slice expr 1) 0
                     parse-partial-infix-expr env expr
+            # named arguments
+            elseif (has-named-arguments? env expr)
+                finalize
+                    expand-named-arguments env expr
 
     #set-scope-symbol! syntax-scope scope-symbol-wildcard-symbol
         fn expand-any-symbol (topexpr env)
@@ -1353,39 +1457,39 @@ syntax-extend
                     slice topexpr 1
     \ syntax-scope
 
-#define-infix-op : 70 > :
-define-infix-op or 100 > or
-define-infix-op and 200 > and
-define-infix-op | 240 > |
-define-infix-op ^ 250 > ^
-define-infix-op & 260 > &
+#define-infix-op : 70 : >
+define-infix-op or 100 or >
+define-infix-op and 200 and >
+define-infix-op | 240 | >
+define-infix-op ^ 250 ^ >
+define-infix-op & 260 & >
 
-define-infix-op < 300 > <
+define-infix-op < 300 < >
 define-infix-op > 300 > >
-define-infix-op <= 300 > <=
-define-infix-op >= 300 > >=
-define-infix-op != 300 > !=
-define-infix-op == 300 > ==
+define-infix-op <= 300 <= >
+define-infix-op >= 300 >= >
+define-infix-op != 300 != >
+define-infix-op == 300 == >
 
-define-infix-op <: 300 > <:
-define-infix-op <> 300 > <>
+define-infix-op <: 300 <: >
+define-infix-op <> 300 <> >
 
-#define-infix-op is 300 > is
-define-infix-op .. 400 < ..
-define-infix-op << 450 > <<
-define-infix-op >> 450 > >>
-define-infix-op - 500 > -
-define-infix-op + 500 > +
-define-infix-op % 600 > %
-define-infix-op / 600 > /
-#define-infix-op // 600 > //
-define-infix-op * 600 > *
-define-infix-op ** 700 < **
-define-infix-op . 800 > .
-define-infix-op @ 800 > @
-#define-infix-op .= 800 > .=
-#define-infix-op @= 800 > @=
-#define-infix-op =@ 800 > =@
+#define-infix-op is 300 is >
+define-infix-op .. 400 .. <
+define-infix-op << 450 << >
+define-infix-op >> 450 >> >
+define-infix-op - 500 - >
+define-infix-op + 500 + >
+define-infix-op % 600 % >
+define-infix-op / 600 / >
+#define-infix-op // 600 // >
+define-infix-op * 600 * >
+define-infix-op ** 700 ** <
+define-infix-op . 800 . >
+define-infix-op @ 800 @ >
+#define-infix-op .= 800 .= >
+#define-infix-op @= 800 @= >
+#define-infix-op =@ 800 =@ >
 
 syntax-extend
     let Qualifier =
@@ -2476,8 +2580,8 @@ set-type-symbol! tuple (quote apply-type)
                         .. (string (int count)) " elements expected, got "
                             string (int argcount)
                     loop-for i arg in (enumerate (va-iter args...))
-                        let offset = (va-arg i offsets...)
-                        let elemtype = (va-arg i element-types...)
+                        let offset = (va@ i offsets...)
+                        let elemtype = (va@ i element-types...)
                         assert ((typeof arg) == elemtype)
                             .. "type " (string elemtype) " expected, got "
                                 string (typeof arg)
@@ -2487,8 +2591,8 @@ set-type-symbol! tuple (quote apply-type)
                 set-type-symbol! etype (quote @)
                     fn tuple-at (self at)
                         fn-types none integer?
-                        let offset = (va-arg at offsets...)
-                        let elemtype = (va-arg at element-types...)
+                        let offset = (va@ at offsets...)
+                        let elemtype = (va@ at element-types...)
                         extract-memory elemtype self offset
                 set-type-symbol! etype (quote countof)
                     fn tuple-countof (self) count
@@ -2496,7 +2600,7 @@ set-type-symbol! tuple (quote apply-type)
                     fn vector-type-at (self i0 i1)
                         fn-types none size_t size_t
                         let num = (i1 - i0)
-                        let offset = (va-arg i0 offsets...)
+                        let offset = (va@ i0 offsets...)
                         let sliced-types... =
                             loop-for i elemtype in (enumerate etypes (size_t 0))
                                 if (i >= i1)
@@ -2763,7 +2867,7 @@ define read-eval-print-loop
                         if (not (none? result...))
                             loop-for i in (range (va-countof result...))
                                 let idstr = (make-idstr)
-                                let value = (va-arg i result...)
+                                let value = (va@ i result...)
                                 print
                                     .. idstr "= "
                                         repr value default-styler
@@ -2817,11 +2921,11 @@ fn run-main (args...)
     loop
         with
             i = 1
-        let arg = (va-arg i args...)
+        let arg = (va@ i args...)
         if (not (none? arg))
             if (parse-options and ((@ arg 0) == "-"))
                 if (arg == "--help" or arg == "-h")
-                    print-help (va-arg 0 args...)
+                    print-help (va@ 0 args...)
                 elseif (arg == "--version" or arg == "-v")
                     print-version
                 elseif (arg == "--")

@@ -378,9 +378,9 @@ fn test-varargs (x y ...)
         (va-countof ...) == (u64 3)
     assert
         and
-            (va-arg 0 ...) == 3
-            (va-arg 1 ...) == 4
-            (va-arg 2 ...) == 5
+            (va@ 0 ...) == 3
+            (va@ 1 ...) == 4
+            (va@ 2 ...) == 5
     list 1 2 ...
 assert
     ==
@@ -448,9 +448,9 @@ do
         and
             start == "("
             end == ")"
-            (va-arg 0 center...) == 1
-            (va-arg 1 center...) == 2
-            (va-arg 2 center...) == 3
+            (va@ 0 center...) == 1
+            (va@ 1 center...) == 2
+            (va@ 2 center...) == 3
 
     let x y z = 1 2 3
     print "HALLO" x y z

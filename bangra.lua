@@ -1175,6 +1175,10 @@ do
         assert_any(value)
         self.symbols[name] = { sxname, value }
     end
+    function cls:del(sxname)
+        local name = unwrap(Type.Symbol, maybe_unsyntax(sxname))
+        self.symbols[name] = nil
+    end
     function cls:lookup(name)
         assert_symbol(name)
         local entry = self.symbols[name]
@@ -2252,7 +2256,7 @@ local FUNCTIONS = set(split(
         .. " macro block-macro block-scope-macro cons expand empty? type?"
         .. " dump syntax-head? countof slice none? list-atom?"
         .. " list-load list-parse load require cstr exit hash min max"
-        .. " va-arg va-countof range zip enumerate cast element-type"
+        .. " va@ va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
         .. " get-exception-handler xpcall error sizeof alignof prompt null?"
         .. " extern-library arrayof get-scope-symbol syntax-cons vectorof"
@@ -2280,7 +2284,7 @@ local TYPES = set(split(
         .. " r16 r32 r64 half float double Symbol list Parameter"
         .. " Frame Closure Flow Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
-        .. " Iterator type size_t usize_t ssize_t void* Callable Boxed"
+        .. " Iterator type size_t usize_t ssize_t void* Callable Boxed Any"
     ))
 
 StreamValueFormat = function(naked, depth, opts)
@@ -5268,6 +5272,12 @@ builtins["set-scope-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     atable:bind(key, value)
 end)
 
+builtins["del-scope-symbol!"] = wrap_simple_builtin(function(dest, key)
+    checkargs(2,2, dest, key)
+    local atable = unwrap(Type.Scope, dest)
+    atable:del(key)
+end)
+
 builtins["set-type-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     checkargs(3,3, dest, key, value)
     local atable = unwrap(Type.Type, dest)
@@ -5320,7 +5330,7 @@ builtins["copy-memory!"] = wrap_simple_builtin(
 -- varargs
 --------------------------------------------------------------------------------
 
-builtins["va-arg"] = wrap_simple_builtin(function(index, ...)
+builtins["va@"] = wrap_simple_builtin(function(index, ...)
     return select(tonumber(unwrap_integer(index)) + 1, ...)
 end)
 
