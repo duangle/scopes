@@ -2671,7 +2671,7 @@ local ARG_Arg0 = 3
 local PARAM_Cont = 1
 local PARAM_Arg0 = 2
 
-local Flow = class("Flow")
+local Flow = {}
 MT_TYPE_MAP[Flow] = Type.Flow
 local function assert_flow(x)
     if getmetatable(x) == Flow then
@@ -2682,19 +2682,24 @@ local function assert_flow(x)
 end
 do
     local cls = Flow
+    cls.__index = cls
     local unique_id_counter = 1
 
-    function cls:init(name)
-        local name,anchor = unsyntax(name)
-        name = unwrap(Type.Symbol, name)
-        assert_symbol(name)
-        self.uid = unique_id_counter
-        unique_id_counter = unique_id_counter + 1
-        self.parameters = {}
-        self.arguments = {}
-        self.name = name
-        self.anchor = anchor
-    end
+    setmetatable(cls, {
+        __call = function(cls, name)
+                local self = setmetatable({}, cls)
+                local name,anchor = unsyntax(name)
+                name = unwrap(Type.Symbol, name)
+                assert_symbol(name)
+                self.uid = unique_id_counter
+                unique_id_counter = unique_id_counter + 1
+                self.parameters = {}
+                self.arguments = {}
+                self.name = name
+                self.anchor = anchor
+                return self
+            end
+    })
 
     function cls:set_body_anchor(anchor)
         assert_anchor(anchor)
@@ -5168,6 +5173,18 @@ builtins["parameter-anchor"] = wrap_simple_builtin(function(param)
     if param.anchor then
         return Any(param.anchor)
     end
+end)
+
+builtins["parameter-flow"] = wrap_simple_builtin(function(param)
+    checkargs(1,1, param)
+    param = unwrap(Type.Parameter, param)
+    return Any(param.flow)
+end)
+
+builtins["parameter-index"] = wrap_simple_builtin(function(param)
+    checkargs(1,1, param)
+    param = unwrap(Type.Parameter, param)
+    return Any(int32_t(param.index))
 end)
 
 builtins["parameter-type"] = wrap_simple_builtin(function(param)
