@@ -2,7 +2,7 @@
 #### test #####
 
 fn pow2 (x)
-    * x x
+    i32* x x
 
 fn pow (x n)
     if (n == 0) 1
@@ -12,7 +12,8 @@ fn pow (x n)
 assert
     (pow 2 5) == 32
 
-fn/cc pow2-int (return : Closure, x : int)
+fn pow2-int (x : int)
     pow2 x
 
 dump-flow pow2-int
+

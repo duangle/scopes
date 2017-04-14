@@ -341,7 +341,7 @@ do
                     print "#" i k
                     continue (i + 1) (k .. "!")
                 else k
-        "loop failed"
+        \ "loop failed"
 
 assert
     == 2
@@ -351,7 +351,7 @@ assert
             \ q
         elseif (k == 2) 3
         else 4
-    "if-tree failed"
+    \ "if-tree failed"
 
 assert
     == 9

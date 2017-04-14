@@ -2903,7 +2903,7 @@ local CONT_SEP = " ⮕ "
 do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
-        local follow_closures = false
+        local follow_closures = true
         local follow_params = true
         if opts.follow_closures ~= null then
             follow_closures = opts.follow_closures
