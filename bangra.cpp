@@ -97,16 +97,6 @@ void bangra_strtof(float *v, const char *str, char **str_end );
 void bangra_strtoll(long long int *v, const char* str, char** endptr, int base);
 void bangra_strtoull(unsigned long long int *v, const char* str, char** endptr, int base);
 
-bool bangra_r32_eq(float a, float b);
-bool bangra_r32_ne(float a, float b);
-bool bangra_r32_lt(float a, float b);
-bool bangra_r32_gt(float a, float b);
-
-bool bangra_r64_eq(double a, double b);
-bool bangra_r64_ne(double a, double b);
-bool bangra_r64_lt(double a, double b);
-bool bangra_r64_gt(double a, double b);
-
 void bangra_r32_mod(float *out, float a, float b);
 void bangra_r64_mod(double *out, double a, double b);
 
@@ -124,6 +114,11 @@ const char *bangra_compile_time_date();
 #define IMPL_BINOP_FUNC(tag, ctype, name, op) \
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b) { *out = a op b; }
 
+#define DEF_BOOL_BINOP_FUNC(tag, ctype, name, op) \
+    bool bangra_ ## tag ## _ ## name(ctype a, ctype b);
+#define IMPL_BOOL_BINOP_FUNC(tag, ctype, name, op) \
+    bool bangra_ ## tag ## _ ## name(ctype a, ctype b) { return a op b; }
+
 #define DEF_WRAP_BINOP_FUNC(tag, ctype, name, op) \
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, ctype b);
 #define IMPL_WRAP_BINOP_FUNC(tag, ctype, name, op) \
@@ -133,6 +128,14 @@ const char *bangra_compile_time_date();
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, int b);
 #define IMPL_SHIFTOP_FUNC(tag, ctype, name, op) \
     void bangra_ ## tag ## _ ## name(ctype *out, ctype a, int b) { *out = a op b; }
+
+#define WALK_BOOL_BINOPS(tag, ctype, T) \
+    T(tag, ctype, eq, ==) \
+    T(tag, ctype, ne, !=) \
+    T(tag, ctype, lt, <) \
+    T(tag, ctype, le, <=) \
+    T(tag, ctype, gt, >) \
+    T(tag, ctype, ge, >=)
 
 #define WALK_ARITHMETIC_BINOPS(tag, ctype, T) \
     T(tag, ctype, add, +) \
@@ -171,6 +174,7 @@ const char *bangra_compile_time_date();
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_BINOPS, DEF_BINOP_FUNC)
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_WRAP_BINOPS, DEF_WRAP_BINOP_FUNC)
+WALK_PRIMITIVE_TYPES(WALK_BOOL_BINOPS, DEF_BOOL_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_BINOPS, DEF_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_UNOPS, DEF_UNOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, DEF_SHIFTOP_FUNC)
@@ -410,21 +414,12 @@ inline T powimpl(T base, T exponent) {
     return result;
 }
 
-bool bangra_r32_eq(float a, float b) { return a == b; }
-bool bangra_r32_ne(float a, float b) { return a != b; }
-bool bangra_r32_lt(float a, float b) { return a <  b; }
-bool bangra_r32_gt(float a, float b) { return a >  b; }
-
-bool bangra_r64_eq(double a, double b) { return a == b; }
-bool bangra_r64_ne(double a, double b) { return a != b; }
-bool bangra_r64_lt(double a, double b) { return a <  b; }
-bool bangra_r64_gt(double a, double b) { return a >  b; }
-
 void bangra_r32_mod(float *out, float a, float b) { *out = std::fmod(a,b); }
 void bangra_r64_mod(double *out, double a, double b) { *out = std::fmod(a,b); }
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_BINOPS, IMPL_BINOP_FUNC)
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_WRAP_BINOPS, IMPL_WRAP_BINOP_FUNC)
+WALK_PRIMITIVE_TYPES(WALK_BOOL_BINOPS, IMPL_BOOL_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_BINOPS, IMPL_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_UNOPS, IMPL_UNOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, IMPL_SHIFTOP_FUNC)

@@ -1,4 +1,46 @@
 #
+    fn/cc pow2 (ret x)
+        i32* x x
+
+    fn/cc pow (ret x n)
+        branch (i32== n 0)
+            fn/cc (_)
+                ret 1
+            fn/cc (_)
+                branch (i32== (i32% n 2) 0)
+                    fn/cc (_)
+                        ret
+                            pow2
+                                pow x (i32/ n 2)
+                    fn/cc (_)
+                        ret
+                            i32* x (pow x (i32- n 1))
+
+    fn/cc pow7 (ret x)
+        pow x 7
+
+    fn/cc print10 (ret f)
+        cc/call none
+            fn/cc rec (_ i)
+                cc/call none branch (i32== i 10)
+                    fn/cc (_)
+                        ret
+                    fn/cc (_)
+                        f
+                        cc/call none rec (i32+ i 1)
+            \ 0
+
+    #print10
+        call
+            fn/cc (_ x y)
+                fn/cc (_)
+                    print
+                        i32+ x y
+            \ 300 3
+
+    print pow7
+
+#
     Bangra Interpreter
     Copyright (c) 2017 Leonard Ritter
 
@@ -22,6 +64,7 @@
 
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
+
 
 syntax-extend
     set-type-symbol! Symbol (symbol-new "apply-type") symbol-new
@@ -300,7 +343,7 @@ syntax-extend
     set-type-symbol! Flow (quote apply-type) flow-new
     set-type-symbol! Parameter (quote apply-type) parameter-new
     set-type-symbol! Scope (quote apply-type) scope-new
-    #set-type-symbol! frame (quote apply-type) frame-new
+    set-type-symbol! Frame (quote apply-type) frame-new
     set-type-symbol! Closure (quote apply-type) closure-new
 
     set-type-symbol! i8 (quote apply-type) i8-new

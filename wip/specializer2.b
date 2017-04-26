@@ -33,6 +33,9 @@ print
         va@ 1
             flow-parameters (closure-flow pow2-int)
 
+print
+    Frame none (closure-flow pow2) 2
+
 
 
 

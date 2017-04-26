@@ -977,6 +977,13 @@ local function define_symbols(def)
     def({Repr='repr'})
     def({Styler='styler'})
 
+    def({Equal='=='})
+    def({NotEqual='!='})
+    def({Greater='>'})
+    def({GreaterEqual='>='})
+    def({Less='<'})
+    def({LessEqual='<='})
+
     -- ad-hoc builtin names
     def({ExecuteReturn='execute-return'})
     def({RCompare='rcompare'})
@@ -2550,15 +2557,6 @@ end
 -- CFF form implemented after
 -- Leissa et al., Graph-Based Higher-Order Intermediate Representation
 -- http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
---
--- some parts of the paper use hindley-milner notation
--- https://en.wikipedia.org/wiki/Hindley%E2%80%93Milner_type_system
---
--- more reading material:
--- Simple and Effective Type Check Removal through Lazy Basic Block Versioning
--- https://arxiv.org/pdf/1411.0352v2.pdf
--- Julia: A Fast Dynamic Language for Technical Computing
--- http://arxiv.org/pdf/1209.5145v1.pdf
 
 local Builtin = class("Builtin")
 MT_TYPE_MAP[Builtin] = Type.Builtin
@@ -2570,6 +2568,8 @@ do
         name = name or Symbol.Unnamed
         assert_symbol(name)
         self.name = name
+        -- self.type_func -- receives argument types and returns return type
+        -- self.foldable -- if true, can be folded
     end
     function cls:__call(...)
         return self.func(...)
@@ -2661,6 +2661,12 @@ do
     end
     function cls:__tostring()
         return self:repr(default_styler)
+    end
+    function cls.create_from_parameter(param)
+        local pparam = Parameter(Any(Syntax(Any(param.name), param.anchor)))
+        pparam.vararg = param.vararg
+        pparam.type = param.type
+        return pparam
     end
 end
 
@@ -2758,6 +2764,11 @@ do
             Parameter(Any(Syntax(Any(Symbol("return-" .. sym.name)),anchor)),
                 Type.Any))
         return value
+    end
+
+    -- only inherits name and anchor
+    function cls.create_from_flow(flow)
+        return Flow(Any(Syntax(Any(flow.name), flow.anchor)))
     end
 
     -- a continuation that never returns
@@ -2908,8 +2919,12 @@ local CONT_SEP = " ⮕ "
 do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
+        local follow_flows = true
         local follow_closures = true
         local follow_params = true
+        if opts.follow_flows ~= null then
+            follow_flows = opts.follow_flows
+        end
         if opts.follow_closures ~= null then
             follow_closures = opts.follow_closures
         end
@@ -2919,6 +2934,8 @@ do
         local styler = opts.styler or default_styler
         local line_anchors = (opts.anchors == "line")
         local atom_anchors = (opts.anchors == "all")
+        local users = opts.users or {}
+        local scopes = opts.scopes or {}
 
         local last_anchor
         local function stream_anchor(anchor)
@@ -2952,6 +2969,12 @@ do
             writer(styler(Style.Operator, "#"))
             writer(styler(Style.Number, tostring(aflow.uid)))
         end
+        local function stream_flow_label_user(aflow)
+            writer(styler(Style.Comment, "λ"))
+            writer(styler(Style.Comment, aflow.name.name))
+            writer(styler(Style.Comment, "#"))
+            writer(styler(Style.Comment, tostring(aflow.uid)))
+        end
 
         local function stream_param_label(param, aflow)
             if param.flow ~= aflow then
@@ -2959,7 +2982,7 @@ do
             end
             if param.name == Symbol.Unnamed then
                 writer(styler(Style.Operator, "@"))
-                writer(styler(Style.Number, tostring(param.index)))
+                writer(styler(Style.Number, tostring(param.index - 1)))
             else
                 writer(styler(Style.Comment, "%"))
                 writer(styler(Style.Symbol, param.name.name))
@@ -2986,7 +3009,7 @@ do
                 stream_param_label(arg.value, aflow)
                 if aframe and follow_params then
                     local param = arg.value
-                    local value = aframe:get(param.flow, param.index)
+                    local value = aframe:get(param.flow, param.index - 1)
                     if value then
                         writer(styler(Style.Operator, "="))
                         writer(tostring(value))
@@ -2999,6 +3022,37 @@ do
             end
         end
 
+        local function stream_users(_users)
+            if _users then
+                writer(styler(Style.Comment, "{"))
+                local k = 0
+                for dest,_ in pairs(_users) do
+                    if k > 0 then
+                        writer(" ")
+                    end
+                    stream_flow_label_user(dest)
+                    k = k + 1
+                end
+                writer(styler(Style.Comment, "}"))
+            end
+        end
+
+        local function stream_scope(_scope)
+            if _scope then
+                writer(" ")
+                writer(styler(Style.Comment, "<"))
+                local k = 0
+                for dest,_ in pairs(_scope) do
+                    if k > 0 then
+                        writer(" ")
+                    end
+                    stream_flow_label_user(dest)
+                    k = k + 1
+                end
+                writer(styler(Style.Comment, ">"))
+            end
+        end
+
         local function stream_flow (aflow, aframe)
             if visited[aflow] then
                 return
@@ -3007,11 +3061,10 @@ do
             if line_anchors then
                 stream_anchor(aflow.anchor)
             end
-            writer(styler(Style.Keyword, "fn/cc"))
-            writer(" ")
             writer(styler(Style.Symbol, aflow.name.name))
             writer(styler(Style.Operator, "#"))
             writer(styler(Style.Number, tostring(aflow.uid)))
+            stream_users(users[aflow])
             writer(" ")
             writer(styler(Style.Operator, "("))
             for i,param in ipairs(aflow.parameters) do
@@ -3019,8 +3072,10 @@ do
                     writer(" ")
                 end
                 stream_param_label(param, aflow)
+                stream_users(users[param])
             end
-            writer(styler(Style.Operator, ")"))
+            writer(styler(Style.Operator, "):"))
+            stream_scope(scopes[aflow])
             writer("\n    ")
             if #aflow.arguments == 0 then
                 writer(styler(Style.Error, "empty"))
@@ -3053,7 +3108,7 @@ do
             stream_flow(aclosure.flow, aclosure.frame)
         end
         stream_any = function(afunc, aframe)
-            if afunc.type == Type.Flow then
+            if afunc.type == Type.Flow and follow_flows then
                 stream_flow(afunc.value, aframe)
             elseif afunc.type == Type.Closure and follow_closures then
                 stream_closure(afunc.value)
@@ -3288,7 +3343,7 @@ local function call_flow(frame, cont, flow, ...)
     local rcount = #rbuf
 
     local pcount = #flow.parameters
-    assert(pcount >= 1)
+    --assert(pcount >= 1)
 
     -- tmpargs map directly to param indices; that means
     -- the callee is not included.
@@ -3296,8 +3351,9 @@ local function call_flow(frame, cont, flow, ...)
 
     -- copy over continuation argument
     local cont_param = flow.parameters[PARAM_Cont]
-    if cont_param.type ~= Type.Any then
-        unwrap(cont_param.type, cont)
+    local cont_type = cont_param and cont_param.type or Type.Nothing
+    if cont_type ~= Type.Any then
+        unwrap(cont_type, cont)
     end
     tmpargs[PARAM_Cont] = cont
     local tcount = pcount - PARAM_Arg0 + 1
@@ -3432,15 +3488,15 @@ call = function(frame, cont, dest, ...)
 end
 
 local function execute(cont, dest, ...)
-    assert_function(cont)
     assert_any(dest)
-    return call(null,
-        Any(Builtin(function(frame, _cont, dest, ...)
-            if frame ~= null then
-                assert_frame(frame)
-            end
-            return cont(...)
-        end, Symbol.ExecuteReturn)), dest, ...)
+    assert_function(cont)
+    local ret = Any(Builtin(function(frame, _cont, dest, ...)
+        if frame ~= null then
+            assert_frame(frame)
+        end
+        return cont(...)
+    end, Symbol.ExecuteReturn))
+    return call(null, ret, dest, ...)
 end
 
 function Type:format_value(value, styler)
@@ -4231,6 +4287,792 @@ function Anchor.extract(value)
 end
 
 --------------------------------------------------------------------------------
+-- SPECIALIZER
+--------------------------------------------------------------------------------
+
+local specialize
+do
+
+local function program(top)
+    local visited = {}
+    local function walk(obj)
+        if visited[obj] then
+            return
+        end
+        visited[obj] = true
+        for i,arg in ipairs(obj.arguments) do
+            arg = maybe_unsyntax(arg)
+            if arg.type == Type.Flow then
+                walk(arg.value)
+            end
+        end
+    end
+    walk(top)
+    return visited
+end
+
+local function build_users(pg)
+    local users = {}
+
+    local function add_user(obj, label, index)
+        local _users = users
+        if _users[obj] == nil then
+            _users[obj] = {}
+        end
+        _users = _users[obj]
+        if _users[label] == nil then
+            _users[label] = {}
+        end
+        _users = _users[label]
+        _users[index] = true
+    end
+
+    -- build dependencies:
+    for obj,_ in pairs(pg) do
+        for i,entry in ipairs(obj.arguments) do
+            entry = maybe_unsyntax(entry)
+            if entry.type == Type.Parameter then
+                add_user(entry.value, obj, i)
+            elseif entry.type == Type.Flow then
+                add_user(entry.value, obj, i)
+            end
+        end
+    end
+
+    return users
+end
+
+local function build_scopes(pg, users)
+    local scopes = {}
+
+    local function add_scope(obj, label, depth)
+        local _scopes = scopes
+        if _scopes[obj] == nil then
+            _scopes[obj] = {}
+        end
+        _scopes = _scopes[obj]
+        _scopes[label] = depth
+    end
+
+    local function mark_indirect(obj, label, level)
+        if users[obj] then
+            for k,_ in pairs(users[obj]) do
+                local scope = scopes[label]
+                local xk = scope and scope[k]
+                if label ~= k and ((not xk) or level < xk) then
+                    add_scope(label, k, level)
+                    mark_indirect(k, label, level + 1)
+                end
+            end
+        end
+    end
+
+    -- build direct and indirect liveness:
+    for obj,_ in pairs(pg) do
+        for i,arg in ipairs(obj.arguments) do
+            arg = maybe_unsyntax(arg)
+            if arg.type == Type.Parameter and arg.value.flow ~= obj then
+                local param = arg.value
+                -- i am directly live in param.flow
+                add_scope(param.flow, obj, 1)
+
+                -- my users are indirectly live in param.flow
+                mark_indirect(obj, param.flow, 2)
+                break
+            end
+        end
+    end
+
+    local visited = {}
+    local function inherit_scope(obj)
+        if visited[obj] then
+            return
+        end
+        visited[obj] = true
+        local scope = scopes[obj]
+        if not scope then
+            return
+        end
+        local newscope = {}
+        for label,ldepth in pairs(scope) do
+            inherit_scope(label)
+            newscope[label] = ldepth
+            local label_scope = scopes[label]
+            if label_scope then
+                for sublabel,sldepth in pairs(label_scope) do
+                    newscope[sublabel] = ldepth + sldepth
+                end
+            end
+        end
+        scopes[obj] = newscope
+    end
+
+    -- inherit child scopes:
+    for obj,_ in pairs(pg) do
+        inherit_scope(obj)
+    end
+
+    return scopes
+end
+
+local function build_scc(top)
+    local S = {}
+    local P = {}
+    local C = 0
+    local Cmap = {}
+    local SCCmap = {}
+    local function walk(obj)
+        Cmap[obj] = C
+        C = C + 1
+        table.insert(S, obj)
+        table.insert(P, obj)
+        for i,arg in ipairs(obj.arguments) do
+            arg = maybe_unsyntax(arg)
+            if arg.type == Type.Flow then
+                arg = arg.value
+                local Cw = Cmap[arg]
+                if Cw == nil then
+                    walk(arg)
+                elseif not SCCmap[arg] then
+                    assert(#P >= 1)
+                    while Cmap[P[#P]] > Cw do
+                        table.remove(P)
+                        assert(#P >= 1)
+                    end
+                end
+            end
+        end
+        assert(#P >= 1)
+        if P[#P] == obj then
+            assert(#S >= 1)
+            local scc = {}
+            while true do
+                local q = S[#S]
+                table.insert(scc, q)
+                SCCmap[q] = scc
+                print(q)
+                table.remove(S)
+                if q == obj then
+                    break
+                end
+            end
+            print()
+            table.remove(P)
+        end
+    end
+    walk(top)
+    return SCCmap
+end
+
+local function remap_body(args, map)
+    local body = {}
+    for i,arg in ipairs(args) do
+        local narg, anchor = maybe_unsyntax(arg)
+        if narg.type == Type.Flow or narg.type == Type.Parameter then
+            narg = narg.value
+            arg = map[narg] or arg
+            if arg.type == Type.VarArgs then
+                if i == #args then
+                    for _,subarg in ipairs(arg.value) do
+                        table.insert(body, subarg)
+                    end
+                elseif #arg.value == 0 then
+                    table.insert(body, none)
+                else
+                    table.insert(body, arg.value[1])
+                end
+            else
+                assert_any(arg)
+                table.insert(body, arg)
+            end
+        else
+            table.insert(body, arg)
+        end
+    end
+    return body
+end
+
+local function mangle(entry, params, map, scopes)
+    assert_flow(entry)
+    local entry_scope = scopes[entry]
+    if entry_scope then
+        -- create new labels and map new parameters
+        for l,_ in pairs(entry_scope) do
+            local ll = Flow.create_from_flow(l)
+            map[l] = Any(ll)
+            for _,param in ipairs(l.parameters) do
+                local pparam = Parameter.create_from_parameter(param)
+                map[param] = Any(pparam)
+                ll:append_parameter(pparam)
+            end
+        end
+    end
+    -- remap entry point
+    local le = Flow.create_from_flow(entry)
+    local scope = {[le]=true}
+    if entry_scope then
+        -- remap label bodies
+        for l,_ in pairs(entry_scope) do
+            local ll = map[l].value
+            ll.arguments = remap_body(l.arguments, map)
+            scope[ll] = true
+        end
+    end
+    for _,param in ipairs(params) do
+        le:append_parameter(param)
+    end
+    le.arguments = remap_body(entry.arguments, map)
+
+    return le
+end
+
+local function intersect(a, b)
+    local result = {}
+    for k,_ in pairs(a) do
+        if b[k] then
+            result[k] = true
+        end
+    end
+    return result
+end
+
+local function fold_constants(label)
+    local body = label.arguments
+    -- evaluate and rewrite
+    local f,anchor = maybe_unsyntax(body[2])
+    if f.type == Type.Builtin then
+        if f.value.fold_func then
+            set_active_anchor(label.body_anchor or label.anchor)
+            return f.value.fold_func(label)
+        elseif f.value.foldable then
+            for i=3,#body do
+                local arg = body[i]
+                arg = maybe_unsyntax(arg)
+                if arg.type == Type.Parameter then
+                    return false
+                end
+            end
+
+            local args = {}
+            for i=3,#body do
+                local arg = body[i]
+                arg = maybe_unsyntax(arg)
+                table.insert(args, arg)
+            end
+            local result
+            execute(function(...)
+                result = { ... }
+            end, f, unpack(args))
+
+            local anchor = label.body_anchor or label.anchor
+            if anchor then
+                for i=1,#result do
+                    local arg = result[i]
+                    arg = Any(Syntax(arg, anchor))
+                    result[i] = arg
+                end
+            end
+
+            label.arguments = { none, body[1], unpack(result) }
+        end
+    end
+    return false
+end
+
+local function optimize(le)
+    local scope = {[le] = true }
+    local users
+    local function dump_program()
+        print("---")
+        stream_il(stdout_writer, Any(le))
+        print("---")
+    end
+
+    local function dump_single_label(l)
+        stream_il(stdout_writer, Any(l), {follow_flows=false, follow_closures=false, follow_params=false})
+    end
+
+    local function fold_flow(label)
+        local body = label.arguments
+        -- evaluate and rewrite
+        local f,anchor = maybe_unsyntax(body[2])
+        if f.type == Type.Flow then
+            if #body == 2 then
+                return false
+            end
+            -- fully inline labels with constant arguments
+            for i=3,#body do
+                local arg = body[i]
+                arg = maybe_unsyntax(arg)
+                if arg.type == Type.Parameter then
+                    return false
+                end
+            end
+
+            f = f.value
+            if f.parameters[1].type == Type.Nothing then
+                return false
+            end
+
+            print("inlining body of ",label)
+            dump_single_label(label)
+            local map = { [f.parameters[1]] = label.arguments[1] }
+            for i=2,#f.parameters do
+                print(f.parameters[i], label.arguments[i + 1])
+                map[f.parameters[i]] = label.arguments[i + 1]
+            end
+            local zero_ret = Parameter(Any(Syntax(Any(Symbol.Unnamed), f.anchor)), Type.Nothing)
+            local newlabel = mangle(f, { zero_ret }, map, build_scopes(scope, users))
+            label.arguments = { none, Any(newlabel) }
+            return true
+        end
+        return false
+    end
+
+    local function is_eq(a,b)
+        if a.type ~= b.type then
+            return false
+        end
+        if is_none(a) then
+            return true
+        end
+        if a.value ~= b.value then
+            return false
+        end
+        return true
+    end
+
+    local function propagate_constants(label, cont)
+        -- if we have one or multiple users, all calling with the same arguments,
+        -- we can safely inline their arguments into other functions
+        local user
+        if not users[label] then
+            return
+        end
+        for k,_ in pairs(users[label]) do
+            local f = maybe_unsyntax(k.arguments[2])
+            if f.type == Type.Flow and f.value == label then
+                if not user then
+                    user = k
+                else
+                    -- verify the arguments are the same
+                    if #k.arguments ~= #user.arguments then
+                        return
+                    end
+                    for i=3,#k.arguments do
+                        local arg0 = maybe_unsyntax(user.arguments[i])
+                        local arg1 = maybe_unsyntax(k.arguments[i])
+                        if not is_eq(arg0, arg1) then
+                            return
+                        end
+                    end
+                end
+            else
+                return
+            end
+        end
+        if user then
+            print("erasing",label)
+            for i,param in ipairs(label.parameters) do
+                local k = 1
+                if param.index > 1 then
+                    k = param.index + 1
+                end
+                local arg = user.arguments[k]
+                if users[param] then
+                    for entry,indices in pairs(users[param]) do
+                        for i,_ in pairs(indices) do
+                            entry.arguments[i] = arg
+                        end
+                    end
+                    users[param] = nil
+                end
+            end
+            local lusers = users[label]
+            users[label] = nil
+            local srcbody = label.arguments
+            for k,_ in pairs(lusers) do
+                local body = {}
+                for i=1,#srcbody do
+                    table.insert(body, srcbody[i])
+                end
+                k.arguments = body
+            end
+            for k,_ in pairs(lusers) do
+                cont(k)
+            end
+            return true
+        end
+    end
+
+    local function update_scope()
+        --local pg = program(le)
+        scope = program(le)
+        users = build_users(scope)
+        local newscope = {[le] = true}
+        for l,_ in pairs(scope) do
+            if users[l] then
+                newscope[l] = true
+            end
+        end
+        scope = newscope
+        dump_program()
+    end
+
+    while true do
+        update_scope()
+
+        local changed = false
+        local visited = {}
+        local function walk(l)
+            print("looking at",l)
+            if not scope[l] then
+                print("not in scope")
+                return
+            end
+            if visited[l] then
+                print("already been there")
+                return
+            end
+            visited[l] = true
+            if fold_constants(l) then
+                changed = true
+                update_scope()
+            end
+            if not propagate_constants(l, function(l)
+                    changed = true
+                    visited[l] = nil
+                    update_scope()
+                    walk(l)
+                end) then
+                for i,arg in ipairs(l.arguments) do
+                    arg = maybe_unsyntax(arg)
+                    if arg.type == Type.Flow then
+                        walk(arg.value)
+                    end
+                end
+            end
+        end
+        walk(le)
+        if not changed then
+            break
+        end
+    end
+
+end
+
+--[[
+REMOVING UNUSED PARAMETERS AND ARGUMENTS
+----------------------------------------
+
+- a parameter that has no users is unused
+- unused parameters can be typed to Nothing, or removed if at tail position
+- conclusively, any argument passed to a non-existing or Nothing-typed parameter
+  can be set to none or removed if at tail position
+- if the argument was a parameter reference in itself, then that parameter
+  may now be unused too - repeat.
+--]]
+local function remove_unused_parameters_and_arguments(func)
+    local pg = program(func)
+    local users = build_users(pg)
+    local scopes = build_scopes(pg, users)
+
+    local function walk(label)
+        local params = label.parameters
+        local pcount = #params
+        local changed = false
+        for i=pcount,1,-1 do
+            local param = params[i]
+            if not users[param] then
+                changed = true
+                if i == #params then
+                    table.remove(params)
+                else
+                    param.type = Type.Nothing
+                end
+            end
+        end
+        if changed then
+            -- todo: we made some changes - truncate or set-none arguments of callers
+            --[[
+            for user,_ in pairs(users[label]) do
+                local cont = maybe_unsyntax(user.arguments[1])
+                local callee = maybe_unsyntax(user.arguments[2])
+                if callee == label then
+                    local args = user.arguments
+                    local acount = #args
+                    for i=acount,3,-1 do
+                        local arg = args[i]
+                        local narg,anchor = maybe_unsyntax(arg)
+
+
+                    end
+                    local p_cont = label.parameters[1]
+                    print(p_cont)
+                    if not p_cont or p_cont.type == Type.Nothing then
+                        user.arguments[1] = none
+                    end
+                end
+            end
+            --]]
+        end
+    end
+
+    for label,_ in pairs(pg) do
+        walk(label)
+    end
+end
+
+--[[
+things we must solve in the specializer:
+
+* ensure there are no vararg parameters anymore
+* ensure all parameters are typed, and continuation parameters know their argument types
+* ensure no arguments or parameters of type Type exist in the code
+* ensure all nodes are in CFF form, that is, we only have basic-block like
+  or returning top level functions, and there are no free variables.
+
+TODO: extension to scope: parent scope also covers all subscopes
+    that is, if a label is live in indirect live label, it is also live in parent
+
+general process:
+begin by mangling entry label (e.g. specialize return continuation to call exit(0))
+
+after mangling an entry point:
+    NOTE: mangling an entry point with exactly the same arguments yields the
+          same mangled label.
+          make sure the entry point is cached at this point.
+
+    obtain scope of label (a scope is a complete function)
+    - get rid of all unused parameters in scope
+    - fold all constant expressions in scope!
+        - generally, it's useful to compact the content as far as possible
+          before mangling additional functions, so that optimal forms are copied
+    - walk scope of label in order, starting at entry point
+    if body is constant expression:
+        - fold
+        if constant expression can't be folded:
+            - mangle continuation for specialized return type
+    if body references label (any position, except continuation?):
+        - mangle!
+            - always inline arguments
+        special case recursive functions?
+
+]]
+local function dump_program(func)
+    local pg = program(func)
+    local users = build_users(pg)
+    local scopes = build_scopes(pg, users)
+    local opts = {}
+    --opts.users = users
+    opts.scopes = scopes
+    stream_il(stdout_writer, Any(func), opts)
+end
+
+specialize = function(func, cont)
+    local opts = {}
+
+    local ret = globals:lookup(Symbol("exit"))
+
+    func = unwrap(Type.Flow, func)
+
+    dump_program(func)
+    print()
+
+    do
+        local function map_arguments(map, params, args)
+            if params[PARAM_Cont] then
+                map[params[PARAM_Cont]] = args[1]
+            end
+            local pcount = #params
+            local rcount = #args
+            local tcount = pcount - PARAM_Arg0 + 1
+            local srci = ARG_Arg0
+            for i=0,(tcount - 1) do
+                local dsti = PARAM_Arg0 + i
+                local param = params[dsti]
+                local dstval
+                if param.vararg then
+                    -- how many parameters after this one
+                    local remparams = tcount - i - 1
+                    -- how many varargs to capture
+                    local vargsize = max(0, rcount - srci - remparams + 1)
+                    local argvalues = {}
+                    for k=srci,(srci + vargsize - 1) do
+                        assert(args[k])
+                        argvalues[k - srci + 1] = args[k]
+                    end
+                    dstval = Any(Type.VarArgs, argvalues)
+                    srci = srci + vargsize
+                elseif srci <= rcount then
+                    local value = args[srci]
+                    if param.type ~= Type.Any then
+                        unwrap(param.type, value)
+                    end
+                    dstval = value
+                    srci = srci + 1
+                else
+                    if param.type ~= Type.Any then
+                        unwrap(param.type, none)
+                    end
+                    dstval = none
+                end
+                map[params[dsti]] = dstval
+            end
+        end
+
+        local function build_argtypes(body)
+            local types = {}
+            for i=3,#body do
+                arg = maybe_unsyntax(body[i])
+                local argtype
+                if arg.type == Type.Parameter then
+                    table.insert(types, arg.value.type)
+                else
+                    table.insert(types, arg.type)
+                end
+
+            end
+            return types
+        end
+
+        local refine_body
+
+        local EOM = {}
+        local function load_val(map, keys)
+            for i=1,#keys-1 do
+                local key = keys[i]
+                map = map[key]
+                if map == nil then
+                    return
+                end
+            end
+            return map[EOM]
+        end
+        local function store_val(map, keys, val)
+            for i=1,#keys do
+                local key = keys[i]
+                local submap = map[key]
+                if submap == nil then
+                    submap = {}
+                    map[key] = submap
+                end
+                map = submap
+            end
+            map[EOM] = val
+        end
+
+        local drop_type_map = {}
+        local function drop_type(func, argtypes)
+            assert_flow(func)
+            local keys = { func, unpack(argtypes) }
+            local rfunc = load_val(drop_type_map, keys)
+            if rfunc then
+                return rfunc
+            end
+
+            local params = func.parameters
+            local same_signature = true
+            if #params ~= #argtypes then
+                same_signature = false
+            else
+                for i,argtype in ipairs(argtypes) do
+                    local param = params[i]
+                    if param.type ~= argtype then
+                        same_signature = false
+                        break
+                    end
+                end
+            end
+
+            if same_signature then
+                rfunc = func
+            else
+                local map = {}
+                local args = {}
+                local anchor = func.body_anchor or func.anchor
+                local sxname = Any(Syntax(Any(Symbol.Unnamed), anchor))
+                local newparams = {}
+                for _,argtype in ipairs(argtypes) do
+                    local param = Parameter(sxname, argtype)
+                    table.insert(args, Any(param))
+                    table.insert(newparams, param)
+                end
+                map_arguments(map, params, args)
+
+                local pg = program(func)
+                local users = build_users(pg)
+                local scopes = build_scopes(pg, users)
+
+                rfunc = mangle(func, newparams, map, scopes)
+            end
+            store_val(drop_type_map, keys, rfunc)
+            return refine_body(rfunc)
+        end
+
+        local function drop(args)
+            local func = unwrap(Type.Flow, maybe_unsyntax(args[2]))
+            local pg = program(func)
+            local users = build_users(pg)
+            local scopes = build_scopes(pg, users)
+
+            local map = {}
+            local params = func.parameters
+            map_arguments(map, params, args)
+
+            return refine_body(mangle(func, {}, map, scopes))
+        end
+
+        refine_body = function(rfunc)
+            local func = rfunc
+            while true do
+                local body = func.arguments
+                local f = maybe_unsyntax(body[2])
+                if f.type == Type.Flow then
+                    local newf = drop(body)
+                    func.arguments = newf.arguments
+                elseif f.type == Type.Builtin then
+                    f = f.value
+                    if not fold_constants(func) then
+                        local cont = maybe_unsyntax(body[1])
+                        if cont.type == Type.Flow then
+                            cont = cont.value
+                            if f.type_func then
+                                local argtypes = build_argtypes(body)
+                                local rettypes = { Type.Nothing, f.type_func(unpack(argtypes)) }
+                                cont = drop_type(cont, rettypes)
+                                body[1] = Any(cont)
+                                return rfunc
+                            else
+                                return rfunc
+                            end
+                        else
+                            return rfunc
+                        end
+                    end
+                else
+                    return rfunc
+                end
+            end
+        end
+
+        func = drop({ret, Any(func)})
+    end
+
+    --build_scc(func)
+    --optimize(func)
+    --remove_unused_parameters_and_arguments(func)
+
+    print("after:")
+    dump_program(func)
+
+    func = Any(func)
+
+    return cont(func)
+end
+end
+
+--------------------------------------------------------------------------------
 -- BUILTINS
 --------------------------------------------------------------------------------
 
@@ -4270,6 +5112,18 @@ local function wrap_simple_builtin(f)
         end
         return call(frame, none, cont, f(...))
     end
+end
+
+local function foldable_builtin(f)
+    local b = Builtin(f)
+    b.foldable = true
+    return b
+end
+
+local function typed_builtin(f, tf)
+    local b = Builtin(f)
+    b.type_func = tf
+    return b
 end
 
 local function builtin_macro(value)
@@ -4331,7 +5185,7 @@ builtins["syntax-extend"] = builtin_macro(expand_syntax_extend)
 --------------------------------------------------------------------------------
 
 local b_true = bool(true)
-function builtins.branch(frame, cont, self, cond, then_cont, else_cont)
+local function branch(frame, cont, self, cond, then_cont, else_cont)
     checkargs(3,3,cond,then_cont,else_cont)
     if unwrap(Type.Bool, cond) == b_true then
         return call(frame, cont, then_cont)
@@ -4339,6 +5193,22 @@ function builtins.branch(frame, cont, self, cond, then_cont, else_cont)
         return call(frame, cont, else_cont)
     end
 end
+branch = Builtin(branch)
+branch.fold_func = function(label)
+    local body = label.arguments
+    local cond = maybe_unsyntax(body[3])
+    if cond.type ~= Type.Parameter then
+        cond = unwrap(Type.Bool, cond)
+        if cond == b_true then
+            label.arguments = { body[1], body[4] }
+        else
+            label.arguments = { body[1], body[5] }
+        end
+        return true
+    end
+    return false
+end
+builtins.branch = branch
 
 local function ordered_branch(frame, cont, self, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
@@ -4479,6 +5349,10 @@ builtins.eval = function(frame, cont, self, expr, scope, path)
                 return call(frame, none, cont, result)
             end)
     end)
+end
+
+builtins.mangle = function(frame, cont, self)
+    -- todo
 end
 
 builtins["syntax-quote"] = wrap_simple_builtin(function(value)
@@ -4907,43 +5781,70 @@ local function opmaker(T, ctype)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
-        builtins[T.name .. sym.name] = wrap_simple_builtin(function(x)
+        local function f(x)
             checkargs(1,1,x)
             x = unwrap(T, x)
             local srcval = new(atype)
             op(srcval, x)
             return Any(cast(ctype, cast(rtype, srcval)))
-        end)
+        end
+        f = Builtin(wrap_simple_builtin(f))
+        f.foldable = true
+        builtins[T.name .. sym.name] = f
     end
     local function arithmetic_op2(sym, opname)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
-        builtins[T.name .. sym.name] = wrap_simple_builtin(function(a,b)
+        local function f(a,b)
             checkargs(2,2,a,b)
             a = unwrap(T, a)
             b = unwrap(T, b)
             local srcval = new(atype)
             op(srcval, a, b)
             return Any(cast(ctype, cast(rtype, srcval)))
-        end)
+        end
+
+        f = Builtin(wrap_simple_builtin(f))
+        f.foldable = true
+        builtins[T.name .. sym.name] = f
+    end
+    local function bool_op2(sym, opname)
+        local op = C["bangra_" .. T.name .. "_" .. opname]
+        assert(op)
+
+        local function f(a,b)
+            checkargs(2,2,a,b)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            return Any(bool(op(a, b)))
+        end
+
+        f = Builtin(wrap_simple_builtin(f))
+        f.foldable = true
+        builtins[T.name .. sym.name] = f
     end
     local function arithmetic_shiftop(sym, opname)
         local op = C["bangra_" .. T.name .. "_" .. opname]
         assert(op)
 
-        builtins[T.name .. sym.name] = wrap_simple_builtin(function(a,b)
+        local function f(a,b)
             checkargs(2,2,a,b)
             a = unwrap(T, a)
             b = unwrap(Type.I32, b)
             local srcval = new(atype)
             op(srcval, a, b)
             return Any(cast(ctype, cast(rtype, srcval)))
-        end)
+        end
+
+        f = Builtin(wrap_simple_builtin(f))
+        f.foldable = true
+        builtins[T.name .. sym.name] = f
     end
     return {
         op1 = arithmetic_op1,
         op2 = arithmetic_op2,
+        bop2 = bool_op2,
         shiftop = arithmetic_shiftop
     }
 end
@@ -4957,6 +5858,13 @@ each_numerical_type(function(T, ctype)
     make.op2(Symbol.Div, "div")
     make.op2(Symbol.Mod, "mod")
     make.op2(Symbol.Pow, "pow")
+
+    make.bop2(Symbol.Equal, "eq")
+    make.bop2(Symbol.NotEqual, "ne")
+    make.bop2(Symbol.Greater, "gt")
+    make.bop2(Symbol.GreaterEqual, "ge")
+    make.bop2(Symbol.Less, "lt")
+    make.bop2(Symbol.LessEqual, "le")
 end)
 
 each_numerical_type(function(T, ctype)
@@ -4988,10 +5896,10 @@ builtins["type-index"] = wrap_simple_builtin(function(_type)
     return Any(size_t(unwrap(Type.Type, _type).index))
 end)
 
-builtins.typeof = wrap_simple_builtin(function(value)
+builtins.typeof = foldable_builtin(wrap_simple_builtin(function(value)
     checkargs(1,1, value)
     return Any(value.type)
-end)
+end))
 
 builtins["element-type"] = wrap_simple_builtin(function(_type)
     checkargs(1,1, _type)
@@ -5203,6 +6111,17 @@ builtins["frame-values"] = wrap_simple_builtin(function(frame, flow)
     end
 end)
 
+builtins["frame-new"] = wrap_simple_builtin(function(frame, flow, ...)
+    checkargs(2,-1, frame, flow, ...)
+    if is_none(frame) then
+        frame = nil
+    else
+        frame = unwrap(Type.Frame, frame)
+    end
+    flow = unwrap(Type.Flow, flow)
+    return Any(Frame(frame, flow, { ... }))
+end)
+
 local valtoptr
 do
     local supported = set({'int','float','struct'})
@@ -5398,7 +6317,7 @@ builtins.repr = wrap_simple_builtin(function(value, styler)
     end
 end)
 
-builtins.print = wrap_simple_builtin(function(...)
+builtins.print = typed_builtin(wrap_simple_builtin(function(...)
     local writer = stdout_writer
     for i=1,select('#', ...) do
         if i > 1 then
@@ -5412,6 +6331,8 @@ builtins.print = wrap_simple_builtin(function(...)
         end
     end
     writer('\n')
+end), function(...)
+    return
 end)
 
 builtins.prompt = wrap_simple_builtin(function(s, pre)
@@ -5476,11 +6397,15 @@ builtins.args = wrap_simple_builtin(function()
     return unpack(result)
 end)
 
-builtins.exit = wrap_simple_builtin(function(code)
-    checkargs(1, 1, code)
-    code = tonumber(unwrap_integer(code))
+builtins.exit = function(frame, cont, self, code)
+    checkargs(0, 1, code)
+    if code then
+        code = tonumber(unwrap_integer(code))
+    else
+        code = 0
+    end
     os.exit(code)
-end)
+end
 
 builtins['set-debug-trace!'] = wrap_simple_builtin(function(value)
     checkargs(1, 1, value)
@@ -5641,11 +6566,7 @@ xpcallcc(
 
         return expand_root(expr, null, function(expexpr)
             return translate_root(expexpr, "main", function(func)
-                return execute(
-                    function()
-                        os.exit(0)
-                    end,
-                    func)
+                return call(nil, globals:lookup(Symbol("exit")), func)
             end)
         end)
     end,
