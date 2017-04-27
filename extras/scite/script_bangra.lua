@@ -65,7 +65,7 @@ local function bangra_symbols()
     TYPES = splitstr(getprop("types.bangra_lang") or
         "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string"
         .. " r16 r32 r64 half float double Symbol list Parameter"
-        .. " Frame Closure Flow Integer Real array tuple vector"
+        .. " Frame Closure Label Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
         .. " Iterator type size_t usize_t ssize_t void* Callable Boxed Any"
         )

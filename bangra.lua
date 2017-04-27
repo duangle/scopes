@@ -1246,7 +1246,7 @@ local function define_types(def)
 
     def('Form', 'Form')
     def('Parameter', 'Parameter')
-    def('Flow', 'Flow')
+    def('Label', 'Label')
     def('VarArgs', 'va-list')
 
     def('Closure', 'Closure')
@@ -2289,7 +2289,7 @@ local OPERATORS = set(split(
 local TYPES = set(split(
         "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string"
         .. " r16 r32 r64 half float double Symbol list Parameter"
-        .. " Frame Closure Flow Integer Real array tuple vector"
+        .. " Frame Closure Label Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
         .. " Iterator type size_t usize_t ssize_t void* Callable Boxed Any"
     ))
@@ -2625,7 +2625,7 @@ do
         assert_anchor(anchor)
         _type = _type or Type.Any
         assert_type(_type)
-        self.flow = null
+        self.label = null
         self.index = -1
         self.name = name
         self.type = _type
@@ -2652,8 +2652,8 @@ do
     end
     function cls:repr(styler)
         local name
-        if self.flow then
-            name = self.flow:short_repr(styler)
+        if self.label then
+            name = self.label:short_repr(styler)
         else
             name = styler(Style.Comment, '<unbound>')
         end
@@ -2677,17 +2677,17 @@ local ARG_Arg0 = 3
 local PARAM_Cont = 1
 local PARAM_Arg0 = 2
 
-local Flow = {}
-MT_TYPE_MAP[Flow] = Type.Flow
-local function assert_flow(x)
-    if getmetatable(x) == Flow then
+local Label = {}
+MT_TYPE_MAP[Label] = Type.Label
+local function assert_label(x)
+    if getmetatable(x) == Label then
         return x
     else
-        error("expected flow, got " .. repr(x))
+        error("expected label, got " .. repr(x))
     end
 end
 do
-    local cls = Flow
+    local cls = Label
     cls.__index = cls
     local unique_id_counter = 1
 
@@ -2740,8 +2740,8 @@ do
     function cls:append_parameter(param)
         assert_table(param)
         assert_parameter(param)
-        assert(param.flow == null)
-        param.flow = self
+        assert(param.label == null)
+        param.label = self
         table.insert(self.parameters, param)
         param.index = #self.parameters
         return param
@@ -2750,12 +2750,12 @@ do
     -- an empty function
     -- you have to add the continuation argument manually
     function cls.create_empty_function(name)
-        return Flow(name)
+        return Label(name)
     end
 
     -- a function that eventually returns
     function cls.create_function(name)
-        local value = Flow(name)
+        local value = Label(name)
         local sym, anchor = maybe_unsyntax(name)
         sym = unwrap(Type.Symbol, sym)
         -- continuation is always first argument
@@ -2767,13 +2767,13 @@ do
     end
 
     -- only inherits name and anchor
-    function cls.create_from_flow(flow)
-        return Flow(Any(Syntax(Any(flow.name), flow.anchor)))
+    function cls.create_from_label(label)
+        return Label(Any(Syntax(Any(label.name), label.anchor)))
     end
 
     -- a continuation that never returns
     function cls.create_continuation(name)
-        local value = Flow(name)
+        local value = Label(name)
         -- first argument is present, but unused
         value:append_parameter(
             Parameter(name, Type.Nothing))
@@ -2796,11 +2796,11 @@ do
     local uid = 1
     setmetatable(Frame, {
         __call =
-            function (cls, frame, flow, values)
-                assert_flow(flow)
+            function (cls, frame, label, values)
+                assert_label(label)
                 assert_table(values)
-                if #flow.parameters == 1
-                    and flow.parameters[1].type == Type.Nothing then
+                if #label.parameters == 1
+                    and label.parameters[1].type == Type.Nothing then
                     -- nothing is bound, skip frame
                     return frame
                 end
@@ -2808,10 +2808,10 @@ do
                 local self = setmetatable({}, cls)
                 if (frame ~= null) then
                     assert_frame(frame)
-                    -- if this flow has already been bound before, all parent frames
+                    -- if this label has already been bound before, all parent frames
                     -- up to this one are being shadowed by a new rebinding in scope,
                     -- so we can safely truncate
-                    local earlier_frame = frame:find_frame(flow)
+                    local earlier_frame = frame:find_frame(label)
                     if earlier_frame then
                         frame = earlier_frame.parent
                     end
@@ -2824,10 +2824,10 @@ do
                 else
                     self.index = 0
                 end
-                self.anchor = flow.body_anchor or flow.anchor or get_active_anchor()
+                self.anchor = label.body_anchor or label.anchor or get_active_anchor()
                 self.parent = parent
-                -- flow -> {values}
-                self.flow = flow
+                -- label -> {values}
+                self.label = label
                 self.values = values
                 self.uid = uid
                 uid = uid + 1
@@ -2842,10 +2842,10 @@ do
     end
     function cls:find_frame(cont)
         if cont then
-            assert_flow(cont)
+            assert_label(cont)
             -- parameter is bound - attempt resolve
             while self do
-                if (cont == self.flow) then
+                if (cont == self.label) then
                     return self
                 end
                 self = self.parent
@@ -2862,7 +2862,7 @@ do
     end
 
     function cls:rebind(cont, index, value)
-        assert_flow(cont)
+        assert_label(cont)
         assert_number(index)
         assert_any(value)
         local values = self:get_bank(cont)
@@ -2885,17 +2885,17 @@ local Closure = class("Closure")
 MT_TYPE_MAP[Closure] = Type.Closure
 do
     local cls = Closure
-    function cls:init(flow, frame)
-        assert_flow(flow)
+    function cls:init(label, frame)
+        assert_label(label)
         if frame ~= null then
             assert_frame(frame)
         end
-        self.flow = flow
+        self.label = label
         self.frame = frame
     end
     function cls:repr(styler)
         local s = styler(Style.Operator, "[")
-            .. self.flow:repr(styler)
+            .. self.label:repr(styler)
             .. styler(Style.Comment, ":")
         if self.frame ~= null then
             s = s .. self.frame:repr(styler)
@@ -2919,11 +2919,11 @@ local CONT_SEP = " ⮕ "
 do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
-        local follow_flows = true
+        local follow_labels = true
         local follow_closures = true
         local follow_params = true
-        if opts.follow_flows ~= null then
-            follow_flows = opts.follow_flows
+        if opts.follow_labels ~= null then
+            follow_labels = opts.follow_labels
         end
         if opts.follow_closures ~= null then
             follow_closures = opts.follow_closures
@@ -2963,22 +2963,22 @@ do
 
         local visited = {}
         local stream_any
-        local function stream_flow_label(aflow)
+        local function stream_label_label(alabel)
             writer(styler(Style.Keyword, "λ"))
-            writer(styler(Style.Symbol, aflow.name.name))
+            writer(styler(Style.Symbol, alabel.name.name))
             writer(styler(Style.Operator, "#"))
-            writer(styler(Style.Number, tostring(aflow.uid)))
+            writer(styler(Style.Number, tostring(alabel.uid)))
         end
-        local function stream_flow_label_user(aflow)
+        local function stream_label_label_user(alabel)
             writer(styler(Style.Comment, "λ"))
-            writer(styler(Style.Comment, aflow.name.name))
+            writer(styler(Style.Comment, alabel.name.name))
             writer(styler(Style.Comment, "#"))
-            writer(styler(Style.Comment, tostring(aflow.uid)))
+            writer(styler(Style.Comment, tostring(alabel.uid)))
         end
 
-        local function stream_param_label(param, aflow)
-            if param.flow ~= aflow then
-                stream_flow_label(param.flow)
+        local function stream_param_label(param, alabel)
+            if param.label ~= alabel then
+                stream_label_label(param.label)
             end
             if param.name == Symbol.Unnamed then
                 writer(styler(Style.Operator, "@"))
@@ -2996,7 +2996,7 @@ do
             end
         end
 
-        local function stream_argument(arg, aflow, aframe)
+        local function stream_argument(arg, alabel, aframe)
             if arg.type == Type.Syntax then
                 local anchor
                 arg,anchor = unsyntax(arg)
@@ -3006,17 +3006,17 @@ do
             end
 
             if arg.type == Type.Parameter then
-                stream_param_label(arg.value, aflow)
+                stream_param_label(arg.value, alabel)
                 if aframe and follow_params then
                     local param = arg.value
-                    local value = aframe:get(param.flow, param.index - 1)
+                    local value = aframe:get(param.label, param.index - 1)
                     if value then
                         writer(styler(Style.Operator, "="))
                         writer(tostring(value))
                     end
                 end
-            elseif arg.type == Type.Flow then
-                stream_flow_label(arg.value)
+            elseif arg.type == Type.Label then
+                stream_label_label(arg.value)
             else
                 writer(tostring(arg))
             end
@@ -3030,7 +3030,7 @@ do
                     if k > 0 then
                         writer(" ")
                     end
-                    stream_flow_label_user(dest)
+                    stream_label_label_user(dest)
                     k = k + 1
                 end
                 writer(styler(Style.Comment, "}"))
@@ -3046,82 +3046,82 @@ do
                     if k > 0 then
                         writer(" ")
                     end
-                    stream_flow_label_user(dest)
+                    stream_label_label_user(dest)
                     k = k + 1
                 end
                 writer(styler(Style.Comment, ">"))
             end
         end
 
-        local function stream_flow (aflow, aframe)
-            if visited[aflow] then
+        local function stream_label (alabel, aframe)
+            if visited[alabel] then
                 return
             end
-            visited[aflow] = true
+            visited[alabel] = true
             if line_anchors then
-                stream_anchor(aflow.anchor)
+                stream_anchor(alabel.anchor)
             end
-            writer(styler(Style.Symbol, aflow.name.name))
+            writer(styler(Style.Symbol, alabel.name.name))
             writer(styler(Style.Operator, "#"))
-            writer(styler(Style.Number, tostring(aflow.uid)))
-            stream_users(users[aflow])
+            writer(styler(Style.Number, tostring(alabel.uid)))
+            stream_users(users[alabel])
             writer(" ")
             writer(styler(Style.Operator, "("))
-            for i,param in ipairs(aflow.parameters) do
+            for i,param in ipairs(alabel.parameters) do
                 if i > 1 then
                     writer(" ")
                 end
-                stream_param_label(param, aflow)
+                stream_param_label(param, alabel)
                 stream_users(users[param])
             end
             writer(styler(Style.Operator, "):"))
-            stream_scope(scopes[aflow])
+            stream_scope(scopes[alabel])
             writer("\n    ")
-            if #aflow.arguments == 0 then
+            if #alabel.arguments == 0 then
                 writer(styler(Style.Error, "empty"))
             else
-                if line_anchors and aflow.body_anchor then
-                    stream_anchor(aflow.body_anchor)
+                if line_anchors and alabel.body_anchor then
+                    stream_anchor(alabel.body_anchor)
                     writer(' ')
                 end
-                for i=2,#aflow.arguments do
+                for i=2,#alabel.arguments do
                     if i > 2 then
                         writer(" ")
                     end
-                    local arg = aflow.arguments[i]
-                    stream_argument(arg, aflow, aframe)
+                    local arg = alabel.arguments[i]
+                    stream_argument(arg, alabel, aframe)
                 end
-                local cont = aflow.arguments[1]
+                local cont = alabel.arguments[1]
                 if not is_none(maybe_unsyntax(cont)) then
                     writer(styler(Style.Comment,CONT_SEP))
-                    stream_argument(cont, aflow, aframe)
+                    stream_argument(cont, alabel, aframe)
                 end
             end
             writer("\n")
 
-            for i,arg in ipairs(aflow.arguments) do
+            for i,arg in ipairs(alabel.arguments) do
                 arg = maybe_unsyntax(arg)
                 stream_any(arg, aframe)
             end
         end
         local function stream_closure(aclosure)
-            stream_flow(aclosure.flow, aclosure.frame)
+            stream_label(aclosure.label, aclosure.frame)
         end
         stream_any = function(afunc, aframe)
-            if afunc.type == Type.Flow and follow_flows then
-                stream_flow(afunc.value, aframe)
+            if afunc.type == Type.Label and follow_labels then
+                stream_label(afunc.value, aframe)
             elseif afunc.type == Type.Closure and follow_closures then
                 stream_closure(afunc.value)
             elseif aframe and afunc.type == Type.Parameter and follow_params then
                 local param = afunc.value
-                local value = aframe:get(param.flow, param.index)
+                local value = aframe:get(param.label, param.index)
                 if value then
                     stream_any(value, aframe)
                 end
             end
         end
-        if afunc.type == Type.Flow then
-            stream_flow(afunc.value)
+        if afunc.type == Type.Label then
+            stream_label(afunc.value)
         elseif afunc.type == Type.Closure then
             stream_closure(afunc.value)
         else
@@ -3145,7 +3145,7 @@ do
             if frame.parent then
                 walk(frame.parent)
             end
-            local flow = frame.flow
+            local label = frame.label
             local values = frame.values
             local anchor = frame.anchor
             if anchor then
@@ -3156,7 +3156,7 @@ do
             writer(frame:repr(styler))
             writer("\n")
             writer("  ")
-            writer(flow:repr(styler))
+            writer(label:repr(styler))
             writer(styler(Style.Operator, " →"))
             for i,val in ipairs(values) do
                 if val.type == Type.VarArgs then
@@ -3212,19 +3212,19 @@ do
                 writer('  in builtin ')
                 writer(tostring(builtin))
                 writer('\n')
-            elseif dest.type == Type.Flow then
-                local flow = dest.value
+            elseif dest.type == Type.Label then
+                local label = dest.value
                 if anchor == null then
-                    anchor = flow.body_anchor or flow.anchor
+                    anchor = label.body_anchor or label.anchor
                 end
                 if anchor then
                     writer('  File ')
                     writer(repr(anchor.path))
                     writer(', line ')
                     writer(styler(Style.Number, tostring(anchor.lineno)))
-                    if flow.name ~= Symbol.Unnamed then
+                    if label.name ~= Symbol.Unnamed then
                         writer(', in ')
-                        writer(tostring(flow.name))
+                        writer(tostring(label.name))
                     end
                     writer('\n')
                     anchor:stream_source_line(writer, styler)
@@ -3265,15 +3265,15 @@ do
         if dest.type == Type.Closure then
             local closure = dest.value
             frame = closure.frame
-            dest = Any(closure.flow)
+            dest = Any(closure.label)
         end
         local anchor
-        if dest.type == Type.Flow then
-            local flow = dest.value
-            local flow_anchor = flow.body_anchor or flow.anchor
-            if flow_anchor then
-                last_anchor = flow_anchor
-                anchor = flow.anchor
+        if dest.type == Type.Label then
+            local label = dest.value
+            local label_anchor = label.body_anchor or label.anchor
+            if label_anchor then
+                last_anchor = label_anchor
+                anchor = label.anchor
                 set_active_anchor(last_anchor)
             end
         end
@@ -3302,12 +3302,12 @@ local function evaluate(argindex, frame, value)
 
     if (value.type == Type.Parameter) then
         local param = value.value
-        local result = frame:get(param.flow, param.index)
+        local result = frame:get(param.label, param.index)
         if result == nil then
             location_error(tostring(param) .. " unbound in frame")
         end
         return result
-    elseif (value.type == Type.Flow) then
+    elseif (value.type == Type.Label) then
         if (argindex == ARG_Func) then
             -- no closure creation required
             return value
@@ -3332,17 +3332,17 @@ local function dump_trace(writer, frame, cont, dest, ...)
 end
 
 local call
-local function call_flow(frame, cont, flow, ...)
+local function call_label(frame, cont, label, ...)
     if frame ~= null then
         assert_frame(frame)
     end
     assert_any(cont)
-    assert_flow(flow)
+    assert_label(label)
 
-    local rbuf = { cont, Any(flow), ... }
+    local rbuf = { cont, Any(label), ... }
     local rcount = #rbuf
 
-    local pcount = #flow.parameters
+    local pcount = #label.parameters
     --assert(pcount >= 1)
 
     -- tmpargs map directly to param indices; that means
@@ -3350,7 +3350,7 @@ local function call_flow(frame, cont, flow, ...)
     local tmpargs = {}
 
     -- copy over continuation argument
-    local cont_param = flow.parameters[PARAM_Cont]
+    local cont_param = label.parameters[PARAM_Cont]
     local cont_type = cont_param and cont_param.type or Type.Nothing
     if cont_type ~= Type.Any then
         unwrap(cont_type, cont)
@@ -3360,7 +3360,7 @@ local function call_flow(frame, cont, flow, ...)
     local srci = ARG_Arg0
     for i=0,(tcount - 1) do
         local dsti = PARAM_Arg0 + i
-        local param = flow.parameters[dsti]
+        local param = label.parameters[dsti]
         if param.vararg then
             if param.type ~= Type.Any then
                 location_error("vararg parameter can't be typed")
@@ -3391,15 +3391,15 @@ local function call_flow(frame, cont, flow, ...)
         end
     end
 
-    frame = Frame(frame, flow, tmpargs)
-    --set_anchor(frame, get_anchor(flow))
+    frame = Frame(frame, label, tmpargs)
+    --set_anchor(frame, get_anchor(label))
 
     if global_opts.trace_execution then
         local w = string_writer()
-        w(default_styler(Style.Keyword, "flow "))
-        dump_trace(w, frame, unpack(flow.arguments))
-        if flow.body_anchor then
-            flow.body_anchor:stream_message_with_source(stderr_writer, w())
+        w(default_styler(Style.Keyword, "label "))
+        dump_trace(w, frame, unpack(label.arguments))
+        if label.body_anchor then
+            label.body_anchor:stream_message_with_source(stderr_writer, w())
         else
             stderr_writer("<unknown source location>: ")
             stderr_writer(w())
@@ -3407,22 +3407,22 @@ local function call_flow(frame, cont, flow, ...)
         stderr_writer('\n')
     end
 
-    if (#flow.arguments == 0) then
+    if (#label.arguments == 0) then
         location_error("function never returns")
     end
 
     local idx = 1
     local wbuf = {}
-    local numflowargs = #flow.arguments
-    for i=1,numflowargs do
-        local arg = flow.arguments[i]
+    local numlabelargs = #label.arguments
+    for i=1,numlabelargs do
+        local arg = label.arguments[i]
         if arg.type == Type.Syntax then
             arg = arg.value.datum
         end
         if arg.type == Type.Parameter and arg.value.vararg then
             arg = evaluate(i, frame, arg)
             local args = unwrap(Type.VarArgs, arg)
-            if i == numflowargs then
+            if i == numlabelargs then
                 -- splice as-is
                 for k=1,#args do
                     wbuf[idx] = args[k]
@@ -3464,10 +3464,10 @@ call = function(frame, cont, dest, ...)
     if dest.type == Type.Closure then
         debugger.enter_call(frame, cont, dest, ...)
         local closure = dest.value
-        return call_flow(closure.frame, cont, closure.flow, ...)
-    elseif dest.type == Type.Flow then
+        return call_label(closure.frame, cont, closure.label, ...)
+    elseif dest.type == Type.Label then
         debugger.enter_call(frame, cont, dest, ...)
-        return call_flow(frame, cont, dest.value, ...)
+        return call_label(frame, cont, dest.value, ...)
     elseif dest.type == Type.Builtin then
         debugger.enter_call(frame, cont, dest, ...)
         local func = dest.value.func
@@ -3639,7 +3639,7 @@ expand_fn_cc = function(env, topit, cont)
 
     it = it.next
 
-    local func = Flow.create_empty_function(func_name, anchor)
+    local func = Label.create_empty_function(func_name, anchor)
     if scopekey then
         -- named self-binding
         env:bind(scopekey, Any(func))
@@ -3692,7 +3692,7 @@ expand_syntax_extend = function(env, topit, cont)
     it = it.next
 
     local func_name = Any(Syntax(Any(Symbol.Unnamed), anchor))
-    local func = Flow.create_empty_function(func_name)
+    local func = Label.create_empty_function(func_name)
     func:append_parameter(Parameter(func_name, Type.Any))
 
     local subenv = Scope(env)
@@ -4043,7 +4043,7 @@ local function translate_expr_list(state, it, cont, anchor)
                             local is_return = is_return_callable(args)
                             -- complex expression
                             -- continuation and results are ignored
-                            local next = Flow.create_continuation(
+                            local next = Label.create_continuation(
                                 Any(Syntax(Any(Symbol.Unnamed), _anchor)))
                             if is_return then
                                 set_active_anchor(anchor)
@@ -4073,7 +4073,7 @@ local function translate_quote(state, it, cont)
     return cont(state, anchor, it.at)
 end
 
--- (fn/cc <flow without body> expr ...)
+-- (fn/cc <label without body> expr ...)
 local function translate_fn_body(state, it, cont, anchor)
     assert_function(cont)
 
@@ -4082,7 +4082,7 @@ local function translate_fn_body(state, it, cont, anchor)
     it = unwrap(Type.List, it)
 
     it = it.next
-    local func = unwrap(Type.Flow, unsyntax(it.at))
+    local func = unwrap(Type.Label, unsyntax(it.at))
     it = it.next
 
     local dest = Any(func.parameters[1])
@@ -4138,7 +4138,7 @@ local function translate_argument_list(state, it, cont, anchor, explicit_ret)
                         end
 
                         local sxdest = Any(Syntax(Any(Symbol.Unnamed), anchor))
-                        local next = Flow.create_continuation(sxdest)
+                        local next = Label.create_continuation(sxdest)
                         local param = Parameter(sxdest, Type.Any)
                         param.vararg = true
                         next:append_parameter(param)
@@ -4249,7 +4249,7 @@ translate_root = function(expr, name, cont)
     expr, anchor = unsyntax(expr)
     expr = unwrap(Type.List, expr)
 
-    local mainfunc = Flow.create_function(Any(Syntax(Any(Symbol(name)), anchor)))
+    local mainfunc = Label.create_function(Any(Syntax(Any(Symbol(name)), anchor)))
     local ret = mainfunc.parameters[PARAM_Cont]
 
     return translate_expr_list(mainfunc, expr,
@@ -4302,7 +4302,7 @@ local function program(top)
         visited[obj] = true
         for i,arg in ipairs(obj.arguments) do
             arg = maybe_unsyntax(arg)
-            if arg.type == Type.Flow then
+            if arg.type == Type.Label then
                 walk(arg.value)
             end
         end
@@ -4333,7 +4333,7 @@ local function build_users(pg)
             entry = maybe_unsyntax(entry)
             if entry.type == Type.Parameter then
                 add_user(entry.value, obj, i)
-            elseif entry.type == Type.Flow then
+            elseif entry.type == Type.Label then
                 add_user(entry.value, obj, i)
             end
         end
@@ -4371,13 +4371,13 @@ local function build_scopes(pg, users)
     for obj,_ in pairs(pg) do
         for i,arg in ipairs(obj.arguments) do
             arg = maybe_unsyntax(arg)
-            if arg.type == Type.Parameter and arg.value.flow ~= obj then
+            if arg.type == Type.Parameter and arg.value.label ~= obj then
                 local param = arg.value
-                -- i am directly live in param.flow
-                add_scope(param.flow, obj, 1)
+                -- i am directly live in param.label
+                add_scope(param.label, obj, 1)
 
-                -- my users are indirectly live in param.flow
-                mark_indirect(obj, param.flow, 2)
+                -- my users are indirectly live in param.label
+                mark_indirect(obj, param.label, 2)
                 break
             end
         end
@@ -4428,7 +4428,7 @@ local function build_scc(top)
         table.insert(P, obj)
         for i,arg in ipairs(obj.arguments) do
             arg = maybe_unsyntax(arg)
-            if arg.type == Type.Flow then
+            if arg.type == Type.Label then
                 arg = arg.value
                 local Cw = Cmap[arg]
                 if Cw == nil then
@@ -4468,7 +4468,7 @@ local function remap_body(args, map)
     local body = {}
     for i,arg in ipairs(args) do
         local narg, anchor = maybe_unsyntax(arg)
-        if narg.type == Type.Flow or narg.type == Type.Parameter then
+        if narg.type == Type.Label or narg.type == Type.Parameter then
             narg = narg.value
             arg = map[narg] or arg
             if arg.type == Type.VarArgs then
@@ -4493,12 +4493,12 @@ local function remap_body(args, map)
 end
 
 local function mangle(entry, params, map, scopes)
-    assert_flow(entry)
+    assert_label(entry)
     local entry_scope = scopes[entry]
     if entry_scope then
         -- create new labels and map new parameters
         for l,_ in pairs(entry_scope) do
-            local ll = Flow.create_from_flow(l)
+            local ll = Label.create_from_label(l)
             map[l] = Any(ll)
             for _,param in ipairs(l.parameters) do
                 local pparam = Parameter.create_from_parameter(param)
@@ -4508,7 +4508,7 @@ local function mangle(entry, params, map, scopes)
         end
     end
     -- remap entry point
-    local le = Flow.create_from_flow(entry)
+    local le = Label.create_from_label(entry)
     local scope = {[le]=true}
     if entry_scope then
         -- remap label bodies
@@ -4589,14 +4589,14 @@ local function optimize(le)
     end
 
     local function dump_single_label(l)
-        stream_il(stdout_writer, Any(l), {follow_flows=false, follow_closures=false, follow_params=false})
+        stream_il(stdout_writer, Any(l), {follow_labels=false, follow_closures=false, follow_params=false})
     end
 
-    local function fold_flow(label)
+    local function fold_label(label)
         local body = label.arguments
         -- evaluate and rewrite
         local f,anchor = maybe_unsyntax(body[2])
-        if f.type == Type.Flow then
+        if f.type == Type.Label then
             if #body == 2 then
                 return false
             end
@@ -4651,7 +4651,7 @@ local function optimize(le)
         end
         for k,_ in pairs(users[label]) do
             local f = maybe_unsyntax(k.arguments[2])
-            if f.type == Type.Flow and f.value == label then
+            if f.type == Type.Label and f.value == label then
                 if not user then
                     user = k
                 else
@@ -4747,7 +4747,7 @@ local function optimize(le)
                 end) then
                 for i,arg in ipairs(l.arguments) do
                     arg = maybe_unsyntax(arg)
-                    if arg.type == Type.Flow then
+                    if arg.type == Type.Label then
                         walk(arg.value)
                     end
                 end
@@ -4874,7 +4874,7 @@ specialize = function(func, cont)
 
     local ret = globals:lookup(Symbol("exit"))
 
-    func = unwrap(Type.Flow, func)
+    func = unwrap(Type.Label, func)
 
     dump_program(func)
     print()
@@ -4964,7 +4964,7 @@ specialize = function(func, cont)
 
         local drop_type_map = {}
         local function drop_type(func, argtypes)
-            assert_flow(func)
+            assert_label(func)
             local keys = { func, unpack(argtypes) }
             local rfunc = load_val(drop_type_map, keys)
             if rfunc then
@@ -5011,7 +5011,7 @@ specialize = function(func, cont)
         end
 
         local function drop(args)
-            local func = unwrap(Type.Flow, maybe_unsyntax(args[2]))
+            local func = unwrap(Type.Label, maybe_unsyntax(args[2]))
             local pg = program(func)
             local users = build_users(pg)
             local scopes = build_scopes(pg, users)
@@ -5028,14 +5028,14 @@ specialize = function(func, cont)
             while true do
                 local body = func.arguments
                 local f = maybe_unsyntax(body[2])
-                if f.type == Type.Flow then
+                if f.type == Type.Label then
                     local newf = drop(body)
                     func.arguments = newf.arguments
                 elseif f.type == Type.Builtin then
                     f = f.value
                     if not fold_constants(func) then
                         local cont = maybe_unsyntax(body[1])
-                        if cont.type == Type.Flow then
+                        if cont.type == Type.Label then
                             cont = cont.value
                             if f.type_func then
                                 local argtypes = build_argtypes(body)
@@ -5351,7 +5351,10 @@ builtins.eval = function(frame, cont, self, expr, scope, path)
     end)
 end
 
-builtins.mangle = function(frame, cont, self)
+-- pass arguments to specialize; when the argument is an unbound parameter,
+-- then this is the new parameter the function will be linked to.
+builtins.mangle = function(frame, cont, self, func, ...)
+    local args = { ... }
     -- todo
 end
 
@@ -5455,19 +5458,19 @@ builtins["type-new"] = wrap_simple_builtin(function(name)
     return Any(Type(unwrap(Type.Symbol, name)))
 end)
 
-builtins["flow-new"] = wrap_simple_builtin(function(name)
+builtins["label-new"] = wrap_simple_builtin(function(name)
     checkargs(1,1,name)
-    return Any(Flow(name))
+    return Any(Label(name))
 end)
 
-builtins["closure-new"] = wrap_simple_builtin(function(flow,frame)
-    checkargs(1,2,flow,frame)
+builtins["closure-new"] = wrap_simple_builtin(function(label,frame)
+    checkargs(1,2,label,frame)
     if is_null_or_none(frame) then
         frame = null
     else
         frame = unwrap(Type.Frame, frame)
     end
-    return Any(Closure(unwrap(Type.Flow,flow),frame))
+    return Any(Closure(unwrap(Type.Label,label),frame))
 end)
 
 builtins["syntax-list"] = wrap_simple_builtin(function(...)
@@ -5548,7 +5551,7 @@ end
 compare_func(Type.Bool)
 compare_func(Type.Symbol)
 compare_func(Type.Parameter)
-compare_func(Type.Flow)
+compare_func(Type.Label)
 compare_func(Type.Closure)
 
 local function ordered_compare_func(T)
@@ -6008,10 +6011,10 @@ builtins["next-scope-symbol"] = wrap_simple_builtin(function(scope, key)
     end
 end)
 
-builtins["closure-flow"] = wrap_simple_builtin(function(closure)
+builtins["closure-label"] = wrap_simple_builtin(function(closure)
     checkargs(1,1, closure)
     closure = unwrap(Type.Closure, closure)
-    return Any(closure.flow)
+    return Any(closure.label)
 end)
 
 builtins["closure-frame"] = wrap_simple_builtin(function(closure)
@@ -6024,49 +6027,49 @@ builtins["closure-frame"] = wrap_simple_builtin(function(closure)
     end
 end)
 
-builtins["flow-parameters"] = wrap_simple_builtin(function(flow)
-    checkargs(1,1, flow)
-    flow = unwrap(Type.Flow, flow)
+builtins["label-parameters"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
     local params = {}
-    local plist = flow.parameters
+    local plist = label.parameters
     for i=1,#plist do
         table.insert(params, Any(plist[i]))
     end
     return unpack(params)
 end)
 
-builtins["flow-arguments"] = wrap_simple_builtin(function(flow)
-    checkargs(1,1, flow)
-    flow = unwrap(Type.Flow, flow)
-    return unpack(flow.arguments)
+builtins["label-arguments"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
+    return unpack(label.arguments)
 end)
 
-builtins["flow-anchor"] = wrap_simple_builtin(function(flow)
-    checkargs(1,1, flow)
-    flow = unwrap(Type.Flow, flow)
-    if flow.anchor then
-        return Any(flow.anchor)
+builtins["label-anchor"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
+    if label.anchor then
+        return Any(label.anchor)
     end
 end)
 
-builtins["flow-body-anchor"] = wrap_simple_builtin(function(flow)
-    checkargs(1,1, flow)
-    flow = unwrap(Type.Flow, flow)
-    if flow.body_anchor then
-        return Any(flow.body_anchor)
+builtins["label-body-anchor"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
+    if label.body_anchor then
+        return Any(label.body_anchor)
     end
 end)
 
-builtins["flow-name"] = wrap_simple_builtin(function(flow)
-    checkargs(1,1, flow)
-    flow = unwrap(Type.Flow, flow)
-    return Any(flow.name)
+builtins["label-name"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
+    return Any(label.name)
 end)
 
-builtins["flow-uid"] = wrap_simple_builtin(function(flow)
-    checkargs(1,1, flow)
-    flow = unwrap(Type.Flow, flow)
-    return Any(size_t(flow.uid))
+builtins["label-uid"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
+    return Any(size_t(label.uid))
 end)
 
 builtins["parameter-name"] = wrap_simple_builtin(function(param)
@@ -6083,10 +6086,10 @@ builtins["parameter-anchor"] = wrap_simple_builtin(function(param)
     end
 end)
 
-builtins["parameter-flow"] = wrap_simple_builtin(function(param)
+builtins["parameter-label"] = wrap_simple_builtin(function(param)
     checkargs(1,1, param)
     param = unwrap(Type.Parameter, param)
-    return Any(param.flow)
+    return Any(param.label)
 end)
 
 builtins["parameter-index"] = wrap_simple_builtin(function(param)
@@ -6101,25 +6104,25 @@ builtins["parameter-type"] = wrap_simple_builtin(function(param)
     return Any(param.type)
 end)
 
-builtins["frame-values"] = wrap_simple_builtin(function(frame, flow)
-    checkargs(2,2, frame, flow)
+builtins["frame-values"] = wrap_simple_builtin(function(frame, label)
+    checkargs(2,2, frame, label)
     frame = unwrap(Type.Frame, frame)
-    flow = unwrap(Type.Flow, flow)
-    local result = frame:get_bank(flow)
+    label = unwrap(Type.Label, label)
+    local result = frame:get_bank(label)
     if result ~= null then
         return unpack(result)
     end
 end)
 
-builtins["frame-new"] = wrap_simple_builtin(function(frame, flow, ...)
-    checkargs(2,-1, frame, flow, ...)
+builtins["frame-new"] = wrap_simple_builtin(function(frame, label, ...)
+    checkargs(2,-1, frame, label, ...)
     if is_none(frame) then
         frame = nil
     else
         frame = unwrap(Type.Frame, frame)
     end
-    flow = unwrap(Type.Flow, flow)
-    return Any(Frame(frame, flow, { ... }))
+    label = unwrap(Type.Label, label)
+    return Any(Frame(frame, label, { ... }))
 end)
 
 local valtoptr
@@ -6223,18 +6226,18 @@ end)
 builtins["bind!"] = function(frame, cont, self, param, value)
     checkargs(2,2, param, value)
     param = unwrap(Type.Parameter, param)
-    if not param.flow then
+    if not param.label then
         error("can't rebind unbound parameter")
     end
-    frame:rebind(param.flow, param.index, value)
+    frame:rebind(param.label, param.index, value)
     return call(frame, none, cont)
 end
 
-builtins["flow-append-parameter!"] = wrap_simple_builtin(function(flow, param)
-    checkargs(2,2, flow, param)
-    flow = unwrap(Type.Flow, flow)
+builtins["label-append-parameter!"] = wrap_simple_builtin(function(label, param)
+    checkargs(2,2, label, param)
+    label = unwrap(Type.Label, label)
     param = unwrap(Type.Parameter, param)
-    flow:append_parameter(param)
+    label:append_parameter(param)
 end)
 
 builtins["copy-memory!"] = wrap_simple_builtin(
@@ -6288,7 +6291,7 @@ builtins.dump = wrap_simple_builtin(function(value)
     return value
 end)
 
-builtins["dump-flow"] = wrap_simple_builtin(function(value)
+builtins["dump-label"] = wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     stream_il(stdout_writer, value)
 end)
@@ -6471,7 +6474,7 @@ end
 
 local function init_globals()
     Type.Builtin:bind(Any(Symbol.Super), Any(Type.Callable))
-    Type.Flow:bind(Any(Symbol.Super), Any(Type.Callable))
+    Type.Label:bind(Any(Symbol.Super), Any(Type.Callable))
     Type.Closure:bind(Any(Symbol.Super), Any(Type.Callable))
 
     do

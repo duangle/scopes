@@ -340,7 +340,7 @@ syntax-extend
     #---
     set-type-symbol! string (quote apply-type) string-new
     set-type-symbol! type (quote apply-type) type-new
-    set-type-symbol! Flow (quote apply-type) flow-new
+    set-type-symbol! Label (quote apply-type) label-new
     set-type-symbol! Parameter (quote apply-type) parameter-new
     set-type-symbol! Scope (quote apply-type) scope-new
     set-type-symbol! Frame (quote apply-type) frame-new
@@ -364,7 +364,7 @@ syntax-extend
     set-type-symbol! bool (quote compare) bool-compare
     set-type-symbol! Symbol (quote compare) symbol-compare
     set-type-symbol! Parameter (quote compare) parameter-compare
-    set-type-symbol! Flow (quote compare) flow-compare
+    set-type-symbol! Label (quote compare) label-compare
     set-type-symbol! Closure (quote compare) closure-compare
     set-type-symbol! string (quote compare) string-compare
     set-type-symbol! type (quote compare) type-compare
@@ -1317,7 +1317,7 @@ syntax-extend
             ? (symbol? head)
                 get-scope-symbol env head
                 \ head
-        let no-named-arguments? = (!= (typeof head) Flow)
+        let no-named-arguments? = (!= (typeof head) Label)
         let expr = (slice expr 1)
         loop (expr)
             if (empty? expr)
@@ -1348,7 +1348,7 @@ syntax-extend
                 get-scope-symbol env head
                 \ head
         let expr = (slice expr 1)
-        let params... = (flow-parameters head)
+        let params... = (label-parameters head)
         let pcount = (int (va-countof params...))
 
         let idx = 1
@@ -2058,7 +2058,7 @@ syntax-extend
         if (not (list? (syntax->datum paramdef)))
             syntax-error paramdef "parameter list expected"
         let func =
-            Flow
+            Label
                 ? (none? decl)
                     datum->syntax
                         Symbol ""
@@ -2069,7 +2069,7 @@ syntax-extend
         let subenv = (Scope env)
         fn append-param (param-name param-type)
             let param-name-datum = (syntax->datum param-name)
-            flow-append-parameter! func
+            label-append-parameter! func
                 if ((typeof param-name-datum) == Parameter) param-name-datum
                 else
                     let param = (Parameter param-name param-type)
@@ -2196,7 +2196,7 @@ define fn-types
                     enumerate
                         zip-fill
                             va-iter
-                                flow-parameters env.recur
+                                label-parameters env.recur
                             syntax->datum expr
                             \ none
                     if (i == 0)
