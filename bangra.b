@@ -20,15 +20,15 @@
         pow x 7
 
     fn/cc print10 (ret f)
-        cc/call none
+        cc/call
             fn/cc rec (_ i)
-                cc/call none branch (i32== i 10)
+                cc/call branch none (i32== i 10)
                     fn/cc (_)
                         ret
                     fn/cc (_)
                         f
-                        cc/call none rec (i32+ i 1)
-            \ 0
+                        cc/call rec none (i32+ i 1)
+            \ none 0
 
     #print10
         call
@@ -262,27 +262,27 @@ syntax-extend
     set-scope-symbol! syntax-scope (Symbol "<")
         fn/cc "<" (return a b)
             ordered-branch a b return-false
-                fn/cc (_) (cc/call none unordered-error a b)
+                fn/cc (_) (cc/call unordered-error none a b)
                 \ return-true return-false
     set-scope-symbol! syntax-scope (Symbol "<=")
         fn/cc "<=" (return a b)
             ordered-branch a b return-true
-                fn/cc (_) (cc/call none unordered-error a b)
+                fn/cc (_) (cc/call unordered-error none a b)
                 \ return-true return-false
     set-scope-symbol! syntax-scope (Symbol ">")
         fn/cc ">" (return a b)
             ordered-branch a b return-false
-                fn/cc (_) (cc/call none unordered-error a b)
+                fn/cc (_) (cc/call unordered-error none a b)
                 \ return-false return-true
     set-scope-symbol! syntax-scope (Symbol ">=")
         fn/cc ">=" (return a b)
             ordered-branch a b return-true
-                fn/cc (_) (cc/call none unordered-error a b)
+                fn/cc (_) (cc/call unordered-error none a b)
                 \ return-false return-true
     set-scope-symbol! syntax-scope (Symbol "<>")
         fn/cc "<>" (return a b)
             ordered-branch a b return-false
-                fn/cc (_) (cc/call none unordered-error a b)
+                fn/cc (_) (cc/call unordered-error none a b)
                 \ return-true return-true
     set-scope-symbol! syntax-scope (Symbol "<:")
         fn/cc "<:" (return a b)
@@ -1674,13 +1674,13 @@ syntax-extend
                         callee
                             fn/cc (cont-callee values...)
                                 # continue caller
-                                cc/call none caller-return cont-callee values...
+                                cc/call caller-return none cont-callee values...
                         # callee has returned for good
                           resume caller - we're done here.
-                        cc/call none caller-return
+                        cc/call caller-return none
                     fn/cc (_)
                         # continue callee
-                        cc/call none cont-callee
+                        cc/call cont-callee none
 
             return yield-iter none
 

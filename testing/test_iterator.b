@@ -47,11 +47,11 @@ bleh 1 2 3
 
 call
     fn/cc (_ x)
-        cc/call _
+        cc/call
             fn (x y)
                 print x y
-                cc/call none _
-            \ x
+                cc/call _ none
+            \ _ x
     \ "hi"
 
 let done =

@@ -252,13 +252,13 @@ assert
 print typeof
 
 fn/cc call/cc (cont func)
-    cc/call none func cont
+    cc/call func none cont
 
 assert
     call/cc
         fn (cont)
             print "entered function"
-            cc/call none cont true
+            cc/call cont none true
     "call/cc failed"
 
 do
@@ -268,7 +268,7 @@ do
             fn subf ()
                 print "entered subfunction"
                 # `return x` would just exit subf, but not cont-test
-                cc/call none topret x
+                cc/call topret none x
             subf;
             error "unreachable"
     assert

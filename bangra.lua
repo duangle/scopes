@@ -28,7 +28,7 @@ local global_opts = {
     version_patch = 0,
 
     trace_execution = false, -- print each statement being executed
-    print_lua_traceback = false, -- print lua traceback on any error
+    print_lua_traceback = true, -- print lua traceback on any error
     validate_macros = false, -- validate each macro result
     stack_limit = 65536, -- recursion limit
 
@@ -2671,8 +2671,7 @@ do
 end
 
 local ARG_Cont = 1
-local ARG_Func = 2
-local ARG_Arg0 = 3
+local ARG_Arg0 = 2
 
 local PARAM_Cont = 1
 local PARAM_Arg0 = 2
@@ -2699,6 +2698,12 @@ do
                 assert_symbol(name)
                 self.uid = unique_id_counter
                 unique_id_counter = unique_id_counter + 1
+                -- next label/builtin
+                -- self.enter = nil
+
+                -- next.parameter index matches self.argument index
+                -- unless a parameter is flagged as vararg
+                -- first parameter/argument is reserved for return continuation
                 self.parameters = {}
                 self.arguments = {}
                 self.name = name
@@ -3077,22 +3082,21 @@ do
             writer(styler(Style.Operator, "):"))
             stream_scope(scopes[alabel])
             writer("\n    ")
-            if #alabel.arguments == 0 then
+            if not alabel.enter then
                 writer(styler(Style.Error, "empty"))
             else
                 if line_anchors and alabel.body_anchor then
                     stream_anchor(alabel.body_anchor)
                     writer(' ')
                 end
+                stream_argument(alabel.enter, alabel, aframe)
                 for i=2,#alabel.arguments do
-                    if i > 2 then
-                        writer(" ")
-                    end
+                    writer(" ")
                     local arg = alabel.arguments[i]
                     stream_argument(arg, alabel, aframe)
                 end
                 local cont = alabel.arguments[1]
-                if not is_none(maybe_unsyntax(cont)) then
+                if cont and not is_none(maybe_unsyntax(cont)) then
                     writer(styler(Style.Comment,CONT_SEP))
                     stream_argument(cont, alabel, aframe)
                 end
@@ -3102,6 +3106,9 @@ do
             for i,arg in ipairs(alabel.arguments) do
                 arg = maybe_unsyntax(arg)
                 stream_any(arg, aframe)
+            end
+            if alabel.enter then
+                stream_any(alabel.enter, aframe)
             end
         end
         local function stream_closure(aclosure)
@@ -3249,7 +3256,7 @@ do
             stack[k] = null
         end
     end
-    function cls.enter_call(frame, cont, dest, ...)
+    function cls.enter_call(frame, dest, cont, ...)
         for i=1,#stack do
             local entry = stack[i]
             local _cont = entry[3]
@@ -3308,7 +3315,7 @@ local function evaluate(argindex, frame, value)
         end
         return result
     elseif (value.type == Type.Label) then
-        if (argindex == ARG_Func) then
+        if (argindex == 0) then
             -- no closure creation required
             return value
         else
@@ -3319,7 +3326,7 @@ local function evaluate(argindex, frame, value)
     return value
 end
 
-local function dump_trace(writer, frame, cont, dest, ...)
+local function dump_trace(writer, frame, dest, cont, ...)
     writer(repr(dest))
     for i=1,select('#', ...) do
         writer(' ')
@@ -3332,14 +3339,14 @@ local function dump_trace(writer, frame, cont, dest, ...)
 end
 
 local call
-local function call_label(frame, cont, label, ...)
+local function call_label(frame, label, cont, ...)
     if frame ~= null then
         assert_frame(frame)
     end
     assert_any(cont)
     assert_label(label)
 
-    local rbuf = { cont, Any(label), ... }
+    local rbuf = { cont, ... }
     local rcount = #rbuf
 
     local pcount = #label.parameters
@@ -3349,46 +3356,42 @@ local function call_label(frame, cont, label, ...)
     -- the callee is not included.
     local tmpargs = {}
 
-    -- copy over continuation argument
-    local cont_param = label.parameters[PARAM_Cont]
-    local cont_type = cont_param and cont_param.type or Type.Nothing
-    if cont_type ~= Type.Any then
-        unwrap(cont_type, cont)
-    end
-    tmpargs[PARAM_Cont] = cont
-    local tcount = pcount - PARAM_Arg0 + 1
-    local srci = ARG_Arg0
-    for i=0,(tcount - 1) do
-        local dsti = PARAM_Arg0 + i
-        local param = label.parameters[dsti]
+    local srci = 1
+    for i=1,pcount do
+        local param = label.parameters[i]
+        local arg
         if param.vararg then
+            if i == 1 then
+                location_error("continuation parameter can't be vararg")
+            end
             if param.type ~= Type.Any then
                 location_error("vararg parameter can't be typed")
             end
             -- how many parameters after this one
-            local remparams = tcount - i - 1
+            local remparams = pcount - i
             -- how many varargs to capture
             local vargsize = max(0, rcount - srci - remparams + 1)
             local argvalues = {}
             for k=srci,(srci + vargsize - 1) do
                 assert(rbuf[k])
-                argvalues[k - srci + 1] = rbuf[k]
+                table.insert(argvalues, rbuf[k])
             end
-            tmpargs[dsti] = Any(Type.VarArgs, argvalues)
+            arg = Any(Type.VarArgs, argvalues)
             srci = srci + vargsize
         elseif srci <= rcount then
             local value = rbuf[srci]
             if param.type ~= Type.Any then
                 unwrap(param.type, value)
             end
-            tmpargs[dsti] = value
+            arg = value
             srci = srci + 1
         else
             if param.type ~= Type.Any then
                 unwrap(param.type, none)
             end
-            tmpargs[dsti] = none
+            arg = none
         end
+        table.insert(tmpargs, arg)
     end
 
     frame = Frame(frame, label, tmpargs)
@@ -3397,7 +3400,7 @@ local function call_label(frame, cont, label, ...)
     if global_opts.trace_execution then
         local w = string_writer()
         w(default_styler(Style.Keyword, "label "))
-        dump_trace(w, frame, unpack(label.arguments))
+        dump_trace(w, frame, label.enter, unpack(label.arguments))
         if label.body_anchor then
             label.body_anchor:stream_message_with_source(stderr_writer, w())
         else
@@ -3407,8 +3410,21 @@ local function call_label(frame, cont, label, ...)
         stderr_writer('\n')
     end
 
-    if (#label.arguments == 0) then
-        location_error("function never returns")
+    if not label.enter then
+        location_error("label is empty")
+    end
+
+    local enter = label.enter
+    if enter.type == Type.Syntax then
+        enter = enter.value.datum
+    end
+    enter = evaluate(0, frame, enter)
+    if (enter.type == Type.VarArgs) then
+        if #enter.value == 0 then
+            enter = none
+        else
+            enter = enter.value[1]
+        end
     end
 
     local idx = 1
@@ -3443,13 +3459,13 @@ local function call_label(frame, cont, label, ...)
         end
     end
 
-    return call(frame, unpack(wbuf))
+    return call(frame, enter, unpack(wbuf))
 end
 
-call = function(frame, cont, dest, ...)
+call = function(frame, dest, cont, ...)
     if global_opts.trace_execution then
         stderr_writer(default_styler(Style.Keyword, "trace "))
-        dump_trace(stderr_writer, frame, cont, dest, ...)
+        dump_trace(stderr_writer, frame, dest, cont, ...)
         stderr_writer('\n')
     end
     if frame ~= null then
@@ -3462,21 +3478,21 @@ call = function(frame, cont, dest, ...)
     end
 
     if dest.type == Type.Closure then
-        debugger.enter_call(frame, cont, dest, ...)
+        debugger.enter_call(frame, dest, cont, ...)
         local closure = dest.value
-        return call_label(closure.frame, cont, closure.label, ...)
+        return call_label(closure.frame, closure.label, cont, ...)
     elseif dest.type == Type.Label then
-        debugger.enter_call(frame, cont, dest, ...)
-        return call_label(frame, cont, dest.value, ...)
+        debugger.enter_call(frame, dest, cont, ...)
+        return call_label(frame, dest.value, cont, ...)
     elseif dest.type == Type.Builtin then
-        debugger.enter_call(frame, cont, dest, ...)
+        debugger.enter_call(frame, dest, cont, ...)
         local func = dest.value.func
-        return func(frame, cont, dest, ...)
+        return func(frame, dest, cont, ...)
     elseif dest.type == Type.Type then
         local ty = dest.value
         local func = ty:lookup(Symbol.ApplyType)
         if func ~= null then
-            return call(frame, cont, func, ...)
+            return call(frame, func, cont, ...)
         else
             location_error("can not apply type "
                 .. tostring(ty))
@@ -3487,26 +3503,30 @@ call = function(frame, cont, dest, ...)
     end
 end
 
-local function execute(cont, dest, ...)
+local function retcall (frame, dest, ...)
+    return call(frame, dest, none, ...)
+end
+
+local function execute(dest, cont, ...)
     assert_any(dest)
     assert_function(cont)
-    local ret = Any(Builtin(function(frame, _cont, dest, ...)
+    local ret = Any(Builtin(function(frame, dest, _cont, ...)
         if frame ~= null then
             assert_frame(frame)
         end
         return cont(...)
     end, Symbol.ExecuteReturn))
-    return call(null, ret, dest, ...)
+    return call(null, dest, ret, ...)
 end
 
 function Type:format_value(value, styler)
     local reprf = self:lookup(Symbol.Repr)
     if reprf then
         local result
-        execute(function(value)
+        execute(reprf, function(value)
             result = unwrap(Type.String, value)
-        end, reprf, Any(self, value), Any(Builtin(function(frame, cont, self, style, text)
-            return call(frame, none, cont,
+        end, Any(self, value), Any(Builtin(function(frame, self, cont, style, text)
+            return retcall(frame, cont,
                 Any(styler(
                     unwrap(Type.String, style),
                     unwrap(Type.String, text))))
@@ -3569,11 +3589,11 @@ local expand_syntax_extend
 local expand_root
 
 local function wrap_expand_builtin(f)
-    return function(frame, cont, dest, topit, env)
+    return function(frame, dest, cont, topit, env)
         return f(unwrap(Type.Scope, env), unwrap(Type.List, topit),
             function (cur_list, cur_env)
                 assert(cur_env)
-                return call(frame, none, cont, Any(cur_list), Any(cur_env))
+                return retcall(frame, cont, Any(cur_list), Any(cur_env))
             end)
     end
 end
@@ -3703,17 +3723,17 @@ expand_syntax_extend = function(env, topit, cont)
         expr = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), expr)
         expr = Any(Syntax(Any(expr), anchor, true))
         return translate(null, expr,
-            function(_state, _anchor, fun)
+            function(_state, _anchor, enter, fun)
+                assert(not enter)
                 fun = maybe_unsyntax(fun)
-                return execute(
+                return execute(fun,
                     function(expr_env)
                         if expr_env == null or expr_env.type ~= Type.Scope then
                             set_active_anchor(anchor)
                             location_error("syntax-extend did not evaluate to scope")
                         end
                         return cont(topit.next, unwrap(Type.Scope, expr_env))
-                    end,
-                    fun)
+                    end)
             end)
     end)
 end
@@ -3725,7 +3745,7 @@ local function expand_wildcard(label, env, handler, topit, cont)
     assert_list(topit)
     assert(cont)
     return xpcallcc(function(cont)
-        return execute(function(result)
+        return execute(handler, function(result)
             if result == null or is_none(result) then
                 return cont(EOL)
             end
@@ -3735,7 +3755,7 @@ local function expand_wildcard(label, env, handler, topit, cont)
                     .. tostring(result.type))
             end
             return cont(unwrap(Type.List, result))
-        end, handler, Any(topit), Any(env))
+        end, Any(topit), Any(env))
     end,
     function (exc, cont)
         exc = exception(exc)
@@ -3760,7 +3780,7 @@ local function expand_macro(env, handler, topit, cont)
     assert_list(topit)
     assert(cont)
     return xpcallcc(function(cont)
-        return execute(function(result_list, result_scope)
+        return execute(handler, function(result_list, result_scope)
             --print(handler, result_list, result_scope)
             if (is_none(result_list)) then
                 return cont(EOL)
@@ -3794,7 +3814,7 @@ local function expand_macro(env, handler, topit, cont)
                 end
             end
             return cont(result_list, result_scope)
-        end, handler,  Any(topit), Any(env))
+        end, Any(topit), Any(env))
     end,
     function (exc, cont)
         exc = exception(exc)
@@ -3946,30 +3966,32 @@ local translate_root
 do
 
 -- arguments must include continuation
-local function br(state, arguments, anchor)
+local function br(state, enter, arguments, anchor)
+    assert_any(enter)
     assert_table(arguments)
     assert_anchor(anchor)
     for i=1,#arguments do
         local arg = arguments[i]
         assert_any(arg)
     end
-    assert(#arguments >= 2)
+    assert(#arguments >= 1)
     if (state == null) then
         location_error("can not define body: continuation already exited.")
         --print("warning: can not define body: continuation already exited.")
         return
     end
+    assert(not state.enter)
     assert(#state.arguments == 0)
+    state.enter = enter
     state.arguments = arguments
     state:set_body_anchor(anchor)
 end
 
 --------------------------------------------------------------------------------
 
-local function is_return_callable(args)
-    local callable = args[2]
+local function is_return_callable(callable, args)
     local contarg = args[1]
-    local argcount = #args - 2
+    local argcount = #args - 1
     local is_return = false
     local is_forward_return = false
     local ncallable = maybe_unsyntax(callable)
@@ -3995,11 +4017,11 @@ end
 
 -- used 2 times
 local function make_callable_dest(dest, cont)
-    return function(state, anchor, value, value_is_call)
+    return function(state, anchor, enter, value)
         assert_anchor(anchor)
-        if value_is_call then
+        if enter then
             local args = value
-            local is_return = is_return_callable(args)
+            local is_return = is_return_callable(enter, args)
             if not args[1] then
                 -- todo: must not override existing cont arg
                 if is_return then
@@ -4009,14 +4031,14 @@ local function make_callable_dest(dest, cont)
                     args[1] = dest
                 end
             end
-            br(state, args, anchor)
+            br(state, enter, args, anchor)
             return cont()
         elseif value == null then
-            br(state, {none, dest}, anchor)
+            br(state, dest, {none}, anchor)
             return cont()
         else
             local _,anchor = maybe_unsyntax(value)
-            br(state, {none, dest, value}, anchor)
+            br(state, dest, {none, value}, anchor)
             return cont()
         end
     end
@@ -4036,11 +4058,11 @@ local function translate_expr_list(state, it, cont, anchor)
                 local sxvalue = it.at
                 local value, anchor = unsyntax(sxvalue)
                 return translate(state, sxvalue,
-                    function(state, _anchor, value, value_is_call)
+                    function(state, _anchor, enter, value)
                         assert_anchor(_anchor)
-                        if value_is_call then
+                        if enter then
                             local args = value
-                            local is_return = is_return_callable(args)
+                            local is_return = is_return_callable(enter, args)
                             -- complex expression
                             -- continuation and results are ignored
                             local next = Label.create_continuation(
@@ -4051,7 +4073,7 @@ local function translate_expr_list(state, it, cont, anchor)
                             else
                                 args[1] = Any(next)
                             end
-                            br(state, args, _anchor)
+                            br(state, enter, args, _anchor)
                             state = next
                         end
                         return loop(state, it.next)
@@ -4070,7 +4092,7 @@ local function translate_quote(state, it, cont)
     it = it.next
     local sx = unwrap(Type.Syntax, it.at)
     sx.quoted = true
-    return cont(state, anchor, it.at)
+    return cont(state, anchor, nil, it.at)
 end
 
 -- (fn/cc <label without body> expr ...)
@@ -4088,11 +4110,11 @@ local function translate_fn_body(state, it, cont, anchor)
     local dest = Any(func.parameters[1])
 
     return translate_expr_list(func, it,
-    function(_state, _anchor, value, value_is_call)
+    function(_state, _anchor, enter, value)
         assert_anchor(_anchor)
-        if value_is_call then
+        if enter then
             local args = value
-            local is_return = is_return_callable(args)
+            local is_return = is_return_callable(enter, args)
             local next
             if not args[1] then
                 if is_return then
@@ -4101,37 +4123,38 @@ local function translate_fn_body(state, it, cont, anchor)
                     args[1] = dest
                 end
             end
-            br(_state, args, _anchor)
+            br(_state, enter, args, _anchor)
         elseif value == null then
-            br(_state, {none, dest}, _anchor)
+            br(_state, dest, {none}, _anchor)
         else
             local _,_anchor = maybe_unsyntax(value)
-            br(_state, {none, dest, value}, _anchor)
+            br(_state, dest, {none, value}, _anchor)
         end
         assert(#func.arguments > 0)
-        return cont(state, anchor, Any(Syntax(Any(func), anchor)))
+        return cont(state, anchor, nil, Any(Syntax(Any(func), anchor)))
     end, anchor)
 end
 
 local function translate_argument_list(state, it, cont, anchor, explicit_ret)
     local args = {}
+    local enter
     if not explicit_ret then
         table.insert(args, false)
     end
     local function loop(state, it)
         if (it == EOL) then
-            return cont(state, anchor, args, true)
+            return cont(state, anchor, enter, args)
         else
             local sxvalue = it.at
             local value = maybe_unsyntax(sxvalue)
             -- complex expression
             return translate(state, sxvalue,
-                function(state, anchor, value, value_is_call)
+                function(state, anchor, _enter, value)
                     assert_anchor(anchor)
                     local arg
-                    if value_is_call then
+                    if _enter then
                         local _args = value
-                        local is_return = is_return_callable(_args)
+                        local is_return = is_return_callable(_enter, _args)
                         if is_return then
                             set_active_anchor(anchor)
                             location_error("unexpected return in argument list")
@@ -4143,14 +4166,18 @@ local function translate_argument_list(state, it, cont, anchor, explicit_ret)
                         param.vararg = true
                         next:append_parameter(param)
                         _args[1] = Any(next)
-                        br(state, _args, anchor)
+                        br(state, _enter, _args, anchor)
                         state = next
                         arg = Any(next.parameters[PARAM_Arg0])
                     else
                         -- a known value is returned - no need to generate code
                         arg = value
                     end
-                    table.insert(args, arg)
+                    if not enter then
+                        enter = arg
+                    else
+                        table.insert(args, arg)
+                    end
                     return loop(state, it.next)
                 end)
         end
@@ -4188,9 +4215,9 @@ local function translate_contcall(state, it, cont, anchor)
     it = it.next
     local count = it.count
     if count < 1 then
-        location_error("continuation expected")
-    elseif count < 2 then
         location_error("callable expected")
+    elseif count < 2 then
+        location_error("continuation expected")
     end
     return translate_argument_list(state, it, cont, anchor, true)
 end
@@ -4218,7 +4245,7 @@ translate = function(state, sxexpr, destcont)
                 return translate_implicit_call(state, slist, cont, anchor)
             end
         else
-            return cont(state, anchor, sxexpr)
+            return cont(state, anchor, nil, sxexpr)
         end
     end,
     function (exc, cont)
@@ -4300,6 +4327,10 @@ local function program(top)
             return
         end
         visited[obj] = true
+        local arg = maybe_unsyntax(obj.enter)
+        if arg.type == Type.Label then
+            walk(arg.value)
+        end
         for i,arg in ipairs(obj.arguments) do
             arg = maybe_unsyntax(arg)
             if arg.type == Type.Label then
@@ -4327,15 +4358,20 @@ local function build_users(pg)
         _users[index] = true
     end
 
+    local function using(entry)
+        entry = maybe_unsyntax(entry)
+        if entry.type == Type.Parameter then
+            add_user(entry.value, obj, i)
+        elseif entry.type == Type.Label then
+            add_user(entry.value, obj, i)
+        end
+    end
+
     -- build dependencies:
     for obj,_ in pairs(pg) do
+        using(obj.enter)
         for i,entry in ipairs(obj.arguments) do
-            entry = maybe_unsyntax(entry)
-            if entry.type == Type.Parameter then
-                add_user(entry.value, obj, i)
-            elseif entry.type == Type.Label then
-                add_user(entry.value, obj, i)
-            end
+            using(entry)
         end
     end
 
@@ -4367,19 +4403,23 @@ local function build_scopes(pg, users)
         end
     end
 
+    local function mark_direct(obj, arg)
+        arg = maybe_unsyntax(arg)
+        if arg.type == Type.Parameter and arg.value.label ~= obj then
+            local param = arg.value
+            -- i am directly live in param.label
+            add_scope(param.label, obj, 1)
+
+            -- my users are indirectly live in param.label
+            mark_indirect(obj, param.label, 2)
+        end
+    end
+
     -- build direct and indirect liveness:
     for obj,_ in pairs(pg) do
+        mark_direct(obj, obj.enter)
         for i,arg in ipairs(obj.arguments) do
-            arg = maybe_unsyntax(arg)
-            if arg.type == Type.Parameter and arg.value.label ~= obj then
-                local param = arg.value
-                -- i am directly live in param.label
-                add_scope(param.label, obj, 1)
-
-                -- my users are indirectly live in param.label
-                mark_indirect(obj, param.label, 2)
-                break
-            end
+            mark_direct(obj, arg)
         end
     end
 
@@ -4426,7 +4466,7 @@ local function build_scc(top)
         C = C + 1
         table.insert(S, obj)
         table.insert(P, obj)
-        for i,arg in ipairs(obj.arguments) do
+        local function walk_arg(arg)
             arg = maybe_unsyntax(arg)
             if arg.type == Type.Label then
                 arg = arg.value
@@ -4441,6 +4481,10 @@ local function build_scc(top)
                     end
                 end
             end
+        end
+        walk_arg(obj.enter)
+        for i,arg in ipairs(obj.arguments) do
+            walk_arg(arg)
         end
         assert(#P >= 1)
         if P[#P] == obj then
@@ -4464,7 +4508,16 @@ local function build_scc(top)
     return SCCmap
 end
 
-local function remap_body(args, map)
+local function remap_body(ll, entry, map)
+    local enter = entry.enter
+    local narg, anchor = maybe_unsyntax(enter)
+    if narg.type == Type.Label or narg.type == Type.Parameter then
+        narg = narg.value
+        enter = map[enter] or enter
+        assert_any(enter)
+    end
+
+    local args = entry.arguments
     local body = {}
     for i,arg in ipairs(args) do
         local narg, anchor = maybe_unsyntax(arg)
@@ -4489,7 +4542,8 @@ local function remap_body(args, map)
             table.insert(body, arg)
         end
     end
-    return body
+    ll.enter = enter
+    ll.arguments = body
 end
 
 local function mangle(entry, params, map, scopes)
@@ -4514,14 +4568,14 @@ local function mangle(entry, params, map, scopes)
         -- remap label bodies
         for l,_ in pairs(entry_scope) do
             local ll = map[l].value
-            ll.arguments = remap_body(l.arguments, map)
+            remap_body(ll, l, map)
             scope[ll] = true
         end
     end
     for _,param in ipairs(params) do
         le:append_parameter(param)
     end
-    le.arguments = remap_body(entry.arguments, map)
+    remap_body(le, entry, map)
 
     return le
 end
@@ -4537,15 +4591,15 @@ local function intersect(a, b)
 end
 
 local function fold_constants(label)
-    local body = label.arguments
     -- evaluate and rewrite
-    local f,anchor = maybe_unsyntax(body[2])
+    local f,anchor = maybe_unsyntax(label.enter)
+    local body = label.arguments
     if f.type == Type.Builtin then
         if f.value.fold_func then
             set_active_anchor(label.body_anchor or label.anchor)
             return f.value.fold_func(label)
         elseif f.value.foldable then
-            for i=3,#body do
+            for i=2,#body do
                 local arg = body[i]
                 arg = maybe_unsyntax(arg)
                 if arg.type == Type.Parameter then
@@ -4554,15 +4608,15 @@ local function fold_constants(label)
             end
 
             local args = {}
-            for i=3,#body do
+            for i=2,#body do
                 local arg = body[i]
                 arg = maybe_unsyntax(arg)
                 table.insert(args, arg)
             end
             local result
-            execute(function(...)
+            execute(f, function(...)
                 result = { ... }
-            end, f, unpack(args))
+            end, unpack(args))
 
             local anchor = label.body_anchor or label.anchor
             if anchor then
@@ -4573,192 +4627,11 @@ local function fold_constants(label)
                 end
             end
 
-            label.arguments = { none, body[1], unpack(result) }
+            label.enter = body[1]
+            label.arguments = { none, unpack(result) }
         end
     end
     return false
-end
-
-local function optimize(le)
-    local scope = {[le] = true }
-    local users
-    local function dump_program()
-        print("---")
-        stream_il(stdout_writer, Any(le))
-        print("---")
-    end
-
-    local function dump_single_label(l)
-        stream_il(stdout_writer, Any(l), {follow_labels=false, follow_closures=false, follow_params=false})
-    end
-
-    local function fold_label(label)
-        local body = label.arguments
-        -- evaluate and rewrite
-        local f,anchor = maybe_unsyntax(body[2])
-        if f.type == Type.Label then
-            if #body == 2 then
-                return false
-            end
-            -- fully inline labels with constant arguments
-            for i=3,#body do
-                local arg = body[i]
-                arg = maybe_unsyntax(arg)
-                if arg.type == Type.Parameter then
-                    return false
-                end
-            end
-
-            f = f.value
-            if f.parameters[1].type == Type.Nothing then
-                return false
-            end
-
-            print("inlining body of ",label)
-            dump_single_label(label)
-            local map = { [f.parameters[1]] = label.arguments[1] }
-            for i=2,#f.parameters do
-                print(f.parameters[i], label.arguments[i + 1])
-                map[f.parameters[i]] = label.arguments[i + 1]
-            end
-            local zero_ret = Parameter(Any(Syntax(Any(Symbol.Unnamed), f.anchor)), Type.Nothing)
-            local newlabel = mangle(f, { zero_ret }, map, build_scopes(scope, users))
-            label.arguments = { none, Any(newlabel) }
-            return true
-        end
-        return false
-    end
-
-    local function is_eq(a,b)
-        if a.type ~= b.type then
-            return false
-        end
-        if is_none(a) then
-            return true
-        end
-        if a.value ~= b.value then
-            return false
-        end
-        return true
-    end
-
-    local function propagate_constants(label, cont)
-        -- if we have one or multiple users, all calling with the same arguments,
-        -- we can safely inline their arguments into other functions
-        local user
-        if not users[label] then
-            return
-        end
-        for k,_ in pairs(users[label]) do
-            local f = maybe_unsyntax(k.arguments[2])
-            if f.type == Type.Label and f.value == label then
-                if not user then
-                    user = k
-                else
-                    -- verify the arguments are the same
-                    if #k.arguments ~= #user.arguments then
-                        return
-                    end
-                    for i=3,#k.arguments do
-                        local arg0 = maybe_unsyntax(user.arguments[i])
-                        local arg1 = maybe_unsyntax(k.arguments[i])
-                        if not is_eq(arg0, arg1) then
-                            return
-                        end
-                    end
-                end
-            else
-                return
-            end
-        end
-        if user then
-            print("erasing",label)
-            for i,param in ipairs(label.parameters) do
-                local k = 1
-                if param.index > 1 then
-                    k = param.index + 1
-                end
-                local arg = user.arguments[k]
-                if users[param] then
-                    for entry,indices in pairs(users[param]) do
-                        for i,_ in pairs(indices) do
-                            entry.arguments[i] = arg
-                        end
-                    end
-                    users[param] = nil
-                end
-            end
-            local lusers = users[label]
-            users[label] = nil
-            local srcbody = label.arguments
-            for k,_ in pairs(lusers) do
-                local body = {}
-                for i=1,#srcbody do
-                    table.insert(body, srcbody[i])
-                end
-                k.arguments = body
-            end
-            for k,_ in pairs(lusers) do
-                cont(k)
-            end
-            return true
-        end
-    end
-
-    local function update_scope()
-        --local pg = program(le)
-        scope = program(le)
-        users = build_users(scope)
-        local newscope = {[le] = true}
-        for l,_ in pairs(scope) do
-            if users[l] then
-                newscope[l] = true
-            end
-        end
-        scope = newscope
-        dump_program()
-    end
-
-    while true do
-        update_scope()
-
-        local changed = false
-        local visited = {}
-        local function walk(l)
-            print("looking at",l)
-            if not scope[l] then
-                print("not in scope")
-                return
-            end
-            if visited[l] then
-                print("already been there")
-                return
-            end
-            visited[l] = true
-            if fold_constants(l) then
-                changed = true
-                update_scope()
-            end
-            if not propagate_constants(l, function(l)
-                    changed = true
-                    visited[l] = nil
-                    update_scope()
-                    walk(l)
-                end) then
-                for i,arg in ipairs(l.arguments) do
-                    arg = maybe_unsyntax(arg)
-                    if arg.type == Type.Label then
-                        walk(arg.value)
-                    end
-                end
-            end
-        end
-        walk(le)
-        if not changed then
-            break
-        end
-    end
-
 end
 
 --[[
@@ -4923,7 +4796,7 @@ specialize = function(func, cont)
 
         local function build_argtypes(body)
             local types = {}
-            for i=3,#body do
+            for i=2,#body do
                 arg = maybe_unsyntax(body[i])
                 local argtype
                 if arg.type == Type.Parameter then
@@ -5010,8 +4883,8 @@ specialize = function(func, cont)
             return refine_body(rfunc)
         end
 
-        local function drop(args)
-            local func = unwrap(Type.Label, maybe_unsyntax(args[2]))
+        local function drop(enter, args)
+            local func = unwrap(Type.Label, enter)
             local pg = program(func)
             local users = build_users(pg)
             local scopes = build_scopes(pg, users)
@@ -5027,9 +4900,10 @@ specialize = function(func, cont)
             local func = rfunc
             while true do
                 local body = func.arguments
-                local f = maybe_unsyntax(body[2])
+                local f = maybe_unsyntax(func.enter)
                 if f.type == Type.Label then
-                    local newf = drop(body)
+                    local newf = drop(f, body)
+                    func.enter = newf.enter
                     func.arguments = newf.arguments
                 elseif f.type == Type.Builtin then
                     f = f.value
@@ -5056,7 +4930,7 @@ specialize = function(func, cont)
             end
         end
 
-        func = drop({ret, Any(func)})
+        func = drop(maybe_unsyntax(func.enter), {ret})
     end
 
     --build_scc(func)
@@ -5106,11 +4980,11 @@ local function checkargs(mincount, maxcount, ...)
 end
 
 local function wrap_simple_builtin(f)
-    return function(frame, cont, self, ...)
+    return function(frame, self, cont, ...)
         if is_none(cont) then
             location_error("missing return")
         end
-        return call(frame, none, cont, f(...))
+        return retcall(frame, cont, f(...))
     end
 end
 
@@ -5185,24 +5059,25 @@ builtins["syntax-extend"] = builtin_macro(expand_syntax_extend)
 --------------------------------------------------------------------------------
 
 local b_true = bool(true)
-local function branch(frame, cont, self, cond, then_cont, else_cont)
+local function branch(frame, self, cont, cond, then_cont, else_cont)
     checkargs(3,3,cond,then_cont,else_cont)
     if unwrap(Type.Bool, cond) == b_true then
-        return call(frame, cont, then_cont)
+        return call(frame, then_cont, cont)
     else
-        return call(frame, cont, else_cont)
+        return call(frame, else_cont, cont)
     end
 end
 branch = Builtin(branch)
 branch.fold_func = function(label)
     local body = label.arguments
-    local cond = maybe_unsyntax(body[3])
+    local cond = maybe_unsyntax(body[2])
     if cond.type ~= Type.Parameter then
         cond = unwrap(Type.Bool, cond)
+        label.arguments = { body[1] }
         if cond == b_true then
-            label.arguments = { body[1], body[4] }
+            label.enter = body[3]
         else
-            label.arguments = { body[1], body[5] }
+            label.enter = body[4]
         end
         return true
     end
@@ -5210,7 +5085,7 @@ branch.fold_func = function(label)
 end
 builtins.branch = branch
 
-local function ordered_branch(frame, cont, self, a, b,
+local function ordered_branch(frame, self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
     local function compare_error()
@@ -5223,7 +5098,7 @@ local function ordered_branch(frame, cont, self, a, b,
     local function unordered()
         local rcmp = b.type:lookup(Symbol.Compare)
         if rcmp then
-            return call(frame, cont, rcmp, b, a,
+            return call(frame, rcmp, cont, b, a,
                 equal_cont, unordered_cont, greater_cont, less_cont)
         else
             compare_error()
@@ -5231,7 +5106,7 @@ local function ordered_branch(frame, cont, self, a, b,
     end
     local cmp = a.type:lookup(Symbol.Compare)
     if cmp then
-        return call(frame, cont, cmp, a, b,
+        return call(frame, cmp, cont, a, b,
             equal_cont, Any(Builtin(unordered, Symbol.RCompare)),
             less_cont, greater_cont)
     else
@@ -5253,13 +5128,13 @@ builtins["syntax-error"] = function(frame, cont, self, sxobj, msg)
     return location_error(unwrap(Type.String, msg))
 end
 
-builtins.xpcall = function(frame, cont, self, func, xfunc)
+builtins.xpcall = function(frame, self, cont, func, xfunc)
     checkargs(2,2, func, xfunc)
     return xpcallcc(function(cont)
-            return call(frame,
-                Any(Builtin(function(_frame, _cont, _self, ...)
+            return call(frame, func,
+                Any(Builtin(function(_frame, _self, _cont, ...)
                     return cont(_frame, ...)
-                end, Symbol.XPCallReturn)), func)
+                end, Symbol.XPCallReturn)))
         end,
         function(exc, cont)
             if getmetatable(exc) ~= Any then
@@ -5269,13 +5144,13 @@ builtins.xpcall = function(frame, cont, self, func, xfunc)
                     exc = Any(exc)
                 end
             end
-            return call(frame,
-                Any(Builtin(function(_frame, _cont, _self, ...)
+            return call(frame, xfunc,
+                Any(Builtin(function(_frame, _self, _cont, ...)
                     return cont(_frame, ...)
-                end, Symbol.XPCallReturn)), xfunc, exc)
+                end, Symbol.XPCallReturn)), exc)
         end,
         function(frame, ...)
-            return call(frame, none, cont, ...)
+            return retcall(frame, cont, ...)
         end)
 end
 
@@ -5320,19 +5195,19 @@ builtins["list-parse"] = wrap_simple_builtin(function(s, path)
     return parse(lexer)
 end)
 
-builtins.expand = function(frame, cont, self, expr, scope)
+builtins.expand = function(frame, self, cont, expr, scope)
     checkargs(2,2, expr, scope)
     local _scope = unwrap(Type.Scope, scope)
     return expand_root(expr, _scope, function(expexpr)
         if expexpr then
-            return call(frame, none, cont, expexpr, scope)
+            return retcall(frame, cont, expexpr, scope)
         else
             error(expexpr)
         end
     end)
 end
 
-builtins.eval = function(frame, cont, self, expr, scope, path)
+builtins.eval = function(frame, self, cont, expr, scope, path)
     checkargs(1,3, expr, scope, path)
     if scope then
         scope = unwrap(Type.Scope, scope)
@@ -5346,14 +5221,14 @@ builtins.eval = function(frame, cont, self, expr, scope, path)
     end
     return expand_root(expr, scope, function(expexpr)
         return translate_root(expexpr, path, function(result)
-                return call(frame, none, cont, result)
+                return retcall(frame, cont, result)
             end)
     end)
 end
 
 -- pass arguments to specialize; when the argument is an unbound parameter,
 -- then this is the new parameter the function will be linked to.
-builtins.mangle = function(frame, cont, self, func, ...)
+builtins.mangle = function(frame, self, cont, func, ...)
     local args = { ... }
     -- todo
 end
@@ -5525,26 +5400,26 @@ end)
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
 
-builtins["nothing-compare"] = function(frame, cont, self, a, b,
+builtins["nothing-compare"] = function(frame, self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == b.type then
-        return call(frame, cont, equal_cont)
+        return call(frame, equal_cont, cont)
     else
-        return call(frame, cont, unordered_cont)
+        return call(frame, unordered_cont, cont)
     end
 end
 
 local function compare_func(T)
-    builtins[T.name:lower() .. "-compare"] = function(frame, cont, self, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(frame, self, cont, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
             b = unwrap(T, b)
             if (a == b) then
-                return call(frame, cont, equal_cont)
+                return call(frame, equal_cont, cont)
             end
         end
-        return call(frame, cont, unordered_cont)
+        return call(frame, unordered_cont, cont)
     end
 end
 
@@ -5555,20 +5430,20 @@ compare_func(Type.Label)
 compare_func(Type.Closure)
 
 local function ordered_compare_func(T)
-    builtins[T.name:lower() .. "-compare"] = function(frame, cont, self, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(frame, self, cont, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
             b = unwrap(T, b)
             if (a == b) then
-                return call(frame, cont, equal_cont)
+                return call(frame, equal_cont, cont)
             elseif (a < b) then
-                return call(frame, cont, less_cont)
+                return call(frame, less_cont, cont)
             else
-                return call(frame, cont, greater_cont)
+                return call(frame, greater_cont, cont)
             end
         end
-        return call(frame, cont, unordered_cont)
+        return call(frame, unordered_cont, cont)
     end
 end
 
@@ -5579,40 +5454,40 @@ local function compare_real_func(T, base)
     local eq = C[base .. '_eq']
     local lt = C[base .. '_lt']
     local gt = C[base .. '_gt']
-    builtins[T.name:lower() .. "-compare"] = function(frame, cont, self, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(frame, self, cont, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
             b = unwrap(T, b)
             if eq(a,b) then
-                return call(frame, cont, equal_cont)
+                return call(frame, equal_cont, cont)
             elseif lt(a,b) then
-                return call(frame, cont, less_cont)
+                return call(frame, less_cont, cont)
             elseif gt(a,b) then
-                return call(frame, cont, greater_cont)
+                return call(frame, greater_cont, cont)
             end
         end
-        return call(frame, cont, unordered_cont)
+        return call(frame, unordered_cont, cont)
     end
 end
 
 compare_real_func(Type.R32, 'bangra_r32')
 compare_real_func(Type.R64, 'bangra_r64')
 
-builtins["list-compare"] = function(frame, cont, self, a, b,
+builtins["list-compare"] = function(frame, self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.List and b.type == Type.List then
         local x = unwrap(Type.List, a)
         local y = unwrap(Type.List, b)
         local function loop()
             if (x == y) then
-                return call(frame, cont, equal_cont)
+                return call(frame, equal_cont, cont)
             elseif (x == EOL) then
-                return call(frame, cont, less_cont)
+                return call(frame, less_cont, cont)
             elseif (y == EOL) then
-                return call(frame, cont, greater_cont)
+                return call(frame, greater_cont, cont)
             end
-            return ordered_branch(frame, cont, none, x.at, y.at,
+            return ordered_branch(frame, none, cont, x.at, y.at,
                 Any(Builtin(function()
                     x = x.next
                     y = y.next
@@ -5622,54 +5497,54 @@ builtins["list-compare"] = function(frame, cont, self, a, b,
         end
         return loop()
     else
-        return call(frame, cont, unordered_cont)
+        return call(frame, unordered_cont, cont)
     end
 end
 
-builtins["type-compare"] = function(frame, cont, self, a, b,
+builtins["type-compare"] = function(frame, self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.Type and b.type == Type.Type then
         local x = unwrap(Type.Type, a)
         local y = unwrap(Type.Type, b)
         if x == y then
-            return call(frame, cont, equal_cont)
+            return call(frame, equal_cont, cont)
         else
             local xs = x:super()
             local ys = y:super()
             if xs == y then
-                return call(frame, cont, less_cont)
+                return call(frame, less_cont, cont)
             elseif ys == x then
-                return call(frame, cont, greater_cont)
+                return call(frame, greater_cont, cont)
             end
         end
     end
-    return call(frame, cont, unordered_cont)
+    return call(frame, unordered_cont, cont)
 end
 
-builtins["scope-compare"] = function(frame, cont, self, a, b,
+builtins["scope-compare"] = function(frame, self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.Scope and b.type == Type.Scope then
         local x = unwrap(Type.Scope, a)
         local y = unwrap(Type.Scope, b)
         if (x == y) then
-            return call(frame, cont, equal_cont)
+            return call(frame, equal_cont, cont)
         end
     end
-    return call(frame, cont, unordered_cont)
+    return call(frame, unordered_cont, cont)
 end
 
-builtins["syntax-compare"] = function(frame, cont, self, a, b,
+builtins["syntax-compare"] = function(frame, self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     local x = maybe_unsyntax(a)
     local y = maybe_unsyntax(b)
-    return ordered_branch(frame, cont, none,
+    return ordered_branch(frame, none, cont,
         x, y, equal_cont, unordered_cont, less_cont, greater_cont)
 end
 
 -- cast
 --------------------------------------------------------------------------------
 
-any_cast = function(frame, cont, self, totype, value)
+any_cast = function(frame, self, cont, totype, value)
     checkargs(2,2, totype, value)
     local fromtype = Any(value.type)
     local func = value.type:lookup(Symbol.Cast)
@@ -5683,27 +5558,27 @@ any_cast = function(frame, cont, self, totype, value)
         end
         func = desttype:lookup(Symbol.Cast)
         if func ~= null then
-            return call(frame,
-                Any(Builtin(function(_frame, _cont, _dest, result)
+            return call(frame, func,
+                Any(Builtin(function(_frame, _dest, _cont, result)
                     if result == null then
                         errmsg()
                     else
-                        return call(frame, none, cont, result)
+                        return retcall(frame, cont, result)
                     end
-                end, Symbol.RCast)), func, fromtype, totype, value)
+                end, Symbol.RCast)), fromtype, totype, value)
         else
             errmsg()
         end
     end
     if func ~= null then
-        return call(frame,
+        return call(frame, func,
             Any(Builtin(function(_frame, _cont, _dest, result)
                 if result == null then
                     return fallback_call()
                 else
-                    return call(frame, none, cont, result)
+                    return retcall(frame, cont, result)
                 end
-            end, Symbol.RCast)), func, fromtype, totype, value)
+            end, Symbol.RCast)), fromtype, totype, value)
     end
     return fallback_call()
 end
@@ -5911,9 +5786,9 @@ builtins["element-type"] = wrap_simple_builtin(function(_type)
 end)
 
 local function countof_func(T)
-    builtins[T.name:lower() .. "-countof"] = function(frame, cont, self, value)
+    builtins[T.name:lower() .. "-countof"] = function(frame, self, cont, value)
         value = value.value
-        return call(frame, none, cont, Any(size_t(#value)))
+        return retcall(frame, cont, Any(size_t(#value)))
     end
 end
 
@@ -6042,6 +5917,12 @@ builtins["label-arguments"] = wrap_simple_builtin(function(label)
     checkargs(1,1, label)
     label = unwrap(Type.Label, label)
     return unpack(label.arguments)
+end)
+
+builtins["label-target"] = wrap_simple_builtin(function(label)
+    checkargs(1,1, label)
+    label = unwrap(Type.Label, label)
+    return label.enter
 end)
 
 builtins["label-anchor"] = wrap_simple_builtin(function(label)
@@ -6223,14 +6104,14 @@ builtins["set-type-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     atable:bind(key, value)
 end)
 
-builtins["bind!"] = function(frame, cont, self, param, value)
+builtins["bind!"] = function(frame, self, cont, param, value)
     checkargs(2,2, param, value)
     param = unwrap(Type.Parameter, param)
     if not param.label then
         error("can't rebind unbound parameter")
     end
     frame:rebind(param.label, param.index, value)
-    return call(frame, none, cont)
+    return retcall(frame, cont)
 end
 
 builtins["label-append-parameter!"] = wrap_simple_builtin(function(label, param)
@@ -6301,8 +6182,8 @@ builtins["dump-frame"] = wrap_simple_builtin(function(value)
     stream_frame(stdout_writer, unwrap(Type.Frame, value))
 end)
 
-builtins["active-frame"] = function(frame, cont, self)
-    return call(frame, none, cont, Any(frame))
+builtins["active-frame"] = function(frame, self, cont)
+    return retcall(frame, cont, Any(frame))
 end
 
 builtins.repr = wrap_simple_builtin(function(value, styler)
@@ -6312,9 +6193,9 @@ builtins.repr = wrap_simple_builtin(function(value, styler)
     else
         return Any(value.type:format_value(value.value, function(style, text)
             local result
-            execute(function(ret)
+            execute(styler, function(ret)
                 result = unwrap(Type.String, ret)
-            end, styler, Any(style), Any(text))
+            end, Any(style), Any(text))
             return result
         end))
     end
@@ -6362,8 +6243,8 @@ builtins["set-globals!"] = wrap_simple_builtin(function(value)
     globals = unwrap(Type.Scope, value)
 end)
 
-builtins["interpreter-version"] = function(frame, cont, dest)
-    return call(frame, none, cont,
+builtins["interpreter-version"] = function(frame, dest, cont)
+    return retcall(frame, cont,
         Any(int(global_opts.version_major)),
         Any(int(global_opts.version_minor)),
         Any(int(global_opts.version_patch)))
@@ -6569,7 +6450,7 @@ xpcallcc(
 
         return expand_root(expr, null, function(expexpr)
             return translate_root(expexpr, "main", function(func)
-                return call(nil, globals:lookup(Symbol("exit")), func)
+                return call(nil, func, globals:lookup(Symbol("exit")))
             end)
         end)
     end,
