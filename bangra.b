@@ -1,44 +1,80 @@
 #
-    fn/cc pow2 (ret x)
-        i32* x x
+    fn/cc make-param (_ name)
+        parameter-new (datum->syntax (symbol-new name) (active-anchor))
+    fn/cc make-typed-param (_ name atype)
+        parameter-new (datum->syntax (symbol-new name) (active-anchor)) atype
 
-    fn/cc pow (ret x n)
-        branch (i32== n 0)
-            fn/cc (_)
-                ret 1
-            fn/cc (_)
-                branch (i32== (i32% n 2) 0)
-                    fn/cc (_)
-                        ret
-                            pow2
-                                pow x (i32/ n 2)
-                    fn/cc (_)
-                        ret
-                            i32* x (pow x (i32- n 1))
+    fn/cc test-pow (_)
+        fn/cc pow2 (ret x)
+            i32* x x
 
-    fn/cc pow7 (ret x)
-        pow x 7
-
-    fn/cc print10 (ret f)
-        cc/call
-            fn/cc rec (_ i)
-                cc/call branch none (i32== i 10)
-                    fn/cc (_)
-                        ret
-                    fn/cc (_)
-                        f
-                        cc/call rec none (i32+ i 1)
-            \ none 0
-
-    #print10
-        call
-            fn/cc (_ x y)
+        fn/cc pow (ret x n)
+            branch (i32== n 0)
                 fn/cc (_)
-                    print
-                        i32+ x y
-            \ 300 3
+                    ret 1
+                fn/cc (_)
+                    branch (i32== (i32% n 2) 0)
+                        fn/cc (_)
+                            ret
+                                pow2
+                                    pow x (i32/ n 2)
+                        fn/cc (_)
+                            ret
+                                i32* x (pow x (i32- n 1))
 
-    print pow7
+        fn/cc pow7 (ret x)
+            pow x 7
+
+        call
+            fn/cc (_ f)
+                print f
+                print
+                    f 5
+            mangle
+                closure-label pow7
+                make-param "ret"
+                make-typed-param "x" i32
+
+    fn/cc test-print10 (_)
+        fn/cc print10 (ret f)
+            cc/call
+                fn/cc rec (_ i)
+                    cc/call branch none (i32== i 10)
+                        fn/cc (_)
+                            ret
+                        fn/cc (_)
+                            f
+                            cc/call rec none (i32+ i 1)
+                \ none 0
+
+        fn/cc main (_)
+            print10
+                call
+                    fn/cc (_ x y)
+                        fn/cc (_)
+                            print
+                                i32+ x y
+                    \ 300 3
+
+        mangle
+            closure-label main
+            make-param "ret"
+
+    fn/cc test-hello-world (_)
+
+        fn/cc main (_)
+            call
+                fn/cc (_ text)
+                    print text
+                \ "hello world"
+        mangle
+            closure-label main
+            make-param "ret"
+
+    test-pow
+
+
+    \ 0
 
 #
     Bangra Interpreter

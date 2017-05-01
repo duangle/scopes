@@ -3108,7 +3108,7 @@ do
                 stream_any(arg, aframe)
             end
             if alabel.enter then
-                stream_any(alabel.enter, aframe)
+                stream_any(maybe_unsyntax(alabel.enter), aframe)
             end
         end
         local function stream_closure(aclosure)
@@ -4358,7 +4358,7 @@ local function build_users(pg)
         _users[index] = true
     end
 
-    local function using(entry)
+    local function using(obj, entry, i)
         entry = maybe_unsyntax(entry)
         if entry.type == Type.Parameter then
             add_user(entry.value, obj, i)
@@ -4369,9 +4369,9 @@ local function build_users(pg)
 
     -- build dependencies:
     for obj,_ in pairs(pg) do
-        using(obj.enter)
+        using(obj, obj.enter, 0)
         for i,entry in ipairs(obj.arguments) do
-            using(entry)
+            using(obj, entry, 1)
         end
     end
 
@@ -4513,7 +4513,7 @@ local function remap_body(ll, entry, map)
     local narg, anchor = maybe_unsyntax(enter)
     if narg.type == Type.Label or narg.type == Type.Parameter then
         narg = narg.value
-        enter = map[enter] or enter
+        enter = map[narg] or enter
         assert_any(enter)
     end
 
@@ -4546,16 +4546,112 @@ local function remap_body(ll, entry, map)
     ll.arguments = body
 end
 
+--[[
+REMOVING UNUSED PARAMETERS AND ARGUMENTS
+----------------------------------------
+
+- a parameter that has no users is unused
+- unused parameters can be typed to Nothing, or removed if at tail position
+- conclusively, any argument passed to a non-existing or Nothing-typed parameter
+  can be set to none or removed if at tail position
+- if the argument was a parameter reference in itself, then that parameter
+  may now be unused too - repeat.
+--]]
+local function remove_unused_parameters_and_arguments(func)
+    local pg
+    local users
+
+    local function update_users()
+        pg = program(func)
+        users = build_users(pg)
+    end
+
+    local function remove_unused_args(label)
+        local label_users = users[label]
+        if not label_users then
+            return
+        end
+        local params = label.parameters
+        local pcount = #params
+        -- todo: we made some changes - truncate or set-none arguments of callers
+        for user,_ in pairs(label_users) do
+            --local cont = maybe_unsyntax(user.arguments[1])
+            local callee = maybe_unsyntax(user.enter)
+            if callee == label then
+                local args = user.arguments
+                local acount = #args
+                for i=acount,1,-1 do
+                    local arg = args[i]
+                    local narg,anchor = maybe_unsyntax(arg)
+                    local mparam = params[i]
+                    if not mparam or mparam.type == Type.Nothing then
+                        args[i] = none
+                    end
+                end
+            end
+        end
+
+    end
+
+    local function remove_unused_params(label)
+        local params = label.parameters
+        local pcount = #params
+        local changed = false
+        for i=pcount,1,-1 do
+            local param = params[i]
+            if not users[param] then
+                if i == #params then
+                    changed = true
+                    table.remove(params)
+                else
+                    param.type = Type.Nothing
+                end
+            end
+        end
+        return changed
+    end
+
+    local loops = 0
+    while true do
+        loops = loops + 1
+        local changed = false
+        update_users()
+        for label,_ in pairs(pg) do
+            remove_unused_args(label)
+        end
+        update_users()
+        for label,_ in pairs(pg) do
+            if remove_unused_params(label) then
+                changed = true
+            end
+        end
+        if not changed then
+            break
+        end
+    end
+    print("loops:",loops)
+
+end
+
 local function mangle(entry, params, map, scopes)
     assert_label(entry)
     local entry_scope = scopes[entry]
+    local sorted_scope = {}
     if entry_scope then
-        -- create new labels and map new parameters
         for l,_ in pairs(entry_scope) do
+            table.insert(sorted_scope, l)
+        end
+        table.sort(sorted_scope, function(a, b)
+            return a.uid < b.uid
+        end)
+        -- create new labels and map new parameters
+        for _,l in ipairs(sorted_scope) do
             local ll = Label.create_from_label(l)
+            assert(not map[l])
             map[l] = Any(ll)
             for _,param in ipairs(l.parameters) do
                 local pparam = Parameter.create_from_parameter(param)
+                assert(not map[param])
                 map[param] = Any(pparam)
                 ll:append_parameter(pparam)
             end
@@ -4563,19 +4659,19 @@ local function mangle(entry, params, map, scopes)
     end
     -- remap entry point
     local le = Label.create_from_label(entry)
-    local scope = {[le]=true}
     if entry_scope then
         -- remap label bodies
-        for l,_ in pairs(entry_scope) do
+        for _,l in ipairs(sorted_scope) do
             local ll = map[l].value
             remap_body(ll, l, map)
-            scope[ll] = true
         end
     end
     for _,param in ipairs(params) do
         le:append_parameter(param)
     end
     remap_body(le, entry, map)
+
+    remove_unused_parameters_and_arguments(le)
 
     return le
 end
@@ -4629,72 +4725,12 @@ local function fold_constants(label)
 
             label.enter = body[1]
             label.arguments = { none, unpack(result) }
+            return true
         end
     end
     return false
 end
 
---[[
-REMOVING UNUSED PARAMETERS AND ARGUMENTS
-----------------------------------------
-
-- a parameter that has no users is unused
-- unused parameters can be typed to Nothing, or removed if at tail position
-- conclusively, any argument passed to a non-existing or Nothing-typed parameter
-  can be set to none or removed if at tail position
-- if the argument was a parameter reference in itself, then that parameter
-  may now be unused too - repeat.
---]]
-local function remove_unused_parameters_and_arguments(func)
-    local pg = program(func)
-    local users = build_users(pg)
-    local scopes = build_scopes(pg, users)
-
-    local function walk(label)
-        local params = label.parameters
-        local pcount = #params
-        local changed = false
-        for i=pcount,1,-1 do
-            local param = params[i]
-            if not users[param] then
-                changed = true
-                if i == #params then
-                    table.remove(params)
-                else
-                    param.type = Type.Nothing
-                end
-            end
-        end
-        if changed then
-            -- todo: we made some changes - truncate or set-none arguments of callers
-            --[[
-            for user,_ in pairs(users[label]) do
-                local cont = maybe_unsyntax(user.arguments[1])
-                local callee = maybe_unsyntax(user.arguments[2])
-                if callee == label then
-                    local args = user.arguments
-                    local acount = #args
-                    for i=acount,3,-1 do
-                        local arg = args[i]
-                        local narg,anchor = maybe_unsyntax(arg)
-
-
-                    end
-                    local p_cont = label.parameters[1]
-                    print(p_cont)
-                    if not p_cont or p_cont.type == Type.Nothing then
-                        user.arguments[1] = none
-                    end
-                end
-            end
-            --]]
-        end
-    end
-
-    for label,_ in pairs(pg) do
-        walk(label)
-    end
-end
 
 --[[
 things we must solve in the specializer:
@@ -4742,69 +4778,83 @@ local function dump_program(func)
     stream_il(stdout_writer, Any(func), opts)
 end
 
-specialize = function(func, cont)
+specialize = function(func, args, cont)
     local opts = {}
-
-    local ret = globals:lookup(Symbol("exit"))
 
     func = unwrap(Type.Label, func)
 
     dump_program(func)
     print()
 
+    local function verify_argtype(ptype, value)
+        if ptype ~= Type.Any then
+            local nvalue = maybe_unsyntax(value)
+            if nvalue.type == Type.Parameter then
+                if nvalue.value.type ~= ptype then
+                    location_error("type "
+                        .. tostring(ptype)
+                        .. " expected, got "
+                        .. tostring(nvalue.value.type))
+                end
+            else
+                unwrap(ptype, nvalue)
+            end
+        end
+    end
+
     do
         local function map_arguments(map, params, args)
-            if params[PARAM_Cont] then
-                map[params[PARAM_Cont]] = args[1]
-            end
             local pcount = #params
             local rcount = #args
-            local tcount = pcount - PARAM_Arg0 + 1
-            local srci = ARG_Arg0
-            for i=0,(tcount - 1) do
-                local dsti = PARAM_Arg0 + i
-                local param = params[dsti]
-                local dstval
+            local srci = 1
+            for i=1,pcount do
+                local param = params[i]
+                local arg
                 if param.vararg then
+                    if i == 1 then
+                        location_error("continuation parameter can't be vararg")
+                    end
+                    if param.type ~= Type.Any then
+                        location_error("vararg parameter can't be typed")
+                    end
                     -- how many parameters after this one
-                    local remparams = tcount - i - 1
+                    local remparams = pcount - i
                     -- how many varargs to capture
                     local vargsize = max(0, rcount - srci - remparams + 1)
                     local argvalues = {}
                     for k=srci,(srci + vargsize - 1) do
                         assert(args[k])
-                        argvalues[k - srci + 1] = args[k]
+                        table.insert(argvalues, args[k])
                     end
-                    dstval = Any(Type.VarArgs, argvalues)
+                    arg = Any(Type.VarArgs, argvalues)
                     srci = srci + vargsize
                 elseif srci <= rcount then
                     local value = args[srci]
-                    if param.type ~= Type.Any then
-                        unwrap(param.type, value)
-                    end
-                    dstval = value
+                    verify_argtype(param.type, value)
+                    arg = value
                     srci = srci + 1
                 else
-                    if param.type ~= Type.Any then
-                        unwrap(param.type, none)
-                    end
-                    dstval = none
+                    verify_argtype(param.type, none)
+                    arg = none
                 end
-                map[params[dsti]] = dstval
+                map[param] = arg
+            end
+
+        end
+
+        local function get_argtype(arg)
+            arg = maybe_unsyntax(arg)
+            if arg.type == Type.Parameter then
+                return arg.value.type
+            else
+                return arg.type
             end
         end
 
         local function build_argtypes(body)
             local types = {}
             for i=2,#body do
-                arg = maybe_unsyntax(body[i])
-                local argtype
-                if arg.type == Type.Parameter then
-                    table.insert(types, arg.value.type)
-                else
-                    table.insert(types, arg.type)
-                end
-
+                table.insert(types, get_argtype(body[i]))
             end
             return types
         end
@@ -4883,37 +4933,155 @@ specialize = function(func, cont)
             return refine_body(rfunc)
         end
 
+        local drop_map = {}
         local function drop(enter, args)
             local func = unwrap(Type.Label, enter)
+            assert_label(func)
+            local keys = { func }
+            for _,arg in ipairs(args) do
+                arg = maybe_unsyntax(arg)
+                if arg.type == Type.Parameter then
+                    if not arg.value.label then
+                        arg = Parameter
+                    end
+                elseif arg.type == Type.Label then
+                else
+                    arg = tostring(arg)
+                end
+                table.insert(keys, arg)
+            end
+            local rfunc = load_val(drop_map, keys)
+            print(unpack(keys))
+            if rfunc then
+                error("CACHED!")
+                return rfunc
+            end
+
             local pg = program(func)
             local users = build_users(pg)
             local scopes = build_scopes(pg, users)
 
+            local anchor = func.body_anchor or func.anchor
+
             local map = {}
             local params = func.parameters
             map_arguments(map, params, args)
+            local destparams = {}
+            for i,arg in ipairs(args) do
+                arg = maybe_unsyntax(arg)
+                if arg.type == Type.Parameter and arg.value.label == nil then
+                    table.insert(destparams, arg.value)
+                elseif i == 1 then
+                    local atype = get_argtype(arg)
+                    if atype ~= Type.Nothing then
+                        atype = Type.Any
+                    end
+                    table.insert(destparams,
+                        Parameter(Any(Syntax(Any(Symbol.Unnamed),anchor)), atype))
+                end
+            end
 
-            return refine_body(mangle(func, {}, map, scopes))
+            rfunc = mangle(func, destparams, map, scopes)
+
+            store_val(drop_map, keys, rfunc)
+            return refine_body(rfunc)
         end
 
+        local function has_constants(body)
+            for i=2,#body do
+                local arg = body[i]
+                local narg = maybe_unsyntax(arg)
+                if narg.type == Type.Label then
+                    return true
+                elseif narg.type == Type.Parameter then
+                else
+                    return true
+                end
+            end
+            return false
+        end
+
+        local function is_simple_forward(body)
+            return (#body <= 1) and is_null_or_none(maybe_unsyntax(body[1]))
+        end
+
+        local function can_be_partially_inlined(body)
+            return has_constants(body)
+        end
+
+        local refined = {}
         refine_body = function(rfunc)
+            if refined[rfunc] then
+                return rfunc
+            end
+            refined[rfunc] = true
             local func = rfunc
             while true do
+                refined[func] = true
+                ----[[
+                print("----")
+                dump_program(func)
+                print("----")
+                --]]
                 local body = func.arguments
                 local f = maybe_unsyntax(func.enter)
                 if f.type == Type.Label then
-                    local newf = drop(f, body)
-                    func.enter = newf.enter
-                    func.arguments = newf.arguments
+                    if is_simple_forward(body) then
+                        f = f.value
+                        func.enter = f.enter
+                        func.arguments = f.arguments
+                    elseif can_be_partially_inlined(body) then
+                        local args = {}
+                        local newbody = {}
+                        for i,arg in ipairs(body) do
+                            local narg = maybe_unsyntax(arg)
+                            if narg.type == Type.Parameter then
+                                local pparam = Parameter.create_from_parameter(
+                                    narg.value)
+                                table.insert(args, Any(pparam))
+                                table.insert(newbody, arg)
+                            else
+                                table.insert(args, arg)
+                                if i == 1 then
+                                    table.insert(newbody, none)
+                                end
+                            end
+                        end
+                        local newf = drop(f, args)
+                        func.enter = Any(newf)
+                        func.arguments = newbody
+                    else
+                        for i=1,#body do
+                            local arg = body[i]
+                            arg = maybe_unsyntax(arg)
+                            if arg.type == Type.Label then
+                                refine_body(arg.value)
+                            end
+                        end
+                        refine_body(f.value)
+                        --print("done:", unpack(body))
+                        assert(not is_simple_forward(rfunc.arguments))
+                        return rfunc
+                    end
                 elseif f.type == Type.Builtin then
                     f = f.value
                     if not fold_constants(func) then
+                        --print("could not fold",f,unpack(body))
+                        for i=2,#body do
+                            local arg = body[i]
+                            arg = maybe_unsyntax(arg)
+                            if arg.type == Type.Label then
+                                print("branching to",arg,f,unpack(body))
+                                refine_body(arg.value)
+                            end
+                        end
                         local cont = maybe_unsyntax(body[1])
                         if cont.type == Type.Label then
                             cont = cont.value
                             if f.type_func then
                                 local argtypes = build_argtypes(body)
-                                local rettypes = { Type.Nothing, f.type_func(unpack(argtypes)) }
+                                local rettypes = { Type.Nothing,
+                                    f.type_func(unpack(argtypes)) }
                                 cont = drop_type(cont, rettypes)
                                 body[1] = Any(cont)
                                 return rfunc
@@ -4924,13 +5092,17 @@ specialize = function(func, cont)
                             return rfunc
                         end
                     end
+                elseif f.type == Type.Parameter then
+                    return rfunc
                 else
+                    print(f, unpack(body))
+                    error("unable to handle")
                     return rfunc
                 end
             end
         end
 
-        func = drop(maybe_unsyntax(func.enter), {ret})
+        func = drop(Any(func), args)
     end
 
     --build_scc(func)
@@ -4988,9 +5160,10 @@ local function wrap_simple_builtin(f)
     end
 end
 
-local function foldable_builtin(f)
+local function foldable_builtin(f, tf)
     local b = Builtin(f)
     b.foldable = true
+    b.type_func = tf
     return b
 end
 
@@ -5229,8 +5402,10 @@ end
 -- pass arguments to specialize; when the argument is an unbound parameter,
 -- then this is the new parameter the function will be linked to.
 builtins.mangle = function(frame, self, cont, func, ...)
-    local args = { ... }
-    -- todo
+    checkargs(1,-1, func, ...)
+    return specialize(func, { ... }, function(func)
+        return retcall(frame, cont, func)
+    end)
 end
 
 builtins["syntax-quote"] = wrap_simple_builtin(function(value)
@@ -5668,6 +5843,9 @@ local function opmaker(T, ctype)
         end
         f = Builtin(wrap_simple_builtin(f))
         f.foldable = true
+        function f.type_func(x)
+            return T
+        end
         builtins[T.name .. sym.name] = f
     end
     local function arithmetic_op2(sym, opname)
@@ -5685,6 +5863,9 @@ local function opmaker(T, ctype)
 
         f = Builtin(wrap_simple_builtin(f))
         f.foldable = true
+        function f.type_func(a,b)
+            return T
+        end
         builtins[T.name .. sym.name] = f
     end
     local function bool_op2(sym, opname)
@@ -5700,6 +5881,9 @@ local function opmaker(T, ctype)
 
         f = Builtin(wrap_simple_builtin(f))
         f.foldable = true
+        function f.type_func(a,b)
+            return Type.Bool
+        end
         builtins[T.name .. sym.name] = f
     end
     local function arithmetic_shiftop(sym, opname)
@@ -5717,6 +5901,9 @@ local function opmaker(T, ctype)
 
         f = Builtin(wrap_simple_builtin(f))
         f.foldable = true
+        function f.type_func(a,b)
+            return T
+        end
         builtins[T.name .. sym.name] = f
     end
     return {
