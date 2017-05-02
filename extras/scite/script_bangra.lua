@@ -52,7 +52,7 @@ local function bangra_symbols()
     -- builtin and global functions with side effects
     SFXFUNCTIONS = splitstr(getprop("sfxfunctions.bangra_lang") or
     "set-scope-symbol! set-type-symbol! set-globals! set-exception-handler!"
-        .. " bind! set! copy-memory!"
+        .. " copy-memory! ref-set!"
         ),
 
     -- builtin operator functions that can also be used as infix
@@ -63,7 +63,7 @@ local function bangra_symbols()
 
 
     TYPES = splitstr(getprop("types.bangra_lang") or
-        "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string"
+        "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string ref"
         .. " r16 r32 r64 half float double Symbol list Parameter"
         .. " Frame Closure Label Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"

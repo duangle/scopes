@@ -1249,6 +1249,8 @@ local function define_types(def)
     def('Label', 'Label')
     def('VarArgs', 'va-list')
 
+    def('Ref', 'ref')
+
     def('Closure', 'Closure')
     def('Frame', 'Frame')
     def('Anchor', 'Anchor')
@@ -1335,6 +1337,24 @@ do
     end)
 
     Type.SizeT = Type.U64
+
+    function Type.TypedLabel(...)
+        local typename = 'TypedLabel['
+        for i=1,select('#', ...) do
+            local argtype = select(i, ...)
+            if i > 1 then
+                typename = typename .. " "
+            end
+            typename = typename .. argtype.name
+        end
+        typename = typename .. "]"
+        local _type = Type(Symbol(typename))
+        if not rawget(_type, 'types') then
+            _type:set_super(Type.Label)
+            _type.types = { ... }
+        end
+        return _type
+    end
 end
 
 local function is_macro_type(_type)
@@ -2277,7 +2297,7 @@ local FUNCTIONS = set(split(
 -- builtin and global functions with side effects
 local SFXFUNCTIONS = set(split(
     "set-scope-symbol! set-type-symbol! set-globals! set-exception-handler!"
-        .. " bind! set! copy-memory!"
+        .. " copy-memory! ref-set!"
     ))
 
 -- builtin operator functions that can also be used as infix
@@ -2287,7 +2307,7 @@ local OPERATORS = set(split(
     ))
 
 local TYPES = set(split(
-        "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string"
+        "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string ref"
         .. " r16 r32 r64 half float double Symbol list Parameter"
         .. " Frame Closure Label Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
@@ -2866,6 +2886,7 @@ do
         end
     end
 
+    --[[
     function cls:rebind(cont, index, value)
         assert_label(cont)
         assert_number(index)
@@ -2875,6 +2896,7 @@ do
             values[index] = value
         end
     end
+    ]]
 
     function cls:get(cont, index, defvalue)
         assert_number(index)
@@ -3296,6 +3318,229 @@ do
             print("----")
         end
     end
+end
+
+--------------------------------------------------------------------------------
+-- LAMBDA MANGLING
+--------------------------------------------------------------------------------
+
+local mangle
+do
+local function program(top)
+    local visited = {}
+    local function walk(obj)
+        if visited[obj] then
+            return
+        end
+        visited[obj] = true
+        local arg = maybe_unsyntax(obj.enter)
+        if arg.type == Type.Label then
+            walk(arg.value)
+        end
+        for i,arg in ipairs(obj.arguments) do
+            arg = maybe_unsyntax(arg)
+            if arg.type == Type.Label then
+                walk(arg.value)
+            end
+        end
+    end
+    walk(top)
+    return visited
+end
+
+local function build_users(pg)
+    local users = {}
+
+    local function add_user(obj, label, index)
+        local _users = users
+        if _users[obj] == nil then
+            _users[obj] = {}
+        end
+        _users = _users[obj]
+        if _users[label] == nil then
+            _users[label] = {}
+        end
+        _users = _users[label]
+        _users[index] = true
+    end
+
+    local function using(obj, entry, i)
+        entry = maybe_unsyntax(entry)
+        if entry.type == Type.Parameter then
+            add_user(entry.value, obj, i)
+        elseif entry.type == Type.Label then
+            add_user(entry.value, obj, i)
+        end
+    end
+
+    -- build dependencies:
+    for obj,_ in pairs(pg) do
+        using(obj, obj.enter, 0)
+        for i,entry in ipairs(obj.arguments) do
+            using(obj, entry, 1)
+        end
+    end
+
+    return users
+end
+
+local function build_scopes(pg, users)
+    local scopes = {}
+
+    local function add_scope(obj, label, depth)
+        local _scopes = scopes
+        if _scopes[obj] == nil then
+            _scopes[obj] = {}
+        end
+        _scopes = _scopes[obj]
+        _scopes[label] = depth
+    end
+
+    local function mark_indirect(obj, label, level)
+        if users[obj] then
+            for k,_ in pairs(users[obj]) do
+                local scope = scopes[label]
+                local xk = scope and scope[k]
+                if label ~= k and ((not xk) or level < xk) then
+                    add_scope(label, k, level)
+                    mark_indirect(k, label, level + 1)
+                end
+            end
+        end
+    end
+
+    local function mark_direct(obj, arg)
+        arg = maybe_unsyntax(arg)
+        if arg.type == Type.Parameter and arg.value.label ~= obj then
+            local param = arg.value
+            -- i am directly live in param.label
+            add_scope(param.label, obj, 1)
+
+            -- my users are indirectly live in param.label
+            mark_indirect(obj, param.label, 2)
+        end
+    end
+
+    -- build direct and indirect liveness:
+    for obj,_ in pairs(pg) do
+        mark_direct(obj, obj.enter)
+        for i,arg in ipairs(obj.arguments) do
+            mark_direct(obj, arg)
+        end
+    end
+
+    local visited = {}
+    local function inherit_scope(obj)
+        if visited[obj] then
+            return
+        end
+        visited[obj] = true
+        local scope = scopes[obj]
+        if not scope then
+            return
+        end
+        local newscope = {}
+        for label,ldepth in pairs(scope) do
+            inherit_scope(label)
+            newscope[label] = ldepth
+            local label_scope = scopes[label]
+            if label_scope then
+                for sublabel,sldepth in pairs(label_scope) do
+                    newscope[sublabel] = ldepth + sldepth
+                end
+            end
+        end
+        scopes[obj] = newscope
+    end
+
+    -- inherit child scopes:
+    for obj,_ in pairs(pg) do
+        inherit_scope(obj)
+    end
+
+    return scopes
+end
+
+
+local function remap_body(ll, entry, map)
+    local enter = entry.enter
+    local narg, anchor = maybe_unsyntax(enter)
+    if narg.type == Type.Label or narg.type == Type.Parameter then
+        narg = narg.value
+        enter = map[narg] or enter
+        assert_any(enter)
+    end
+
+    local args = entry.arguments
+    local body = {}
+    for i,arg in ipairs(args) do
+        local narg, anchor = maybe_unsyntax(arg)
+        if narg.type == Type.Label or narg.type == Type.Parameter then
+            narg = narg.value
+            arg = map[narg] or arg
+            if arg.type == Type.VarArgs then
+                if i == #args then
+                    for _,subarg in ipairs(arg.value) do
+                        table.insert(body, subarg)
+                    end
+                elseif #arg.value == 0 then
+                    table.insert(body, none)
+                else
+                    table.insert(body, arg.value[1])
+                end
+            else
+                assert_any(arg)
+                table.insert(body, arg)
+            end
+        else
+            table.insert(body, arg)
+        end
+    end
+    ll.enter = enter
+    ll.arguments = body
+end
+
+mangle = function(entry, params, map, scopes)
+    assert_label(entry)
+    local entry_scope = scopes[entry]
+    local sorted_scope = {}
+    if entry_scope then
+        for l,_ in pairs(entry_scope) do
+            table.insert(sorted_scope, l)
+        end
+        table.sort(sorted_scope, function(a, b)
+            return a.uid < b.uid
+        end)
+        -- create new labels and map new parameters
+        for _,l in ipairs(sorted_scope) do
+            local ll = Label.create_from_label(l)
+            assert(not map[l])
+            map[l] = Any(ll)
+            for _,param in ipairs(l.parameters) do
+                local pparam = Parameter.create_from_parameter(param)
+                assert(not map[param])
+                map[param] = Any(pparam)
+                ll:append_parameter(pparam)
+            end
+        end
+    end
+    -- remap entry point
+    local le = Label.create_from_label(entry)
+    if entry_scope then
+        -- remap label bodies
+        for _,l in ipairs(sorted_scope) do
+            local ll = map[l].value
+            remap_body(ll, l, map)
+        end
+    end
+    for _,param in ipairs(params) do
+        le:append_parameter(param)
+    end
+    remap_body(le, entry, map)
+
+    return le
+end
+
 end
 
 --------------------------------------------------------------------------------
@@ -4320,141 +4565,6 @@ end
 local specialize
 do
 
-local function program(top)
-    local visited = {}
-    local function walk(obj)
-        if visited[obj] then
-            return
-        end
-        visited[obj] = true
-        local arg = maybe_unsyntax(obj.enter)
-        if arg.type == Type.Label then
-            walk(arg.value)
-        end
-        for i,arg in ipairs(obj.arguments) do
-            arg = maybe_unsyntax(arg)
-            if arg.type == Type.Label then
-                walk(arg.value)
-            end
-        end
-    end
-    walk(top)
-    return visited
-end
-
-local function build_users(pg)
-    local users = {}
-
-    local function add_user(obj, label, index)
-        local _users = users
-        if _users[obj] == nil then
-            _users[obj] = {}
-        end
-        _users = _users[obj]
-        if _users[label] == nil then
-            _users[label] = {}
-        end
-        _users = _users[label]
-        _users[index] = true
-    end
-
-    local function using(obj, entry, i)
-        entry = maybe_unsyntax(entry)
-        if entry.type == Type.Parameter then
-            add_user(entry.value, obj, i)
-        elseif entry.type == Type.Label then
-            add_user(entry.value, obj, i)
-        end
-    end
-
-    -- build dependencies:
-    for obj,_ in pairs(pg) do
-        using(obj, obj.enter, 0)
-        for i,entry in ipairs(obj.arguments) do
-            using(obj, entry, 1)
-        end
-    end
-
-    return users
-end
-
-local function build_scopes(pg, users)
-    local scopes = {}
-
-    local function add_scope(obj, label, depth)
-        local _scopes = scopes
-        if _scopes[obj] == nil then
-            _scopes[obj] = {}
-        end
-        _scopes = _scopes[obj]
-        _scopes[label] = depth
-    end
-
-    local function mark_indirect(obj, label, level)
-        if users[obj] then
-            for k,_ in pairs(users[obj]) do
-                local scope = scopes[label]
-                local xk = scope and scope[k]
-                if label ~= k and ((not xk) or level < xk) then
-                    add_scope(label, k, level)
-                    mark_indirect(k, label, level + 1)
-                end
-            end
-        end
-    end
-
-    local function mark_direct(obj, arg)
-        arg = maybe_unsyntax(arg)
-        if arg.type == Type.Parameter and arg.value.label ~= obj then
-            local param = arg.value
-            -- i am directly live in param.label
-            add_scope(param.label, obj, 1)
-
-            -- my users are indirectly live in param.label
-            mark_indirect(obj, param.label, 2)
-        end
-    end
-
-    -- build direct and indirect liveness:
-    for obj,_ in pairs(pg) do
-        mark_direct(obj, obj.enter)
-        for i,arg in ipairs(obj.arguments) do
-            mark_direct(obj, arg)
-        end
-    end
-
-    local visited = {}
-    local function inherit_scope(obj)
-        if visited[obj] then
-            return
-        end
-        visited[obj] = true
-        local scope = scopes[obj]
-        if not scope then
-            return
-        end
-        local newscope = {}
-        for label,ldepth in pairs(scope) do
-            inherit_scope(label)
-            newscope[label] = ldepth
-            local label_scope = scopes[label]
-            if label_scope then
-                for sublabel,sldepth in pairs(label_scope) do
-                    newscope[sublabel] = ldepth + sldepth
-                end
-            end
-        end
-        scopes[obj] = newscope
-    end
-
-    -- inherit child scopes:
-    for obj,_ in pairs(pg) do
-        inherit_scope(obj)
-    end
-
-    return scopes
-end
-
 local function build_scc(top)
     local S = {}
     local P = {}
@@ -4506,44 +4616,6 @@ local function build_scc(top)
     end
     walk(top)
     return SCCmap
-end
-
-local function remap_body(ll, entry, map)
-    local enter = entry.enter
-    local narg, anchor = maybe_unsyntax(enter)
-    if narg.type == Type.Label or narg.type == Type.Parameter then
-        narg = narg.value
-        enter = map[narg] or enter
-        assert_any(enter)
-    end
-
-    local args = entry.arguments
-    local body = {}
-    for i,arg in ipairs(args) do
-        local narg, anchor = maybe_unsyntax(arg)
-        if narg.type == Type.Label or narg.type == Type.Parameter then
-            narg = narg.value
-            arg = map[narg] or arg
-            if arg.type == Type.VarArgs then
-                if i == #args then
-                    for _,subarg in ipairs(arg.value) do
-                        table.insert(body, subarg)
-                    end
-                elseif #arg.value == 0 then
-                    table.insert(body, none)
-                else
-                    table.insert(body, arg.value[1])
-                end
-            else
-                assert_any(arg)
-                table.insert(body, arg)
-            end
-        else
-            table.insert(body, arg)
-        end
-    end
-    ll.enter = enter
-    ll.arguments = body
 end
 
 --[[
@@ -4631,49 +4703,6 @@ local function remove_unused_parameters_and_arguments(func)
     end
     print("loops:",loops)
 
-end
-
-local function mangle(entry, params, map, scopes)
-    assert_label(entry)
-    local entry_scope = scopes[entry]
-    local sorted_scope = {}
-    if entry_scope then
-        for l,_ in pairs(entry_scope) do
-            table.insert(sorted_scope, l)
-        end
-        table.sort(sorted_scope, function(a, b)
-            return a.uid < b.uid
-        end)
-        -- create new labels and map new parameters
-        for _,l in ipairs(sorted_scope) do
-            local ll = Label.create_from_label(l)
-            assert(not map[l])
-            map[l] = Any(ll)
-            for _,param in ipairs(l.parameters) do
-                local pparam = Parameter.create_from_parameter(param)
-                assert(not map[param])
-                map[param] = Any(pparam)
-                ll:append_parameter(pparam)
-            end
-        end
-    end
-    -- remap entry point
-    local le = Label.create_from_label(entry)
-    if entry_scope then
-        -- remap label bodies
-        for _,l in ipairs(sorted_scope) do
-            local ll = map[l].value
-            remap_body(ll, l, map)
-        end
-    end
-    for _,param in ipairs(params) do
-        le:append_parameter(param)
-    end
-    remap_body(le, entry, map)
-
-    remove_unused_parameters_and_arguments(le)
-
-    return le
 end
 
 local function intersect(a, b)
@@ -4778,6 +4807,12 @@ local function dump_program(func)
     stream_il(stdout_writer, Any(func), opts)
 end
 
+local function dump_label(func)
+    local opts = {}
+    opts.follow_labels = false
+    stream_il(stdout_writer, Any(func), opts)
+end
+
 specialize = function(func, args, cont)
     local opts = {}
 
@@ -4803,6 +4838,10 @@ specialize = function(func, args, cont)
     end
 
     do
+        local function is_label_type(_type)
+            return _type == Type.Label or _type:super() == Type.Label
+        end
+
         local function map_arguments(map, params, args)
             local pcount = #params
             local rcount = #args
@@ -4830,7 +4869,10 @@ specialize = function(func, args, cont)
                     srci = srci + vargsize
                 elseif srci <= rcount then
                     local value = args[srci]
-                    verify_argtype(param.type, value)
+                    if is_label_type(param.type) and value.type == Type.Label then
+                    else
+                        verify_argtype(param.type, value)
+                    end
                     arg = value
                     srci = srci + 1
                 else
@@ -4851,9 +4893,9 @@ specialize = function(func, args, cont)
             end
         end
 
-        local function build_argtypes(body)
+        local function build_argtypes(body, start)
             local types = {}
-            for i=2,#body do
+            for i=start,#body do
                 table.insert(types, get_argtype(body[i]))
             end
             return types
@@ -4887,6 +4929,7 @@ specialize = function(func, args, cont)
 
         local drop_type_map = {}
         local function drop_type(func, argtypes)
+            print("drop_type", func, unpack(argtypes))
             assert_label(func)
             local keys = { func, unpack(argtypes) }
             local rfunc = load_val(drop_type_map, keys)
@@ -4935,6 +4978,7 @@ specialize = function(func, args, cont)
 
         local drop_map = {}
         local function drop(enter, args)
+            print("drop", enter, unpack(args))
             local func = unwrap(Type.Label, enter)
             assert_label(func)
             local keys = { func }
@@ -5001,12 +5045,72 @@ specialize = function(func, args, cont)
             return false
         end
 
+        local function partially_untyped(label)
+            assert_label(label)
+            for _,param in ipairs(label.parameters) do
+                if param.type == Type.Any then
+                    return true
+                end
+            end
+            return false
+        end
+
+        local function contains_label_argument(body)
+            for i=2,#body do
+                local arg = body[i]
+                local narg = maybe_unsyntax(arg)
+                if narg.type == Type.Label then
+                    return true
+                end
+            end
+            return false
+        end
+
         local function is_simple_forward(body)
             return (#body <= 1) and is_null_or_none(maybe_unsyntax(body[1]))
         end
 
         local function can_be_partially_inlined(body)
             return has_constants(body)
+        end
+
+        local function has_typed_arguments(body)
+
+            return has_constants(body)
+        end
+
+        local function apply_continuation_type(body, rettypes)
+            local cont = maybe_unsyntax(body[1])
+            if cont.type == Type.Label then
+                cont = drop_type(cont.value, rettypes)
+                body[1] = Any(cont)
+            elseif cont.type == Type.Parameter then
+                cont = cont.value
+                local newtype = Type.TypedLabel(unpack(rettypes))
+                if cont.type == Type.Any then
+                    cont.type = newtype
+                elseif cont.type == newtype then
+                    -- all is fine
+                else
+                    error("can't retype continuation parameter "
+                        .. tostring(cont)
+                        .. " as "
+                        .. tostring(newtype))
+                end
+            end
+        end
+
+        local function is_label_factory(func)
+            assert_label(func)
+            local p_cont = func.parameters[1]
+            if p_cont.type:super() == Type.Label then
+                for _,arg in ipairs(p_cont.type.types) do
+                    if arg == Type.Label or arg:super() == Type.Label then
+                        return true
+                    end
+                end
+            end
+            return false
         end
 
         local refined = {}
@@ -5030,43 +5134,47 @@ specialize = function(func, args, cont)
                         f = f.value
                         func.enter = f.enter
                         func.arguments = f.arguments
-                    elseif can_be_partially_inlined(body) then
-                        local args = {}
-                        local newbody = {}
-                        for i,arg in ipairs(body) do
-                            local narg = maybe_unsyntax(arg)
-                            if narg.type == Type.Parameter then
-                                local pparam = Parameter.create_from_parameter(
-                                    narg.value)
-                                table.insert(args, Any(pparam))
-                                table.insert(newbody, arg)
-                            else
-                                table.insert(args, arg)
-                                if i == 1 then
-                                    table.insert(newbody, none)
-                                end
-                            end
-                        end
-                        local newf = drop(f, args)
+                    elseif contains_label_argument(body) then
+                        --error("droppin")
+                        -- labels passed as argument must be dropped
+                        local newf = drop(f, body)
                         func.enter = Any(newf)
-                        func.arguments = newbody
+                        func.arguments = { none }
                     else
-                        for i=1,#body do
-                            local arg = body[i]
-                            arg = maybe_unsyntax(arg)
-                            if arg.type == Type.Label then
-                                refine_body(arg.value)
-                            end
+                        local newf
+                        -- drop types
+                        local argtypes = build_argtypes(body, 1)
+                        if argtypes[1] ~= Type.Nothing then
+                            argtypes[1] = Type.Any
                         end
-                        refine_body(f.value)
-                        --print("done:", unpack(body))
-                        assert(not is_simple_forward(rfunc.arguments))
-                        return rfunc
+                        newf = drop_type(f.value, argtypes)
+                        if is_label_factory(newf) then
+                            -- label factories must be dropped
+                            newf = drop(Any(newf), body)
+                            func.enter = Any(newf)
+                            func.arguments = { none }
+                        end
+                        local p_cont = newf.parameters[1]
+                        func.enter = Any(newf)
+                        if p_cont.type ~= Type.Nothing then
+                            if p_cont.type:super() == Type.Label then
+                                local rettypes = p_cont.type.types
+                                assert(rettypes)
+                                apply_continuation_type(func.arguments, rettypes)
+                            else
+                                error("parameter of closure type expected, got "
+                                    .. tostring(p_cont))
+                            end
+                        else
+                            func.arguments[1] = none
+                        end
+                        break
                     end
                 elseif f.type == Type.Builtin then
-                    f = f.value
+                    local ff = f.value
                     if not fold_constants(func) then
                         --print("could not fold",f,unpack(body))
+                        --[[
                         for i=2,#body do
                             local arg = body[i]
                             arg = maybe_unsyntax(arg)
@@ -5075,31 +5183,35 @@ specialize = function(func, args, cont)
                                 refine_body(arg.value)
                             end
                         end
-                        local cont = maybe_unsyntax(body[1])
-                        if cont.type == Type.Label then
-                            cont = cont.value
-                            if f.type_func then
-                                local argtypes = build_argtypes(body)
-                                local rettypes = { Type.Nothing,
-                                    f.type_func(unpack(argtypes)) }
-                                cont = drop_type(cont, rettypes)
-                                body[1] = Any(cont)
-                                return rfunc
-                            else
-                                return rfunc
-                            end
-                        else
-                            return rfunc
+                        --]]
+                        if f == globals:lookup(Symbol("branch")) then
+                            -- always drop both branches
+                            local label1 = maybe_unsyntax(body[3])
+                            local label2 = maybe_unsyntax(body[4])
+                            local args = {body[1]}
+                            label1 = drop(label1, args)
+                            label2 = drop(label2, args)
+                            body[3] = Any(label1)
+                            body[4] = Any(label2)
+                        elseif ff.type_func then
+                            local argtypes = build_argtypes(body, 2)
+                            local rettypes = { Type.Nothing,
+                                ff.type_func(unpack(argtypes)) }
+                            apply_continuation_type(body, rettypes)
                         end
+                        break
                     end
                 elseif f.type == Type.Parameter then
-                    return rfunc
+                    local argtypes = build_argtypes(body, 1)
+                    apply_continuation_type({f}, argtypes)
+                    break
                 else
                     print(f, unpack(body))
                     error("unable to handle")
-                    return rfunc
+                    break
                 end
             end
+            return rfunc
         end
 
         func = drop(Any(func), args)
@@ -5477,6 +5589,11 @@ builtins["datum->syntax"] = wrap_simple_builtin(function(value, anchor)
         anchor = unwrap(Type.Anchor, anchor)
     end
     return Any(Syntax(value,anchor))
+end)
+
+builtins["ref-new"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    return Any(Type.Ref, { value })
 end)
 
 builtins["string-new"] = wrap_simple_builtin(function(value)
@@ -6000,6 +6117,12 @@ builtins["string-at"] = wrap_simple_builtin(function(x, i)
     i = tonumber(unwrap_integer(i)) + 1
     return Any(x:sub(i,i))
 end)
+builtins["ref-at"] = wrap_simple_builtin(function(value)
+    checkargs(1,1,value)
+    value = unwrap(Type.Ref, value)
+    return value[1]
+end)
+
 builtins["list-at"] = wrap_simple_builtin(function(x, i)
     checkargs(2,2,x,i)
     x = unwrap(Type.List, x)
@@ -6291,6 +6414,7 @@ builtins["set-type-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     atable:bind(key, value)
 end)
 
+--[[
 builtins["bind!"] = function(frame, self, cont, param, value)
     checkargs(2,2, param, value)
     param = unwrap(Type.Parameter, param)
@@ -6300,6 +6424,13 @@ builtins["bind!"] = function(frame, self, cont, param, value)
     frame:rebind(param.label, param.index, value)
     return retcall(frame, cont)
 end
+]]
+
+builtins["ref-set!"] = wrap_simple_builtin(function(ref, value)
+    checkargs(2,2, ref, value)
+    ref = unwrap(Type.Ref, ref)
+    ref[1] = value
+end)
 
 builtins["label-append-parameter!"] = wrap_simple_builtin(function(label, param)
     checkargs(2,2, label, param)

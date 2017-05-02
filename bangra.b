@@ -71,7 +71,7 @@
             closure-label main
             make-param "ret"
 
-    test-pow
+    test-print10
 
 
     \ 0
@@ -100,7 +100,6 @@
 
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
-
 
 syntax-extend
     set-type-symbol! Symbol (symbol-new "apply-type") symbol-new
@@ -381,6 +380,7 @@ syntax-extend
     set-type-symbol! Scope (quote apply-type) scope-new
     set-type-symbol! Frame (quote apply-type) frame-new
     set-type-symbol! Closure (quote apply-type) closure-new
+    set-type-symbol! ref (quote apply-type) ref-new
 
     set-type-symbol! i8 (quote apply-type) i8-new
     set-type-symbol! i16 (quote apply-type) i16-new
@@ -430,6 +430,7 @@ syntax-extend
     set-type-symbol! Scope (quote @) scope-at
     set-type-symbol! type (quote @) type-at
     set-type-symbol! string (quote @) string-at
+    set-type-symbol! ref (quote @) ref-at
 
     #---
     set-type-symbol! string (quote slice) string-slice
@@ -467,7 +468,7 @@ syntax-extend
     set-type-symbol! r32 (quote %) r32%; set-type-symbol! r64 (quote %) r64%
     set-type-symbol! r32 (quote **) r32**; set-type-symbol! r64 (quote **) r64**
 
-    set-scope-symbol! syntax-scope
+    #set-scope-symbol! syntax-scope
         Symbol "set!"
         block-scope-macro
             fn/cc "expand-set!" (return expr env)
@@ -1700,20 +1701,20 @@ syntax-extend
                 fn () (return self (size_t 0))
     set-type-symbol! Closure (quote iter)
         fn gen-yield-iter (callee)
-            let caller-return = none
+            let caller-return = (ref none)
             fn/cc yield-iter (return cont-callee)
                 # store caller continuation in state
-                set! caller-return return
+                ref-set! caller-return return
                 branch (none? cont-callee) # first invocation
                     fn/cc (_)
                         # invoke callee with yield function as first argument
                         callee
                             fn/cc (cont-callee values...)
                                 # continue caller
-                                cc/call caller-return none cont-callee values...
+                                cc/call (@ caller-return) none cont-callee values...
                         # callee has returned for good
                           resume caller - we're done here.
-                        cc/call caller-return none
+                        cc/call (@ caller-return) none
                     fn/cc (_)
                         # continue callee
                         cc/call cont-callee none
@@ -2926,7 +2927,7 @@ define read-eval-print-loop
             let preload =
                 if terminated? ""
                 else (get-leading-spaces cmd)
-            let slevel = (stack-level)
+            let slevel = (ref (stack-level))
             let cmdlist =
                 if terminated?
                     try
@@ -2937,11 +2938,11 @@ define read-eval-print-loop
                         let code =
                             .. expr
                                 syntax-list expression-suffix
-                        set! slevel (stack-level)
+                        ref-set! slevel (stack-level)
                         let f =
                             Closure
                                 eval code eval-env
-                        set! slevel (stack-level)
+                        ref-set! slevel (stack-level)
                         let result... = (f)
                         if (not (none? result...))
                             loop-for i in (range (va-countof result...))
@@ -2958,7 +2959,7 @@ define read-eval-print-loop
                                 continue
                     except (e)
                         print
-                            traceback slevel 2
+                            traceback (@ slevel) 2
                         print "error:" e
                     \ ""
                 else cmdlist
@@ -2995,27 +2996,27 @@ fn print-version (total)
 fn run-main (args...)
     #set-debug-trace! true
     # running in interpreter mode
-    let sourcepath = none
-    let parse-options = true
+    let sourcepath = (ref none)
+    let parse-options = (ref true)
     loop
         with
             i = 1
         let arg = (va@ i args...)
         if (not (none? arg))
-            if (parse-options and ((@ arg 0) == "-"))
+            if ((@ parse-options) and ((@ arg 0) == "-"))
                 if (arg == "--help" or arg == "-h")
                     print-help (va@ 0 args...)
                 elseif (arg == "--version" or arg == "-v")
                     print-version
                 elseif (arg == "--")
-                    set! parse-options false
+                    ref-set! parse-options false
                 else
                     print
                         .. "unrecognized option: " arg
                             \ ". Try --help for help."
                     exit 1
-            elseif (none? sourcepath)
-                set! sourcepath arg
+            elseif (none? (@ sourcepath))
+                ref-set! sourcepath arg
             else
                 print
                     .. "unrecognized argument: " arg
@@ -3023,6 +3024,7 @@ fn run-main (args...)
                 exit 1
             continue (i + 1)
 
+    let sourcepath = (@ sourcepath)
     if (none? sourcepath)
         read-eval-print-loop
     else
