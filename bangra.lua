@@ -1251,8 +1251,6 @@ local function define_types(def)
 
     def('Ref', 'ref')
 
-    def('Closure', 'Closure')
-    def('Frame', 'Frame')
     def('Anchor', 'Anchor')
 
     def('BuiltinMacro', 'BuiltinMacro')
@@ -1525,7 +1523,7 @@ local function macro(x)
     assert_any(x)
     if x.type == Type.Builtin then
         return Any(Type.BuiltinMacro, x.value)
-    elseif x.type == Type.Closure then
+    elseif x.type == Type.Label then
         return Any(Type.Macro, x.value)
     else
         error("type " .. repr(x.type) .. " can not be a macro")
@@ -1536,7 +1534,7 @@ local function unmacro(x)
     if x.type == Type.BuiltinMacro then
         return Any(Type.Builtin, x.value)
     elseif x.type == Type.Macro then
-        return Any(Type.Closure, x.value)
+        return Any(Type.Label, x.value)
     else
         error("type " .. repr(x.type) .. " is not a macro macro")
     end
@@ -2281,7 +2279,7 @@ local KEYWORDS = set(split(
 local FUNCTIONS = set(split(
     "external branch print repr tupleof import-c eval structof typeof"
         .. " macro block-macro block-scope-macro cons expand empty? type?"
-        .. " dump syntax-head? countof slice none? list-atom?"
+        .. " dump syntax-head? countof slice none? list-atom? label?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va@ va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
@@ -2309,7 +2307,7 @@ local OPERATORS = set(split(
 local TYPES = set(split(
         "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string ref"
         .. " r16 r32 r64 half float double Symbol list Parameter"
-        .. " Frame Closure Label Integer Real array tuple vector"
+        .. " Label Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
         .. " Iterator type size_t usize_t ssize_t void* Callable Boxed Any"
     ))
@@ -2651,6 +2649,12 @@ do
         self.type = _type
         self.anchor = anchor
         self.vararg = endswith(name.name, "...")
+        self.users = setmetatable({}, {__mode="k"})
+    end
+    function cls:add_user(label, argindex)
+        if label ~= self.label then
+            self.users[label] = true
+        end
     end
     function cls:local_repr(styler)
         local name
@@ -2712,7 +2716,7 @@ do
 
     setmetatable(cls, {
         __call = function(cls, name)
-                local self = setmetatable({}, cls)
+                local self = {}
                 local name,anchor = unsyntax(name)
                 name = unwrap(Type.Symbol, name)
                 assert_symbol(name)
@@ -2725,16 +2729,51 @@ do
                 -- unless a parameter is flagged as vararg
                 -- first parameter/argument is reserved for return continuation
                 self.parameters = {}
-                self.arguments = {}
+                --self.arguments = {}
                 self.name = name
                 self.anchor = anchor
+                self.users = setmetatable({}, {__mode="k"})
+                setmetatable(self, cls)
                 return self
             end
     })
 
+    function cls.__newindex(self, name, value)
+        error("can't directly set attribute: " .. name)
+    end
+
+    function cls:add_user(label, argindex)
+        if label ~= self then
+            self.users[label] = true
+        end
+    end
+
+    local function using(self, arg, i)
+        if arg.type == Type.Parameter or arg.type == Type.Label then
+            --print("+user:", arg, self, i)
+            arg.value:add_user(self, i)
+        end
+    end
+
+    function cls:set_enter(enter)
+        assert_any(enter)
+        using(self, enter, 0)
+        rawset(self, 'enter', enter)
+    end
+
+    function cls:set_arguments(arguments)
+        assert(not self.arguments)
+        for i=1,#arguments do
+            local arg = arguments[i]
+            assert_any(arg)
+            using(self, arg, i)
+        end
+        rawset(self, 'arguments', arguments)
+    end
+
     function cls:set_body_anchor(anchor)
         assert_anchor(anchor)
-        self.body_anchor = anchor
+        rawset(self, 'body_anchor', anchor)
     end
 
     function cls:short_repr(styler)
@@ -2806,137 +2845,6 @@ do
     end
 end
 
-local Frame = {}
-MT_TYPE_MAP[Frame] = Type.Frame
-local function assert_frame(x)
-    if getmetatable(x) == Frame then
-        return x
-    else
-        error("expected frame, got " .. repr(x))
-    end
-end
-do
-    local cls = Frame
-    cls.__index = cls
-    local uid = 1
-    setmetatable(Frame, {
-        __call =
-            function (cls, frame, label, values)
-                assert_label(label)
-                assert_table(values)
-                if #label.parameters == 1
-                    and label.parameters[1].type == Type.Nothing then
-                    -- nothing is bound, skip frame
-                    return frame
-                end
-                local parent = null
-                local self = setmetatable({}, cls)
-                if (frame ~= null) then
-                    assert_frame(frame)
-                    -- if this label has already been bound before, all parent frames
-                    -- up to this one are being shadowed by a new rebinding in scope,
-                    -- so we can safely truncate
-                    local earlier_frame = frame:find_frame(label)
-                    if earlier_frame then
-                        frame = earlier_frame.parent
-                    end
-                    if frame ~= null then
-                        parent = frame
-                    end
-                end
-                if parent then
-                    self.index = parent.index + 1
-                else
-                    self.index = 0
-                end
-                self.anchor = label.body_anchor or label.anchor or get_active_anchor()
-                self.parent = parent
-                -- label -> {values}
-                self.label = label
-                self.values = values
-                self.uid = uid
-                uid = uid + 1
-                return self
-            end
-    })
-    function cls:repr(styler)
-        return format("0x%08x#%i", self.uid, self.index)
-    end
-    function cls:__tostring()
-        return self:repr(default_styler)
-    end
-    function cls:find_frame(cont)
-        if cont then
-            assert_label(cont)
-            -- parameter is bound - attempt resolve
-            while self do
-                if (cont == self.label) then
-                    return self
-                end
-                self = self.parent
-            end
-        end
-    end
-    function cls:get_bank(cont)
-        if cont then
-            self = self:find_frame(cont)
-            if self then
-                return self.values
-            end
-        end
-    end
-
-    --[[
-    function cls:rebind(cont, index, value)
-        assert_label(cont)
-        assert_number(index)
-        assert_any(value)
-        local values = self:get_bank(cont)
-        if values then
-            values[index] = value
-        end
-    end
-    ]]
-
-    function cls:get(cont, index, defvalue)
-        assert_number(index)
-        local values = self:get_bank(cont)
-        if values then
-            return values[index]
-        end
-        return defvalue
-    end
-end
-
-local Closure = class("Closure")
-MT_TYPE_MAP[Closure] = Type.Closure
-do
-    local cls = Closure
-    function cls:init(label, frame)
-        assert_label(label)
-        if frame ~= null then
-            assert_frame(frame)
-        end
-        self.label = label
-        self.frame = frame
-    end
-    function cls:repr(styler)
-        local s = styler(Style.Operator, "[")
-            .. self.label:repr(styler)
-            .. styler(Style.Comment, ":")
-        if self.frame ~= null then
-            s = s .. self.frame:repr(styler)
-        else
-            s = s .. styler(Style.Comment, "<none>")
-        end
-        s = s .. styler(Style.Operator, "]")
-        return s
-    end
-    function cls:__tostring()
-        return self:repr(default_styler)
-    end
-end
-
 --------------------------------------------------------------------------------
 -- IL PRINTER
 --------------------------------------------------------------------------------
@@ -2947,13 +2855,9 @@ do
     stream_il = function(writer, afunc, opts)
         opts = opts or {}
         local follow_labels = true
-        local follow_closures = true
         local follow_params = true
         if opts.follow_labels ~= null then
             follow_labels = opts.follow_labels
-        end
-        if opts.follow_closures ~= null then
-            follow_closures = opts.follow_closures
         end
         if opts.follow_params ~= null then
             follow_params = opts.follow_params
@@ -3023,7 +2927,7 @@ do
             end
         end
 
-        local function stream_argument(arg, alabel, aframe)
+        local function stream_argument(arg, alabel)
             if arg.type == Type.Syntax then
                 local anchor
                 arg,anchor = unsyntax(arg)
@@ -3034,14 +2938,6 @@ do
 
             if arg.type == Type.Parameter then
                 stream_param_label(arg.value, alabel)
-                if aframe and follow_params then
-                    local param = arg.value
-                    local value = aframe:get(param.label, param.index - 1)
-                    if value then
-                        writer(styler(Style.Operator, "="))
-                        writer(tostring(value))
-                    end
-                end
             elseif arg.type == Type.Label then
                 stream_label_label(arg.value)
             else
@@ -3080,7 +2976,7 @@ do
             end
         end
 
-        local function stream_label (alabel, aframe)
+        local function stream_label (alabel)
             if visited[alabel] then
                 return
             end
@@ -3111,98 +3007,38 @@ do
                     stream_anchor(alabel.body_anchor)
                     writer(' ')
                 end
-                stream_argument(alabel.enter, alabel, aframe)
+                stream_argument(alabel.enter, alabel)
                 for i=2,#alabel.arguments do
                     writer(" ")
                     local arg = alabel.arguments[i]
-                    stream_argument(arg, alabel, aframe)
+                    stream_argument(arg, alabel)
                 end
                 local cont = alabel.arguments[1]
                 if cont and not is_none(maybe_unsyntax(cont)) then
                     writer(styler(Style.Comment,CONT_SEP))
-                    stream_argument(cont, alabel, aframe)
+                    stream_argument(cont, alabel)
                 end
             end
             writer("\n")
 
             for i,arg in ipairs(alabel.arguments) do
                 arg = maybe_unsyntax(arg)
-                stream_any(arg, aframe)
+                stream_any(arg)
             end
             if alabel.enter then
-                stream_any(maybe_unsyntax(alabel.enter), aframe)
+                stream_any(maybe_unsyntax(alabel.enter))
             end
         end
-        local function stream_closure(aclosure)
-            stream_label(aclosure.label, aclosure.frame)
-        end
-        stream_any = function(afunc, aframe)
+        stream_any = function(afunc)
             if afunc.type == Type.Label and follow_labels then
-                stream_label(afunc.value, aframe)
-            elseif afunc.type == Type.Closure and follow_closures then
-                stream_closure(afunc.value)
-            elseif aframe and afunc.type == Type.Parameter and follow_params then
-                local param = afunc.value
-                local value = aframe:get(param.label, param.index)
-                if value then
-                    stream_any(value, aframe)
-                end
+                stream_label(afunc.value)
             end
         end
         if afunc.type == Type.Label then
             stream_label(afunc.value)
-        elseif afunc.type == Type.Closure then
-            stream_closure(afunc.value)
         else
             error("can't descend into type " .. tostring(afunc.type))
         end
-    end
-end
-
---------------------------------------------------------------------------------
--- FRAME PRINTER
---------------------------------------------------------------------------------
-
-local stream_frame
-do
-    stream_frame = function(writer, frame, opts)
-        opts = opts or {}
-        local styler = opts.styler or default_styler
-
-        local function walk(frame)
-            assert_frame(frame)
-            if frame.parent then
-                walk(frame.parent)
-            end
-            local label = frame.label
-            local values = frame.values
-            local anchor = frame.anchor
-            if anchor then
-                writer(anchor:repr(styler))
-                writer(styler(Style.Comment, ":"))
-                writer(" ")
-            end
-            writer(frame:repr(styler))
-            writer("\n")
-            writer("  ")
-            writer(label:repr(styler))
-            writer(styler(Style.Operator, " →"))
-            for i,val in ipairs(values) do
-                if val.type == Type.VarArgs then
-                    for _,k in ipairs(val.value) do
-                        writer(" ")
-                        writer(k:repr(styler))
-                        writer(styler(Style.Keyword, "…"))
-                    end
-                else
-                    writer(" ")
-                    writer(val:repr(styler))
-                end
-            end
-            writer("\n")
-        end
-
-        walk(frame)
     end
 end
 
@@ -3233,9 +3069,8 @@ do
         for i=start,#stack - endn do
             local entry = stack[i]
             local anchor = entry[1]
-            local frame = entry[2]
-            local cont = entry[3]
-            local dest = entry[4]
+            local cont = entry[2]
+            local dest = entry[3]
             if dest.type == Type.Builtin then
                 local builtin = dest.value
                 writer('  in builtin ')
@@ -3278,7 +3113,7 @@ do
             stack[k] = null
         end
     end
-    function cls.enter_call(frame, dest, cont, ...)
+    function cls.enter_call(dest, cont, ...)
         for i=1,#stack do
             local entry = stack[i]
             local _cont = entry[3]
@@ -3290,11 +3125,6 @@ do
 
         if #stack > 0 then
             stack[#stack][1] = last_anchor
-        end
-        if dest.type == Type.Closure then
-            local closure = dest.value
-            frame = closure.frame
-            dest = Any(closure.label)
         end
         local anchor
         if dest.type == Type.Label then
@@ -3309,7 +3139,7 @@ do
         if #stack >= global_opts.stack_limit then
             location_error("stack overflow")
         end
-        table.insert(stack, { anchor, frame, cont, dest, ... })
+        table.insert(stack, { anchor, cont, dest, ... })
         if false then
             for i=1,#stack do
                 local entry = stack[i]
@@ -3333,12 +3163,11 @@ local function program(top)
             return
         end
         visited[obj] = true
-        local arg = maybe_unsyntax(obj.enter)
+        local arg = obj.enter
         if arg.type == Type.Label then
             walk(arg.value)
         end
         for i,arg in ipairs(obj.arguments) do
-            arg = maybe_unsyntax(arg)
             if arg.type == Type.Label then
                 walk(arg.value)
             end
@@ -3365,7 +3194,6 @@ local function build_users(pg)
     end
 
     local function using(obj, entry, i)
-        entry = maybe_unsyntax(entry)
         if entry.type == Type.Parameter then
             add_user(entry.value, obj, i)
         elseif entry.type == Type.Label then
@@ -3410,7 +3238,6 @@ local function build_scopes(pg, users)
     end
 
     local function mark_direct(obj, arg)
-        arg = maybe_unsyntax(arg)
         if arg.type == Type.Parameter and arg.value.label ~= obj then
             local param = arg.value
             -- i am directly live in param.label
@@ -3461,23 +3288,64 @@ local function build_scopes(pg, users)
     return scopes
 end
 
+local function build_scope(entry)
+    local scope = {}
+
+    local function can_walk_label(label, level)
+        if entry == label then
+            return false
+        end
+        return not scope[label]
+    end
+
+    local function walk(scope_label, level)
+        if scope_label ~= entry then
+            scope[scope_label] = level
+            -- users of live_label are indirectly live in topscope_label
+            for live_label,_ in pairs(scope_label.users) do
+                if can_walk_label(live_label) then
+                    walk(live_label, level + 1)
+                end
+            end
+        end
+        for _,param in ipairs(scope_label.parameters) do
+            -- every label using one of our parameters is live in scope
+            for live_label,_ in pairs(param.users) do
+                if can_walk_label(live_label) then
+                    walk(live_label, level + 1)
+                end
+            end
+        end
+    end
+
+    --print("-----")
+    --stream_il(stdout_writer, Any(entry))
+    --print("-----")
+    walk(entry, 1)
+
+    return scope
+end
 
 local function remap_body(ll, entry, map)
     local enter = entry.enter
-    local narg, anchor = maybe_unsyntax(enter)
-    if narg.type == Type.Label or narg.type == Type.Parameter then
-        narg = narg.value
-        enter = map[narg] or enter
+    local narg = enter
+    if enter.type == Type.Label or enter.type == Type.Parameter then
+        enter = map[enter.value] or enter
         assert_any(enter)
+        if (enter.type == Type.VarArgs) then
+            if #enter.value == 0 then
+                enter = none
+            else
+                enter = enter.value[1]
+            end
+        end
     end
 
     local args = entry.arguments
     local body = {}
     for i,arg in ipairs(args) do
-        local narg, anchor = maybe_unsyntax(arg)
-        if narg.type == Type.Label or narg.type == Type.Parameter then
-            narg = narg.value
-            arg = map[narg] or arg
+        if arg.type == Type.Label or arg.type == Type.Parameter then
+            arg = map[arg.value] or arg
             if arg.type == Type.VarArgs then
                 if i == #args then
                     for _,subarg in ipairs(arg.value) do
@@ -3496,13 +3364,13 @@ local function remap_body(ll, entry, map)
             table.insert(body, arg)
         end
     end
-    ll.enter = enter
-    ll.arguments = body
+    ll:set_enter(enter)
+    ll:set_arguments(body)
 end
 
-mangle = function(entry, params, map, scopes)
+mangle = function(entry, params, map)
     assert_label(entry)
-    local entry_scope = scopes[entry]
+    local entry_scope = build_scope(entry)
     local sorted_scope = {}
     if entry_scope then
         for l,_ in pairs(entry_scope) do
@@ -3511,6 +3379,7 @@ mangle = function(entry, params, map, scopes)
         table.sort(sorted_scope, function(a, b)
             return a.uid < b.uid
         end)
+        --print('sorted_scope:', #sorted_scope, unpack(sorted_scope))
         -- create new labels and map new parameters
         for _,l in ipairs(sorted_scope) do
             local ll = Label.create_from_label(l)
@@ -3547,31 +3416,7 @@ end
 -- INTERPRETER
 --------------------------------------------------------------------------------
 
-local function evaluate(argindex, frame, value)
-    assert_number(argindex)
-    assert_frame(frame)
-    assert_any(value)
-
-    if (value.type == Type.Parameter) then
-        local param = value.value
-        local result = frame:get(param.label, param.index)
-        if result == nil then
-            location_error(tostring(param) .. " unbound in frame")
-        end
-        return result
-    elseif (value.type == Type.Label) then
-        if (argindex == 0) then
-            -- no closure creation required
-            return value
-        else
-            -- create closure
-            return Any(Closure(value.value, frame))
-        end
-    end
-    return value
-end
-
-local function dump_trace(writer, frame, dest, cont, ...)
+local function dump_trace(writer, dest, cont, ...)
     writer(repr(dest))
     for i=1,select('#', ...) do
         writer(' ')
@@ -3583,11 +3428,33 @@ local function dump_trace(writer, frame, dest, cont, ...)
     end
 end
 
-local call
-local function call_label(frame, label, cont, ...)
-    if frame ~= null then
-        assert_frame(frame)
+local EOM = {}
+local function load_val(map, keys)
+    for i=1,#keys do
+        local key = keys[i]
+        map = map[key]
+        if map == nil then
+            return
+        end
     end
+    return map[EOM]
+end
+local function store_val(map, keys, val)
+    for i=1,#keys do
+        local key = keys[i]
+        local submap = map[key]
+        if submap == nil then
+            submap = {}
+            map[key] = submap
+        end
+        map = submap
+    end
+    map[EOM] = val
+end
+
+local label_cache = {}
+local call
+local function call_label(label, cont, ...)
     assert_any(cont)
     assert_label(label)
 
@@ -3597,55 +3464,58 @@ local function call_label(frame, label, cont, ...)
     local pcount = #label.parameters
     --assert(pcount >= 1)
 
-    -- tmpargs map directly to param indices; that means
-    -- the callee is not included.
-    local tmpargs = {}
+    if pcount > 0 then
+        local map = {}
 
-    local srci = 1
-    for i=1,pcount do
-        local param = label.parameters[i]
-        local arg
-        if param.vararg then
-            if i == 1 then
-                location_error("continuation parameter can't be vararg")
+        local srci = 1
+        for i=1,pcount do
+            local param = label.parameters[i]
+            local arg
+            if param.vararg then
+                if i == 1 then
+                    location_error("continuation parameter can't be vararg")
+                end
+                if param.type ~= Type.Any then
+                    location_error("vararg parameter can't be typed")
+                end
+                -- how many parameters after this one
+                local remparams = pcount - i
+                -- how many varargs to capture
+                local vargsize = max(0, rcount - srci - remparams + 1)
+                local argvalues = {}
+                for k=srci,(srci + vargsize - 1) do
+                    table.insert(argvalues, rbuf[k])
+                end
+                arg = Any(Type.VarArgs, argvalues)
+                srci = srci + vargsize
+            elseif srci <= rcount then
+                local value = rbuf[srci]
+                if param.type ~= Type.Any then
+                    unwrap(param.type, value)
+                end
+                arg = value
+                srci = srci + 1
+            else
+                if param.type ~= Type.Any then
+                    unwrap(param.type, none)
+                end
+                arg = none
             end
-            if param.type ~= Type.Any then
-                location_error("vararg parameter can't be typed")
-            end
-            -- how many parameters after this one
-            local remparams = pcount - i
-            -- how many varargs to capture
-            local vargsize = max(0, rcount - srci - remparams + 1)
-            local argvalues = {}
-            for k=srci,(srci + vargsize - 1) do
-                assert(rbuf[k])
-                table.insert(argvalues, rbuf[k])
-            end
-            arg = Any(Type.VarArgs, argvalues)
-            srci = srci + vargsize
-        elseif srci <= rcount then
-            local value = rbuf[srci]
-            if param.type ~= Type.Any then
-                unwrap(param.type, value)
-            end
-            arg = value
-            srci = srci + 1
-        else
-            if param.type ~= Type.Any then
-                unwrap(param.type, none)
-            end
-            arg = none
+            assert_any(arg)
+            map[param] = arg
         end
-        table.insert(tmpargs, arg)
+
+        label = mangle(label, {}, map)
     end
 
-    frame = Frame(frame, label, tmpargs)
-    --set_anchor(frame, get_anchor(label))
+    --print("before:")
+    --stream_il(stdout_writer, Any(label))
+    --print("----")
 
     if global_opts.trace_execution then
         local w = string_writer()
         w(default_styler(Style.Keyword, "label "))
-        dump_trace(w, frame, label.enter, unpack(label.arguments))
+        dump_trace(w, label.enter, unpack(label.arguments))
         if label.body_anchor then
             label.body_anchor:stream_message_with_source(stderr_writer, w())
         else
@@ -3659,62 +3529,14 @@ local function call_label(frame, label, cont, ...)
         location_error("label is empty")
     end
 
-    local enter = label.enter
-    if enter.type == Type.Syntax then
-        enter = enter.value.datum
-    end
-    enter = evaluate(0, frame, enter)
-    if (enter.type == Type.VarArgs) then
-        if #enter.value == 0 then
-            enter = none
-        else
-            enter = enter.value[1]
-        end
-    end
-
-    local idx = 1
-    local wbuf = {}
-    local numlabelargs = #label.arguments
-    for i=1,numlabelargs do
-        local arg = label.arguments[i]
-        if arg.type == Type.Syntax then
-            arg = arg.value.datum
-        end
-        if arg.type == Type.Parameter and arg.value.vararg then
-            arg = evaluate(i, frame, arg)
-            local args = unwrap(Type.VarArgs, arg)
-            if i == numlabelargs then
-                -- splice as-is
-                for k=1,#args do
-                    wbuf[idx] = args[k]
-                    idx = idx + 1
-                end
-            else
-                -- splice first argument or none
-                if #args >= 1 then
-                    wbuf[idx] = args[1]
-                else
-                    wbuf[idx] = none
-                end
-                idx = idx + 1
-            end
-        else
-            wbuf[idx] = evaluate(i, frame, arg)
-            idx = idx + 1
-        end
-    end
-
-    return call(frame, enter, unpack(wbuf))
+    return call(label.enter, unpack(label.arguments))
 end
 
-call = function(frame, dest, cont, ...)
+call = function(dest, cont, ...)
     if global_opts.trace_execution then
         stderr_writer(default_styler(Style.Keyword, "trace "))
-        dump_trace(stderr_writer, frame, dest, cont, ...)
+        dump_trace(stderr_writer, dest, cont, ...)
         stderr_writer('\n')
-    end
-    if frame ~= null then
-        assert_frame(frame)
     end
     assert_any(cont)
     assert_any(dest)
@@ -3722,22 +3544,18 @@ call = function(frame, dest, cont, ...)
         assert_any(select(i, ...))
     end
 
-    if dest.type == Type.Closure then
-        debugger.enter_call(frame, dest, cont, ...)
-        local closure = dest.value
-        return call_label(closure.frame, closure.label, cont, ...)
-    elseif dest.type == Type.Label then
-        debugger.enter_call(frame, dest, cont, ...)
-        return call_label(frame, dest.value, cont, ...)
+    if dest.type == Type.Label then
+        debugger.enter_call(dest, cont, ...)
+        return call_label(dest.value, cont, ...)
     elseif dest.type == Type.Builtin then
-        debugger.enter_call(frame, dest, cont, ...)
+        debugger.enter_call(dest, cont, ...)
         local func = dest.value.func
-        return func(frame, dest, cont, ...)
+        return func(dest, cont, ...)
     elseif dest.type == Type.Type then
         local ty = dest.value
         local func = ty:lookup(Symbol.ApplyType)
         if func ~= null then
-            return call(frame, func, cont, ...)
+            return call(func, cont, ...)
         else
             location_error("can not apply type "
                 .. tostring(ty))
@@ -3748,20 +3566,17 @@ call = function(frame, dest, cont, ...)
     end
 end
 
-local function retcall (frame, dest, ...)
-    return call(frame, dest, none, ...)
+local function retcall (dest, ...)
+    return call(dest, none, ...)
 end
 
 local function execute(dest, cont, ...)
     assert_any(dest)
     assert_function(cont)
-    local ret = Any(Builtin(function(frame, dest, _cont, ...)
-        if frame ~= null then
-            assert_frame(frame)
-        end
+    local ret = Any(Builtin(function(dest, _cont, ...)
         return cont(...)
     end, Symbol.ExecuteReturn))
-    return call(null, dest, ret, ...)
+    return call(dest, ret, ...)
 end
 
 function Type:format_value(value, styler)
@@ -3770,8 +3585,8 @@ function Type:format_value(value, styler)
         local result
         execute(reprf, function(value)
             result = unwrap(Type.String, value)
-        end, Any(self, value), Any(Builtin(function(frame, self, cont, style, text)
-            return retcall(frame, cont,
+        end, Any(self, value), Any(Builtin(function(self, cont, style, text)
+            return retcall(cont,
                 Any(styler(
                     unwrap(Type.String, style),
                     unwrap(Type.String, text))))
@@ -3834,11 +3649,11 @@ local expand_syntax_extend
 local expand_root
 
 local function wrap_expand_builtin(f)
-    return function(frame, dest, cont, topit, env)
+    return function(dest, cont, topit, env)
         return f(unwrap(Type.Scope, env), unwrap(Type.List, topit),
             function (cur_list, cur_env)
                 assert(cur_env)
-                return retcall(frame, cont, Any(cur_list), Any(cur_env))
+                return retcall(cont, Any(cur_list), Any(cur_env))
             end)
     end
 end
@@ -4216,8 +4031,9 @@ local function br(state, enter, arguments, anchor)
     assert_table(arguments)
     assert_anchor(anchor)
     for i=1,#arguments do
-        local arg = arguments[i]
+        local arg = maybe_unsyntax(arguments[i])
         assert_any(arg)
+        arguments[i] = arg
     end
     assert(#arguments >= 1)
     if (state == null) then
@@ -4226,9 +4042,10 @@ local function br(state, enter, arguments, anchor)
         return
     end
     assert(not state.enter)
-    assert(#state.arguments == 0)
-    state.enter = enter
-    state.arguments = arguments
+    assert(not state.arguments)
+    enter = maybe_unsyntax(enter)
+    state:set_enter(enter)
+    state:set_arguments(arguments)
     state:set_body_anchor(anchor)
 end
 
@@ -5162,7 +4979,7 @@ specialize = function(func, args, cont)
                                 assert(rettypes)
                                 apply_continuation_type(func.arguments, rettypes)
                             else
-                                error("parameter of closure type expected, got "
+                                error("parameter of label type expected, got "
                                     .. tostring(p_cont))
                             end
                         else
@@ -5264,11 +5081,11 @@ local function checkargs(mincount, maxcount, ...)
 end
 
 local function wrap_simple_builtin(f)
-    return function(frame, self, cont, ...)
+    return function(self, cont, ...)
         if is_none(cont) then
             location_error("missing return")
         end
-        return retcall(frame, cont, f(...))
+        return retcall(cont, f(...))
     end
 end
 
@@ -5344,12 +5161,12 @@ builtins["syntax-extend"] = builtin_macro(expand_syntax_extend)
 --------------------------------------------------------------------------------
 
 local b_true = bool(true)
-local function branch(frame, self, cont, cond, then_cont, else_cont)
+local function branch(self, cont, cond, then_cont, else_cont)
     checkargs(3,3,cond,then_cont,else_cont)
     if unwrap(Type.Bool, cond) == b_true then
-        return call(frame, then_cont, cont)
+        return call(then_cont, cont)
     else
-        return call(frame, else_cont, cont)
+        return call(else_cont, cont)
     end
 end
 branch = Builtin(branch)
@@ -5370,7 +5187,7 @@ branch.fold_func = function(label)
 end
 builtins.branch = branch
 
-local function ordered_branch(frame, self, cont, a, b,
+local function ordered_branch(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
     local function compare_error()
@@ -5383,7 +5200,7 @@ local function ordered_branch(frame, self, cont, a, b,
     local function unordered()
         local rcmp = b.type:lookup(Symbol.Compare)
         if rcmp then
-            return call(frame, rcmp, cont, b, a,
+            return call(rcmp, cont, b, a,
                 equal_cont, unordered_cont, greater_cont, less_cont)
         else
             compare_error()
@@ -5391,7 +5208,7 @@ local function ordered_branch(frame, self, cont, a, b,
     end
     local cmp = a.type:lookup(Symbol.Compare)
     if cmp then
-        return call(frame, cmp, cont, a, b,
+        return call(cmp, cont, a, b,
             equal_cont, Any(Builtin(unordered, Symbol.RCompare)),
             less_cont, greater_cont)
     else
@@ -5401,24 +5218,24 @@ end
 -- ordered-branch(a, b, equal, unordered [, less [, greater]])
 builtins['ordered-branch'] = ordered_branch
 
-builtins.error = function(frame, cont, self, msg)
+builtins.error = function(cont, self, msg)
     checkargs(1,1, msg)
     return location_error(unwrap(Type.String, msg))
 end
 
-builtins["syntax-error"] = function(frame, cont, self, sxobj, msg)
+builtins["syntax-error"] = function(cont, self, sxobj, msg)
     checkargs(2,2, sxobj, msg)
     local _,anchor = unsyntax(sxobj)
     set_active_anchor(anchor)
     return location_error(unwrap(Type.String, msg))
 end
 
-builtins.xpcall = function(frame, self, cont, func, xfunc)
+builtins.xpcall = function(self, cont, func, xfunc)
     checkargs(2,2, func, xfunc)
     return xpcallcc(function(cont)
-            return call(frame, func,
-                Any(Builtin(function(_frame, _self, _cont, ...)
-                    return cont(_frame, ...)
+            return call(func,
+                Any(Builtin(function(_self, _cont, ...)
+                    return cont(...)
                 end, Symbol.XPCallReturn)))
         end,
         function(exc, cont)
@@ -5429,13 +5246,13 @@ builtins.xpcall = function(frame, self, cont, func, xfunc)
                     exc = Any(exc)
                 end
             end
-            return call(frame, xfunc,
-                Any(Builtin(function(_frame, _self, _cont, ...)
-                    return cont(_frame, ...)
+            return call(xfunc,
+                Any(Builtin(function(_self, _cont, ...)
+                    return cont(...)
                 end, Symbol.XPCallReturn)), exc)
         end,
-        function(frame, ...)
-            return retcall(frame, cont, ...)
+        function(...)
+            return retcall(cont, ...)
         end)
 end
 
@@ -5480,19 +5297,19 @@ builtins["list-parse"] = wrap_simple_builtin(function(s, path)
     return parse(lexer)
 end)
 
-builtins.expand = function(frame, self, cont, expr, scope)
+builtins.expand = function(self, cont, expr, scope)
     checkargs(2,2, expr, scope)
     local _scope = unwrap(Type.Scope, scope)
     return expand_root(expr, _scope, function(expexpr)
         if expexpr then
-            return retcall(frame, cont, expexpr, scope)
+            return retcall(cont, expexpr, scope)
         else
             error(expexpr)
         end
     end)
 end
 
-builtins.eval = function(frame, self, cont, expr, scope, path)
+builtins.eval = function(self, cont, expr, scope, path)
     checkargs(1,3, expr, scope, path)
     if scope then
         scope = unwrap(Type.Scope, scope)
@@ -5506,17 +5323,17 @@ builtins.eval = function(frame, self, cont, expr, scope, path)
     end
     return expand_root(expr, scope, function(expexpr)
         return translate_root(expexpr, path, function(result)
-                return retcall(frame, cont, result)
+                return retcall(cont, result)
             end)
     end)
 end
 
 -- pass arguments to specialize; when the argument is an unbound parameter,
 -- then this is the new parameter the function will be linked to.
-builtins.mangle = function(frame, self, cont, func, ...)
+builtins.mangle = function(self, cont, func, ...)
     checkargs(1,-1, func, ...)
     return specialize(func, { ... }, function(func)
-        return retcall(frame, cont, func)
+        return retcall(cont, func)
     end)
 end
 
@@ -5540,7 +5357,7 @@ end)
 
 builtins["block-scope-macro"] = wrap_simple_builtin(function(func)
     checkargs(1,1, func)
-    unwrap(Type.Closure, func)
+    unwrap(Type.Label, func)
     return macro(func)
 end)
 
@@ -5630,16 +5447,6 @@ builtins["label-new"] = wrap_simple_builtin(function(name)
     return Any(Label(name))
 end)
 
-builtins["closure-new"] = wrap_simple_builtin(function(label,frame)
-    checkargs(1,2,label,frame)
-    if is_null_or_none(frame) then
-        frame = null
-    else
-        frame = unwrap(Type.Frame, frame)
-    end
-    return Any(Closure(unwrap(Type.Label,label),frame))
-end)
-
 builtins["syntax-list"] = wrap_simple_builtin(function(...)
     checkargs(0,-1,...)
     local vacount = select('#', ...)
@@ -5692,26 +5499,26 @@ end)
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
 
-builtins["nothing-compare"] = function(frame, self, cont, a, b,
+builtins["nothing-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == b.type then
-        return call(frame, equal_cont, cont)
+        return call(equal_cont, cont)
     else
-        return call(frame, unordered_cont, cont)
+        return call(unordered_cont, cont)
     end
 end
 
 local function compare_func(T)
-    builtins[T.name:lower() .. "-compare"] = function(frame, self, cont, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(self, cont, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
             b = unwrap(T, b)
             if (a == b) then
-                return call(frame, equal_cont, cont)
+                return call(equal_cont, cont)
             end
         end
-        return call(frame, unordered_cont, cont)
+        return call(unordered_cont, cont)
     end
 end
 
@@ -5719,23 +5526,22 @@ compare_func(Type.Bool)
 compare_func(Type.Symbol)
 compare_func(Type.Parameter)
 compare_func(Type.Label)
-compare_func(Type.Closure)
 
 local function ordered_compare_func(T)
-    builtins[T.name:lower() .. "-compare"] = function(frame, self, cont, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(self, cont, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
             b = unwrap(T, b)
             if (a == b) then
-                return call(frame, equal_cont, cont)
+                return call(equal_cont, cont)
             elseif (a < b) then
-                return call(frame, less_cont, cont)
+                return call(less_cont, cont)
             else
-                return call(frame, greater_cont, cont)
+                return call(greater_cont, cont)
             end
         end
-        return call(frame, unordered_cont, cont)
+        return call(unordered_cont, cont)
     end
 end
 
@@ -5746,40 +5552,40 @@ local function compare_real_func(T, base)
     local eq = C[base .. '_eq']
     local lt = C[base .. '_lt']
     local gt = C[base .. '_gt']
-    builtins[T.name:lower() .. "-compare"] = function(frame, self, cont, a, b,
+    builtins[T.name:lower() .. "-compare"] = function(self, cont, a, b,
         equal_cont, unordered_cont, less_cont, greater_cont)
         if a.type == T and b.type == T then
             a = unwrap(T, a)
             b = unwrap(T, b)
             if eq(a,b) then
-                return call(frame, equal_cont, cont)
+                return call(equal_cont, cont)
             elseif lt(a,b) then
-                return call(frame, less_cont, cont)
+                return call(less_cont, cont)
             elseif gt(a,b) then
-                return call(frame, greater_cont, cont)
+                return call(greater_cont, cont)
             end
         end
-        return call(frame, unordered_cont, cont)
+        return call(unordered_cont, cont)
     end
 end
 
 compare_real_func(Type.R32, 'bangra_r32')
 compare_real_func(Type.R64, 'bangra_r64')
 
-builtins["list-compare"] = function(frame, self, cont, a, b,
+builtins["list-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.List and b.type == Type.List then
         local x = unwrap(Type.List, a)
         local y = unwrap(Type.List, b)
         local function loop()
             if (x == y) then
-                return call(frame, equal_cont, cont)
+                return call(equal_cont, cont)
             elseif (x == EOL) then
-                return call(frame, less_cont, cont)
+                return call(less_cont, cont)
             elseif (y == EOL) then
-                return call(frame, greater_cont, cont)
+                return call(greater_cont, cont)
             end
-            return ordered_branch(frame, none, cont, x.at, y.at,
+            return ordered_branch(none, cont, x.at, y.at,
                 Any(Builtin(function()
                     x = x.next
                     y = y.next
@@ -5789,54 +5595,54 @@ builtins["list-compare"] = function(frame, self, cont, a, b,
         end
         return loop()
     else
-        return call(frame, unordered_cont, cont)
+        return call(unordered_cont, cont)
     end
 end
 
-builtins["type-compare"] = function(frame, self, cont, a, b,
+builtins["type-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.Type and b.type == Type.Type then
         local x = unwrap(Type.Type, a)
         local y = unwrap(Type.Type, b)
         if x == y then
-            return call(frame, equal_cont, cont)
+            return call(equal_cont, cont)
         else
             local xs = x:super()
             local ys = y:super()
             if xs == y then
-                return call(frame, less_cont, cont)
+                return call(less_cont, cont)
             elseif ys == x then
-                return call(frame, greater_cont, cont)
+                return call(greater_cont, cont)
             end
         end
     end
-    return call(frame, unordered_cont, cont)
+    return call(unordered_cont, cont)
 end
 
-builtins["scope-compare"] = function(frame, self, cont, a, b,
+builtins["scope-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.Scope and b.type == Type.Scope then
         local x = unwrap(Type.Scope, a)
         local y = unwrap(Type.Scope, b)
         if (x == y) then
-            return call(frame, equal_cont, cont)
+            return call(equal_cont, cont)
         end
     end
-    return call(frame, unordered_cont, cont)
+    return call(unordered_cont, cont)
 end
 
-builtins["syntax-compare"] = function(frame, self, cont, a, b,
+builtins["syntax-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     local x = maybe_unsyntax(a)
     local y = maybe_unsyntax(b)
-    return ordered_branch(frame, none, cont,
+    return ordered_branch(none, cont,
         x, y, equal_cont, unordered_cont, less_cont, greater_cont)
 end
 
 -- cast
 --------------------------------------------------------------------------------
 
-any_cast = function(frame, self, cont, totype, value)
+any_cast = function(self, cont, totype, value)
     checkargs(2,2, totype, value)
     local fromtype = Any(value.type)
     local func = value.type:lookup(Symbol.Cast)
@@ -5850,12 +5656,12 @@ any_cast = function(frame, self, cont, totype, value)
         end
         func = desttype:lookup(Symbol.Cast)
         if func ~= null then
-            return call(frame, func,
-                Any(Builtin(function(_frame, _dest, _cont, result)
+            return call(func,
+                Any(Builtin(function(_dest, _cont, result)
                     if result == null then
                         errmsg()
                     else
-                        return retcall(frame, cont, result)
+                        return retcall(cont, result)
                     end
                 end, Symbol.RCast)), fromtype, totype, value)
         else
@@ -5863,12 +5669,12 @@ any_cast = function(frame, self, cont, totype, value)
         end
     end
     if func ~= null then
-        return call(frame, func,
-            Any(Builtin(function(_frame, _cont, _dest, result)
+        return call(func,
+            Any(Builtin(function(_cont, _dest, result)
                 if result == null then
                     return fallback_call()
                 else
-                    return retcall(frame, cont, result)
+                    return retcall(cont, result)
                 end
             end, Symbol.RCast)), fromtype, totype, value)
     end
@@ -6090,9 +5896,9 @@ builtins["element-type"] = wrap_simple_builtin(function(_type)
 end)
 
 local function countof_func(T)
-    builtins[T.name:lower() .. "-countof"] = function(frame, self, cont, value)
+    builtins[T.name:lower() .. "-countof"] = function(self, cont, value)
         value = value.value
-        return retcall(frame, cont, Any(size_t(#value)))
+        return retcall(cont, Any(size_t(#value)))
     end
 end
 
@@ -6196,22 +6002,6 @@ builtins["next-scope-symbol"] = wrap_simple_builtin(function(scope, key)
     end
 end)
 
-builtins["closure-label"] = wrap_simple_builtin(function(closure)
-    checkargs(1,1, closure)
-    closure = unwrap(Type.Closure, closure)
-    return Any(closure.label)
-end)
-
-builtins["closure-frame"] = wrap_simple_builtin(function(closure)
-    checkargs(1,1, closure)
-    closure = unwrap(Type.Closure, closure)
-    if closure.frame ~= null then
-        return Any(closure.frame)
-    else
-        return none
-    end
-end)
-
 builtins["label-parameters"] = wrap_simple_builtin(function(label)
     checkargs(1,1, label)
     label = unwrap(Type.Label, label)
@@ -6293,27 +6083,6 @@ builtins["parameter-type"] = wrap_simple_builtin(function(param)
     checkargs(1,1, param)
     param = unwrap(Type.Parameter, param)
     return Any(param.type)
-end)
-
-builtins["frame-values"] = wrap_simple_builtin(function(frame, label)
-    checkargs(2,2, frame, label)
-    frame = unwrap(Type.Frame, frame)
-    label = unwrap(Type.Label, label)
-    local result = frame:get_bank(label)
-    if result ~= null then
-        return unpack(result)
-    end
-end)
-
-builtins["frame-new"] = wrap_simple_builtin(function(frame, label, ...)
-    checkargs(2,-1, frame, label, ...)
-    if is_none(frame) then
-        frame = nil
-    else
-        frame = unwrap(Type.Frame, frame)
-    end
-    label = unwrap(Type.Label, label)
-    return Any(Frame(frame, label, { ... }))
 end)
 
 local valtoptr
@@ -6414,18 +6183,6 @@ builtins["set-type-symbol!"] = wrap_simple_builtin(function(dest, key, value)
     atable:bind(key, value)
 end)
 
---[[
-builtins["bind!"] = function(frame, self, cont, param, value)
-    checkargs(2,2, param, value)
-    param = unwrap(Type.Parameter, param)
-    if not param.label then
-        error("can't rebind unbound parameter")
-    end
-    frame:rebind(param.label, param.index, value)
-    return retcall(frame, cont)
-end
-]]
-
 builtins["ref-set!"] = wrap_simple_builtin(function(ref, value)
     checkargs(2,2, ref, value)
     ref = unwrap(Type.Ref, ref)
@@ -6495,15 +6252,6 @@ builtins["dump-label"] = wrap_simple_builtin(function(value)
     stream_il(stdout_writer, value)
 end)
 
-builtins["dump-frame"] = wrap_simple_builtin(function(value)
-    checkargs(1,1,value)
-    stream_frame(stdout_writer, unwrap(Type.Frame, value))
-end)
-
-builtins["active-frame"] = function(frame, self, cont)
-    return retcall(frame, cont, Any(frame))
-end
-
 builtins.repr = wrap_simple_builtin(function(value, styler)
     checkargs(1,2,value, styler)
     if styler == null then
@@ -6561,8 +6309,8 @@ builtins["set-globals!"] = wrap_simple_builtin(function(value)
     globals = unwrap(Type.Scope, value)
 end)
 
-builtins["interpreter-version"] = function(frame, dest, cont)
-    return retcall(frame, cont,
+builtins["interpreter-version"] = function(dest, cont)
+    return retcall(cont,
         Any(int(global_opts.version_major)),
         Any(int(global_opts.version_minor)),
         Any(int(global_opts.version_patch)))
@@ -6599,7 +6347,7 @@ builtins.args = wrap_simple_builtin(function()
     return unpack(result)
 end)
 
-builtins.exit = function(frame, cont, self, code)
+builtins.exit = function(cont, self, code)
     checkargs(0, 1, code)
     if code then
         code = tonumber(unwrap_integer(code))
@@ -6674,7 +6422,6 @@ end
 local function init_globals()
     Type.Builtin:bind(Any(Symbol.Super), Any(Type.Callable))
     Type.Label:bind(Any(Symbol.Super), Any(Type.Callable))
-    Type.Closure:bind(Any(Symbol.Super), Any(Type.Callable))
 
     do
         local ctype = typeof('void *')
@@ -6768,7 +6515,7 @@ xpcallcc(
 
         return expand_root(expr, null, function(expexpr)
             return translate_root(expexpr, "main", function(func)
-                return call(nil, func, globals:lookup(Symbol("exit")))
+                return call(func, globals:lookup(Symbol("exit")))
             end)
         end)
     end,

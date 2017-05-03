@@ -30,8 +30,7 @@
                 print f
                 print
                     f 5
-            mangle
-                closure-label pow7
+            mangle pow7
                 make-param "ret"
                 make-typed-param "x" i32
 
@@ -56,8 +55,7 @@
                                 i32+ x y
                     \ 300 3
 
-        mangle
-            closure-label main
+        mangle main
             make-param "ret"
 
     fn/cc test-hello-world (_)
@@ -67,8 +65,7 @@
                 fn/cc (_ text)
                     print text
                 \ "hello world"
-        mangle
-            closure-label main
+        mangle main
             make-param "ret"
 
     test-print10
@@ -101,11 +98,15 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
+print "running main"
+
 syntax-extend
+    print "stage 1"
     set-type-symbol! Symbol (symbol-new "apply-type") symbol-new
     \ syntax-scope
 
 syntax-extend
+    print "stage 2"
     fn/cc no-op (_)
     fn/cc unreachable (_)
         error "unreachable branch"
@@ -276,6 +277,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 3"
     fn/cc unordered-error (_ a b)
         error
             .. "illegal ordered comparison of values of types "
@@ -372,14 +374,13 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 4"
     #---
     set-type-symbol! string (quote apply-type) string-new
     set-type-symbol! type (quote apply-type) type-new
     set-type-symbol! Label (quote apply-type) label-new
     set-type-symbol! Parameter (quote apply-type) parameter-new
     set-type-symbol! Scope (quote apply-type) scope-new
-    set-type-symbol! Frame (quote apply-type) frame-new
-    set-type-symbol! Closure (quote apply-type) closure-new
     set-type-symbol! ref (quote apply-type) ref-new
 
     set-type-symbol! i8 (quote apply-type) i8-new
@@ -401,7 +402,6 @@ syntax-extend
     set-type-symbol! Symbol (quote compare) symbol-compare
     set-type-symbol! Parameter (quote compare) parameter-compare
     set-type-symbol! Label (quote compare) label-compare
-    set-type-symbol! Closure (quote compare) closure-compare
     set-type-symbol! string (quote compare) string-compare
     set-type-symbol! type (quote compare) type-compare
     set-type-symbol! Scope (quote compare) scope-compare
@@ -468,43 +468,10 @@ syntax-extend
     set-type-symbol! r32 (quote %) r32%; set-type-symbol! r64 (quote %) r64%
     set-type-symbol! r32 (quote **) r32**; set-type-symbol! r64 (quote **) r64**
 
-    #set-scope-symbol! syntax-scope
-        Symbol "set!"
-        block-scope-macro
-            fn/cc "expand-set!" (return expr env)
-                call
-                    fn/cc (_ name expr-anchor)
-                        call
-                            fn/cc (_ param)
-                                ordered-branch (typeof param) Parameter
-                                    fn/cc (_) (_ none)
-                                    fn/cc (_)
-                                        error "set! requires parameter argument"
-                                    \ none none # never reached
-                                return
-                                    cons
-                                        syntax-cons
-                                            datum->syntax bind! expr-anchor
-                                            syntax-cons
-                                                # wrap parameter in closure to
-                                                  prevent evaluation
-                                                syntax-list
-                                                    datum->syntax
-                                                        fn/cc (_)
-                                                            _ param
-                                                        \ expr-anchor
-                                                slice (@ expr 0) 2
-                                        slice expr 1
-                                    \ env
-                            ordered-branch (typeof (syntax->datum name)) Parameter
-                                fn/cc (_) (_ (syntax->datum name))
-                                fn/cc (_) (_ (get-scope-symbol env name name))
-                                \ none none # never reached
-                    @ (@ expr 0) 1
-                    syntax->anchor (@ expr 0)
     \ syntax-scope
 
 syntax-extend
+    print "stage 5"
     set-scope-symbol! syntax-scope
         quote dump-syntax
         block-scope-macro
@@ -524,6 +491,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 6"
     set-scope-symbol! syntax-scope
         quote callable?
         fn/cc "callable?" (return x)
@@ -535,10 +503,10 @@ syntax-extend
             return
                 <: (typeof x) Integer
     set-scope-symbol! syntax-scope
-        quote closure?
-        fn/cc "closure?" (return x)
+        quote label?
+        fn/cc "label?" (return x)
             return
-                == (typeof x) Closure
+                == (typeof x) Label
     set-scope-symbol! syntax-scope
         quote real?
         fn/cc "real?" (return x)
@@ -639,6 +607,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 7"
     set-scope-symbol! syntax-scope (quote do)
         macro
             fn/cc "expand-do" (return expr env)
@@ -654,6 +623,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 8"
     set-scope-symbol! syntax-scope (quote syntax-head?)
         fn/cc "syntax-head?" (return expr name)
             return
@@ -688,6 +658,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 9"
     fn/cc syntax-wrap (_ loc x)
         ? (syntax? x) x
             datum->syntax x loc
@@ -730,6 +701,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 10"
     set-scope-symbol! syntax-scope (quote define)
         block-macro
             fn/cc "expand-define" (return topexpr env)
@@ -1006,6 +978,7 @@ define if
                         \ rest-expr
 
 syntax-extend
+    print "stage 11"
     fn =? (x)
         and
             symbol? (syntax->datum x)
@@ -1122,6 +1095,7 @@ define define-infix-op
             return rest env
 
 syntax-extend
+    print "stage 12"
     fn get-ifx-op (env op)
         let sym =
             syntax->datum op
@@ -1572,6 +1546,7 @@ define-infix-op @ 800 @ >
 #define-infix-op =@ 800 =@ >
 
 syntax-extend
+    print "stage 13"
     let Qualifier =
         type
             quote Qualifier
@@ -1643,6 +1618,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 14"
 
     fn iterator? (x)
         (typeof x) <: Iterator
@@ -1699,7 +1675,7 @@ syntax-extend
         fn string-iter (self)
             return countable-iter
                 fn () (return self (size_t 0))
-    set-type-symbol! Closure (quote iter)
+    set-type-symbol! Label (quote iter)
         fn gen-yield-iter (callee)
             let caller-return = (ref none)
             fn/cc yield-iter (return cont-callee)
@@ -2059,6 +2035,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
+    print "stage 15"
     fn paramdef-has-types? (expr)
         loop-for token in (syntax->datum expr)
             if (token == (quote ,))
@@ -2264,6 +2241,7 @@ define fn-types
 #-------------------------------------------------------------------------------
 
 syntax-extend
+    print "stage 16"
     fn build-scope (names...)
         fn (values...)
             let table = (Scope)
@@ -2311,6 +2289,7 @@ syntax-extend
 #-------------------------------------------------------------------------------
 
 syntax-extend
+    print "stage 17"
     let bangra = (Scope)
     set-scope-symbol! bangra (quote path)
         list "./?.b"
@@ -2363,8 +2342,7 @@ syntax-extend
                             quote module-path
                             \ module-path
                         let fun =
-                            Closure
-                                eval expr eval-scope module-path
+                            eval expr eval-scope module-path
                         let content =
                             fun
                         set-scope-symbol!
@@ -2736,7 +2714,7 @@ set-type-symbol! struct (quote apply-type)
         let etype =
             loop-for i f in (enumerate fields)
                 with (s = "{")
-                assert (closure? f) "field expected"
+                assert (label? f) "field expected"
                 let name elemtype = (f)
                 assert (symbol? name) "name expected"
                 assert (type? elemtype) "type expected"
@@ -2940,8 +2918,7 @@ define read-eval-print-loop
                                 syntax-list expression-suffix
                         ref-set! slevel (stack-level)
                         let f =
-                            Closure
-                                eval code eval-env
+                            eval code eval-env
                         ref-set! slevel (stack-level)
                         let result... = (f)
                         if (not (none? result...))
@@ -2966,6 +2943,7 @@ define read-eval-print-loop
             continue preload cmdlist
 
 syntax-extend
+    print "stage 18"
     set-globals! syntax-scope
     \ syntax-scope
 
@@ -3035,10 +3013,10 @@ fn run-main (args...)
         set-scope-symbol! eval-scope (quote module-path) sourcepath
         clear-traceback
         let fun =
-            Closure
-                eval expr eval-scope sourcepath
+            eval expr eval-scope sourcepath
         clear-traceback
         fun
         exit 0
 
+print "run-main"
 run-main (args)

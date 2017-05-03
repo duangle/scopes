@@ -36,7 +36,7 @@ local function bangra_symbols()
     FUNCTIONS = splitstr(getprop("functions.bangra_lang") or
     "external branch print repr tupleof import-c eval structof typeof"
         .. " macro block-macro block-scope-macro cons expand empty? type?"
-        .. " dump syntax-head? countof slice none? list-atom?"
+        .. " dump syntax-head? countof slice none? list-atom? label?"
         .. " list-load list-parse load require cstr exit hash min max"
         .. " va@ va-countof range zip enumerate cast element-type"
         .. " qualify disqualify iter va-iter iterator? list? symbol? parse-c"
@@ -65,7 +65,7 @@ local function bangra_symbols()
     TYPES = splitstr(getprop("types.bangra_lang") or
         "int i8 i16 i32 i64 u8 u16 u32 u64 Nothing string ref"
         .. " r16 r32 r64 half float double Symbol list Parameter"
-        .. " Frame Closure Label Integer Real array tuple vector"
+        .. " Label Integer Real array tuple vector"
         .. " pointer struct enum bool uint Qualifier Syntax Anchor Scope"
         .. " Iterator type size_t usize_t ssize_t void* Callable Boxed Any"
         )
