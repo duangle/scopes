@@ -68,7 +68,20 @@
         mangle main
             make-param "ret"
 
-    test-print10
+    fn/cc test-warble-garble (_)
+        call
+            fn/cc (_ x y)
+                dump-label
+                    fn/cc (_)
+                        branch true
+                            fn/cc (_)
+                                i32+ x y
+                            fn/cc (_)
+                                i32+ x x
+            \ 23 42
+
+    #test-print10
+    test-warble-garble
 
 
     \ 0

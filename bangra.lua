@@ -3154,139 +3154,9 @@ end
 -- LAMBDA MANGLING
 --------------------------------------------------------------------------------
 
+local execute
 local mangle
 do
-local function program(top)
-    local visited = {}
-    local function walk(obj)
-        if visited[obj] then
-            return
-        end
-        visited[obj] = true
-        local arg = obj.enter
-        if arg.type == Type.Label then
-            walk(arg.value)
-        end
-        for i,arg in ipairs(obj.arguments) do
-            if arg.type == Type.Label then
-                walk(arg.value)
-            end
-        end
-    end
-    walk(top)
-    return visited
-end
-
-local function build_users(pg)
-    local users = {}
-
-    local function add_user(obj, label, index)
-        local _users = users
-        if _users[obj] == nil then
-            _users[obj] = {}
-        end
-        _users = _users[obj]
-        if _users[label] == nil then
-            _users[label] = {}
-        end
-        _users = _users[label]
-        _users[index] = true
-    end
-
-    local function using(obj, entry, i)
-        if entry.type == Type.Parameter then
-            add_user(entry.value, obj, i)
-        elseif entry.type == Type.Label then
-            add_user(entry.value, obj, i)
-        end
-    end
-
-    -- build dependencies:
-    for obj,_ in pairs(pg) do
-        using(obj, obj.enter, 0)
-        for i,entry in ipairs(obj.arguments) do
-            using(obj, entry, 1)
-        end
-    end
-
-    return users
-end
-
-local function build_scopes(pg, users)
-    local scopes = {}
-
-    local function add_scope(obj, label, depth)
-        local _scopes = scopes
-        if _scopes[obj] == nil then
-            _scopes[obj] = {}
-        end
-        _scopes = _scopes[obj]
-        _scopes[label] = depth
-    end
-
-    local function mark_indirect(obj, label, level)
-        if users[obj] then
-            for k,_ in pairs(users[obj]) do
-                local scope = scopes[label]
-                local xk = scope and scope[k]
-                if label ~= k and ((not xk) or level < xk) then
-                    add_scope(label, k, level)
-                    mark_indirect(k, label, level + 1)
-                end
-            end
-        end
-    end
-
-    local function mark_direct(obj, arg)
-        if arg.type == Type.Parameter and arg.value.label ~= obj then
-            local param = arg.value
-            -- i am directly live in param.label
-            add_scope(param.label, obj, 1)
-
-            -- my users are indirectly live in param.label
-            mark_indirect(obj, param.label, 2)
-        end
-    end
-
-    -- build direct and indirect liveness:
-    for obj,_ in pairs(pg) do
-        mark_direct(obj, obj.enter)
-        for i,arg in ipairs(obj.arguments) do
-            mark_direct(obj, arg)
-        end
-    end
-
-    local visited = {}
-    local function inherit_scope(obj)
-        if visited[obj] then
-            return
-        end
-        visited[obj] = true
-        local scope = scopes[obj]
-        if not scope then
-            return
-        end
-        local newscope = {}
-        for label,ldepth in pairs(scope) do
-            inherit_scope(label)
-            newscope[label] = ldepth
-            local label_scope = scopes[label]
-            if label_scope then
-                for sublabel,sldepth in pairs(label_scope) do
-                    newscope[sublabel] = ldepth + sldepth
-                end
-            end
-        end
-        scopes[obj] = newscope
-    end
-
-    -- inherit child scopes:
-    for obj,_ in pairs(pg) do
-        inherit_scope(obj)
-    end
-
-    return scopes
-end
 
 local function build_scope(entry)
     local scope = {}
@@ -3324,6 +3194,33 @@ local function build_scope(entry)
     walk(entry, 1)
 
     return scope
+end
+
+local function fold_constants(enter, body)
+    if enter.type == Type.Builtin then
+        local ev = enter.value
+        local ff = ev.fold_func
+        if ff then
+            return ff(enter, body)
+        elseif ev.foldable then
+            for i=2,#body do
+                if body[i].type == Type.Parameter then
+                    return enter, body
+                end
+            end
+
+            local ret = body[1]
+            table.remove(body, 1)
+
+            local result
+            execute(enter, function(...)
+                result = { none, ... }
+            end, unpack(body))
+
+            return ret, result
+        end
+    end
+    return enter, body
 end
 
 local function remap_body(ll, entry, map)
@@ -3364,6 +3261,9 @@ local function remap_body(ll, entry, map)
             table.insert(body, arg)
         end
     end
+
+    enter, body = fold_constants(enter, body)
+
     ll:set_enter(enter)
     ll:set_arguments(body)
 end
@@ -3371,39 +3271,27 @@ end
 mangle = function(entry, params, map)
     assert_label(entry)
     local entry_scope = build_scope(entry)
-    local sorted_scope = {}
-    if entry_scope then
-        for l,_ in pairs(entry_scope) do
-            table.insert(sorted_scope, l)
-        end
-        table.sort(sorted_scope, function(a, b)
-            return a.uid < b.uid
-        end)
-        --print('sorted_scope:', #sorted_scope, unpack(sorted_scope))
-        -- create new labels and map new parameters
-        for _,l in ipairs(sorted_scope) do
-            local ll = Label.create_from_label(l)
-            assert(not map[l])
-            map[l] = Any(ll)
-            for _,param in ipairs(l.parameters) do
-                local pparam = Parameter.create_from_parameter(param)
-                assert(not map[param])
-                map[param] = Any(pparam)
-                ll:append_parameter(pparam)
-            end
-        end
-    end
     -- remap entry point
     local le = Label.create_from_label(entry)
-    if entry_scope then
-        -- remap label bodies
-        for _,l in ipairs(sorted_scope) do
-            local ll = map[l].value
-            remap_body(ll, l, map)
-        end
-    end
     for _,param in ipairs(params) do
         le:append_parameter(param)
+    end
+    -- create new labels and map new parameters
+    for l,_ in pairs(entry_scope) do
+        local ll = Label.create_from_label(l)
+        assert(not map[l])
+        map[l] = Any(ll)
+        for _,param in ipairs(l.parameters) do
+            local pparam = Parameter.create_from_parameter(param)
+            assert(not map[param])
+            map[param] = Any(pparam)
+            ll:append_parameter(pparam)
+        end
+    end
+    -- remap label bodies
+    for l,_ in pairs(entry_scope) do
+        local ll = map[l].value
+        remap_body(ll, l, map)
     end
     remap_body(le, entry, map)
 
@@ -3570,7 +3458,7 @@ local function retcall (dest, ...)
     return call(dest, none, ...)
 end
 
-local function execute(dest, cont, ...)
+execute = function(dest, cont, ...)
     assert_any(dest)
     assert_function(cont)
     local ret = Any(Builtin(function(dest, _cont, ...)
@@ -4532,52 +4420,6 @@ local function intersect(a, b)
     return result
 end
 
-local function fold_constants(label)
-    -- evaluate and rewrite
-    local f,anchor = maybe_unsyntax(label.enter)
-    local body = label.arguments
-    if f.type == Type.Builtin then
-        if f.value.fold_func then
-            set_active_anchor(label.body_anchor or label.anchor)
-            return f.value.fold_func(label)
-        elseif f.value.foldable then
-            for i=2,#body do
-                local arg = body[i]
-                arg = maybe_unsyntax(arg)
-                if arg.type == Type.Parameter then
-                    return false
-                end
-            end
-
-            local args = {}
-            for i=2,#body do
-                local arg = body[i]
-                arg = maybe_unsyntax(arg)
-                table.insert(args, arg)
-            end
-            local result
-            execute(f, function(...)
-                result = { ... }
-            end, unpack(args))
-
-            local anchor = label.body_anchor or label.anchor
-            if anchor then
-                for i=1,#result do
-                    local arg = result[i]
-                    arg = Any(Syntax(arg, anchor))
-                    result[i] = arg
-                end
-            end
-
-            label.enter = body[1]
-            label.arguments = { none, unpack(result) }
-            return true
-        end
-    end
-    return false
-end
-
-
 --[[
 things we must solve in the specializer:
 
@@ -5170,20 +5012,17 @@ local function branch(self, cont, cond, then_cont, else_cont)
     end
 end
 branch = Builtin(branch)
-branch.fold_func = function(label)
-    local body = label.arguments
-    local cond = maybe_unsyntax(body[2])
+branch.fold_func = function(enter, body)
+    local cond = body[2]
     if cond.type ~= Type.Parameter then
         cond = unwrap(Type.Bool, cond)
-        label.arguments = { body[1] }
         if cond == b_true then
-            label.enter = body[3]
+            return body[3], { body[1] }
         else
-            label.enter = body[4]
+            return body[4], { body[1] }
         end
-        return true
     end
-    return false
+    return enter, body
 end
 builtins.branch = branch
 
