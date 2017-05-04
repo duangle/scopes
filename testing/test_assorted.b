@@ -152,11 +152,6 @@ assert
     k == (.test T 1 2)
 
 assert
-    <
-        list 1 2 2
-        list 1 2 3
-
-assert
     ==
         ..
             list 1 2 3

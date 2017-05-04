@@ -1,4 +1,30 @@
 #
+    Bangra Interpreter
+    Copyright (c) 2017 Leonard Ritter
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to
+    deal in the Software without restriction, including without limitation the
+    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+    sell copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+    This is the bangra boot script. It implements the remaining standard
+    functions and macros, parses the command-line and then enters the REPL.
+
+# this is a test block
+syntax-extend
     fn/cc make-param (_ name)
         parameter-new (datum->syntax (symbol-new name) (active-anchor))
     fn/cc make-typed-param (_ name atype)
@@ -73,7 +99,7 @@
             fn/cc (_ x y)
                 dump-label
                     fn/cc (_)
-                        branch true
+                        branch (i32< x y)
                             fn/cc (_)
                                 i32+ x y
                             fn/cc (_)
@@ -83,33 +109,8 @@
     #test-print10
     test-warble-garble
 
-
-    \ 0
-
-#
-    Bangra Interpreter
-    Copyright (c) 2017 Leonard Ritter
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to
-    deal in the Software without restriction, including without limitation the
-    rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
-    sell copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in
-    all copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
-    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-    DEALINGS IN THE SOFTWARE.
-
-    This is the bangra boot script. It implements the remaining standard
-    functions and macros, parses the command-line and then enters the REPL.
+    #exit 0
+    \ syntax-scope
 
 print "running main"
 
@@ -128,7 +129,8 @@ syntax-extend
         fn/cc (_ x values...)
             call
                 fn/cc (_ x-func)
-                    type-compare (typeof x-func) Nothing
+                    branch
+                        type== (typeof x-func) Nothing
                         fn/cc (_)
                             error
                                 string-join "can not "
@@ -137,7 +139,6 @@ syntax-extend
                                             string-new (typeof x)
                         fn/cc (_)
                             x-func x values...
-                        \ unreachable unreachable
                 type-at (typeof x) name
 
     fn/cc forward-op2 (_ name errmsg)
@@ -153,31 +154,31 @@ syntax-extend
             fn/cc alt-forward-op2 (_)
                 call
                     fn/cc (_ b-func)
-                        type-compare (typeof b-func) Nothing
+                        branch
+                            type== (typeof b-func) Nothing
                             \ forward-op2-error
                             fn/cc (_)
                                 call
                                     fn/cc (_ result...)
-                                        u64-compare (va-countof result...) (u64-new 0)
-                                        \ forward-op2-error
-                                        \ unreachable unreachable
-                                        fn/cc (_) result...
+                                        branch
+                                            u64== (va-countof result...) (u64-new 0)
+                                            \ forward-op2-error
+                                            fn/cc (_) result...
                                     b-func a b true
-                            \ unreachable unreachable
                     type-at (typeof b) name
             call
                 fn/cc (_ a-func)
-                    type-compare (typeof a-func) Nothing
+                    branch
+                        type== (typeof a-func) Nothing
                         \ alt-forward-op2
                         fn/cc (_)
                             call
                                 fn/cc (_ result...)
-                                    u64-compare (va-countof result...) (u64-new 0)
+                                    branch
+                                        u64== (va-countof result...) (u64-new 0)
                                         \ alt-forward-op2
-                                        \ unreachable unreachable
                                         fn/cc (_) result...
                                 a-func a b false
-                        \ unreachable unreachable
                 type-at (typeof a) name
 
     call
@@ -211,38 +212,33 @@ syntax-extend
                                 call
                                     fn/cc (_ i1)
                                         forward-slice obj (u64-new i0) (u64-new i1)
-                                    i64-compare i1 zero
+                                    branch
+                                        i64>= i1 zero
                                         fn/cc (_) i1
-                                        \ unreachable
                                         fn/cc (_)
                                             call
                                                 fn/cc (_ i1)
-                                                    i64-compare i1 i0
+                                                    branch
+                                                        i64>= i1 i0
                                                         fn/cc (_) i1
-                                                        \ unreachable
                                                         fn/cc (_) i0
-                                                        fn/cc (_) i1
                                                 i64+ i1 count
-                                        fn/cc (_) i1
-                            i64-compare i0 zero
-                                fn/cc (_) i0
-                                \ unreachable
+                            branch
+                                i64< i0 zero
                                 fn/cc (_)
-                                    i64-compare i0 (i64- zero count)
-                                        fn/cc (_) zero
-                                        \ unreachable
+                                    branch
+                                        i64<= i0 (i64- zero count)
                                         fn/cc (_) zero
                                         fn/cc (_) (i64+ i0 count)
                                 fn/cc (_)
-                                    i64-compare i0 count
-                                        fn/cc (_) i0
-                                        \ unreachable
+                                    branch
+                                        i64<= i0 count
                                         fn/cc (_) i0
                                         fn/cc (_) count
-                            type-compare (typeof i1) Nothing
+                            branch
+                                type== (typeof i1) Nothing
                                 fn/cc (_) count
                                 fn/cc (_) (i64-new i1)
-                                \ unreachable unreachable
                     i64-new 0
                     i64-new
                         forward-countof obj
@@ -281,63 +277,49 @@ syntax-extend
     set-forward (Symbol ">>") "right-shift"
 
     set-type-symbol! list (Symbol "apply-type") list-new
-    set-type-symbol! list (Symbol "compare") list-compare
-    set-type-symbol! list (Symbol "@") list-at
+    #set-type-symbol! list (Symbol "compare") list-compare
+    set-type-symbol! list (Symbol "@") list@
     set-type-symbol! list (Symbol "countof") list-countof
     set-type-symbol! list (Symbol "slice") list-slice
-    set-type-symbol! Syntax (Symbol "compare") syntax-compare
-
+    #set-type-symbol! Syntax (Symbol "compare") syntax-compare
     \ syntax-scope
 
 syntax-extend
-    print "stage 3"
-    fn/cc unordered-error (_ a b)
-        error
-            .. "illegal ordered comparison of values of types "
-                .. (repr (typeof a))
-                    .. " and "
-                        repr (typeof b)
+    print "stage 2.1"
+    call
+        fn/cc (_ name)
+            fn/cc ordered-branch (_ a b cc== cc!= cc< cc>)
+                fn/cc forward-compare-error (_ a b)
+                    error
+                        string-join "types "
+                            string-join (repr (typeof a))
+                                string-join " and "
+                                    string-join (repr (typeof b)) " are incomparable"
 
-    fn/cc return-true (_) true
-    fn/cc return-false (_) false
+                fn/cc alt-forward-compare (_)
+                    call
+                        fn/cc (_ b-func)
+                            branch
+                                type== (typeof b-func) Nothing
+                                fn/cc (_)
+                                    forward-compare-error a b
+                                fn/cc (_)
+                                    b-func b a cc== cc!= cc> cc<
+                        type-at (typeof b) name
+                call
+                    fn/cc (_ a-func)
+                        branch
+                            type== (typeof a-func) Nothing
+                            \ alt-forward-compare
+                            fn/cc (_)
+                                a-func a b cc== alt-forward-compare cc< cc>
+                    type-at (typeof a) name
+            set-scope-symbol! syntax-scope (Symbol "ordered-branch") ordered-branch
+        Symbol "compare"
+    \ syntax-scope
 
-    set-scope-symbol! syntax-scope (Symbol "==")
-        fn/cc "==" (return a b)
-            ordered-branch a b return-true
-                \ return-false return-false return-false
-    set-scope-symbol! syntax-scope (Symbol "!=")
-        fn/cc "!=" (return a b)
-            ordered-branch a b return-false
-                \ return-true return-true return-true
-    set-scope-symbol! syntax-scope (Symbol "<")
-        fn/cc "<" (return a b)
-            ordered-branch a b return-false
-                fn/cc (_) (cc/call unordered-error none a b)
-                \ return-true return-false
-    set-scope-symbol! syntax-scope (Symbol "<=")
-        fn/cc "<=" (return a b)
-            ordered-branch a b return-true
-                fn/cc (_) (cc/call unordered-error none a b)
-                \ return-true return-false
-    set-scope-symbol! syntax-scope (Symbol ">")
-        fn/cc ">" (return a b)
-            ordered-branch a b return-false
-                fn/cc (_) (cc/call unordered-error none a b)
-                \ return-false return-true
-    set-scope-symbol! syntax-scope (Symbol ">=")
-        fn/cc ">=" (return a b)
-            ordered-branch a b return-true
-                fn/cc (_) (cc/call unordered-error none a b)
-                \ return-false return-true
-    set-scope-symbol! syntax-scope (Symbol "<>")
-        fn/cc "<>" (return a b)
-            ordered-branch a b return-false
-                fn/cc (_) (cc/call unordered-error none a b)
-                \ return-true return-true
-    set-scope-symbol! syntax-scope (Symbol "<:")
-        fn/cc "<:" (return a b)
-            ordered-branch a b return-false return-false
-                \ return-true return-false
+syntax-extend
+    print "stage 2.2"
     set-scope-symbol! syntax-scope
         Symbol "quote"
         block-scope-macro
@@ -353,12 +335,10 @@ syntax-extend
                                     syntax-quote
                                         # keep wrapped in list if multiple
                                             arguments
-                                        ordered-branch (list) (slice args 1)
-                                            fn/cc (_)
-                                                _ (@ args 0)
-                                            fn/cc (_) (_ args)
-                                            fn/cc (_) (_ args)
-                                            fn/cc (_) (_ args)
+                                        branch
+                                            u64== (countof args) (u64-new 1)
+                                            fn/cc (_) (@ args 0)
+                                            fn/cc (_) args
                                 slice expr 1
                             \ syntax-scope
                     slice (@ expr 0) 1
@@ -374,16 +354,66 @@ syntax-extend
                                 datum->syntax
                                     # keep wrapped in list if multiple
                                         arguments
-                                    ordered-branch (list) (slice args 1)
-                                        fn/cc (_)
-                                            _ (@ args 0)
-                                        fn/cc (_) (_ args)
-                                        fn/cc (_) (_ args)
-                                        fn/cc (_) (_ args)
+                                    branch
+                                        u64== (countof args) (u64-new 1)
+                                        fn/cc (_) (@ args 0)
+                                        fn/cc (_) args
                                     \ args
                                 slice expr 1
                             \ syntax-scope
                     slice (@ expr 0) 1
+    \ syntax-scope
+
+syntax-extend
+    print "stage 3"
+    fn/cc unordered-error (_ a b)
+        error
+            .. "illegal ordered comparison of values of types "
+                .. (repr (typeof a))
+                    .. " and "
+                        repr (typeof b)
+
+    fn/cc return-true (_) true
+    fn/cc return-false (_) false
+
+    set-scope-symbol! syntax-scope (quote ==)
+        fn/cc "==" (return a b)
+            ordered-branch a b return-true
+                \ return-false return-false return-false
+    set-scope-symbol! syntax-scope (quote !=)
+        fn/cc "!=" (return a b)
+            ordered-branch a b return-false
+                \ return-true return-true return-true
+    set-scope-symbol! syntax-scope (quote <)
+        fn/cc "<" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call unordered-error none a b)
+                \ return-true return-false
+    set-scope-symbol! syntax-scope (quote <=)
+        fn/cc "<=" (return a b)
+            ordered-branch a b return-true
+                fn/cc (_) (cc/call unordered-error none a b)
+                \ return-true return-false
+    set-scope-symbol! syntax-scope (quote >)
+        fn/cc ">" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call unordered-error none a b)
+                \ return-false return-true
+    set-scope-symbol! syntax-scope (quote >=)
+        fn/cc ">=" (return a b)
+            ordered-branch a b return-true
+                fn/cc (_) (cc/call unordered-error none a b)
+                \ return-false return-true
+    set-scope-symbol! syntax-scope (quote <>)
+        fn/cc "<>" (return a b)
+            ordered-branch a b return-false
+                fn/cc (_) (cc/call unordered-error none a b)
+                \ return-true return-true
+    set-scope-symbol! syntax-scope (quote <:)
+        fn/cc "<:" (return a b)
+            ordered-branch a b return-false return-false
+                \ return-true return-false
+
     \ syntax-scope
 
 syntax-extend
@@ -410,27 +440,127 @@ syntax-extend
     set-type-symbol! r64 (quote apply-type) r64-new
 
     #---
-    set-type-symbol! Nothing (quote compare) nothing-compare
-    set-type-symbol! bool (quote compare) bool-compare
-    set-type-symbol! Symbol (quote compare) symbol-compare
-    set-type-symbol! Parameter (quote compare) parameter-compare
-    set-type-symbol! Label (quote compare) label-compare
-    set-type-symbol! string (quote compare) string-compare
-    set-type-symbol! type (quote compare) type-compare
-    set-type-symbol! Scope (quote compare) scope-compare
+    fn/cc unordered-compare-op (_ T T==)
+        set-type-symbol! T (quote compare)
+            fn/cc (_ a b cc== cc!=)
+                branch
+                    type== (typeof a) T
+                    fn/cc (_)
+                        branch
+                            type== (typeof b) T
+                            fn/cc (_)
+                                branch
+                                    T== a b
+                                    \ cc== cc!=
+                            \ cc!=
+                    \ cc!=
 
-    set-type-symbol! i8 (quote compare) i8-compare
-    set-type-symbol! i16 (quote compare) i16-compare
-    set-type-symbol! i32 (quote compare) i32-compare
-    set-type-symbol! i64 (quote compare) i64-compare
+    fn/cc ordered-compare-op (_ T T== T<)
+        set-type-symbol! T (quote compare)
+            fn/cc (_ a b cc== cc!= cc< cc>)
+                branch
+                    type== (typeof a) T
+                    fn/cc (_)
+                        branch
+                            type== (typeof b) T
+                            fn/cc (_)
+                                branch
+                                    T== a b
+                                    \ cc==
+                                    fn/cc (_)
+                                        branch
+                                            T< a b
+                                            \ cc< cc>
+                            \ cc!=
+                    \ cc!=
 
-    set-type-symbol! u8 (quote compare) u8-compare
-    set-type-symbol! u16 (quote compare) u16-compare
-    set-type-symbol! u32 (quote compare) u32-compare
-    set-type-symbol! u64 (quote compare) u64-compare
+    fn/cc partially-ordered-compare-op (_ T T== T< T>)
+        set-type-symbol! T (quote compare)
+            fn/cc (_ a b cc== cc!= cc< cc>)
+                branch
+                    type== (typeof a) T
+                    fn/cc (_)
+                        branch
+                            type== (typeof b) T
+                            fn/cc (_)
+                                branch
+                                    T== a b
+                                    \ cc==
+                                    fn/cc (_)
+                                        branch
+                                            T< a b
+                                            \ cc<
+                                            fn/cc (_)
+                                                branch
+                                                    T> a b
+                                                    \ cc> cc!=
+                            \ cc!=
+                    \ cc!=
 
-    set-type-symbol! r32 (quote compare) r32-compare
-    set-type-symbol! r64 (quote compare) r64-compare
+    set-type-symbol! Nothing (quote compare)
+        fn/cc nothing-compare (_ a b cc== cc!=)
+            branch
+                type== (typeof a) (typeof b)
+                \ cc== cc!=
+    unordered-compare-op bool bool==
+    unordered-compare-op Symbol Symbol==
+    unordered-compare-op Parameter Parameter==
+    unordered-compare-op Label Label==
+    unordered-compare-op Scope Scope==
+
+    ordered-compare-op string string== string<
+    ordered-compare-op type type== type<
+
+    ordered-compare-op i8 i8== i8<
+    ordered-compare-op i16 i16== i16<
+    ordered-compare-op i32 i32== i32<
+    ordered-compare-op i64 i64== i64<
+
+    ordered-compare-op u8 u8== u8<
+    ordered-compare-op u16 u16== u16<
+    ordered-compare-op u32 u32== u32<
+    ordered-compare-op u64 u64== u64<
+
+    partially-ordered-compare-op r32 r32== r32< r32>
+    partially-ordered-compare-op r64 r64== r64< r64>
+
+    set-type-symbol! list (quote compare)
+        fn/cc list-compare (_ a b cc== cc!=)
+            fn/cc list-loop (_ a b)
+                call
+                    fn/cc (_ a-len)
+                        branch
+                            u64== a-len (list-countof b)
+                            fn/cc (_)
+                                branch
+                                    u64== a-len (u64-new 0)
+                                    \ cc==
+                                    fn/cc (_)
+                                        branch
+                                            == (list-at a) (list-at b)
+                                            fn/cc (_)
+                                                list-loop
+                                                    list-next a
+                                                    list-next b
+                                            \ cc!=
+                            \ cc!=
+                    list-countof a
+            branch
+                type== (typeof a) list
+                fn/cc (_)
+                    branch
+                        type== (typeof b) list
+                        fn/cc (_)
+                            list-loop a b
+                        \ cc!=
+                \ cc!=
+
+    set-type-symbol! Syntax (quote compare)
+        fn/cc syntax-compare (_ a b cc== cc!= cc< cc>)
+            ordered-branch
+                syntax->datum a
+                syntax->datum b
+                \ cc== cc!= cc< cc>
 
     #---
     set-type-symbol! string (quote ..) string-join

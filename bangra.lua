@@ -28,7 +28,7 @@ local global_opts = {
     version_patch = 0,
 
     trace_execution = false, -- print each statement being executed
-    print_lua_traceback = true, -- print lua traceback on any error
+    print_lua_traceback = false, -- print lua traceback on any error
     validate_macros = false, -- validate each macro result
     stack_limit = 65536, -- recursion limit
 
@@ -2750,7 +2750,6 @@ do
 
     local function using(self, arg, i)
         if arg.type == Type.Parameter or arg.type == Type.Label then
-            --print("+user:", arg, self, i)
             arg.value:add_user(self, i)
         end
     end
@@ -2832,7 +2831,9 @@ do
 
     -- only inherits name and anchor
     function cls.create_from_label(label)
-        return Label(Any(Syntax(Any(label.name), label.anchor)))
+        local ll = Label(Any(Syntax(Any(label.name), label.anchor)))
+        ll:set_body_anchor(label.body_anchor)
+        return ll
     end
 
     -- a continuation that never returns
@@ -3159,22 +3160,24 @@ local mangle
 do
 
 local function build_scope(entry)
+    local visited = {}
     local scope = {}
 
-    local function can_walk_label(label, level)
+    local function can_walk_label(label)
         if entry == label then
             return false
         end
-        return not scope[label]
+        return not visited[label]
     end
 
-    local function walk(scope_label, level)
+    local function walk(scope_label)
         if scope_label ~= entry then
-            scope[scope_label] = level
+            visited[scope_label] = true
+            table.insert(scope, scope_label)
             -- users of live_label are indirectly live in topscope_label
             for live_label,_ in pairs(scope_label.users) do
                 if can_walk_label(live_label) then
-                    walk(live_label, level + 1)
+                    walk(live_label)
                 end
             end
         end
@@ -3182,7 +3185,7 @@ local function build_scope(entry)
             -- every label using one of our parameters is live in scope
             for live_label,_ in pairs(param.users) do
                 if can_walk_label(live_label) then
-                    walk(live_label, level + 1)
+                    walk(live_label)
                 end
             end
         end
@@ -3213,6 +3216,7 @@ local function fold_constants(enter, body)
             table.remove(body, 1)
 
             local result
+
             execute(enter, function(...)
                 result = { none, ... }
             end, unpack(body))
@@ -3262,7 +3266,9 @@ local function remap_body(ll, entry, map)
         end
     end
 
-    enter, body = fold_constants(enter, body)
+    -- constant folding produces errors when performed in in unreachable branches
+    -- set_active_anchor(ll.body_anchor or ll.anchor)
+    -- enter, body = fold_constants(enter, body)
 
     ll:set_enter(enter)
     ll:set_arguments(body)
@@ -3277,7 +3283,7 @@ mangle = function(entry, params, map)
         le:append_parameter(param)
     end
     -- create new labels and map new parameters
-    for l,_ in pairs(entry_scope) do
+    for _,l in ipairs(entry_scope) do
         local ll = Label.create_from_label(l)
         assert(not map[l])
         map[l] = Any(ll)
@@ -3289,7 +3295,7 @@ mangle = function(entry, params, map)
         end
     end
     -- remap label bodies
-    for l,_ in pairs(entry_scope) do
+    for _,l in ipairs(entry_scope) do
         local ll = map[l].value
         remap_body(ll, l, map)
     end
@@ -5026,6 +5032,7 @@ branch.fold_func = function(enter, body)
 end
 builtins.branch = branch
 
+--[[
 local function ordered_branch(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     checkargs(6,6,a,b,equal_cont,unordered_cont,less_cont,greater_cont)
@@ -5054,8 +5061,9 @@ local function ordered_branch(self, cont, a, b,
         return unordered()
     end
 end
--- ordered-branch(a, b, equal, unordered [, less [, greater]])
+-- ordered-branch(a, b, equal, unordered [, less [, greater])
 builtins['ordered-branch'] = ordered_branch
+--]]
 
 builtins.error = function(cont, self, msg)
     checkargs(1,1, msg)
@@ -5338,26 +5346,63 @@ end)
 local any_true = Any(bool(true))
 local any_false = Any(bool(false))
 
-builtins["nothing-compare"] = function(self, cont, a, b,
-    equal_cont, unordered_cont, less_cont, greater_cont)
-    if a.type == b.type then
-        return call(equal_cont, cont)
-    else
-        return call(unordered_cont, cont)
-    end
-end
-
-local function compare_func(T)
-    builtins[T.name:lower() .. "-compare"] = function(self, cont, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == T and b.type == T then
+local function compare_func(T, ordered)
+    local prefix = T.name
+    builtins[prefix .. "=="] = foldable_builtin(wrap_simple_builtin(function(a, b)
+        a = unwrap(T, a)
+        b = unwrap(T, b)
+        if (a == b) then
+            return any_true
+        else
+            return any_false
+        end
+    end))
+    builtins[prefix .. "!="] = foldable_builtin(wrap_simple_builtin(function(a, b)
+        a = unwrap(T, a)
+        b = unwrap(T, b)
+        if (a ~= b) then
+            return any_true
+        else
+            return any_false
+        end
+    end))
+    if ordered then
+        builtins[prefix .. "<"] = foldable_builtin(wrap_simple_builtin(function(a, b)
             a = unwrap(T, a)
             b = unwrap(T, b)
-            if (a == b) then
-                return call(equal_cont, cont)
+            if (a < b) then
+                return any_true
+            else
+                return any_false
             end
-        end
-        return call(unordered_cont, cont)
+        end))
+        builtins[prefix .. "<="] = foldable_builtin(wrap_simple_builtin(function(a, b)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a <= b) then
+                return any_true
+            else
+                return any_false
+            end
+        end))
+        builtins[prefix .. ">"] = foldable_builtin(wrap_simple_builtin(function(a, b)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a > b) then
+                return any_true
+            else
+                return any_false
+            end
+        end))
+        builtins[prefix .. ">="] = foldable_builtin(wrap_simple_builtin(function(a, b)
+            a = unwrap(T, a)
+            b = unwrap(T, b)
+            if (a >= b) then
+                return any_true
+            else
+                return any_false
+            end
+        end))
     end
 end
 
@@ -5365,52 +5410,28 @@ compare_func(Type.Bool)
 compare_func(Type.Symbol)
 compare_func(Type.Parameter)
 compare_func(Type.Label)
+compare_func(Type.Scope)
+compare_func(Type.Type)
 
-local function ordered_compare_func(T)
-    builtins[T.name:lower() .. "-compare"] = function(self, cont, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == T and b.type == T then
-            a = unwrap(T, a)
-            b = unwrap(T, b)
-            if (a == b) then
-                return call(equal_cont, cont)
-            elseif (a < b) then
-                return call(less_cont, cont)
-            else
-                return call(greater_cont, cont)
-            end
+compare_func(Type.String, true)
+
+builtins["type<"] = foldable_builtin(wrap_simple_builtin(function(a, b)
+    a = unwrap(Type.Type, a)
+    b = unwrap(Type.Type, b)
+    while true do
+        a = a:super()
+        if not a then
+            return any_false
+        elseif a == b then
+            return any_true
         end
-        return call(unordered_cont, cont)
     end
-end
+end))
 
-each_numerical_type(ordered_compare_func, {ints=true})
-ordered_compare_func(Type.String)
+-- TODO:
+-- comparisons for none, list, type, syntax should be done in boot script
 
-local function compare_real_func(T, base)
-    local eq = C[base .. '_eq']
-    local lt = C[base .. '_lt']
-    local gt = C[base .. '_gt']
-    builtins[T.name:lower() .. "-compare"] = function(self, cont, a, b,
-        equal_cont, unordered_cont, less_cont, greater_cont)
-        if a.type == T and b.type == T then
-            a = unwrap(T, a)
-            b = unwrap(T, b)
-            if eq(a,b) then
-                return call(equal_cont, cont)
-            elseif lt(a,b) then
-                return call(less_cont, cont)
-            elseif gt(a,b) then
-                return call(greater_cont, cont)
-            end
-        end
-        return call(unordered_cont, cont)
-    end
-end
-
-compare_real_func(Type.R32, 'bangra_r32')
-compare_real_func(Type.R64, 'bangra_r64')
-
+--[[
 builtins["list-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     if a.type == Type.List and b.type == Type.List then
@@ -5458,18 +5479,6 @@ builtins["type-compare"] = function(self, cont, a, b,
     return call(unordered_cont, cont)
 end
 
-builtins["scope-compare"] = function(self, cont, a, b,
-    equal_cont, unordered_cont, less_cont, greater_cont)
-    if a.type == Type.Scope and b.type == Type.Scope then
-        local x = unwrap(Type.Scope, a)
-        local y = unwrap(Type.Scope, b)
-        if (x == y) then
-            return call(equal_cont, cont)
-        end
-    end
-    return call(unordered_cont, cont)
-end
-
 builtins["syntax-compare"] = function(self, cont, a, b,
     equal_cont, unordered_cont, less_cont, greater_cont)
     local x = maybe_unsyntax(a)
@@ -5477,6 +5486,7 @@ builtins["syntax-compare"] = function(self, cont, a, b,
     return ordered_branch(none, cont,
         x, y, equal_cont, unordered_cont, less_cont, greater_cont)
 end
+--]]
 
 -- cast
 --------------------------------------------------------------------------------
@@ -5736,7 +5746,7 @@ end)
 
 local function countof_func(T)
     builtins[T.name:lower() .. "-countof"] = function(self, cont, value)
-        value = value.value
+        value = unwrap(T, value)
         return retcall(cont, Any(size_t(#value)))
     end
 end
@@ -5768,7 +5778,7 @@ builtins["ref-at"] = wrap_simple_builtin(function(value)
     return value[1]
 end)
 
-builtins["list-at"] = wrap_simple_builtin(function(x, i)
+builtins["list@"] = wrap_simple_builtin(function(x, i)
     checkargs(2,2,x,i)
     x = unwrap(Type.List, x)
     i = unwrap_integer(i)
@@ -5777,6 +5787,18 @@ builtins["list-at"] = wrap_simple_builtin(function(x, i)
     end
     return x.at
 end)
+
+builtins["list-at"] = foldable_builtin(wrap_simple_builtin(function(x)
+    checkargs(1,1,x)
+    x = unwrap(Type.List, x)
+    return x.at
+end))
+
+builtins["list-next"] = foldable_builtin(wrap_simple_builtin(function(x)
+    checkargs(1,1,x)
+    x = unwrap(Type.List, x)
+    return Any(x.next)
+end))
 
 builtins["list-slice"] = wrap_simple_builtin(function(value, i0, i1)
     checkargs(3,3,value,i0,i1)
