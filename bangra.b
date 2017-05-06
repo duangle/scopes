@@ -25,91 +25,122 @@
 
 # this is a test block
 syntax-extend
+
     fn/cc make-param (_ name)
         parameter-new (datum->syntax (symbol-new name) (active-anchor))
     fn/cc make-typed-param (_ name atype)
         parameter-new (datum->syntax (symbol-new name) (active-anchor)) atype
 
-    fn/cc test-pow (_)
-        fn/cc pow2 (ret x)
-            i32* x x
+    fn/cc testboot (_)
+        #fn/cc test-pow (_)
+            fn/cc pow2 (ret x)
+                i32* x x
 
-        fn/cc pow (ret x n)
-            branch (i32== n 0)
-                fn/cc (_)
-                    ret 1
-                fn/cc (_)
-                    branch (i32== (i32% n 2) 0)
-                        fn/cc (_)
-                            ret
-                                pow2
-                                    pow x (i32/ n 2)
-                        fn/cc (_)
-                            ret
-                                i32* x (pow x (i32- n 1))
-
-        fn/cc pow7 (ret x)
-            pow x 7
-
-        call
-            fn/cc (_ f)
-                print f
-                print
-                    f 5
-            mangle pow7
-                make-param "ret"
-                make-typed-param "x" i32
-
-    fn/cc test-print10 (_)
-        fn/cc print10 (ret f)
-            cc/call
-                fn/cc rec (_ i)
-                    cc/call branch none (i32== i 10)
-                        fn/cc (_)
-                            ret
-                        fn/cc (_)
-                            f
-                            cc/call rec none (i32+ i 1)
-                \ none 0
-
-        fn/cc main (_)
-            print10
-                call
-                    fn/cc (_ x y)
-                        fn/cc (_)
-                            print
-                                i32+ x y
-                    \ 300 3
-
-        mangle main
-            make-param "ret"
-
-    fn/cc test-hello-world (_)
-
-        fn/cc main (_)
-            call
-                fn/cc (_ text)
-                    print text
-                \ "hello world"
-        mangle main
-            make-param "ret"
-
-    fn/cc test-warble-garble (_)
-        call
-            fn/cc (_ x y)
-                dump-label
+            fn/cc pow (ret x n)
+                branch (i32== n 0)
                     fn/cc (_)
-                        branch (i32< x y)
+                        ret 1
+                    fn/cc (_)
+                        branch (i32== (i32% n 2) 0)
                             fn/cc (_)
-                                i32+ x y
+                                ret
+                                    pow2
+                                        pow x (i32/ n 2)
                             fn/cc (_)
-                                i32+ x x
-            \ 23 42
+                                ret
+                                    i32* x (pow x (i32- n 1))
 
-    #test-print10
-    test-warble-garble
+            fn/cc pow7 (ret x)
+                pow x 7
 
-    #exit 0
+            call
+                fn/cc (_ f)
+                    print f
+                    print
+                        f 5
+                mangle pow7
+                    make-param "ret"
+                    make-typed-param "x" i32
+
+        #fn/cc test-print10 (_)
+            fn/cc print10 (ret f)
+                cc/call
+                    fn/cc rec (_ i)
+                        cc/call branch none (i32== i 10)
+                            fn/cc (_)
+                                ret
+                            fn/cc (_)
+                                f
+                                cc/call rec none (i32+ i 1)
+                    \ none 0
+
+            fn/cc main (_)
+                print10
+                    call
+                        fn/cc (_ x y)
+                            fn/cc (_)
+                                print
+                                    i32+ x y
+                        \ 300 3
+
+            mangle main
+                make-param "ret"
+
+        #fn/cc test-hello-world (_)
+
+            fn/cc main (_)
+                call
+                    fn/cc (_ text)
+                        print text
+                    \ "hello world"
+            mangle main
+                make-param "ret"
+
+        fn/cc test-assert (_ expr)
+            branch expr
+                fn/cc (_) true
+                fn/cc (_)
+                    error "assertion failed"
+
+        fn/cc test-polymorph-return (_)
+            # example: a div that converts arguments to r64 if division isn't integer
+            fn/cc polydiv (_ x y)
+                branch (i32== (i32% x y) 0)
+                    # divisible
+                    fn/cc (_)
+                        i32/ x y
+                    # fractional
+                    fn/cc (_)
+                        r64/ (r64-new x) (r64-new y)
+            #test-assert
+                r64== (polydiv 1 2) (r64-new 0.5)
+            #test-assert
+                i32== (polydiv 4 2) 2
+            call
+                fn/cc (_ polydiv-i32)
+                    print "template:"
+                    dump-label polydiv
+                    print "typed to i32 i32:"
+                    dump-label polydiv-i32
+                typify polydiv i32 i32
+
+        #test-print10
+        test-polymorph-return
+
+        exit 0
+
+    call
+        fn/cc (_ self extra)
+            branch
+                type== (typeof extra) string
+                fn/cc (_)
+                    branch
+                        string== extra "testboot"
+                        \ testboot
+                        fn/cc (_) none
+                fn/cc (_) none
+        args
+
     \ syntax-scope
 
 print "running main"
