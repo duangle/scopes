@@ -62,29 +62,59 @@ syntax-extend
                     make-param "ret"
                     make-typed-param "x" i32
 
-        #fn/cc test-print10 (_)
-            fn/cc print10 (ret f)
-                cc/call
-                    fn/cc rec (_ i)
-                        cc/call branch none (i32== i 10)
-                            fn/cc (_)
-                                ret
-                            fn/cc (_)
-                                f
-                                cc/call rec none (i32+ i 1)
-                    \ none 0
+        # example: a div that converts arguments to r64 if division isn't integer
+        fn/cc polydiv (_ x y)
+            branch (i32== (i32% x y) 0)
+                # divisible
+                fn/cc (_)
+                    i32/ x y
+                # fractional
+                fn/cc (_)
+                    r64/ (r64-new x) (r64-new y)
 
-            fn/cc main (_)
-                print10
-                    call
-                        fn/cc (_ x y)
-                            fn/cc (_)
-                                print
-                                    i32+ x y
-                        \ 300 3
+        fn/cc test-polymorph-return (_)
+            print "test-polymorph-return"
+            call
+                fn/cc (_ polydiv-i32)
+                    print "polydiv template:"
+                    dump-label polydiv
+                    print "polydiv typed to i32 i32:"
+                    dump-label polydiv-i32
+                    #print "polydiv 1/2"
+                        r64== (polydiv-i32 1 2) (r64-new 0.5)
+                    #print "polydiv 4/2"
+                        i32== (polydiv-i32 4 2) 2
+                typify polydiv i32 i32
 
-            mangle main
-                make-param "ret"
+        fn/cc print10 (ret f)
+            cc/call
+                fn/cc rec (_ i)
+                    cc/call branch none (i32== i 10)
+                        fn/cc (_)
+                            ret
+                        fn/cc (_)
+                            f i
+                            cc/call rec none (i32+ i 1)
+                \ none 0
+
+        fn/cc print10-main (_)
+            print10
+                call
+                    fn/cc (_ x y)
+                        fn/cc (_ i)
+                            print i
+                                i32+ x y
+                    \ 300 3
+
+        fn/cc test-print10 (_)
+            print "test-print10"
+            call
+                fn/cc (_ print10-main-typed)
+                    print "print10 template:"
+                    dump-label print10-main
+                    print "print10 typed:"
+                    dump-label print10-main-typed
+                typify print10-main
 
         #fn/cc test-hello-world (_)
 
@@ -96,36 +126,8 @@ syntax-extend
             mangle main
                 make-param "ret"
 
-        fn/cc test-assert (_ expr)
-            branch expr
-                fn/cc (_) true
-                fn/cc (_)
-                    error "assertion failed"
-
-        fn/cc test-polymorph-return (_)
-            # example: a div that converts arguments to r64 if division isn't integer
-            fn/cc polydiv (_ x y)
-                branch (i32== (i32% x y) 0)
-                    # divisible
-                    fn/cc (_)
-                        i32/ x y
-                    # fractional
-                    fn/cc (_)
-                        r64/ (r64-new x) (r64-new y)
-            #test-assert
-                r64== (polydiv 1 2) (r64-new 0.5)
-            #test-assert
-                i32== (polydiv 4 2) 2
-            call
-                fn/cc (_ polydiv-i32)
-                    print "template:"
-                    dump-label polydiv
-                    print "typed to i32 i32:"
-                    dump-label polydiv-i32
-                typify polydiv i32 i32
-
-        #test-print10
         test-polymorph-return
+        test-print10
 
         exit 0
 

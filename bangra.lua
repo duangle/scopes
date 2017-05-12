@@ -30,6 +30,7 @@ local global_opts = {
     trace_execution = false, -- print each statement being executed
     print_lua_traceback = true, -- print lua traceback on any error
     validate_macros = false, -- validate each macro result
+    normalize_labels = true, -- normalize typed labels
     stack_limit = 65536, -- recursion limit
 
     debug = false, -- updated by bangra_is_debug() further down
@@ -1289,6 +1290,8 @@ local function define_types(def)
     def('Syntax', 'Syntax')
 
     def('Boxed', 'Boxed')
+
+    def('Constant', 'Constant')
 end
 
 do
@@ -1408,6 +1411,25 @@ do
         if not rawget(_type, 'types') then
             _type:set_super(Type.TypeSet)
             _type.types = { ... }
+        end
+        return _type
+    end
+
+    function Type.Value(value)
+        assert_any(value)
+        local typename
+        if value.type == Type.Label then
+            typename = value.value:short_repr(plain_styler)
+        elseif value.type == Type.Type then
+            typename = value.value.name
+        else
+            error("only higher order values can be typified")
+        end
+        typename = 'Constant[' .. typename .. ']'
+        local _type = Type(Symbol(typename))
+        if not rawget(_type, 'value') then
+            _type:set_super(Type.Constant)
+            _type.value = value
         end
         return _type
     end
@@ -2901,6 +2923,32 @@ do
         end
     end
 
+    function cls:link_backrefs()
+        local enter = self.enter
+        local arguments = self.arguments
+        if enter then
+            using(self, enter, 0)
+        end
+        if arguments then
+            for i=1,#arguments do
+                using(self, arguments[i], i)
+            end
+        end
+    end
+
+    function cls:unlink_backrefs()
+        local enter = self.enter
+        local arguments = self.arguments
+        if enter then
+            using(self, enter, 0)
+        end
+        if arguments then
+            for i=1,#arguments do
+                using(self, arguments[i], i)
+            end
+        end
+    end
+
     function cls:set_enter(enter)
         assert_any(enter)
         local oldenter = self.enter
@@ -3409,6 +3457,27 @@ some thoughts:
       also be folded, likely infinitely; we need a threshold here after which
       the interpreter bails out.
 
+some more thoughts:
+    It all comes down to the fact that we are lowering what are essentially
+    templates to functions, of which we don't initially know about parameters:
+        * their type
+            * whether that type is of higher order (Type, Label, Continuation, etc)
+            * for continuations:
+                * what types that continuations parameters have
+                * whether a continuation is called with different parameter types
+        * whether they are constant / variable at runtime
+        * whether they are in use
+        * in what scope they are live
+
+    higher-order parameters _must_ be eliminated, constant parameters are nice-to-have.
+    we can eliminate constant and higher-order parameters from template
+    instantiations, which means it is not necessary to inline the whole function
+    if a parameter can't be lowered - but we can still inline the function body
+    if the function ends up taking no arguments at all.
+
+    also, since we can't know what type continuations have until they are called,
+    we have to retype arguments of type label once that happens.
+
 
 
 --]]
@@ -3430,14 +3499,6 @@ local typify_from_types
 local inline
 do
 
-local function get_variable_type(arg)
-    if is_variable(arg) then
-        return arg.value.type
-    else
-        return arg.type
-    end
-end
-
 local function fold_constants(enter, body)
     if enter.type == Type.Builtin then
         local ev = enter.value
@@ -3445,29 +3506,34 @@ local function fold_constants(enter, body)
         if ff then
             return ff(enter, body)
         elseif ev.foldable then
+            local newbody = {}
             for i=2,#body do
                 local arg = body[i]
                 if is_variable(arg) then
-                    return
+                    if arg.value.type:super() == Type.Constant then
+                        -- higher order value
+                        arg = arg.value.type.value
+                    else
+                        return
+                    end
                 end
+                table.insert(newbody, arg)
             end
-
-            local ret = body[1]
-            table.remove(body, 1)
 
             local result
 
             execute(enter, function(...)
                 result = { none, ... }
-            end, unpack(body))
+            end, unpack(newbody))
 
-            return ret, result
+            return body[1], result
         end
     end
     return
 end
 
-map_arguments = function(parameters, rbuf, each_vararg, each_param)
+map_arguments = function(parameters, rbuf, each_vararg, each_param, missing_arg)
+    missing_arg = missing_arg or none
     local pcount = #parameters
     local rcount = #rbuf
 
@@ -3495,7 +3561,7 @@ map_arguments = function(parameters, rbuf, each_vararg, each_param)
             srci = srci + 1
             each_param(param, value, false)
         else
-            each_param(param, none, false)
+            each_param(param, missing_arg, false)
         end
     end
 end
@@ -3515,13 +3581,20 @@ typify_from_types = function(label, arguments)
         function(param, arg, vararg)
             if vararg then
             else
-                if param.index == 1 and arg ~= Type.Nothing then
-                    table.insert(keys, param.type)
-                else
-                    table.insert(keys, arg)
+
+                if param.index == 1 then
+                    if arg ~= Type.Nothing then
+                        arg = param.type
+                    end
+                    if arg ~= Type.Any and arg ~= Type.Nothing then
+                        error("return continuation keyed with illegal type: "
+                            .. tostring(arg))
+                    end
                 end
+                table.insert(keys, arg)
             end
-        end)
+        end,
+        Type.Nothing)
     local newlabel = label:get_mangled(keys)
     if not newlabel then
         local params = {}
@@ -3545,22 +3618,41 @@ typify_from_types = function(label, arguments)
                     table.insert(params, xparam)
                     param_map[param] = Any(xparam)
                 end
-            end)
+            end,
+            Type.Nothing)
 
         if not newlabel then
             newlabel = mangle(label, params, param_map)
             newlabel:set_typed()
             label:set_mangled(keys, newlabel)
-            --normalize(newlabel)
+            if global_opts.normalize_labels then
+                normalize(newlabel)
+            end
         end
     end
     return newlabel
 end
 
+-- higher order types
+local HOT = {
+    [Type.Type] = true,
+    [Type.Label] = true
+}
+
+local function get_variable_type(i, arg)
+    if is_variable(arg) then
+        return arg.value.type
+    elseif i > 1 and HOT[arg.type] then
+        return Type.Value(arg)
+    else
+        return arg.type
+    end
+end
+
 local function types_from_arguments(arguments, start)
     local types = {}
     for i=start,#arguments do
-        table.insert(types, get_variable_type(arguments[i]))
+        table.insert(types, get_variable_type(i, arguments[i]))
     end
     return types
 end
@@ -3570,13 +3662,16 @@ local function type_parameter_from_type(param, cctype)
     if ptype == Type.Nothing then
         -- needs better error message
         location_error("attempting to call none")
-    elseif ptype == Type.Any then
+    elseif ptype == Type.Any or ptype == Type.Label then
         param.type = cctype
     elseif ptype:super() == Type.Label then
         param.type = Type.Or(ptype, cctype)
     else
         -- needs better error message
-        location_error("type mismatch")
+        location_error("type mismatch while backpropagating type "
+            .. tostring(cctype)
+            .. " to parameter of type "
+            .. tostring(ptype))
     end
 end
 
@@ -3586,7 +3681,7 @@ local function type_parameter(param, types)
 end
 
 local function label_cc_typed(label)
-    return label.parameters[1].type ~= Type.Any
+    return label.parameters[1].type:super() == Type.Label
 end
 
 typify = function(label, arguments)
@@ -3596,7 +3691,11 @@ typify = function(label, arguments)
     end
     local types = types_from_arguments(arguments, 1)
     label = typify_from_types(label, types)
+
     -- back propagate continuation type if possible
+    -- to solve this general problem:
+    -- we're accidentally overwriting already typed continuations
+    -- instead we need to recognize those and inherit the type
     if label_cc_typed(label) then
         local cont = arguments[1]
         if cont then
@@ -3693,45 +3792,71 @@ normalize = function(label)
         return normalize(label)
     end
 
-    -- general problem:
-    -- we're accidentally overwriting already typed continuations
-    -- instead we need to recognize those and inherit the type
+    if enter.type == Type.Parameter and enter.value.type:super() == Type.Constant then
+        -- unpack higher-order value
+        enter = enter.value.type.value
+    end
 
     if enter.type == Type.Label then
+        log("typing callee...", enter, unpack(body))
+        local newenter = typify(enter.value, body)
+
+        -- check conditions for forced inlining
         local force_inline = false
         local cont = body[1]
         -- is continuation argument empty?
+        --[[
         if is_none(cont) then
             force_inline = true
         end
+        --]]
         --[[
         -- is continuation argument forwarded?
         if cont.type == Type.Parameter then
             force_inline = true
         end
-        ]]
+        --]]
 
-        -- is an argument of higher-order type?
-        for i=2,#body do
-            local arg = body[i]
-            -- types must be inlined
-            if arg.type == Type.Type then
-                force_inline = true
+        -- is a return value of higher-order type?
+        ----[[
+        local contparam = newenter.parameters[1]
+        if contparam then
+            local cctype = contparam.type
+            if cctype:super() == Type.Label then
+                for _,pt in ipairs(cctype.types) do
+                    if pt:super() == Type.Constant then
+                        force_inline = true
+                    end
+                end
+            elseif cctype:super() == Type.TypeSet then
+                -- one of multiple continuation types
+                --force_inline = true
             end
         end
+        --]]
+
+        -- is a parameter of higher-order type?
+        ----[[
+        for i=2,#newenter.parameters do
+            local param = newenter.parameters[i]
+            if param.type:super() == Type.Constant then
+                force_inline = true
+                break
+            end
+        end
+        --]]
+
         if force_inline then
             -- inline arguments into label and copy over body
             log("inlining...")
-            local newlabel = inline(enter.value, body)
+            local newlabel = inline(newenter, body)
             label:set_enter(newlabel.enter)
             label:set_arguments(newlabel.arguments)
             log("inlined...")
             return normalize(label)
         else
-            log("typing callee...", enter, unpack(body))
             -- we know continuation is neither none nor empty
             -- this is a call
-            local newenter = typify(enter.value, body)
             label:set_enter(Any(newenter))
             local retcont = newenter.parameters[1]
             if retcont.type ~= Type.Any then
@@ -3753,6 +3878,8 @@ normalize = function(label)
                 elseif cont.type == Type.Parameter then
                     log("typing continuation parameter: terminating")
                     type_parameter_from_type(cont.value, rettype)
+                elseif cont.type == Type.Nothing then
+                    -- we're never returning
                 else
                     error("not sure what to do 2")
                 end
@@ -3763,30 +3890,16 @@ normalize = function(label)
         local cont = body[1]
         if not builtin.type_func then
             if builtin.name == Symbol.Branch then
-                if cont.type == Type.Nothing then
-                    todo("normalize branches if necessary")
-                else
-                    local bthen = body[3]
-                    local belse = body[4]
-                    if bthen.type == Type.Label or belse.type == Type.Label then
-                        local rettypes = { Type.Nothing }
-                        if bthen.type == Type.Label then
-                            log("inlining then-branch...")
-                            bthen = Any(inline(bthen.value, { cont }))
-                            log("inlined then-branch")
-                        end
-                        if belse.type == Type.Label then
-                            log("inlining else-branch...")
-                            belse = Any(inline(belse.value, { cont }))
-                            log("inlined else-branch")
-                        end
-                        log("inlined continuation argument into branch: terminating")
-                        local newbody = { none, body[2], bthen, belse }
-                        label:set_arguments(newbody)
-                    else
-                        -- possibly illegal
-                        todo("branch not inlinable")
-                    end
+                local bthen = body[3]
+                local belse = body[4]
+                assert(bthen.type == Type.Label, "branch-then: label expected")
+                assert(belse.type == Type.Label, "branch-else: label expected")
+                if not (bthen.value.typed and belse.value.typed) then
+                    bthen = typify(bthen.value, {cont})
+                    belse = typify(belse.value, {cont})
+                    print("typed branches:",bthen,belse)
+                    local newbody = { none, body[2], Any(bthen), Any(belse) }
+                    label:set_arguments(newbody)
                 end
             elseif builtin.name == Symbol.Exit then
                 log("exit: terminating")
@@ -3815,8 +3928,10 @@ normalize = function(label)
             end
         end
     elseif enter.type == Type.Parameter then
-        log("typing callee parameter: terminating")
-        type_parameter(enter.value, types_from_arguments(body, 1))
+        todo("typing callee parameter: terminating")
+        stream_il(stdout_writer, label, {follow="none"})
+        local param = enter.value
+        type_parameter(param, types_from_arguments(body, 1))
     else
         error("invalid call target")
     end
@@ -5486,6 +5601,15 @@ local function typechecker(...)
                 return unpack(sig[1])
             end
         end
+        local insig = ''
+        for i=1,select('#', ...) do
+            local argtype = select(i, ...)
+            if i > 1 then
+                insig = insig .. ' '
+            end
+            insig = insig .. tostring(argtype)
+        end
+
         local sigs = ''
         for _,sig in ipairs(signatures) do
             local d = ''
@@ -5497,7 +5621,9 @@ local function typechecker(...)
             end
             sigs = '    (' .. d .. ')\n'
         end
-        location_error("builtin called with invalid argument types.\nuse one of:\n"
+        location_error("builtin called with invalid argument types ("
+            .. insig
+            .. ").\nuse one of:\n"
             .. sigs)
     end
 end
@@ -5732,7 +5858,7 @@ builtins.eval = function(self, cont, expr, scope, path)
     end)
 end
 
-builtins.typify = wrap_simple_builtin(function(func, ...)
+builtins.typify = typed_builtin(wrap_simple_builtin(function(func, ...)
     checkargs(1,-1, func, ...)
     func = unwrap(Type.Label, func)
     local types = { Type.Any }
@@ -5740,7 +5866,7 @@ builtins.typify = wrap_simple_builtin(function(func, ...)
         table.insert(types, unwrap(Type.Type, select(i, ...)))
     end
     return Any(typify_from_types(func, types))
-end)
+end), {{Type.Label}})
 
 builtins["syntax-quote"] = wrap_simple_builtin(function(value)
     checkargs(1,1, value)
@@ -5975,18 +6101,31 @@ compare_func(Type.Type)
 
 compare_func(Type.String, true)
 
-builtins["type<"] = foldable_builtin(wrap_simple_builtin(function(a, b)
-    a = unwrap(Type.Type, a)
-    b = unwrap(Type.Type, b)
-    while true do
-        a = a:super()
-        if not a then
-            return any_false
-        elseif a == b then
+do
+    local T = Type.Type
+    local tf = typechecker({{Type.Bool}, T, T})
+    builtins["type=="] = foldable_builtin(wrap_simple_builtin(function(a, b)
+        a = unwrap(T, a)
+        b = unwrap(T, b)
+        if (a == b) then
             return any_true
+        else
+            return any_false
         end
-    end
-end))
+    end), tf)
+    builtins["type<"] = foldable_builtin(wrap_simple_builtin(function(a, b)
+        a = unwrap(T, a)
+        b = unwrap(T, b)
+        while true do
+            a = a:super()
+            if not a then
+                return any_false
+            elseif a == b then
+                return any_true
+            end
+        end
+    end), tf)
+end
 
 -- TODO:
 -- comparisons for none, list, type, syntax should be done in boot script
@@ -6684,7 +6823,7 @@ end)
 builtins["dump-label"] = typed_builtin(wrap_simple_builtin(function(value)
     checkargs(1,1,value)
     stream_il(stdout_writer, unwrap(Type.Label, value), {follow="all"})
-end), {{}, Type.Label})
+end), {{}})
 
 builtins.repr = wrap_simple_builtin(function(value, styler)
     checkargs(1,2,value, styler)
@@ -6923,33 +7062,84 @@ end -- do
 -- MAIN
 --------------------------------------------------------------------------------
 
+local function run_tests()
+    local anchor = Anchor("test",1,1,1)
+    local function new_label(name)
+        return Label(Symbol(name), anchor)
+    end
+    local function new_param(label, name)
+        local param = Parameter(Symbol(name), anchor)
+        label:append_parameter(param)
+        return Any(param)
+    end
+
+    local function test_users()
+        local label1 = new_label("test")
+        local p0 = new_param(label1, "_")
+        local p1 = new_param(label1, "x")
+        local p2 = new_param(label1, "y")
+        do
+            local label2 = new_label("test2")
+            local p3 = new_param(label2, "_")
+
+            label1:set_enter(Any(label2))
+            label1:set_arguments({})
+            label2:set_enter(p0)
+            label2:set_arguments({none,p1,p2})
+        end
+
+        stream_il(stdout_writer, label1, {follow="scope"})
+        print("---")
+        label1:set_enter(Any(label1))
+        label1:set_arguments({})
+        collectgarbage()
+        stream_il(stdout_writer, label1, {follow="scope"})
+    end
+
+    print("-- running host tests")
+    test_users()
+end
+
+--------------------------------------------------------------------------------
+-- MAIN
+--------------------------------------------------------------------------------
+
 xpcallcc(
     function(cont)
-        local basedir = cstr(C.bangra_interpreter_dir)
-        local srcpath = basedir .. "/bangra.b"
-        local src
-        if global_opts.debug then
-            src = SourceFile.open(srcpath)
+        local args = {}
+        local count = tonumber(C.bangra_argc)
+        for i=0,count-1 do
+            table.insert(args, cstr(C.bangra_argv[i]))
+        end
+        if args[2] == "testlua" then
+            run_tests()
         else
-            src = SourceFile.open(srcpath, cstr(C.bangra_b, C.bangra_b_len))
-        end
-        local ptr = src:strptr()
-        local lexer = Lexer.init(ptr, ptr + src.length, src.path)
-        local expr = parse(lexer)
+            local basedir = cstr(C.bangra_interpreter_dir)
+            local srcpath = basedir .. "/bangra.b"
+            local src
+            if global_opts.debug then
+                src = SourceFile.open(srcpath)
+            else
+                src = SourceFile.open(srcpath, cstr(C.bangra_b, C.bangra_b_len))
+            end
+            local ptr = src:strptr()
+            local lexer = Lexer.init(ptr, ptr + src.length, src.path)
+            local expr = parse(lexer)
 
-        --[[
-        do
-            local fmt = StreamValueFormat(true)
-            fmt.anchors = "none"
-            stream_expr(stdout_writer, expr, fmt)
-        end
-        --]]
+            --[[
+            do
+                local fmt = StreamValueFormat(true)
+                fmt.anchors = "none"
+                stream_expr(stdout_writer, expr, fmt)
+            end
+            --]]
 
-        return expand_root(expr, null, function(expexpr)
-            return translate_root(expexpr, "main", function(func)
-                return call(func, globals:lookup(Symbol("exit")))
+            return expand_root(expr, null, function(expexpr)
+                return translate_root(expexpr, "main", function(func)
+                    return call(func, globals:lookup(Symbol("exit")))
+                end)
             end)
-        end)
+        end
     end,
     function (err, cont)
         local is_complex_msg = type(err) == "table" and err.msg
