@@ -1296,7 +1296,7 @@ end
 
 do
     Type.__index = Type
-    local typemap = {}
+    local typemap = setmetatable({},{__mode="v"})
 
     local cls = Type
     setmetatable(Type, {
@@ -3666,6 +3666,8 @@ local function type_parameter_from_type(param, cctype)
         param.type = cctype
     elseif ptype:super() == Type.Label then
         param.type = Type.Or(ptype, cctype)
+    elseif ptype:super() == Type.TypeSet then
+        param.type = Type.Or(ptype, cctype)
     else
         -- needs better error message
         location_error("type mismatch while backpropagating type "
@@ -3684,6 +3686,16 @@ local function label_cc_typed(label)
     return label.parameters[1].type:super() == Type.Label
 end
 
+local function type_cont_from_label(cont, label)
+    if label_cc_typed(label) then
+        if cont then
+            if cont.type == Type.Parameter then
+                type_parameter_from_type(cont.value, label.parameters[1].type)
+            end
+        end
+    end
+end
+
 typify = function(label, arguments)
     if label.typed then
         -- TODO: verify signature
@@ -3696,14 +3708,7 @@ typify = function(label, arguments)
     -- to solve this general problem:
     -- we're accidentally overwriting already typed continuations
     -- instead we need to recognize those and inherit the type
-    if label_cc_typed(label) then
-        local cont = arguments[1]
-        if cont then
-            if cont.type == Type.Parameter then
-                type_parameter_from_type(cont.value, label.parameters[1].type)
-            end
-        end
-    end
+    type_cont_from_label(arguments[1], label)
     return label
 end
 
@@ -3720,6 +3725,7 @@ local function match_types(typea, typeb)
     end
 end
 
+-- a problem with inline: after typing
 inline = function(label, rbuf)
     local rcount = #rbuf
     local pcount = #label.parameters
@@ -3897,9 +3903,19 @@ normalize = function(label)
                 if not (bthen.value.typed and belse.value.typed) then
                     bthen = typify(bthen.value, {cont})
                     belse = typify(belse.value, {cont})
-                    print("typed branches:",bthen,belse)
+                    type_cont_from_label(cont, bthen)
+                    type_cont_from_label(cont, belse)
+                    -- problem here: the continuation is not being typed / forked
+                    print("typed branches:",bthen,belse,cont)
+                    -- inline both arguments
+                    bthen = inline(bthen, {cont})
+                    belse = inline(belse, {cont})
+                    normalize(bthen)
+                    normalize(belse)
+                    -- problem here: cont not typed yet
                     local newbody = { none, body[2], Any(bthen), Any(belse) }
                     label:set_arguments(newbody)
+
                 end
             elseif builtin.name == Symbol.Exit then
                 log("exit: terminating")

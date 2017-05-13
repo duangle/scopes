@@ -62,17 +62,16 @@ syntax-extend
                     make-param "ret"
                     make-typed-param "x" i32
 
-        # example: a div that converts arguments to r64 if division isn't integer
-        fn/cc polydiv (_ x y)
-            branch (i32== (i32% x y) 0)
-                # divisible
-                fn/cc (_)
-                    i32/ x y
-                # fractional
-                fn/cc (_)
-                    r64/ (r64-new x) (r64-new y)
-
         fn/cc test-polymorph-return (_)
+            # example: a div that converts arguments to r64 if division isn't integer
+            fn/cc polydiv (_ x y)
+                branch (i32== (i32% x y) 0)
+                    # divisible
+                    fn/cc (_)
+                        i32/ x y
+                    # fractional
+                    fn/cc (_)
+                        r64/ (r64-new x) (r64-new y)
             print "test-polymorph-return"
             call
                 fn/cc (_ polydiv-i32)
@@ -86,27 +85,27 @@ syntax-extend
                         i32== (polydiv-i32 4 2) 2
                 typify polydiv i32 i32
 
-        fn/cc print10 (ret f)
-            cc/call
-                fn/cc rec (_ i)
-                    cc/call branch none (i32== i 10)
-                        fn/cc (_)
-                            ret
-                        fn/cc (_)
-                            f i
-                            cc/call rec none (i32+ i 1)
-                \ none 0
-
-        fn/cc print10-main (_)
-            print10
-                call
-                    fn/cc (_ x y)
-                        fn/cc (_ i)
-                            print i
-                                i32+ x y
-                    \ 300 3
-
         fn/cc test-print10 (_)
+            fn/cc print10 (ret f)
+                cc/call
+                    fn/cc rec (_ i)
+                        cc/call branch none (i32== i 10)
+                            fn/cc (_)
+                                ret
+                            fn/cc (_)
+                                f i
+                                cc/call rec none (i32+ i 1)
+                    \ none 0
+
+            fn/cc print10-main (_)
+                print10
+                    call
+                        fn/cc (_ x y)
+                            fn/cc (_ i)
+                                print i
+                                    i32+ x y
+                        \ 300 3
+
             print "test-print10"
             call
                 fn/cc (_ print10-main-typed)
@@ -116,18 +115,31 @@ syntax-extend
                     dump-label print10-main-typed
                 typify print10-main
 
-        #fn/cc test-hello-world (_)
-
-            fn/cc main (_)
+        fn/cc test-print-args (_)
+            fn/cc print-args (_)
                 call
-                    fn/cc (_ text)
-                        print text
-                    \ "hello world"
-            mangle main
-                make-param "ret"
+                    fn/cc (_ self extra x)
+                        print
+                            branch
+                                type== (typeof extra) string
+                                fn/cc (_)
+                                    print "branch 1"
+                                    string== extra "yes"
+                                fn/cc (_)
+                                    print "branch 2"
+                                    \ "???"
+                    args
+            call
+                fn/cc (_ print-args-typed)
+                    print "print-args template:"
+                    dump-label print-args
+                    print "print-args typed:"
+                    dump-label print-args-typed
+                typify print-args
 
         test-polymorph-return
         test-print10
+        test-print-args
 
         exit 0
 
