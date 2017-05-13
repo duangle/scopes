@@ -30,24 +30,11 @@ local global_opts = {
     trace_execution = false, -- print each statement being executed
     print_lua_traceback = true, -- print lua traceback on any error
     validate_macros = false, -- validate each macro result
-    normalize_labels = true, -- normalize typed labels
+    normalize_labels = false, -- normalize typed labels
     stack_limit = 65536, -- recursion limit
 
     debug = false, -- updated by bangra_is_debug() further down
 }
-
---------------------------------------------------------------------------------
--- verify luajit was built with the right flags
-
-do
-
-    local t = setmetatable({count=10}, {
-        __len = function(x)
-            return x.count
-        end})
-    -- the flag can be uncommented in luajit/src/Makefile
-    assert(#t == 10, "luajit must be built with -DLUAJIT_ENABLE_LUA52COMPAT")
-end
 
 --------------------------------------------------------------------------------
 -- strict.lua
@@ -585,7 +572,27 @@ do
 end
 
 global_opts.debug = C.bangra_is_debug()
-local off_t = typeof('__off_t')
+local off_t
+if WIN32 then
+    off_t = typeof('off_t')
+else
+    off_t = typeof('__off_t')
+end
+
+if WIN32 then
+    local _C = C
+    C = setmetatable({},{
+        __index = function(self, name)
+            return _C[name]
+        end
+    })
+    C.isatty = C._isatty
+    C.fileno = C._fileno
+    C.stdout = C.__iob_func() + 1
+    C.stderr = C.__iob_func() + 1
+    C.open = C._open
+    C.lseek = C._lseek
+end
 
 local function stderr_writer(x)
     C.fputs(x, C.stderr)
@@ -735,7 +742,10 @@ rawset(_G, "pcall", null)
 
 local function protect(obj)
     local mt = getmetatable(obj)
-    assert(mt)
+    if mt == nil then
+        mt = {}
+        setmetatable(obj, mt)
+    end
     assert(mt.__index == null)
     function mt.__index(cls, name)
         error("no such attribute in "
@@ -809,8 +819,10 @@ COLOR_RGB       = function(hexcode, isbg)
         .. tostring(b) .. "m"
 end
 }
+protect(ANSI)
 
-local SUPPORT_ISO_8613_3 = not WIN32
+-- works on most bash shells as well as windows 10
+local SUPPORT_ISO_8613_3 = true
 local Style
 if SUPPORT_ISO_8613_3 then
 local BG = ANSI.COLOR_RGB(0x2D2D2D, true)
@@ -834,6 +846,7 @@ else
 Style = {
 Foreground = ANSI.COLOR_WHITE,
 Background = ANSI.RESET,
+Symbol = ANSI.COLOR_GRAY60,
 String = ANSI.COLOR_XMAGENTA,
 Number = ANSI.COLOR_XGREEN,
 Keyword = ANSI.COLOR_XBLUE,
@@ -847,6 +860,7 @@ Error = ANSI.COLOR_XRED,
 Location = ANSI.COLOR_GRAY30,
 }
 end
+protect(Style)
 
 local function ansi_styler(style, x)
     return style .. x .. ANSI.RESET
@@ -856,7 +870,7 @@ local function plain_styler(style, x)
     return x
 end
 
-local is_tty = (C.isatty(C.fileno(C.stdout)) == 1)
+local is_tty = (C.isatty(C.fileno(C.stdout)) ~= 0)
 local support_ansi = is_tty
 local default_styler
 if support_ansi then
@@ -1851,7 +1865,7 @@ do
             self.number = Any(cast(srctype, cast(rtype, srcval)))
             local cend = cendp[0]
             if ((cend == self.cursor)
-                or (errno == C._ERANGE)
+                or (errno == C.BANGRA_ERANGE)
                 or (cend >= self.eof)
                 or ((0 == C.isspace(cend[0]))
                     and (NULL == C.strchr(token_terminators, cend[0])))) then
@@ -1980,11 +1994,11 @@ do
                 return file
             else
                 local file = SourceFile(path)
-                file.fd = C.open(path, C._O_RDONLY)
+                file.fd = C.open(path, C.BANGRA_O_RDONLY)
                 if (file.fd >= 0) then
-                    file.length = C.lseek(file.fd, 0, C._SEEK_END)
+                    file.length = C.lseek(file.fd, 0, C.BANGRA_SEEK_END)
                     file.ptr = C.mmap(null,
-                        file.length, C._PROT_READ, C._MAP_PRIVATE, file.fd, 0)
+                        file.length, C.BANGRA_PROT_READ, C.BANGRA_MAP_PRIVATE, file.fd, 0)
                     if (file.ptr ~= MAP_FAILED) then
                         file_cache[path] = file
                         file._close_token = ffi.gc(new(gc_token),
@@ -4157,7 +4171,7 @@ local function verify_list_parameter_count(expr, mincount, maxcount)
     if ((mincount <= 0) and (maxcount == -1)) then
         return true
     end
-    local argcount = #expr - 1
+    local argcount = expr.count - 1
 
     if ((maxcount >= 0) and (argcount > maxcount)) then
         location_error(
@@ -6473,14 +6487,17 @@ builtins["element-type"] = wrap_simple_builtin(function(_type)
 end)
 
 local function countof_func(T)
-    builtins[T.name:lower() .. "-countof"] = function(self, cont, value)
+    builtins[T.name .. "-countof"] = function(self, cont, value)
         value = unwrap(T, value)
         return retcall(cont, Any(size_t(#value)))
     end
 end
 
 countof_func(Type.String)
-countof_func(Type.List)
+builtins["list-countof"] = function(self, cont, value)
+    value = unwrap(Type.List, value)
+    return retcall(cont, Any(size_t(value.count)))
+end
 
 builtins["scope-at"] = wrap_simple_builtin(function(x, name)
     checkargs(2,2,x,name)

@@ -78,7 +78,7 @@ extern "C" {
 // make sure ffi.cdef() can see C defines we care about
 enum {
 #define T(NAME) \
-    _ ## NAME = NAME,
+    BANGRA_ ## NAME = NAME,
 EXPORT_DEFINES
 #undef T
 #undef EXPORT_DEFINES
