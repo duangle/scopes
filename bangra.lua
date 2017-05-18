@@ -3115,7 +3115,8 @@ end
 --------------------------------------------------------------------------------
 
 local stream_il
-local CONT_SEP = " ⮕ "
+-- local CONT_SEP = " ⮕ " -- not compatible with Consolas
+local CONT_SEP = " → "
 do
     stream_il = function(writer, afunc, opts)
         assert_label(afunc)
@@ -3493,6 +3494,21 @@ some more thoughts:
     we have to retype arguments of type label once that happens.
 
 
+difficulty:
+if a continuation is inlined into a label, the continuation needs to be typed.
+which means we should first inline, then type; rather than first type, then inline.
+some optimizations can already be performed when untyped.
+branch continuations can already be inlined untyped.
+
+furthermore, we need to inline continuations that receive higher-order values
+or return them.
+
+in case the arguments are safe, we do a test-typing to get
+a normalized label and a return type, but begin to inline from the untyped label
+if the return type has HOV's.
+
+also, we need to inline calls where all arguments are constant or the
+continuation is none, to ensure that type-dependent branches are resolved.
 
 --]]
 
