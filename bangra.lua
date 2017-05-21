@@ -30,7 +30,7 @@ local global_opts = {
     trace_execution = false, -- print each statement being executed
     print_lua_traceback = true, -- print lua traceback on any error
     validate_macros = false, -- validate each macro result
-    normalize_labels = false, -- normalize typed labels
+    normalize_labels = true, -- normalize typed labels
     stack_limit = 65536, -- recursion limit
 
     debug = false, -- updated by bangra_is_debug() further down
@@ -3596,11 +3596,11 @@ map_arguments = function(parameters, rbuf, each_vararg, each_param, missing_arg)
     end
 end
 
-typify_from_types = function(label, arguments)
+typify_from_types = function(label, arguments, cont)
     assert_label(label)
     if label.typed then
         -- TODO: verify signature
-        return label
+        return cont(label)
     end
     local keys = {label}
     map_arguments(label.parameters, arguments,
@@ -3656,11 +3656,11 @@ typify_from_types = function(label, arguments)
             newlabel:set_typed()
             label:set_mangled(keys, newlabel)
             if global_opts.normalize_labels then
-                normalize(newlabel)
+                return normalize(newlabel, cont)
             end
         end
     end
-    return newlabel
+    return cont(newlabel)
 end
 
 -- higher order types
@@ -3726,20 +3726,20 @@ local function type_cont_from_label(cont, label)
     end
 end
 
-typify = function(label, arguments)
+typify = function(label, arguments, cont)
     if label.typed then
         -- TODO: verify signature
-        return label
+        return cont(label)
     end
     local types = types_from_arguments(arguments, 1)
-    label = typify_from_types(label, types)
-
-    -- back propagate continuation type if possible
-    -- to solve this general problem:
-    -- we're accidentally overwriting already typed continuations
-    -- instead we need to recognize those and inherit the type
-    type_cont_from_label(arguments[1], label)
-    return label
+    typify_from_types(label, types, function(label)
+        -- back propagate continuation type if possible
+        -- to solve this general problem:
+        -- we're accidentally overwriting already typed continuations
+        -- instead we need to recognize those and inherit the type
+        type_cont_from_label(arguments[1], label)
+        return cont(label)
+    end)
 end
 
 local function set_active_label(label)
@@ -3755,43 +3755,117 @@ local function match_types(typea, typeb)
     end
 end
 
--- a problem with inline: after typing
 inline = function(label, rbuf)
-    local rcount = #rbuf
-    local pcount = #label.parameters
-    if pcount > 0 then
-        do
-            label = typify(label, rbuf)
-            pcount = #label.parameters
-        end
+    if #label.parameters > 0 then
+        local arg_map = {}
 
-        do
-            local arg_map = {}
-
-            local srci = 1
-            for i=1,pcount do
-                local param = label.parameters[i]
-                local arg
-                if param.vararg then
-                    location_error("unexpected vararg parameter")
-                elseif srci <= rcount then
-                    local value = rbuf[srci]
-                    arg = value
-                    srci = srci + 1
-                else
-                    arg = none
-                end
-                assert_any(arg)
+        map_arguments(label.parameters, rbuf,
+            function(param, arg)
+                return arg
+            end,
+            function(param, arg, vararg)
                 arg_map[param] = arg
-            end
-
-            label = mangle(label, {}, arg_map)
-        end
+            end)
+        return mangle(label, {}, arg_map)
+    else
+        return label
     end
-    return label
 end
 
-normalize = function(label)
+-- is any argument of higher-order type?
+local function any_argument_hot(body)
+    for i=2,#body do
+        local arg = body[i]
+        if HOT[arg.type] then
+            return true
+        end
+    end
+    return false
+end
+
+-- are all arguments constant?
+local function all_arguments_constant(body)
+    for i=2,#body do
+        local arg = body[i]
+        if is_variable(arg) then
+            return false
+        end
+    end
+    return true
+end
+
+local function build_scc(top)
+    local S = {}
+    local P = {}
+    local C = 0
+    local Cmap = {}
+    local SCCmap = {}
+    local function walk(obj)
+        Cmap[obj] = C
+        C = C + 1
+        table.insert(S, obj)
+        table.insert(P, obj)
+        local function walk_arg(arg)
+            if arg.type == Type.Label then
+                arg = arg.value
+                local Cw = Cmap[arg]
+                if Cw == nil then
+                    walk(arg)
+                elseif not SCCmap[arg] then
+                    assert(#P >= 1)
+                    while Cmap[P[#P]] > Cw do
+                        table.remove(P)
+                        assert(#P >= 1)
+                    end
+                end
+            end
+        end
+        walk_arg(obj.enter)
+        for i,arg in ipairs(obj.arguments) do
+            walk_arg(arg)
+        end
+        assert(#P >= 1)
+        if P[#P] == obj then
+            assert(#S >= 1)
+            local scc = {}
+            while true do
+                local q = S[#S]
+                table.insert(scc, q)
+                SCCmap[q] = scc
+                --print(q)
+                table.remove(S)
+                if q == obj then
+                    break
+                end
+            end
+            --print()
+            table.remove(P)
+        end
+    end
+    walk(top)
+    return SCCmap
+end
+
+local function has_free_variables(label)
+    local scope = label:build_scope()
+    local has_label = {}
+    -- remap label bodies
+    for _,l in ipairs(scope) do
+        has_label[l] = true
+    end
+    for _,l in ipairs(scope) do
+        local body = l.arguments
+        for i=1,#body do
+            local arg = body[i]
+            if arg.type == Type.Parameter and not has_label[arg.value.label] then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+normalize = function(label, cont)
     set_active_label(label)
     --[[
         we need to figure out the return signature. doing this backwards
@@ -3825,7 +3899,7 @@ normalize = function(label)
         label:set_enter(enter2)
         label:set_arguments(body2)
         log("constants folded...")
-        return normalize(label)
+        return normalize(label, cont)
     end
 
     if enter.type == Type.Parameter and enter.value.type:super() == Type.Constant then
@@ -3835,140 +3909,139 @@ normalize = function(label)
 
     if enter.type == Type.Label then
         log("typing callee...", enter, unpack(body))
-        local newenter = typify(enter.value, body)
-
-        -- check conditions for forced inlining
-        local force_inline = false
-        local cont = body[1]
-        -- is continuation argument empty?
-        --[[
-        if is_none(cont) then
-            force_inline = true
-        end
-        --]]
-        --[[
-        -- is continuation argument forwarded?
-        if cont.type == Type.Parameter then
-            force_inline = true
-        end
-        --]]
-
-        -- is a return value of higher-order type?
-        ----[[
-        local contparam = newenter.parameters[1]
-        if contparam then
-            local cctype = contparam.type
-            if cctype:super() == Type.Label then
-                for _,pt in ipairs(cctype.types) do
-                    if pt:super() == Type.Constant then
-                        force_inline = true
-                    end
-                end
-            elseif cctype:super() == Type.TypeSet then
-                -- one of multiple continuation types
-                --force_inline = true
-            end
-        end
-        --]]
-
-        -- is a parameter of higher-order type?
-        ----[[
-        for i=2,#newenter.parameters do
-            local param = newenter.parameters[i]
-            if param.type:super() == Type.Constant then
-                force_inline = true
-                break
-            end
-        end
-        --]]
-
-        if force_inline then
+        local function inline_body()
             -- inline arguments into label and copy over body
             log("inlining...")
-            local newlabel = inline(newenter, body)
+            local newlabel = inline(enter.value, body)
             label:set_enter(newlabel.enter)
             label:set_arguments(newlabel.arguments)
             log("inlined...")
-            return normalize(label)
-        else
+            return normalize(label, cont)
+        end
+
+        -- also inline calls to functions that have free variables
+        if has_free_variables(enter.value) then
+            return inline_body()
+        end
+
+        local emap = build_scc(enter.value)
+        local is_recursive = #emap[enter.value] > 1
+        if not is_recursive
+            and (
+                all_arguments_constant(body)
+                or any_argument_hot(body)) then
+            return inline_body()
+        end
+
+        return typify(enter.value, body, function(newenter)
+            -- check conditions for forced inlining
+            local bcont = body[1]
+
+            -- is a return value of higher-order type?
+            local contparam = newenter.parameters[1]
+            if contparam then
+                local cctype = contparam.type
+                if cctype:super() == Type.Label then
+                    for _,pt in ipairs(cctype.types) do
+                        if pt:super() == Type.Constant then
+                            return inline_body()
+                        end
+                    end
+                elseif cctype:super() == Type.TypeSet then
+                    -- one of multiple continuation types
+                    --force_inline = true
+                end
+            end
+
             -- we know continuation is neither none nor empty
             -- this is a call
             label:set_enter(Any(newenter))
             local retcont = newenter.parameters[1]
             if retcont.type ~= Type.Any then
-                local cont = body[1]
+                local bcont = body[1]
                 local rettype = retcont.type
-                if cont.type == Type.Label then
-                    log("typing continuation: ", cont, retcont)
+                if bcont.type == Type.Label then
+                    log("typing continuation: ", bcont, retcont)
                     if retcont.type:super() == Type.Label then
                         log("typing label")
                         local types = retcont.type.types
-                        local newcont = typify_from_types(cont.value, types)
-                        local newbody = { unpack(body) }
-                        newbody[1] = Any(newcont)
-                        --stream_il(stdout_writer, label, {follow="none"})
-                        label:set_arguments(newbody)
+                        return typify_from_types(bcont.value, types, function(newcont)
+                            local newbody = { unpack(body) }
+                            newbody[1] = Any(newcont)
+                            --stream_il(stdout_writer, label, {follow="none"})
+                            label:set_arguments(newbody)
+                            return cont(label)
+                        end)
                     else
                         error("not sure what to do 3")
                     end
-                elseif cont.type == Type.Parameter then
+                elseif bcont.type == Type.Parameter then
                     log("typing continuation parameter: terminating")
-                    type_parameter_from_type(cont.value, rettype)
-                elseif cont.type == Type.Nothing then
+                    type_parameter_from_type(bcont.value, rettype)
+                    return cont(label)
+                elseif bcont.type == Type.Nothing then
                     -- we're never returning
+                    return cont(label)
                 else
                     error("not sure what to do 2")
                 end
+            else
+                return cont(label)
             end
-        end
+            error("unreachable")
+        end)
     elseif enter.type == Type.Builtin then
         local builtin = enter.value
-        local cont = body[1]
+        local bcont = body[1]
         if not builtin.type_func then
             if builtin.name == Symbol.Branch then
                 local bthen = body[3]
                 local belse = body[4]
                 assert(bthen.type == Type.Label, "branch-then: label expected")
                 assert(belse.type == Type.Label, "branch-else: label expected")
-                if not (bthen.value.typed and belse.value.typed) then
-                    bthen = typify(bthen.value, {cont})
-                    belse = typify(belse.value, {cont})
-                    type_cont_from_label(cont, bthen)
-                    type_cont_from_label(cont, belse)
-                    -- problem here: the continuation is not being typed / forked
-                    print("typed branches:",bthen,belse,cont)
-                    -- inline both arguments
-                    bthen = inline(bthen, {cont})
-                    belse = inline(belse, {cont})
-                    normalize(bthen)
-                    normalize(belse)
-                    -- problem here: cont not typed yet
-                    local newbody = { none, body[2], Any(bthen), Any(belse) }
-                    label:set_arguments(newbody)
-
+                bthen = bthen.value
+                belse = belse.value
+                if bthen.parameters[1] and bthen.parameters[1].type ~= Type.Nothing then
+                    bthen = inline(bthen, {bcont})
                 end
+                if belse.parameters[1] and belse.parameters[1].type ~= Type.Nothing then
+                    belse = inline(belse, {bcont})
+                end
+                -- always inline continuation
+                return normalize(bthen, function(bthen)
+                    return normalize(belse, function(belse)
+                        -- problem here: cont not typed yet
+                        local newbody = { none, body[2], Any(bthen), Any(belse) }
+                        label:set_arguments(newbody)
+                        return cont(label)
+                    end)
+                end)
             elseif builtin.name == Symbol.Exit then
                 log("exit: terminating")
                 local newbody = { unpack(body) }
                 newbody[1] = none
                 label:set_arguments(newbody)
+                return cont(label)
             else
                 todo("untyped builtin:", builtin)
             end
         else
             local types = types_from_arguments(body, 2)
             local rettypes = { Type.Nothing, builtin.type_func(unpack(types)) }
-            if cont.type == Type.Label then
-                log("typing continuation: ", cont)
-                local newcont = typify_from_types(cont.value, rettypes)
-                local newbody = { Any(newcont) }
-                for i=2,#body do
-                    table.insert(newbody, body[i])
-                end
-                label:set_arguments(newbody)
-            elseif cont.type == Type.Parameter then
+            if bcont.type == Type.Label then
+                log("typing continuation: ", bcont)
+                return typify_from_types(bcont.value, rettypes, function(newcont)
+                    local newbody = { Any(newcont) }
+                    for i=2,#body do
+                        table.insert(newbody, body[i])
+                    end
+                    label:set_arguments(newbody)
+                    return cont(label)
+                end)
+            elseif bcont.type == Type.Parameter then
                 log("typing continuation parameter: terminating")
-                type_parameter(cont.value, rettypes)
+                type_parameter(bcont.value, rettypes)
+                return cont(label)
             else
                 error("not sure what to do")
             end
@@ -3978,9 +4051,11 @@ normalize = function(label)
         stream_il(stdout_writer, label, {follow="none"})
         local param = enter.value
         type_parameter(param, types_from_arguments(body, 1))
+        return cont(label)
     else
         error("invalid call target")
     end
+    error("unreachable")
 end
 
 local function remap_body(ll, entry, map)
@@ -4080,12 +4155,12 @@ local function dump_trace(writer, dest, cont, ...)
 end
 
 local call
+
 local function call_label(label, cont, ...)
     assert_any(cont)
     assert_label(label)
 
     label = inline(label, { cont, ... })
-
     if global_opts.trace_execution then
         local w = string_writer()
         w(default_styler(Style.Keyword, "label "))
@@ -5904,15 +5979,17 @@ builtins.eval = function(self, cont, expr, scope, path)
     end)
 end
 
-builtins.typify = typed_builtin(wrap_simple_builtin(function(func, ...)
+builtins.typify = typed_builtin(function(self, cont, func, ...)
     checkargs(1,-1, func, ...)
     func = unwrap(Type.Label, func)
     local types = { Type.Any }
     for i=1,select('#', ...) do
         table.insert(types, unwrap(Type.Type, select(i, ...)))
     end
-    return Any(typify_from_types(func, types))
-end), {{Type.Label}})
+    return typify_from_types(func, types, function(label)
+        return retcall(cont, Any(label))
+    end)
+end, {{Type.Label}})
 
 builtins["syntax-quote"] = wrap_simple_builtin(function(value)
     checkargs(1,1, value)

@@ -85,11 +85,11 @@ syntax-extend
                         i32== (polydiv-i32 4 2) 2
                 typify polydiv i32 i32
 
-        fn/cc test-print10 (_)
-            fn/cc print10 (ret f)
+        fn/cc test-print-n (_)
+            fn/cc print-n (ret f n)
                 cc/call
                     fn/cc rec (_ i)
-                        cc/call branch none (i32== i 10)
+                        cc/call branch none (i32== i n)
                             fn/cc (_)
                                 ret
                             fn/cc (_)
@@ -97,28 +97,29 @@ syntax-extend
                                 cc/call rec none (i32+ i 1)
                     \ none 0
 
-            fn/cc print10-main (_)
-                print10
+            fn/cc print-n-main (_ n)
+                print-n
                     call
                         fn/cc (_ x y)
                             fn/cc (_ i)
-                                print i
+                                print i n
                                     i32+ x y
                         \ 300 3
+                    \ n
 
-            print "test-print10"
+            print "test-print-n"
+            print "print-n template:"
+            dump-label print-n-main
             call
-                fn/cc (_ print10-main-typed)
-                    print "print10 template:"
-                    dump-label print10-main
-                    print "print10 typed:"
-                    dump-label print10-main-typed
-                typify print10-main
+                fn/cc (_ print-n-main-typed)
+                    print "print-n typed:"
+                    dump-label print-n-main-typed
+                typify print-n-main i32
 
         fn/cc test-print-args (_)
             fn/cc print-args (_)
                 call
-                    fn/cc (_ self extra x)
+                    fn/cc (_ x extra)
                         print
                             branch
                                 type== (typeof extra) string
@@ -128,7 +129,7 @@ syntax-extend
                                 fn/cc (_)
                                     print "branch 2"
                                     \ "???"
-                    args
+                    \ "test" "yes"
             call
                 fn/cc (_ print-args-typed)
                     print "print-args template:"
@@ -138,7 +139,7 @@ syntax-extend
                 typify print-args
 
         test-polymorph-return
-        test-print10
+        test-print-n
         test-print-args
 
         exit 0
