@@ -18,3 +18,5 @@ syntax: regexp
 ^bangra$
 ^bangra[.]h$
 ^doc/_build/
+^Cargo[.]lock$
+^target/
