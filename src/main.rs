@@ -4,6 +4,7 @@
 use std::io::prelude::*;
 use std::fs::File;
 use std::path::PathBuf;
+use std::collections::HashMap;
 
 //------------------------------------------------------------------------------
 // ANSI COLOR FORMATTING
@@ -116,10 +117,43 @@ fn default_styler(style : Style, s : &str) -> String {
 }
 
 //------------------------------------------------------------------------------
-// MAIN
+// SYMBOL
 //------------------------------------------------------------------------------
 
 #[allow(dead_code)]
+static SYMBOL_ESCAPE_CHARS : &'static str = "[]{}()\"";
+
+#[derive(Debug)]
+struct Symbol {
+    id : u64,
+    name : String,
+}
+
+struct SymbolTable {
+    next_id : u64,
+    map : HashMap<String, Symbol>,
+}
+
+impl Symbol {
+    fn new(name : &str) -> Symbol {
+        static mut symtable : SymbolTable = SymbolTable { 
+            next_id : 0, 
+            map : HashMap::new() 
+        };
+        unsafe {
+            symtable.next_id = symtable.next_id + 1;
+            Symbol {
+                id : symtable.next_id,
+                name : name.to_string()
+            }
+        }
+    }
+}
+
+//------------------------------------------------------------------------------
+// MAIN
+//------------------------------------------------------------------------------
+
 fn get_boot_source_path () -> PathBuf {
     let mut bangra_path = std::env::current_dir()
         .expect("couldn't retrieve executable path");
@@ -143,4 +177,5 @@ fn main () {
     }
     //println!("{:?}", get_boot_source());
     println!("{}", default_styler(Style::String, "yo yo yo"));
+    println!("{:?}", Symbol::new("test"));
 }

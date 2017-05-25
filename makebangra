@@ -35,7 +35,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
 && $DIR/luajit/bin/luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h -g \
 && clang++ \
     -o $DIR/bangra \
-    $DIR/bangra.cpp \
+    $DIR/bangra2.cpp \
     -pedantic \
     $OPT_G -rdynamic \
     -ferror-limit=1 \
