@@ -94,9 +94,9 @@ char **bangra_argv;
 int unescape_string(char *buf);
 int escape_string(char *buf, const char *str, int strcount, const char *quote_chars);
 
-void bangra_strtof(float *v, const char *str, char **str_end );
-void bangra_strtoll(long long int *v, const char* str, char** endptr, int base);
-void bangra_strtoull(unsigned long long int *v, const char* str, char** endptr, int base);
+void bangra_strtof(float *v, const char *str, char **str_end, int base );
+void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base);
+void bangra_strtoull(uint64_t *v, const char* str, char** endptr, int base);
 
 void bangra_r32_mod(float *out, float a, float b);
 void bangra_r64_mod(double *out, double a, double b);
@@ -262,13 +262,13 @@ namespace blobs {
 // UTILITIES
 //------------------------------------------------------------------------------
 
-void bangra_strtof(float *v, const char *str, char **str_end ) {
+void bangra_strtof(float *v, const char *str, char **str_end, int base ) {
     *v = std::strtof(str, str_end);
 }
-void bangra_strtoll(long long int *v, const char* str, char** endptr, int base) {
+void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base) {
     *v = std::strtoll(str, endptr, base);
 }
-void bangra_strtoull(unsigned long long int *v, const char* str, char** endptr, int base) {
+void bangra_strtoull(uint64_t *v, const char* str, char** endptr, int base) {
     *v = std::strtoull(str, endptr, base);
 }
 
@@ -1380,59 +1380,301 @@ static StyledStream& operator<<(StyledStream& ost, const List *list) {
     return ost;
 }
 
-#if 0
-local EOL = {count=0}
-local List = {}
-MT_TYPE_MAP[List] = Type.List
-setmetatable(EOL, List)
-local function assert_list(x)
-    if getmetatable(x) == List then
-        return x
-    else
-        error("expected list, got " .. repr(x))
-    end
-end
-do
-    List.__class = "List"
+//------------------------------------------------------------------------------
+// ERROR HANDLING
+//------------------------------------------------------------------------------
 
-    function List:__len()
-        return self.count
-    end
+static const Anchor *_active_anchor = nullptr;
 
-    function List:__index(key)
-        local value = rawget(self, key)
-        if value == null and self == EOL then
-            location_error("cannot index into empty list")
-        end
-    end
+static void set_active_anchor(const Anchor *anchor) {
+    _active_anchor = anchor;
+}
 
-    function List.from_args(...)
-        local l = EOL
-        for i=select('#',...),1,-1 do
-            l = List(select(i, ...), l)
-        end
-        return l
-    end
+static const Anchor *get_active_anchor() {
+    return _active_anchor;
+}
 
-    setmetatable(List, {
-        __call = function (cls, at, next)
-            assert_any(at)
-            assert_list(next)
-            local count
-            if (next ~= EOL) then
-                count = next.count + 1
-            else
-                count = 1
-            end
-            return setmetatable({
-                at = at,
-                next = next,
-                count = count
-            }, List)
-        end
-    })
-end
-#endif
+static void location_error(const char *msg) {
+    assert(false && "location_error");
+}
+
+//------------------------------------------------------------------------------
+// S-EXPR LEXER / TOKENIZER
+//------------------------------------------------------------------------------
+
+#define B_TOKENS() \
+    T(none, -1) \
+    T(eof, 0) \
+    T(open, '(') \
+    T(close, ')') \
+    T(square_open, '[') \
+    T(square_close, ']') \
+    T(curly_open, '{') \
+    T(curly_close, '}') \
+    T(string, '"') \
+    T(symbol, 'S') \
+    T(escape, '\\') \
+    T(statement, ';') \
+    T(number, 'N')
+
+enum Token {
+#define T(NAME, VALUE) tok_ ## NAME = VALUE,
+    B_TOKENS()
+#undef T
+};
+
+static const char *get_token_name(Token tok) {
+    switch(tok) {
+#define T(NAME, VALUE) case tok_ ## NAME: return #NAME;
+    B_TOKENS()
+#undef T
+    }
+}
+
+const char TOKEN_TERMINATORS[] = "()[]{}\"';#,";
+
+//local TAB = ord('\t')
+//local CR = ord('\n')
+//local BS = ord('\\')
+struct Lexer {
+    void verify_good_taste(char c) {
+        if (c == '\t') {
+            location_error("please use spaces instead of tabs.");
+        }
+    }
+
+    Token token;
+    int base_offset;
+    Symbol path;
+    const char *input_stream;
+    const char *eof;
+    const char *cursor;
+    const char *next_cursor;
+    int lineno;
+    int next_lineno;
+    const char *line;
+    const char *next_line;
+
+    const char *string;
+    int string_len;
+
+    Any value;
+
+    Lexer(Symbol _path, const char *_input_stream,
+        const char *_eof = nullptr, int offset = 0) :
+            value(none) {
+        if (!_eof) {
+            _eof = _input_stream + strlen(_input_stream);
+        }
+        token = tok_eof;
+        base_offset = offset;
+        path = _path;
+        input_stream = _input_stream;
+        eof = _eof;
+        cursor = next_cursor = _input_stream;
+        lineno = next_lineno = 1;
+        line = next_line = _input_stream;
+    }
+
+    int offset() {
+        return base_offset + (cursor - input_stream);
+    }
+
+    int column() {
+        return cursor - line + 1;
+    }
+
+    int next_column() {
+        return next_cursor - next_line + 1;
+    }
+
+    const Anchor *anchor() {
+        return Anchor::from(path, lineno, column(), offset());
+    }
+
+    char next() {
+        char c = next_cursor[0];
+        verify_good_taste(c);
+        next_cursor = next_cursor + 1;
+        return c;
+    }
+
+    bool is_eof() {
+        return next_cursor == eof;
+    }
+
+    void newline() {
+        next_lineno = next_lineno + 1;
+        next_line = next_cursor;
+    }
+
+    void select_string() {
+        string = cursor;
+        string_len = next_cursor - cursor;
+    }
+
+    void read_single_symbol() {
+        select_string();
+    }
+
+    void read_symbol() {
+        bool escape = false;
+        while (true) {
+            if (is_eof()) {
+                break;
+            }
+            char c = next();
+            if (escape) {
+                if (c == '\n') {
+                    newline();
+                }
+                escape = false;
+            } else if (c == '\\') {
+                escape = true;
+            } else if (isspace(c) || strchr(TOKEN_TERMINATORS, c)) {
+                next_cursor = next_cursor - 1;
+                break;
+            }
+        }
+        select_string();
+    }
+
+    void read_string(char terminator) {
+        bool escape = false;
+        while (true) {
+            if (is_eof()) {
+                location_error("unterminated sequence");
+                break;
+            }
+            char c = next();
+            if (c == '\n') {
+                newline();
+            }
+            if (escape) {
+                escape = false;
+            } else if (c == '\\') {
+                escape = true;
+            } else if (c == terminator) {
+                break;
+            }
+        }
+        select_string();
+    }
+
+    void read_comment() {
+        int col = column();
+        while (true) {
+            if (is_eof()) {
+                break;
+            }
+            int next_col = next_column();
+            char c = next();
+            if (c == '\n') {
+                newline();
+            } else if (!isspace(c) && (next_col <= col)) {
+                next_cursor = next_cursor - 1;
+                break;
+            }
+        }
+    }
+
+    template<typename T>
+    bool read_number(void (*strton)(T *, const char*, char**, int)) {
+        char *cend;
+        errno = 0;
+        T srcval;
+        strton(&srcval, cursor, &cend, 0);
+        if ((cend == cursor)
+            || (errno == ERANGE)
+            || (cend > eof)
+            || ((!isspace(*cend)) && (!strchr(TOKEN_TERMINATORS, *cend)))) {
+            return false;
+        }
+        value = Any(srcval);
+        next_cursor = cend;
+        return true;
+    }
+
+    bool read_int64() {
+        return read_number(bangra_strtoll);
+    }
+    bool read_uint64() {
+        return read_number(bangra_strtoull);
+    }
+    bool read_real32() {
+        return read_number(bangra_strtof);
+    }
+
+    void next_token() {
+        lineno = next_lineno;
+        line = next_line;
+        cursor = next_cursor;
+        set_active_anchor(anchor());
+    }
+
+    Token read_token() {
+        char c;
+    skip:
+        next_token();
+        if (is_eof()) { token = tok_eof; goto done; }
+        c = next();
+        if (c == '\n') { newline(); }
+        if (isspace(c)) { goto skip; }
+        if (c == '#') { read_comment(); goto skip; }
+        else if (c == '(') { token = tok_open; }
+        else if (c == ')') { token = tok_close; }
+        else if (c == '[') { token = tok_square_open; }
+        else if (c == ']') { token = tok_square_close; }
+        else if (c == '{') { token = tok_curly_open; }
+        else if (c == '}') { token = tok_curly_close; }
+        else if (c == '\\') { token = tok_escape; }
+        else if (c == '"') { token = tok_string; read_string(c); }
+        else if (c == ';') { token = tok_statement; }
+        else if (c == ',') { token = tok_symbol; read_single_symbol(); }
+        else if (read_int64() || read_uint64() || read_real32()) { token = tok_number; }
+        else { token = tok_symbol; read_symbol(); }
+    done:
+        return token;
+    }
+
+    Any get_symbol() {
+        char dest[string_len + 1];
+        memcpy(dest, string, string_len);
+        dest[string_len] = 0;
+        auto size = unescape_string(dest);
+        return Symbol(String::from(dest, size));
+    }
+    Any get_string() {
+        auto len = string_len - 2;
+        char dest[len + 1];
+        memcpy(dest, string + 1, len);
+        dest[len] = 0;
+        auto size = unescape_string(dest);
+        return String::from(dest, size);
+    }
+    Any get_number() {
+        if ((value.type == TYPE_I64)
+            && (value.i64 <= 0x7fffffffll)
+            && (value.i64 >= -0x80000000ll)) {
+            return int32_t(value.i64);
+        } else if ((value.type == TYPE_U64)
+            && (value.u64 <= 0xffffffffull)) {
+            return uint32_t(value.u64);
+        }
+        return value;
+    }
+    Any get() {
+        if (token == tok_number) {
+            return get_number();
+        } else if (token == tok_symbol) {
+            return get_symbol();
+        } else if (token == tok_string) {
+            return get_string();
+        } else {
+            return none;
+        }
+    }
+};
 
 //------------------------------------------------------------------------------
 // MAIN
@@ -1509,6 +1751,20 @@ int main(int argc, char *argv[]) {
         << " " << Any((uint16_t)123)
         << " " << Any(false)
         << std::endl;
+
+    SourceFile *sf = SourceFile::open("bangra.b");
+    Lexer lexer(sf->path, sf->strptr(), sf->strptr() + sf->length);
+    auto tok = lexer.read_token();
+    while (tok != tok_eof) {
+        cout << " ";
+        auto val = lexer.get();
+        if (val.type != TYPE_Nothing) {
+            cout << val;
+        } else {
+            cout << get_token_name(tok);
+        }
+        tok = lexer.read_token();
+    }
 
     return 0;
 }
