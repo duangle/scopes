@@ -693,7 +693,7 @@ static StyledStream& operator<<(StyledStream& ost, const String *s) {
 // SYMBOL
 //------------------------------------------------------------------------------
 
-static const char SYMBOL_ESCAPE_CHARS[] = ":[]{}()\"";
+static const char SYMBOL_ESCAPE_CHARS[] = "[]{}()\"";
 
 //------------------------------------------------------------------------------
 // SYMBOL TYPE
@@ -753,6 +753,79 @@ static const char SYMBOL_ESCAPE_CHARS[] = ":[]{}()\"";
     \
     T(TYPE_Constant, "Constant") \
     \
+    /* keywords and macros */ \
+    T(KW_CatRest, "::*") T(KW_CatOne, "::@") T(KW_Assert, "assert") T(KW_Break, "break") \
+    T(KW_Call, "call") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
+    T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
+    T(KW_Else, "else") T(KW_ElseIf, "elseif") T(KW_EmptyList, "empty-list") \
+    T(KW_EmptyTuple, "empty-tuple") T(KW_Escape, "escape") \
+    T(KW_Except, "except") T(KW_False, "false") T(KW_Fn, "fn") \
+    T(KW_FnTypes, "fn-types") T(KW_FnCC, "fn/cc") T(KW_Globals, "globals") \
+    T(KW_If, "if") T(KW_In, "in") T(KW_Let, "let") T(KW_Loop, "loop") \
+    T(KW_LoopFor, "loop-for") T(KW_None, "none") T(KW_Null, "null") \
+    T(KW_QQuoteSyntax, "qquote-syntax") T(KW_Quote, "quote") \
+    T(KW_QuoteSyntax, "quote-syntax") T(KW_Raise, "raise") T(KW_Recur, "recur") \
+    T(KW_Return, "return") T(KW_Splice, "splice") \
+    T(KW_SyntaxExtend, "syntax-extend") T(KW_True, "true") T(KW_Try, "try") \
+    T(KW_Unquote, "unquote") T(KW_UnquoteSplice, "unquote-splice") \
+    T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
+    \
+    /* builtin and global functions */ \
+    T(FN_Alignof, "alignof") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
+    T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
+    T(FN_BlockScopeMacro, "block-scope-macro") T(FN_Box, "box") \
+    T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
+    T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
+    T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
+    T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
+    T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
+    T(FN_Enumerate, "enumerate") T(FN_Error, "error") T(FN_Eval, "eval") \
+    T(FN_Exit, "exit") T(FN_Expand, "expand") \
+    T(FN_ExternLibrary, "extern-library") T(FN_External, "external") \
+    T(FN_ExtractMemory, "extract-memory") \
+    T(FN_GetExceptionHandler, "get-exception-handler") \
+    T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
+    T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") T(FN_Iter, "iter") \
+    T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
+    T(FN_ListAtom, "list-atom?") T(FN_ListLoad, "list-load") \
+    T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
+    T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") T(FN_IsNone, "none?") \
+    T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
+    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
+    T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
+    T(FN_Range, "range") T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
+    T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_SizeOf, "sizeof") \
+    T(FN_Slice, "slice") T(FN_StructOf, "structof") T(FN_IsSymbol, "symbol?") \
+    T(FN_SyntaxAnchor, "syntax->anchor") T(FN_SyntaxDatum, "syntax->datum") \
+    T(FN_SyntaxCons, "syntax-cons") T(FN_SyntaxDo, "syntax-do") \
+    T(FN_SyntaxError, "syntax-error") T(FN_IsSyntaxHead, "syntax-head?") \
+    T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
+    T(FN_IsSyntaxQuoted, "syntax-quoted?") \
+    T(FN_SyntaxUnquote, "syntax-unquote") T(FN_TupleOf, "tupleof") \
+    T(FN_IsType, "type?") T(FN_TypeOf, "typeof") T(FN_Unbox, "unbox") \
+    T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
+    T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
+    T(FN_ZipFill, "zip-fill") \
+    \
+    /* builtin and global functions with side effects */ \
+    T(SFXFN_CopyMemory, "copy-memory!") T(SFXFN_RefSet, "ref-set!") \
+    T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
+    T(SFXFN_SetGlobals, "set-globals!") \
+    T(SFXFN_SetScopeSymbol, "set-scope-symbol!") \
+    T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
+    \
+    /* builtin operator functions that can also be used as infix */ \
+    T(OP_NotEq, "!=") T(OP_Mod, "%") T(OP_InMod, "%=") T(OP_BitAnd, "&") T(OP_InBitAnd, "&=") \
+    T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_Add, "+") T(OP_Incr, "++") \
+    T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_Sub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
+    T(OP_Dot, ".") T(OP_Join, "..") T(OP_Div, "/") T(OP_InDiv, "/=") \
+    T(OP_Colon, ":") T(OP_Let, ":=") T(OP_Less, "<") T(OP_LeftArrow, "<-") T(OP_Subtype, "<:") \
+    T(OP_ShiftL, "<<") T(OP_LessThan, "<=") T(OP_Set, "=") T(OP_Eq, "==") \
+    T(OP_Greater, ">") T(OP_GreaterThan, ">=") T(OP_ShiftR, ">>") T(OP_Tertiary, "?") \
+    T(OP_At, "@") T(OP_Xor, "^") T(OP_InXor, "^=") T(OP_And, "and") T(OP_Not, "not") \
+    T(OP_Or, "or") T(OP_BitOr, "|") T(OP_InBitOr, "|=") T(OP_BitNot, "~") \
+    T(OP_InBitNot, "~=") \
+    \
     /* builtins, forms, etc */ \
     T(SYM_FnCCForm, "form-fn-body") \
     T(SYM_QuoteForm, "form-quote") \
@@ -763,42 +836,14 @@ static const char SYMBOL_ESCAPE_CHARS[] = ":[]{}()\"";
     T(SYM_SymbolWildcard, "#symbol") \
     T(SYM_ThisFnCC, "#this-fn/cc") \
     \
-    T(SYM_Branch, "branch") \
-    T(SYM_Exit, "exit") \
     T(SYM_Compare, "compare") \
-    T(SYM_CountOf, "countof") \
-    T(SYM_Slice, "slice") \
-    T(SYM_Cast, "cast") \
     T(SYM_Size, "size") \
     T(SYM_Alignment, "alignment") \
     T(SYM_Unsigned, "unsigned") \
     T(SYM_Bitwidth, "bitwidth") \
     T(SYM_Super, "super") \
-    T(SYM_At, "@") \
     T(SYM_ApplyType, "apply-type") \
-    T(SYM_ElementType, "element-type") \
-    T(SYM_Join, "..") \
-    T(SYM_Add, "+") \
-    T(SYM_Sub, "-") \
-    T(SYM_Mul, "*") \
-    T(SYM_Div, "/") \
-    T(SYM_Mod, "%") \
-    T(SYM_BitAnd, "&") \
-    T(SYM_BitOr, "|") \
-    T(SYM_BitXor, "^") \
-    T(SYM_BitNot, "~") \
-    T(SYM_LShift, "<<") \
-    T(SYM_RShift, ">>") \
-    T(SYM_Pow, "**") \
-    T(SYM_Repr, "repr") \
     T(SYM_Styler, "styler") \
-    \
-    T(SYM_Equal, ", , ") \
-    T(SYM_NotEqual, "!, ") \
-    T(SYM_Greater, ">") \
-    T(SYM_GreaterEqual, ">= ") \
-    T(SYM_Less, "<") \
-    T(SYM_LessEqual, "<= ") \
     \
     /* ad-hoc builtin names */ \
     T(SYM_ExecuteReturn, "execute-return") \
@@ -819,6 +864,29 @@ enum KnownSymbol {
 #undef T
     SYM_Count,
 };
+
+enum {
+    KEYWORD_FIRST = KW_CatRest,
+    KEYWORD_LAST = KW_Yield,
+
+    FUNCTION_FIRST = FN_Alignof,
+    FUNCTION_LAST = FN_ZipFill,
+
+    SFXFUNCTION_FIRST = SFXFN_CopyMemory,
+    SFXFUNCTION_LAST = SFXFN_SetTypeSymbol,
+
+    OPERATOR_FIRST = OP_NotEq,
+    OPERATOR_LAST = OP_InBitNot,
+};
+
+static const char *get_known_symbol_name(KnownSymbol sym) {
+    switch(sym) {
+#define T(SYM, NAME) case SYM: return #SYM;
+    B_MAP_SYMBOLS()
+#undef T
+    case SYM_Count: return "SYM_Count";
+    }
+}
 
 struct Symbol {
     typedef KnownSymbol EnumT;
@@ -852,9 +920,23 @@ protected:
     static std::unordered_map<StringKey, Symbol, StringKey::Hash> map_name_symbol;
     static uint64_t next_symbol_id;
 
+    static void verify_unmapped(Symbol id, const String *name) {
+        auto it = map_name_symbol.find({ name });
+        if (it != map_name_symbol.end()) {
+            printf("known symbols %s and %s mapped to same string.\n",
+               get_known_symbol_name(id.known_value()),
+               get_known_symbol_name(it->second.known_value()));
+        }
+    }
+
     static void map_symbol(Symbol id, const String *name) {
         map_name_symbol[{ name }] = id;
         map_symbol_name[id] = name;
+    }
+
+    static void map_known_symbol(Symbol id, const String *name) {
+        verify_unmapped(id, name);
+        map_symbol(id, name);
     }
 
     static Symbol get_symbol(const String *name) {
@@ -941,7 +1023,7 @@ public:
     }
 
     static void _init_symbols() {
-    #define T(sym, name) map_symbol(sym, String::from(name));
+    #define T(sym, name) map_known_symbol(sym, String::from(name));
         B_MAP_SYMBOLS()
     #undef T
     }
@@ -1323,6 +1405,14 @@ struct Syntax {
 
 };
 
+static Any maybe_unsyntax(const Any &e) {
+    if (e.type == TYPE_Syntax) {
+        return e.syntax->datum;
+    } else {
+        return e;
+    }
+}
+
 static StyledStream& operator<<(StyledStream& ost, const Syntax *value) {
     ost << value->anchor << value->datum;
     return ost;
@@ -1365,6 +1455,26 @@ struct List {
     }
 };
 
+// (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
+// this is the mutating version; input lists are modified, direction is inverted
+const List *reverse_list_inplace(
+    const List *l, const List *eol = EOL, const List *cat_to = EOL) {
+    const List *next = cat_to;
+    size_t count = 0;
+    if (cat_to != EOL) {
+        count = cat_to->count;
+    }
+    while (l != eol) {
+        count = count + 1;
+        const List *iternext = l->next;
+        const_cast<List *>(l)->next = next;
+        const_cast<List *>(l)->count = count;
+        next = l;
+        l = iternext;
+    }
+    return next;
+}
+
 static StyledStream& operator<<(StyledStream& ost, const List *list) {
     ost << Style_Operator << "(" << Style_None;
     int i = 0;
@@ -1394,12 +1504,12 @@ static const Anchor *get_active_anchor() {
     return _active_anchor;
 }
 
-static void location_error(const char *msg) {
+static void location_error(const char *msg, ...) {
     assert(false && "location_error");
 }
 
 //------------------------------------------------------------------------------
-// S-EXPR LEXER / TOKENIZER
+// S-EXPR LEXER & PARSER
 //------------------------------------------------------------------------------
 
 #define B_TOKENS() \
@@ -1431,12 +1541,12 @@ static const char *get_token_name(Token tok) {
     }
 }
 
-const char TOKEN_TERMINATORS[] = "()[]{}\"';#,";
+static const char TOKEN_TERMINATORS[] = "()[]{}\"';#,";
 
-//local TAB = ord('\t')
-//local CR = ord('\n')
-//local BS = ord('\\')
-struct Lexer {
+struct LexerParser {
+    // LEXER
+    //////////////////////////////
+
     void verify_good_taste(char c) {
         if (c == '\t') {
             location_error("please use spaces instead of tabs.");
@@ -1460,7 +1570,7 @@ struct Lexer {
 
     Any value;
 
-    Lexer(Symbol _path, const char *_input_stream,
+    LexerParser(Symbol _path, const char *_input_stream,
         const char *_eof = nullptr, int offset = 0) :
             value(none) {
         if (!_eof) {
@@ -1674,7 +1784,454 @@ struct Lexer {
             return none;
         }
     }
+
+    // PARSER
+    //////////////////////////////
+
+    struct ListBuilder {
+        LexerParser &lexer;
+        const List *prev;
+        const List *eol;
+
+        ListBuilder(LexerParser &_lexer) :
+            lexer(_lexer),
+            prev(EOL),
+            eol(EOL) {}
+
+        void append(const Any &value) {
+            assert(value.type == TYPE_Syntax);
+            prev = List::from(value, prev);
+        }
+
+        bool is_empty() const {
+            return (prev == EOL);
+        }
+
+        bool is_expression_empty() const {
+            return (prev == EOL);
+        }
+
+        void reset_start() {
+            eol = prev;
+        }
+
+        void split(const Anchor *anchor) {
+            // reverse what we have, up to last split point and wrap result
+            // in cell
+            prev = List::from(
+                Syntax::from(anchor,reverse_list_inplace(prev, eol)), eol);
+            reset_start();
+        }
+
+        const List *get_result() {
+            return reverse_list_inplace(prev);
+        }
+    };
+
+    // parses a list to its terminator and returns a handle to the first cell
+    const List *parse_list(Token end_token) {
+        const Anchor *start_anchor = this->anchor();
+        ListBuilder builder(*this);
+        this->read_token();
+        while (true) {
+            if (this->token == end_token) {
+                break;
+            } else if (this->token == tok_escape) {
+                int column = this->column();
+                this->read_token();
+                builder.append(parse_naked(column, end_token));
+            } else if (this->token == tok_eof) {
+                set_active_anchor(start_anchor);
+                location_error("unclosed open bracket");
+            } else if (this->token == tok_statement) {
+                builder.split(this->anchor());
+                this->read_token();
+            } else {
+                builder.append(parse_any());
+                this->read_token();
+            }
+        }
+        return builder.get_result();
+    }
+
+    // parses the next sequence and returns it wrapped in a cell that points
+    // to prev
+    Any parse_any() {
+        assert(this->token != tok_eof);
+        const Anchor *anchor = this->anchor();
+        if (this->token == tok_open) {
+            return Syntax::from(anchor, parse_list(tok_close));
+        } else if (this->token == tok_square_open) {
+            return Syntax::from(anchor,
+                List::from(Symbol("square-list"),
+                    parse_list(tok_square_close)));
+        } else if (this->token == tok_curly_open) {
+            return Syntax::from(anchor,
+                List::from(Symbol("curly-list"),
+                    parse_list(tok_curly_close)));
+        } else if ((this->token == tok_close)
+            || (this->token == tok_square_close)
+            || (this->token == tok_curly_close)) {
+            location_error("stray closing bracket");
+        } else if (this->token == tok_string) {
+            return Syntax::from(anchor, get_string());
+        } else if (this->token == tok_symbol) {
+            return Syntax::from(anchor, get_symbol());
+        } else if (this->token == tok_number) {
+            return Syntax::from(anchor, get_number());
+        } else {
+            location_error("unexpected token: %c (%i)",
+                this->cursor[0], (int)this->cursor[0]);
+        }
+        return none;
+    }
+
+    Any parse_naked(int column, Token end_token) {
+        int lineno = this->lineno;
+
+        bool escape = false;
+        int subcolumn = 0;
+
+        const Anchor *anchor = this->anchor();
+        ListBuilder builder(*this);
+
+        while (this->token != tok_eof) {
+            if (this->token == end_token) {
+                break;
+            } else if (this->token == tok_escape) {
+                escape = true;
+                this->read_token();
+                if (this->lineno <= lineno) {
+                    location_error("escape character is not at end of line");
+                }
+                lineno = this->lineno;
+            } else if (this->lineno > lineno) {
+                if (subcolumn == 0) {
+                    subcolumn = this->column();
+                } else if (this->column() != subcolumn) {
+                    location_error("indentation mismatch");
+                }
+                if (column != subcolumn) {
+                    if ((column + 4) != subcolumn) {
+                        location_error("indentations must nest by 4 spaces.");
+                    }
+                }
+
+                escape = false;
+                lineno = this->lineno;
+                // keep adding elements while we're in the same line
+                while ((this->token != tok_eof)
+                        && (this->token != end_token)
+                        && (this->lineno == lineno)) {
+                    builder.append(parse_naked(subcolumn, end_token));
+                }
+            } else if (this->token == tok_statement) {
+                this->read_token();
+                if (!builder.is_empty()) {
+                    break;
+                }
+            } else {
+                builder.append(parse_any());
+                lineno = this->next_lineno;
+                this->read_token();
+            }
+            if ((!escape || (this->lineno > lineno))
+                && (this->column() <= column)) {
+                break;
+            }
+        }
+
+        return Syntax::from(anchor, builder.get_result());
+    }
+
+    Any parse() {
+        this->read_token();
+        int lineno = 0;
+        bool escape = false;
+
+        const Anchor *anchor = this->anchor();
+        ListBuilder builder(*this);
+
+        while (this->token != tok_eof) {
+            if (this->token == tok_none) {
+                break;
+            } else if (this->token == tok_escape) {
+                escape = true;
+                this->read_token();
+                if (this->lineno <= lineno) {
+                    location_error("escape character is not at end of line");
+                }
+                lineno = this->lineno;
+            } else if (this->lineno > lineno) {
+                if (this->column() != 1) {
+                    location_error("indentation mismatch");
+                }
+
+                escape = false;
+                lineno = this->lineno;
+                // keep adding elements while we're in the same line
+                while ((this->token != tok_eof)
+                        && (this->token != tok_none)
+                        && (this->lineno == lineno)) {
+                    builder.append(parse_naked(1, tok_none));
+                }
+            } else if (this->token == tok_statement) {
+                location_error("unexpected statement token");
+            } else {
+                builder.append(parse_any());
+                lineno = this->next_lineno;
+                this->read_token();
+            }
+        }
+        return Syntax::from(anchor, builder.get_result());
+    }
+
 };
+
+//------------------------------------------------------------------------------
+// EXPRESSION PRINTER
+//------------------------------------------------------------------------------
+
+static const char INDENT_SEP[] = "⁞";
+
+static Style default_symbol_styler(Symbol name) {
+    if (!name.is_known())
+        return Style_None;
+    auto val = name.known_value();
+    if ((val >= KEYWORD_FIRST) && (val <= KEYWORD_LAST))
+        return Style_Keyword;
+    else if ((val >= FUNCTION_FIRST) && (val <= FUNCTION_LAST))
+        return Style_Function;
+    else if ((val >= SFXFUNCTION_FIRST) && (val <= SFXFUNCTION_LAST))
+        return Style_SfxFunction;
+    else if ((val >= OPERATOR_FIRST) && (val <= OPERATOR_LAST))
+        return Style_Operator;
+    return Style_None;
+}
+
+struct StreamExprFormat {
+    enum Tagging {
+        All,
+        Line,
+        None,
+    };
+
+    bool naked;
+    Tagging anchors;
+    int maxdepth;
+    int maxlength;
+    Style (*symbol_styler)(Symbol);
+    int depth;
+
+    StreamExprFormat() :
+        naked(true),
+        anchors(None),
+        maxdepth(1<<30),
+        maxlength(1<<30),
+        symbol_styler(default_symbol_styler),
+        depth(0)
+    {}
+};
+
+struct StreamExpr {
+    StyledStream &ss;
+    StreamExprFormat fmt;
+    const Anchor *last_anchor;
+    bool line_anchors;
+    bool atom_anchors;
+
+    StreamExpr(StyledStream &_ss, const StreamExprFormat &_fmt) :
+        ss(_ss), fmt(_fmt), last_anchor(nullptr) {
+        line_anchors = (fmt.anchors == StreamExprFormat::Line);
+        atom_anchors = (fmt.anchors == StreamExprFormat::All);
+    }
+
+    void stream_indent(int depth = 0) {
+        if (depth >= 1) {
+            ss << Style_Comment << "    ";
+            for (int i = 2; i <= depth; ++i) {
+                ss << INDENT_SEP << "   ";
+            }
+            ss << Style_None;
+        }
+    }
+
+    void stream_anchor(const Anchor *anchor, bool quoted = false) {
+        if (anchor) {
+            ss << Style_Location;
+            auto rss = StyledStream::plain(ss);
+            // ss << path.name()->data << ":" << lineno << ":" << column << ":";
+            if (!last_anchor || (last_anchor->path != anchor->path)) {
+                rss << anchor->path.name()->data
+                    << ":" << anchor->lineno
+                    << ":" << anchor->column
+                    << ":";
+            } else if (!last_anchor || (last_anchor->lineno != anchor->lineno)) {
+                rss << ":" << anchor->lineno
+                    << ":" << anchor->column
+                    << ":";
+            } else if (!last_anchor || (last_anchor->column != anchor->column)) {
+                rss << "::" << anchor->column
+                    << ":";
+            } else {
+                rss << ":::";
+            }
+            if (quoted) { rss << "'"; }
+            ss << Style_None;
+            last_anchor = anchor;
+        }
+    }
+
+    static bool is_nested(const Any &_e) {
+        auto e = maybe_unsyntax(_e);
+        if (e.type == TYPE_List) {
+            auto it = e.list;
+            while (it != EOL) {
+                auto q = maybe_unsyntax(it->at);
+                if (q.type.is_known()) {
+                    switch(q.type.known_value()) {
+                    case TYPE_Symbol:
+                    case TYPE_String:
+                    case TYPE_I32:
+                    case TYPE_R32:
+                        break;
+                    default: return true;
+                    }
+                }
+                it = it->next;
+            }
+        }
+        return false;
+    }
+
+    static bool is_list (const Any &_value) {
+        auto value = maybe_unsyntax(_value);
+        return value.type == TYPE_List;
+    }
+
+    void walk(Any e, int depth, int maxdepth, bool naked) {
+        bool quoted = false;
+
+        const Anchor *anchor = nullptr;
+        if (e.type == TYPE_Syntax) {
+            anchor = e.syntax->anchor;
+            quoted = e.syntax->quoted;
+            e = e.syntax->datum;
+        }
+
+        if (naked) {
+            stream_indent(depth);
+        }
+        if (atom_anchors) {
+            stream_anchor(anchor, quoted);
+        }
+
+        if (e.type == TYPE_List) {
+            if (naked && line_anchors && !atom_anchors) {
+                stream_anchor(anchor, quoted);
+            }
+
+            maxdepth = maxdepth - 1;
+
+            auto it = e.list;
+            if (it == EOL) {
+                ss << Style_Operator << "()" << Style_None;
+                if (naked) { ss << std::endl; }
+                return;
+            }
+            if (maxdepth == 0) {
+                ss << Style_Operator << "("
+                   << Style_Comment << "<...>"
+                   << Style_Operator << ")"
+                   << Style_None;
+                if (naked) { ss << std::endl; }
+                return;
+            }
+            int offset = 0;
+            // int numsublists = 0;
+            if (naked) {
+                if (is_list(it->at)) {
+                    ss << ";" << std::endl;
+                    goto print_sparse;
+                }
+            print_terse:
+                walk(it->at, depth, maxdepth, false);
+                it = it->next;
+                offset = offset + 1;
+                while (it != EOL) {
+                    /*if (is_list(it->at)) {
+                        numsublists = numsublists + 1;
+                        if (numsublists >= 2) {
+                            break;
+                        }
+                    }*/
+                    if (is_nested(it->at)) {
+                        break;
+                    }
+                    ss << " ";
+                    walk(it->at, depth, maxdepth, false);
+                    offset = offset + 1;
+                    it = it->next;
+                }
+                ss << std::endl;
+            print_sparse:
+                int subdepth = depth + 1;
+                while (it != EOL) {
+                    auto value = it->at;
+                    if (!is_list(value) // not a list
+                        && (offset >= 1)) { // not first element in list
+                        stream_indent(subdepth);
+                        ss << "\\ ";
+                        goto print_terse;
+                    }
+                    if (offset >= fmt.maxlength) {
+                        stream_indent(subdepth);
+                        ss << "<...>" << std::endl;
+                        return;
+                    }
+                    walk(value, subdepth, maxdepth, true);
+                    offset = offset + 1;
+                    it = it->next;
+                }
+            } else {
+                depth = depth + 1;
+                ss << Style_Operator << "(" << Style_None;
+                while (it != EOL) {
+                    if (offset > 0) {
+                        ss << " ";
+                    }
+                    if (offset >= fmt.maxlength) {
+                        ss << Style_Comment << "..." << Style_None;
+                        break;
+                    }
+                    walk(it->at, depth, maxdepth, false);
+                    offset = offset + 1;
+                    it = it->next;
+                }
+                ss << Style_Operator << ")" << Style_None;
+            }
+        } else {
+            if (e.type == TYPE_Symbol) {
+                ss << fmt.symbol_styler(e.symbol);
+                e.symbol.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
+                ss << Style_None;
+            } else {
+                ss << e;
+            }
+            if (naked) { ss << std::endl; }
+        }
+    }
+
+    void stream(const Any &e) {
+        walk(e, fmt.depth, fmt.maxdepth, fmt.naked);
+    }
+};
+
+static void stream_expr(
+    StyledStream &_ss, const Any &e, const StreamExprFormat &_fmt) {
+    StreamExpr streamer(_ss, _fmt);
+    streamer.stream(e);
+}
 
 //------------------------------------------------------------------------------
 // MAIN
@@ -1753,18 +2310,9 @@ int main(int argc, char *argv[]) {
         << std::endl;
 
     SourceFile *sf = SourceFile::open("bangra.b");
-    Lexer lexer(sf->path, sf->strptr(), sf->strptr() + sf->length);
-    auto tok = lexer.read_token();
-    while (tok != tok_eof) {
-        cout << " ";
-        auto val = lexer.get();
-        if (val.type != TYPE_Nothing) {
-            cout << val;
-        } else {
-            cout << get_token_name(tok);
-        }
-        tok = lexer.read_token();
-    }
+    LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
+    auto expr = parser.parse();
+    stream_expr(cout, expr, StreamExprFormat());
 
     return 0;
 }
