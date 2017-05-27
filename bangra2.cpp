@@ -693,7 +693,7 @@ static StyledStream& operator<<(StyledStream& ost, const String *s) {
 // SYMBOL
 //------------------------------------------------------------------------------
 
-static const char SYMBOL_ESCAPE_CHARS[] = "[]{}()\"";
+static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 
 //------------------------------------------------------------------------------
 // SYMBOL TYPE
@@ -866,6 +866,9 @@ enum KnownSymbol {
 };
 
 enum {
+    TYPE_FIRST = TYPE_Nothing,
+    TYPE_LAST = TYPE_Constant,
+
     KEYWORD_FIRST = KW_CatRest,
     KEYWORD_LAST = KW_Yield,
 
@@ -1051,8 +1054,18 @@ static StyledStream& operator<<(StyledStream& ost, Symbol sym) {
 //------------------------------------------------------------------------------
 
 struct SourceFile {
+protected:
     static std::unordered_map<Symbol, SourceFile *, Symbol::Hash> file_cache;
 
+    SourceFile(Symbol _path) :
+        path(_path),
+        fd(-1),
+        length(0),
+        ptr(MAP_FAILED),
+        _str(nullptr) {
+    }
+
+public:
     Symbol path;
     int fd;
     int length;
@@ -1086,12 +1099,7 @@ struct SourceFile {
         if (it != file_cache.end()) {
             return it->second;
         }
-        SourceFile *file = (SourceFile *)malloc(sizeof(SourceFile));
-        file->path = _path;
-        file->fd = -1;
-        file->length = 0;
-        file->ptr = MAP_FAILED;
-        file->_str = nullptr;
+        SourceFile *file = new SourceFile(_path);
         if (str) {
             // loading from string buffer rather than file
             file->ptr = (void *)str->data;
@@ -1166,6 +1174,14 @@ std::unordered_map<Symbol, SourceFile *, Symbol::Hash> SourceFile::file_cache;
 //------------------------------------------------------------------------------
 
 struct Anchor {
+protected:
+    Anchor(Symbol _path, int _lineno, int _column, int _offset) :
+        path(_path),
+        lineno(_lineno),
+        column(_column),
+        offset(_offset) {}
+
+public:
     Symbol path;
     int lineno;
     int column;
@@ -1173,12 +1189,7 @@ struct Anchor {
 
     static const Anchor *from(
         Symbol _path, int _lineno, int _column, int _offset = 0) {
-        Anchor *anchor = (Anchor *)malloc(sizeof(Anchor));
-        anchor->path = _path;
-        anchor->lineno = _lineno;
-        anchor->column = _column;
-        anchor->offset = _offset;
-        return anchor;
+        return new Anchor(_path, _lineno, _column, _offset);
     }
 
     StyledStream& stream(StyledStream& ost) const {
@@ -1212,6 +1223,10 @@ protected:
     Symbol _name;
 
 public:
+    Type(EnumT id) :
+        _name(id) {
+    }
+
     Type(Symbol name) :
         _name(name) {
     }
@@ -1275,11 +1290,87 @@ static StyledStream& operator<<(StyledStream& ost, Type type) {
 }
 
 //------------------------------------------------------------------------------
+// BUILTIN
+//------------------------------------------------------------------------------
+
+struct Builtin {
+    typedef KnownSymbol EnumT;
+protected:
+    Symbol _name;
+
+public:
+    Builtin(Symbol name) :
+        _name(name) {
+        assert(_name.is_known());
+    }
+
+    EnumT value() const {
+        return _name.known_value();
+    }
+
+    bool operator < (Builtin b) const { return _name < b._name; }
+    bool operator ==(Builtin b) const { return _name == b._name; }
+    bool operator !=(Builtin b) const { return _name != b._name; }
+    bool operator ==(EnumT b) const { return _name == b; }
+    bool operator !=(EnumT b) const { return _name != b; }
+    std::size_t hash() const { return _name.hash(); }
+    Symbol name() const { return _name; }
+
+    StyledStream& stream(StyledStream& ost) const {
+        ost << Style_Function; name().name()->stream(ost, ""); ost << Style_None;
+        return ost;
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ost, Builtin builtin) {
+    return builtin.stream(ost);
+}
+
+//------------------------------------------------------------------------------
+// FORM
+//------------------------------------------------------------------------------
+
+struct Form {
+    typedef KnownSymbol EnumT;
+protected:
+    Symbol _name;
+
+public:
+    Form(Symbol name) :
+        _name(name) {
+        assert(_name.is_known());
+    }
+
+    EnumT value() const {
+        return _name.known_value();
+    }
+
+    bool operator < (Form b) const { return _name < b._name; }
+    bool operator ==(Form b) const { return _name == b._name; }
+    bool operator !=(Form b) const { return _name != b._name; }
+    bool operator ==(EnumT b) const { return _name == b; }
+    bool operator !=(EnumT b) const { return _name != b; }
+    std::size_t hash() const { return _name.hash(); }
+    Symbol name() const { return _name; }
+
+    StyledStream& stream(StyledStream& ost) const {
+        ost << Style_Function; name().name()->stream(ost, ""); ost << Style_None;
+        return ost;
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ost, Form form) {
+    return form.stream(ost);
+}
+
+//------------------------------------------------------------------------------
 // ANY
 //------------------------------------------------------------------------------
 
 struct Syntax;
 struct List;
+struct Label;
+struct Parameter;
 
 struct Any {
     Type type;
@@ -1300,6 +1391,8 @@ struct Any {
         Symbol symbol;
         const Syntax *syntax;
         const List *list;
+        Label *label;
+        Parameter *parameter;
     };
 
     Any(Nothing x) : type(TYPE_Nothing) {}
@@ -1319,6 +1412,8 @@ struct Any {
     Any(Symbol x) : type(TYPE_Symbol), symbol(x) {}
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
     Any(const List *x) : type(TYPE_List), list(x) {}
+    Any(Label *x) : type(TYPE_Label), label(x) {}
+    Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     template<unsigned N>
     Any(const char (&str)[N]) : type(TYPE_String), string(String::from(str)) {}
     // a catch-all for unsupported types
@@ -1390,19 +1485,21 @@ static StyledStream& operator<<(StyledStream& ost, Any value) {
 //------------------------------------------------------------------------------
 
 struct Syntax {
+protected:
+    Syntax(const Anchor *_anchor, const Any &_datum, bool _quoted) :
+        anchor(_anchor),
+        datum(_datum),
+        quoted(_quoted) {}
+
+public:
     const Anchor *anchor;
     Any datum;
     bool quoted;
 
     static const Syntax *from(const Anchor *_anchor, const Any &_datum) {
         assert(_anchor);
-        Syntax *sx = (Syntax *)malloc(sizeof(Syntax));
-        sx->anchor = _anchor;
-        sx->datum = _datum;
-        sx->quoted = false;
-        return sx;
+        return new Syntax(_anchor, _datum, false);
     }
-
 };
 
 static Any maybe_unsyntax(const Any &e) {
@@ -1425,20 +1522,19 @@ static StyledStream& operator<<(StyledStream& ost, const Syntax *value) {
 static const List *EOL = nullptr;
 
 struct List {
+protected:
+    List(const Any &_at, const List *_next, size_t _count) :
+        at(_at),
+        next(_next),
+        count(_count) {}
+
+public:
     Any at;
     const List *next;
     size_t count;
 
     static const List *from(const Any &_at, const List *_next) {
-        List *list = (List *)malloc(sizeof(List));
-        list->at = _at;
-        list->next = _next;
-        if (_next != EOL) {
-            list->count = _next->count + 1;
-        } else {
-            list->count = 1;
-        }
-        return list;
+        return new List(_at, _next, (_next != EOL)?(_next->count + 1):1);
     }
 
     static const List *from(const Any *values, int N) {
@@ -1996,7 +2092,7 @@ static const char INDENT_SEP[] = "⁞";
 
 static Style default_symbol_styler(Symbol name) {
     if (!name.is_known())
-        return Style_None;
+        return Style_Symbol;
     auto val = name.known_value();
     if ((val >= KEYWORD_FIRST) && (val <= KEYWORD_LAST))
         return Style_Keyword;
@@ -2006,7 +2102,9 @@ static Style default_symbol_styler(Symbol name) {
         return Style_SfxFunction;
     else if ((val >= OPERATOR_FIRST) && (val <= OPERATOR_LAST))
         return Style_Operator;
-    return Style_None;
+    else if ((val >= TYPE_FIRST) && (val <= TYPE_LAST))
+        return Style_Type;
+    return Style_Symbol;
 }
 
 struct StreamExprFormat {
@@ -2234,6 +2332,578 @@ static void stream_expr(
 }
 
 //------------------------------------------------------------------------------
+// IL OBJECTS
+//------------------------------------------------------------------------------
+
+// CFF form implemented after
+// Leissa et al., Graph-Based Higher-Order Intermediate Representation
+// http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
+
+//------------------------------------------------------------------------------
+
+enum {
+    ARG_Cont = 0,
+    ARG_Arg0 = 1,
+    PARAM_Cont = 0,
+    PARAM_Arg0 = 1,
+};
+
+struct UserClass {
+    std::unordered_map<const Label *, int> users;
+
+    void add_user(const Label *label, int argindex) {
+        auto it = users.find(label);
+        if (it == users.end()) {
+            users[label] = 1;
+        } else {
+            it->second++;
+        }
+    }
+    void del_user(const Label *label, int argindex) {
+        auto it = users.find(label);
+        if (it == users.end()) {
+            std::cerr << "internal warning: attempting to remove user, but user is unknown." << std::endl;
+        } else {
+            if (it->second == 1) {
+                // remove last reference
+                users.erase(it);
+            } else {
+                it->second--;
+            }
+        }
+    }
+};
+
+struct Parameter : UserClass {
+protected:
+    Parameter(const Anchor *_anchor, Symbol _name, Type _type, bool _vararg) :
+        anchor(_anchor), name(_name), type(_type), label(nullptr), index(-1),
+        vararg(_vararg) {}
+
+public:
+    const Anchor *anchor;
+    Symbol name;
+    Type type;
+    const Label *label;
+    int index;
+    bool vararg;
+
+    StyledStream &stream_local(StyledStream &ss) const {
+        if ((name != SYM_Unnamed) || !label) {
+            ss << Style_Comment << "%" << Style_Symbol;
+            name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
+            ss << Style_None;
+        } else {
+            ss << Style_Operator << "@" << Style_None << index;
+        }
+        if (vararg) {
+            ss << Style_Keyword << "…" << Style_None;
+        }
+        if (type != TYPE_Any) {
+            ss << Style_Operator << ":" << Style_None << type;
+        }
+        return ss;
+    }
+    StyledStream &stream(StyledStream &ss) const;
+
+    static Parameter *from(const Parameter *_param) {
+        auto param = new Parameter(*_param);
+        param->label = nullptr;
+        param->index = -1;
+        return param;
+    }
+
+    static Parameter *from(const Anchor *_anchor, Symbol _name, Type _type) {
+        return new Parameter(_anchor, _name, _type, false);
+    }
+
+    static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, Type _type) {
+        return new Parameter(_anchor, _name, _type, true);
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
+    param->stream(ss);
+    return ss;
+}
+
+struct Body {
+    const Anchor *anchor;
+    Any enter;
+    std::vector<Any> args;
+
+    Body() : anchor(nullptr), enter(none) {}
+};
+
+static const char CONT_SEP[] = "→";
+
+struct Label : UserClass {
+protected:
+    static uint64_t next_uid;
+
+    Label(const Anchor *_anchor, Symbol _name) :
+        uid(++next_uid), anchor(_anchor), name(_name)
+        {}
+
+public:
+    uint64_t uid;
+    const Anchor *anchor;
+    Symbol name;
+    std::vector<Parameter *> params;
+    Body body;
+
+    void use(const Any &arg, int i) {
+        if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
+            arg.parameter->add_user(this, i);
+        } else if (arg.type == TYPE_Label && (arg.label != this)) {
+            arg.label->add_user(this, i);
+        }
+    }
+
+    void unuse(const Any &arg, int i) {
+        if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
+            arg.parameter->del_user(this, i);
+        } else if (arg.type == TYPE_Label && (arg.label != this)) {
+            arg.label->del_user(this, i);
+        }
+    }
+
+    void link_backrefs() {
+        use(body.enter, -1);
+        size_t count = body.args.size();
+        for (size_t i = 0; i < count; ++i) {
+            use(body.args[i], i);
+        }
+    }
+
+    void unlink_backrefs() {
+        unuse(body.enter, -1);
+        size_t count = body.args.size();
+        for (size_t i = 0; i < count; ++i) {
+            unuse(body.args[i], i);
+        }
+    }
+
+    void append(Parameter *param) {
+        assert(!param->label);
+        param->label = this;
+        param->index = (int)params.size();
+        params.push_back(param);
+    }
+
+    void set_enter(const Any &enter) {
+        unuse(body.enter, -1);
+        body.enter = enter;
+        use(body.enter, -1);
+    }
+
+    void set_args(const Any *args, size_t count) {
+        {
+            size_t count = body.args.size();
+            for (size_t i = 0; i < count; ++i) {
+                unuse(body.args[i], i);
+            }
+        }
+        body.args.clear();
+        body.args.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            body.args.push_back(args[i]);
+        }
+        for (size_t i = 0; i < count; ++i) {
+            use(body.args[i], i);
+        }
+    }
+
+    template<unsigned N>
+    void set_args(const Any (&args)[N]) {
+        set_args(args, N);
+    }
+
+    StyledStream &stream_short(StyledStream &ss) const {
+        ss << Style_Keyword << "λ" << Style_Symbol;
+        name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
+        ss << Style_Operator << "#" << Style_None << uid;
+        return ss;
+    }
+
+    StyledStream &stream(StyledStream &ss) const {
+        stream_short(ss);
+        ss << Style_Operator << "(" << Style_None;
+        size_t count = params.size();
+        for (size_t i = 1; i < count; ++i) {
+            if (i > 1) {
+                ss << " ";
+            }
+            params[i]->stream_local(ss);
+        }
+        ss << Style_Operator << ")" << Style_None;
+        if (count && (params[0]->type != TYPE_Nothing)) {
+            ss << Style_Comment << CONT_SEP << Style_None;
+            params[0]->stream_local(ss);
+        }
+        return ss;
+    }
+
+    static Label *from(const Anchor *_anchor, Symbol _name) {
+        return new Label(_anchor, _name);
+    }
+
+};
+
+uint64_t Label::next_uid = 0;
+
+static StyledStream& operator<<(StyledStream& ss, Label *label) {
+    label->stream(ss);
+    return ss;
+}
+
+StyledStream &Parameter::stream(StyledStream &ss) const {
+    if (label) {
+        label->stream_short(ss);
+    } else {
+        ss << Style_Comment << "<unbound>" << Style_None;
+    }
+    stream_local(ss);
+    return ss;
+}
+
+#if 0
+    function cls.__newindex(self, name, value)
+        error("can't directly set attribute: " .. name)
+    end
+
+    function cls:set_typed()
+        rawset(self, 'typed', true)
+    end
+
+    function cls:set_mangled(signature, label)
+        local cache = self.cache
+        if not cache then
+            cache = {}
+            rawset(self, 'cache', cache)
+        end
+        set_array_key(cache, signature, label)
+    end
+
+    function cls:inputs_typed(self)
+        local params = self.parameters
+        for i=2,#params do
+            local arg = params[i]
+            if arg.type == Type.Any then
+                return false
+            end
+        end
+        return true
+    end
+
+    function cls:get_mangled(signature)
+        local cache = self.cache
+        if cache then
+            return get_array_key(cache, signature)
+        end
+    end
+
+    function cls:set_body_anchor(anchor)
+        assert_anchor(anchor)
+        rawset(self, 'body_anchor', anchor)
+    end
+
+    function cls:__tostring()
+        return self:repr(default_styler)
+    end
+
+    function cls:build_scope()
+        local visited = {}
+        local scope = {}
+
+        local function can_walk_label(label)
+            if self == label then
+                return false
+            end
+            return not visited[label]
+        end
+
+        local function walk(scope_label)
+            if scope_label ~= self then
+                visited[scope_label] = true
+                table.insert(scope, scope_label)
+                -- users of live_label are indirectly live in topscope_label
+                for live_label,_ in pairs(scope_label.users) do
+                    if can_walk_label(live_label) then
+                        walk(live_label)
+                    end
+                end
+            end
+            for _,param in ipairs(scope_label.parameters) do
+                -- every label using one of our parameters is live in scope
+                for live_label,_ in pairs(param.users) do
+                    if can_walk_label(live_label) then
+                        walk(live_label)
+                    end
+                end
+            end
+        end
+
+        walk(self, 1)
+
+        return scope
+    end
+
+    function cls.create_from_syntax(name)
+        local name,anchor = unsyntax(name)
+        name = unwrap(Type.Symbol, name)
+        return Label(name, anchor)
+    end
+
+    -- an empty function
+    -- you have to add the continuation argument manually
+    function cls.create_empty_function(name)
+        return cls.create_from_syntax(name)
+    end
+
+    -- a function that eventually returns
+    function cls.create_function(name)
+        local value = cls.create_from_syntax(name)
+        local sym, anchor = maybe_unsyntax(name)
+        sym = unwrap(Type.Symbol, sym)
+        -- continuation is always first argument
+        -- this argument will be called when the function is done
+        value:append_parameter(
+            Parameter(Symbol("return-" .. sym.name), anchor, Type.Any))
+        return value
+    end
+
+    -- only inherits name and anchor
+    function cls.create_from_label(label)
+        local ll = Label(label.name, label.anchor)
+        ll:set_body_anchor(label.body_anchor)
+        if label.typed then
+            ll:set_typed()
+        end
+        return ll
+    end
+
+    -- a continuation that never returns
+    function cls.create_continuation(name)
+        local value = cls.create_from_syntax(name)
+        -- first argument is present, but unused
+        value:append_parameter(
+            Parameter(value.name, value.anchor, Type.Nothing))
+        return value
+    end
+end
+#endif
+
+//------------------------------------------------------------------------------
+// IL PRINTER
+//------------------------------------------------------------------------------
+
+#if 0
+local stream_il
+-- local CONT_SEP = " ⮕ " -- not compatible with Consolas
+local CONT_SEP = " → "
+do
+    stream_il = function(writer, afunc, opts)
+        assert_label(afunc)
+
+        opts = opts or {}
+        local follow = opts.follow or "scope"
+        local follow_labels = (follow == "all")
+        local follow_scope = (follow == "scope")
+        local styler = opts.styler or default_styler
+        local line_anchors = (opts.anchors == "line")
+        local atom_anchors = (opts.anchors == "all")
+        local users = opts.users or {}
+        local scopes = opts.scopes or {}
+
+        local last_anchor
+        local function stream_anchor(anchor)
+            if anchor then
+                local str
+                if not last_anchor or last_anchor.path ~= anchor.path then
+                    str = anchor.path
+                        .. ":" .. tostring(anchor.lineno)
+                        .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
+                elseif not last_anchor or last_anchor.lineno ~= anchor.lineno then
+                    str = ":" .. tostring(anchor.lineno)
+                        .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
+                elseif not last_anchor or last_anchor.column ~= anchor.column then
+                    str = "::" .. tostring(anchor.column) .. ANCHOR_SEP
+                else
+                    str = "::" .. ANCHOR_SEP
+                end
+
+                writer(styler(Style.Comment, str))
+                last_anchor = anchor
+            else
+                --writer(styler(Style.Error, "?"))
+            end
+        end
+
+        local visited = {}
+        local stream_any
+        local function stream_label_label(alabel)
+            writer(styler(Style.Keyword, "λ"))
+            writer(styler(Style.Symbol, alabel.name.name))
+            writer(styler(Style.Operator, "#"))
+            writer(styler(Style.Number, tostring(alabel.uid)))
+        end
+        local function stream_label_label_user(alabel)
+            writer(styler(Style.Comment, "λ"))
+            writer(styler(Style.Comment, alabel.name.name))
+            writer(styler(Style.Comment, "#"))
+            writer(styler(Style.Comment, tostring(alabel.uid)))
+        end
+
+        local function stream_param_label(param, alabel)
+            if param.label ~= alabel then
+                stream_label_label(param.label)
+            end
+            if param.name == Symbol.Unnamed then
+                writer(styler(Style.Operator, "@"))
+                writer(styler(Style.Number, tostring(param.index - 1)))
+            else
+                writer(styler(Style.Comment, "%"))
+                writer(styler(Style.Symbol, param.name.name))
+            end
+            if param.type ~= Type.Any then
+                writer(styler(Style.Comment, ":"))
+                writer(param.type:repr(styler))
+            end
+            if param.vararg then
+                writer(styler(Style.Keyword, "…"))
+            end
+        end
+
+        local function stream_argument(arg, alabel)
+            if arg.type == Type.Syntax then
+                local anchor
+                arg,anchor = unsyntax(arg)
+                if atom_anchors then
+                    stream_anchor(anchor)
+                end
+            end
+
+            if arg.type == Type.Parameter then
+                stream_param_label(arg.value, alabel)
+            elseif arg.type == Type.Label then
+                stream_label_label(arg.value)
+            else
+                writer(tostring(arg))
+            end
+        end
+
+        local function stream_users(_users)
+            if _users then
+                writer(styler(Style.Comment, "{"))
+                local k = 0
+                for dest,_ in pairs(_users) do
+                    if k > 0 then
+                        writer(" ")
+                    end
+                    stream_label_label_user(dest)
+                    k = k + 1
+                end
+                writer(styler(Style.Comment, "}"))
+            end
+        end
+
+        local function stream_scope(_scope)
+            if _scope then
+                writer(" ")
+                writer(styler(Style.Comment, "<"))
+                local k = 0
+                for dest,_ in pairs(_scope) do
+                    if k > 0 then
+                        writer(" ")
+                    end
+                    stream_label_label_user(dest)
+                    k = k + 1
+                end
+                writer(styler(Style.Comment, ">"))
+            end
+        end
+
+        local function stream_label (alabel)
+            if visited[alabel] then
+                return
+            end
+            visited[alabel] = true
+            if line_anchors then
+                stream_anchor(alabel.anchor)
+            end
+            writer(styler(Style.Symbol, alabel.name.name))
+            writer(styler(Style.Operator, "#"))
+            writer(styler(Style.Number, tostring(alabel.uid)))
+            stream_users(users[alabel])
+            writer(" ")
+            writer(styler(Style.Operator, "("))
+            for i=2,#alabel.parameters do
+                local param = alabel.parameters[i]
+                if i > 2 then
+                    writer(" ")
+                end
+                stream_param_label(param, alabel)
+                stream_users(users[param])
+            end
+            writer(styler(Style.Operator, ")"))
+            if alabel.parameters[1] and alabel.parameters[1].type ~= Type.Nothing then
+                writer(styler(Style.Comment,CONT_SEP))
+                local param = alabel.parameters[1]
+                stream_param_label(param, alabel)
+                stream_users(users[param])
+            end
+            writer(styler(Style.Operator, ":"))
+            stream_scope(scopes[alabel])
+            writer("\n    ")
+            if not alabel.enter then
+                writer(styler(Style.Error, "empty"))
+            else
+                if line_anchors and alabel.body_anchor then
+                    stream_anchor(alabel.body_anchor)
+                    writer(' ')
+                end
+                stream_argument(alabel.enter, alabel)
+                for i=2,#alabel.arguments do
+                    writer(" ")
+                    local arg = alabel.arguments[i]
+                    stream_argument(arg, alabel)
+                end
+                local cont = alabel.arguments[1]
+                if cont and not is_none(maybe_unsyntax(cont)) then
+                    writer(styler(Style.Comment,CONT_SEP))
+                    stream_argument(cont, alabel)
+                end
+            end
+            writer("\n")
+
+            if follow_labels then
+                for i,arg in ipairs(alabel.arguments) do
+                    arg = maybe_unsyntax(arg)
+                    stream_any(arg)
+                end
+                if alabel.enter then
+                    stream_any(maybe_unsyntax(alabel.enter))
+                end
+            end
+        end
+        stream_any = function(afunc)
+            if afunc.type == Type.Label then
+                stream_label(afunc.value)
+            end
+        end
+        stream_label(afunc)
+        if follow_scope then
+            local scope = afunc:build_scope()
+            for k=#scope,1,-1 do
+                stream_label(scope[k])
+            end
+        end
+    end
+end
+#endif
+
+//------------------------------------------------------------------------------
 // MAIN
 //------------------------------------------------------------------------------
 
@@ -2309,10 +2979,16 @@ int main(int argc, char *argv[]) {
         << " " << Any(false)
         << std::endl;
 
+    auto p0 = Parameter::from(Anchor::from("test.txt",2,5), "test", TYPE_Any);
+    auto fn = Label::from(Anchor::from("test.txt",2,5), "xyz");
+    fn->append(p0);
+
+    cout << fn << std::endl;
+
     SourceFile *sf = SourceFile::open("bangra.b");
     LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
     auto expr = parser.parse();
-    stream_expr(cout, expr, StreamExprFormat());
+    //stream_expr(cout, expr, StreamExprFormat());
 
     return 0;
 }
