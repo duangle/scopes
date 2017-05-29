@@ -453,6 +453,41 @@ std::string GetExecutablePath(const char *Argv0) {
   return llvm::sys::fs::getMainExecutable(Argv0, MainAddr);
 }
 
+typedef struct stb_printf_ctx {
+    FILE *dest;
+    char tmp[STB_SPRINTF_MIN];
+} stb_printf_ctx;
+
+static char *_printf_cb(char * buf, void * user, int len) {
+    stb_printf_ctx *ctx = (stb_printf_ctx *)user;
+    fwrite (buf, 1, len, ctx->dest);
+    return ctx->tmp;
+}
+static int stb_vprintf(const char *fmt, va_list va) {
+    stb_printf_ctx ctx;
+    ctx.dest = stdout;
+    return stb_vsprintfcb(_printf_cb, &ctx, ctx.tmp, fmt, va);
+}
+static int stb_printf(const char *fmt, ...) {
+    stb_printf_ctx ctx;
+    ctx.dest = stdout;
+    va_list va;
+    va_start(va, fmt);
+    int c = stb_vsprintfcb(_printf_cb, &ctx, ctx.tmp, fmt, va);
+    va_end(va);
+    return c;
+}
+
+static int stb_fprintf(FILE *out, const char *fmt, ...) {
+    stb_printf_ctx ctx;
+    ctx.dest = out;
+    va_list va;
+    va_start(va, fmt);
+    int c = stb_vsprintfcb(_printf_cb, &ctx, ctx.tmp, fmt, va);
+    va_end(va);
+    return c;
+}
+
 namespace bangra {
 
 //------------------------------------------------------------------------------
@@ -659,6 +694,13 @@ struct String {
     size_t count;
     char data[1];
 
+    static String *alloc(size_t count) {
+        String *str = (String *)malloc(
+            sizeof(size_t) + sizeof(char) * (count + 1));
+        str->count = count;
+        return str;
+    }
+
     static const String *from(const char *s, size_t count) {
         String *str = (String *)malloc(
             sizeof(size_t) + sizeof(char) * (count + 1));
@@ -671,6 +713,10 @@ struct String {
     template<unsigned N>
     static const String *from(const char (&s)[N]) {
         return from(s, N - 1);
+    }
+
+    static const String *from_stdstring(const std::string &s) {
+        return from(s.c_str(), s.size());
     }
 
     StyledStream& stream(StyledStream& ost, const char *escape_chars) const {
@@ -687,6 +733,37 @@ static StyledStream& operator<<(StyledStream& ost, const String *s) {
     s->stream(ost, "\"");
     ost << "\"" << Style_None;
     return ost;
+}
+
+struct StyledString {
+    std::stringstream _ss;
+    StyledStream out;
+
+    StyledString() :
+        out(_ss) {
+    }
+
+    const String *str() const {
+        return String::from_stdstring(_ss.str());
+    }
+};
+
+static const String *vformat( const char *fmt, va_list va ) {
+    va_list va2;
+    va_copy(va2, va);
+    size_t size = stb_vsnprintf( nullptr, 0, fmt, va2 );
+    va_end(va2);
+    String *str = String::alloc(size);
+    stb_vsnprintf( str->data, size + 1, fmt, va );
+    return str;
+}
+
+static const String *format( const char *fmt, ...) {
+    va_list va;
+    va_start(va, fmt);
+    const String *result = vformat(fmt, va);
+    va_end(va);
+    return result;
 }
 
 //------------------------------------------------------------------------------
@@ -1371,6 +1448,9 @@ struct Syntax;
 struct List;
 struct Label;
 struct Parameter;
+struct VarArgs;
+
+static void location_error(const String *msg);
 
 struct Any {
     Type type;
@@ -1393,6 +1473,8 @@ struct Any {
         const List *list;
         Label *label;
         Parameter *parameter;
+        const VarArgs *varargs;
+        Builtin builtin;
     };
 
     Any(Nothing x) : type(TYPE_Nothing) {}
@@ -1412,8 +1494,11 @@ struct Any {
     Any(Symbol x) : type(TYPE_Symbol), symbol(x) {}
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
     Any(const List *x) : type(TYPE_List), list(x) {}
+    //Any(const VarArgs *x) : type(TYPE_VarArgs), varargs(x) {}
+    Any(VarArgs *x) : type(TYPE_VarArgs), varargs(x) {}
     Any(Label *x) : type(TYPE_Label), label(x) {}
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
+    Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
     template<unsigned N>
     Any(const char (&str)[N]) : type(TYPE_String), string(String::from(str)) {}
     // a catch-all for unsupported types
@@ -1470,6 +1555,16 @@ struct Any {
         void operator ()(Type x) const { naked(x); }
     };
 
+    template<KnownSymbol T>
+    void verify() const {
+        StyledString ss;
+        ss.out << "type " << Type(T) << " expected, got " << type << std::endl;
+        location_error(ss.str());
+    }
+
+    operator const List *() const { verify<TYPE_List>(); return list; }
+    operator const Syntax *() const { verify<TYPE_Syntax>(); return syntax; }
+
     StyledStream& stream(StyledStream& ost) const {
         dispatch(AnyStreamer(ost, type));
         return ost;
@@ -1478,6 +1573,137 @@ struct Any {
 
 static StyledStream& operator<<(StyledStream& ost, Any value) {
     return value.stream(ost);
+}
+
+//------------------------------------------------------------------------------
+// VARARGS
+//------------------------------------------------------------------------------
+
+struct VarArgs {
+    std::vector<Any> values;
+
+    size_t size() const {
+        return values.size();
+    }
+
+    bool empty() const {
+        return values.empty();
+    }
+
+    Any first() const {
+        if (values.empty()) {
+            return none;
+        } else {
+            return values[0];
+        }
+    }
+
+    Any at(size_t i) const {
+        return values[i];
+    }
+
+    static VarArgs *from(size_t capacity) {
+        VarArgs *va = new VarArgs();
+        va->values.reserve(capacity);
+        return va;
+    }
+};
+
+//------------------------------------------------------------------------------
+// ERROR HANDLING
+//------------------------------------------------------------------------------
+
+static const Anchor *_active_anchor = nullptr;
+
+static void set_active_anchor(const Anchor *anchor) {
+    _active_anchor = anchor;
+}
+
+static const Anchor *get_active_anchor() {
+    return _active_anchor;
+}
+
+struct Exception {
+    const Anchor *anchor;
+    const String *msg;
+
+    Exception(const Anchor *_anchor, const String *_msg) :
+        anchor(_anchor),
+        msg(_msg) {}
+};
+
+static void location_error(const String *msg) {
+    throw Exception(_active_anchor, msg);
+}
+
+//------------------------------------------------------------------------------
+// SCOPE
+//------------------------------------------------------------------------------
+
+struct Scope {
+protected:
+    std::unordered_map<Symbol, Any, Symbol::Hash> map;
+    Scope *parent;
+
+    Scope(Scope *_parent = nullptr) : parent(_parent) {}
+
+public:
+    size_t count() const {
+        return map.size();
+    }
+
+    size_t totalcount() const {
+        const Scope *self = this;
+        size_t count = 0;
+        while (self) {
+            count += self->count();
+            self = self->parent;
+        }
+        return count;
+    }
+
+    void bind(Symbol name, const Any &value) {
+        map.insert(std::pair<Symbol, Any>(name, value));
+    }
+
+    void del(Symbol name) {
+        auto it = map.find(name);
+        if (it != map.end()) {
+            map.erase(it);
+        }
+    }
+
+    bool lookup(Symbol name, Any &dest) const {
+        const Scope *self = this;
+        do {
+            auto it = self->map.find(name);
+            if (it != self->map.end()) {
+                dest = it->second;
+                return true;
+            }
+            self = self->parent;
+        } while (self);
+        return false;
+    }
+
+    StyledStream &stream(StyledStream &ss) {
+        size_t totalcount = this->totalcount();
+        size_t count = this->count();
+        ss << Style_Keyword << "Scope" << Style_Comment << "<" << Style_None
+            << format("%i+%i symbols", count, totalcount - count)
+            << Style_Comment << ">" << Style_None;
+        return ss;
+    }
+
+    Scope *from(Scope *_parent = nullptr) {
+        return new Scope(_parent);
+    }
+};
+
+
+static StyledStream& operator<<(StyledStream& ost, Scope *scope) {
+    scope->stream(ost);
+    return ost;
 }
 
 //------------------------------------------------------------------------------
@@ -1500,7 +1726,17 @@ public:
         assert(_anchor);
         return new Syntax(_anchor, _datum, false);
     }
+
+    static const Syntax *from_quoted(const Anchor *_anchor, const Any &_datum) {
+        assert(_anchor);
+        return new Syntax(_anchor, _datum, true);
+    }
 };
+
+static Any unsyntax(const Any &e) {
+    e.verify<TYPE_Syntax>();
+    return e.syntax->datum;
+}
 
 static Any maybe_unsyntax(const Any &e) {
     if (e.type == TYPE_Syntax) {
@@ -1587,24 +1823,6 @@ static StyledStream& operator<<(StyledStream& ost, const List *list) {
 }
 
 //------------------------------------------------------------------------------
-// ERROR HANDLING
-//------------------------------------------------------------------------------
-
-static const Anchor *_active_anchor = nullptr;
-
-static void set_active_anchor(const Anchor *anchor) {
-    _active_anchor = anchor;
-}
-
-static const Anchor *get_active_anchor() {
-    return _active_anchor;
-}
-
-static void location_error(const char *msg, ...) {
-    assert(false && "location_error");
-}
-
-//------------------------------------------------------------------------------
 // S-EXPR LEXER & PARSER
 //------------------------------------------------------------------------------
 
@@ -1645,7 +1863,7 @@ struct LexerParser {
 
     void verify_good_taste(char c) {
         if (c == '\t') {
-            location_error("please use spaces instead of tabs.");
+            location_error(String::from("please use spaces instead of tabs."));
         }
     }
 
@@ -1749,7 +1967,7 @@ struct LexerParser {
         bool escape = false;
         while (true) {
             if (is_eof()) {
-                location_error("unterminated sequence");
+                location_error(String::from("unterminated sequence"));
                 break;
             }
             char c = next();
@@ -1938,7 +2156,7 @@ struct LexerParser {
                 builder.append(parse_naked(column, end_token));
             } else if (this->token == tok_eof) {
                 set_active_anchor(start_anchor);
-                location_error("unclosed open bracket");
+                location_error(String::from("unclosed open bracket"));
             } else if (this->token == tok_statement) {
                 builder.split(this->anchor());
                 this->read_token();
@@ -1968,7 +2186,7 @@ struct LexerParser {
         } else if ((this->token == tok_close)
             || (this->token == tok_square_close)
             || (this->token == tok_curly_close)) {
-            location_error("stray closing bracket");
+            location_error(String::from("stray closing bracket"));
         } else if (this->token == tok_string) {
             return Syntax::from(anchor, get_string());
         } else if (this->token == tok_symbol) {
@@ -1976,8 +2194,8 @@ struct LexerParser {
         } else if (this->token == tok_number) {
             return Syntax::from(anchor, get_number());
         } else {
-            location_error("unexpected token: %c (%i)",
-                this->cursor[0], (int)this->cursor[0]);
+            location_error(format("unexpected token: %c (%i)",
+                this->cursor[0], (int)this->cursor[0]));
         }
         return none;
     }
@@ -1998,18 +2216,20 @@ struct LexerParser {
                 escape = true;
                 this->read_token();
                 if (this->lineno <= lineno) {
-                    location_error("escape character is not at end of line");
+                    location_error(String::from(
+                        "escape character is not at end of line"));
                 }
                 lineno = this->lineno;
             } else if (this->lineno > lineno) {
                 if (subcolumn == 0) {
                     subcolumn = this->column();
                 } else if (this->column() != subcolumn) {
-                    location_error("indentation mismatch");
+                    location_error(String::from("indentation mismatch"));
                 }
                 if (column != subcolumn) {
                     if ((column + 4) != subcolumn) {
-                        location_error("indentations must nest by 4 spaces.");
+                        location_error(String::from(
+                            "indentations must nest by 4 spaces."));
                     }
                 }
 
@@ -2055,12 +2275,14 @@ struct LexerParser {
                 escape = true;
                 this->read_token();
                 if (this->lineno <= lineno) {
-                    location_error("escape character is not at end of line");
+                    location_error(String::from(
+                        "escape character is not at end of line"));
                 }
                 lineno = this->lineno;
             } else if (this->lineno > lineno) {
                 if (this->column() != 1) {
-                    location_error("indentation mismatch");
+                    location_error(String::from(
+                        "indentation mismatch"));
                 }
 
                 escape = false;
@@ -2072,7 +2294,8 @@ struct LexerParser {
                     builder.append(parse_naked(1, tok_none));
                 }
             } else if (this->token == tok_statement) {
-                location_error("unexpected statement token");
+                location_error(String::from(
+                    "unexpected statement token"));
             } else {
                 builder.append(parse_any());
                 lineno = this->next_lineno;
@@ -2348,10 +2571,10 @@ enum {
     PARAM_Arg0 = 1,
 };
 
-struct UserClass {
-    std::unordered_map<const Label *, int> users;
+struct ILNode {
+    std::unordered_map<Label *, int> users;
 
-    void add_user(const Label *label, int argindex) {
+    void add_user(Label *label, int argindex) {
         auto it = users.find(label);
         if (it == users.end()) {
             users[label] = 1;
@@ -2359,7 +2582,7 @@ struct UserClass {
             it->second++;
         }
     }
-    void del_user(const Label *label, int argindex) {
+    void del_user(Label *label, int argindex) {
         auto it = users.find(label);
         if (it == users.end()) {
             std::cerr << "internal warning: attempting to remove user, but user is unknown." << std::endl;
@@ -2374,7 +2597,7 @@ struct UserClass {
     }
 };
 
-struct Parameter : UserClass {
+struct Parameter : ILNode {
 protected:
     Parameter(const Anchor *_anchor, Symbol _name, Type _type, bool _vararg) :
         anchor(_anchor), name(_name), type(_type), label(nullptr), index(-1),
@@ -2437,12 +2660,36 @@ struct Body {
 
 static const char CONT_SEP[] = "→";
 
-struct Label : UserClass {
+template<typename T>
+struct Tag {
+    static int active_gen;
+    int gen;
+
+    Tag() :
+        gen(active_gen) {}
+
+    static void clear() {
+        active_gen++;
+    }
+    bool visited() const {
+        return gen == active_gen;
+    }
+    void visit() {
+        gen = active_gen;
+    }
+};
+
+template<typename T>
+int Tag<T>::active_gen = 0;
+
+typedef Tag<Label> LabelTag;
+
+struct Label : ILNode {
 protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
-        uid(++next_uid), anchor(_anchor), name(_name)
+        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr)
         {}
 
 public:
@@ -2451,6 +2698,8 @@ public:
     Symbol name;
     std::vector<Parameter *> params;
     Body body;
+    LabelTag tag;
+    Label *paired;
 
     void use(const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
@@ -2491,6 +2740,17 @@ public:
         params.push_back(param);
     }
 
+    void set_parameters(const std::vector<Parameter *> &_params) {
+        assert(params.empty());
+        params = _params;
+        for (size_t i = 0; i < params.size(); ++i) {
+            Parameter *param = params[i];
+            assert(!param->label);
+            param->label = this;
+            param->index = (int)i;
+        }
+    }
+
     void set_enter(const Any &enter) {
         unuse(body.enter, -1);
         body.enter = enter;
@@ -2517,6 +2777,51 @@ public:
     template<unsigned N>
     void set_args(const Any (&args)[N]) {
         set_args(args, N);
+    }
+
+    std::vector<Label *> &build_scope() {
+        static std::vector<Label *> tempscope;
+
+        LabelTag::clear();
+        tag.visit();
+
+        tempscope.clear();
+        for (auto &&param : params) {
+            // every label using one of our parameters is live in scope
+            for (auto &&kv : param->users) {
+                Label *live_label = kv.first;
+                if (!live_label->tag.visited()) {
+                    live_label->tag.visit();
+                    tempscope.push_back(live_label);
+                }
+            }
+        }
+
+        size_t index = 0;
+        while (index < tempscope.size()) {
+            Label *scope_label = tempscope[index++];
+            // users of scope_label are indirectly live in scope
+            for (auto &&kv : scope_label->users) {
+                Label *live_label = kv.first;
+                if (!live_label->tag.visited()) {
+                    live_label->tag.visit();
+                    tempscope.push_back(live_label);
+                }
+            }
+
+            // every label using one of our parameters is live in scope
+            for (auto &&param : scope_label->params) {
+                for (auto &&kv : param->users) {
+                    Label *live_label = kv.first;
+                    if (!live_label->tag.visited()) {
+                        live_label->tag.visit();
+                        tempscope.push_back(live_label);
+                    }
+                }
+            }
+        }
+
+        return tempscope;
     }
 
     StyledStream &stream_short(StyledStream &ss) const {
@@ -2547,6 +2852,10 @@ public:
     static Label *from(const Anchor *_anchor, Symbol _name) {
         return new Label(_anchor, _name);
     }
+    // only inherits name and anchor
+    static Label *from(const Label *label) {
+        return new Label(label->anchor, label->name);
+    }
 
 };
 
@@ -2565,6 +2874,94 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
     }
     stream_local(ss);
     return ss;
+}
+
+typedef std::map<ILNode *, Any> MangleMap;
+
+void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
+    Any enter = entry->body.enter;
+    std::vector<Any> &args = entry->body.args;
+    std::vector<Any> &body = ll->body.args;
+    if (enter.type == TYPE_Label) {
+        auto it = map.find(enter.label);
+        if (it != map.end()) {
+            enter = it->second;
+        }
+    } else if (enter.type == TYPE_Parameter) {
+        auto it = map.find(enter.parameter);
+        if (it != map.end()) {
+            enter = it->second;
+        }
+    } else {
+        goto skip;
+    }
+    if (enter.type == TYPE_VarArgs) {
+        enter = enter.varargs->first();
+    }
+skip:
+    ll->body.enter = enter;
+
+    entry->link_backrefs();
+    for (size_t i = 0; i < args.size(); ++i) {
+        Any arg = args[i];
+        if (arg.type == TYPE_Label) {
+            auto it = map.find(arg.label);
+            if (it != map.end()) {
+                arg = it->second;
+            }
+        } else if (arg.type == TYPE_Parameter) {
+            auto it = map.find(arg.parameter);
+            if (it != map.end()) {
+                arg = it->second;
+            }
+        } else {
+            goto skip2;
+        }
+        if (arg.type == TYPE_VarArgs) {
+            // if at tail, append
+            if (i == (args.size() - 1)) {
+                for (size_t j = 0; j < arg.varargs->size(); ++j) {
+                    body.push_back(arg.varargs->at(j));
+                }
+                continue;
+            } else {
+                arg = arg.varargs->first();
+            }
+        }
+    skip2:
+        body.push_back(arg);
+    }
+
+    ll->link_backrefs();
+}
+
+static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map) {
+    std::vector<Label *> &entry_scope = entry->build_scope();
+    // remap entry point
+    Label *le = Label::from(entry);
+    le->set_parameters(params);
+
+    // create new labels and map new parameters
+    for (auto &&l : entry_scope) {
+        Label *ll = Label::from(l);
+        l->paired = ll;
+        map.insert(std::pair<ILNode *, Any>(l, Any(ll)));
+        ll->params.reserve(l->params.size());
+        for (auto &&param : l->params) {
+            Parameter *pparam = Parameter::from(param);
+            map.insert(std::pair<ILNode *, Any>(param, Any(pparam)));
+            ll->append(pparam);
+        }
+    }
+    // remap label bodies
+    for (auto &&l : entry_scope) {
+        Label *ll = l->paired;
+        l->paired = nullptr;
+        mangle_remap_body(ll, l, map);
+    }
+    mangle_remap_body(le, entry, map);
+
+    return le;
 }
 
 #if 0
@@ -2612,43 +3009,6 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
         return self:repr(default_styler)
     end
 
-    function cls:build_scope()
-        local visited = {}
-        local scope = {}
-
-        local function can_walk_label(label)
-            if self == label then
-                return false
-            end
-            return not visited[label]
-        end
-
-        local function walk(scope_label)
-            if scope_label ~= self then
-                visited[scope_label] = true
-                table.insert(scope, scope_label)
-                -- users of live_label are indirectly live in topscope_label
-                for live_label,_ in pairs(scope_label.users) do
-                    if can_walk_label(live_label) then
-                        walk(live_label)
-                    end
-                end
-            end
-            for _,param in ipairs(scope_label.parameters) do
-                -- every label using one of our parameters is live in scope
-                for live_label,_ in pairs(param.users) do
-                    if can_walk_label(live_label) then
-                        walk(live_label)
-                    end
-                end
-            end
-        end
-
-        walk(self, 1)
-
-        return scope
-    end
-
     function cls.create_from_syntax(name)
         local name,anchor = unsyntax(name)
         name = unwrap(Type.Symbol, name)
@@ -2673,16 +3033,6 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
         return value
     end
 
-    -- only inherits name and anchor
-    function cls.create_from_label(label)
-        local ll = Label(label.name, label.anchor)
-        ll:set_body_anchor(label.body_anchor)
-        if label.typed then
-            ll:set_typed()
-        end
-        return ll
-    end
-
     -- a continuation that never returns
     function cls.create_continuation(name)
         local value = cls.create_from_syntax(name)
@@ -2693,6 +3043,153 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
     end
 end
 #endif
+
+//------------------------------------------------------------------------------
+// INTERPRETER
+//------------------------------------------------------------------------------
+
+struct Instruction {
+    Any enter;
+    std::vector<Any> args;
+
+    Instruction() :
+        enter(none) {
+        args.reserve(256);
+    }
+
+    void clear() {
+        enter = none;
+        args.clear();
+    }
+};
+
+static void apply_type_error(const Any &enter) {
+    StyledString ss;
+    ss.out << "don't know how to apply value of type " << enter.type;
+    location_error(ss.str());
+}
+
+void interpreter_loop(Label *entry) {
+    Instruction _in;
+    Instruction _out;
+
+    Instruction *in = &_in;
+    Instruction *out = &_out;
+
+    MangleMap map;
+
+    _in.enter = Any(entry);
+    set_active_anchor(entry->body.anchor);
+
+    try {
+loop:
+    out->clear();
+    const Any &enter = in->enter;
+    Any &next_enter = out->enter;
+    const std::vector<Any> &args = in->args;
+    std::vector<Any> &next_args = out->args;
+    if (enter.type.is_known()) {
+        switch(enter.type.known_value()) {
+        case TYPE_Label: {
+            //debugger.enter_call(dest, cont, ...)
+            map.clear();
+
+            Label *label = enter.label;
+            // map arguments
+            size_t srci = 0;
+            size_t rcount = args.size();
+            size_t pcount = label->params.size();
+            for (size_t i = 0; i < pcount; ++i) {
+                Parameter *param = label->params[i];
+                if (param->vararg) {
+                    if (i == 0) {
+                        location_error(
+                            String::from(
+                            "continuation parameter can't be vararg"));
+                    }
+                    // how many parameters after this one
+                    size_t remparams = pcount - i - 1;
+
+                    // how many varargs to capture
+                    size_t vargsize = 0;
+                    size_t r = rcount;
+                    if (remparams <= r) {
+                        r = r - remparams;
+                    }
+                    if (srci < r) {
+                        vargsize = r - srci;
+                    }
+                    VarArgs *va = VarArgs::from(vargsize);
+
+                    size_t endi = srci + vargsize;
+                    for (size_t k = srci; k < endi; ++k) {
+                        va->values.push_back(args[k]);
+                    }
+                    srci = srci + vargsize;
+                    map.insert(std::pair<ILNode*,Any>(param, va));
+                } else if (srci < rcount) {
+                    map.insert(std::pair<ILNode*,Any>(param, args[srci]));
+                    srci = srci + 1;
+                } else {
+                    map.insert(std::pair<ILNode*,Any>(param, none));
+                }
+            }
+
+            label = mangle(label, {}, map);
+            next_enter = label->body.enter;
+            next_args = label->body.args;
+            set_active_anchor(label->body.anchor);
+        } break;
+        case TYPE_Builtin: {
+            //debugger.enter_call(dest, cont, ...)
+            auto func = enter.builtin.value();
+            switch(func) {
+            case FN_Exit: {
+                return;
+                } break;
+            default: {
+                StyledString ss;
+                ss.out << "don't know how to apply builtin " << enter.builtin;
+                location_error(ss.str());
+                } break;
+            }
+        } break;
+        /*
+        case TYPE_Type: {
+            //local ty = dest.value
+            //local func = ty:lookup(Symbol.ApplyType)
+            //if func ~= null then
+            //    return call(func, cont, ...)
+            //else
+            //    location_error("can not apply type "
+            //        .. tostring(ty))
+            //end
+        } break;
+        */
+        default: {
+            apply_type_error(enter);
+        } break;
+        }
+    } else {
+        apply_type_error(enter);
+    }
+
+    // flip
+    Instruction *tmp = in;
+    in = out;
+    out = tmp;
+    goto loop;
+    } catch (Exception &exc) {
+        auto cerr = StyledStream(std::cerr);
+        if (exc.anchor) {
+            cerr << exc.anchor << " ";
+        }
+        cerr << Style_Error << "error:" << Style_None << " "
+            << exc.msg->data << std::endl;
+        exit(1);
+    }
+
+}
 
 //------------------------------------------------------------------------------
 // IL PRINTER
@@ -2904,6 +3401,483 @@ end
 #endif
 
 //------------------------------------------------------------------------------
+// MACRO EXPANDER
+//------------------------------------------------------------------------------
+// a basic macro expander that is replaced by the boot script
+
+static bool verify_list_parameter_count(const List *expr, int mincount, int maxcount) {
+    assert(expr != EOL);
+    if ((mincount <= 0) && (maxcount == -1)) {
+        return true;
+    }
+    int argcount = (int)expr->count - 1;
+
+    if ((maxcount >= 0) && (argcount > maxcount)) {
+        location_error(
+            format("excess argument. At most %i arguments expected", maxcount));
+        return false;
+    }
+    if ((mincount >= 0) && (argcount < mincount)) {
+        location_error(
+            format("at least %i arguments expected", mincount));
+        return false;
+    }
+    return true;
+}
+
+static void verify_at_parameter_count(const List *topit, int mincount, int maxcount) {
+    assert(topit != EOL);
+    verify_list_parameter_count(unsyntax(topit->at), mincount, maxcount);
+}
+
+//------------------------------------------------------------------------------
+
+static const List *expand_expr_list(Scope *env, const List *list);
+
+static const List *expand(Scope *env, const List *topit) {
+process:
+    assert(env);
+    assert(topit != EOL);
+    Any expr = topit->at;
+    const Syntax *sx = expr;
+    if (sx->quoted) {
+        // return as-is
+        return expr;
+    }
+    const Anchor *anchor = sx->anchor;
+    set_active_anchor(anchor);
+    expr = sx->datum;
+    if (expr.type == TYPE_List) {
+        const List *list = expr.list;
+        if (list == EOL) {
+            location_error(String::from("expression is empty"));
+        }
+
+        Any head = unsyntax(list->at);
+
+        // resolve symbol
+        if (head.type == TYPE_Symbol) {
+            env->lookup(head.symbol, head);
+        }
+
+        if (head.type == TYPE_Builtin) {
+            Builtin func = head.builtin;
+            switch(func.value()) {
+            default: {
+            } break;
+            }
+        }
+
+        list = expand_expr_list(env, list);
+        return List::from(Syntax::from_quoted(anchor, list), topit->next);
+    } else if (expr.type == TYPE_Symbol) {
+        Symbol name = expr.symbol;
+
+        Any result = none;
+        if (!env->lookup(name, result)) {
+            location_error(
+                format("no value bound to name '%s' in scope", name.name()->data));
+        }
+        if (result.type == TYPE_List) {
+            const List *list = result.list;
+            // quote lists
+            list = List::from(Syntax::from_quoted(anchor, result), EOL);
+            result = List::from(Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)), list);
+        }
+        result = Syntax::from_quoted(anchor, result);
+        return List::from(result, topit->next);
+    } else {
+        return List::from(Syntax::from_quoted(anchor, expr), topit->next);
+    }
+    goto process;
+}
+
+//------------------------------------------------------------------------------
+
+#if 0
+
+
+local globals
+
+local expand
+local translate
+
+local expand_fn_cc
+local expand_syntax_extend
+
+local expand_root
+
+local function wrap_expand_builtin(f)
+    return function(dest, cont, topit, env)
+        return f(unwrap(Type.Scope, env), unwrap(Type.List, topit),
+            function (cur_list, cur_env)
+                assert(cur_env)
+                return retcall(cont, Any(cur_list), Any(cur_env))
+            end)
+    end
+end
+
+do
+
+local function expand_expr_list(env, it, cont)
+    assert_scope(env)
+    assert_list(it)
+
+    local function process(env, it, l)
+        if it == EOL then
+            return cont(reverse_list_inplace(l))
+        end
+        return expand(env, it, function(nextlist,nextscope)
+            assert_list(nextlist)
+            if (nextlist == EOL) then
+                return cont(reverse_list_inplace(l))
+            end
+            return process(
+                nextscope,
+                nextlist.next,
+                List(nextlist.at, l))
+        end)
+    end
+    return process(env, it, EOL)
+end
+
+expand_fn_cc = function(env, topit, cont)
+    assert_scope(env)
+    assert_list(topit)
+    verify_at_parameter_count(topit, 1, -1)
+
+    local it = topit.at
+
+    local nit,anchor = unsyntax(it)
+    it = unwrap(Type.List, nit)
+
+    local _,anchor_kw = unsyntax(it.at)
+
+    it = it.next
+
+    local func_name
+    assert(it ~= EOL)
+
+    local scopekey
+
+    local tryfunc_name = unsyntax(it.at)
+    if (tryfunc_name.type == Type.Symbol) then
+        func_name = it.at
+        it = it.next
+        scopekey = tryfunc_name
+    elseif (tryfunc_name.type == Type.String) then
+        func_name = Any(Syntax(Any(Symbol(tryfunc_name.value)), anchor_kw))
+        it = it.next
+    else
+        func_name = Any(Syntax(Any(Symbol.Unnamed), anchor_kw))
+    end
+
+    local expr_parameters = it.at
+    local params_anchor
+    expr_parameters, params_anchor = unsyntax(expr_parameters)
+
+    it = it.next
+
+    local func = Label.create_empty_function(func_name, anchor)
+    if scopekey then
+        -- named self-binding
+        env:bind(scopekey, Any(func))
+    end
+    -- hidden self-binding for subsequent macros
+    env:bind(Any(Symbol.ThisFnCC), Any(func))
+
+    local subenv = Scope(env)
+
+    local function toparameter(env, value)
+        assert_scope(env)
+        local _value, anchor = unsyntax(value)
+        if _value.type == Type.Parameter then
+            return _value.value
+        else
+            local param = Parameter.create_from_syntax(value, Type.Any)
+            env:bind(value, Any(param))
+            return param
+        end
+    end
+
+    local params = unwrap(Type.List, expr_parameters)
+    while (params ~= EOL) do
+        func:append_parameter(toparameter(subenv, params.at))
+        params = params.next
+    end
+    if (#func.parameters == 0) then
+        set_active_anchor(params_anchor)
+        location_error("explicit continuation parameter missing")
+    end
+
+    return expand_expr_list(subenv, it, function(result)
+        result = List(Any(Syntax(Any(func), anchor, true)), result)
+        result = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), result)
+        return cont(List(Any(Syntax(Any(result), anchor, true)), topit.next), env)
+    end)
+end
+
+expand_syntax_extend = function(env, topit, cont)
+    assert_scope(env)
+    assert_list(topit)
+    verify_at_parameter_count(topit, 1, -1)
+
+    local it = topit.at
+
+    local nit,anchor = unsyntax(it)
+    it = unwrap(Type.List, nit)
+
+    local _,anchor_kw = unsyntax(it.at)
+    it = it.next
+
+    local func_name = Any(Syntax(Any(Symbol.Unnamed), anchor))
+    local func = Label.create_empty_function(func_name)
+    func:append_parameter(Parameter.create_from_syntax(func_name, Type.Any))
+
+    local subenv = Scope(env)
+    subenv:bind(Any(Symbol.SyntaxScope), Any(env))
+
+    return expand_expr_list(subenv, it, function(expr)
+        expr = List(Any(Syntax(Any(func), anchor, true)), expr)
+        expr = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), expr)
+        expr = Any(Syntax(Any(expr), anchor, true))
+        return translate(null, expr,
+            function(_state, _anchor, enter, fun)
+                assert(not enter)
+                fun = maybe_unsyntax(fun)
+                return execute(fun,
+                    function(expr_env)
+                        if expr_env == null or expr_env.type ~= Type.Scope then
+                            set_active_anchor(anchor)
+                            location_error("syntax-extend did not evaluate to scope")
+                        end
+                        return cont(topit.next, unwrap(Type.Scope, expr_env))
+                    end)
+            end)
+    end)
+end
+
+local function expand_wildcard(label, env, handler, topit, cont)
+    assert_string(label)
+    assert_scope(env)
+    assert_any(handler)
+    assert_list(topit)
+    assert(cont)
+    return xpcallcc(function(cont)
+        return execute(handler, function(result)
+            if result == null or is_none(result) then
+                return cont(EOL)
+            end
+            if result.type ~= Type.List then
+                location_error(label
+                    .. " macro returned unexpected value of type "
+                    .. tostring(result.type))
+            end
+            return cont(unwrap(Type.List, result))
+        end, Any(topit), Any(env))
+    end,
+    function (exc, cont)
+        exc = exception(exc)
+        local w = string_writer()
+        local _,anchor = unsyntax(topit.at)
+        anchor:stream_message_with_source(w,
+            'while expanding ' .. label .. ' macro')
+        local fmt = StreamValueFormat()
+        fmt.naked = true
+        fmt.maxdepth = 3
+        fmt.maxlength = 5
+        stream_expr(w, topit.at, fmt)
+        exc.macros = w() .. (exc.macros or "")
+        error(exc)
+    end,
+    cont)
+end
+
+local function expand_macro(env, handler, topit, cont)
+    assert_scope(env)
+    assert_any(handler)
+    assert_list(topit)
+    assert(cont)
+    return xpcallcc(function(cont)
+        return execute(handler, function(result_list, result_scope)
+            --print(handler, result_list, result_scope)
+            if (is_none(result_list)) then
+                return cont(EOL)
+            end
+            result_list = unwrap(Type.List, result_list)
+            result_scope = result_scope and unwrap(Type.Scope, result_scope)
+            if result_list ~= EOL and result_scope == null then
+                location_error(tostring(handler) .. " did not return a scope")
+            end
+            if global_opts.validate_macros then
+                -- validate result completely wrapped in syntax
+                local todo = {result_list.at}
+                local k = 1
+                while k <= #todo do
+                    local elem = todo[k]
+                    if elem.type ~= Type.Syntax then
+                        location_error("syntax objects missing in expanded macro")
+                    end
+                    if not elem.value.quoted then
+                        elem = unsyntax(elem)
+                        if elem.type == Type.List then
+                            elem = elem.value
+                            while elem ~= EOL do
+                                table.insert(todo, elem.at)
+                                elem = elem.next
+                            end
+                        end
+                    end
+                    k = k + 1
+                    assert(k < global_opts.stack_limit, "possible circular reference encountered")
+                end
+            end
+            return cont(result_list, result_scope)
+        end, Any(topit), Any(env))
+    end,
+    function (exc, cont)
+        exc = exception(exc)
+        local w = string_writer()
+        local _, anchor = unsyntax(topit.at)
+        anchor:stream_message_with_source(w, 'while expanding macro')
+        local fmt = StreamValueFormat()
+        fmt.naked = true
+        fmt.maxdepth = 3
+        fmt.maxlength = 5
+        stream_expr(w, topit.at, fmt)
+        exc.macros = w() .. (exc.macros or "")
+        error(exc)
+    end,
+    cont)
+end
+
+expand = function(env, topit, cont)
+    assert_scope(env)
+    assert_list(topit)
+    local result = none
+    assert(topit ~= EOL)
+
+    local function process(env, topit)
+        local expr = topit.at
+        local sx = unwrap(Type.Syntax, expr)
+        if sx.quoted then
+            -- return as-is
+            return cont(List(expr, topit.next), env)
+        end
+        local anchor
+        expr,anchor = unsyntax(expr)
+        set_active_anchor(anchor)
+        if (expr.type == Type.List) then
+            local list = expr.value
+            if (list == EOL) then
+                location_error("expression is empty")
+            end
+
+            local head = list.at
+            local head_anchor
+            head, head_anchor = unsyntax(head)
+
+            -- resolve symbol
+            if (head.type == Type.Symbol) then
+                head = env:lookup(head.value) or none
+            end
+
+            local function expand_list()
+                return expand_expr_list(env,
+                    unwrap(Type.List, expr),
+                    function (result)
+                        return cont(List(Any(Syntax(Any(result), anchor, true)),
+                            topit.next), env)
+                    end)
+            end
+
+            local function expand_wildcard_list()
+                local default_handler = env:lookup(Symbol.ListWildcard)
+                if default_handler then
+                    return expand_wildcard("wildcard list",
+                        env, default_handler, topit,
+                        function (result)
+                            if result ~= EOL then
+                                return process(env, result)
+                            end
+                            return expand_list()
+                        end)
+                end
+                return expand_list()
+            end
+
+            if (is_macro_type(head.type)) then
+                return expand_macro(env, unmacro(head), topit,
+                    function (result_list,result_env)
+                        if (result_list ~= EOL) then
+                            assert_scope(result_env)
+                            assert(result_list ~= EOL)
+                            return process(result_env, result_list)
+                        elseif result_env then
+                            return cont(EOL, env)
+                        else
+                            return expand_wildcard_list()
+                        end
+                    end)
+            end
+
+            return expand_wildcard_list()
+        elseif expr.type == Type.Symbol then
+            local value = expr.value
+            local result = env:lookup(value)
+            if result == null then
+                local function missing_symbol_error()
+                    set_active_anchor(anchor)
+                    location_error(
+                        format("no value bound to name '%s' in scope", value.name))
+                end
+                local default_handler = env:lookup(Symbol.SymbolWildcard)
+                if default_handler then
+                    return expand_wildcard("wildcard symbol",
+                        env, default_handler, topit, function(result)
+                        if result ~= EOL then
+                            return process(env, result)
+                        end
+                        return missing_symbol_error()
+                    end)
+                else
+                    return missing_symbol_error()
+                end
+            end
+            if result.type == Type.List then
+                -- quote lists
+                result = List(Any(Syntax(result, anchor, true)), EOL)
+                result = List(Any(Syntax(globals:lookup(Symbol.QuoteForm), anchor, true)), result)
+                result = Any(result)
+            end
+            result = Any(Syntax(result, anchor, true))
+            return cont(List(result, topit.next), env)
+        else
+            return cont(List(Any(Syntax(expr, anchor, true)), topit.next), env)
+        end
+    end
+    return process(env, topit)
+end
+
+expand_root = function(expr, scope, cont)
+    local anchor
+    if expr.type == Type.Syntax then
+        expr, anchor = unsyntax(expr)
+    end
+    expr = unwrap(Type.List, expr)
+    return expand_expr_list(scope or globals, expr, function(result)
+        result = Any(result)
+        if anchor then
+            result = Any(Syntax(result, anchor))
+        end
+        return cont(result)
+    end)
+end
+
+end -- do
+#endif
+
+//------------------------------------------------------------------------------
 // MAIN
 //------------------------------------------------------------------------------
 
@@ -2989,6 +3963,7 @@ int main(int argc, char *argv[]) {
     LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
     auto expr = parser.parse();
     //stream_expr(cout, expr, StreamExprFormat());
+    interpreter_loop(fn);
 
     return 0;
 }
