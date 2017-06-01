@@ -778,7 +778,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
-    T(FN_Print)
+     T(FN_Branch) T(FN_Print) T(KW_FnCC)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -1492,6 +1492,8 @@ struct Any {
             case TYPE_Syntax: return dest(syntax);
             case TYPE_List: return dest(list);
             case TYPE_Builtin: return dest(builtin);
+            case TYPE_Label: return dest(label);
+            case TYPE_Parameter: return dest(parameter);
             default:
                 StyledString ss;
                 ss.out << "cannot dispatch type: " << type;
@@ -3175,8 +3177,29 @@ static void default_exception_handler(const Exception &exc) {
     exit(1);
 }
 
+template<int mincount, int maxcount>
+inline int checkargs(const Instruction &in) {
+    if ((mincount <= 0) && (maxcount == -1)) {
+        return true;
+    }
+
+    int count = (int)in.args.size() - 1;
+
+    if ((maxcount >= 0) && (count > maxcount)) {
+        location_error(
+            format("excess argument. At most %i arguments expected", maxcount));
+    }
+    if ((mincount >= 0) && (count < mincount)) {
+        location_error(
+            format("at least %i arguments expected", mincount));
+    }
+    return count;
+}
+
 #define BUILTIN(NAME) \
     static void NAME(Instruction &in, Instruction &out)
+#define CHECKARGS(MINARGS, MAXARGS) \
+    checkargs<MINARGS, MAXARGS>(in)
 
 BUILTIN(builtin_print) {
     auto cout = StyledStream(std::cout);
@@ -3193,7 +3216,16 @@ BUILTIN(builtin_print) {
     cout << std::endl;
 }
 
+BUILTIN(builtin_branch) {
+    CHECKARGS(3, 3);
+    Any cond = in.args[1];
+    cond.verify<TYPE_Bool>();
+    out.enter = in.args[cond.i1?2:3];
+    out.args = { in.args[0] };
+}
+
 #undef BUILTIN
+#undef CHECKARGS
 
 static void interpreter_loop(Instruction &_in) {
     Instruction _out;
@@ -3268,6 +3300,7 @@ loop:
             next_enter = args[0];
             switch(func) {
             case FN_Print: builtin_print(*in, *out); break;
+            case FN_Branch: builtin_branch(*in, *out); break;
             case FN_Exit: return;
             default: {
                 StyledString ss;
@@ -3306,311 +3339,6 @@ loop:
     }
 
 }
-
-//------------------------------------------------------------------------------
-// MACRO EXPANDER
-//------------------------------------------------------------------------------
-// a basic macro expander that is replaced by the boot script
-
-static bool verify_list_parameter_count(const List *expr, int mincount, int maxcount) {
-    assert(expr != EOL);
-    if ((mincount <= 0) && (maxcount == -1)) {
-        return true;
-    }
-    int argcount = (int)expr->count - 1;
-
-    if ((maxcount >= 0) && (argcount > maxcount)) {
-        location_error(
-            format("excess argument. At most %i arguments expected", maxcount));
-        return false;
-    }
-    if ((mincount >= 0) && (argcount < mincount)) {
-        location_error(
-            format("at least %i arguments expected", mincount));
-        return false;
-    }
-    return true;
-}
-
-static void verify_at_parameter_count(const List *topit, int mincount, int maxcount) {
-    assert(topit != EOL);
-    verify_list_parameter_count(unsyntax(topit->at), mincount, maxcount);
-}
-
-//------------------------------------------------------------------------------
-
-struct ExpandResult {
-    const List *list;
-    Scope *env;
-
-    ExpandResult(const List *_list, Scope *_env) :
-        list(_list), env(_env) {}
-};
-
-static ExpandResult expand(Scope *env, const List *topit);
-
-static ExpandResult expand_expr_list(Scope *env, const List *it) {
-    const List *l = EOL;
-process:
-    if (it == EOL) {
-        return ExpandResult(reverse_list_inplace(l), env);
-    }
-    ExpandResult result = expand(env, it);
-    env = result.env;
-    assert(env);
-    if (result.list == EOL) {
-        return ExpandResult(reverse_list_inplace(l), env);
-    }
-    it = result.list->next;
-    l = List::from(result.list->at, l);
-    goto process;
-}
-
-#if 0
-static ExpandResult expand_syntax_extend( = function(env, topit, cont)
-    assert_scope(env)
-    assert_list(topit)
-    verify_at_parameter_count(topit, 1, -1)
-
-    local it = topit.at
-
-    local nit,anchor = unsyntax(it)
-    it = unwrap(Type.List, nit)
-
-    local _,anchor_kw = unsyntax(it.at)
-    it = it.next
-
-    local func_name = Any(Syntax(Any(Symbol.Unnamed), anchor))
-    local func = Label.create_empty_function(func_name)
-    func:append_parameter(Parameter.create_from_syntax(func_name, Type.Any))
-
-    local subenv = Scope(env)
-    subenv:bind(Any(Symbol.SyntaxScope), Any(env))
-
-    return expand_expr_list(subenv, it, function(expr)
-        expr = List(Any(Syntax(Any(func), anchor, true)), expr)
-        expr = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), expr)
-        expr = Any(Syntax(Any(expr), anchor, true))
-        return translate(null, expr,
-            function(_state, _anchor, enter, fun)
-                assert(not enter)
-                fun = maybe_unsyntax(fun)
-                return execute(fun,
-                    function(expr_env)
-                        if expr_env == null or expr_env.type ~= Type.Scope then
-                            set_active_anchor(anchor)
-                            location_error("syntax-extend did not evaluate to scope")
-                        end
-                        return cont(topit.next, unwrap(Type.Scope, expr_env))
-                    end)
-            end)
-    end)
-end
-#endif
-
-static ExpandResult expand(Scope *env, const List *topit) {
-process:
-    assert(env);
-    assert(topit != EOL);
-    Any expr = topit->at;
-    const Syntax *sx = expr;
-    if (sx->quoted) {
-        // return as-is
-        return ExpandResult(expr, env);
-    }
-    const Anchor *anchor = sx->anchor;
-    set_active_anchor(anchor);
-    expr = sx->datum;
-    if (expr.type == TYPE_List) {
-        const List *list = expr.list;
-        if (list == EOL) {
-            location_error(String::from("expression is empty"));
-        }
-
-        Any head = unsyntax(list->at);
-
-        // resolve symbol
-        if (head.type == TYPE_Symbol) {
-            env->lookup(head.symbol, head);
-        }
-
-        if (head.type == TYPE_Builtin) {
-            Builtin func = head.builtin;
-            switch(func.value()) {
-            default: {
-            } break;
-            }
-        }
-
-        ExpandResult result = expand_expr_list(env, list);
-        list = result.list;
-        env = result.env;
-        assert(env);
-        return ExpandResult(
-            List::from(Syntax::from_quoted(anchor, list), topit->next), env);
-    } else if (expr.type == TYPE_Symbol) {
-        Symbol name = expr.symbol;
-
-        Any result = none;
-        if (!env->lookup(name, result)) {
-            location_error(
-                format("no value bound to name '%s' in scope", name.name()->data));
-        }
-        if (result.type == TYPE_List) {
-            const List *list = result.list;
-            // quote lists
-            list = List::from(Syntax::from_quoted(anchor, result), EOL);
-            result = List::from(Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)), list);
-        }
-        result = Syntax::from_quoted(anchor, result);
-        return ExpandResult(List::from(result, topit->next), env);
-    } else {
-        return ExpandResult(List::from(Syntax::from_quoted(anchor, expr), topit->next), env);
-    }
-    goto process;
-}
-
-static Any expand_root(Any expr, Scope *scope = nullptr) {
-    const Anchor *anchor = nullptr;
-    if (expr.type == TYPE_Syntax) {
-        anchor = expr.syntax->anchor;
-        expr = expr.syntax->datum;
-    }
-    ExpandResult result = expand_expr_list(scope?scope:globals, expr);
-    if (anchor) {
-        return Syntax::from(anchor, result.list);
-    } else {
-        return result.list;
-    }
-}
-
-//------------------------------------------------------------------------------
-
-#if 0
-
-
-local globals
-
-local expand
-local translate
-
-local expand_fn_cc
-local expand_syntax_extend
-
-local expand_root
-
-local function wrap_expand_builtin(f)
-    return function(dest, cont, topit, env)
-        return f(unwrap(Type.Scope, env), unwrap(Type.List, topit),
-            function (cur_list, cur_env)
-                assert(cur_env)
-                return retcall(cont, Any(cur_list), Any(cur_env))
-            end)
-    end
-end
-
-do
-
-local function expand_expr_list(env, it, cont)
-    assert_scope(env)
-    assert_list(it)
-
-    local function process(env, it, l)
-        if it == EOL then
-            return cont(reverse_list_inplace(l))
-        end
-        return expand(env, it, function(nextlist,nextscope)
-            assert_list(nextlist)
-            if (nextlist == EOL) then
-                return cont(reverse_list_inplace(l))
-            end
-            return process(
-                nextscope,
-                nextlist.next,
-                List(nextlist.at, l))
-        end)
-    end
-    return process(env, it, EOL)
-end
-
-expand_fn_cc = function(env, topit, cont)
-    assert_scope(env)
-    assert_list(topit)
-    verify_at_parameter_count(topit, 1, -1)
-
-    local it = topit.at
-
-    local nit,anchor = unsyntax(it)
-    it = unwrap(Type.List, nit)
-
-    local _,anchor_kw = unsyntax(it.at)
-
-    it = it.next
-
-    local func_name
-    assert(it ~= EOL)
-
-    local scopekey
-
-    local tryfunc_name = unsyntax(it.at)
-    if (tryfunc_name.type == Type.Symbol) then
-        func_name = it.at
-        it = it.next
-        scopekey = tryfunc_name
-    elseif (tryfunc_name.type == Type.String) then
-        func_name = Any(Syntax(Any(Symbol(tryfunc_name.value)), anchor_kw))
-        it = it.next
-    else
-        func_name = Any(Syntax(Any(Symbol.Unnamed), anchor_kw))
-    end
-
-    local expr_parameters = it.at
-    local params_anchor
-    expr_parameters, params_anchor = unsyntax(expr_parameters)
-
-    it = it.next
-
-    local func = Label.create_empty_function(func_name, anchor)
-    if scopekey then
-        -- named self-binding
-        env:bind(scopekey, Any(func))
-    end
-    -- hidden self-binding for subsequent macros
-    env:bind(Any(Symbol.ThisFnCC), Any(func))
-
-    local subenv = Scope(env)
-
-    local function toparameter(env, value)
-        assert_scope(env)
-        local _value, anchor = unsyntax(value)
-        if _value.type == Type.Parameter then
-            return _value.value
-        else
-            local param = Parameter.create_from_syntax(value, Type.Any)
-            env:bind(value, Any(param))
-            return param
-        end
-    end
-
-    local params = unwrap(Type.List, expr_parameters)
-    while (params ~= EOL) do
-        func:append_parameter(toparameter(subenv, params.at))
-        params = params.next
-    end
-    if (#func.parameters == 0) then
-        set_active_anchor(params_anchor)
-        location_error("explicit continuation parameter missing")
-    end
-
-    return expand_expr_list(subenv, it, function(result)
-        result = List(Any(Syntax(Any(func), anchor, true)), result)
-        result = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), result)
-        return cont(List(Any(Syntax(Any(result), anchor, true)), topit.next), env)
-    end)
-end
-
-end -- do
-#endif
 
 //------------------------------------------------------------------------------
 // IL TRANSLATOR
@@ -3831,20 +3559,6 @@ static void translate_function_expr_list(
     assert(!func->body.args.empty());
 }
 
-// (fn/cc <label without body> expr ...)
-static TranslateResult translate_fn_body(Label *state, Any _it) {
-    const Syntax *sx = _it;
-    const Anchor *anchor = sx->anchor;
-    const List *it = sx->datum;
-
-    it = it->next;
-    Label *func = unsyntax(it->at);
-    it = it->next;
-
-    translate_function_expr_list(func, it, anchor);
-    return TranslateResult(state, anchor, none, { func });
-}
-
 static TranslateResult translate(Label *state, const Any &sxexpr) {
     try {
         const Syntax *sx = sxexpr;
@@ -3863,7 +3577,6 @@ static TranslateResult translate(Label *state, const Any &sxexpr) {
                 switch(head.builtin.value()) {
                 case KW_Call: return translate_call(state, sxexpr);
                 case KW_CCCall: return translate_contcall(state, sxexpr);
-                case SYM_FnCCForm: return translate_fn_body(state, sxexpr);
                 case SYM_QuoteForm: return translate_quote(state, sxexpr);
                 default: break;
                 }
@@ -3898,10 +3611,217 @@ static Label *translate_root(Any _expr, Symbol name) {
 }
 
 //------------------------------------------------------------------------------
+// MACRO EXPANDER
+//------------------------------------------------------------------------------
+// a basic macro expander that is replaced by the boot script
+
+static bool verify_list_parameter_count(const List *expr, int mincount, int maxcount) {
+    assert(expr != EOL);
+    if ((mincount <= 0) && (maxcount == -1)) {
+        return true;
+    }
+    int argcount = (int)expr->count - 1;
+
+    if ((maxcount >= 0) && (argcount > maxcount)) {
+        location_error(
+            format("excess argument. At most %i arguments expected", maxcount));
+        return false;
+    }
+    if ((mincount >= 0) && (argcount < mincount)) {
+        location_error(
+            format("at least %i arguments expected", mincount));
+        return false;
+    }
+    return true;
+}
+
+static void verify_at_parameter_count(const List *topit, int mincount, int maxcount) {
+    assert(topit != EOL);
+    verify_list_parameter_count(unsyntax(topit->at), mincount, maxcount);
+}
+
+//------------------------------------------------------------------------------
+
+struct ExpandResult {
+    const List *list;
+    Scope *env;
+
+    ExpandResult(const List *_list, Scope *_env) :
+        list(_list), env(_env) {}
+};
+
+static ExpandResult expand(Scope *env, const List *topit);
+
+static ExpandResult expand_expr_list(Scope *env, const List *it) {
+    const List *l = EOL;
+process:
+    if (it == EOL) {
+        return ExpandResult(reverse_list_inplace(l), env);
+    }
+    ExpandResult result = expand(env, it);
+    env = result.env;
+    assert(env);
+    if (result.list == EOL) {
+        return ExpandResult(reverse_list_inplace(l), env);
+    }
+    it = result.list->next;
+    l = List::from(result.list->at, l);
+    goto process;
+}
+
+static Parameter *expand_parameter(Scope *env, Any value) {
+    const Syntax *sxvalue = value;
+    const Anchor *anchor = sxvalue->anchor;
+    Any _value = sxvalue->datum;
+    if (_value.type == TYPE_Parameter) {
+        return _value.parameter;
+    } else {
+        _value.verify<TYPE_Symbol>();
+        Parameter *param = Parameter::from(anchor, _value.symbol, TYPE_Any);
+        env->bind(_value.symbol, param);
+        return param;
+    }
+}
+
+static const List *expand_fn_cc(Scope *env, const List *topit) {
+    verify_at_parameter_count(topit, 1, -1);
+
+    const Syntax *sxit = topit->at;
+    //const Anchor *anchor = sxit->anchor;
+    const List *it = sxit->datum;
+
+    const Anchor *anchor_kw = ((const Syntax *)it->at)->anchor;
+
+    it = it->next;
+
+    assert(it != EOL);
+
+    Label *func = nullptr;
+    Any tryfunc_name = unsyntax(it->at);
+    if (tryfunc_name.type == TYPE_Symbol) {
+        // named self-binding
+        func = Label::from(anchor_kw, tryfunc_name.symbol);
+        env->bind(tryfunc_name.symbol, func);
+        it = it->next;
+    } else if (tryfunc_name.type == TYPE_String) {
+        // named lambda
+        func = Label::from(anchor_kw, Symbol(tryfunc_name.string));
+        it = it->next;
+    } else {
+        // unnamed lambda
+        func = Label::from(anchor_kw, Symbol(SYM_Unnamed));
+    }
+
+    const Syntax *sxplist = it->at;
+    const Anchor *params_anchor = sxplist->anchor;
+    const List *params = sxplist->datum;
+
+    it = it->next;
+
+    Scope *subenv = Scope::from(env);
+    // hidden self-binding for subsequent macros
+    subenv->bind(SYM_ThisFnCC, func);
+
+    while (params != EOL) {
+        func->append(expand_parameter(subenv, params->at));
+        params = params->next;
+    }
+    if (func->params.empty()) {
+        set_active_anchor(params_anchor);
+        location_error(String::from("explicit continuation parameter missing"));
+    }
+
+    ExpandResult result = expand_expr_list(subenv, it);
+    translate_function_expr_list(func, result.list, anchor_kw);
+    return List::from(Syntax::from_quoted(anchor_kw, func), topit->next);
+}
+
+static ExpandResult expand(Scope *env, const List *topit) {
+process:
+    assert(env);
+    assert(topit != EOL);
+    Any expr = topit->at;
+    const Syntax *sx = expr;
+    if (sx->quoted) {
+        // return as-is
+        return ExpandResult(topit, env);
+    }
+    const Anchor *anchor = sx->anchor;
+    set_active_anchor(anchor);
+    expr = sx->datum;
+    if (expr.type == TYPE_List) {
+        const List *list = expr.list;
+        if (list == EOL) {
+            location_error(String::from("expression is empty"));
+        }
+
+        Any head = unsyntax(list->at);
+
+        // resolve symbol
+        if (head.type == TYPE_Symbol) {
+            env->lookup(head.symbol, head);
+        }
+
+        if (head.type == TYPE_Builtin) {
+            Builtin func = head.builtin;
+            switch(func.value()) {
+            case KW_FnCC: {
+                topit = expand_fn_cc(env, topit);
+                return ExpandResult(topit, env);
+            } break;
+            default: break;
+            }
+        }
+
+        ExpandResult result = expand_expr_list(env, list);
+        list = result.list;
+        env = result.env;
+        assert(env);
+        return ExpandResult(
+            List::from(Syntax::from_quoted(anchor, list), topit->next), env);
+    } else if (expr.type == TYPE_Symbol) {
+        Symbol name = expr.symbol;
+
+        Any result = none;
+        if (!env->lookup(name, result)) {
+            location_error(
+                format("no value bound to name '%s' in scope", name.name()->data));
+        }
+        if (result.type == TYPE_List) {
+            const List *list = result.list;
+            // quote lists
+            list = List::from(Syntax::from_quoted(anchor, result), EOL);
+            result = List::from(Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)), list);
+        }
+        result = Syntax::from_quoted(anchor, result);
+        return ExpandResult(List::from(result, topit->next), env);
+    } else {
+        return ExpandResult(List::from(Syntax::from_quoted(anchor, expr), topit->next), env);
+    }
+    goto process;
+}
+
+static Any expand_root(Any expr, Scope *scope = nullptr) {
+    const Anchor *anchor = nullptr;
+    if (expr.type == TYPE_Syntax) {
+        anchor = expr.syntax->anchor;
+        expr = expr.syntax->datum;
+    }
+    ExpandResult result = expand_expr_list(scope?scope:globals, expr);
+    if (anchor) {
+        return Syntax::from(anchor, result.list);
+    } else {
+        return result.list;
+    }
+}
+
+//------------------------------------------------------------------------------
 // GLOBALS
 //------------------------------------------------------------------------------
 
 static void init_globals() {
+    globals->bind(KW_True, true);
+    globals->bind(KW_False, false);
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
     B_GLOBALS()
 #undef T

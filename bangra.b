@@ -23,7 +23,18 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
-print "hello world"
+fn/cc somefunc (_ x)
+    print
+        branch false
+            fn/cc (_)
+                print "yes" x
+                \ "!!"
+            fn/cc (_)
+                print "no" x
+                \ "??"
+
+somefunc "hello world 1"
+somefunc "hello world 2"
 
 #
     # this is a test block
