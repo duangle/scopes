@@ -776,6 +776,10 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 // SYMBOL TYPE
 //------------------------------------------------------------------------------
 
+// list of symbols to be exposed as builtins to the default global namespace
+#define B_GLOBALS() \
+    T(FN_Print)
+
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
     \
@@ -1376,9 +1380,8 @@ protected:
     Symbol _name;
 
 public:
-    Builtin(Symbol name) :
+    Builtin(EnumT name) :
         _name(name) {
-        assert(_name.is_known());
     }
 
     EnumT value() const {
@@ -1488,7 +1491,12 @@ struct Any {
             case TYPE_Symbol: return dest(symbol);
             case TYPE_Syntax: return dest(syntax);
             case TYPE_List: return dest(list);
-            default: assert(false && "cannot dispatch type"); break;
+            case TYPE_Builtin: return dest(builtin);
+            default:
+                StyledString ss;
+                ss.out << "cannot dispatch type: " << type;
+                location_error(ss.str());
+                break;
         }
     }
 
@@ -1522,7 +1530,7 @@ struct Any {
     void verify() const {
         if (type != T) {
             StyledString ss;
-            ss.out << "type " << Type(T) << " expected, got " << type << std::endl;
+            ss.out << "type " << Type(T) << " expected, got " << type;
             location_error(ss.str());
         }
     }
@@ -2330,27 +2338,12 @@ struct StreamExprFormat {
     }
 };
 
-struct StreamExpr {
+struct StreamAnchors {
     StyledStream &ss;
-    StreamExprFormat fmt;
     const Anchor *last_anchor;
-    bool line_anchors;
-    bool atom_anchors;
 
-    StreamExpr(StyledStream &_ss, const StreamExprFormat &_fmt) :
-        ss(_ss), fmt(_fmt), last_anchor(nullptr) {
-        line_anchors = (fmt.anchors == StreamExprFormat::Line);
-        atom_anchors = (fmt.anchors == StreamExprFormat::All);
-    }
-
-    void stream_indent(int depth = 0) {
-        if (depth >= 1) {
-            ss << Style_Comment << "    ";
-            for (int i = 2; i <= depth; ++i) {
-                ss << INDENT_SEP << "   ";
-            }
-            ss << Style_None;
-        }
+    StreamAnchors(StyledStream &_ss) :
+        ss(_ss), last_anchor(nullptr) {
     }
 
     void stream_anchor(const Anchor *anchor, bool quoted = false) {
@@ -2376,6 +2369,28 @@ struct StreamExpr {
             if (quoted) { rss << "'"; }
             ss << Style_None;
             last_anchor = anchor;
+        }
+    }
+};
+
+struct StreamExpr : StreamAnchors {
+    StreamExprFormat fmt;
+    bool line_anchors;
+    bool atom_anchors;
+
+    StreamExpr(StyledStream &_ss, const StreamExprFormat &_fmt) :
+        StreamAnchors(_ss), fmt(_fmt) {
+        line_anchors = (fmt.anchors == StreamExprFormat::Line);
+        atom_anchors = (fmt.anchors == StreamExprFormat::All);
+    }
+
+    void stream_indent(int depth = 0) {
+        if (depth >= 1) {
+            ss << Style_Comment << "    ";
+            for (int i = 2; i <= depth; ++i) {
+                ss << INDENT_SEP << "   ";
+            }
+            ss << Style_None;
         }
     }
 
@@ -2634,7 +2649,7 @@ struct Body {
     Body() : anchor(nullptr), enter(none) {}
 };
 
-static const char CONT_SEP[] = "→";
+static const char CONT_SEP[] = "▶";
 
 template<typename T>
 struct Tag {
@@ -2960,89 +2975,171 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     return le;
 }
 
-#if 0
-    function cls.__newindex(self, name, value)
-        error("can't directly set attribute: " .. name)
-    end
+//------------------------------------------------------------------------------
+// IL PRINTER
+//------------------------------------------------------------------------------
 
-    function cls:set_typed()
-        rawset(self, 'typed', true)
-    end
+struct StreamILFormat {
+    enum Tagging {
+        All,
+        Line,
+        Scope,
+        None,
+    };
 
-    function cls:set_mangled(signature, label)
-        local cache = self.cache
-        if not cache then
-            cache = {}
-            rawset(self, 'cache', cache)
-        end
-        set_array_key(cache, signature, label)
-    end
+    Tagging anchors;
+    Tagging follow;
 
-    function cls:inputs_typed(self)
-        local params = self.parameters
-        for i=2,#params do
-            local arg = params[i]
-            if arg.type == Type.Any then
-                return false
+    StreamILFormat() :
+        anchors(None),
+        follow(All)
+        {}
+};
+
+struct StreamIL : StreamAnchors {
+    StreamILFormat fmt;
+    bool line_anchors;
+    bool atom_anchors;
+    bool follow_labels;
+    bool follow_scope;
+    std::unordered_set<Label *> visited;
+
+    StreamIL(StyledStream &_ss, const StreamILFormat &_fmt) :
+        StreamAnchors(_ss), fmt(_fmt) {
+        line_anchors = (fmt.anchors == StreamILFormat::Line);
+        atom_anchors = (fmt.anchors == StreamILFormat::All);
+        follow_labels = (fmt.follow == StreamILFormat::All);
+        follow_scope = (fmt.follow == StreamILFormat::Scope);
+    }
+
+    void stream_label_label(Label *alabel) {
+        alabel->stream_short(ss);
+    }
+
+    void stream_label_label_user(Label *alabel) {
+        alabel->stream_short(ss);
+    }
+
+    void stream_param_label(Parameter *param, Label *alabel) {
+        if (param->label == alabel) {
+            param->stream_local(ss);
+        } else {
+            param->stream(ss);
+        }
+    }
+
+    void stream_argument(Any arg, Label *alabel) {
+        if (arg.type == TYPE_Parameter) {
+            stream_param_label(arg.parameter, alabel);
+        } else if (arg.type == TYPE_Label) {
+            stream_label_label(arg.label);
+        } else {
+            ss << arg;
+        }
+    }
+
+    #if 0
+    local function stream_users(_users)
+        if _users then
+            writer(styler(Style.Comment, "{"))
+            local k = 0
+            for dest,_ in pairs(_users) do
+                if k > 0 then
+                    writer(" ")
+                end
+                stream_label_label_user(dest)
+                k = k + 1
             end
-        end
-        return true
-    end
-
-    function cls:get_mangled(signature)
-        local cache = self.cache
-        if cache then
-            return get_array_key(cache, signature)
+            writer(styler(Style.Comment, "}"))
         end
     end
 
-    function cls:set_body_anchor(anchor)
-        assert_anchor(anchor)
-        rawset(self, 'body_anchor', anchor)
+    local function stream_scope(_scope)
+        if _scope then
+            writer(" ")
+            writer(styler(Style.Comment, "<"))
+            local k = 0
+            for dest,_ in pairs(_scope) do
+                if k > 0 then
+                    writer(" ")
+                end
+                stream_label_label_user(dest)
+                k = k + 1
+            end
+            writer(styler(Style.Comment, ">"))
+        end
     end
+    #endif
 
-    function cls:__tostring()
-        return self:repr(default_styler)
-    end
+    void stream_label (Label *alabel) {
+        if (visited.count(alabel)) {
+            return;
+        }
+        visited.insert(alabel);
+        if (line_anchors) {
+            stream_anchor(alabel->anchor);
+        }
+        alabel->stream(ss);
+        ss << Style_Operator << ":" << Style_None;
+        //stream_scope(scopes[alabel])
+        ss << std::endl;
+        ss << "    ";
+        if (line_anchors && alabel->body.anchor) {
+            stream_anchor(alabel->body.anchor);
+            ss << " ";
+        }
+        stream_argument(alabel->body.enter, alabel);
+        for (size_t i=1; i < alabel->body.args.size(); ++i) {
+            ss << " ";
+            stream_argument(alabel->body.args[i], alabel);
+        }
+        if (!alabel->body.args.empty()) {
+            auto &&cont = alabel->body.args[0];
+            if (cont.type != TYPE_Nothing) {
+                ss << Style_Comment << CONT_SEP << Style_None;
+                stream_argument(cont, alabel);
+            }
+        }
+        ss << std::endl;
 
-    function cls.create_from_syntax(name)
-        local name,anchor = unsyntax(name)
-        name = unwrap(Type.Symbol, name)
-        return Label(name, anchor)
-    end
+        if (follow_labels) {
+            for (size_t i=0; i < alabel->body.args.size(); ++i) {
+                stream_any(alabel->body.args[i]);
+            }
+            stream_any(alabel->body.enter);
+        }
+    }
 
-    -- an empty function
-    -- you have to add the continuation argument manually
-    function cls.create_empty_function(name)
-        return cls.create_from_syntax(name)
-    end
+    void stream_any(const Any &afunc) {
+        if (afunc.type == TYPE_Label) {
+            stream_label(afunc.label);
+        }
+    }
 
-    -- a function that eventually returns
-    function cls.create_function(name)
-        local value = cls.create_from_syntax(name)
-        local sym, anchor = maybe_unsyntax(name)
-        sym = unwrap(Type.Symbol, sym)
-        -- continuation is always first argument
-        -- this argument will be called when the function is done
-        value:append_parameter(
-            Parameter(Symbol("return-" .. sym.name), anchor, Type.Any))
-        return value
-    end
+    void stream(Label *label) {
+        stream_label(label);
+        if (follow_scope) {
+            auto scope = label->build_scope();
+            size_t i = scope.size();
+            while (i > 0) {
+                --i;
+                stream_label(scope[i]);
+            }
+        }
+    }
 
-    -- a continuation that never returns
-    function cls.create_continuation(name)
-        local value = cls.create_from_syntax(name)
-        -- first argument is present, but unused
-        value:append_parameter(
-            Parameter(value.name, value.anchor, Type.Nothing))
-        return value
-    end
-end
-#endif
+};
+
+static void stream_il(
+    StyledStream &_ss, Label *label, const StreamILFormat &_fmt) {
+    StreamIL streamer(_ss, _fmt);
+    streamer.stream(label);
+}
 
 //------------------------------------------------------------------------------
 // INTERPRETER
 //------------------------------------------------------------------------------
+
 
 struct Instruction {
     Any enter;
@@ -3078,17 +3175,33 @@ static void default_exception_handler(const Exception &exc) {
     exit(1);
 }
 
-static void interpreter_loop(Label *entry) {
-    Instruction _in;
+#define BUILTIN(NAME) \
+    static void NAME(Instruction &in, Instruction &out)
+
+BUILTIN(builtin_print) {
+    auto cout = StyledStream(std::cout);
+    for (size_t i = 1; i < in.args.size(); ++i) {
+        if (i > 1) {
+            cout << " ";
+        }
+        if (in.args[i].type == TYPE_String) {
+            cout << in.args[i].string->data;
+        } else {
+            cout << in.args[i];
+        }
+    }
+    cout << std::endl;
+}
+
+#undef BUILTIN
+
+static void interpreter_loop(Instruction &_in) {
     Instruction _out;
 
     Instruction *in = &_in;
     Instruction *out = &_out;
 
     MangleMap map;
-
-    _in.enter = Any(entry);
-    set_active_anchor(entry->body.anchor);
 
     try {
 loop:
@@ -3152,13 +3265,13 @@ loop:
         case TYPE_Builtin: {
             //debugger.enter_call(dest, cont, ...)
             auto func = enter.builtin.value();
+            next_enter = args[0];
             switch(func) {
-            case FN_Exit: {
-                return;
-                } break;
+            case FN_Print: builtin_print(*in, *out); break;
+            case FN_Exit: return;
             default: {
                 StyledString ss;
-                ss.out << "don't know how to apply builtin " << enter.builtin;
+                ss.out << "builtin " << enter.builtin << " is not implemented";
                 location_error(ss.str());
                 } break;
             }
@@ -3195,215 +3308,6 @@ loop:
 }
 
 //------------------------------------------------------------------------------
-// IL PRINTER
-//------------------------------------------------------------------------------
-
-#if 0
-local stream_il
--- local CONT_SEP = " ⮕ " -- not compatible with Consolas
-local CONT_SEP = " → "
-do
-    stream_il = function(writer, afunc, opts)
-        assert_label(afunc)
-
-        opts = opts or {}
-        local follow = opts.follow or "scope"
-        local follow_labels = (follow == "all")
-        local follow_scope = (follow == "scope")
-        local styler = opts.styler or default_styler
-        local line_anchors = (opts.anchors == "line")
-        local atom_anchors = (opts.anchors == "all")
-        local users = opts.users or {}
-        local scopes = opts.scopes or {}
-
-        local last_anchor
-        local function stream_anchor(anchor)
-            if anchor then
-                local str
-                if not last_anchor or last_anchor.path ~= anchor.path then
-                    str = anchor.path
-                        .. ":" .. tostring(anchor.lineno)
-                        .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
-                elseif not last_anchor or last_anchor.lineno ~= anchor.lineno then
-                    str = ":" .. tostring(anchor.lineno)
-                        .. ":" .. tostring(anchor.column) .. ANCHOR_SEP
-                elseif not last_anchor or last_anchor.column ~= anchor.column then
-                    str = "::" .. tostring(anchor.column) .. ANCHOR_SEP
-                else
-                    str = "::" .. ANCHOR_SEP
-                end
-
-                writer(styler(Style.Comment, str))
-                last_anchor = anchor
-            else
-                --writer(styler(Style.Error, "?"))
-            end
-        end
-
-        local visited = {}
-        local stream_any
-        local function stream_label_label(alabel)
-            writer(styler(Style.Keyword, "λ"))
-            writer(styler(Style.Symbol, alabel.name.name))
-            writer(styler(Style.Operator, "#"))
-            writer(styler(Style.Number, tostring(alabel.uid)))
-        end
-        local function stream_label_label_user(alabel)
-            writer(styler(Style.Comment, "λ"))
-            writer(styler(Style.Comment, alabel.name.name))
-            writer(styler(Style.Comment, "#"))
-            writer(styler(Style.Comment, tostring(alabel.uid)))
-        end
-
-        local function stream_param_label(param, alabel)
-            if param.label ~= alabel then
-                stream_label_label(param.label)
-            end
-            if param.name == Symbol.Unnamed then
-                writer(styler(Style.Operator, "@"))
-                writer(styler(Style.Number, tostring(param.index - 1)))
-            else
-                writer(styler(Style.Comment, "%"))
-                writer(styler(Style.Symbol, param.name.name))
-            end
-            if param.type ~= Type.Any then
-                writer(styler(Style.Comment, ":"))
-                writer(param.type:repr(styler))
-            end
-            if param.vararg then
-                writer(styler(Style.Keyword, "…"))
-            end
-        end
-
-        local function stream_argument(arg, alabel)
-            if arg.type == Type.Syntax then
-                local anchor
-                arg,anchor = unsyntax(arg)
-                if atom_anchors then
-                    stream_anchor(anchor)
-                end
-            end
-
-            if arg.type == Type.Parameter then
-                stream_param_label(arg.value, alabel)
-            elseif arg.type == Type.Label then
-                stream_label_label(arg.value)
-            else
-                writer(tostring(arg))
-            end
-        end
-
-        local function stream_users(_users)
-            if _users then
-                writer(styler(Style.Comment, "{"))
-                local k = 0
-                for dest,_ in pairs(_users) do
-                    if k > 0 then
-                        writer(" ")
-                    end
-                    stream_label_label_user(dest)
-                    k = k + 1
-                end
-                writer(styler(Style.Comment, "}"))
-            end
-        end
-
-        local function stream_scope(_scope)
-            if _scope then
-                writer(" ")
-                writer(styler(Style.Comment, "<"))
-                local k = 0
-                for dest,_ in pairs(_scope) do
-                    if k > 0 then
-                        writer(" ")
-                    end
-                    stream_label_label_user(dest)
-                    k = k + 1
-                end
-                writer(styler(Style.Comment, ">"))
-            end
-        end
-
-        local function stream_label (alabel)
-            if visited[alabel] then
-                return
-            end
-            visited[alabel] = true
-            if line_anchors then
-                stream_anchor(alabel.anchor)
-            end
-            writer(styler(Style.Symbol, alabel.name.name))
-            writer(styler(Style.Operator, "#"))
-            writer(styler(Style.Number, tostring(alabel.uid)))
-            stream_users(users[alabel])
-            writer(" ")
-            writer(styler(Style.Operator, "("))
-            for i=2,#alabel.parameters do
-                local param = alabel.parameters[i]
-                if i > 2 then
-                    writer(" ")
-                end
-                stream_param_label(param, alabel)
-                stream_users(users[param])
-            end
-            writer(styler(Style.Operator, ")"))
-            if alabel.parameters[1] and alabel.parameters[1].type ~= Type.Nothing then
-                writer(styler(Style.Comment,CONT_SEP))
-                local param = alabel.parameters[1]
-                stream_param_label(param, alabel)
-                stream_users(users[param])
-            end
-            writer(styler(Style.Operator, ":"))
-            stream_scope(scopes[alabel])
-            writer("\n    ")
-            if not alabel.enter then
-                writer(styler(Style.Error, "empty"))
-            else
-                if line_anchors and alabel.body_anchor then
-                    stream_anchor(alabel.body_anchor)
-                    writer(' ')
-                end
-                stream_argument(alabel.enter, alabel)
-                for i=2,#alabel.arguments do
-                    writer(" ")
-                    local arg = alabel.arguments[i]
-                    stream_argument(arg, alabel)
-                end
-                local cont = alabel.arguments[1]
-                if cont and not is_none(maybe_unsyntax(cont)) then
-                    writer(styler(Style.Comment,CONT_SEP))
-                    stream_argument(cont, alabel)
-                end
-            end
-            writer("\n")
-
-            if follow_labels then
-                for i,arg in ipairs(alabel.arguments) do
-                    arg = maybe_unsyntax(arg)
-                    stream_any(arg)
-                end
-                if alabel.enter then
-                    stream_any(maybe_unsyntax(alabel.enter))
-                end
-            end
-        end
-        stream_any = function(afunc)
-            if afunc.type == Type.Label then
-                stream_label(afunc.value)
-            end
-        end
-        stream_label(afunc)
-        if follow_scope then
-            local scope = afunc:build_scope()
-            for k=#scope,1,-1 do
-                stream_label(scope[k])
-            end
-        end
-    end
-end
-#endif
-
-//------------------------------------------------------------------------------
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
 // a basic macro expander that is replaced by the boot script
@@ -3435,24 +3339,76 @@ static void verify_at_parameter_count(const List *topit, int mincount, int maxco
 
 //------------------------------------------------------------------------------
 
-static const List *expand(Scope *env, const List *topit);
+struct ExpandResult {
+    const List *list;
+    Scope *env;
 
-static const List *expand_expr_list(Scope *env, const List *it) {
+    ExpandResult(const List *_list, Scope *_env) :
+        list(_list), env(_env) {}
+};
+
+static ExpandResult expand(Scope *env, const List *topit);
+
+static ExpandResult expand_expr_list(Scope *env, const List *it) {
     const List *l = EOL;
 process:
     if (it == EOL) {
-        return reverse_list_inplace(l);
+        return ExpandResult(reverse_list_inplace(l), env);
     }
-    const List *nextlist = expand(env, it);
-    if (nextlist == EOL) {
-        return reverse_list_inplace(l);
+    ExpandResult result = expand(env, it);
+    env = result.env;
+    assert(env);
+    if (result.list == EOL) {
+        return ExpandResult(reverse_list_inplace(l), env);
     }
-    it = nextlist->next;
-    l = List::from(nextlist->at, l);
+    it = result.list->next;
+    l = List::from(result.list->at, l);
     goto process;
 }
 
-static const List *expand(Scope *env, const List *topit) {
+#if 0
+static ExpandResult expand_syntax_extend( = function(env, topit, cont)
+    assert_scope(env)
+    assert_list(topit)
+    verify_at_parameter_count(topit, 1, -1)
+
+    local it = topit.at
+
+    local nit,anchor = unsyntax(it)
+    it = unwrap(Type.List, nit)
+
+    local _,anchor_kw = unsyntax(it.at)
+    it = it.next
+
+    local func_name = Any(Syntax(Any(Symbol.Unnamed), anchor))
+    local func = Label.create_empty_function(func_name)
+    func:append_parameter(Parameter.create_from_syntax(func_name, Type.Any))
+
+    local subenv = Scope(env)
+    subenv:bind(Any(Symbol.SyntaxScope), Any(env))
+
+    return expand_expr_list(subenv, it, function(expr)
+        expr = List(Any(Syntax(Any(func), anchor, true)), expr)
+        expr = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), expr)
+        expr = Any(Syntax(Any(expr), anchor, true))
+        return translate(null, expr,
+            function(_state, _anchor, enter, fun)
+                assert(not enter)
+                fun = maybe_unsyntax(fun)
+                return execute(fun,
+                    function(expr_env)
+                        if expr_env == null or expr_env.type ~= Type.Scope then
+                            set_active_anchor(anchor)
+                            location_error("syntax-extend did not evaluate to scope")
+                        end
+                        return cont(topit.next, unwrap(Type.Scope, expr_env))
+                    end)
+            end)
+    end)
+end
+#endif
+
+static ExpandResult expand(Scope *env, const List *topit) {
 process:
     assert(env);
     assert(topit != EOL);
@@ -3460,7 +3416,7 @@ process:
     const Syntax *sx = expr;
     if (sx->quoted) {
         // return as-is
-        return expr;
+        return ExpandResult(expr, env);
     }
     const Anchor *anchor = sx->anchor;
     set_active_anchor(anchor);
@@ -3486,8 +3442,12 @@ process:
             }
         }
 
-        list = expand_expr_list(env, list);
-        return List::from(Syntax::from_quoted(anchor, list), topit->next);
+        ExpandResult result = expand_expr_list(env, list);
+        list = result.list;
+        env = result.env;
+        assert(env);
+        return ExpandResult(
+            List::from(Syntax::from_quoted(anchor, list), topit->next), env);
     } else if (expr.type == TYPE_Symbol) {
         Symbol name = expr.symbol;
 
@@ -3503,9 +3463,9 @@ process:
             result = List::from(Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)), list);
         }
         result = Syntax::from_quoted(anchor, result);
-        return List::from(result, topit->next);
+        return ExpandResult(List::from(result, topit->next), env);
     } else {
-        return List::from(Syntax::from_quoted(anchor, expr), topit->next);
+        return ExpandResult(List::from(Syntax::from_quoted(anchor, expr), topit->next), env);
     }
     goto process;
 }
@@ -3516,11 +3476,11 @@ static Any expand_root(Any expr, Scope *scope = nullptr) {
         anchor = expr.syntax->anchor;
         expr = expr.syntax->datum;
     }
-    const List *result = expand_expr_list(scope?scope:globals, expr);
+    ExpandResult result = expand_expr_list(scope?scope:globals, expr);
     if (anchor) {
-        return Syntax::from(anchor, result);
+        return Syntax::from(anchor, result.list);
     } else {
-        return result;
+        return result.list;
     }
 }
 
@@ -3649,263 +3609,6 @@ expand_fn_cc = function(env, topit, cont)
     end)
 end
 
-expand_syntax_extend = function(env, topit, cont)
-    assert_scope(env)
-    assert_list(topit)
-    verify_at_parameter_count(topit, 1, -1)
-
-    local it = topit.at
-
-    local nit,anchor = unsyntax(it)
-    it = unwrap(Type.List, nit)
-
-    local _,anchor_kw = unsyntax(it.at)
-    it = it.next
-
-    local func_name = Any(Syntax(Any(Symbol.Unnamed), anchor))
-    local func = Label.create_empty_function(func_name)
-    func:append_parameter(Parameter.create_from_syntax(func_name, Type.Any))
-
-    local subenv = Scope(env)
-    subenv:bind(Any(Symbol.SyntaxScope), Any(env))
-
-    return expand_expr_list(subenv, it, function(expr)
-        expr = List(Any(Syntax(Any(func), anchor, true)), expr)
-        expr = List(Any(Syntax(globals:lookup(Symbol.FnCCForm), anchor, true)), expr)
-        expr = Any(Syntax(Any(expr), anchor, true))
-        return translate(null, expr,
-            function(_state, _anchor, enter, fun)
-                assert(not enter)
-                fun = maybe_unsyntax(fun)
-                return execute(fun,
-                    function(expr_env)
-                        if expr_env == null or expr_env.type ~= Type.Scope then
-                            set_active_anchor(anchor)
-                            location_error("syntax-extend did not evaluate to scope")
-                        end
-                        return cont(topit.next, unwrap(Type.Scope, expr_env))
-                    end)
-            end)
-    end)
-end
-
-local function expand_wildcard(label, env, handler, topit, cont)
-    assert_string(label)
-    assert_scope(env)
-    assert_any(handler)
-    assert_list(topit)
-    assert(cont)
-    return xpcallcc(function(cont)
-        return execute(handler, function(result)
-            if result == null or is_none(result) then
-                return cont(EOL)
-            end
-            if result.type ~= Type.List then
-                location_error(label
-                    .. " macro returned unexpected value of type "
-                    .. tostring(result.type))
-            end
-            return cont(unwrap(Type.List, result))
-        end, Any(topit), Any(env))
-    end,
-    function (exc, cont)
-        exc = exception(exc)
-        local w = string_writer()
-        local _,anchor = unsyntax(topit.at)
-        anchor:stream_message_with_source(w,
-            'while expanding ' .. label .. ' macro')
-        local fmt = StreamValueFormat()
-        fmt.naked = true
-        fmt.maxdepth = 3
-        fmt.maxlength = 5
-        stream_expr(w, topit.at, fmt)
-        exc.macros = w() .. (exc.macros or "")
-        error(exc)
-    end,
-    cont)
-end
-
-local function expand_macro(env, handler, topit, cont)
-    assert_scope(env)
-    assert_any(handler)
-    assert_list(topit)
-    assert(cont)
-    return xpcallcc(function(cont)
-        return execute(handler, function(result_list, result_scope)
-            --print(handler, result_list, result_scope)
-            if (is_none(result_list)) then
-                return cont(EOL)
-            end
-            result_list = unwrap(Type.List, result_list)
-            result_scope = result_scope and unwrap(Type.Scope, result_scope)
-            if result_list ~= EOL and result_scope == null then
-                location_error(tostring(handler) .. " did not return a scope")
-            end
-            if global_opts.validate_macros then
-                -- validate result completely wrapped in syntax
-                local todo = {result_list.at}
-                local k = 1
-                while k <= #todo do
-                    local elem = todo[k]
-                    if elem.type ~= Type.Syntax then
-                        location_error("syntax objects missing in expanded macro")
-                    end
-                    if not elem.value.quoted then
-                        elem = unsyntax(elem)
-                        if elem.type == Type.List then
-                            elem = elem.value
-                            while elem ~= EOL do
-                                table.insert(todo, elem.at)
-                                elem = elem.next
-                            end
-                        end
-                    end
-                    k = k + 1
-                    assert(k < global_opts.stack_limit, "possible circular reference encountered")
-                end
-            end
-            return cont(result_list, result_scope)
-        end, Any(topit), Any(env))
-    end,
-    function (exc, cont)
-        exc = exception(exc)
-        local w = string_writer()
-        local _, anchor = unsyntax(topit.at)
-        anchor:stream_message_with_source(w, 'while expanding macro')
-        local fmt = StreamValueFormat()
-        fmt.naked = true
-        fmt.maxdepth = 3
-        fmt.maxlength = 5
-        stream_expr(w, topit.at, fmt)
-        exc.macros = w() .. (exc.macros or "")
-        error(exc)
-    end,
-    cont)
-end
-
-expand = function(env, topit, cont)
-    assert_scope(env)
-    assert_list(topit)
-    local result = none
-    assert(topit ~= EOL)
-
-    local function process(env, topit)
-        local expr = topit.at
-        local sx = unwrap(Type.Syntax, expr)
-        if sx.quoted then
-            -- return as-is
-            return cont(List(expr, topit.next), env)
-        end
-        local anchor
-        expr,anchor = unsyntax(expr)
-        set_active_anchor(anchor)
-        if (expr.type == Type.List) then
-            local list = expr.value
-            if (list == EOL) then
-                location_error("expression is empty")
-            end
-
-            local head = list.at
-            local head_anchor
-            head, head_anchor = unsyntax(head)
-
-            -- resolve symbol
-            if (head.type == Type.Symbol) then
-                head = env:lookup(head.value) or none
-            end
-
-            local function expand_list()
-                return expand_expr_list(env,
-                    unwrap(Type.List, expr),
-                    function (result)
-                        return cont(List(Any(Syntax(Any(result), anchor, true)),
-                            topit.next), env)
-                    end)
-            end
-
-            local function expand_wildcard_list()
-                local default_handler = env:lookup(Symbol.ListWildcard)
-                if default_handler then
-                    return expand_wildcard("wildcard list",
-                        env, default_handler, topit,
-                        function (result)
-                            if result ~= EOL then
-                                return process(env, result)
-                            end
-                            return expand_list()
-                        end)
-                end
-                return expand_list()
-            end
-
-            if (is_macro_type(head.type)) then
-                return expand_macro(env, unmacro(head), topit,
-                    function (result_list,result_env)
-                        if (result_list ~= EOL) then
-                            assert_scope(result_env)
-                            assert(result_list ~= EOL)
-                            return process(result_env, result_list)
-                        elseif result_env then
-                            return cont(EOL, env)
-                        else
-                            return expand_wildcard_list()
-                        end
-                    end)
-            end
-
-            return expand_wildcard_list()
-        elseif expr.type == Type.Symbol then
-            local value = expr.value
-            local result = env:lookup(value)
-            if result == null then
-                local function missing_symbol_error()
-                    set_active_anchor(anchor)
-                    location_error(
-                        format("no value bound to name '%s' in scope", value.name))
-                end
-                local default_handler = env:lookup(Symbol.SymbolWildcard)
-                if default_handler then
-                    return expand_wildcard("wildcard symbol",
-                        env, default_handler, topit, function(result)
-                        if result ~= EOL then
-                            return process(env, result)
-                        end
-                        return missing_symbol_error()
-                    end)
-                else
-                    return missing_symbol_error()
-                end
-            end
-            if result.type == Type.List then
-                -- quote lists
-                result = List(Any(Syntax(result, anchor, true)), EOL)
-                result = List(Any(Syntax(globals:lookup(Symbol.QuoteForm), anchor, true)), result)
-                result = Any(result)
-            end
-            result = Any(Syntax(result, anchor, true))
-            return cont(List(result, topit.next), env)
-        else
-            return cont(List(Any(Syntax(expr, anchor, true)), topit.next), env)
-        end
-    end
-    return process(env, topit)
-end
-
-expand_root = function(expr, scope, cont)
-    local anchor
-    if expr.type == Type.Syntax then
-        expr, anchor = unsyntax(expr)
-    end
-    expr = unwrap(Type.List, expr)
-    return expand_expr_list(scope or globals, expr, function(result)
-        result = Any(result)
-        if anchor then
-            result = Any(Syntax(result, anchor))
-        end
-        return cont(result)
-    end)
-end
-
 end -- do
 #endif
 
@@ -3967,49 +3670,13 @@ struct TranslateResult {
 
 static TranslateResult translate(Label *state, const Any &sxexpr);
 
-static TranslateResult translate_expr_list(Label *state, const List *it, const Anchor *anchor) {
-    assert(anchor);
-    assert(it);
-loop:
-    if (it == EOL) {
-        return TranslateResult(state, anchor);
-    } else if (it->next == EOL) { // last element goes to cont
-        return translate(state, it->at);
-    } else {
-        Any sxvalue = it->at;
-        const Syntax *sx = sxvalue;
-        anchor = sx->anchor;
-        TranslateResult result = translate(state, sxvalue);
-        state = result.state;
-        const Anchor *_anchor = result.anchor;
-        assert(anchor);
-        Any enter = result.enter;
-        if (enter.type != TYPE_Nothing) {
-            auto &&_args = result.args;
-            // complex expression
-            // continuation and results are ignored
-            Label *next = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            if (is_return_callable(enter, _args)) {
-                set_active_anchor(anchor);
-                location_error(String::from("return call is not last expression"));
-            } else {
-                _args[0] = next;
-            }
-            br(state, enter, _args, _anchor);
-            state = next;
-        }
-        it = it->next;
-        goto loop;
-    }
-}
-
 static TranslateResult translate_argument_list(
     Label *state, const List *it, const Anchor *anchor, bool explicit_ret) {
     std::vector<Any> args;
     int idx = 0;
     Any enter = none;
     if (!explicit_ret) {
-        args.push_back(none);
+        args.push_back(Any(false));
     }
 loop:
     if (it == EOL) {
@@ -4096,18 +3763,44 @@ static TranslateResult translate_quote(Label *state, Any _it) {
     return TranslateResult(state, anchor, none, { unsyntax(it->at) });
 }
 
-// (fn/cc <label without body> expr ...)
-static TranslateResult translate_fn_body(Label *state, Any _it) {
-    const Syntax *sx = _it;
-    const Anchor *anchor = sx->anchor;
-    const List *it = sx->datum;
+static TranslateResult translate_expr_list(Label *state, const List *it, const Anchor *anchor) {
+    assert(anchor);
+loop:
+    if (it == EOL) {
+        return TranslateResult(state, anchor);
+    } else if (it->next == EOL) { // last element goes to cont
+        return translate(state, it->at);
+    } else {
+        Any sxvalue = it->at;
+        const Syntax *sx = sxvalue;
+        anchor = sx->anchor;
+        TranslateResult result = translate(state, sxvalue);
+        state = result.state;
+        const Anchor *_anchor = result.anchor;
+        assert(anchor);
+        Any enter = result.enter;
+        if (enter.type != TYPE_Nothing) {
+            auto &&_args = result.args;
+            // complex expression
+            // continuation and results are ignored
+            Label *next = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+            if (is_return_callable(enter, _args)) {
+                set_active_anchor(anchor);
+                location_error(String::from("return call is not last expression"));
+            } else {
+                _args[0] = next;
+            }
+            br(state, enter, _args, _anchor);
+            state = next;
+        }
+        it = it->next;
+        goto loop;
+    }
+}
 
-    it = it->next;
-    Label *func = unsyntax(it->at);
-    it = it->next;
-
+static void translate_function_expr_list(
+    Label *func, const List *it, const Anchor *anchor) {
     Parameter *dest = func->params[0];
-
     TranslateResult result = translate_expr_list(func, it, anchor);
     Label *_state = result.state;
     const Anchor *_anchor = result.anchor;
@@ -4116,7 +3809,8 @@ static TranslateResult translate_fn_body(Label *state, Any _it) {
     assert(_anchor);
     if (enter.type != TYPE_Nothing) {
         assert(!args.empty());
-        if (args[0].type == TYPE_Nothing) {
+        if ((args[0].type == TYPE_Bool)
+            && !(args[0].i1)) {
             if (is_return_callable(enter, args)) {
                 args[0] = none;
             } else {
@@ -4135,6 +3829,19 @@ static TranslateResult translate_fn_body(Label *state, Any _it) {
         br(_state, dest, {none, value}, _anchor);
     }
     assert(!func->body.args.empty());
+}
+
+// (fn/cc <label without body> expr ...)
+static TranslateResult translate_fn_body(Label *state, Any _it) {
+    const Syntax *sx = _it;
+    const Anchor *anchor = sx->anchor;
+    const List *it = sx->datum;
+
+    it = it->next;
+    Label *func = unsyntax(it->at);
+    it = it->next;
+
+    translate_function_expr_list(func, it, anchor);
     return TranslateResult(state, anchor, none, { func });
 }
 
@@ -4186,7 +3893,7 @@ static Label *translate_root(Any _expr, Symbol name) {
     const List *expr = sx->datum;
 
     Label *mainfunc = Label::function_from(anchor, name);
-    translate_expr_list(mainfunc, expr, anchor);
+    translate_function_expr_list(mainfunc, expr, anchor);
     return mainfunc;
 }
 
@@ -4195,7 +3902,9 @@ static Label *translate_root(Any _expr, Symbol name) {
 //------------------------------------------------------------------------------
 
 static void init_globals() {
-
+#define T(NAME) globals->bind(NAME, Builtin(NAME));
+    B_GLOBALS()
+#undef T
 }
 
 //------------------------------------------------------------------------------
@@ -4251,47 +3960,25 @@ int main(int argc, char *argv[]) {
 
     auto cout = StyledStream(std::cout);
 
-    cout << 1 << "," << 2.0 << "," << false << std::endl;
-
-    cout << Any(Syntax::from(Anchor::from("test.txt",2,5), Any(String::from("yo yo yo")))) << std::endl;
-
-    Anchor::from("bangra2.cpp",1,1,10)->stream_source_line(cout);
-
-    cout << List::from({1,2.0,List::from({1,2,3}),Symbol("my dude"), false,"hi"}) << std::endl;
-
-    cout << Symbol("test") << std::endl;
-    cout << Symbol("tost") << std::endl;
-    cout << Symbol("test") << std::endl;
-    cout << Type(TYPE_U32) << std::endl;
-
-    cout << Any(String::from("string"))
-        << " " << Any(none)
-        << " " << Any(Symbol("symbol"))
-        << " " << Any(123)
-        << " " << Any((int8_t)123)
-        << " " << Any((uint8_t)123)
-        << " " << Any((int16_t)123)
-        << " " << Any((uint16_t)123)
-        << " " << Any(false)
-        << std::endl;
-
-    auto p0 = Parameter::from(Anchor::from("test.txt",2,5), "test", TYPE_Any);
-    auto fn = Label::from(Anchor::from("test.txt",2,5), "xyz");
-    fn->append(p0);
-
-    cout << fn << std::endl;
-
-    SourceFile *sf = SourceFile::open("bangra.b");
+    Symbol name = "bangra.b";
+    SourceFile *sf = SourceFile::open(name);
     LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
     auto expr = parser.parse();
     try {
         expr = expand_root(expr);
+        stream_expr(cout, expr, StreamExprFormat());
+        Label *fn = translate_root(expr, name);
+        StreamILFormat fmt;
+        fmt.follow = StreamILFormat::Scope;
+        stream_il(cout, fn, fmt);
+
+        Instruction cmd;
+        cmd.enter = fn;
+        cmd.args = { Builtin(FN_Exit) };
+        interpreter_loop(cmd);
     } catch (const Exception &exc) {
         default_exception_handler(exc);
     }
-
-    //stream_expr(cout, expr, StreamExprFormat());
-    interpreter_loop(fn);
 
     return 0;
 }
