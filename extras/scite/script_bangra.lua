@@ -29,7 +29,7 @@ local function bangra_symbols()
         .. " unquote unquote-splice globals return splice"
         .. " try except define in loop-for empty-list empty-tuple raise"
         .. " yield xlet cc/call fn/cc null break quote-syntax recur"
-        .. " fn-types"
+        .. " fn-types syntax-apply-block"
         ),
 
     -- builtin and global functions

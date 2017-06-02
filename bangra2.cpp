@@ -778,7 +778,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
-     T(FN_Branch) T(FN_Print) T(KW_FnCC)
+     T(FN_Branch) T(FN_Print) T(KW_FnCC) T(KW_SyntaxApplyBlock)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -846,7 +846,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(KW_LoopFor, "loop-for") T(KW_None, "none") T(KW_Null, "null") \
     T(KW_QQuoteSyntax, "qquote-syntax") T(KW_Quote, "quote") \
     T(KW_QuoteSyntax, "quote-syntax") T(KW_Raise, "raise") T(KW_Recur, "recur") \
-    T(KW_Return, "return") T(KW_Splice, "splice") \
+    T(KW_Return, "return") T(KW_Splice, "splice") T(KW_SyntaxApplyBlock, "syntax-apply-block") \
     T(KW_SyntaxExtend, "syntax-extend") T(KW_True, "true") T(KW_Try, "try") \
     T(KW_Unquote, "unquote") T(KW_UnquoteSplice, "unquote-splice") \
     T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
@@ -1415,6 +1415,7 @@ struct List;
 struct Label;
 struct Parameter;
 struct VarArgs;
+struct Scope;
 
 static void location_error(const String *msg);
 
@@ -1441,6 +1442,7 @@ struct Any {
         Parameter *parameter;
         const VarArgs *varargs;
         Builtin builtin;
+        Scope *scope;
     };
 
     Any(Nothing x) : type(TYPE_Nothing) {}
@@ -1465,6 +1467,7 @@ struct Any {
     Any(Label *x) : type(TYPE_Label), label(x) {}
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
+    Any(Scope *x) : type(TYPE_Scope), scope(x) {}
     template<unsigned N>
     Any(const char (&str)[N]) : type(TYPE_String), string(String::from(str)) {}
     // a catch-all for unsupported types
@@ -1494,6 +1497,7 @@ struct Any {
             case TYPE_Builtin: return dest(builtin);
             case TYPE_Label: return dest(label);
             case TYPE_Parameter: return dest(parameter);
+            case TYPE_Scope: return dest(scope);
             default:
                 StyledString ss;
                 ss.out << "cannot dispatch type: " << type;
@@ -1668,7 +1672,7 @@ public:
         size_t totalcount = this->totalcount();
         size_t count = this->count();
         ss << Style_Keyword << "Scope" << Style_Comment << "<" << Style_None
-            << format("%i+%i symbols", count, totalcount - count)
+            << format("%i+%i symbols", count, totalcount - count)->data
             << Style_Comment << ">" << Style_None;
         return ss;
     }
@@ -3736,6 +3740,28 @@ static const List *expand_fn_cc(Scope *env, const List *topit) {
     return List::from(Syntax::from_quoted(anchor_kw, func), topit->next);
 }
 
+static const List *expand_syntax_apply_block(Scope *env, const List *topit) {
+    verify_at_parameter_count(topit, 1, 1);
+
+    const Syntax *sxit = topit->at;
+    //const Anchor *anchor = sxit->anchor;
+    const List *it = sxit->datum;
+
+    const Anchor *anchor_kw = ((const Syntax *)it->at)->anchor;
+
+    it = it->next;
+
+    return List::from(
+        Syntax::from(anchor_kw,
+            List::from({
+                it->at,
+                Syntax::from(anchor_kw, List::from({
+                    Syntax::from(anchor_kw, Builtin(SYM_QuoteForm)),
+                    Syntax::from_quoted(anchor_kw, topit->next)})),
+                Syntax::from_quoted(anchor_kw, env)})),
+        EOL);
+}
+
 static ExpandResult expand(Scope *env, const List *topit) {
 process:
     assert(env);
@@ -3768,6 +3794,10 @@ process:
             case KW_FnCC: {
                 topit = expand_fn_cc(env, topit);
                 return ExpandResult(topit, env);
+            } break;
+            case KW_SyntaxApplyBlock: {
+                topit = expand_syntax_apply_block(env, topit);
+                goto process;
             } break;
             default: break;
             }

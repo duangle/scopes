@@ -23,6 +23,15 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
+# defer the rest of the source file to process()
+syntax-apply-block
+    fn/cc process (_ exprs env)
+        # we can do funky stuff here, such as
+          do some changes to env, then continue
+          macro expansion
+        print exprs env
+
+# by the time we get here,
 fn/cc somefunc (_ x)
     print
         branch false
