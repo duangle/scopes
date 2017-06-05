@@ -24,7 +24,7 @@
     functions and macros, parses the command-line and then enters the REPL.
 
 fn/cc expand-expr-list (_ topit env)
-    fn/cc expand-fn/cc (_)
+    fn/cc expand-fn/cc (_ topit env)
         fn/cc process-name (_ anchor it subenv)
             fn/cc expand-parameter (_ sxparam)
                 call
@@ -38,13 +38,17 @@ fn/cc expand-expr-list (_ topit env)
                     syntax->datum sxparam
 
             fn/cc process-params (_ func it)
-                fn/cc process-body (_)
-                    translate-label-body! func anchor
+                fn/cc process-body (return)
+                    call
+                        fn/cc (_ result)
+                            translate-label-body! func anchor result
                         expand-expr-list (list-next it) subenv
                     # return result
-                    list-cons
-                        datum->quoted-syntax func anchor
-                        list-next topit
+                    return
+                        list-cons
+                            datum->quoted-syntax func anchor
+                            list-next topit
+                        \ env
 
                 fn/cc process-param (_ params)
                     branch (list-empty? params)
@@ -159,7 +163,7 @@ fn/cc expand-expr-list (_ topit env)
                                 fn/cc (_)
                                     branch (Symbol== head (Symbol-new "fn/cc"))
                                         fn/cc (_)
-                                            return (expand-fn/cc)
+                                            return (expand-fn/cc topit env)
                                         fn/cc (_)
                                             scope@ env head
                                 fn/cc (_) head
@@ -232,7 +236,7 @@ fn/cc expand-expr-list (_ topit env)
                             syntax->anchor expr
             list-at topit
 
-    print "expanding" topit
+    #print "expanding" topit env
     branch (list-empty? topit)
         fn/cc (return)
             return topit env
@@ -251,13 +255,17 @@ fn/cc expand-expr-list (_ topit env)
 
 # defer the rest of the source file to process()
 syntax-apply-block
-    fn/cc process (_ exprs env)
-        expand-expr-list exprs env
+    fn/cc process (_ anchor exprs env)
+        call
+            fn/cc (_ result)
+                call
+                    translate anchor result
+            expand-expr-list exprs env
 
 # by the time we get here,
 fn/cc somefunc (_ x)
     print
-        branch false
+        branch true
             fn/cc (_)
                 print "yes" x
                 \ "!!"

@@ -795,7 +795,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
     T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
     T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
-    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq)
+    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -908,6 +908,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
+    T(FN_Translate, "translate") \
     T(FN_TupleOf, "tupleof") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") T(FN_Unbox, "unbox") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
@@ -3297,6 +3298,7 @@ inline int checkargs(const Instruction &in) {
 
 static void translate_function_expr_list(
     Label *func, const List *it, const Anchor *anchor);
+static Label *translate_root(const List *it, const Anchor *anchor);
 
 static bool handle_builtin(Instruction &in, Instruction &out) {
     switch(in.enter.builtin.value()) {
@@ -3442,6 +3444,12 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(1, 1);
         const Syntax *sx = in.args[1];
         RETARGS(sx->anchor);
+    } break;
+    case FN_Translate: {
+        CHECKARGS(2, 2);
+        const Anchor *body_anchor = in.args[1];
+        const List *expr = in.args[2];
+        RETARGS(translate_root(expr, body_anchor));
     } break;
     case SFXFN_TranslateLabelBody: {
         CHECKARGS(3, 3);
@@ -3849,15 +3857,18 @@ static TranslateResult translate(Label *state, const Any &sxexpr) {
     }
 }
 
+static Label *translate_root(const List *it, const Anchor *anchor) {
+    Label *mainfunc = Label::function_from(anchor, anchor->path);
+    translate_function_expr_list(mainfunc, it, anchor);
+    return mainfunc;
+}
+
 // path must be resident
-static Label *translate_root(Any _expr, Symbol name) {
+static Label *translate_root(Any _expr) {
     const Syntax *sx = _expr;
     const Anchor *anchor = sx->anchor;
     const List *expr = sx->datum;
-
-    Label *mainfunc = Label::function_from(anchor, name);
-    translate_function_expr_list(mainfunc, expr, anchor);
-    return mainfunc;
+    return translate_root(expr, anchor);
 }
 
 //------------------------------------------------------------------------------
@@ -3993,6 +4004,7 @@ static const List *expand_syntax_apply_block(Scope *env, const List *topit) {
         Syntax::from(anchor_kw,
             List::from({
                 it->at,
+                Syntax::from_quoted(anchor_kw, anchor_kw),
                 Syntax::from(anchor_kw, List::from({
                     Syntax::from(anchor_kw, Builtin(SYM_QuoteForm)),
                     Syntax::from_quoted(anchor_kw, topit->next)})),
@@ -4149,7 +4161,7 @@ int main(int argc, char *argv[]) {
         bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
     }
 
-    auto cout = StyledStream(std::cout);
+    //auto cout = StyledStream(std::cout);
 
     Symbol name = "bangra.b";
     SourceFile *sf = SourceFile::open(name);
@@ -4157,11 +4169,11 @@ int main(int argc, char *argv[]) {
     auto expr = parser.parse();
     try {
         expr = expand_root(expr);
-        stream_expr(cout, expr, StreamExprFormat());
-        Label *fn = translate_root(expr, name);
-        StreamILFormat fmt;
-        fmt.follow = StreamILFormat::Scope;
-        stream_il(cout, fn, fmt);
+        //stream_expr(cout, expr, StreamExprFormat());
+        Label *fn = translate_root(expr);
+        //StreamILFormat fmt;
+        //fmt.follow = StreamILFormat::Scope;
+        //stream_il(cout, fn, fmt);
 
         Instruction cmd;
         cmd.enter = fn;
