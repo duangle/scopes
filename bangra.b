@@ -23,13 +23,236 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
+fn/cc expand-expr-list (_ topit env)
+    fn/cc expand-fn/cc (_)
+        fn/cc process-name (_ anchor it subenv)
+            fn/cc expand-parameter (_ sxparam)
+                call
+                    fn/cc (_ param-anchor param-name)
+                        call
+                            fn/cc (_ param)
+                                set-scope-symbol! subenv param-name param
+                                \ param
+                            Parameter-new param-anchor param-name Any
+                    syntax->anchor sxparam
+                    syntax->datum sxparam
+
+            fn/cc process-params (_ func it)
+                fn/cc process-body (_)
+                    translate-label-body! func anchor
+                        expand-expr-list (list-next it) subenv
+                    # return result
+                    list-cons
+                        datum->quoted-syntax func anchor
+                        list-next topit
+
+                fn/cc process-param (_ params)
+                    branch (list-empty? params)
+                        \ process-body
+                        fn/cc (_)
+                            label-append-parameter! func
+                                expand-parameter (list-at params)
+                            process-param
+                                list-next params
+                call
+                    fn/cc (_ sxplist)
+                        call
+                            fn/cc (_ params)
+                                branch (list-empty? params)
+                                    fn/cc (_)
+                                        error (syntax->anchor params)
+                                            \ "explicit continuation parameter missing"
+                                    fn/cc (_)
+                                        process-param params
+                            syntax->datum sxplist
+                    list-at it
+
+            call
+                fn/cc (_ tryfunc-name)
+                    branch (type== (typeof tryfunc-name) Symbol)
+                        fn/cc (_)
+                            # named self-binding
+                            call
+                                fn/cc (_ func)
+                                    set-scope-symbol! env tryfunc-name func
+                                    process-params func
+                                        list-next it
+                                Label-new anchor tryfunc-name
+                        fn/cc (_)
+                            branch (type== (typeof tryfunc-name) string)
+                                fn/cc (_)
+                                    # named lambda
+                                    process-params
+                                        Label-new anchor (Symbol-new tryfunc-name)
+                                        list-next it
+                                fn/cc (_)
+                                    # unnamed lambda
+                                    process-params
+                                        Label-new anchor (Symbol-new "")
+                                        \ it
+                syntax->datum (list-at it)
+
+        call
+            fn/cc (_ it)
+                call process-name
+                    syntax->anchor (list-at it)
+                    list-next it
+                    Scope-new env
+
+            syntax->datum (list-at topit)
+
+    fn/cc expand (_ topit env)
+        fn/cc expand-list-or-symbol (_ expr anchor)
+
+            fn/cc expand-call-list (_)
+                call
+                    fn/cc (return outlist outenv)
+                        return
+                            list-cons
+                                datum->quoted-syntax outlist anchor
+                                list-next topit
+                            \ outenv
+                    expand-expr-list expr env
+
+            #fn/cc expand-wildcard-list (_)
+                local default_handler = env:lookup(Symbol.ListWildcard)
+                if default_handler then
+                    return expand_wildcard("wildcard list",
+                        env, default_handler, topit,
+                        function (result)
+                            if result ~= EOL then
+                                return expand(env, result)
+                            end
+                            return expand-call-list()
+                        end)
+                end
+                return expand-call-list()
+
+            #fn/cc expand-macro-list (_ f)
+                #return expand_macro(env, unmacro(head), topit,
+                    function (result_list,result_env)
+                        if (result_list ~= EOL) then
+                            assert_scope(result_env)
+                            assert(result_list ~= EOL)
+                            return expand(result_env, result_list)
+                        elseif result_env then
+                            return cont(EOL, env)
+                        else
+                            return expand_wildcard_list()
+                        end
+                    end)
+
+            fn/cc expand-list (return)
+                branch
+                    list-empty? expr
+                    fn/cc (_)
+                        error anchor "expression is empty"
+                    fn/cc (_)
+                call
+                    fn/cc (_ head)
+                        # expand-macro-list (macro->Label head)
+                        # expand-wildcard-list
+                        expand-call-list
+                    call
+                        fn/cc (_ head)
+                            branch (type== (typeof head) Symbol)
+                                fn/cc (_)
+                                    branch (Symbol== head (Symbol-new "fn/cc"))
+                                        fn/cc (_)
+                                            return (expand-fn/cc)
+                                        fn/cc (_)
+                                            scope@ env head
+                                fn/cc (_) head
+                        syntax->datum
+                            list-at expr
+
+            fn/cc expand-symbol (_ value value-exists?)
+                branch value-exists?
+                    fn/cc (_)
+                        branch (type== (typeof value) list)
+                            fn/cc (return)
+                                # quote lists
+                                return
+                                    list-cons
+                                        list-cons
+                                            datum->quoted-syntax
+                                                \ form-quote anchor
+                                            list-cons
+                                                datum->quoted-syntax value anchor
+                                                \ list-empty
+                                        list-next topit
+                                    \ env
+                            fn/cc (return)
+                                return
+                                    list-cons
+                                        datum->quoted-syntax value anchor
+                                        list-next topit
+                                    \ env
+                    fn/cc (_)
+                        fn/cc missing-symbol-error (_)
+                            error anchor
+                                string-join "no value bound to name "
+                                    string-join (repr expr) " in scope"
+                        #
+                            local default_handler = env:lookup(Symbol.SymbolWildcard)
+                            if default_handler then
+                                return expand_wildcard("wildcard symbol",
+                                    env, default_handler, topit, function(result)
+                                    if result ~= EOL then
+                                        return expand(env, result)
+                                    end
+                                    return missing_symbol_error()
+                                end)
+                            else
+                                return missing_symbol_error()
+                            end
+                        missing-symbol-error
+
+            call
+                fn/cc (_ expr-type)
+                    branch (type== expr-type list)
+                        \ expand-list
+                        fn/cc (_)
+                            branch (type== expr-type Symbol)
+                                fn/cc (_)
+                                    expand-symbol (scope@ env expr)
+                                fn/cc (return)
+                                    return topit env
+                typeof expr
+
+        call
+            fn/cc (_ expr)
+                branch
+                    syntax-quoted? expr
+                    fn/cc (return)
+                        return topit env
+                    fn/cc (_)
+                        expand-list-or-symbol
+                            syntax->datum expr
+                            syntax->anchor expr
+            list-at topit
+
+    print "expanding" topit
+    branch (list-empty? topit)
+        fn/cc (return)
+            return topit env
+        fn/cc (_)
+            call
+                fn/cc (_ nextlist nextscope)
+                    call
+                        fn/cc (return restlist restscope)
+                            return
+                                list-cons (list-at nextlist) restlist
+                                \ restscope
+                        expand-expr-list
+                            list-next nextlist
+                            \ nextscope
+                expand topit env
+
 # defer the rest of the source file to process()
 syntax-apply-block
     fn/cc process (_ exprs env)
-        # we can do funky stuff here, such as
-          do some changes to env, then continue
-          macro expansion
-        print exprs env
+        expand-expr-list exprs env
 
 # by the time we get here,
 fn/cc somefunc (_ x)
