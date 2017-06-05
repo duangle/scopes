@@ -2643,6 +2643,8 @@ struct ILNode {
             }
         }
     }
+
+    void stream_users(StyledStream &ss) const;
 };
 
 struct Parameter : ILNode {
@@ -2678,10 +2680,8 @@ public:
     StyledStream &stream(StyledStream &ss) const;
 
     static Parameter *from(const Parameter *_param) {
-        auto param = new Parameter(*_param);
-        param->label = nullptr;
-        param->index = -1;
-        return param;
+        return new Parameter(
+            _param->anchor, _param->name, _param->type, _param->vararg);
     }
 
     static Parameter *from(const Anchor *_anchor, Symbol _name, Type _type) {
@@ -2839,7 +2839,7 @@ public:
             }
         }
 
-        std::cout << tempscope.size() << std::endl;
+        //std::cout << tempscope.size() << std::endl;
     }
 
     StyledStream &stream_short(StyledStream &ss) const {
@@ -2849,8 +2849,11 @@ public:
         return ss;
     }
 
-    StyledStream &stream(StyledStream &ss) const {
+    StyledStream &stream(StyledStream &ss, bool users = false) const {
         stream_short(ss);
+        if (users) {
+            stream_users(ss);
+        }
         ss << Style_Operator << "(" << Style_None;
         size_t count = params.size();
         for (size_t i = 1; i < count; ++i) {
@@ -2858,11 +2861,17 @@ public:
                 ss << " ";
             }
             params[i]->stream_local(ss);
+            if (users) {
+                params[i]->stream_users(ss);
+            }
         }
         ss << Style_Operator << ")" << Style_None;
         if (count && (params[0]->type != TYPE_Nothing)) {
             ss << Style_Comment << CONT_SEP << Style_None;
             params[0]->stream_local(ss);
+            if (users) {
+                params[0]->stream_users(ss);
+            }
         }
         return ss;
     }
@@ -2914,6 +2923,22 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
     return ss;
 }
 
+void ILNode::stream_users(StyledStream &ss) const {
+    if (!users.empty()) {
+        ss << Style_Comment << "{" << Style_None;
+        size_t i = 0;
+        for (auto &&kv : users) {
+            if (i > 0) {
+                ss << " ";
+            }
+            Label *label = kv.first;
+            label->stream_short(ss);
+            i++;
+        }
+        ss << Style_Comment << "}" << Style_None;
+    }
+}
+
 //------------------------------------------------------------------------------
 // IL PRINTER
 //------------------------------------------------------------------------------
@@ -2928,15 +2953,25 @@ struct StreamILFormat {
 
     Tagging anchors;
     Tagging follow;
+    bool show_users;
 
     StreamILFormat() :
         anchors(None),
-        follow(All)
+        follow(All),
+        show_users(false)
         {}
 
     static StreamILFormat debug_scope() {
         StreamILFormat fmt;
         fmt.follow = Scope;
+        fmt.show_users = true;
+        return fmt;
+    }
+
+    static StreamILFormat debug_single() {
+        StreamILFormat fmt;
+        fmt.follow = None;
+        fmt.show_users = true;
         return fmt;
     }
 };
@@ -2986,21 +3021,6 @@ struct StreamIL : StreamAnchors {
     }
 
     #if 0
-    local function stream_users(_users)
-        if _users then
-            writer(styler(Style.Comment, "{"))
-            local k = 0
-            for dest,_ in pairs(_users) do
-                if k > 0 then
-                    writer(" ")
-                end
-                stream_label_label_user(dest)
-                k = k + 1
-            end
-            writer(styler(Style.Comment, "}"))
-        end
-    end
-
     local function stream_scope(_scope)
         if _scope then
             writer(" ")
@@ -3026,7 +3046,7 @@ struct StreamIL : StreamAnchors {
         if (line_anchors) {
             stream_anchor(alabel->anchor);
         }
-        alabel->stream(ss);
+        alabel->stream(ss, true);
         ss << Style_Operator << ":" << Style_None;
         //stream_scope(scopes[alabel])
         ss << std::endl;
@@ -3114,6 +3134,7 @@ skip:
     ll->body.anchor = entry->body.anchor;
     ll->body.enter = enter;
 
+    StyledStream ss(std::cout);
     for (size_t i = 0; i < args.size(); ++i) {
         Any arg = args[i];
         if (arg.type == TYPE_Label) {
@@ -3149,11 +3170,10 @@ skip:
 
 static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map) {
     StyledStream ss(std::cout);
-    stream_il(ss, entry, StreamILFormat::debug_scope());
-    ss << "=====================================\n";
 
     std::vector<Label *> entry_scope;
     entry->build_scope(entry_scope);
+
     // remap entry point
     Label *le = Label::from(entry);
     le->set_parameters(params);
@@ -3170,6 +3190,7 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
             ll->append(pparam);
         }
     }
+
     // remap label bodies
     for (auto &&l : entry_scope) {
         Label *ll = l->paired;
@@ -3177,6 +3198,22 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
         mangle_remap_body(ll, l, map);
     }
     mangle_remap_body(le, entry, map);
+
+    #if 0
+    ss << "IN[\n";
+    stream_il(ss, entry, StreamILFormat::debug_single());
+    for (auto && l : entry_scope) {
+        stream_il(ss, l, StreamILFormat::debug_single());
+    }
+    ss << "]IN\n";
+    ss << "OUT[\n";
+    stream_il(ss, le, StreamILFormat::debug_single());
+    for (auto && l : entry_scope) {
+        auto it = map.find(l);
+        stream_il(ss, it->second, StreamILFormat::debug_single());
+    }
+    ss << "]OUT\n";
+    #endif
 
     return le;
 }
