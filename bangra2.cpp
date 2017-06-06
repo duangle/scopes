@@ -795,7 +795,13 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
     T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
     T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
-    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate)
+    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
+    T(FN_BuiltinEq) T(FN_LabelToMacro) T(FN_MacroToLabel) T(FN_VaCountOf) \
+    T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
+    T(FN_ListCountOf) \
+    T(FN_I32Eq) T(FN_I32LE) T(FN_I32Sub) \
+    T(FN_I64New) T(FN_I64Eq) T(FN_I64GE) T(FN_I64LT) T(FN_I64LE) T(FN_I64Add) T(FN_I64Sub) \
+    T(FN_U64New)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -842,7 +848,6 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     \
     T(TYPE_Anchor, "Anchor") \
     \
-    T(TYPE_BuiltinMacro, "BuiltinMacro") \
     T(TYPE_Macro, "Macro") \
     \
     T(TYPE_Syntax, "Syntax") \
@@ -852,7 +857,9 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(TYPE_Constant, "Constant") \
     \
     /* keywords and macros */ \
-    T(KW_CatRest, "::*") T(KW_CatOne, "::@") T(KW_Assert, "assert") T(KW_Break, "break") \
+    T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
+    T(KW_Parenthesis, "...") \
+    T(KW_Assert, "assert") T(KW_Break, "break") \
     T(KW_Call, "call") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
     T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
     T(KW_Else, "else") T(KW_ElseIf, "elseif") T(KW_EmptyList, "empty-list") \
@@ -865,13 +872,14 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(KW_QuoteSyntax, "quote-syntax") T(KW_Raise, "raise") T(KW_Recur, "recur") \
     T(KW_Return, "return") T(KW_Splice, "splice") T(KW_SyntaxApplyBlock, "syntax-apply-block") \
     T(KW_SyntaxExtend, "syntax-extend") T(KW_True, "true") T(KW_Try, "try") \
-    T(KW_Unquote, "unquote") T(KW_UnquoteSplice, "unquote-splice") \
+    T(KW_Unquote, "unquote") T(KW_UnquoteSplice, "unquote-splice") T(KW_ListEmpty, "eol") \
     T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
     \
     /* builtin and global functions */ \
     T(FN_Alignof, "alignof") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
     T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
     T(FN_BlockScopeMacro, "block-scope-macro") T(FN_Box, "box") \
+    T(FN_BuiltinEq, "Builtin==") \
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
@@ -884,10 +892,16 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
-    T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") T(FN_Iter, "iter") \
+    T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
+    T(FN_I32Eq, "i32==") T(FN_I32LE, "i32<=") T(FN_I32Sub, "i32-") \
+    T(FN_I64New, "i64-new") T(FN_I64Eq, "i64==") T(FN_I64LT, "i64<") T(FN_I64LE, "i64<=") T(FN_I64GE, "i64>=") T(FN_I64Add, "i64+") T(FN_I64Sub, "i64-") \
+    T(FN_U64New, "u64-new") \
+    T(FN_Iter, "iter") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
-    T(FN_LabelNew, "Label-new") \
-    T(FN_ListAtom, "list-atom?") T(FN_ListEmpty, "list-empty") T(FN_ListLoad, "list-load") \
+    T(FN_LabelNew, "Label-new") T(FN_LabelToMacro, "Label->Macro") \
+    T(FN_MacroToLabel, "Macro->Label") \
+    T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
+    T(FN_ListLoad, "list-load") \
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
@@ -897,7 +911,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
-    T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "scope@") \
+    T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeNew, "Scope-new") T(FN_SizeOf, "sizeof") \
     T(FN_Slice, "slice") T(FN_StringJoin, "string-join") T(FN_StructOf, "structof") \
     T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "Symbol-new") \
@@ -909,7 +923,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
     T(FN_Translate, "translate") \
-    T(FN_TupleOf, "tupleof") \
+    T(FN_TupleOf, "tupleof") T(FN_TypeName, "type-name") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") T(FN_Unbox, "unbox") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -921,6 +935,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(SFXFN_RefSet, "ref-set!") \
     T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
     T(SFXFN_SetGlobals, "set-globals!") \
+    T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
     T(SFXFN_SetScopeSymbol, "set-scope-symbol!") \
     T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
     T(SFXFN_TranslateLabelBody, "translate-label-body!") \
@@ -3274,11 +3289,10 @@ static void default_exception_handler(const Exception &exc) {
 
 template<int mincount, int maxcount>
 inline int checkargs(const Instruction &in) {
-    if ((mincount <= 0) && (maxcount == -1)) {
-        return true;
-    }
-
     int count = (int)in.args.size() - 1;
+    if ((mincount <= 0) && (maxcount == -1)) {
+        return count;
+    }
 
     if ((maxcount >= 0) && (count > maxcount)) {
         location_error(
@@ -3296,10 +3310,34 @@ inline int checkargs(const Instruction &in) {
 #define RETARGS(...) \
     out.args = { none, __VA_ARGS__ }
 
+template<typename T>
+static T cast_number(const Any &value) {
+    switch(value.type.value()) {
+    case TYPE_Bool: return (T)value.i1;
+    case TYPE_I8: return (T)value.i8;
+    case TYPE_I16: return (T)value.i16;
+    case TYPE_I32: return (T)value.i32;
+    case TYPE_I64: return (T)value.i64;
+    case TYPE_U8: return (T)value.u8;
+    case TYPE_U16: return (T)value.u16;
+    case TYPE_U32: return (T)value.u32;
+    case TYPE_U64: return (T)value.u64;
+    case TYPE_R32: return (T)value.r32;
+    case TYPE_R64: return (T)value.r64;
+    default: {
+        StyledString ss;
+        ss.out << "type " << value.type << " can not be converted to numerical type";
+        location_error(ss.str());
+    } break;
+    }
+    return 0;
+}
+
 static void translate_function_expr_list(
     Label *func, const List *it, const Anchor *anchor);
 static Label *translate_root(const List *it, const Anchor *anchor);
 
+static Label *apply_unknown_type = nullptr;
 static bool handle_builtin(Instruction &in, Instruction &out) {
     switch(in.enter.builtin.value()) {
     case FN_Branch: {
@@ -3308,6 +3346,12 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         cond.verify<TYPE_Bool>();
         out.enter = in.args[cond.i1?2:3];
         out.args = { in.args[0] };
+    } break;
+    case FN_BuiltinEq: {
+        CHECKARGS(2, 2);
+        in.args[1].verify<TYPE_Builtin>();
+        in.args[2].verify<TYPE_Builtin>();
+        RETARGS(Any(in.args[1].builtin == in.args[2].builtin));
     } break;
     case FN_DatumToSyntax: {
         CHECKARGS(2, 2);
@@ -3332,6 +3376,30 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         }
     } break;
     case FN_Exit: return false;
+#define BINOP_CASE(NAME, TYPE, MEMBER, OP) \
+    case NAME: { \
+        CHECKARGS(2, 2); \
+        in.args[1].verify<TYPE>(); \
+        in.args[2].verify<TYPE>(); \
+        RETARGS(in.args[1]. MEMBER OP in.args[2]. MEMBER); \
+    } break
+    BINOP_CASE(FN_I32Eq, TYPE_I32, i32, ==);
+    BINOP_CASE(FN_I32LE, TYPE_I32, i32, <=);
+    BINOP_CASE(FN_I32Sub, TYPE_I32, i32, -);
+
+    BINOP_CASE(FN_I64Eq, TYPE_I64, i64, ==);
+    BINOP_CASE(FN_I64GE, TYPE_I64, i64, >=);
+    BINOP_CASE(FN_I64LT, TYPE_I64, i64, <);
+    BINOP_CASE(FN_I64LE, TYPE_I64, i64, <=);
+    BINOP_CASE(FN_I64Add, TYPE_I64, i64, +);
+    BINOP_CASE(FN_I64Sub, TYPE_I64, i64, -);
+#undef BINOP_CASE
+    case FN_I64New: {
+        CHECKARGS(1, 1); RETARGS(cast_number<int64_t>(in.args[1]));
+    } break;
+    case FN_U64New: {
+        CHECKARGS(1, 1); RETARGS(cast_number<uint64_t>(in.args[1]));
+    } break;
     case FN_IsListEmpty: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
@@ -3353,6 +3421,13 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         in.args[2].verify<TYPE_Symbol>();
         RETARGS(Label::from(in.args[1], in.args[2].symbol));
     } break;
+    case FN_LabelToMacro: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Label>();
+        Any result = in.args[1];
+        result.type = TYPE_Macro;
+        RETARGS(result);
+    } break;
     case FN_ListAt: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
@@ -3362,16 +3437,39 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(2, 2);
         RETARGS(List::from(in.args[1], in.args[2]));
     } break;
+    case FN_ListCountOf: {
+        CHECKARGS(1, 1);
+        const List *l = in.args[1];
+        if (l == EOL) {
+            RETARGS((size_t)0);
+        } else {
+            RETARGS(l->count);
+        }
+    } break;
     case FN_ListNext: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
         RETARGS((a == EOL)?EOL:a->next);
     } break;
+    case FN_MacroToLabel: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Macro>();
+        Any result = in.args[1];
+        result.type = TYPE_Label;
+        RETARGS(result);
+    } break;
     case FN_ParameterNew: {
-        CHECKARGS(3, 3);
+        CHECKARGS(4, 4);
         in.args[2].verify<TYPE_Symbol>();
         in.args[3].verify<TYPE_Type>();
-        RETARGS(Parameter::from(in.args[1], in.args[2].symbol, in.args[3].type));
+        in.args[4].verify<TYPE_Bool>();
+        Parameter *param = nullptr;
+        if (in.args[4].i1) {
+            param = Parameter::vararg_from(in.args[1], in.args[2].symbol, in.args[3].type);
+        } else {
+            param = Parameter::from(in.args[1], in.args[2].symbol, in.args[3].type);
+        }
+        RETARGS(param);
     } break;
     case FN_Print: {
         auto cout = StyledStream(std::cout);
@@ -3411,6 +3509,10 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         } break;
         default: break;
         }
+    } break;
+    case SFXFN_SetGlobalApplyFallback: {
+        CHECKARGS(1, 1);
+        apply_unknown_type = in.args[1];
     } break;
     case SFXFN_SetScopeSymbol: {
         CHECKARGS(3, 3);
@@ -3468,6 +3570,14 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(1, 1);
         RETARGS(in.args[1].type);
     } break;
+    case FN_TypeName: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Type>();
+        RETARGS(in.args[1].typeref.name());
+    } break;
+    case FN_VaCountOf: {
+        RETARGS(CHECKARGS(0, -1));
+    } break;
     default: {
         StyledString ss;
         ss.out << "builtin " << in.enter.builtin << " is not implemented";
@@ -3496,86 +3606,78 @@ loop:
     Any &next_enter = out->enter;
     const std::vector<Any> &args = in->args;
     std::vector<Any> &next_args = out->args;
-    if (enter.type.is_known()) {
-        switch(enter.type.known_value()) {
-        case TYPE_Label: {
-            //debugger.enter_call(dest, cont, ...)
-            map.clear();
+    switch(enter.type.value()) {
+    case TYPE_Label: {
+        //debugger.enter_call(dest, cont, ...)
+        map.clear();
 
-            Label *label = enter.label;
-            // map arguments
-            size_t srci = 0;
-            size_t rcount = args.size();
-            size_t pcount = label->params.size();
-            for (size_t i = 0; i < pcount; ++i) {
-                Parameter *param = label->params[i];
-                if (param->vararg) {
-                    if (i == 0) {
-                        location_error(
-                            String::from(
-                            "continuation parameter can't be vararg"));
-                    }
-                    // how many parameters after this one
-                    size_t remparams = pcount - i - 1;
-
-                    // how many varargs to capture
-                    size_t vargsize = 0;
-                    size_t r = rcount;
-                    if (remparams <= r) {
-                        r = r - remparams;
-                    }
-                    if (srci < r) {
-                        vargsize = r - srci;
-                    }
-                    VarArgs *va = VarArgs::from(vargsize);
-
-                    size_t endi = srci + vargsize;
-                    for (size_t k = srci; k < endi; ++k) {
-                        va->values.push_back(args[k]);
-                    }
-                    srci = srci + vargsize;
-                    map.insert(std::pair<ILNode*,Any>(param, va));
-                } else if (srci < rcount) {
-                    map.insert(std::pair<ILNode*,Any>(param, args[srci]));
-                    srci = srci + 1;
-                } else {
-                    map.insert(std::pair<ILNode*,Any>(param, none));
+        Label *label = enter.label;
+        // map arguments
+        size_t srci = 0;
+        size_t rcount = args.size();
+        size_t pcount = label->params.size();
+        for (size_t i = 0; i < pcount; ++i) {
+            Parameter *param = label->params[i];
+            if (param->vararg) {
+                if (i == 0) {
+                    location_error(
+                        String::from(
+                        "continuation parameter can't be vararg"));
                 }
-            }
+                // how many parameters after this one
+                size_t remparams = pcount - i - 1;
 
-            label = mangle(label, {}, map);
-            next_enter = label->body.enter;
-            next_args = label->body.args;
-            if (label->body.anchor) {
-                set_active_anchor(label->body.anchor);
-            } else if (label->anchor) {
-                set_active_anchor(label->anchor);
+                // how many varargs to capture
+                size_t vargsize = 0;
+                size_t r = rcount;
+                if (remparams <= r) {
+                    r = r - remparams;
+                }
+                if (srci < r) {
+                    vargsize = r - srci;
+                }
+                VarArgs *va = VarArgs::from(vargsize);
+
+                size_t endi = srci + vargsize;
+                for (size_t k = srci; k < endi; ++k) {
+                    va->values.push_back(args[k]);
+                }
+                srci = srci + vargsize;
+                map.insert(std::pair<ILNode*,Any>(param, va));
+            } else if (srci < rcount) {
+                map.insert(std::pair<ILNode*,Any>(param, args[srci]));
+                srci = srci + 1;
+            } else {
+                map.insert(std::pair<ILNode*,Any>(param, none));
             }
-        } break;
-        case TYPE_Builtin: {
-            //debugger.enter_call(dest, cont, ...)
-            next_enter = args[0];
-            if (!handle_builtin(*in, *out))
-                return;
-        } break;
-        /*
-        case TYPE_Type: {
-            //local ty = dest.value
-            //local func = ty:lookup(Symbol.ApplyType)
-            //if func ~= null then
-            //    return call(func, cont, ...)
-            //else
-            //    location_error("can not apply type "
-            //        .. tostring(ty))
-            //end
-        } break;
-        */
-        default: {
-            apply_type_error(enter);
-        } break;
         }
-    } else {
-        apply_type_error(enter);
+
+        label = mangle(label, {}, map);
+        next_enter = label->body.enter;
+        next_args = label->body.args;
+        if (label->body.anchor) {
+            set_active_anchor(label->body.anchor);
+        } else if (label->anchor) {
+            set_active_anchor(label->anchor);
+        }
+    } break;
+    case TYPE_Builtin: {
+        //debugger.enter_call(dest, cont, ...)
+        next_enter = args[0];
+        if (!handle_builtin(*in, *out))
+            return;
+    } break;
+    default: {
+        if (apply_unknown_type) {
+            next_enter = apply_unknown_type;
+            next_args = { args[0], get_active_anchor(), enter };
+            for (size_t i = 1; i < args.size(); ++i) {
+                next_args.push_back(args[i]);
+            }
+        } else {
+            apply_type_error(enter);
+        }
+    } break;
     }
 
     // flip
@@ -3930,7 +4032,12 @@ static Parameter *expand_parameter(Scope *env, Any value) {
         return _value.parameter;
     } else {
         _value.verify<TYPE_Symbol>();
-        Parameter *param = Parameter::from(anchor, _value.symbol, TYPE_Any);
+        Parameter *param = nullptr;
+        if (_value.symbol == KW_Parenthesis) {
+            param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Any);
+        } else {
+            param = Parameter::from(anchor, _value.symbol, TYPE_Any);
+        }
         env->bind(_value.symbol, param);
         return param;
     }
@@ -4098,13 +4205,18 @@ static Any expand_root(Any expr, Scope *scope = nullptr) {
 static void init_globals() {
     globals->bind(KW_True, true);
     globals->bind(KW_False, false);
-    globals->bind(FN_ListEmpty, EOL);
+    globals->bind(KW_ListEmpty, EOL);
+    globals->bind(KW_None, none);
 
     globals->bind(TYPE_Symbol, Type(TYPE_Symbol));
     globals->bind(TYPE_List, Type(TYPE_List));
-    //globals->bind(TYPE_Macro, Type(TYPE_Macro));
+    globals->bind(TYPE_Macro, Type(TYPE_Macro));
     globals->bind(TYPE_Any, Type(TYPE_Any));
     globals->bind(TYPE_String, Type(TYPE_String));
+    globals->bind(TYPE_Builtin, Type(TYPE_Builtin));
+    globals->bind(TYPE_Nothing, Type(TYPE_Nothing));
+    globals->bind(TYPE_Type, Type(TYPE_Type));
+    globals->bind(TYPE_Syntax, Type(TYPE_Syntax));
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
     B_GLOBALS()
 #undef T
