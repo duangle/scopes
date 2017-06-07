@@ -30,12 +30,55 @@
 # defer the rest of the source file to function
 syntax-apply-block
     fn/cc (_ anchor exprs env)
+        call
+            fn/cc (_ active-xfunc)
+                set-exception-handler!
+                    fn/cc exception-handler-hook (_ anchor msg)
+                        (ref@ active-xfunc) anchor msg
+
+                fn/cc xpcall (return func xfunc)
+                    call
+                        fn/cc (_ prev-xfunc)
+                            ref-set! active-xfunc
+                                fn/cc (_ anchor msg)
+                                    ref-set! active-xfunc prev-xfunc
+                                    return
+                                        xfunc msg anchor
+                            func
+                        ref@ active-xfunc
+
+                set-scope-symbol! env (Symbol-new "xpcall") xpcall
+                set-scope-symbol! env (Symbol-new "error")
+                    fn/cc "error" (_ msg)
+                        (ref@ active-xfunc) (active-anchor) msg
+                set-scope-symbol! env (Symbol-new "syntax-error")
+                    fn/cc "syntax-error" (_ anchor msg)
+                        (ref@ active-xfunc) anchor msg
+
+            ref-new
+                fn/cc default-exception-handler (_ anchor msg)
+                    print anchor msg
+                    exit
+
+        fn/cc error (_ msg)
+            call
+                Scope@ env (Symbol-new "error")
+                \ msg
+        fn/cc syntax-error (_ anchor msg)
+            call
+                Scope@ env (Symbol-new "syntax-error")
+                \ anchor msg
+
         fn/cc expand (_ topit env)
             fn/cc expand-fn/cc (_ topit env)
                 fn/cc process-name (_ anchor it subenv)
                     fn/cc expand-parameter (_ sxparam)
                         call
-                            fn/cc (_ param-anchor param-name)
+                            fn/cc (return param-anchor param-name)
+                                branch (type== (typeof param-name) Parameter)
+                                    fn/cc (_)
+                                        return param-name
+                                    fn/cc (_)
                                 call
                                     fn/cc (_ param)
                                         set-scope-symbol! subenv param-name param
@@ -72,7 +115,7 @@ syntax-apply-block
                                     fn/cc (_ params)
                                         branch (list-empty? params)
                                             fn/cc (_)
-                                                error (syntax->anchor params)
+                                                syntax-error (syntax->anchor params)
                                                     \ "explicit continuation parameter missing"
                                             fn/cc (_)
                                                 process-param params
@@ -160,7 +203,7 @@ syntax-apply-block
                         branch
                             list-empty? expr
                             fn/cc (_)
-                                error anchor "expression is empty"
+                                syntax-error anchor "expression is empty"
                             fn/cc (_)
                         call
                             fn/cc (_ head)
@@ -218,7 +261,7 @@ syntax-apply-block
                                             \ env
                             fn/cc (_)
                                 fn/cc missing-symbol-error (_)
-                                    error anchor
+                                    syntax-error anchor
                                         string-join "no value bound to name "
                                             string-join (repr expr) " in scope"
                                 #
@@ -287,6 +330,71 @@ syntax-apply-block
                                 list-new ...
                         \ ...
 
+        fn/cc none? (_ x)
+            type== (typeof x) Nothing
+
+        fn/cc syntax-quote (_ value)
+            datum->quoted-syntax
+                syntax->datum value
+                syntax->anchor value
+
+        fn/cc syntax-cons (_ at next)
+            call
+                fn/cc (_ anchor)
+                    datum->syntax
+                        list-cons
+                            branch (type== (typeof at) Syntax)
+                                fn/cc (_) at
+                                fn/cc (_)
+                                    datum->syntax at anchor
+                            syntax->datum next
+                        \ anchor
+                branch (type== (typeof at) Syntax)
+                    fn/cc (_)
+                        syntax->anchor at
+                    fn/cc (_)
+                        branch (type== (typeof next) Syntax)
+                            fn/cc (_)
+                                syntax->anchor next
+                            fn/cc (_)
+                                error "either argument must be a syntax object"
+
+        fn/cc syntax-list (_ ...)
+            fn/cc find-anchor (_ ...)
+                branch
+                    i32== (va-countof ...) 0
+                    fn/cc (_)
+                        error "no syntax object in argument list"
+                    fn/cc (_)
+                        call
+                            fn/cc (_ at ...)
+                                branch (type== (typeof at) Syntax)
+                                    fn/cc (_)
+                                        syntax->anchor at
+                                    fn/cc (_)
+                                        find-anchor ...
+                            \ ...
+            call
+                fn/cc (_ anchor)
+                    fn/cc build (_ ...)
+                        branch
+                            i32== (va-countof ...) 0
+                            fn/cc (_) eol
+                            fn/cc (_)
+                                call
+                                    fn/cc (_ at ...)
+                                        list-cons
+                                            branch (type== (typeof at) Syntax)
+                                                fn/cc (_) at
+                                                fn/cc (_)
+                                                    datum->syntax at anchor
+                                            build ...
+                                    \ ...
+                    datum->syntax
+                        build ...
+                        \ anchor
+                find-anchor ...
+
         fn/cc list@ (_ x i)
             branch (i32<= i 0)
                 fn/cc (_)
@@ -295,35 +403,36 @@ syntax-apply-block
                     list@ (list-next x) (i32- i 1)
 
         fn/cc list-slice (_ value i0 i1)
-            fn/cc walk-i0 (_ l i)
-                branch (i64< i i0)
-                    fn/cc (_)
-                        walk-i0 (list-next l) (i64+ i (i64-new 1))
-                    fn/cc (_) l
             call
-                fn/cc (_ l)
+                fn/cc (_ i0 i1)
+                    fn/cc walk-i0 (_ l i)
+                        branch (i64< i i0)
+                            fn/cc (_)
+                                walk-i0 (list-next l) (i64+ i (i64-new 1))
+                            fn/cc (_) l
                     call
-                        fn/cc (_ count)
-                            branch (i64== (i64- i1 i0) count)
-                                fn/cc (_) l
-                                fn/cc (_)
-                                    # need to chop off tail, which requires creating a new list
-                                    fn/cc walk-i1 (_ l i)
-                                        branch (i64< i i1)
-                                            fn/cc (_)
-                                                list-cons
-                                                    list-at l
-                                                    walk-i1 (list-next l) (i64+ i (i64-new 1))
-                                            fn/cc (_) eol
-                                    walk-i1 l i0
+                        fn/cc (_ l)
+                            call
+                                fn/cc (_ count)
+                                    branch (i64== (i64- i1 i0) count)
+                                        fn/cc (_) l
+                                        fn/cc (_)
+                                            # need to chop off tail, which requires creating a new list
+                                            fn/cc walk-i1 (_ l i)
+                                                branch (i64< i i1)
+                                                    fn/cc (_)
+                                                        list-cons
+                                                            list-at l
+                                                            walk-i1 (list-next l) (i64+ i (i64-new 1))
+                                                    fn/cc (_) eol
+                                            walk-i1 l i0
 
-                        branch (list-empty? l)
-                            fn/cc (_) (i64-new 0)
-                            fn/cc (_) (i64-new (list-countof l))
-                walk-i0 value (i64-new 0)
-
-        fn/cc none? (_ x)
-            type== (typeof x) Nothing
+                                branch (list-empty? l)
+                                    fn/cc (_) (i64-new 0)
+                                    fn/cc (_) (i64-new (list-countof l))
+                        walk-i0 value (i64-new 0)
+                i64-new i0
+                i64-new i1
 
         # support for type attributes
         call
@@ -359,7 +468,7 @@ syntax-apply-block
                             get-typemap type
 
                 fn/cc apply-error (_ anchor enter)
-                    error anchor
+                    syntax-error anchor
                         string-join "don't know how to apply value of type "
                             repr (typeof enter)
 
@@ -382,11 +491,30 @@ syntax-apply-block
             Scope-new
             Symbol-new "apply-type"
 
+        fn/cc string== (_ a b)
+            i32== (string-compare a b) 0
+        fn/cc string< (_ a b)
+            i32== (string-compare a b) -1
+
+        fn/cc eval (_ expr env)
+            expand expr
+                branch (none? env)
+                    fn/cc (_) globals
+                    fn/cc (_) env
+
+        set-scope-symbol! env (Symbol-new "eval") eval
+        set-scope-symbol! env (Symbol-new "string==") string==
+        set-scope-symbol! env (Symbol-new "string<") string<
         set-scope-symbol! env (Symbol-new "none?") none?
         set-scope-symbol! env (Symbol-new "list-new") list-new
         set-scope-symbol! env (Symbol-new "list-slice") list-slice
+        set-scope-symbol! env (Symbol-new "syntax-list") syntax-list
+        set-scope-symbol! env (Symbol-new "syntax-quote") syntax-quote
+        set-scope-symbol! env (Symbol-new "syntax-cons") syntax-cons
         set-scope-symbol! env (Symbol-new "list@") list@
         set-scope-symbol! env (Symbol-new "expand") expand
+        set-scope-symbol! env (Symbol-new "block-scope-macro") Label->Macro
+        set-scope-symbol! env (Symbol-new "cons") list-cons
         set-scope-symbol! env (Symbol-new "syntax-extend")
             Label->Macro
                 fn/cc expand-syntax-extend (_ topit env)
@@ -434,17 +562,32 @@ print "running main"
 
 syntax-extend
     print "stage 1"
+
+    call
+        fn/cc (_ super-key)
+            fn/cc type< (_ a b)
+                call
+                    fn/cc (_ sa success)
+                        branch success
+                            fn/cc (_)
+                                type== sa b
+                            fn/cc (_) false
+                    type@ a super-key
+            set-scope-symbol! syntax-scope (Symbol-new "type<") type<
+        Symbol-new "super"
+
     set-type-symbol! Symbol (Symbol-new "apply-type") Symbol-new
     \ syntax-scope
 
 syntax-extend
     print "stage 2"
+
     fn/cc no-op (_)
     fn/cc unreachable (_)
         error "unreachable branch"
 
     fn/cc forward (_ name errmsg)
-        fn/cc (_ x values...)
+        fn/cc (_ x ...)
             call
                 fn/cc (_ x-func)
                     branch
@@ -456,7 +599,7 @@ syntax-extend
                                         string-join " value of type "
                                             repr (typeof x)
                         fn/cc (_)
-                            x-func x values...
+                            x-func x ...
                 type@ (typeof x) name
 
     fn/cc forward-op2 (_ name errmsg)
@@ -736,12 +879,25 @@ syntax-extend
 
 syntax-extend
     print "stage 4"
+
     #---
     set-type-symbol! string (quote apply-type) string-new
     set-type-symbol! type (quote apply-type) type-new
-    set-type-symbol! Label (quote apply-type) label-new
-    set-type-symbol! Parameter (quote apply-type) parameter-new
-    set-type-symbol! Scope (quote apply-type) scope-new
+    set-type-symbol! Label (quote apply-type) Label-new
+    set-type-symbol! Parameter (quote apply-type)
+        fn/cc "Parameter-new" (_ syntax-name param-type)
+            call
+                fn/cc (_ name)
+                    Parameter-new
+                        syntax->anchor syntax-name
+                        \ name
+                        branch (none? param-type)
+                            fn/cc (_) Any
+                            fn/cc (_) param-type
+                        string== (slice (string-new name) -3) "..."
+                syntax->datum syntax-name
+
+    set-type-symbol! Scope (quote apply-type) Scope-new
     set-type-symbol! ref (quote apply-type) ref-new
 
     set-type-symbol! i8 (quote apply-type) i8-new
@@ -888,10 +1044,10 @@ syntax-extend
     set-type-symbol! string (quote countof) string-countof
 
     #---
-    set-type-symbol! Scope (quote @) scope-at
+    set-type-symbol! Scope (quote @) Scope@
     set-type-symbol! type (quote @) type@
-    set-type-symbol! string (quote @) string-at
-    set-type-symbol! ref (quote @) ref-at
+    set-type-symbol! string (quote @) string@
+    set-type-symbol! ref (quote @) ref@
 
     #---
     set-type-symbol! string (quote slice) string-slice
@@ -1180,6 +1336,7 @@ syntax-extend
 
 # a lofi version of let so we get some sugar early
 define let
+    print "let"
     block-scope-macro
         fn/cc "expand-let" (return expr env)
             branch
@@ -1221,6 +1378,7 @@ define let
   (fn [name] (param ...) body ...)
   an extended implementation follows further down
 define fn
+    print "fn"
     block-macro
         fn/cc "expand-fn" (return topexpr)
             let expr =
@@ -1259,10 +1417,12 @@ define fn
                     \ rest
 
 define raise
+    print "raise"
     fn/cc "raise" (_ x)
         error x
 
 define try
+    print "try"
     block-macro
         fn expand-try (expr env)
             ? (not (syntax-head? (@ expr 1) (quote except)))
@@ -1286,10 +1446,12 @@ define float r32
 define double r64
 
 define _
+    print "_"
     fn forward-multiargs (args...) args...
 
 # (assert bool-expr [error-message])
 define assert
+    print "assert"
     macro
         fn assert (expr)
             qquote-syntax
@@ -1312,6 +1474,7 @@ define assert
 
 
 define sizeof
+    print "sizeof"
     let sym = (Symbol "size")
     fn/cc "sizeof" (return x)
         assert (type? x) "type expected"
@@ -1320,6 +1483,7 @@ define sizeof
         ? (none? size) (size_t 0) size
 
 define alignof
+    print "alignof"
     let sym = (Symbol "alignment")
     fn/cc "alignof" (return x)
         assert (type? x) "type expected"
@@ -1327,6 +1491,7 @@ define alignof
             @ x sym
 
 define ::@
+    print "::@"
     block-macro
         fn ::@ (expr)
             cons
@@ -1336,6 +1501,7 @@ define ::@
                         @ expr 1
                 slice expr 2
 define ::*
+    print "::*"
     block-macro
         fn ::* (expr)
             list
@@ -1344,6 +1510,7 @@ define ::*
                     slice expr 1
 
 define .
+    print "."
     macro
         fn . (expr)
             let key = (@ expr 2)
@@ -1357,6 +1524,7 @@ define .
                 error "symbol expected"
 
 define and
+    print "and"
     macro
         fn and (expr)
             let tmp = (datum->syntax (Parameter (quote-syntax tmp)))
@@ -1376,6 +1544,7 @@ define and
                         syntax-eol expr
 
 define or
+    print "or"
     macro
         fn or (expr)
             let tmp = (datum->syntax (Parameter (quote-syntax tmp)))
@@ -1395,6 +1564,7 @@ define or
                         syntax-eol expr
 
 define if
+    print "if"
     block-macro
         fn if-rec (topexpr env)
             let expr =

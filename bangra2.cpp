@@ -737,6 +737,11 @@ struct String {
         ost << deststr;
         return ost;
     }
+
+    const String *substr(int64_t i0, int64_t i1) const {
+        assert(i1 >= i0);
+        return from(data + i0, (size_t)(i1 - i0 + 1));
+    }
 };
 
 static StyledStream& operator<<(StyledStream& ost, const String *s) {
@@ -752,6 +757,14 @@ struct StyledString {
 
     StyledString() :
         out(_ss) {
+    }
+
+    StyledString(StreamStyleFunction ssf) :
+        out(_ss, ssf) {
+    }
+
+    static StyledString plain() {
+        return StyledString(stream_plain_style);
     }
 
     const String *str() const {
@@ -787,21 +800,71 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 // SYMBOL TYPE
 //------------------------------------------------------------------------------
 
+#define B_IOP_DEFS(UNAME, LNAME) \
+    T0(FN_ ## UNAME ## New, #LNAME "-new") \
+    T0(FN_ ## UNAME ## LShift, #LNAME "<<") \
+    T0(FN_ ## UNAME ## RShift, #LNAME ">>") \
+    T1(UNAME, LNAME, Not, ~) \
+    T2(UNAME, LNAME, Eq, ==) \
+    T2(UNAME, LNAME, NE, !=) \
+    T2(UNAME, LNAME, LT, <) \
+    T2(UNAME, LNAME, LE, <=) \
+    T2(UNAME, LNAME, GT, >) \
+    T2(UNAME, LNAME, GE, >=) \
+    T2(UNAME, LNAME, Add, +) \
+    T2(UNAME, LNAME, Sub, -) \
+    T2(UNAME, LNAME, Mul, *) \
+    T2(UNAME, LNAME, Div, /) \
+    T2(UNAME, LNAME, Mod, %) \
+    T2(UNAME, LNAME, And, &) \
+    T2(UNAME, LNAME, Or, |) \
+    T2(UNAME, LNAME, Xor, ^) \
+    T2T(UNAME, LNAME, Pow, **)
+
+#define B_ROP_DEFS(UNAME, LNAME) \
+    T0(FN_ ## UNAME ## New, #LNAME "-new") \
+    T2(UNAME, LNAME, Eq, ==) \
+    T2(UNAME, LNAME, NE, !=) \
+    T2(UNAME, LNAME, LT, <) \
+    T2(UNAME, LNAME, LE, <=) \
+    T2(UNAME, LNAME, GT, >) \
+    T2(UNAME, LNAME, GE, >=) \
+    T2(UNAME, LNAME, Add, +) \
+    T2(UNAME, LNAME, Sub, -) \
+    T2(UNAME, LNAME, Mul, *) \
+    T2(UNAME, LNAME, Div, /) \
+    T2T(UNAME, LNAME, Pow, **) \
+    T2T(UNAME, LNAME, Mod, %)
+
+#define B_ALL_OP_DEFS() \
+    B_IOP_DEFS(I8, i8) \
+    B_IOP_DEFS(I16, i16) \
+    B_IOP_DEFS(I32, i32) \
+    B_IOP_DEFS(I64, i64) \
+    B_IOP_DEFS(U8, u8) \
+    B_IOP_DEFS(U16, u16) \
+    B_IOP_DEFS(U32, u32) \
+    B_IOP_DEFS(U64, u64) \
+    B_ROP_DEFS(R32, r32) \
+    B_ROP_DEFS(R64, r64)
+
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
     T(FN_Branch) T(FN_Print) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_ListAt) T(FN_ListNext) \
-    T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) T(FN_Error) \
+    T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) \
     T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
     T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
     T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
     T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
     T(FN_BuiltinEq) T(FN_LabelToMacro) T(FN_MacroToLabel) T(FN_VaCountOf) \
     T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
-    T(FN_ListCountOf) \
-    T(FN_I32Eq) T(FN_I32LE) T(FN_I32Sub) \
-    T(FN_I64New) T(FN_I64Eq) T(FN_I64GE) T(FN_I64LT) T(FN_I64LE) T(FN_I64Add) T(FN_I64Sub) \
-    T(FN_U64New)
+    T(FN_ListCountOf) T(FN_StringNew) T(FN_TypeNew) T(FN_RefNew) \
+    T(FN_BoolEq) T(FN_ParameterEq) T(FN_LabelEq) T(FN_ScopeEq) T(FN_StringCmp) \
+    T(FN_ListJoin) T(FN_StringCountOf) T(FN_StringAt) T(FN_RefAt) \
+    T(FN_StringSlice) T(FN_Dump) T(OP_Not) T(FN_ListLoad) T(FN_ListParse) \
+    T(SFXFN_SetExceptionHandler) T(SFXFN_RefSet) T(FN_Exit) T(FN_ActiveAnchor) \
+    B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -854,6 +917,7 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     \
     T(TYPE_Boxed, "Boxed") \
     \
+    T(TYPE_SizeT, "size_t") \
     T(TYPE_Constant, "Constant") \
     \
     /* keywords and macros */ \
@@ -877,8 +941,10 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     \
     /* builtin and global functions */ \
     T(FN_Alignof, "alignof") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
+    T(FN_ActiveAnchor, "active-anchor") \
     T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
-    T(FN_BlockScopeMacro, "block-scope-macro") T(FN_Box, "box") \
+    T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
+    T(FN_Box, "box") \
     T(FN_BuiltinEq, "Builtin==") \
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
@@ -886,44 +952,49 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
     T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
-    T(FN_Enumerate, "enumerate") T(FN_Error, "error") T(FN_Eval, "eval") \
+    T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
     T(FN_ExternLibrary, "extern-library") T(FN_External, "external") \
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
-    T(FN_I32Eq, "i32==") T(FN_I32LE, "i32<=") T(FN_I32Sub, "i32-") \
-    T(FN_I64New, "i64-new") T(FN_I64Eq, "i64==") T(FN_I64LT, "i64<") T(FN_I64LE, "i64<=") T(FN_I64GE, "i64>=") T(FN_I64Add, "i64+") T(FN_I64Sub, "i64-") \
-    T(FN_U64New, "u64-new") \
+    B_ALL_OP_DEFS() \
     T(FN_Iter, "iter") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
+    T(FN_LabelEq, "Label==") \
     T(FN_LabelNew, "Label-new") T(FN_LabelToMacro, "Label->Macro") \
     T(FN_MacroToLabel, "Macro->Label") \
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
-    T(FN_ListLoad, "list-load") \
+    T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
     T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") T(FN_IsNone, "none?") \
     T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
+    T(FN_ParameterEq, "Parameter==") \
     T(FN_ParameterNew, "Parameter-new") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
-    T(FN_Range, "range") T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
+    T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
+    T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
+    T(FN_ScopeEq, "Scope==") \
     T(FN_ScopeNew, "Scope-new") T(FN_SizeOf, "sizeof") \
-    T(FN_Slice, "slice") T(FN_StringJoin, "string-join") T(FN_StructOf, "structof") \
+    T(FN_Slice, "slice") T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
+    T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
+    T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
+    T(FN_StructOf, "structof") \
     T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "Symbol-new") \
     T(FN_IsSymbol, "symbol?") \
     T(FN_SyntaxToAnchor, "syntax->anchor") T(FN_SyntaxToDatum, "syntax->datum") \
     T(FN_SyntaxCons, "syntax-cons") T(FN_SyntaxDo, "syntax-do") \
-    T(FN_SyntaxError, "syntax-error") T(FN_IsSyntaxHead, "syntax-head?") \
+    T(FN_IsSyntaxHead, "syntax-head?") \
     T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
     T(FN_Translate, "translate") \
-    T(FN_TupleOf, "tupleof") T(FN_TypeName, "type-name") \
+    T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") T(FN_Unbox, "unbox") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -986,8 +1057,17 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 
 enum KnownSymbol {
 #define T(sym, name) sym,
+#define T0 T
+#define T1 T2
+#define T2T T2
+#define T2(UNAME, LNAME, PFIX, OP) \
+    FN_ ## UNAME ## PFIX,
     B_MAP_SYMBOLS()
 #undef T
+#undef T0
+#undef T1
+#undef T2
+#undef T2T
     SYM_Count,
 };
 
@@ -1011,8 +1091,17 @@ enum {
 static const char *get_known_symbol_name(KnownSymbol sym) {
     switch(sym) {
 #define T(SYM, NAME) case SYM: return #SYM;
+#define T0 T
+#define T1 T2
+#define T2T T2
+#define T2(UNAME, LNAME, PFIX, OP) \
+    case FN_ ## UNAME ## PFIX: return "FN_" #UNAME #PFIX;
     B_MAP_SYMBOLS()
 #undef T
+#undef T0
+#undef T1
+#undef T2
+#undef T2T
     case SYM_Count: return "SYM_Count";
     }
 }
@@ -1153,8 +1242,17 @@ public:
 
     static void _init_symbols() {
     #define T(sym, name) map_known_symbol(sym, String::from(name));
+    #define T0 T
+    #define T1 T2
+    #define T2T T2
+    #define T2(UNAME, LNAME, PFIX, OP) \
+        map_known_symbol(FN_ ## UNAME ## PFIX, String::from(#LNAME #OP));
         B_MAP_SYMBOLS()
     #undef T
+    #undef T0
+    #undef T1
+    #undef T2
+    #undef T2T
     }
 
     StyledStream& stream(StyledStream& ost) const {
@@ -1232,6 +1330,7 @@ public:
             file->length = str->count;
             file->_str = str;
             file_cache[_path] = file;
+            return file;
         } else {
             file->fd = ::open(_path.name()->data, O_RDONLY);
             if (file->fd >= 0) {
@@ -1463,7 +1562,6 @@ struct Syntax;
 struct List;
 struct Label;
 struct Parameter;
-struct VarArgs;
 struct Scope;
 
 static void location_error(const String *msg);
@@ -1490,9 +1588,9 @@ struct Any {
         const List *list;
         Label *label;
         Parameter *parameter;
-        const VarArgs *varargs;
         Builtin builtin;
         Scope *scope;
+        Any *ref;
     };
 
     Any(Nothing x) : type(TYPE_Nothing) {}
@@ -1513,12 +1611,11 @@ struct Any {
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
     Any(const Anchor *x) : type(TYPE_Anchor), anchor(x) {}
     Any(const List *x) : type(TYPE_List), list(x) {}
-    //Any(const VarArgs *x) : type(TYPE_VarArgs), varargs(x) {}
-    Any(VarArgs *x) : type(TYPE_VarArgs), varargs(x) {}
     Any(Label *x) : type(TYPE_Label), label(x) {}
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
     Any(Scope *x) : type(TYPE_Scope), scope(x) {}
+    Any(Any *x) : type(TYPE_Ref), ref(x) {}
     template<unsigned N>
     Any(const char (&str)[N]) : type(TYPE_String), string(String::from(str)) {}
     // a catch-all for unsupported types
@@ -1550,6 +1647,7 @@ struct Any {
             case TYPE_Label: return dest(label);
             case TYPE_Parameter: return dest(parameter);
             case TYPE_Scope: return dest(scope);
+            case TYPE_Ref: return dest(ref);
             default:
                 StyledString ss;
                 ss.out << "cannot dispatch type: " << type;
@@ -1561,13 +1659,19 @@ struct Any {
     struct AnyStreamer {
         StyledStream& ost;
         const Type &type;
-        AnyStreamer(StyledStream& _ost, const Type &_type) :
-            ost(_ost), type(_type) {}
+        bool annotate_type;
+        AnyStreamer(StyledStream& _ost, const Type &_type, bool _annotate_type) :
+            ost(_ost), type(_type), annotate_type(_annotate_type) {}
+        void stream_type_suffix() const {
+            if (annotate_type) {
+                ost << Style_Operator << ":" << Style_None;
+                ost << type;
+            }
+        }
         template<typename T>
         void operator ()(const T &x) const {
             ost << x;
-            ost << Style_Operator << ":" << Style_None;
-            ost << type;
+            stream_type_suffix();
         }
         template<typename T>
         void naked(const T &x) const {
@@ -1582,7 +1686,18 @@ struct Any {
         void operator ()(const List *x) const { naked(x); }
         void operator ()(Symbol x) const { naked(x); }
         void operator ()(Type x) const { naked(x); }
+        void operator ()(Any *x) const {
+            ost << Style_Operator << "[" << Style_None;
+            x->stream(ost);
+            ost << Style_Operator << "]" << Style_None;
+            stream_type_suffix();
+        }
     };
+
+    Any toref() {
+        Any *pvalue = new Any(*this);
+        return pvalue;
+    }
 
     template<KnownSymbol T>
     void verify() const {
@@ -1601,8 +1716,8 @@ struct Any {
     operator Scope *() const { verify<TYPE_Scope>(); return scope; }
     operator Parameter *() const { verify<TYPE_Parameter>(); return parameter; }
 
-    StyledStream& stream(StyledStream& ost) const {
-        dispatch(AnyStreamer(ost, type));
+    StyledStream& stream(StyledStream& ost, bool annotate_type = true) const {
+        dispatch(AnyStreamer(ost, type, annotate_type));
         return ost;
     }
 };
@@ -1610,40 +1725,6 @@ struct Any {
 static StyledStream& operator<<(StyledStream& ost, Any value) {
     return value.stream(ost);
 }
-
-//------------------------------------------------------------------------------
-// VARARGS
-//------------------------------------------------------------------------------
-
-struct VarArgs {
-    std::vector<Any> values;
-
-    size_t size() const {
-        return values.size();
-    }
-
-    bool empty() const {
-        return values.empty();
-    }
-
-    Any first() const {
-        if (values.empty()) {
-            return none;
-        } else {
-            return values[0];
-        }
-    }
-
-    Any at(size_t i) const {
-        return values[i];
-    }
-
-    static VarArgs *from(size_t capacity) {
-        VarArgs *va = new VarArgs();
-        va->values.reserve(capacity);
-        return va;
-    }
-};
 
 //------------------------------------------------------------------------------
 // ERROR HANDLING
@@ -1825,6 +1906,8 @@ public:
     static const List *from(const Any (&values)[N]) {
         return from(values, N);
     }
+
+    static const List *join(const List *a, const List *b);
 };
 
 // (a . (b . (c . (d . NIL)))) -> (d . (c . (b . (a . NIL))))
@@ -1845,6 +1928,15 @@ const List *reverse_list_inplace(
         l = iternext;
     }
     return next;
+}
+
+const List *List::join(const List *la, const List *lb) {
+    const List *l = lb;
+    while (la != EOL) {
+        l = List::from(la->at, l);
+        la = la->next;
+    }
+    return reverse_list_inplace(l, lb, lb);
 }
 
 static StyledStream& operator<<(StyledStream& ost, const List *list) {
@@ -2673,7 +2765,7 @@ public:
     const Anchor *anchor;
     Symbol name;
     Type type;
-    const Label *label;
+    Label *label;
     int index;
     bool vararg;
 
@@ -2753,7 +2845,8 @@ protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
-        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr)
+        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
+        original(nullptr), scope_valid(false)
         {}
 
 public:
@@ -2764,6 +2857,9 @@ public:
     Body body;
     LabelTag tag;
     Label *paired;
+    const Label *original;
+    std::vector<Label *> scope;
+    bool scope_valid;
 
     void use(const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
@@ -2815,45 +2911,119 @@ public:
         }
     }
 
-    void build_scope(std::vector<Label *> &tempscope) {
-        LabelTag::clear();
-        tag.visit();
+    void build_reachable(std::unordered_set<Label *> &labels) {
+        labels.clear();
 
-        for (auto &&param : params) {
-            // every label using one of our parameters is live in scope
-            for (auto &&kv : param->users) {
-                Label *live_label = kv.first;
-                if (!live_label->tag.visited()) {
-                    live_label->tag.visit();
-                    tempscope.push_back(live_label);
+        std::vector<Label *> stack = { this };
+        while (!stack.empty()) {
+            Label *parent = stack.back();
+            stack.pop_back();
+
+            int size = (int)parent->body.args.size();
+            for (int i = -1; i < size; ++i) {
+                Any arg = none;
+                if (i == -1) {
+                    arg = parent->body.enter;
+                } else {
+                    arg = parent->body.args[i];
+                }
+
+                switch(arg.type.value()) {
+                case TYPE_Parameter: {
+                    Label *label = arg.parameter->label;
+                    if (label && !labels.count(label)) {
+                        labels.insert(label);
+                        stack.push_back(label);
+                    }
+                } break;
+                case TYPE_Label: {
+                    Label *label = arg.label;
+                    if (!labels.count(label)) {
+                        labels.insert(label);
+                        stack.push_back(label);
+                    }
+                } break;
+                default: break;
                 }
             }
         }
+    }
 
-        size_t index = 0;
-        while (index < tempscope.size()) {
-            Label *scope_label = tempscope[index++];
+    void build_scope(std::vector<Label *> &tempscope) {
+        if (!scope_valid) {
+            scope_valid = true;
+            std::unordered_set<Label *> reachable;
+            build_reachable(reachable);
 
-            // users of scope_label are indirectly live in scope
-            for (auto &&kv : scope_label->users) {
-                Label *live_label = kv.first;
-                if (!live_label->tag.visited()) {
-                    live_label->tag.visit();
-                    tempscope.push_back(live_label);
-                }
-            }
+            scope.clear();
 
-            // every label using one of our parameters is live in scope
-            for (auto &&param : scope_label->params) {
+            std::unordered_set<Label *> visited;
+            visited.clear();
+            visited.insert(this);
+
+            for (auto &&param : params) {
+                // every label using one of our parameters is live in scope
                 for (auto &&kv : param->users) {
                     Label *live_label = kv.first;
-                    if (!live_label->tag.visited()) {
-                        live_label->tag.visit();
-                        tempscope.push_back(live_label);
+                    if (!visited.count(live_label)) {
+                        visited.insert(live_label);
+                        scope.push_back(live_label);
                     }
                 }
             }
+
+            size_t index = 0;
+            while (index < scope.size()) {
+                Label *scope_label = scope[index++];
+
+                // users of scope_label are indirectly live in scope
+                for (auto &&kv : scope_label->users) {
+                    Label *live_label = kv.first;
+                    if (!visited.count(live_label)) {
+                        visited.insert(live_label);
+                        if (reachable.count(live_label)) {
+                            scope.push_back(live_label);
+                        }
+                    }
+                }
+
+                static std::vector<Label *> subscope;
+                scope_label->build_scope(subscope);
+                for (auto &&live_label : subscope) {
+                    if (!visited.count(live_label)) {
+                        visited.insert(live_label);
+                        if (reachable.count(live_label)) {
+                            scope.push_back(live_label);
+                        }
+                    }
+                }
+
+                /*
+                // every label using one of our parameters is live in scope
+                for (auto &&param : scope_label->params) {
+                    for (auto &&kv : param->users) {
+                        Label *live_label = kv.first;
+                        if (!visited.count(live_label)) {
+                            visited.insert(live_label);
+                            if (reachable.count(live_label)) {
+                                scope.push_back(live_label);
+                            }
+                        }
+                    }
+                }
+                */
+            }
+
+            if (scope.size() > 1000) {
+                StyledStream ss(std::cout);
+                ss << scope.size() << " labels in scope, "
+                    << reachable.size() << " labels reachable"
+                    << std::endl;
+            }
+
         }
+
+        tempscope = scope;
 
         //std::cout << tempscope.size() << std::endl;
     }
@@ -2897,7 +3067,13 @@ public:
     }
     // only inherits name and anchor
     static Label *from(const Label *label) {
-        return new Label(label->anchor, label->name);
+        Label *result = new Label(label->anchor, label->name);
+        if (label->original) {
+            result->original = label->original;
+        } else {
+            result->original = label;
+        }
+        return result;
     }
 
     // a continuation that never returns
@@ -2925,6 +3101,11 @@ public:
 uint64_t Label::next_uid = 0;
 
 static StyledStream& operator<<(StyledStream& ss, Label *label) {
+    label->stream(ss);
+    return ss;
+}
+
+static StyledStream& operator<<(StyledStream& ss, const Label *label) {
     label->stream(ss);
     return ss;
 }
@@ -3062,8 +3243,14 @@ struct StreamIL : StreamAnchors {
         if (line_anchors) {
             stream_anchor(alabel->anchor);
         }
-        alabel->stream(ss, true);
+        alabel->stream(ss, fmt.show_users);
         ss << Style_Operator << ":" << Style_None;
+        if (fmt.show_users) {
+            if (alabel->original) {
+                ss << " # ";
+                alabel->original->stream_short(ss);
+            }
+        }
         //stream_scope(scopes[alabel])
         ss << std::endl;
         ss << "    ";
@@ -3126,6 +3313,14 @@ static void stream_il(
 
 typedef std::map<ILNode *, Any> MangleMap;
 
+static Any vararg_first(const Any &value) {
+    if (value.list == EOL) {
+        return none;
+    } else {
+        return value.list->at;
+    }
+}
+
 void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
     Any enter = entry->body.enter;
     std::vector<Any> &args = entry->body.args;
@@ -3144,7 +3339,7 @@ void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
         goto skip;
     }
     if (enter.type == TYPE_VarArgs) {
-        enter = enter.varargs->first();
+        enter = vararg_first(enter);
     }
 skip:
     ll->body.anchor = entry->body.anchor;
@@ -3169,12 +3364,14 @@ skip:
         if (arg.type == TYPE_VarArgs) {
             // if at tail, append
             if (i == (args.size() - 1)) {
-                for (size_t j = 0; j < arg.varargs->size(); ++j) {
-                    body.push_back(arg.varargs->at(j));
+                const List *list = arg.list;
+                while (list != EOL) {
+                    body.push_back(list->at);
+                    list = list->next;
                 }
                 continue;
             } else {
-                arg = arg.varargs->first();
+                arg = vararg_first(arg);
             }
         }
     skip2:
@@ -3182,12 +3379,24 @@ skip:
     }
 
     ll->link_backrefs();
+
+    if (entry->scope_valid) {
+        for (auto &&it : entry->scope) {
+            Label *label = it;
+            auto mapit = map.find(label);
+            if (mapit != map.end()) {
+                label = mapit->second;
+            }
+            ll->scope.push_back(label);
+        }
+        ll->scope_valid = true;
+    }
+
 }
 
 static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map) {
-    StyledStream ss(std::cout);
 
-    std::vector<Label *> entry_scope;
+    static std::vector<Label *> entry_scope;
     entry->build_scope(entry_scope);
 
     // remap entry point
@@ -3216,19 +3425,25 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     mangle_remap_body(le, entry, map);
 
     #if 0
-    ss << "IN[\n";
-    stream_il(ss, entry, StreamILFormat::debug_single());
-    for (auto && l : entry_scope) {
-        stream_il(ss, l, StreamILFormat::debug_single());
+    if (entry_scope.size() > 10000) {
+        StyledStream ss(std::cout);
+        ss << (entry_scope.size() + 1) << " labels mangled" << std::endl;
+        #if 0
+        ss << "IN[\n";
+        stream_il(ss, entry, StreamILFormat::debug_single());
+        for (auto && l : entry_scope) {
+            stream_il(ss, l, StreamILFormat::debug_single());
+        }
+        ss << "]IN\n";
+        ss << "OUT[\n";
+        stream_il(ss, le, StreamILFormat::debug_single());
+        for (auto && l : entry_scope) {
+            auto it = map.find(l);
+            stream_il(ss, it->second, StreamILFormat::debug_single());
+        }
+        ss << "]OUT\n";
+        #endif
     }
-    ss << "]IN\n";
-    ss << "OUT[\n";
-    stream_il(ss, le, StreamILFormat::debug_single());
-    for (auto && l : entry_scope) {
-        auto it = map.find(l);
-        stream_il(ss, it->second, StreamILFormat::debug_single());
-    }
-    ss << "]OUT\n";
     #endif
 
     return le;
@@ -3294,9 +3509,9 @@ inline int checkargs(const Instruction &in) {
         return count;
     }
 
+    // arguments can overshoot, then we just truncate the count
     if ((maxcount >= 0) && (count > maxcount)) {
-        location_error(
-            format("excess argument. At most %i arguments expected", maxcount));
+        count = maxcount;
     }
     if ((mincount >= 0) && (count < mincount)) {
         location_error(
@@ -3333,13 +3548,28 @@ static T cast_number(const Any &value) {
     return 0;
 }
 
+template<typename T>
+static T PowT(T a, T b) {
+    return powimpl(a, b);
+}
+
+template<typename T>
+static T ModT(T a, T b) {
+    return std::fmod(a, b);
+}
+
 static void translate_function_expr_list(
     Label *func, const List *it, const Anchor *anchor);
 static Label *translate_root(const List *it, const Anchor *anchor);
 
 static Label *apply_unknown_type = nullptr;
+static Label *exception_handler = nullptr;
 static bool handle_builtin(Instruction &in, Instruction &out) {
     switch(in.enter.builtin.value()) {
+    case FN_ActiveAnchor: {
+        CHECKARGS(0, 0);
+        RETARGS(get_active_anchor());
+    } break;
     case FN_Branch: {
         CHECKARGS(3, 3);
         Any cond = in.args[1];
@@ -3354,8 +3584,38 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         RETARGS(Any(in.args[1].builtin == in.args[2].builtin));
     } break;
     case FN_DatumToSyntax: {
-        CHECKARGS(2, 2);
-        const Anchor *anchor = in.args[2];
+        const Anchor *anchor = nullptr;
+        switch(CHECKARGS(1, 2)) {
+        case 1: {
+            switch(in.args[1].type.value()) {
+            case TYPE_Parameter: {
+                anchor = in.args[1].parameter->anchor;
+            } break;
+            case TYPE_Label: {
+                anchor = in.args[1].label->anchor;
+            } break;
+            case TYPE_Syntax: {
+                anchor = in.args[1].syntax->anchor;
+            } break;
+            default: {
+                location_error(String::from("can't extract anchor from datum."));
+            } break;
+            }
+        } break;
+        case 2: {
+            switch(in.args[2].type.value()) {
+            case TYPE_Syntax: {
+                anchor = in.args[2].syntax->anchor;
+            } break;
+            case TYPE_Anchor: {
+                anchor = in.args[2].anchor;
+            } break;
+            default: {
+                location_error(String::from("anchor or syntax expected."));
+            } break;
+            }
+        } break;
+        }
         RETARGS(Syntax::from(anchor, in.args[1]));
     } break;
     case FN_DatumToQuotedSyntax: {
@@ -3363,19 +3623,18 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         const Anchor *anchor = in.args[2];
         RETARGS(Syntax::from_quoted(anchor, in.args[1]));
     } break;
-    case FN_Error: {
-        switch(CHECKARGS(1, 2)) {
-        case 1: {
-            location_error(in.args[1]);
-        } break;
-        case 2: {
-            set_active_anchor(in.args[1]);
-            location_error(in.args[2]);
-        } break;
-        default: break;
-        }
+    case FN_Dump: {
+        CHECKARGS(1, 1);
+        StyledStream ss(std::cout);
+        stream_expr(ss, in.args[1], StreamExprFormat());
     } break;
     case FN_Exit: return false;
+#define UNOP_CASE(NAME, TYPE, MEMBER, OP) \
+    case NAME: { \
+        CHECKARGS(1, 1); \
+        in.args[1].verify<TYPE>(); \
+        RETARGS(OP (in.args[1]. MEMBER)); \
+    } break
 #define BINOP_CASE(NAME, TYPE, MEMBER, OP) \
     case NAME: { \
         CHECKARGS(2, 2); \
@@ -3383,23 +3642,61 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         in.args[2].verify<TYPE>(); \
         RETARGS(in.args[1]. MEMBER OP in.args[2]. MEMBER); \
     } break
-    BINOP_CASE(FN_I32Eq, TYPE_I32, i32, ==);
-    BINOP_CASE(FN_I32LE, TYPE_I32, i32, <=);
-    BINOP_CASE(FN_I32Sub, TYPE_I32, i32, -);
-
-    BINOP_CASE(FN_I64Eq, TYPE_I64, i64, ==);
-    BINOP_CASE(FN_I64GE, TYPE_I64, i64, >=);
-    BINOP_CASE(FN_I64LT, TYPE_I64, i64, <);
-    BINOP_CASE(FN_I64LE, TYPE_I64, i64, <=);
-    BINOP_CASE(FN_I64Add, TYPE_I64, i64, +);
-    BINOP_CASE(FN_I64Sub, TYPE_I64, i64, -);
+#define TBINOP_CASE(NAME, TYPE, MEMBER, OP) \
+    case NAME: { \
+        CHECKARGS(2, 2); \
+        in.args[1].verify<TYPE>(); \
+        in.args[2].verify<TYPE>(); \
+        RETARGS(OP(in.args[1]. MEMBER, in.args[2]. MEMBER)); \
+    } break
+#define SHIFT_CASES(UNAME, LNAME) \
+    case FN_ ## UNAME ## LShift: { \
+        CHECKARGS(2, 2); \
+        in.args[1].verify<TYPE_ ## UNAME>(); \
+        RETARGS(in.args[1]. LNAME << cast_number<int32_t>(in.args[2])); \
+    } break; \
+    case FN_ ## UNAME ## RShift: { \
+        CHECKARGS(2, 2); \
+        in.args[1].verify<TYPE_ ## UNAME>(); \
+        RETARGS(in.args[1]. LNAME >> cast_number<int32_t>(in.args[2])); \
+    } break
+    BINOP_CASE(FN_BoolEq, TYPE_Bool, i1, ==);
+    BINOP_CASE(FN_ParameterEq, TYPE_Parameter, parameter, ==);
+    BINOP_CASE(FN_LabelEq, TYPE_Label, label, ==);
+    BINOP_CASE(FN_ScopeEq, TYPE_Scope, scope, ==);
+    SHIFT_CASES(I8, i8);
+    SHIFT_CASES(I16, i16);
+    SHIFT_CASES(I32, i32);
+    SHIFT_CASES(I64, i64);
+    SHIFT_CASES(U8, u8);
+    SHIFT_CASES(U16, u16);
+    SHIFT_CASES(U32, u32);
+    SHIFT_CASES(U64, u64);
+#define T0(NAME, STR)
+#define T1(UNAME, LNAME, PFIX, OP) \
+    UNOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, OP);
+#define T2(UNAME, LNAME, PFIX, OP) \
+    BINOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, OP);
+#define T2T(UNAME, LNAME, PFIX, OP) \
+    TBINOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, PFIX ## T);
+    B_ALL_OP_DEFS()
+#undef T0
+#undef T1
+#undef T2
+#undef T2T
 #undef BINOP_CASE
-    case FN_I64New: {
-        CHECKARGS(1, 1); RETARGS(cast_number<int64_t>(in.args[1]));
-    } break;
-    case FN_U64New: {
-        CHECKARGS(1, 1); RETARGS(cast_number<uint64_t>(in.args[1]));
-    } break;
+#undef TBINOP_CASE
+#undef UNOP_CASE
+    case FN_I8New: CHECKARGS(1, 1); RETARGS(cast_number<int8_t>(in.args[1])); break;
+    case FN_I16New: CHECKARGS(1, 1); RETARGS(cast_number<int16_t>(in.args[1])); break;
+    case FN_I32New: CHECKARGS(1, 1); RETARGS(cast_number<int32_t>(in.args[1])); break;
+    case FN_I64New: CHECKARGS(1, 1); RETARGS(cast_number<int64_t>(in.args[1])); break;
+    case FN_U8New: CHECKARGS(1, 1); RETARGS(cast_number<uint8_t>(in.args[1])); break;
+    case FN_U16New: CHECKARGS(1, 1); RETARGS(cast_number<uint16_t>(in.args[1])); break;
+    case FN_U32New: CHECKARGS(1, 1); RETARGS(cast_number<uint32_t>(in.args[1])); break;
+    case FN_U64New: CHECKARGS(1, 1); RETARGS(cast_number<uint64_t>(in.args[1])); break;
+    case FN_R32New: CHECKARGS(1, 1); RETARGS(cast_number<float>(in.args[1])); break;
+    case FN_R64New: CHECKARGS(1, 1); RETARGS(cast_number<double>(in.args[1])); break;
     case FN_IsListEmpty: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
@@ -3446,6 +3743,34 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
             RETARGS(l->count);
         }
     } break;
+    case FN_ListJoin: {
+        CHECKARGS(2, 2);
+        const List *a = in.args[1];
+        const List *b = in.args[2];
+        RETARGS(List::join(a, b));
+    } break;
+    case FN_ListLoad: {
+        CHECKARGS(1, 1);
+        const String *path = in.args[1];
+        SourceFile *sf = SourceFile::open(path);
+        LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
+        RETARGS(parser.parse());
+    } break;
+    case FN_ListParse: {
+        const String *text = nullptr;
+        const String *path = nullptr;
+        switch(CHECKARGS(1, 2)) {
+        case 1: {
+            text = in.args[1]; path = String::from("<string>");
+        } break;
+        case 2: {
+            text = in.args[1]; path = in.args[2];
+        } break;
+        }
+        SourceFile *sf = SourceFile::open(path, text);
+        LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
+        RETARGS(parser.parse());
+    } break;
     case FN_ListNext: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
@@ -3457,6 +3782,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         Any result = in.args[1];
         result.type = TYPE_Label;
         RETARGS(result);
+    } break;
+    case OP_Not: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Bool>();
+        RETARGS(!in.args[1].i1);
     } break;
     case FN_ParameterNew: {
         CHECKARGS(4, 4);
@@ -3477,13 +3807,31 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
             if (i > 1) {
                 cout << " ";
             }
-            if (in.args[i].type == TYPE_String) {
+            switch(in.args[i].type.value()) {
+            case TYPE_String: {
                 cout << in.args[i].string->data;
-            } else {
+            } break;
+            default: {
                 cout << in.args[i];
+            } break;
             }
         }
         cout << std::endl;
+    } break;
+    case FN_RefAt: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Ref>();
+        Any result = *in.args[1].ref;
+        RETARGS(result);
+    } break;
+    case SFXFN_RefSet: {
+        CHECKARGS(2, 2);
+        in.args[1].verify<TYPE_Ref>();
+        *in.args[1].ref = in.args[2];
+    } break;
+    case FN_RefNew: {
+        CHECKARGS(1, 1);
+        RETARGS(in.args[1].toref());
     } break;
     case FN_Repr: {
         CHECKARGS(1, 1);
@@ -3510,6 +3858,10 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         default: break;
         }
     } break;
+    case SFXFN_SetExceptionHandler: {
+        CHECKARGS(1, 1);
+        exception_handler = in.args[1];
+    } break;
     case SFXFN_SetGlobalApplyFallback: {
         CHECKARGS(1, 1);
         apply_unknown_type = in.args[1];
@@ -3520,11 +3872,63 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         in.args[2].verify<TYPE_Symbol>();
         scope->bind(in.args[2].symbol, in.args[3]);
     } break;
+    case FN_StringCmp: {
+        CHECKARGS(2, 2);
+        const String *a = in.args[1];
+        const String *b = in.args[2];
+        if (a->count == b->count) {
+            RETARGS(memcmp(a->data, b->data, a->count));
+        } else if (a->count < b->count) {
+            RETARGS(Any(-1));
+        } else {
+            RETARGS(Any(1));
+        }
+    } break;
+    case FN_StringCountOf: {
+        CHECKARGS(1, 1);
+        const String *a = in.args[1];
+        RETARGS(a->count);
+    } break;
+    case FN_StringAt: {
+        CHECKARGS(2, 2);
+        const String *a = in.args[1];
+        int64_t offset = cast_number<int64_t>(in.args[2]);
+        while (offset < 0) {
+            offset += (int64_t)a->count;
+        }
+        if (offset > (int64_t)a->count) {
+            location_error(String::from("string index out of bounds"));
+        }
+        RETARGS(a->substr(offset, offset));
+    } break;
     case FN_StringJoin: {
         CHECKARGS(2, 2);
         const String *a = in.args[1];
         const String *b = in.args[2];
         RETARGS(String::join(a, b));
+    } break;
+    case FN_StringNew: {
+        CHECKARGS(1, 1);
+        switch(in.args[1].type.value()) {
+        case TYPE_String: {
+            RETARGS(in.args[1]);
+        } break;
+        case TYPE_Symbol: {
+            RETARGS(in.args[1].symbol.name());
+        } break;
+        default: {
+            StyledString ss = StyledString::plain();
+            in.args[1].stream(ss.out, false);
+            RETARGS(ss.str());
+        } break;
+        }
+    } break;
+    case FN_StringSlice: {
+        CHECKARGS(3, 3);
+        const String *a = in.args[1];
+        int64_t i0 = cast_number<int64_t>(in.args[2]);
+        int64_t i1 = cast_number<int64_t>(in.args[3]);
+        RETARGS(a->substr(i0, i1));
     } break;
     case FN_SymbolNew: {
         CHECKARGS(1, 1);
@@ -3539,8 +3943,12 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
     } break;
     case FN_SyntaxToDatum: {
         CHECKARGS(1, 1);
-        const Syntax *sx = in.args[1];
-        RETARGS(sx->datum);
+        if (in.args[1].type == TYPE_Syntax) {
+            const Syntax *sx = in.args[1].syntax;
+            RETARGS(sx->datum);
+        } else {
+            RETARGS(in.args[1]);
+        }
     } break;
     case FN_SyntaxToAnchor: {
         CHECKARGS(1, 1);
@@ -3565,6 +3973,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         in.args[1].verify<TYPE_Type>();
         in.args[2].verify<TYPE_Type>();
         RETARGS(in.args[1].typeref == in.args[2].typeref);
+    } break;
+    case FN_TypeNew: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Symbol>();
+        RETARGS(Type(in.args[1].symbol));
     } break;
     case FN_TypeOf: {
         CHECKARGS(1, 1);
@@ -3599,6 +4012,7 @@ static void interpreter_loop(Instruction &_in) {
 
     MangleMap map;
 
+restart_loop:
     try {
 loop:
     out->clear();
@@ -3636,13 +4050,8 @@ loop:
                 if (srci < r) {
                     vargsize = r - srci;
                 }
-                VarArgs *va = VarArgs::from(vargsize);
-
-                size_t endi = srci + vargsize;
-                for (size_t k = srci; k < endi; ++k) {
-                    va->values.push_back(args[k]);
-                }
-                srci = srci + vargsize;
+                Any va = List::from(&args[srci], vargsize);
+                va.type = TYPE_VarArgs;
                 map.insert(std::pair<ILNode*,Any>(param, va));
             } else if (srci < rcount) {
                 map.insert(std::pair<ILNode*,Any>(param, args[srci]));
@@ -3686,13 +4095,19 @@ loop:
     out = tmp;
     goto loop;
     } catch (const Exception &exc) {
-#if 1
-        StyledStream cerr(std::cout);
-        cerr << *in << std::endl;
-#endif
-        default_exception_handler(exc);
+        if (!exception_handler) {
+        #if 1
+            StyledStream cerr(std::cout);
+            cerr << *in << std::endl;
+        #endif
+            default_exception_handler(exc);
+        } else {
+            in->enter = exception_handler;
+            in->args = { Builtin(FN_Exit), exc.anchor, exc.msg };
+        }
     }
 
+    goto restart_loop;
 }
 
 //------------------------------------------------------------------------------
@@ -4207,7 +4622,25 @@ static void init_globals() {
     globals->bind(KW_False, false);
     globals->bind(KW_ListEmpty, EOL);
     globals->bind(KW_None, none);
+    globals->bind(KW_Globals, globals);
 
+    globals->bind(TYPE_Bool, Type(TYPE_Bool));
+    globals->bind(TYPE_I8, Type(TYPE_I8));
+    globals->bind(TYPE_I16, Type(TYPE_I16));
+    globals->bind(TYPE_I32, Type(TYPE_I32));
+    globals->bind(TYPE_I64, Type(TYPE_I64));
+    globals->bind(TYPE_U8, Type(TYPE_U8));
+    globals->bind(TYPE_U16, Type(TYPE_U16));
+    globals->bind(TYPE_U32, Type(TYPE_U32));
+    globals->bind(TYPE_U64, Type(TYPE_U64));
+    globals->bind(TYPE_R32, Type(TYPE_R32));
+    globals->bind(TYPE_R64, Type(TYPE_R64));
+
+    if (sizeof(size_t) == sizeof(uint64_t)) {
+        globals->bind(TYPE_SizeT, Type(TYPE_U64));
+    } else {
+        globals->bind(TYPE_SizeT, Type(TYPE_U32));
+    }
     globals->bind(TYPE_Symbol, Type(TYPE_Symbol));
     globals->bind(TYPE_List, Type(TYPE_List));
     globals->bind(TYPE_Macro, Type(TYPE_Macro));
@@ -4217,9 +4650,25 @@ static void init_globals() {
     globals->bind(TYPE_Nothing, Type(TYPE_Nothing));
     globals->bind(TYPE_Type, Type(TYPE_Type));
     globals->bind(TYPE_Syntax, Type(TYPE_Syntax));
+    globals->bind(TYPE_Label, Type(TYPE_Label));
+    globals->bind(TYPE_Ref, Type(TYPE_Ref));
+    globals->bind(TYPE_Parameter, Type(TYPE_Parameter));
+    globals->bind(TYPE_Scope, Type(TYPE_Scope));
+    globals->bind(TYPE_Callable, Type(TYPE_Callable));
+    globals->bind(TYPE_Integer, Type(TYPE_Integer));
+    globals->bind(TYPE_Real, Type(TYPE_Real));
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
+#define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
+#define T1 T2
+#define T2T T2
+#define T2(UNAME, LNAME, PFIX, OP) \
+    globals->bind(FN_ ## UNAME ## PFIX, Builtin(FN_ ## UNAME ## PFIX));
     B_GLOBALS()
 #undef T
+#undef T0
+#undef T1
+#undef T2
+#undef T2T
 }
 
 //------------------------------------------------------------------------------
