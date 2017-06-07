@@ -69,6 +69,9 @@ syntax-apply-block
                 Scope@ env (Symbol-new "syntax-error")
                 \ anchor msg
 
+        set-scope-symbol! env (Symbol-new "scope-list-wildcard-symbol")
+            Symbol-new "#list"
+
         fn/cc expand (_ topit env)
             fn/cc expand-fn/cc (_ topit env)
                 fn/cc process-name (_ anchor it subenv)
@@ -169,27 +172,33 @@ syntax-apply-block
                                     \ outenv
                             expand expr env
 
-                    #fn/cc expand-wildcard-list (_)
-                        local default_handler = env:lookup(Symbol.ListWildcard)
-                        if default_handler then
-                            return expand_wildcard("wildcard list",
-                                env, default_handler, topit,
-                                function (result)
-                                    if result ~= EOL then
-                                        return expand(env, result)
-                                    end
-                                    return expand-call-list()
-                                end)
-                        end
-                        return expand-call-list()
+                    fn/cc expand-wildcard-list (_)
+                        call
+                            fn/cc (_ default-handler)
+                                branch (type== (typeof default-handler) Nothing)
+                                    fn/cc (_)
+                                        expand-call-list
+                                    fn/cc (_)
+                                        call
+                                            fn/cc (_ result-list)
+                                                branch (type== (typeof result-list) Nothing)
+                                                    fn/cc (_)
+                                                        expand-call-list
+                                                    fn/cc (_)
+                                                        branch (list-empty? result-list)
+                                                            fn/cc (_)
+                                                                expand-call-list
+                                                            fn/cc (_)
+                                                                expand result-list env
+                                            default-handler topit env
+                            Scope@ env (Symbol-new "#list")
 
                     fn/cc expand-macro-list (_ f topit env)
                         call
                             fn/cc (_ result-list result-env)
                                 branch (type== (typeof result-list) Nothing)
                                     fn/cc (_)
-                                        # expand-wildcard-list
-                                        expand-call-list
+                                        expand-wildcard-list
                                     fn/cc (_)
                                         branch (list-empty? result-list)
                                             fn/cc (return)
@@ -220,12 +229,11 @@ syntax-apply-block
                                                     fn/cc (_)
                                                         return
                                                             expand-macro-list
-                                                                Macro->Label head
+                                                                Macro->Closure head
                                                                 \ topit env
                                                     fn/cc (_)
                                         # expand-macro-list (macro->Label head)
-                                        # expand-wildcard-list
-                                        expand-call-list
+                                        expand-wildcard-list
 
                                     typeof head
                             call
@@ -264,19 +272,6 @@ syntax-apply-block
                                     syntax-error anchor
                                         string-join "no value bound to name "
                                             string-join (repr expr) " in scope"
-                                #
-                                    local default_handler = env:lookup(Symbol.SymbolWildcard)
-                                    if default_handler then
-                                        return expand_wildcard("wildcard symbol",
-                                            env, default_handler, topit, function(result)
-                                            if result ~= EOL then
-                                                return expand(env, result)
-                                            end
-                                            return missing_symbol_error()
-                                        end)
-                                    else
-                                        return missing_symbol_error()
-                                    end
                                 missing-symbol-error
 
                     call
@@ -402,6 +397,15 @@ syntax-apply-block
                 fn/cc (_)
                     list@ (list-next x) (i32- i 1)
 
+        fn/cc va@ (_ i ...)
+            branch (i32<= i 0)
+                fn/cc (_) ...
+                fn/cc (_)
+                    call
+                        fn/cc (_ at ...)
+                            va@ (i32- i 1) ...
+                        \ ...
+
         fn/cc list-slice (_ value i0 i1)
             call
                 fn/cc (_ i0 i1)
@@ -512,11 +516,12 @@ syntax-apply-block
         set-scope-symbol! env (Symbol-new "syntax-quote") syntax-quote
         set-scope-symbol! env (Symbol-new "syntax-cons") syntax-cons
         set-scope-symbol! env (Symbol-new "list@") list@
+        set-scope-symbol! env (Symbol-new "va@") va@
         set-scope-symbol! env (Symbol-new "expand") expand
-        set-scope-symbol! env (Symbol-new "block-scope-macro") Label->Macro
+        set-scope-symbol! env (Symbol-new "block-scope-macro") Closure->Macro
         set-scope-symbol! env (Symbol-new "cons") list-cons
         set-scope-symbol! env (Symbol-new "syntax-extend")
-            Label->Macro
+            Closure->Macro
                 fn/cc expand-syntax-extend (_ topit env)
                     fn/cc step4 (return rest expr)
                         return rest
@@ -1336,7 +1341,6 @@ syntax-extend
 
 # a lofi version of let so we get some sugar early
 define let
-    print "let"
     block-scope-macro
         fn/cc "expand-let" (return expr env)
             branch
@@ -1378,7 +1382,6 @@ define let
   (fn [name] (param ...) body ...)
   an extended implementation follows further down
 define fn
-    print "fn"
     block-macro
         fn/cc "expand-fn" (return topexpr)
             let expr =
@@ -1417,12 +1420,10 @@ define fn
                     \ rest
 
 define raise
-    print "raise"
     fn/cc "raise" (_ x)
         error x
 
 define try
-    print "try"
     block-macro
         fn expand-try (expr env)
             ? (not (syntax-head? (@ expr 1) (quote except)))
@@ -1446,12 +1447,10 @@ define float r32
 define double r64
 
 define _
-    print "_"
     fn forward-multiargs (args...) args...
 
 # (assert bool-expr [error-message])
 define assert
-    print "assert"
     macro
         fn assert (expr)
             qquote-syntax
@@ -1474,7 +1473,6 @@ define assert
 
 
 define sizeof
-    print "sizeof"
     let sym = (Symbol "size")
     fn/cc "sizeof" (return x)
         assert (type? x) "type expected"
@@ -1483,7 +1481,6 @@ define sizeof
         ? (none? size) (size_t 0) size
 
 define alignof
-    print "alignof"
     let sym = (Symbol "alignment")
     fn/cc "alignof" (return x)
         assert (type? x) "type expected"
@@ -1491,7 +1488,6 @@ define alignof
             @ x sym
 
 define ::@
-    print "::@"
     block-macro
         fn ::@ (expr)
             cons
@@ -1501,7 +1497,6 @@ define ::@
                         @ expr 1
                 slice expr 2
 define ::*
-    print "::*"
     block-macro
         fn ::* (expr)
             list
@@ -1510,7 +1505,6 @@ define ::*
                     slice expr 1
 
 define .
-    print "."
     macro
         fn . (expr)
             let key = (@ expr 2)
@@ -1524,7 +1518,6 @@ define .
                 error "symbol expected"
 
 define and
-    print "and"
     macro
         fn and (expr)
             let tmp = (datum->syntax (Parameter (quote-syntax tmp)))
@@ -1544,7 +1537,6 @@ define and
                         syntax-eol expr
 
 define or
-    print "or"
     macro
         fn or (expr)
             let tmp = (datum->syntax (Parameter (quote-syntax tmp)))
@@ -1564,7 +1556,6 @@ define or
                         syntax-eol expr
 
 define if
-    print "if"
     block-macro
         fn if-rec (topexpr env)
             let expr =
@@ -1732,7 +1723,7 @@ syntax-extend
             syntax->datum op
         let key =
         ? (symbol? sym)
-            get-scope-symbol env
+            @ env
                 Symbol
                     .. "#ifx:" (string sym)
             \ none
@@ -1885,7 +1876,7 @@ syntax-extend
         (@ self name) self args...
 
     fn dotted-symbol? (env head)
-        if (none? (get-scope-symbol env head))
+        if (none? (@ env head))
             let s = (string head)
             let sz = (countof s)
             let i = (size_t 0)
@@ -1917,7 +1908,7 @@ syntax-extend
             let sxhead = (@ expr 0)
             let head = (syntax->datum sxhead)
             if (symbol? head)
-                if (none? (get-scope-symbol env head))
+                if (none? (@ env head))
                     let s = (string head)
                     let sz = (countof s)
                     let i = (size_t 0)
@@ -1957,7 +1948,7 @@ syntax-extend
         let head = (syntax->datum (@ expr 0))
         let head =
             ? (symbol? head)
-                get-scope-symbol env head
+                @ env head
                 \ head
         let no-named-arguments? = (!= (typeof head) Label)
         let expr = (slice expr 1)
@@ -1987,10 +1978,10 @@ syntax-extend
         let head = (syntax->datum sxhead)
         let head =
             ? (symbol? head)
-                get-scope-symbol env head
+                @ env head
                 \ head
         let expr = (slice expr 1)
-        let params... = (label-parameters head)
+        let params... = (Label-parameters head)
         let pcount = (int (va-countof params...))
 
         let idx = 1
@@ -2011,7 +2002,7 @@ syntax-extend
                         let sxkey = (@ entry 0)
                         let sxvalue = (@ entry 2)
                         let key = (syntax->datum sxkey)
-                        if (none? (get-scope-symbol map key))
+                        if (none? (@ map key))
                             set-scope-symbol! map key
                                 fn () (return sxkey sxvalue)
                             continue (slice expr 1)
@@ -2022,14 +2013,14 @@ syntax-extend
                         let param = (va@ idx params...)
                         if (none? param)
                             # complain about unused scope entries
-                            let key value = (next-scope-symbol map none)
+                            let key value = (Scope-next-symbol map none)
                             if (none? key)
                                 break eol
                             else
                                 syntax-error (value) "no such named parameter"
-                        let param-name = (parameter-name param)
-                        let sxvalue = (get-scope-symbol map param-name)
-                        del-scope-symbol! map param-name
+                        let param-name = (Parameter-name param)
+                        let sxvalue = (@ map param-name)
+                        set-scope-symbol! map param-name none
                         syntax-cons
                             ? (none? sxvalue)
                                 datum->syntax none eol
@@ -2055,7 +2046,7 @@ syntax-extend
                 and
                     symbol? (syntax->datum head)
                     and
-                        none? (get-scope-symbol env head)
+                        none? (@ env head)
                         == (slice headstr 0 1) "."
 
                 let name =
@@ -2092,54 +2083,6 @@ syntax-extend
                 finalize
                     expand-named-arguments env expr
 
-    #set-scope-symbol! syntax-scope scope-symbol-wildcard-symbol
-        fn expand-any-symbol (topexpr env)
-            let sym =
-                @ topexpr 0
-            let sym-anchor =
-                syntax->anchor sym
-            let it =
-                iter-r
-                    string sym
-            fn finalize-head (out)
-                cons
-                    datum->syntax
-                        Symbol
-                            @ out 0
-                        \ sym-anchor
-                    slice out 1
-            # return tokenized list if string contains a dot
-            if
-                and
-                    none? (get-scope-symbol env sym)
-                    fold
-                        fn (out k)
-                            if (== k ".") true
-                            else out
-                        \ false
-                        iter-r
-                            string sym
-                cons
-                    datum->syntax
-                        finalize-head
-                            fold
-                                fn (out k)
-                                    if (== k ".")
-                                        cons ""
-                                            cons
-                                                datum->syntax
-                                                    quote .
-                                                    \ sym-anchor
-                                                finalize-head out
-                                    else
-                                        cons
-                                            .. k (@ out 0)
-                                            slice out 1
-                                list ""
-                                iter-r
-                                    string sym
-                        \ sym-anchor
-                    slice topexpr 1
     \ syntax-scope
 
 #define-infix-op : 70 : >
@@ -2276,7 +2219,7 @@ syntax-extend
     fn scope-iter (f)
         let t k = (f)
         let key value =
-            next-scope-symbol t k
+            Scope-next-symbol t k
         if (not (none? key))
             return
                 fn ()
@@ -2841,7 +2784,7 @@ define fn-types
                     enumerate
                         zip-fill
                             va-iter
-                                label-parameters env.recur
+                                Label-parameters env.recur
                             syntax->datum expr
                             \ none
                     if (i == 0)
@@ -2851,7 +2794,7 @@ define fn-types
                             syntax-error expr "parameter count mismatch"
                         let param-label =
                             .. "parameter #" (string i) " '"
-                                \ (string (parameter-name param)) "'"
+                                \ (string (Parameter-name param)) "'"
                         syntax-cons
                             qquote-syntax
                                 (unquote assert-type-fn)
@@ -2950,14 +2893,14 @@ syntax-extend
         let name = (syntax->datum name)
         assert (symbol? name) "module name must be symbol"
         let content =
-            get-scope-symbol
-                get-scope-symbol bangra (quote modules)
+            @
+                @ bangra (quote modules)
                 \ name
         if (none? content)
             let namestr =
                 string name
             let pattern =
-                get-scope-symbol bangra (quote path)
+                @ bangra (quote path)
             loop (pattern)
                 if (not (empty? pattern))
                     let module-path =
@@ -2977,7 +2920,7 @@ syntax-extend
                         let content =
                             fun
                         set-scope-symbol!
-                            get-scope-symbol bangra (quote modules)
+                            @ bangra (quote modules)
                             \ name content
                         \ content
                     else
@@ -3508,7 +3451,7 @@ define read-eval-print-loop
                     \ syntax-scope
         fn make-idstr ()
             .. "$"
-                string (get-scope-symbol state (quote counter))
+                string (@ state (quote counter))
         loop
             with
                 preload = ""
@@ -3543,7 +3486,7 @@ define read-eval-print-loop
                         let expr = (list-parse cmdlist)
                         if (none? expr)
                             error "parsing failed"
-                        let eval-env = (get-scope-symbol state (quote env))
+                        let eval-env = (@ state (quote env))
                         let code =
                             .. expr
                                 syntax-list expression-suffix
@@ -3563,7 +3506,7 @@ define read-eval-print-loop
                                         repr (typeof value) default-styler
                                 set-scope-symbol! eval-env id value
                                 set-scope-symbol! state (quote counter)
-                                    (get-scope-symbol state (quote counter)) + 1
+                                    (@ state (quote counter)) + 1
                                 continue
                     except (e)
                         print

@@ -26,6 +26,8 @@ BEWARE: If you build this with anything else but a recent enough clang,
         you will have a bad time.
 */
 
+// real: 18s, user: 17s
+
 #ifndef BANGRA_CPP
 #define BANGRA_CPP
 
@@ -857,13 +859,15 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
     T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
     T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
-    T(FN_BuiltinEq) T(FN_LabelToMacro) T(FN_MacroToLabel) T(FN_VaCountOf) \
+    T(FN_BuiltinEq) T(FN_ClosureToMacro) T(FN_MacroToClosure) T(FN_VaCountOf) \
     T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
     T(FN_ListCountOf) T(FN_StringNew) T(FN_TypeNew) T(FN_RefNew) \
     T(FN_BoolEq) T(FN_ParameterEq) T(FN_LabelEq) T(FN_ScopeEq) T(FN_StringCmp) \
     T(FN_ListJoin) T(FN_StringCountOf) T(FN_StringAt) T(FN_RefAt) \
     T(FN_StringSlice) T(FN_Dump) T(OP_Not) T(FN_ListLoad) T(FN_ListParse) \
     T(SFXFN_SetExceptionHandler) T(SFXFN_RefSet) T(FN_Exit) T(FN_ActiveAnchor) \
+    T(FN_ScopeNextSymbol) T(FN_ParameterName) T(FN_LabelParameters) \
+    T(FN_Bitcast) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -906,6 +910,8 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(TYPE_Label, "Label") \
     T(TYPE_VarArgs, "va-list") \
     T(TYPE_TypeSet, "TypeSet") \
+    T(TYPE_Closure, "Closure") \
+    T(TYPE_Frame, "Frame") \
     \
     T(TYPE_Ref, "ref") \
     \
@@ -963,8 +969,9 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_Iter, "iter") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
-    T(FN_LabelNew, "Label-new") T(FN_LabelToMacro, "Label->Macro") \
-    T(FN_MacroToLabel, "Macro->Label") \
+    T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
+    T(FN_ClosureToMacro, "Closure->Macro") \
+    T(FN_MacroToClosure, "Macro->Closure") \
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
@@ -973,14 +980,14 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
     T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") T(FN_IsNone, "none?") \
     T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
     T(FN_ParameterEq, "Parameter==") \
-    T(FN_ParameterNew, "Parameter-new") \
+    T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
     T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeEq, "Scope==") \
-    T(FN_ScopeNew, "Scope-new") T(FN_SizeOf, "sizeof") \
+    T(FN_ScopeNew, "Scope-new") T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
     T(FN_Slice, "slice") T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
     T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
@@ -1563,6 +1570,8 @@ struct List;
 struct Label;
 struct Parameter;
 struct Scope;
+struct Frame;
+struct Closure;
 
 static void location_error(const String *msg);
 
@@ -1586,6 +1595,8 @@ struct Any {
         const Syntax *syntax;
         const Anchor *anchor;
         const List *list;
+        const Frame *frame;
+        const Closure *closure;
         Label *label;
         Parameter *parameter;
         Builtin builtin;
@@ -1611,6 +1622,8 @@ struct Any {
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
     Any(const Anchor *x) : type(TYPE_Anchor), anchor(x) {}
     Any(const List *x) : type(TYPE_List), list(x) {}
+    Any(const Frame *x) : type(TYPE_Frame), frame(x) {}
+    Any(const Closure *x) : type(TYPE_Closure), closure(x) {}
     Any(Label *x) : type(TYPE_Label), label(x) {}
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
@@ -1648,6 +1661,9 @@ struct Any {
             case TYPE_Parameter: return dest(parameter);
             case TYPE_Scope: return dest(scope);
             case TYPE_Ref: return dest(ref);
+            case TYPE_Frame: return dest(frame);
+            case TYPE_Closure: return dest(closure);
+            case TYPE_Macro: return dest(closure);
             default:
                 StyledString ss;
                 ss.out << "cannot dispatch type: " << type;
@@ -1712,6 +1728,8 @@ struct Any {
     operator const Syntax *() const { verify<TYPE_Syntax>(); return syntax; }
     operator const Anchor *() const { verify<TYPE_Anchor>(); return anchor; }
     operator const String *() const { verify<TYPE_String>(); return string; }
+    operator const Frame *() const { verify<TYPE_Frame>(); return frame; }
+    operator const Closure *() const { verify<TYPE_Closure>(); return closure; }
     operator Label *() const { verify<TYPE_Label>(); return label; }
     operator Scope *() const { verify<TYPE_Scope>(); return scope; }
     operator Parameter *() const { verify<TYPE_Parameter>(); return parameter; }
@@ -1762,12 +1780,12 @@ static void location_error(const String *msg) {
 
 struct Scope {
 protected:
-    std::unordered_map<Symbol, Any, Symbol::Hash> map;
-    Scope *parent;
-
     Scope(Scope *_parent = nullptr) : parent(_parent) {}
 
 public:
+    std::unordered_map<Symbol, Any, Symbol::Hash> map;
+    Scope *parent;
+
     size_t count() const {
         return map.size();
     }
@@ -1783,7 +1801,10 @@ public:
     }
 
     void bind(Symbol name, const Any &value) {
-        map.insert(std::pair<Symbol, Any>(name, value));
+        auto ret = map.insert(std::pair<Symbol, Any>(name, value));
+        if (!ret.second) {
+            ret.first->second = value;
+        }
     }
 
     void del(Symbol name) {
@@ -1889,6 +1910,14 @@ public:
     Any at;
     const List *next;
     size_t count;
+
+    Any first() const {
+        if (this == EOL) {
+            return none;
+        } else {
+            return at;
+        }
+    }
 
     static const List *from(const Any &_at, const List *_next) {
         return new List(_at, _next, (_next != EOL)?(_next->count + 1):1);
@@ -2845,8 +2874,7 @@ protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
-        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
-        original(nullptr), scope_valid(false)
+        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr)
         {}
 
 public:
@@ -2857,9 +2885,6 @@ public:
     Body body;
     LabelTag tag;
     Label *paired;
-    const Label *original;
-    std::vector<Label *> scope;
-    bool scope_valid;
 
     void use(const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
@@ -2950,82 +2975,53 @@ public:
     }
 
     void build_scope(std::vector<Label *> &tempscope) {
-        if (!scope_valid) {
-            scope_valid = true;
-            std::unordered_set<Label *> reachable;
-            build_reachable(reachable);
+        std::unordered_set<Label *> reachable;
+        build_reachable(reachable);
 
-            scope.clear();
+        tempscope.clear();
 
-            std::unordered_set<Label *> visited;
-            visited.clear();
-            visited.insert(this);
+        std::unordered_set<Label *> visited;
+        visited.clear();
+        visited.insert(this);
 
-            for (auto &&param : params) {
-                // every label using one of our parameters is live in scope
-                for (auto &&kv : param->users) {
-                    Label *live_label = kv.first;
-                    if (!visited.count(live_label)) {
-                        visited.insert(live_label);
-                        scope.push_back(live_label);
+        for (auto &&param : params) {
+            // every label using one of our parameters is live in scope
+            for (auto &&kv : param->users) {
+                Label *live_label = kv.first;
+                if (!visited.count(live_label)) {
+                    visited.insert(live_label);
+                    tempscope.push_back(live_label);
+                }
+            }
+        }
+
+        size_t index = 0;
+        while (index < tempscope.size()) {
+            Label *scope_label = tempscope[index++];
+
+            // users of scope_label are indirectly live in scope
+            for (auto &&kv : scope_label->users) {
+                Label *live_label = kv.first;
+                if (!visited.count(live_label)) {
+                    visited.insert(live_label);
+                    if (reachable.count(live_label)) {
+                        tempscope.push_back(live_label);
                     }
                 }
             }
 
-            size_t index = 0;
-            while (index < scope.size()) {
-                Label *scope_label = scope[index++];
-
-                // users of scope_label are indirectly live in scope
-                for (auto &&kv : scope_label->users) {
-                    Label *live_label = kv.first;
-                    if (!visited.count(live_label)) {
-                        visited.insert(live_label);
-                        if (reachable.count(live_label)) {
-                            scope.push_back(live_label);
-                        }
+            static std::vector<Label *> subscope;
+            scope_label->build_scope(subscope);
+            for (auto &&live_label : subscope) {
+                if (!visited.count(live_label)) {
+                    visited.insert(live_label);
+                    if (reachable.count(live_label)) {
+                        tempscope.push_back(live_label);
                     }
                 }
-
-                static std::vector<Label *> subscope;
-                scope_label->build_scope(subscope);
-                for (auto &&live_label : subscope) {
-                    if (!visited.count(live_label)) {
-                        visited.insert(live_label);
-                        if (reachable.count(live_label)) {
-                            scope.push_back(live_label);
-                        }
-                    }
-                }
-
-                /*
-                // every label using one of our parameters is live in scope
-                for (auto &&param : scope_label->params) {
-                    for (auto &&kv : param->users) {
-                        Label *live_label = kv.first;
-                        if (!visited.count(live_label)) {
-                            visited.insert(live_label);
-                            if (reachable.count(live_label)) {
-                                scope.push_back(live_label);
-                            }
-                        }
-                    }
-                }
-                */
-            }
-
-            if (scope.size() > 1000) {
-                StyledStream ss(std::cout);
-                ss << scope.size() << " labels in scope, "
-                    << reachable.size() << " labels reachable"
-                    << std::endl;
             }
 
         }
-
-        tempscope = scope;
-
-        //std::cout << tempscope.size() << std::endl;
     }
 
     StyledStream &stream_short(StyledStream &ss) const {
@@ -3068,11 +3064,6 @@ public:
     // only inherits name and anchor
     static Label *from(const Label *label) {
         Label *result = new Label(label->anchor, label->name);
-        if (label->original) {
-            result->original = label->original;
-        } else {
-            result->original = label;
-        }
         return result;
     }
 
@@ -3134,6 +3125,57 @@ void ILNode::stream_users(StyledStream &ss) const {
         }
         ss << Style_Comment << "}" << Style_None;
     }
+}
+
+struct Frame {
+    Frame(const Frame *_parent, Label *_label) :
+        parent(_parent), label(_label) {}
+
+    const Frame *parent;
+    Label *label;
+    std::vector<Any> args;
+
+    static Frame *from(const Frame *parent, Label *label) {
+        const Frame *top = parent;
+        #if 1
+        // truncate if we're remapping a label
+        while (top) {
+            if (top->label == label) {
+                parent = top->parent;
+            }
+            top = top->parent;
+        }
+        #endif
+        return new Frame(parent, label);
+    }
+
+};
+
+struct Closure {
+protected:
+
+    Closure(Label *_label, const Frame *_frame) :
+        label(_label), frame(_frame) {}
+
+public:
+    Label *label;
+    const Frame *frame;
+
+    static const Closure *from(Label *label, const Frame *frame) {
+        return new Closure(label, frame);
+    }
+
+    StyledStream &stream(StyledStream &ost) const {
+        ost << Style_Comment << "[" << Style_None;
+        label->stream_short(ost);
+        ost << Style_Comment << "]@" << Style_None << frame;
+        return ost;
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
+    closure->stream(ss);
+    return ss;
 }
 
 //------------------------------------------------------------------------------
@@ -3245,12 +3287,6 @@ struct StreamIL : StreamAnchors {
         }
         alabel->stream(ss, fmt.show_users);
         ss << Style_Operator << ":" << Style_None;
-        if (fmt.show_users) {
-            if (alabel->original) {
-                ss << " # ";
-                alabel->original->stream_short(ss);
-            }
-        }
         //stream_scope(scopes[alabel])
         ss << std::endl;
         ss << "    ";
@@ -3308,152 +3344,8 @@ static void stream_il(
 }
 
 //------------------------------------------------------------------------------
-// IL MANGLING
-//------------------------------------------------------------------------------
-
-typedef std::map<ILNode *, Any> MangleMap;
-
-static Any vararg_first(const Any &value) {
-    if (value.list == EOL) {
-        return none;
-    } else {
-        return value.list->at;
-    }
-}
-
-void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
-    Any enter = entry->body.enter;
-    std::vector<Any> &args = entry->body.args;
-    std::vector<Any> &body = ll->body.args;
-    if (enter.type == TYPE_Label) {
-        auto it = map.find(enter.label);
-        if (it != map.end()) {
-            enter = it->second;
-        }
-    } else if (enter.type == TYPE_Parameter) {
-        auto it = map.find(enter.parameter);
-        if (it != map.end()) {
-            enter = it->second;
-        }
-    } else {
-        goto skip;
-    }
-    if (enter.type == TYPE_VarArgs) {
-        enter = vararg_first(enter);
-    }
-skip:
-    ll->body.anchor = entry->body.anchor;
-    ll->body.enter = enter;
-
-    StyledStream ss(std::cout);
-    for (size_t i = 0; i < args.size(); ++i) {
-        Any arg = args[i];
-        if (arg.type == TYPE_Label) {
-            auto it = map.find(arg.label);
-            if (it != map.end()) {
-                arg = it->second;
-            }
-        } else if (arg.type == TYPE_Parameter) {
-            auto it = map.find(arg.parameter);
-            if (it != map.end()) {
-                arg = it->second;
-            }
-        } else {
-            goto skip2;
-        }
-        if (arg.type == TYPE_VarArgs) {
-            // if at tail, append
-            if (i == (args.size() - 1)) {
-                const List *list = arg.list;
-                while (list != EOL) {
-                    body.push_back(list->at);
-                    list = list->next;
-                }
-                continue;
-            } else {
-                arg = vararg_first(arg);
-            }
-        }
-    skip2:
-        body.push_back(arg);
-    }
-
-    ll->link_backrefs();
-
-    if (entry->scope_valid) {
-        for (auto &&it : entry->scope) {
-            Label *label = it;
-            auto mapit = map.find(label);
-            if (mapit != map.end()) {
-                label = mapit->second;
-            }
-            ll->scope.push_back(label);
-        }
-        ll->scope_valid = true;
-    }
-
-}
-
-static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map) {
-
-    static std::vector<Label *> entry_scope;
-    entry->build_scope(entry_scope);
-
-    // remap entry point
-    Label *le = Label::from(entry);
-    le->set_parameters(params);
-
-    // create new labels and map new parameters
-    for (auto &&l : entry_scope) {
-        Label *ll = Label::from(l);
-        l->paired = ll;
-        map.insert(std::pair<ILNode *, Any>(l, Any(ll)));
-        ll->params.reserve(l->params.size());
-        for (auto &&param : l->params) {
-            Parameter *pparam = Parameter::from(param);
-            map.insert(std::pair<ILNode *, Any>(param, Any(pparam)));
-            ll->append(pparam);
-        }
-    }
-
-    // remap label bodies
-    for (auto &&l : entry_scope) {
-        Label *ll = l->paired;
-        l->paired = nullptr;
-        mangle_remap_body(ll, l, map);
-    }
-    mangle_remap_body(le, entry, map);
-
-    #if 0
-    if (entry_scope.size() > 10000) {
-        StyledStream ss(std::cout);
-        ss << (entry_scope.size() + 1) << " labels mangled" << std::endl;
-        #if 0
-        ss << "IN[\n";
-        stream_il(ss, entry, StreamILFormat::debug_single());
-        for (auto && l : entry_scope) {
-            stream_il(ss, l, StreamILFormat::debug_single());
-        }
-        ss << "]IN\n";
-        ss << "OUT[\n";
-        stream_il(ss, le, StreamILFormat::debug_single());
-        for (auto && l : entry_scope) {
-            auto it = map.find(l);
-            stream_il(ss, it->second, StreamILFormat::debug_single());
-        }
-        ss << "]OUT\n";
-        #endif
-    }
-    #endif
-
-    return le;
-}
-
-
-//------------------------------------------------------------------------------
 // INTERPRETER
 //------------------------------------------------------------------------------
-
 
 struct Instruction {
     Any enter;
@@ -3562,13 +3454,21 @@ static void translate_function_expr_list(
     Label *func, const List *it, const Anchor *anchor);
 static Label *translate_root(const List *it, const Anchor *anchor);
 
-static Label *apply_unknown_type = nullptr;
-static Label *exception_handler = nullptr;
+static const Closure *apply_unknown_type = nullptr;
+static const Closure *exception_handler = nullptr;
 static bool handle_builtin(Instruction &in, Instruction &out) {
     switch(in.enter.builtin.value()) {
     case FN_ActiveAnchor: {
         CHECKARGS(0, 0);
         RETARGS(get_active_anchor());
+    } break;
+    case FN_Bitcast: {
+        CHECKARGS(2, 2);
+        // very dangerous
+        in.args[1].verify<TYPE_Type>();
+        Any result = in.args[2];
+        result.type = in.args[1].typeref;
+        RETARGS(result);
     } break;
     case FN_Branch: {
         CHECKARGS(3, 3);
@@ -3718,9 +3618,18 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         in.args[2].verify<TYPE_Symbol>();
         RETARGS(Label::from(in.args[1], in.args[2].symbol));
     } break;
-    case FN_LabelToMacro: {
+    case FN_LabelParameters: {
         CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Label>();
+        Label *label = in.args[1];
+        out.args = { none };
+        size_t count = label->params.size();
+        for (size_t i = 0; i < count; ++i) {
+            out.args.push_back(label->params[i]);
+        }
+    } break;
+    case FN_ClosureToMacro: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Closure>();
         Any result = in.args[1];
         result.type = TYPE_Macro;
         RETARGS(result);
@@ -3776,11 +3685,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         const List *a = in.args[1];
         RETARGS((a == EOL)?EOL:a->next);
     } break;
-    case FN_MacroToLabel: {
+    case FN_MacroToClosure: {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_Macro>();
         Any result = in.args[1];
-        result.type = TYPE_Label;
+        result.type = TYPE_Closure;
         RETARGS(result);
     } break;
     case OP_Not: {
@@ -3800,6 +3709,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
             param = Parameter::from(in.args[1], in.args[2].symbol, in.args[3].type);
         }
         RETARGS(param);
+    } break;
+    case FN_ParameterName: {
+        CHECKARGS(1, 1);
+        Parameter *param = in.args[1];
+        RETARGS(param->name);
     } break;
     case FN_Print: {
         auto cout = StyledStream(std::cout);
@@ -3856,6 +3770,30 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
             RETARGS(Scope::from(in.args[1]));
         } break;
         default: break;
+        }
+    } break;
+    case FN_ScopeNextSymbol: {
+        CHECKARGS(2,2);
+        Scope *scope = in.args[2];
+        switch(in.args[2].type.value()) {
+        case TYPE_Nothing: {
+            auto it = scope->map.begin();
+            if (it != scope->map.end()) {
+                RETARGS(it->first, it->second);
+            }
+        } break;
+        case TYPE_Symbol: {
+            auto it = scope->map.find(in.args[2].symbol);
+            if (it != scope->map.end()) {
+                it++;
+                if (it != scope->map.end()) {
+                    RETARGS(it->first, it->second);
+                }
+            }
+        } break;
+        default:
+            location_error(String::from("symbol or none expected"));
+            break;
         }
     } break;
     case SFXFN_SetExceptionHandler: {
@@ -4004,28 +3942,52 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
 #undef CHECKARGS
 #undef RETARGS
 
+static Any evaluate(const Frame *frame, Any arg) {
+    switch(arg.type.value()) {
+    case TYPE_Parameter: {
+        while (frame) {
+            if (arg.parameter->label == frame->label) {
+                return frame->args[arg.parameter->index];
+            }
+            frame = frame->parent;
+        }
+        location_error(String::from("unbound parameter encountered"));
+    } break;
+    case TYPE_Label: {
+        return Closure::from(arg.label, frame);
+    } break;
+    default: return arg;
+    }
+    return none;
+}
+
 static void interpreter_loop(Instruction &_in) {
     Instruction _out;
 
     Instruction *in = &_in;
     Instruction *out = &_out;
 
-    MangleMap map;
+    const Frame *frame = nullptr;
 
 restart_loop:
     try {
 loop:
     out->clear();
-    const Any &enter = in->enter;
+    Any &enter = in->enter;
     Any &next_enter = out->enter;
     const std::vector<Any> &args = in->args;
     std::vector<Any> &next_args = out->args;
     switch(enter.type.value()) {
+    case TYPE_Closure: {
+        frame = enter.closure->frame;
+        enter = enter.closure->label;
+        goto loop;
+    } break;
     case TYPE_Label: {
         //debugger.enter_call(dest, cont, ...)
-        map.clear();
 
         Label *label = enter.label;
+        Frame *nextframe = Frame::from(frame, label);
         // map arguments
         size_t srci = 0;
         size_t rcount = args.size();
@@ -4052,18 +4014,38 @@ loop:
                 }
                 Any va = List::from(&args[srci], vargsize);
                 va.type = TYPE_VarArgs;
-                map.insert(std::pair<ILNode*,Any>(param, va));
+                nextframe->args.push_back(va);
             } else if (srci < rcount) {
-                map.insert(std::pair<ILNode*,Any>(param, args[srci]));
+                nextframe->args.push_back(args[srci]);
                 srci = srci + 1;
             } else {
-                map.insert(std::pair<ILNode*,Any>(param, none));
+                nextframe->args.push_back(none);
             }
         }
+        frame = nextframe;
 
-        label = mangle(label, {}, map);
-        next_enter = label->body.enter;
-        next_args = label->body.args;
+        next_enter = evaluate(frame, label->body.enter);
+        if (next_enter.type == TYPE_VarArgs) {
+            next_enter = next_enter.list->first();
+        }
+
+        size_t acount = label->body.args.size();
+        for (size_t i = 0; i < acount; ++i) {
+            Any arg = evaluate(frame, label->body.args[i]);
+            if (arg.type == TYPE_VarArgs) {
+                const List *list = arg.list;
+                if (i == (acount - 1)) {
+                    while (list) {
+                        next_args.push_back(list->at);
+                        list = list->next;
+                    }
+                } else {
+                    next_args.push_back(list->first());
+                }
+            } else {
+                next_args.push_back(arg);
+            }
+        }
         if (label->body.anchor) {
             set_active_anchor(label->body.anchor);
         } else if (label->anchor) {
@@ -4657,6 +4639,8 @@ static void init_globals() {
     globals->bind(TYPE_Callable, Type(TYPE_Callable));
     globals->bind(TYPE_Integer, Type(TYPE_Integer));
     globals->bind(TYPE_Real, Type(TYPE_Real));
+    globals->bind(TYPE_Closure, Type(TYPE_Closure));
+    globals->bind(TYPE_Frame, Type(TYPE_Frame));
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
 #define T1 T2
