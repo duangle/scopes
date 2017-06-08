@@ -63,10 +63,14 @@ syntax-apply-block
 
             ref-new
                 fn/cc default-exception-handler (_ frame anchor msg)
-                    print "Traceback:"
-                    print
+                    write "Traceback:\n"
+                    write
                         Frame-format frame
-                    print anchor msg
+                    write
+                        repr anchor
+                    write " "
+                    write msg
+                    write "\n"
                     exit
 
         fn/cc error (_ msg)
@@ -562,6 +566,36 @@ syntax-apply-block
                     fn/cc (return)
                         return expr (active-anchor)
 
+        fn/cc print (_ ...)
+            fn/cc print-arg (_ at ...)
+                branch (type== (typeof at) string)
+                    fn/cc (_)
+                        write at
+                    fn/cc (_)
+                        write (repr at)
+                branch
+                    i32== (va-countof ...) 0
+                    fn/cc (_)
+                        write "\n"
+                    fn/cc (_)
+                        write " "
+                        print-arg ...
+            branch
+                i32== (va-countof ...) 0
+                fn/cc (_)
+                    write "\n"
+                fn/cc (_)
+                    print-arg ...
+
+        set-scope-symbol! env (Symbol-new "print") print
+        set-scope-symbol! env (Symbol-new "debug-stage")
+            call
+                fn/cc (_ k)
+                    fn/cc debug-stage (_)
+                        ref-set! k
+                            i32+ (ref@ k) 1
+                        #print "stage" (ref@ k)
+                ref-new 0
         set-scope-symbol! env (Symbol-new "eval") eval
         set-scope-symbol! env (Symbol-new "string==") string==
         set-scope-symbol! env (Symbol-new "string<") string<
@@ -616,10 +650,10 @@ syntax-apply-block
                     translate anchor result
             expand exprs env
 
-print "running main"
+debug-stage
 
 syntax-extend
-    print "stage 1"
+    debug-stage
 
     call
         fn/cc (_ super-key)
@@ -638,7 +672,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 2"
+    debug-stage
 
     fn/cc no-op (_)
     fn/cc unreachable (_)
@@ -804,7 +838,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 2.1"
+    debug-stage
     call
         fn/cc (_ name)
             fn/cc ordered-branch (_ a b cc== cc!= cc< cc>)
@@ -838,7 +872,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 2.2"
+    debug-stage
     set-scope-symbol! syntax-scope
         Symbol "quote"
         block-scope-macro
@@ -884,7 +918,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 3"
+    debug-stage
     fn/cc unordered-error (_ a b)
         error
             .. "illegal ordered comparison of values of types "
@@ -936,7 +970,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 4"
+    debug-stage
 
     #---
     set-type-symbol! string (quote apply-type) string-new
@@ -1155,7 +1189,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 5"
+    debug-stage
     set-scope-symbol! syntax-scope
         quote dump-syntax
         block-scope-macro
@@ -1175,7 +1209,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 6"
+    debug-stage
     set-scope-symbol! syntax-scope
         quote callable?
         fn/cc "callable?" (return x)
@@ -1291,7 +1325,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 7"
+    debug-stage
     set-scope-symbol! syntax-scope (quote do)
         macro
             fn/cc "expand-do" (return expr env)
@@ -1307,7 +1341,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 8"
+    debug-stage
     set-scope-symbol! syntax-scope (quote syntax-head?)
         fn/cc "syntax-head?" (return expr name)
             return
@@ -1342,7 +1376,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 9"
+    debug-stage
     fn/cc syntax-wrap (_ loc x)
         ? (syntax? x) x
             datum->syntax x loc
@@ -1385,7 +1419,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 10"
+    debug-stage
     set-scope-symbol! syntax-scope (quote define)
         block-macro
             fn/cc "expand-define" (return topexpr env)
@@ -1662,7 +1696,7 @@ define if
                         \ rest-expr
 
 syntax-extend
-    print "stage 11"
+    debug-stage
     fn =? (x)
         and
             symbol? (syntax->datum x)
@@ -1809,7 +1843,7 @@ define cast
             alt-forward
 
 syntax-extend
-    print "stage 12"
+    debug-stage
     fn get-ifx-op (env op)
         let sym =
             syntax->datum op
@@ -2213,7 +2247,7 @@ define-infix-op @ 800 @ >
 #define-infix-op =@ 800 =@ >
 
 syntax-extend
-    print "stage 13"
+    debug-stage
     let Qualifier =
         type
             quote Qualifier
@@ -2285,7 +2319,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 14"
+    debug-stage
 
     fn iterator? (x)
         (typeof x) <: Iterator
@@ -2702,7 +2736,7 @@ syntax-extend
     \ syntax-scope
 
 syntax-extend
-    print "stage 15"
+    debug-stage
     fn paramdef-has-types? (expr)
         loop-for token in (syntax->datum expr)
             if (token == (quote ,))
@@ -2901,7 +2935,7 @@ define fn-types
 #-------------------------------------------------------------------------------
 
 syntax-extend
-    print "stage 16"
+    debug-stage
     fn build-scope (names...)
         fn (values...)
             let table = (Scope)
@@ -2949,7 +2983,7 @@ syntax-extend
 #-------------------------------------------------------------------------------
 
 syntax-extend
-    print "stage 17"
+    debug-stage
     let bangra = (Scope)
     set-scope-symbol! bangra (quote path)
         list "./?.b"
@@ -3141,7 +3175,7 @@ define read-eval-print-loop
             continue preload cmdlist
 
 syntax-extend
-    print "stage 18"
+    debug-stage
     set-globals! syntax-scope
     \ syntax-scope
 
@@ -3174,7 +3208,6 @@ fn run-main (args...)
     # running in interpreter mode
     let sourcepath = (ref none)
     let parse-options = (ref true)
-    print args...
     loop
         with
             i = 1
@@ -3216,5 +3249,5 @@ fn run-main (args...)
         fun
         exit 0
 
-print "run-main"
+debug-stage
 run-main (args)

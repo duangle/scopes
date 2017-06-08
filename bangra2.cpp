@@ -551,7 +551,7 @@ namespace bangra {
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
-    T(FN_Branch) T(FN_Print) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
+    T(FN_Branch) T(FN_Write) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_ListAt) T(FN_ListNext) \
     T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) \
     T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
@@ -684,7 +684,7 @@ namespace bangra {
     T(FN_ParameterEq, "Parameter==") \
     T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
     T(FN_ParameterAnchor, "Parameter-anchor") \
-    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
+    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Write, "write") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
     T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
@@ -3916,25 +3916,10 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         Parameter *param = in.args[1];
         RETARGS(param->name);
     } break;
-    case FN_Print: {
-        auto cout = StyledStream(std::cout);
-        for (size_t i = 1; i < in.args.size(); ++i) {
-            if (i > 1) {
-                cout << " ";
-            }
-            switch(in.args[i].type.value()) {
-            case TYPE_String: {
-                cout << in.args[i].string->data;
-            } break;
-            case TYPE_Anchor: {
-                in.args[i].anchor->stream(cout);
-            } break;
-            default: {
-                cout << in.args[i];
-            } break;
-            }
-        }
-        cout << std::endl;
+    case FN_Write: {
+        CHECKARGS(1, 1);
+        const String *s = in.args[1];
+        std::cout << s->data;
     } break;
     case FN_Prompt: {
         switch(CHECKARGS(1, 2)) {
