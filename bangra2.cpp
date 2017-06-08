@@ -28,6 +28,10 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 // real: 18s, user: 17s
 
+#define BANGRA_VERSION_MAJOR 0
+#define BANGRA_VERSION_MINOR 7
+#define BANGRA_VERSION_PATCH 0
+
 #ifndef BANGRA_CPP
 #define BANGRA_CPP
 
@@ -213,6 +217,7 @@ WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, DEF_SHIFTOP_FUNC)
 #include <sstream>
 #include <iostream>
 #include <unordered_set>
+#include <deque>
 
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
@@ -493,6 +498,351 @@ static int stb_fprintf(FILE *out, const char *fmt, ...) {
 namespace bangra {
 
 //------------------------------------------------------------------------------
+// SYMBOL ENUM
+//------------------------------------------------------------------------------
+
+#define B_IOP_DEFS(UNAME, LNAME) \
+    T0(FN_ ## UNAME ## New, #LNAME "-new") \
+    T0(FN_ ## UNAME ## LShift, #LNAME "<<") \
+    T0(FN_ ## UNAME ## RShift, #LNAME ">>") \
+    T1(UNAME, LNAME, Not, ~) \
+    T2(UNAME, LNAME, Eq, ==) \
+    T2(UNAME, LNAME, NE, !=) \
+    T2(UNAME, LNAME, LT, <) \
+    T2(UNAME, LNAME, LE, <=) \
+    T2(UNAME, LNAME, GT, >) \
+    T2(UNAME, LNAME, GE, >=) \
+    T2(UNAME, LNAME, Add, +) \
+    T2(UNAME, LNAME, Sub, -) \
+    T2(UNAME, LNAME, Mul, *) \
+    T2(UNAME, LNAME, Div, /) \
+    T2(UNAME, LNAME, Mod, %) \
+    T2(UNAME, LNAME, And, &) \
+    T2(UNAME, LNAME, Or, |) \
+    T2(UNAME, LNAME, Xor, ^) \
+    T2T(UNAME, LNAME, Pow, **)
+
+#define B_ROP_DEFS(UNAME, LNAME) \
+    T0(FN_ ## UNAME ## New, #LNAME "-new") \
+    T2(UNAME, LNAME, Eq, ==) \
+    T2(UNAME, LNAME, NE, !=) \
+    T2(UNAME, LNAME, LT, <) \
+    T2(UNAME, LNAME, LE, <=) \
+    T2(UNAME, LNAME, GT, >) \
+    T2(UNAME, LNAME, GE, >=) \
+    T2(UNAME, LNAME, Add, +) \
+    T2(UNAME, LNAME, Sub, -) \
+    T2(UNAME, LNAME, Mul, *) \
+    T2(UNAME, LNAME, Div, /) \
+    T2T(UNAME, LNAME, Pow, **) \
+    T2T(UNAME, LNAME, Mod, %)
+
+#define B_ALL_OP_DEFS() \
+    B_IOP_DEFS(I8, i8) \
+    B_IOP_DEFS(I16, i16) \
+    B_IOP_DEFS(I32, i32) \
+    B_IOP_DEFS(I64, i64) \
+    B_IOP_DEFS(U8, u8) \
+    B_IOP_DEFS(U16, u16) \
+    B_IOP_DEFS(U32, u32) \
+    B_IOP_DEFS(U64, u64) \
+    B_ROP_DEFS(R32, r32) \
+    B_ROP_DEFS(R64, r64)
+
+// list of symbols to be exposed as builtins to the default global namespace
+#define B_GLOBALS() \
+    T(FN_Branch) T(FN_Print) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
+    T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_ListAt) T(FN_ListNext) \
+    T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) \
+    T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
+    T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
+    T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
+    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
+    T(FN_BuiltinEq) T(FN_ClosureToMacro) T(FN_MacroToClosure) T(FN_VaCountOf) \
+    T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
+    T(FN_ListCountOf) T(FN_StringNew) T(FN_TypeNew) T(FN_RefNew) \
+    T(FN_BoolEq) T(FN_ParameterEq) T(FN_LabelEq) T(FN_ScopeEq) T(FN_StringCmp) \
+    T(FN_ListJoin) T(FN_StringCountOf) T(FN_StringAt) T(FN_RefAt) \
+    T(FN_StringSlice) T(FN_Dump) T(OP_Not) T(FN_ListLoad) T(FN_ListParse) \
+    T(SFXFN_SetExceptionHandler) T(SFXFN_RefSet) T(FN_Exit) T(FN_ActiveAnchor) \
+    T(FN_ScopeNextSymbol) T(FN_ParameterName) T(FN_LabelParameters) \
+    T(FN_Bitcast) T(FN_FormatFrame) T(FN_ActiveFrame) T(FN_ClosureEq) \
+    T(FN_ParameterAnchor) T(FN_FrameEq) T(FN_TypeSizeOf) T(FN_DefaultStyler) \
+    T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
+    T(KW_Globals) \
+    B_ALL_OP_DEFS()
+
+#define B_MAP_SYMBOLS() \
+    T(SYM_Unnamed, "") \
+    \
+    /* types */ \
+    T(TYPE_Nothing, "Nothing") \
+    T(TYPE_Any, "Any") \
+    T(TYPE_Type, "type") \
+    T(TYPE_Callable, "Callable") \
+    \
+    T(TYPE_Bool, "bool") \
+    \
+    T(TYPE_Integer, "Integer") \
+    T(TYPE_Real, "Real") \
+    \
+    T(TYPE_I8, "i8") \
+    T(TYPE_I16, "i16") \
+    T(TYPE_I32, "i32") \
+    T(TYPE_I64, "i64") \
+    \
+    T(TYPE_U8, "u8") \
+    T(TYPE_U16, "u16") \
+    T(TYPE_U32, "u32") \
+    T(TYPE_U64, "u64") \
+    \
+    T(TYPE_R32, "r32") \
+    T(TYPE_R64, "r64") \
+    \
+    T(TYPE_Builtin, "Builtin") \
+    \
+    T(TYPE_Scope, "Scope") \
+    \
+    T(TYPE_Symbol, "Symbol") \
+    T(TYPE_List, "list") \
+    T(TYPE_String, "string") \
+    \
+    T(TYPE_Form, "Form") \
+    T(TYPE_Parameter, "Parameter") \
+    T(TYPE_Label, "Label") \
+    T(TYPE_VarArgs, "va-list") \
+    T(TYPE_TypeSet, "TypeSet") \
+    T(TYPE_Closure, "Closure") \
+    T(TYPE_Frame, "Frame") \
+    \
+    T(TYPE_Ref, "ref") \
+    \
+    T(TYPE_Anchor, "Anchor") \
+    \
+    T(TYPE_Macro, "Macro") \
+    \
+    T(TYPE_Syntax, "Syntax") \
+    \
+    T(TYPE_SizeT, "size_t") \
+    T(TYPE_Constant, "Constant") \
+    \
+    /* keywords and macros */ \
+    T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
+    T(KW_Parenthesis, "...") \
+    T(KW_Assert, "assert") T(KW_Break, "break") \
+    T(KW_Call, "call") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
+    T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
+    T(KW_Else, "else") T(KW_ElseIf, "elseif") T(KW_EmptyList, "empty-list") \
+    T(KW_EmptyTuple, "empty-tuple") T(KW_Escape, "escape") \
+    T(KW_Except, "except") T(KW_False, "false") T(KW_Fn, "fn") \
+    T(KW_FnTypes, "fn-types") T(KW_FnCC, "fn/cc") T(KW_Globals, "globals") \
+    T(KW_If, "if") T(KW_In, "in") T(KW_Let, "let") T(KW_Loop, "loop") \
+    T(KW_LoopFor, "loop-for") T(KW_None, "none") T(KW_Null, "null") \
+    T(KW_QQuoteSyntax, "qquote-syntax") T(KW_Quote, "quote") \
+    T(KW_QuoteSyntax, "quote-syntax") T(KW_Raise, "raise") T(KW_Recur, "recur") \
+    T(KW_Return, "return") T(KW_Splice, "splice") T(KW_SyntaxApplyBlock, "syntax-apply-block") \
+    T(KW_SyntaxExtend, "syntax-extend") T(KW_True, "true") T(KW_Try, "try") \
+    T(KW_Unquote, "unquote") T(KW_UnquoteSplice, "unquote-splice") T(KW_ListEmpty, "eol") \
+    T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
+    \
+    /* builtin and global functions */ \
+    T(FN_Alignof, "alignof") T(FN_Args, "args") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
+    T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
+    T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
+    T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
+    T(FN_BuiltinEq, "Builtin==") \
+    T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
+    T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
+    T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
+    T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
+    T(FN_DefaultStyler, "default-styler") \
+    T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
+    T(FN_FormatFrame, "Frame-format") \
+    T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
+    T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
+    T(FN_Exit, "exit") T(FN_Expand, "expand") \
+    T(FN_ExternLibrary, "extern-library") T(FN_External, "external") \
+    T(FN_ExtractMemory, "extract-memory") T(FN_FrameEq, "Frame==") \
+    T(FN_GetExceptionHandler, "get-exception-handler") \
+    T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
+    T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
+    T(FN_InterpreterVersion, "interpreter-version") \
+    B_ALL_OP_DEFS() \
+    T(FN_Iter, "iter") \
+    T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
+    T(FN_LabelEq, "Label==") \
+    T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
+    T(FN_ClosureEq, "Closure==") T(FN_ClosureToMacro, "Closure->Macro") \
+    T(FN_MacroToClosure, "Macro->Closure") \
+    T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
+    T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
+    T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
+    T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
+    T(FN_IsListEmpty, "list-empty?") \
+    T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") T(FN_IsNone, "none?") \
+    T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
+    T(FN_ParameterEq, "Parameter==") \
+    T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
+    T(FN_ParameterAnchor, "Parameter-anchor") \
+    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
+    T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
+    T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
+    T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
+    T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
+    T(FN_ScopeEq, "Scope==") \
+    T(FN_ScopeNew, "Scope-new") T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
+    T(FN_Slice, "slice") T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
+    T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
+    T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
+    T(FN_StructOf, "structof") \
+    T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "Symbol-new") \
+    T(FN_IsSymbol, "symbol?") \
+    T(FN_SyntaxToAnchor, "syntax->anchor") T(FN_SyntaxToDatum, "syntax->datum") \
+    T(FN_SyntaxCons, "syntax-cons") T(FN_SyntaxDo, "syntax-do") \
+    T(FN_IsSyntaxHead, "syntax-head?") \
+    T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
+    T(FN_IsSyntaxQuoted, "syntax-quoted?") \
+    T(FN_SyntaxUnquote, "syntax-unquote") \
+    T(FN_Translate, "translate") \
+    T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
+    T(FN_TypeSizeOf, "type-sizeof") \
+    T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") \
+    T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
+    T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
+    T(FN_ZipFill, "zip-fill") \
+    \
+    /* builtin and global functions with side effects */ \
+    T(SFXFN_CopyMemory, "copy-memory!") \
+    T(SFXFN_LabelAppendParameter, "label-append-parameter!") \
+    T(SFXFN_RefSet, "ref-set!") \
+    T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
+    T(SFXFN_SetGlobals, "set-globals!") \
+    T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
+    T(SFXFN_SetScopeSymbol, "set-scope-symbol!") \
+    T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
+    T(SFXFN_TranslateLabelBody, "translate-label-body!") \
+    \
+    /* builtin operator functions that can also be used as infix */ \
+    T(OP_NotEq, "!=") T(OP_Mod, "%") T(OP_InMod, "%=") T(OP_BitAnd, "&") T(OP_InBitAnd, "&=") \
+    T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_Add, "+") T(OP_Incr, "++") \
+    T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_Sub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
+    T(OP_Dot, ".") T(OP_Join, "..") T(OP_Div, "/") T(OP_InDiv, "/=") \
+    T(OP_Colon, ":") T(OP_Let, ":=") T(OP_Less, "<") T(OP_LeftArrow, "<-") T(OP_Subtype, "<:") \
+    T(OP_ShiftL, "<<") T(OP_LessThan, "<=") T(OP_Set, "=") T(OP_Eq, "==") \
+    T(OP_Greater, ">") T(OP_GreaterThan, ">=") T(OP_ShiftR, ">>") T(OP_Tertiary, "?") \
+    T(OP_At, "@") T(OP_Xor, "^") T(OP_InXor, "^=") T(OP_And, "and") T(OP_Not, "not") \
+    T(OP_Or, "or") T(OP_BitOr, "|") T(OP_InBitOr, "|=") T(OP_BitNot, "~") \
+    T(OP_InBitNot, "~=") \
+    \
+    /* globals */ \
+    T(SYM_DebugBuild, "debug-build?") \
+    T(SYM_InterpreterDir, "interpreter-dir") \
+    T(SYM_InterpreterPath, "interpreter-path") \
+    T(SYM_InterpreterTimestamp, "interpreter-timestamp") \
+    \
+    /* styles */ \
+    T(Style_None, "style-none") \
+    T(Style_Symbol, "style-symbol") \
+    T(Style_String, "style-string") \
+    T(Style_Number, "style-number") \
+    T(Style_Keyword, "style-keyword") \
+    T(Style_Function, "style-function") \
+    T(Style_SfxFunction, "style-sfxfunction") \
+    T(Style_Operator, "style-operator") \
+    T(Style_Instruction, "style-instruction") \
+    T(Style_Type, "style-type") \
+    T(Style_Comment, "style-comment") \
+    T(Style_Error, "style-error") \
+    T(Style_Location, "style-location") \
+    \
+    /* builtins, forms, etc */ \
+    T(SYM_FnCCForm, "form-fn-body") \
+    T(SYM_QuoteForm, "form-quote") \
+    T(SYM_DoForm, "form-do") \
+    T(SYM_SyntaxScope, "syntax-scope") \
+    \
+    T(SYM_ListWildcard, "#list") \
+    T(SYM_SymbolWildcard, "#symbol") \
+    T(SYM_ThisFnCC, "#this-fn/cc") \
+    \
+    T(SYM_Compare, "compare") \
+    T(SYM_Size, "size") \
+    T(SYM_Alignment, "alignment") \
+    T(SYM_Unsigned, "unsigned") \
+    T(SYM_Bitwidth, "bitwidth") \
+    T(SYM_Super, "super") \
+    T(SYM_ApplyType, "apply-type") \
+    T(SYM_Styler, "styler") \
+    \
+    /* ad-hoc builtin names */ \
+    T(SYM_ExecuteReturn, "execute-return") \
+    T(SYM_RCompare, "rcompare") \
+    T(SYM_CountOfForwarder, "countof-forwarder") \
+    T(SYM_SliceForwarder, "slice-forwarder") \
+    T(SYM_JoinForwarder, "join-forwarder") \
+    T(SYM_RCast, "rcast") \
+    T(SYM_ROp, "rop") \
+    T(SYM_CompareListNext, "compare-list-next") \
+    T(SYM_ReturnSafecall, "return-safecall") \
+    T(SYM_ReturnError, "return-error") \
+    T(SYM_XPCallReturn, "xpcall-return")
+
+enum KnownSymbol {
+#define T(sym, name) sym,
+#define T0 T
+#define T1 T2
+#define T2T T2
+#define T2(UNAME, LNAME, PFIX, OP) \
+    FN_ ## UNAME ## PFIX,
+    B_MAP_SYMBOLS()
+#undef T
+#undef T0
+#undef T1
+#undef T2
+#undef T2T
+    SYM_Count,
+};
+
+enum {
+    TYPE_FIRST = TYPE_Nothing,
+    TYPE_LAST = TYPE_Constant,
+
+    KEYWORD_FIRST = KW_CatRest,
+    KEYWORD_LAST = KW_Yield,
+
+    FUNCTION_FIRST = FN_Alignof,
+    FUNCTION_LAST = FN_ZipFill,
+
+    SFXFUNCTION_FIRST = SFXFN_CopyMemory,
+    SFXFUNCTION_LAST = SFXFN_TranslateLabelBody,
+
+    OPERATOR_FIRST = OP_NotEq,
+    OPERATOR_LAST = OP_InBitNot,
+
+    STYLE_FIRST = Style_None,
+    STYLE_LAST = Style_Location,
+
+};
+
+static const char *get_known_symbol_name(KnownSymbol sym) {
+    switch(sym) {
+#define T(SYM, NAME) case SYM: return #SYM;
+#define T0 T
+#define T1 T2
+#define T2T T2
+#define T2(UNAME, LNAME, PFIX, OP) \
+    case FN_ ## UNAME ## PFIX: return "FN_" #UNAME #PFIX;
+    B_MAP_SYMBOLS()
+#undef T
+#undef T0
+#undef T1
+#undef T2
+#undef T2T
+    case SYM_Count: return "SYM_Count";
+    }
+}
+
+//------------------------------------------------------------------------------
 // ANSI COLOR FORMATTING
 //------------------------------------------------------------------------------
 
@@ -533,21 +883,7 @@ static void COLOR_RGB_BG(std::ostream &ost, int hexcode) {
 
 } // namespace ANSI
 
-enum Style {
-    Style_None,
-    Style_Symbol,
-    Style_String,
-    Style_Number,
-    Style_Keyword,
-    Style_Function,
-    Style_SfxFunction,
-    Style_Operator,
-    Style_Instruction,
-    Style_Type,
-    Style_Comment,
-    Style_Error,
-    Style_Location,
-};
+typedef KnownSymbol Style;
 
 // support 24-bit ANSI colors (ISO-8613-3)
 // works on most bash shells as well as windows 10
@@ -583,6 +919,7 @@ static void ansi_from_style(std::ostream &ost, Style style) {
     case Style_Error: ost << ANSI::COLOR_XRED; break;
     case Style_Location: ost << ANSI::COLOR_GRAY30; break;
 #endif
+    default: break;
     }
 }
 
@@ -712,6 +1049,10 @@ struct String {
         return str;
     }
 
+    static const String *from_cstr(const char *s) {
+        return from(s, strlen(s));
+    }
+
     static const String *join(const String *a, const String *b) {
         size_t ac = a->count;
         size_t bc = b->count;
@@ -742,7 +1083,7 @@ struct String {
 
     const String *substr(int64_t i0, int64_t i1) const {
         assert(i1 >= i0);
-        return from(data + i0, (size_t)(i1 - i0 + 1));
+        return from(data + i0, (size_t)(i1 - i0));
     }
 };
 
@@ -801,317 +1142,6 @@ static const char SYMBOL_ESCAPE_CHARS[] = " []{}()\"";
 //------------------------------------------------------------------------------
 // SYMBOL TYPE
 //------------------------------------------------------------------------------
-
-#define B_IOP_DEFS(UNAME, LNAME) \
-    T0(FN_ ## UNAME ## New, #LNAME "-new") \
-    T0(FN_ ## UNAME ## LShift, #LNAME "<<") \
-    T0(FN_ ## UNAME ## RShift, #LNAME ">>") \
-    T1(UNAME, LNAME, Not, ~) \
-    T2(UNAME, LNAME, Eq, ==) \
-    T2(UNAME, LNAME, NE, !=) \
-    T2(UNAME, LNAME, LT, <) \
-    T2(UNAME, LNAME, LE, <=) \
-    T2(UNAME, LNAME, GT, >) \
-    T2(UNAME, LNAME, GE, >=) \
-    T2(UNAME, LNAME, Add, +) \
-    T2(UNAME, LNAME, Sub, -) \
-    T2(UNAME, LNAME, Mul, *) \
-    T2(UNAME, LNAME, Div, /) \
-    T2(UNAME, LNAME, Mod, %) \
-    T2(UNAME, LNAME, And, &) \
-    T2(UNAME, LNAME, Or, |) \
-    T2(UNAME, LNAME, Xor, ^) \
-    T2T(UNAME, LNAME, Pow, **)
-
-#define B_ROP_DEFS(UNAME, LNAME) \
-    T0(FN_ ## UNAME ## New, #LNAME "-new") \
-    T2(UNAME, LNAME, Eq, ==) \
-    T2(UNAME, LNAME, NE, !=) \
-    T2(UNAME, LNAME, LT, <) \
-    T2(UNAME, LNAME, LE, <=) \
-    T2(UNAME, LNAME, GT, >) \
-    T2(UNAME, LNAME, GE, >=) \
-    T2(UNAME, LNAME, Add, +) \
-    T2(UNAME, LNAME, Sub, -) \
-    T2(UNAME, LNAME, Mul, *) \
-    T2(UNAME, LNAME, Div, /) \
-    T2T(UNAME, LNAME, Pow, **) \
-    T2T(UNAME, LNAME, Mod, %)
-
-#define B_ALL_OP_DEFS() \
-    B_IOP_DEFS(I8, i8) \
-    B_IOP_DEFS(I16, i16) \
-    B_IOP_DEFS(I32, i32) \
-    B_IOP_DEFS(I64, i64) \
-    B_IOP_DEFS(U8, u8) \
-    B_IOP_DEFS(U16, u16) \
-    B_IOP_DEFS(U32, u32) \
-    B_IOP_DEFS(U64, u64) \
-    B_ROP_DEFS(R32, r32) \
-    B_ROP_DEFS(R64, r64)
-
-// list of symbols to be exposed as builtins to the default global namespace
-#define B_GLOBALS() \
-    T(FN_Branch) T(FN_Print) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
-    T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_ListAt) T(FN_ListNext) \
-    T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) \
-    T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
-    T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
-    T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
-    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
-    T(FN_BuiltinEq) T(FN_ClosureToMacro) T(FN_MacroToClosure) T(FN_VaCountOf) \
-    T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
-    T(FN_ListCountOf) T(FN_StringNew) T(FN_TypeNew) T(FN_RefNew) \
-    T(FN_BoolEq) T(FN_ParameterEq) T(FN_LabelEq) T(FN_ScopeEq) T(FN_StringCmp) \
-    T(FN_ListJoin) T(FN_StringCountOf) T(FN_StringAt) T(FN_RefAt) \
-    T(FN_StringSlice) T(FN_Dump) T(OP_Not) T(FN_ListLoad) T(FN_ListParse) \
-    T(SFXFN_SetExceptionHandler) T(SFXFN_RefSet) T(FN_Exit) T(FN_ActiveAnchor) \
-    T(FN_ScopeNextSymbol) T(FN_ParameterName) T(FN_LabelParameters) \
-    T(FN_Bitcast) \
-    B_ALL_OP_DEFS()
-
-#define B_MAP_SYMBOLS() \
-    T(SYM_Unnamed, "") \
-    \
-    /* types */ \
-    T(TYPE_Nothing, "Nothing") \
-    T(TYPE_Any, "Any") \
-    T(TYPE_Type, "type") \
-    T(TYPE_Callable, "Callable") \
-    \
-    T(TYPE_Bool, "bool") \
-    \
-    T(TYPE_Integer, "Integer") \
-    T(TYPE_Real, "Real") \
-    \
-    T(TYPE_I8, "i8") \
-    T(TYPE_I16, "i16") \
-    T(TYPE_I32, "i32") \
-    T(TYPE_I64, "i64") \
-    \
-    T(TYPE_U8, "u8") \
-    T(TYPE_U16, "u16") \
-    T(TYPE_U32, "u32") \
-    T(TYPE_U64, "u64") \
-    \
-    T(TYPE_R32, "r32") \
-    T(TYPE_R64, "r64") \
-    \
-    T(TYPE_Builtin, "Builtin") \
-    \
-    T(TYPE_Scope, "Scope") \
-    \
-    T(TYPE_Symbol, "Symbol") \
-    T(TYPE_List, "list") \
-    T(TYPE_String, "string") \
-    \
-    T(TYPE_Form, "Form") \
-    T(TYPE_Parameter, "Parameter") \
-    T(TYPE_Label, "Label") \
-    T(TYPE_VarArgs, "va-list") \
-    T(TYPE_TypeSet, "TypeSet") \
-    T(TYPE_Closure, "Closure") \
-    T(TYPE_Frame, "Frame") \
-    \
-    T(TYPE_Ref, "ref") \
-    \
-    T(TYPE_Anchor, "Anchor") \
-    \
-    T(TYPE_Macro, "Macro") \
-    \
-    T(TYPE_Syntax, "Syntax") \
-    \
-    T(TYPE_Boxed, "Boxed") \
-    \
-    T(TYPE_SizeT, "size_t") \
-    T(TYPE_Constant, "Constant") \
-    \
-    /* keywords and macros */ \
-    T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
-    T(KW_Parenthesis, "...") \
-    T(KW_Assert, "assert") T(KW_Break, "break") \
-    T(KW_Call, "call") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
-    T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
-    T(KW_Else, "else") T(KW_ElseIf, "elseif") T(KW_EmptyList, "empty-list") \
-    T(KW_EmptyTuple, "empty-tuple") T(KW_Escape, "escape") \
-    T(KW_Except, "except") T(KW_False, "false") T(KW_Fn, "fn") \
-    T(KW_FnTypes, "fn-types") T(KW_FnCC, "fn/cc") T(KW_Globals, "globals") \
-    T(KW_If, "if") T(KW_In, "in") T(KW_Let, "let") T(KW_Loop, "loop") \
-    T(KW_LoopFor, "loop-for") T(KW_None, "none") T(KW_Null, "null") \
-    T(KW_QQuoteSyntax, "qquote-syntax") T(KW_Quote, "quote") \
-    T(KW_QuoteSyntax, "quote-syntax") T(KW_Raise, "raise") T(KW_Recur, "recur") \
-    T(KW_Return, "return") T(KW_Splice, "splice") T(KW_SyntaxApplyBlock, "syntax-apply-block") \
-    T(KW_SyntaxExtend, "syntax-extend") T(KW_True, "true") T(KW_Try, "try") \
-    T(KW_Unquote, "unquote") T(KW_UnquoteSplice, "unquote-splice") T(KW_ListEmpty, "eol") \
-    T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
-    \
-    /* builtin and global functions */ \
-    T(FN_Alignof, "alignof") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
-    T(FN_ActiveAnchor, "active-anchor") \
-    T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
-    T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
-    T(FN_Box, "box") \
-    T(FN_BuiltinEq, "Builtin==") \
-    T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
-    T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
-    T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
-    T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
-    T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
-    T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
-    T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
-    T(FN_Exit, "exit") T(FN_Expand, "expand") \
-    T(FN_ExternLibrary, "extern-library") T(FN_External, "external") \
-    T(FN_ExtractMemory, "extract-memory") \
-    T(FN_GetExceptionHandler, "get-exception-handler") \
-    T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
-    T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
-    B_ALL_OP_DEFS() \
-    T(FN_Iter, "iter") \
-    T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
-    T(FN_LabelEq, "Label==") \
-    T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
-    T(FN_ClosureToMacro, "Closure->Macro") \
-    T(FN_MacroToClosure, "Macro->Closure") \
-    T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
-    T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
-    T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
-    T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
-    T(FN_IsListEmpty, "list-empty?") \
-    T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") T(FN_IsNone, "none?") \
-    T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
-    T(FN_ParameterEq, "Parameter==") \
-    T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
-    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Print, "print") \
-    T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
-    T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
-    T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
-    T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
-    T(FN_ScopeEq, "Scope==") \
-    T(FN_ScopeNew, "Scope-new") T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
-    T(FN_Slice, "slice") T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
-    T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
-    T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
-    T(FN_StructOf, "structof") \
-    T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "Symbol-new") \
-    T(FN_IsSymbol, "symbol?") \
-    T(FN_SyntaxToAnchor, "syntax->anchor") T(FN_SyntaxToDatum, "syntax->datum") \
-    T(FN_SyntaxCons, "syntax-cons") T(FN_SyntaxDo, "syntax-do") \
-    T(FN_IsSyntaxHead, "syntax-head?") \
-    T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
-    T(FN_IsSyntaxQuoted, "syntax-quoted?") \
-    T(FN_SyntaxUnquote, "syntax-unquote") \
-    T(FN_Translate, "translate") \
-    T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
-    T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") T(FN_Unbox, "unbox") \
-    T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
-    T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
-    T(FN_ZipFill, "zip-fill") \
-    \
-    /* builtin and global functions with side effects */ \
-    T(SFXFN_CopyMemory, "copy-memory!") \
-    T(SFXFN_LabelAppendParameter, "label-append-parameter!") \
-    T(SFXFN_RefSet, "ref-set!") \
-    T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
-    T(SFXFN_SetGlobals, "set-globals!") \
-    T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
-    T(SFXFN_SetScopeSymbol, "set-scope-symbol!") \
-    T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
-    T(SFXFN_TranslateLabelBody, "translate-label-body!") \
-    \
-    /* builtin operator functions that can also be used as infix */ \
-    T(OP_NotEq, "!=") T(OP_Mod, "%") T(OP_InMod, "%=") T(OP_BitAnd, "&") T(OP_InBitAnd, "&=") \
-    T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_Add, "+") T(OP_Incr, "++") \
-    T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_Sub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
-    T(OP_Dot, ".") T(OP_Join, "..") T(OP_Div, "/") T(OP_InDiv, "/=") \
-    T(OP_Colon, ":") T(OP_Let, ":=") T(OP_Less, "<") T(OP_LeftArrow, "<-") T(OP_Subtype, "<:") \
-    T(OP_ShiftL, "<<") T(OP_LessThan, "<=") T(OP_Set, "=") T(OP_Eq, "==") \
-    T(OP_Greater, ">") T(OP_GreaterThan, ">=") T(OP_ShiftR, ">>") T(OP_Tertiary, "?") \
-    T(OP_At, "@") T(OP_Xor, "^") T(OP_InXor, "^=") T(OP_And, "and") T(OP_Not, "not") \
-    T(OP_Or, "or") T(OP_BitOr, "|") T(OP_InBitOr, "|=") T(OP_BitNot, "~") \
-    T(OP_InBitNot, "~=") \
-    \
-    /* builtins, forms, etc */ \
-    T(SYM_FnCCForm, "form-fn-body") \
-    T(SYM_QuoteForm, "form-quote") \
-    T(SYM_DoForm, "form-do") \
-    T(SYM_SyntaxScope, "syntax-scope") \
-    \
-    T(SYM_ListWildcard, "#list") \
-    T(SYM_SymbolWildcard, "#symbol") \
-    T(SYM_ThisFnCC, "#this-fn/cc") \
-    \
-    T(SYM_Compare, "compare") \
-    T(SYM_Size, "size") \
-    T(SYM_Alignment, "alignment") \
-    T(SYM_Unsigned, "unsigned") \
-    T(SYM_Bitwidth, "bitwidth") \
-    T(SYM_Super, "super") \
-    T(SYM_ApplyType, "apply-type") \
-    T(SYM_Styler, "styler") \
-    \
-    /* ad-hoc builtin names */ \
-    T(SYM_ExecuteReturn, "execute-return") \
-    T(SYM_RCompare, "rcompare") \
-    T(SYM_CountOfForwarder, "countof-forwarder") \
-    T(SYM_SliceForwarder, "slice-forwarder") \
-    T(SYM_JoinForwarder, "join-forwarder") \
-    T(SYM_RCast, "rcast") \
-    T(SYM_ROp, "rop") \
-    T(SYM_CompareListNext, "compare-list-next") \
-    T(SYM_ReturnSafecall, "return-safecall") \
-    T(SYM_ReturnError, "return-error") \
-    T(SYM_XPCallReturn, "xpcall-return")
-
-enum KnownSymbol {
-#define T(sym, name) sym,
-#define T0 T
-#define T1 T2
-#define T2T T2
-#define T2(UNAME, LNAME, PFIX, OP) \
-    FN_ ## UNAME ## PFIX,
-    B_MAP_SYMBOLS()
-#undef T
-#undef T0
-#undef T1
-#undef T2
-#undef T2T
-    SYM_Count,
-};
-
-enum {
-    TYPE_FIRST = TYPE_Nothing,
-    TYPE_LAST = TYPE_Constant,
-
-    KEYWORD_FIRST = KW_CatRest,
-    KEYWORD_LAST = KW_Yield,
-
-    FUNCTION_FIRST = FN_Alignof,
-    FUNCTION_LAST = FN_ZipFill,
-
-    SFXFUNCTION_FIRST = SFXFN_CopyMemory,
-    SFXFUNCTION_LAST = SFXFN_TranslateLabelBody,
-
-    OPERATOR_FIRST = OP_NotEq,
-    OPERATOR_LAST = OP_InBitNot,
-};
-
-static const char *get_known_symbol_name(KnownSymbol sym) {
-    switch(sym) {
-#define T(SYM, NAME) case SYM: return #SYM;
-#define T0 T
-#define T1 T2
-#define T2T T2
-#define T2(UNAME, LNAME, PFIX, OP) \
-    case FN_ ## UNAME ## PFIX: return "FN_" #UNAME #PFIX;
-    B_MAP_SYMBOLS()
-#undef T
-#undef T0
-#undef T1
-#undef T2
-#undef T2T
-    case SYM_Count: return "SYM_Count";
-    }
-}
 
 struct Symbol {
     typedef KnownSymbol EnumT;
@@ -1326,19 +1356,19 @@ public:
     }
 
     static SourceFile *open(Symbol _path, const String *str = nullptr) {
-        auto it = file_cache.find(_path);
-        if (it != file_cache.end()) {
-            return it->second;
-        }
-        SourceFile *file = new SourceFile(_path);
         if (str) {
+            SourceFile *file = new SourceFile(_path);
             // loading from string buffer rather than file
             file->ptr = (void *)str->data;
             file->length = str->count;
             file->_str = str;
-            file_cache[_path] = file;
             return file;
         } else {
+            auto it = file_cache.find(_path);
+            if (it != file_cache.end()) {
+                return it->second;
+            }
+            SourceFile *file = new SourceFile(_path);
             file->fd = ::open(_path.name()->data, O_RDONLY);
             if (file->fd >= 0) {
                 file->length = lseek(file->fd, 0, SEEK_END);
@@ -1407,36 +1437,37 @@ std::unordered_map<Symbol, SourceFile *, Symbol::Hash> SourceFile::file_cache;
 
 struct Anchor {
 protected:
-    Anchor(Symbol _path, int _lineno, int _column, int _offset) :
-        path(_path),
+    Anchor(SourceFile *_file, int _lineno, int _column, int _offset) :
+        file(_file),
         lineno(_lineno),
         column(_column),
         offset(_offset) {}
 
 public:
-    Symbol path;
+    SourceFile *file;
     int lineno;
     int column;
     int offset;
 
+    Symbol path() const {
+        return file->path;
+    }
+
     static const Anchor *from(
-        Symbol _path, int _lineno, int _column, int _offset = 0) {
-        return new Anchor(_path, _lineno, _column, _offset);
+        SourceFile *_file, int _lineno, int _column, int _offset = 0) {
+        return new Anchor(_file, _lineno, _column, _offset);
     }
 
     StyledStream& stream(StyledStream& ost) const {
         ost << Style_Location;
         auto ss = StyledStream::plain(ost);
-        ss << path.name()->data << ":" << lineno << ":" << column << ":";
+        ss << path().name()->data << ":" << lineno << ":" << column << ":";
         ost << Style_None;
         return ost;
     }
 
     StyledStream &stream_source_line(StyledStream &ost, const char *indent = "    ") const {
-        SourceFile *sf = SourceFile::open(path);
-        if (sf) {
-            sf->stream(ost, offset, indent);
-        }
+        file->stream(ost, offset, indent);
         return ost;
     }
 };
@@ -1448,6 +1479,8 @@ static StyledStream& operator<<(StyledStream& ost, const Anchor *anchor) {
 //------------------------------------------------------------------------------
 // TYPE
 //------------------------------------------------------------------------------
+
+static void location_error(const String *msg);
 
 struct Type {
     typedef KnownSymbol EnumT;
@@ -1513,6 +1546,51 @@ public:
         return _name;
     }
 
+    size_t bytesize() const {
+        switch(value()) {
+        case TYPE_Nothing: return 0;
+        case TYPE_Bool: return sizeof(bool);
+
+        case TYPE_I8:
+        case TYPE_U8: return sizeof(int8_t);
+
+        case TYPE_I16:
+        case TYPE_U16: return sizeof(int16_t);
+
+        case TYPE_I32:
+        case TYPE_U32: return sizeof(int32_t);
+
+        case TYPE_I64:
+        case TYPE_U64: return sizeof(int64_t);
+
+        case TYPE_R32: return sizeof(float);
+        case TYPE_R64: return sizeof(double);
+
+        case TYPE_Type:
+        case TYPE_Builtin:
+        case TYPE_Symbol: return sizeof(uint64_t);
+
+        case TYPE_String:
+        case TYPE_Syntax:
+        case TYPE_Anchor:
+        case TYPE_List:
+        case TYPE_Macro:
+        case TYPE_Label:
+        case TYPE_Parameter:
+        case TYPE_Scope:
+        case TYPE_Ref:
+        case TYPE_Frame:
+        case TYPE_Closure: return sizeof(void *);
+        default: {
+            StyledString ss;
+            ss.out << "cannot fetch byte size of type ";
+            stream(ss.out);
+            location_error(ss.str());
+        } break;
+        }
+        return -1;
+    }
+
     StyledStream& stream(StyledStream& ost) const {
         ost << Style_Type;
         name().name()->stream(ost, "");
@@ -1572,8 +1650,6 @@ struct Parameter;
 struct Scope;
 struct Frame;
 struct Closure;
-
-static void location_error(const String *msg);
 
 struct Any {
     Type type;
@@ -1968,20 +2044,7 @@ const List *List::join(const List *la, const List *lb) {
     return reverse_list_inplace(l, lb, lb);
 }
 
-static StyledStream& operator<<(StyledStream& ost, const List *list) {
-    ost << Style_Operator << "(" << Style_None;
-    int i = 0;
-    while (list != EOL) {
-        if (i > 0) {
-            ost << " ";
-        }
-        ost << list->at;
-        list = list->next;
-        ++i;
-    }
-    ost << Style_Operator << ")" << Style_None;
-    return ost;
-}
+static StyledStream& operator<<(StyledStream& ost, const List *list);
 
 //------------------------------------------------------------------------------
 // S-EXPR LEXER & PARSER
@@ -2030,7 +2093,7 @@ struct LexerParser {
 
     Token token;
     int base_offset;
-    Symbol path;
+    SourceFile *file;
     const char *input_stream;
     const char *eof;
     const char *cursor;
@@ -2045,20 +2108,16 @@ struct LexerParser {
 
     Any value;
 
-    LexerParser(Symbol _path, const char *_input_stream,
-        const char *_eof = nullptr, int offset = 0) :
+    LexerParser(SourceFile *_file, int offset = 0) :
             value(none) {
-        if (!_eof) {
-            _eof = _input_stream + strlen(_input_stream);
-        }
+        file = _file;
+        input_stream = file->strptr();
         token = tok_eof;
         base_offset = offset;
-        path = _path;
-        input_stream = _input_stream;
-        eof = _eof;
-        cursor = next_cursor = _input_stream;
+        eof = file->strptr() + file->length;
+        cursor = next_cursor = input_stream;
         lineno = next_lineno = 1;
-        line = next_line = _input_stream;
+        line = next_line = input_stream;
     }
 
     int offset() {
@@ -2074,7 +2133,7 @@ struct LexerParser {
     }
 
     const Anchor *anchor() {
-        return Anchor::from(path, lineno, column(), offset());
+        return Anchor::from(file, lineno, column(), offset());
     }
 
     char next() {
@@ -2514,6 +2573,12 @@ struct StreamExprFormat {
         depth(0)
     {}
 
+    static StreamExprFormat singleline() {
+        auto fmt = StreamExprFormat();
+        fmt.naked = false;
+        return fmt;
+    }
+
     static StreamExprFormat digest() {
         auto fmt = StreamExprFormat();
         fmt.maxdepth = 5;
@@ -2545,8 +2610,8 @@ struct StreamAnchors {
             ss << Style_Location;
             auto rss = StyledStream::plain(ss);
             // ss << path.name()->data << ":" << lineno << ":" << column << ":";
-            if (!last_anchor || (last_anchor->path != anchor->path)) {
-                rss << anchor->path.name()->data
+            if (!last_anchor || (last_anchor->path() != anchor->path())) {
+                rss << anchor->path().name()->data
                     << ":" << anchor->lineno
                     << ":" << anchor->column
                     << ":";
@@ -2737,6 +2802,11 @@ static void stream_expr(
     StyledStream &_ss, const Any &e, const StreamExprFormat &_fmt) {
     StreamExpr streamer(_ss, _fmt);
     streamer.stream(e);
+}
+
+static StyledStream& operator<<(StyledStream& ost, const List *list) {
+    stream_expr(ost, list, StreamExprFormat::singleline());
+    return ost;
 }
 
 //------------------------------------------------------------------------------
@@ -3179,6 +3249,92 @@ static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
 }
 
 //------------------------------------------------------------------------------
+// FRAME PRINTER
+//------------------------------------------------------------------------------
+
+struct StreamFrameFormat {
+};
+
+struct StreamFrame : StreamAnchors {
+    StreamFrameFormat fmt;
+
+    StreamFrame(StyledStream &_ss, const StreamFrameFormat &_fmt) :
+        StreamAnchors(_ss), fmt(_fmt) {
+    }
+
+    const Frame *find_return_frame(const Frame *frame) {
+        while (frame) {
+            if (!frame->args.empty()) {
+                Any cont = frame->args[0];
+                if (cont.type == TYPE_Closure) {
+                    return cont.closure->frame;
+                }
+            }
+            frame = frame->parent;
+        }
+        return nullptr;
+    }
+
+    Symbol get_good_frame_name(const Frame *frame) {
+        while (frame) {
+            Symbol name = frame->label->name;
+            if (name != SYM_Unnamed)
+                return name;
+            frame = frame->parent;
+        }
+        return SYM_Unnamed;
+    }
+
+    void stream(const Frame *frame) {
+
+        if (!frame) return;
+
+        std::deque<const Frame *> frames = { frame };
+        Symbol lastname = get_good_frame_name(frame);
+        while (frame) {
+            const Frame *nextframe = find_return_frame(frame);
+            if (nextframe) {
+                auto name = get_good_frame_name(nextframe);
+                if (name != lastname) {
+                    frames.push_front(nextframe);
+                    lastname = name;
+                }
+            }
+            frame = nextframe;
+        }
+
+        size_t count = frames.size();
+        for (size_t i = 0; i < count; ++i) {
+            const Frame *frame = frames[i];
+
+            if ((i < 5) || (i >= (count - 5))) {
+                Label *label = frame->label;
+                const Anchor *anchor = label->body.anchor;
+
+                ss << anchor;
+                ss << " [" << "#" << (i + 1) << "] ";
+                Symbol name = get_good_frame_name(frame);
+                if (name == SYM_Unnamed) {
+                    ss << "in anonymous function";
+                } else {
+                    ss << "in function '" << name.name()->data << "'";
+                }
+                ss << std::endl;
+                anchor->stream_source_line(ss);
+            } else if (i == 5) {
+                ss << "..." << std::endl;
+            }
+        }
+    }
+};
+
+static void stream_frame(
+    StyledStream &_ss, const Frame *frame, StreamFrameFormat _fmt) {
+    StreamFrame streamer(_ss, _fmt);
+    streamer.stream(frame);
+}
+
+//------------------------------------------------------------------------------
 // IL PRINTER
 //------------------------------------------------------------------------------
 
@@ -3456,11 +3612,23 @@ static Label *translate_root(const List *it, const Anchor *anchor);
 
 static const Closure *apply_unknown_type = nullptr;
 static const Closure *exception_handler = nullptr;
-static bool handle_builtin(Instruction &in, Instruction &out) {
+static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out) {
     switch(in.enter.builtin.value()) {
+    case FN_Args: {
+        CHECKARGS(0, 0);
+        out.args = { none };
+        for (size_t i = 0; i < bangra_argc; ++i) {
+            const char *s = bangra_argv[i];
+            out.args.push_back(String::from_cstr(s));
+        }
+    } break;
     case FN_ActiveAnchor: {
         CHECKARGS(0, 0);
         RETARGS(get_active_anchor());
+    } break;
+    case FN_ActiveFrame: {
+        CHECKARGS(0, 0);
+        RETARGS(frame);
     } break;
     case FN_Bitcast: {
         CHECKARGS(2, 2);
@@ -3523,6 +3691,15 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         const Anchor *anchor = in.args[2];
         RETARGS(Syntax::from_quoted(anchor, in.args[1]));
     } break;
+    case FN_DefaultStyler: {
+        CHECKARGS(2, 2);
+        in.args[1].verify<TYPE_Symbol>();
+        const String *s = in.args[2];
+        StyledString ss;
+        ss.out << (Style)in.args[1].symbol.known_value()
+            << s->data << Style_None;
+        RETARGS(ss.str());
+    } break;
     case FN_Dump: {
         CHECKARGS(1, 1);
         StyledStream ss(std::cout);
@@ -3564,6 +3741,8 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
     BINOP_CASE(FN_ParameterEq, TYPE_Parameter, parameter, ==);
     BINOP_CASE(FN_LabelEq, TYPE_Label, label, ==);
     BINOP_CASE(FN_ScopeEq, TYPE_Scope, scope, ==);
+    BINOP_CASE(FN_FrameEq, TYPE_Frame, frame, ==);
+    BINOP_CASE(FN_ClosureEq, TYPE_Closure, closure, ==);
     SHIFT_CASES(I8, i8);
     SHIFT_CASES(I16, i16);
     SHIFT_CASES(I32, i32);
@@ -3597,6 +3776,23 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
     case FN_U64New: CHECKARGS(1, 1); RETARGS(cast_number<uint64_t>(in.args[1])); break;
     case FN_R32New: CHECKARGS(1, 1); RETARGS(cast_number<float>(in.args[1])); break;
     case FN_R64New: CHECKARGS(1, 1); RETARGS(cast_number<double>(in.args[1])); break;
+    case FN_FormatFrame: {
+        CHECKARGS(1, 1);
+        const Frame *frame = in.args[1];
+        StyledString ss;
+        stream_frame(ss.out, frame, StreamFrameFormat());
+        RETARGS(ss.str());
+    } break;
+    case KW_Globals: {
+        CHECKARGS(0, 0);
+        RETARGS(globals);
+    } break;
+    case FN_InterpreterVersion: {
+        CHECKARGS(0, 0);
+        RETARGS(BANGRA_VERSION_MAJOR,
+            BANGRA_VERSION_MINOR,
+            BANGRA_VERSION_PATCH);
+    } break;
     case FN_IsListEmpty: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
@@ -3661,8 +3857,7 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
     case FN_ListLoad: {
         CHECKARGS(1, 1);
         const String *path = in.args[1];
-        SourceFile *sf = SourceFile::open(path);
-        LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
+        LexerParser parser(SourceFile::open(path));
         RETARGS(parser.parse());
     } break;
     case FN_ListParse: {
@@ -3676,8 +3871,9 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
             text = in.args[1]; path = in.args[2];
         } break;
         }
-        SourceFile *sf = SourceFile::open(path, text);
-        LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
+        assert(text);
+        assert(path);
+        LexerParser parser(SourceFile::open(path, text));
         RETARGS(parser.parse());
     } break;
     case FN_ListNext: {
@@ -3696,6 +3892,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_Bool>();
         RETARGS(!in.args[1].i1);
+    } break;
+    case FN_ParameterAnchor: {
+        CHECKARGS(1, 1);
+        Parameter *param = in.args[1];
+        RETARGS(param->anchor);
     } break;
     case FN_ParameterNew: {
         CHECKARGS(4, 4);
@@ -3725,12 +3926,32 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
             case TYPE_String: {
                 cout << in.args[i].string->data;
             } break;
+            case TYPE_Anchor: {
+                in.args[i].anchor->stream(cout);
+            } break;
             default: {
                 cout << in.args[i];
             } break;
             }
         }
         cout << std::endl;
+    } break;
+    case FN_Prompt: {
+        switch(CHECKARGS(1, 2)) {
+        case 2: {
+            const String *pre = in.args[2];
+            linenoisePreloadBuffer(pre->data);
+        }
+        case 1: {
+            const String *s = in.args[1];
+            const char *r = linenoise(s->data);
+            if (r) {
+                linenoiseHistoryAdd(r);
+                RETARGS(String::from_cstr(r));
+            }
+        } break;
+        default: break;
+        }
     } break;
     case FN_RefAt: {
         CHECKARGS(1, 1);
@@ -3800,6 +4021,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(1, 1);
         exception_handler = in.args[1];
     } break;
+    case SFXFN_SetGlobals: {
+        CHECKARGS(1, 1);
+        Scope *scope = in.args[1];
+        globals = scope;
+    } break;
     case SFXFN_SetGlobalApplyFallback: {
         CHECKARGS(1, 1);
         apply_unknown_type = in.args[1];
@@ -3837,7 +4063,7 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         if (offset > (int64_t)a->count) {
             location_error(String::from("string index out of bounds"));
         }
-        RETARGS(a->substr(offset, offset));
+        RETARGS(a->substr(offset, offset + 1));
     } break;
     case FN_StringJoin: {
         CHECKARGS(2, 2);
@@ -3897,7 +4123,8 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(2, 2);
         const Anchor *body_anchor = in.args[1];
         const List *expr = in.args[2];
-        RETARGS(translate_root(expr, body_anchor));
+        Label *label = translate_root(expr, body_anchor);
+        RETARGS(Closure::from(label, nullptr));
     } break;
     case SFXFN_TranslateLabelBody: {
         CHECKARGS(3, 3);
@@ -3925,6 +4152,11 @@ static bool handle_builtin(Instruction &in, Instruction &out) {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_Type>();
         RETARGS(in.args[1].typeref.name());
+    } break;
+    case FN_TypeSizeOf: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Type>();
+        RETARGS(in.args[1].typeref.bytesize());
     } break;
     case FN_VaCountOf: {
         RETARGS(CHECKARGS(0, -1));
@@ -4055,7 +4287,7 @@ loop:
     case TYPE_Builtin: {
         //debugger.enter_call(dest, cont, ...)
         next_enter = args[0];
-        if (!handle_builtin(*in, *out))
+        if (!handle_builtin(frame, *in, *out))
             return;
     } break;
     default: {
@@ -4085,7 +4317,8 @@ loop:
             default_exception_handler(exc);
         } else {
             in->enter = exception_handler;
-            in->args = { Builtin(FN_Exit), exc.anchor, exc.msg };
+            Any cont = in->args[0];
+            in->args = { cont, exc.anchor, exc.msg };
         }
     }
 
@@ -4357,7 +4590,7 @@ static TranslateResult translate(Label *state, const Any &sxexpr) {
 }
 
 static Label *translate_root(const List *it, const Anchor *anchor) {
-    Label *mainfunc = Label::function_from(anchor, anchor->path);
+    Label *mainfunc = Label::function_from(anchor, anchor->path());
     translate_function_expr_list(mainfunc, it, anchor);
     return mainfunc;
 }
@@ -4604,7 +4837,18 @@ static void init_globals() {
     globals->bind(KW_False, false);
     globals->bind(KW_ListEmpty, EOL);
     globals->bind(KW_None, none);
-    globals->bind(KW_Globals, globals);
+    globals->bind(SYM_InterpreterDir,
+        String::from(bangra_interpreter_dir, strlen(bangra_interpreter_dir)));
+    globals->bind(SYM_InterpreterPath,
+        String::from(bangra_interpreter_path, strlen(bangra_interpreter_path)));
+    globals->bind(SYM_DebugBuild, bangra_is_debug());
+    globals->bind(SYM_InterpreterTimestamp,
+        String::from_cstr(bangra_compile_time_date()));
+
+    for (uint64_t i = STYLE_FIRST; i <= STYLE_LAST; ++i) {
+        Symbol sym = Symbol((KnownSymbol)i);
+        globals->bind(sym, sym);
+    }
 
     globals->bind(TYPE_Bool, Type(TYPE_Bool));
     globals->bind(TYPE_I8, Type(TYPE_I8));
@@ -4686,7 +4930,6 @@ static void setup_stdio() {
 int main(int argc, char *argv[]) {
     using namespace bangra;
     Symbol::_init_symbols();
-    init_globals();
 
     setup_stdio();
     bangra_argc = argc;
@@ -4706,19 +4949,22 @@ int main(int argc, char *argv[]) {
         bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
     }
 
-    //auto cout = StyledStream(std::cout);
+    init_globals();
 
-    Symbol name = "bangra.b";
+    char sourcepath[1024];
+    strncpy(sourcepath, bangra_interpreter_dir, 1024);
+    strncat(sourcepath, "/bangra.b", 1024);
+
+    Symbol name = String::from_cstr(sourcepath);
     SourceFile *sf = SourceFile::open(name);
-    LexerParser parser(sf->path, sf->strptr(), sf->strptr() + sf->length);
+    if (!sf) {
+        location_error(String::from("bootscript missing\n"));
+    }
+    LexerParser parser(sf);
     auto expr = parser.parse();
     try {
         expr = expand_root(expr);
-        //stream_expr(cout, expr, StreamExprFormat());
         Label *fn = translate_root(expr);
-        //StreamILFormat fmt;
-        //fmt.follow = StreamILFormat::Scope;
-        //stream_il(cout, fn, fmt);
 
         Instruction cmd;
         cmd.enter = fn;

@@ -30,33 +30,42 @@
 # defer the rest of the source file to function
 syntax-apply-block
     fn/cc (_ anchor exprs env)
+        fn/cc string== (_ a b)
+            i32== (string-compare a b) 0
+        fn/cc string< (_ a b)
+            i32== (string-compare a b) -1
         call
             fn/cc (_ active-xfunc)
                 set-exception-handler!
                     fn/cc exception-handler-hook (_ anchor msg)
-                        (ref@ active-xfunc) anchor msg
+                        (ref@ active-xfunc) (active-frame) anchor msg
 
                 fn/cc xpcall (return func xfunc)
                     call
                         fn/cc (_ prev-xfunc)
                             ref-set! active-xfunc
-                                fn/cc (_ anchor msg)
+                                fn/cc (_ frame anchor msg)
                                     ref-set! active-xfunc prev-xfunc
                                     return
-                                        xfunc msg anchor
+                                        xfunc msg anchor frame
                             func
                         ref@ active-xfunc
 
                 set-scope-symbol! env (Symbol-new "xpcall") xpcall
                 set-scope-symbol! env (Symbol-new "error")
                     fn/cc "error" (_ msg)
-                        (ref@ active-xfunc) (active-anchor) msg
+                        (ref@ active-xfunc) (active-frame) (active-anchor)
+                            string-join "error: " msg
                 set-scope-symbol! env (Symbol-new "syntax-error")
                     fn/cc "syntax-error" (_ anchor msg)
-                        (ref@ active-xfunc) anchor msg
+                        (ref@ active-xfunc) (active-frame) anchor
+                            string-join "syntax error: " msg
 
             ref-new
-                fn/cc default-exception-handler (_ anchor msg)
+                fn/cc default-exception-handler (_ frame anchor msg)
+                    print "Traceback:"
+                    print
+                        Frame-format frame
                     print anchor msg
                     exit
 
@@ -87,7 +96,21 @@ syntax-apply-block
                                         set-scope-symbol! subenv param-name param
                                         \ param
                                     Parameter-new param-anchor param-name Any
-                                        Symbol== param-name (Symbol-new "...")
+                                        call
+                                            fn/cc (_ namestr)
+                                                call
+                                                    fn/cc (_ slen u3)
+                                                        branch (u64>= slen u3)
+                                                            fn/cc (_)
+                                                                string==
+                                                                    string-slice namestr
+                                                                        u64- slen u3
+                                                                        \ slen
+                                                                    \ "..."
+                                                            fn/cc (_) false
+                                                    string-countof namestr
+                                                    u64-new 3
+                                            string-new param-name
                             syntax->anchor sxparam
                             syntax->datum sxparam
 
@@ -304,14 +327,18 @@ syntax-apply-block
                 fn/cc (_)
                     call
                         fn/cc (_ nextlist nextscope)
-                            call
-                                fn/cc (return restlist restscope)
-                                    return
-                                        list-cons (list-at nextlist) restlist
-                                        \ restscope
-                                expand
-                                    list-next nextlist
-                                    \ nextscope
+                            branch (list-empty? nextlist)
+                                fn/cc (return)
+                                    return nextlist nextscope
+                                fn/cc (_)
+                                    call
+                                        fn/cc (return restlist restscope)
+                                            return
+                                                list-cons (list-at nextlist) restlist
+                                                \ restscope
+                                        expand
+                                            list-next nextlist
+                                            \ nextscope
                         expand-any topit env
 
         fn/cc list-new (_ ...)
@@ -465,11 +492,33 @@ syntax-apply-block
                                 set-scope-symbol! typemap name value
                             get-typemap type
                 set-scope-symbol! env (Symbol-new "type@")
-                    fn/cc type@ (_ type name)
-                        call
-                            fn/cc (_ typemap)
-                                Scope@ typemap name
-                            get-typemap type
+                    call
+                        fn/cc (_ super)
+                            fn/cc type@ (return typeref name)
+                                call
+                                    fn/cc (_ typemap)
+                                        call
+                                            fn/cc (_ value ok)
+                                                branch ok
+                                                    fn/cc (_)
+                                                        return value true
+                                                    fn/cc (_)
+                                                call
+                                                    fn/cc (_ supertype ok)
+                                                        branch ok
+                                                            fn/cc (_)
+                                                                type@ supertype name
+                                                            fn/cc (return)
+                                                                return none false
+                                                    Scope@ typemap super
+                                            Scope@ typemap name
+                                    get-typemap typeref
+                        Symbol-new "super"
+
+                fn/cc type@ (_ type name)
+                    call
+                        Scope@ env (Symbol-new "type@")
+                        \ type name
 
                 fn/cc apply-error (_ anchor enter)
                     syntax-error anchor
@@ -495,16 +544,23 @@ syntax-apply-block
             Scope-new
             Symbol-new "apply-type"
 
-        fn/cc string== (_ a b)
-            i32== (string-compare a b) 0
-        fn/cc string< (_ a b)
-            i32== (string-compare a b) -1
-
         fn/cc eval (_ expr env)
-            expand expr
-                branch (none? env)
-                    fn/cc (_) globals
-                    fn/cc (_) env
+            call
+                fn/cc (_ expr anchor)
+                    call
+                        fn/cc (_ expanded-expr)
+                            translate anchor expanded-expr
+                        expand expr
+                            branch (none? env)
+                                fn/cc (_) (globals)
+                                fn/cc (_) env
+                branch (type== (typeof expr) Syntax)
+                    fn/cc (return)
+                        return
+                            syntax->datum expr
+                            syntax->anchor expr
+                    fn/cc (return)
+                        return expr (active-anchor)
 
         set-scope-symbol! env (Symbol-new "eval") eval
         set-scope-symbol! env (Symbol-new "string==") string==
@@ -523,36 +579,33 @@ syntax-apply-block
         set-scope-symbol! env (Symbol-new "syntax-extend")
             Closure->Macro
                 fn/cc expand-syntax-extend (_ topit env)
-                    fn/cc step4 (return rest expr)
-                        return rest
+                    call
+                        fn/cc (_ expr rest)
                             call
-                                syntax->datum (list-at expr)
-                                \ env
-
-                    fn/cc step3 (_ anchor body rest)
-                        step4 rest
-                            expand
-                                list-cons
-                                    datum->syntax
-                                        list-cons
-                                            datum->syntax fn/cc anchor
+                                fn/cc (_ anchor body)
+                                    call
+                                        fn/cc (return expr)
+                                            return rest
+                                                call
+                                                    syntax->datum (list-at expr)
+                                                    \ env
+                                        expand
                                             list-cons
                                                 datum->syntax
-                                                    list-new # parameters
-                                                        datum->syntax (Symbol-new "return") anchor
-                                                        datum->syntax (Symbol-new "syntax-scope") anchor
+                                                    list-cons
+                                                        datum->syntax fn/cc anchor
+                                                        list-cons
+                                                            datum->syntax
+                                                                list-new # parameters
+                                                                    datum->syntax (Symbol-new "return") anchor
+                                                                    datum->syntax (Symbol-new "syntax-scope") anchor
+                                                                \ anchor
+                                                            \ body
                                                     \ anchor
-                                                \ body
-                                        \ anchor
-                                    \ eol
-                                \ env
-
-                    fn/cc step2 (_ expr rest)
-                        step3
-                            syntax->anchor expr
-                            list-next (syntax->datum expr)
-                            \ rest
-                    step2
+                                                \ eol
+                                            \ env
+                                syntax->anchor expr
+                                list-next (syntax->datum expr)
                         list-at topit
                         list-next topit
 
@@ -888,7 +941,14 @@ syntax-extend
     #---
     set-type-symbol! string (quote apply-type) string-new
     set-type-symbol! type (quote apply-type) type-new
-    set-type-symbol! Label (quote apply-type) Label-new
+    set-type-symbol! Label (quote apply-type)
+        fn/cc "Label-new" (_ syntax-name)
+            call
+                fn/cc (_ name)
+                    Label-new
+                        syntax->anchor syntax-name
+                        \ name
+                syntax->datum syntax-name
     set-type-symbol! Parameter (quote apply-type)
         fn/cc "Parameter-new" (_ syntax-name param-type)
             call
@@ -986,6 +1046,8 @@ syntax-extend
     unordered-compare-op Parameter Parameter==
     unordered-compare-op Label Label==
     unordered-compare-op Scope Scope==
+    unordered-compare-op Closure Closure==
+    unordered-compare-op Frame Frame==
 
     ordered-compare-op string string== string<
     ordered-compare-op type type== type<
@@ -1447,7 +1509,7 @@ define float r32
 define double r64
 
 define _
-    fn forward-multiargs (args...) args...
+    fn forward-multiargs (...) ...
 
 # (assert bool-expr [error-message])
 define assert
@@ -1715,6 +1777,36 @@ define define-infix-op
             set-scope-symbol! env infix-symbol
                 syntax-infix-rules prec (@ env order) dest-name
             return rest env
+
+define cast
+    fn cast (totype value)
+        let fromtype = (typeof value)
+        fn/cc forward-error (_)
+            error
+                string-join "can not cast from type "
+                    string-join (repr fromtype)
+                        string-join " to type " (repr totype)
+        fn/cc alt-forward (_)
+            let func success = (type@ totype (quote cast))
+            if success
+                call
+                    fn (...)
+                        if (i32== (va-countof ...) 0)
+                            forward-error
+                        else ...
+                    func fromtype totype value
+            else
+                forward-error
+        let func success = (type@ fromtype (quote cast))
+        if success
+            call
+                fn (...)
+                    if (i32== (va-countof ...) 0)
+                        alt-forward
+                    else ...
+                func fromtype totype value
+        else
+            alt-forward
 
 syntax-extend
     print "stage 12"
@@ -2035,8 +2127,9 @@ syntax-extend
         fn expand-any-list (topexpr env)
             let expr =
                 @ topexpr 0
-            let head =
+            let sxhead =
                 @ expr 0
+            let head = (syntax->datum sxhead)
             let headstr =
                 string head
             fn finalize (expr)
@@ -2044,7 +2137,7 @@ syntax-extend
             # method call syntax
             if
                 and
-                    symbol? (syntax->datum head)
+                    symbol? head
                     and
                         none? (@ env head)
                         == (slice headstr 0 1) "."
@@ -2053,7 +2146,7 @@ syntax-extend
                     datum->syntax
                         Symbol
                             slice headstr 1
-                        \ head
+                        \ sxhead
                 let self-arg =
                     @ expr 1
                 let rest =
@@ -2273,7 +2366,7 @@ syntax-extend
 
     fn varargs-iter (f)
         let args... = (f)
-        if (> (va-countof args...) (size_t 0))
+        if (> (va-countof args...) 0)
             let first rest... = args...
             return
                 fn () rest...
@@ -2516,7 +2609,7 @@ syntax-extend
                         \ "syntax: (loop-for let-name ... in iter-expr body-expr ...)"
                     if (syntax-head? expr (quote in))
                         return
-                            syntax-list
+                            list
                             slice expr 1
                     else
                         let names rest =
@@ -2653,7 +2746,7 @@ syntax-extend
                         \ expr-anchor
                     \ decl
         if (not (none? decl))
-            set-scope-symbol! env decl func
+            set-scope-symbol! env (syntax->datum decl) func
         let subenv = (Scope env)
         fn append-param (param-name param-type)
             let param-name-datum = (syntax->datum param-name)
@@ -2683,17 +2776,10 @@ syntax-extend
                 append-param param-name Any
                 continue
         fn (rest)
+            translate-label-body! func expr-anchor
+                expand (syntax->datum body) subenv
             cons
-                @
-                    expand
-                        list
-                            syntax-cons
-                                quote-syntax form-fn-body
-                                syntax-cons
-                                    datum->syntax func expr-anchor
-                                    \ body
-                        \ subenv
-                    \ 0
+                datum->quoted-syntax func expr-anchor
                 nextfunc rest
 
     # chains cross-dependent function declarations.
@@ -2800,11 +2886,11 @@ define fn-types
                                 (unquote assert-type-fn)
                                     unquote
                                         datum->syntax param-label
-                                            parameter-anchor param
+                                            Parameter-anchor param
                                     unquote expected-type-arg
                                     unquote
                                         datum->syntax param
-                                            parameter-anchor param
+                                            Parameter-anchor param
                                     unquote-splice
                                         syntax-eol expr
                             continue
@@ -2868,6 +2954,7 @@ syntax-extend
     set-scope-symbol! bangra (quote path)
         list "./?.b"
             .. interpreter-dir "/?.b"
+
     set-scope-symbol! bangra (quote modules) (Scope)
     set-scope-symbol! syntax-scope (quote bangra) bangra
 
@@ -2934,469 +3021,6 @@ syntax-extend
     \ syntax-scope
 
 #-------------------------------------------------------------------------------
-# C types
-#-------------------------------------------------------------------------------
-
-define array
-    type (quote array)
-
-define vector
-    type (quote vector)
-
-define tuple
-    type (quote tuple)
-
-define struct
-    type (quote struct)
-
-define pointer
-    type (quote pointer)
-
-fn arrayof (atype values...)
-    call
-        array atype
-            va-countof values...
-        \ values...
-
-fn vectorof (atype values...)
-    call
-        vector atype
-            va-countof values...
-        \ values...
-
-fn tupleof (values...)
-    call
-        tuple
-            loop-for value in (va-iter values...)
-                break (typeof value) (continue)
-            else
-                break
-        \ values...
-
-fn pointerof (value)
-    (pointer (typeof value)) value
-
-fn align (offset align)
-    let T = (typeof offset)
-    fn-types integer? T
-    (offset + align - (T 1)) & (~ (align - (T 1)))
-
-# pointer implementation
-  ----------------------
-
-set-type-symbol! pointer (quote size) (sizeof Boxed)
-set-type-symbol! pointer (quote alignment) (alignof Boxed)
-
-set-type-symbol! pointer (quote apply-type)
-    fn apply-pointer-type (element)
-        fn-types type
-        let etype =
-            type (Symbol (.. (repr element) "*"))
-        if (none? (. etype complete))
-            fn addressof (self)
-                @
-                    bitcast
-                        tuple u64
-                        tupleof self
-                    \ 0
-            fn getvalue (self)
-                ? ((addressof self) == (u64 0)) none
-                    unbox element
-                        bitcast Boxed self
-            let methods =
-                scopeof
-                    getvalue = getvalue
-                    getaddress = addressof
-
-            set-type-symbol! etype (quote super) pointer
-            set-type-symbol! etype (quote apply-type)
-                fn apply-typed-pointer-type (value)
-                    bitcast etype (box value)
-            set-type-symbol! etype (quote @)
-                fn pointer-at (self name)
-                    @ methods name
-            set-type-symbol! etype (quote repr)
-                fn pointer-type-repr (self styler)
-                    ..
-                        styler Style.Operator "&"
-                        repr
-                            getvalue self
-
-            set-type-symbol! etype (quote complete) true
-        \ etype
-
-# array implementation
-  --------------------
-
-set-type-symbol! array (quote apply-type)
-    fn apply-array-type (element count)
-        fn-types type size_t
-        let etype =
-            type (Symbol (.. "[" (repr count) " x " (repr element) "]"))
-        if (none? (. etype complete))
-            let sz = (sizeof element)
-            let alignment = (alignof element)
-            let stride = (align sz alignment)
-            set-type-symbol! etype (quote super) array
-            set-type-symbol! etype (quote size) (stride * count)
-            set-type-symbol! etype (quote alignment) alignment
-            set-type-symbol! etype (quote apply-type)
-                fn apply-typed-array-type (args...)
-                    let self =
-                        alloc etype
-                    let argcount = (va-countof args...)
-                    assert (argcount == count)
-                        .. (string (int count)) " elements expected, got "
-                            string (int argcount)
-                    loop-for i arg in (enumerate (va-iter args...))
-                        let offset = (stride * (size_t i))
-                        copy-memory! self offset arg (size_t 0) sz
-                        continue
-                    \ self
-            set-type-symbol! etype (quote @)
-                fn array-type-at (self at)
-                    fn-types none integer?
-                    let offset = (stride * (size_t at))
-                    extract-memory element self offset
-            set-type-symbol! etype (quote countof)
-                fn array-countof (self) count
-            set-type-symbol! etype (quote slice)
-                fn array-type-at (self i0 i1)
-                    fn-types none size_t size_t
-                    let num = (i1 - i0)
-                    let offset = (stride * (size_t i0))
-                    let T = (array element num)
-                    extract-memory T self offset
-            set-type-symbol! etype (quote repr)
-                fn array-type-repr (self styler)
-                    loop
-                        with
-                            i = (size_t 0)
-                            s = (styler Style.Operator "[")
-                        if (i < count)
-                            continue
-                                i + (size_t 1)
-                                .. s
-                                    ? (i > (size_t 0)) " " ""
-                                    repr (@ self i) styler
-                        else
-                            .. s (styler Style.Operator "]")
-            set-type-symbol! etype (quote iter)
-                fn gen-array-type-iter (self)
-                    return
-                        fn countable-iter (i)
-                            if (i < count)
-                                return
-                                    i + (size_t 1)
-                                    @ self i
-                        size_t 0
-
-            set-type-symbol! etype (quote complete) true
-        \ etype
-
-# vector implementation
-  ---------------------
-
-set-type-symbol! vector (quote apply-type)
-    fn apply-vector-type (element count)
-        fn-types type size_t
-        let etype =
-            type (Symbol (.. "<" (repr count) " x " (repr element) ">"))
-        if (none? (. etype complete))
-            let sz = (sizeof element)
-            let alignment = (alignof element)
-            let stride = (align sz alignment)
-            set-type-symbol! etype (quote super) vector
-            set-type-symbol! etype (quote size) (stride * count)
-            set-type-symbol! etype (quote alignment) alignment
-            set-type-symbol! etype (quote apply-type)
-                fn apply-typed-vector-type (args...)
-                    let self =
-                        alloc etype
-                    let argcount = (va-countof args...)
-                    assert (argcount == count)
-                        .. (string (int count)) " elements expected, got "
-                            string (int argcount)
-                    loop-for i arg in (enumerate (va-iter args...))
-                        let offset = (stride * (size_t i))
-                        copy-memory! self offset arg (size_t 0) sz
-                        continue
-                    \ self
-            set-type-symbol! etype (quote @)
-                fn vector-type-at (self at)
-                    fn-types none integer?
-                    let offset = (stride * (size_t at))
-                    extract-memory element self offset
-            set-type-symbol! etype (quote countof)
-                fn vector-countof (self) count
-            set-type-symbol! etype (quote slice)
-                fn vector-type-at (self i0 i1)
-                    fn-types none size_t size_t
-                    let num = (i1 - i0)
-                    let offset = (stride * (size_t i0))
-                    let T = (vector element num)
-                    extract-memory T self offset
-            set-type-symbol! etype (quote repr)
-                fn vector-type-repr (self styler)
-                    loop
-                        with
-                            i = (size_t 0)
-                            s = (styler Style.Operator "<")
-                        if (i < count)
-                            continue
-                                i + (size_t 1)
-                                .. s
-                                    ? (i > (size_t 0)) " " ""
-                                    repr (@ self i) styler
-                        else
-                            .. s (styler Style.Operator ">")
-            set-type-symbol! etype (quote iter)
-                fn gen-vector-type-iter (self)
-                    return
-                        fn countable-iter (i)
-                            if (i < count)
-                                return
-                                    i + (size_t 1)
-                                    @ self i
-                        size_t 0
-
-            set-type-symbol! etype (quote complete) true
-        \ etype
-
-# tuple implementation
-  --------------------
-
-set-type-symbol! tuple (quote apply-type)
-    fn apply-tuple-type (element-types...)
-        let count = (va-countof element-types...)
-        let etypes = (va-iter element-types...)
-        let etype =
-            loop-for i elemtype in (enumerate etypes)
-                with (s = "{")
-                assert ((typeof elemtype) == type) "type expected"
-                continue
-                    .. s
-                        ? (i == 0) "" " "
-                        repr elemtype
-            else
-                type
-                    Symbol
-                        .. s "}"
-        if (none? (. etype complete))
-            let sz alignment offsets... =
-                loop-for elemtype in etypes
-                    with
-                        offset = (size_t 0)
-                        max-alignment = (size_t 1)
-                    let sz = (sizeof elemtype)
-                    let alignment = (alignof elemtype)
-                    let aligned-offset = (align offset alignment)
-                    let total-size sum-alignment offsets... =
-                        continue
-                            aligned-offset + sz
-                            max max-alignment alignment
-                    break total-size sum-alignment aligned-offset offsets...
-                else
-                    break offset max-alignment
-
-            set-type-symbol! etype (quote super) tuple
-            set-type-symbol! etype (quote size) sz
-            set-type-symbol! etype (quote alignment) alignment
-
-            set-type-symbol! etype (quote apply-type)
-                fn apply-typed-tuple-type (args...)
-                    let self =
-                        alloc etype
-                    let argcount = (va-countof args...)
-                    assert (argcount == count)
-                        .. (string (int count)) " elements expected, got "
-                            string (int argcount)
-                    loop-for i arg in (enumerate (va-iter args...))
-                        let offset = (va@ i offsets...)
-                        let elemtype = (va@ i element-types...)
-                        assert ((typeof arg) == elemtype)
-                            .. "type " (string elemtype) " expected, got "
-                                string (typeof arg)
-                        copy-memory! self offset arg (size_t 0) (sizeof elemtype)
-                        continue
-                    \ self
-                set-type-symbol! etype (quote @)
-                    fn tuple-at (self at)
-                        fn-types none integer?
-                        let offset = (va@ at offsets...)
-                        let elemtype = (va@ at element-types...)
-                        extract-memory elemtype self offset
-                set-type-symbol! etype (quote countof)
-                    fn tuple-countof (self) count
-                set-type-symbol! etype (quote slice)
-                    fn vector-type-at (self i0 i1)
-                        fn-types none size_t size_t
-                        let num = (i1 - i0)
-                        let offset = (va@ i0 offsets...)
-                        let sliced-types... =
-                            loop-for i elemtype in (enumerate etypes (size_t 0))
-                                if (i >= i1)
-                                    break
-                                elseif (i >= i0)
-                                    break elemtype (continue)
-                                else
-                                    continue
-                            else
-                                break
-                        let T =
-                            tuple sliced-types...
-                        extract-memory T self offset
-                set-type-symbol! etype (quote repr)
-                    fn vector-type-repr (self styler)
-                        loop
-                            with
-                                i = (size_t 0)
-                                s = (styler Style.Operator "{")
-                            if (i < count)
-                                continue
-                                    i + (size_t 1)
-                                    .. s
-                                        ? (i > (size_t 0)) " " ""
-                                        repr (@ self i) styler
-                            else
-                                .. s (styler Style.Operator "}")
-                set-type-symbol! etype (quote iter)
-                    fn gen-vector-type-iter (self)
-                        return
-                            fn countable-iter (i)
-                                if (i < count)
-                                    return
-                                        i + (size_t 1)
-                                        @ self i
-                            size_t 0
-
-                set-type-symbol! etype (quote complete) true
-        \ etype
-
-# struct implementation
-  ---------------------
-
-fn field (field-name field-type)
-    fn-types symbol? type?
-    fn ()
-        return field-name field-type
-
-set-type-symbol! struct (quote apply-type)
-    fn apply-struct-type (fields...)
-        let count = (va-countof fields...)
-        let fields = (va-iter fields...)
-        let etype =
-            loop-for i f in (enumerate fields)
-                with (s = "{")
-                assert (label? f) "field expected"
-                let name elemtype = (f)
-                assert (symbol? name) "name expected"
-                assert (type? elemtype) "type expected"
-                continue
-                    .. s
-                        ? (i == 0) "" " "
-                        \ (repr name) "=" (repr elemtype)
-            else
-                type
-                    Symbol
-                        .. s "}"
-        if (none? (. etype complete))
-            let etypes... =
-                loop-for f in fields
-                    let name elemtype = (f)
-                    break elemtype (continue)
-            let names... =
-                loop-for f in fields
-                    let name elemtype = (f)
-                    break name (continue)
-            let ttype = (tuple etypes...)
-            set-type-symbol! etype (quote super) struct
-            set-type-symbol! etype (quote size) ttype.size
-            set-type-symbol! etype (quote alignment) ttype.alignment
-            set-type-symbol! etype (quote apply-type)
-                fn struct-apply-type (values...)
-                    let stype = (ttype.apply-type values...)
-                    bitcast etype stype
-            set-type-symbol! etype (quote @)
-                fn struct-at (self at)
-                    if (symbol? at)
-                        loop-for i name in (enumerate (va-iter names...))
-                            if (name == at)
-                                break
-                                    ttype.@ self i
-                            else
-                                continue
-                        else
-                            error
-                                .. "no field named " (repr at) " in struct"
-                    else
-                        ttype.@ self at
-            set-type-symbol! etype (quote countof) ttype.countof
-            set-type-symbol! etype (quote repr)
-                fn struct-repr (self styler)
-                    loop-for i name in (enumerate (va-iter names...))
-                        with
-                            s = (styler Style.Operator "{")
-                        continue
-                            .. s
-                                ? (i > 0) " " ""
-                                repr name
-                                styler Style.Operator "="
-                                repr (@ self i) styler
-                    else
-                        .. s (styler Style.Operator "}")
-
-        \ etype
-
-syntax-extend
-    fn build-struct (names...)
-        fn (values...)
-            call
-                struct
-                    loop-for key value in (zip (va-iter names...) (va-iter values...))
-                        let value-type = (typeof value)
-                        break
-                            field key value-type
-                            continue
-                \ values...
-
-    # (structof (key = value) ...)
-    set-scope-symbol! syntax-scope (quote structof)
-        macro
-            fn expand-structof (expr env)
-                qquote-syntax
-                    {call}
-                        (unquote (datum->syntax build-struct expr))
-                            unquote-splice
-                                loop-for entry in (syntax->datum (slice expr 1))
-                                    if
-                                        not
-                                            and
-                                                (countof entry) == (size_t 3)
-                                                (@ entry 1) == (quote =)
-                                        syntax-error entry "syntax: (structof (key = value) ...)"
-                                    let key = (@ entry 0)
-                                    let value = (slice entry 2)
-                                    syntax-cons
-                                        qquote-syntax
-                                            {quote}
-                                                unquote key
-                                        continue
-                                else
-                                    syntax-eol expr
-                        unquote-splice
-                            loop-for entry in (syntax->datum (slice expr 1))
-                                let value = (slice entry 2)
-                                syntax-cons
-                                    syntax-do value
-                                    continue
-                            else
-                                syntax-eol expr
-
-
-    \ syntax-scope
-
-#-------------------------------------------------------------------------------
 # REPL
 #-------------------------------------------------------------------------------
 
@@ -3419,6 +3043,8 @@ define read-eval-print-loop
             if (i != " ") true
             else (continue)
         else false
+
+    fn stack-level () 0
 
     fn ()
         let vmin vmaj vpatch = (interpreter-version)
@@ -3461,7 +3087,7 @@ define read-eval-print-loop
             let styler = default-styler
             let promptstr =
                 .. idstr " "
-                    styler Style.Comment "▶"
+                    styler style-comment "▶"
             let promptlen = ((countof idstr) + (size_t 2))
             let cmd =
                 prompt
@@ -3479,7 +3105,6 @@ define read-eval-print-loop
             let preload =
                 if terminated? ""
                 else (get-leading-spaces cmd)
-            let slevel = (ref (stack-level))
             let cmdlist =
                 if terminated?
                     try
@@ -3490,10 +3115,8 @@ define read-eval-print-loop
                         let code =
                             .. expr
                                 syntax-list expression-suffix
-                        ref-set! slevel (stack-level)
                         let f =
                             eval code eval-env
-                        ref-set! slevel (stack-level)
                         let result... = (f)
                         if (not (none? result...))
                             loop-for i in (range (va-countof result...))
@@ -3501,17 +3124,18 @@ define read-eval-print-loop
                                 let value = (va@ i result...)
                                 print
                                     .. idstr "= "
-                                        repr value default-styler
-                                        default-styler Style.Operator ":"
-                                        repr (typeof value) default-styler
+                                        repr value
+                                        default-styler style-operator ":"
+                                        repr (typeof value)
                                 set-scope-symbol! eval-env id value
                                 set-scope-symbol! state (quote counter)
                                     (@ state (quote counter)) + 1
                                 continue
-                    except (e)
+                    except (msg anchor frame)
+                        print "Traceback:"
                         print
-                            traceback (@ slevel) 2
-                        print "error:" e
+                            Frame-format frame
+                        print "error:" msg
                     \ ""
                 else cmdlist
             continue preload cmdlist
@@ -3550,6 +3174,7 @@ fn run-main (args...)
     # running in interpreter mode
     let sourcepath = (ref none)
     let parse-options = (ref true)
+    print args...
     loop
         with
             i = 1
@@ -3581,14 +3206,13 @@ fn run-main (args...)
         read-eval-print-loop
     else
         let expr =
-            list-load sourcepath
+            syntax->datum
+                list-load sourcepath
         let eval-scope =
             Scope (globals)
         set-scope-symbol! eval-scope (quote module-path) sourcepath
-        clear-traceback
         let fun =
             eval expr eval-scope sourcepath
-        clear-traceback
         fun
         exit 0
 

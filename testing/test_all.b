@@ -3,7 +3,7 @@ set-scope-symbol! bangra
     quote path
     cons
         .. interpreter-dir "/testing/?.b"
-        get-scope-symbol bangra (quote path)
+        @ bangra (quote path)
 
 let
     modules =
@@ -34,13 +34,14 @@ loop-for module in modules
     let ok =
         do
             try
-                clear-traceback
+                #clear-traceback
                 require module
                 \ true
-            except (e)
+            except (msg anchor frame)
+                print "Traceback:"
                 print
-                    traceback
-                print "error running module:" e
+                    Frame-format frame
+                print "error running module:" msg
                 \ false
     continue
         ? ok failed (failed + 1)
