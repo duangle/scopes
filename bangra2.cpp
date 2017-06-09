@@ -608,7 +608,6 @@ namespace bangra {
     T(TYPE_Form, "Form") \
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
-    T(TYPE_VarArgs, "va-list") \
     T(TYPE_TypeSet, "TypeSet") \
     T(TYPE_Closure, "Closure") \
     T(TYPE_Frame, "Frame") \
@@ -4164,16 +4163,53 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
 #undef CHECKARGS
 #undef RETARGS
 
+static const Frame *find_frame(const Frame *frame, Parameter *param) {
+    while (frame) {
+        if (param->label == frame->label) {
+            return frame;
+        }
+        frame = frame->parent;
+    }
+    location_error(String::from("unbound parameter encountered"));
+    return nullptr;
+}
+
+static Any evaluate_param(const Frame *frame, Parameter *param) {
+    frame = find_frame(frame, param);
+    if (frame) {
+        if (param->vararg) {
+            if ((size_t)param->index < frame->args.size()) {
+                return frame->args[param->index];
+            } else {
+                return none;
+            }
+        } else {
+            return frame->args[param->index];
+        }
+    }
+    return none;
+}
+
+static void evaluate_param(std::vector<Any> &destargs,
+    const Frame *frame, Parameter *param) {
+    frame = find_frame(frame, param);
+    if (frame) {
+        if (param->vararg) {
+            auto &&args = frame->args;
+            size_t count = args.size();
+            for (size_t i = param->index; i < count; ++i) {
+                destargs.push_back(args[i]);
+            }
+        } else {
+            destargs.push_back(frame->args[param->index]);
+        }
+    }
+}
+
 static Any evaluate_enter(const Frame *frame, Any arg) {
     switch(arg.type.value()) {
     case TYPE_Parameter: {
-        while (frame) {
-            if (arg.parameter->label == frame->label) {
-                return frame->args[arg.parameter->index];
-            }
-            frame = frame->parent;
-        }
-        location_error(String::from("unbound parameter encountered"));
+        return evaluate_param(frame, arg.parameter);
     } break;
     default: return arg;
     }
@@ -4183,13 +4219,7 @@ static Any evaluate_enter(const Frame *frame, Any arg) {
 static Any evaluate(const Frame *frame, Any arg) {
     switch(arg.type.value()) {
     case TYPE_Parameter: {
-        while (frame) {
-            if (arg.parameter->label == frame->label) {
-                return frame->args[arg.parameter->index];
-            }
-            frame = frame->parent;
-        }
-        location_error(String::from("unbound parameter encountered"));
+        return evaluate_param(frame, arg.parameter);
     } break;
     case TYPE_Label: {
         return Closure::from(arg.label, frame);
@@ -4197,6 +4227,20 @@ static Any evaluate(const Frame *frame, Any arg) {
     default: return arg;
     }
     return none;
+}
+
+static void evaluate(std::vector<Any> &destargs, const Frame *frame, Any arg) {
+    switch(arg.type.value()) {
+    case TYPE_Parameter: {
+        evaluate_param(destargs, frame, arg.parameter);
+    } break;
+    case TYPE_Label: {
+        destargs.push_back(Closure::from(arg.label, frame));
+    } break;
+    default: {
+        destargs.push_back(arg);
+    } break;
+    }
 }
 
 static void interpreter_loop(Instruction &_in) {
@@ -4230,60 +4274,36 @@ loop:
         size_t srci = 0;
         size_t rcount = args.size();
         size_t pcount = label->params.size();
+        auto &&frameargs = nextframe->args;
+        frameargs.reserve(pcount);
         for (size_t i = 0; i < pcount; ++i) {
             Parameter *param = label->params[i];
             if (param->vararg) {
-                if (i == 0) {
-                    location_error(
-                        String::from(
-                        "continuation parameter can't be vararg"));
-                }
-                if (i != (pcount - 1)) {
-                    location_error(
-                        String::from("vararg must be last parameter"));
-                }
+                assert(i != 0);
+                assert(i == (pcount - 1));
 
-                Any va = args[srci];
-                if (va.type != TYPE_VarArgs) {
-                    // how many varargs to capture
-                    size_t vargsize = 0;
-                    if (srci < rcount) {
-                        vargsize = rcount - srci;
-                    }
-                    va = List::from(&args[srci], vargsize);
-                    va.type = TYPE_VarArgs;
+                while (srci < rcount) {
+                    frameargs.push_back(args[srci++]);
                 }
-                nextframe->args.push_back(va);
             } else if (srci < rcount) {
-                nextframe->args.push_back(args[srci]);
+                frameargs.push_back(args[srci]);
                 srci = srci + 1;
             } else {
-                nextframe->args.push_back(none);
+                frameargs.push_back(none);
             }
         }
         frame = nextframe;
 
         next_enter = evaluate_enter(frame, label->body.enter);
-        if (next_enter.type == TYPE_VarArgs) {
-            next_enter = next_enter.list->first();
-        }
 
-        size_t acount = label->body.args.size();
-        for (size_t i = 0; i < acount; ++i) {
-            Any arg = evaluate(frame, label->body.args[i]);
-            if (arg.type == TYPE_VarArgs) {
-                const List *list = arg.list;
-                if (i == (acount - 1)) {
-                    while (list) {
-                        next_args.push_back(list->at);
-                        list = list->next;
-                    }
-                } else {
-                    next_args.push_back(list->first());
-                }
-            } else {
-                next_args.push_back(arg);
+        auto &&args = label->body.args;
+        size_t acount = args.size();
+        if (acount) {
+            size_t alast = acount - 1;
+            for (size_t i = 0; i < alast; ++i) {
+                next_args.push_back(evaluate(frame, args[i]));
             }
+            evaluate(next_args, frame, args[alast]);
         }
 
         if (label->body.anchor) {
