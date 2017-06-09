@@ -3176,8 +3176,6 @@ define read-eval-print-loop
                                 print
                                     .. idstr "= "
                                         repr value
-                                        default-styler style-operator ":"
-                                        repr (typeof value)
                                 set-scope-symbol! eval-env id value
                                 set-scope-symbol! state (quote counter)
                                     (@ state (quote counter)) + 1

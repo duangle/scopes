@@ -32,10 +32,9 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
-&& $DIR/luajit/bin/luajit -b $DIR/bangra.lua $DIR/bangra_luasrc.bin.h -g \
 && clang++ \
     -o $DIR/bangra \
-    $DIR/bangra2.cpp \
+    $DIR/bangra.cpp \
     -pedantic \
     $OPT_G -rdynamic \
     -ferror-limit=1 \
