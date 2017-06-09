@@ -26,8 +26,6 @@ BEWARE: If you build this with anything else but a recent enough clang,
         you will have a bad time.
 */
 
-// real: 18s, user: 17s
-
 #define BANGRA_VERSION_MAJOR 0
 #define BANGRA_VERSION_MINOR 7
 #define BANGRA_VERSION_PATCH 0
@@ -569,7 +567,7 @@ namespace bangra {
     T(FN_Bitcast) T(FN_FormatFrame) T(FN_ActiveFrame) T(FN_ClosureEq) \
     T(FN_ParameterAnchor) T(FN_FrameEq) T(FN_TypeSizeOf) T(FN_DefaultStyler) \
     T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
-    T(KW_Globals) \
+    T(KW_Globals) T(FN_Flush) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -684,7 +682,8 @@ namespace bangra {
     T(FN_ParameterEq, "Parameter==") \
     T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
     T(FN_ParameterAnchor, "Parameter-anchor") \
-    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Write, "write") \
+    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Write, "io-write") \
+    T(FN_Flush, "io-flush") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
     T(FN_Repeat, "repeat") T(FN_Repr, "repr") \
@@ -1975,6 +1974,8 @@ static StyledStream& operator<<(StyledStream& ost, const Syntax *value) {
 
 static const List *EOL = nullptr;
 
+
+#define LIST_POOLSIZE 0x10000
 struct List {
 protected:
     List(const Any &_at, const List *_next, size_t _count) :
@@ -3776,6 +3777,10 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     case FN_U64New: CHECKARGS(1, 1); RETARGS(cast_number<uint64_t>(in.args[1])); break;
     case FN_R32New: CHECKARGS(1, 1); RETARGS(cast_number<float>(in.args[1])); break;
     case FN_R64New: CHECKARGS(1, 1); RETARGS(cast_number<double>(in.args[1])); break;
+    case FN_Flush: {
+        CHECKARGS(0, 0);
+        std::cout << std::flush;
+    } break;
     case FN_FormatFrame: {
         CHECKARGS(1, 1);
         const Frame *frame = in.args[1];
@@ -4159,6 +4164,22 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
 #undef CHECKARGS
 #undef RETARGS
 
+static Any evaluate_enter(const Frame *frame, Any arg) {
+    switch(arg.type.value()) {
+    case TYPE_Parameter: {
+        while (frame) {
+            if (arg.parameter->label == frame->label) {
+                return frame->args[arg.parameter->index];
+            }
+            frame = frame->parent;
+        }
+        location_error(String::from("unbound parameter encountered"));
+    } break;
+    default: return arg;
+    }
+    return none;
+}
+
 static Any evaluate(const Frame *frame, Any arg) {
     switch(arg.type.value()) {
     case TYPE_Parameter: {
@@ -4217,20 +4238,21 @@ loop:
                         String::from(
                         "continuation parameter can't be vararg"));
                 }
-                // how many parameters after this one
-                size_t remparams = pcount - i - 1;
+                if (i != (pcount - 1)) {
+                    location_error(
+                        String::from("vararg must be last parameter"));
+                }
 
-                // how many varargs to capture
-                size_t vargsize = 0;
-                size_t r = rcount;
-                if (remparams <= r) {
-                    r = r - remparams;
+                Any va = args[srci];
+                if (va.type != TYPE_VarArgs) {
+                    // how many varargs to capture
+                    size_t vargsize = 0;
+                    if (srci < rcount) {
+                        vargsize = rcount - srci;
+                    }
+                    va = List::from(&args[srci], vargsize);
+                    va.type = TYPE_VarArgs;
                 }
-                if (srci < r) {
-                    vargsize = r - srci;
-                }
-                Any va = List::from(&args[srci], vargsize);
-                va.type = TYPE_VarArgs;
                 nextframe->args.push_back(va);
             } else if (srci < rcount) {
                 nextframe->args.push_back(args[srci]);
@@ -4241,7 +4263,7 @@ loop:
         }
         frame = nextframe;
 
-        next_enter = evaluate(frame, label->body.enter);
+        next_enter = evaluate_enter(frame, label->body.enter);
         if (next_enter.type == TYPE_VarArgs) {
             next_enter = next_enter.list->first();
         }
@@ -4263,6 +4285,7 @@ loop:
                 next_args.push_back(arg);
             }
         }
+
         if (label->body.anchor) {
             set_active_anchor(label->body.anchor);
         } else if (label->anchor) {

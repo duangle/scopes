@@ -63,14 +63,14 @@ syntax-apply-block
 
             ref-new
                 fn/cc default-exception-handler (_ frame anchor msg)
-                    write "Traceback:\n"
-                    write
+                    io-write "Traceback:\n"
+                    io-write
                         Frame-format frame
-                    write
+                    io-write
                         repr anchor
-                    write " "
-                    write msg
-                    write "\n"
+                    io-write " "
+                    io-write msg
+                    io-write "\n"
                     exit
 
         fn/cc error (_ msg)
@@ -469,6 +469,27 @@ syntax-apply-block
                 i64-new i0
                 i64-new i1
 
+        fn/cc print (_ ...)
+            fn/cc print-arg (_ at ...)
+                branch (type== (typeof at) string)
+                    fn/cc (_)
+                        io-write at
+                    fn/cc (_)
+                        io-write (repr at)
+                branch
+                    i32== (va-countof ...) 0
+                    fn/cc (_)
+                        io-write "\n"
+                    fn/cc (_)
+                        io-write " "
+                        print-arg ...
+            branch
+                i32== (va-countof ...) 0
+                fn/cc (_)
+                    io-write "\n"
+                fn/cc (_)
+                    print-arg ...
+
         # support for type attributes
         call
             fn/cc (_ typemaps sym-apply-type)
@@ -566,36 +587,11 @@ syntax-apply-block
                     fn/cc (return)
                         return expr (active-anchor)
 
-        fn/cc print (_ ...)
-            fn/cc print-arg (_ at ...)
-                branch (type== (typeof at) string)
-                    fn/cc (_)
-                        write at
-                    fn/cc (_)
-                        write (repr at)
-                branch
-                    i32== (va-countof ...) 0
-                    fn/cc (_)
-                        write "\n"
-                    fn/cc (_)
-                        write " "
-                        print-arg ...
-            branch
-                i32== (va-countof ...) 0
-                fn/cc (_)
-                    write "\n"
-                fn/cc (_)
-                    print-arg ...
-
         set-scope-symbol! env (Symbol-new "print") print
         set-scope-symbol! env (Symbol-new "debug-stage")
-            call
-                fn/cc (_ k)
-                    fn/cc debug-stage (_)
-                        ref-set! k
-                            i32+ (ref@ k) 1
-                        #print "stage" (ref@ k)
-                ref-new 0
+            fn/cc debug-stage (_)
+                io-write "."
+                io-flush
         set-scope-symbol! env (Symbol-new "eval") eval
         set-scope-symbol! env (Symbol-new "string==") string==
         set-scope-symbol! env (Symbol-new "string<") string<
@@ -3206,35 +3202,42 @@ fn print-version (total)
 fn run-main (args...)
     #set-debug-trace! true
     # running in interpreter mode
-    let sourcepath = (ref none)
-    let parse-options = (ref true)
-    loop
-        with
-            i = 1
-        let arg = (va@ i args...)
-        if (not (none? arg))
-            if ((@ parse-options) and ((@ arg 0) == "-"))
-                if (arg == "--help" or arg == "-h")
-                    print-help (va@ 0 args...)
-                elseif (arg == "--version" or arg == "-v")
-                    print-version
-                elseif (arg == "--")
-                    ref-set! parse-options false
+    #let sourcepath = (ref none)
+    #let parse-options = (ref true)
+    let sourcepath =
+        loop
+            with
+                i = 1
+                sourcepath = none
+                parse-options = true
+            let k = i + 1
+            let arg = (va@ i args...)
+            if (not (none? arg))
+                if (parse-options and ((@ arg 0) == "-"))
+                    if (arg == "--help" or arg == "-h")
+                        print-help (va@ 0 args...)
+                        continue k sourcepath parse-options
+                    elseif (arg == "--version" or arg == "-v")
+                        print-version
+                        continue k sourcepath parse-options
+                    elseif (arg == "--")
+                        continue k sourcepath false
+                    else
+                        print
+                            .. "unrecognized option: " arg
+                                \ ". Try --help for help."
+                        exit 1
+                elseif (none? sourcepath)
+                    continue k arg parse-options
                 else
                     print
-                        .. "unrecognized option: " arg
+                        .. "unrecognized argument: " arg
                             \ ". Try --help for help."
                     exit 1
-            elseif (none? (@ sourcepath))
-                ref-set! sourcepath arg
             else
-                print
-                    .. "unrecognized argument: " arg
-                        \ ". Try --help for help."
-                exit 1
-            continue (i + 1)
+                break sourcepath
 
-    let sourcepath = (@ sourcepath)
+    io-write "\n"
     if (none? sourcepath)
         read-eval-print-loop
     else
