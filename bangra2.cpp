@@ -556,7 +556,7 @@ namespace bangra {
     T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
     T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
     T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
-    T(FN_BuiltinEq) T(FN_ClosureToMacro) T(FN_MacroToClosure) T(FN_VaCountOf) \
+    T(FN_BuiltinEq) T(FN_VaCountOf) \
     T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
     T(FN_ListCountOf) T(FN_StringNew) T(FN_TypeNew) T(FN_RefNew) \
     T(FN_BoolEq) T(FN_ParameterEq) T(FN_LabelEq) T(FN_ScopeEq) T(FN_StringCmp) \
@@ -576,13 +576,12 @@ namespace bangra {
     /* types */ \
     T(TYPE_Nothing, "Nothing") \
     T(TYPE_Any, "Any") \
+    \
     T(TYPE_Type, "type") \
-    T(TYPE_Callable, "Callable") \
+    T(TYPE_Symbol, "Symbol") \
+    T(TYPE_Builtin, "Builtin") \
     \
     T(TYPE_Bool, "bool") \
-    \
-    T(TYPE_Integer, "Integer") \
-    T(TYPE_Real, "Real") \
     \
     T(TYPE_I8, "i8") \
     T(TYPE_I16, "i16") \
@@ -594,34 +593,24 @@ namespace bangra {
     T(TYPE_U32, "u32") \
     T(TYPE_U64, "u64") \
     \
+    T(TYPE_SizeT, "size_t") \
+    \
     T(TYPE_R32, "r32") \
     T(TYPE_R64, "r64") \
     \
-    T(TYPE_Builtin, "Builtin") \
+    T(TYPE_List, "list") \
+    T(TYPE_Syntax, "Syntax") \
+    T(TYPE_Anchor, "Anchor") \
+    T(TYPE_String, "string") \
+    T(TYPE_Ref, "ref") \
     \
     T(TYPE_Scope, "Scope") \
     \
-    T(TYPE_Symbol, "Symbol") \
-    T(TYPE_List, "list") \
-    T(TYPE_String, "string") \
-    \
-    T(TYPE_Form, "Form") \
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
-    T(TYPE_TypeSet, "TypeSet") \
+    \
     T(TYPE_Closure, "Closure") \
     T(TYPE_Frame, "Frame") \
-    \
-    T(TYPE_Ref, "ref") \
-    \
-    T(TYPE_Anchor, "Anchor") \
-    \
-    T(TYPE_Macro, "Macro") \
-    \
-    T(TYPE_Syntax, "Syntax") \
-    \
-    T(TYPE_SizeT, "size_t") \
-    T(TYPE_Constant, "Constant") \
     \
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
@@ -669,8 +658,7 @@ namespace bangra {
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
     T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
-    T(FN_ClosureEq, "Closure==") T(FN_ClosureToMacro, "Closure->Macro") \
-    T(FN_MacroToClosure, "Macro->Closure") \
+    T(FN_ClosureEq, "Closure==") \
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
@@ -803,7 +791,7 @@ enum KnownSymbol {
 
 enum {
     TYPE_FIRST = TYPE_Nothing,
-    TYPE_LAST = TYPE_Constant,
+    TYPE_LAST = TYPE_Frame,
 
     KEYWORD_FIRST = KW_CatRest,
     KEYWORD_LAST = KW_Yield,
@@ -1572,7 +1560,6 @@ public:
         case TYPE_Syntax:
         case TYPE_Anchor:
         case TYPE_List:
-        case TYPE_Macro:
         case TYPE_Label:
         case TYPE_Parameter:
         case TYPE_Scope:
@@ -1676,6 +1663,7 @@ struct Any {
         Builtin builtin;
         Scope *scope;
         Any *ref;
+        void *pointer;
     };
 
     Any(Nothing x) : type(TYPE_Nothing) {}
@@ -1711,7 +1699,7 @@ struct Any {
 
     template<typename T>
     void dispatch(const T &dest) const {
-        switch(type.known_value()) {
+        switch(type.value()) {
             case TYPE_Nothing: return dest(none);
             case TYPE_Type: return dest(typeref);
             case TYPE_Bool: return dest(i1);
@@ -1737,12 +1725,7 @@ struct Any {
             case TYPE_Ref: return dest(ref);
             case TYPE_Frame: return dest(frame);
             case TYPE_Closure: return dest(closure);
-            case TYPE_Macro: return dest(closure);
-            default:
-                StyledString ss;
-                ss.out << "cannot dispatch type: " << type;
-                location_error(ss.str());
-                break;
+            default: return dest(pointer);
         }
     }
 
@@ -3827,13 +3810,6 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
             out.args.push_back(label->params[i]);
         }
     } break;
-    case FN_ClosureToMacro: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Closure>();
-        Any result = in.args[1];
-        result.type = TYPE_Macro;
-        RETARGS(result);
-    } break;
     case FN_ListAt: {
         CHECKARGS(1, 1);
         const List *a = in.args[1];
@@ -3884,13 +3860,6 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         CHECKARGS(1, 1);
         const List *a = in.args[1];
         RETARGS((a == EOL)?EOL:a->next);
-    } break;
-    case FN_MacroToClosure: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Macro>();
-        Any result = in.args[1];
-        result.type = TYPE_Closure;
-        RETARGS(result);
     } break;
     case OP_Not: {
         CHECKARGS(1, 1);
@@ -4897,7 +4866,6 @@ static void init_globals() {
     }
     globals->bind(TYPE_Symbol, Type(TYPE_Symbol));
     globals->bind(TYPE_List, Type(TYPE_List));
-    globals->bind(TYPE_Macro, Type(TYPE_Macro));
     globals->bind(TYPE_Any, Type(TYPE_Any));
     globals->bind(TYPE_String, Type(TYPE_String));
     globals->bind(TYPE_Builtin, Type(TYPE_Builtin));
@@ -4908,9 +4876,6 @@ static void init_globals() {
     globals->bind(TYPE_Ref, Type(TYPE_Ref));
     globals->bind(TYPE_Parameter, Type(TYPE_Parameter));
     globals->bind(TYPE_Scope, Type(TYPE_Scope));
-    globals->bind(TYPE_Callable, Type(TYPE_Callable));
-    globals->bind(TYPE_Integer, Type(TYPE_Integer));
-    globals->bind(TYPE_Real, Type(TYPE_Real));
     globals->bind(TYPE_Closure, Type(TYPE_Closure));
     globals->bind(TYPE_Frame, Type(TYPE_Frame));
 #define T(NAME) globals->bind(NAME, Builtin(NAME));

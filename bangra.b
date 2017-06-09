@@ -84,6 +84,8 @@ syntax-apply-block
 
         set-scope-symbol! env (Symbol-new "scope-list-wildcard-symbol")
             Symbol-new "#list"
+        set-scope-symbol! env (Symbol-new "Macro")
+            type-new (Symbol-new "Macro")
 
         fn/cc expand (_ topit env)
             fn/cc expand-fn/cc (_ topit env)
@@ -252,11 +254,12 @@ syntax-apply-block
                                                         return (expand-fn/cc topit env)
                                                     fn/cc (_)
                                             fn/cc (_)
-                                                branch (type== head-type Macro)
+                                                branch (type== head-type
+                                                    (Scope@ env (Symbol-new "Macro")))
                                                     fn/cc (_)
                                                         return
                                                             expand-macro-list
-                                                                Macro->Closure head
+                                                                bitcast Closure head
                                                                 \ topit env
                                                     fn/cc (_)
                                         # expand-macro-list (macro->Label head)
@@ -586,6 +589,16 @@ syntax-apply-block
                             syntax->anchor expr
                     fn/cc (return)
                         return expr (active-anchor)
+        call
+            fn/cc (_ Macro)
+                fn/cc block-scope-macro (_ f)
+                    branch (type== (typeof f) Closure)
+                        fn/cc (_)
+                        fn/cc (_)
+                            error "closure expected"
+                    bitcast Macro f
+                set-scope-symbol! env (Symbol-new "block-scope-macro") block-scope-macro
+            Scope@ env (Symbol-new "Macro")
 
         set-scope-symbol! env (Symbol-new "print") print
         set-scope-symbol! env (Symbol-new "debug-stage")
@@ -604,10 +617,10 @@ syntax-apply-block
         set-scope-symbol! env (Symbol-new "list@") list@
         set-scope-symbol! env (Symbol-new "va@") va@
         set-scope-symbol! env (Symbol-new "expand") expand
-        set-scope-symbol! env (Symbol-new "block-scope-macro") Closure->Macro
         set-scope-symbol! env (Symbol-new "cons") list-cons
         set-scope-symbol! env (Symbol-new "syntax-extend")
-            Closure->Macro
+            bitcast
+                Scope@ env (Symbol-new "Macro")
                 fn/cc expand-syntax-extend (_ topit env)
                     call
                         fn/cc (_ expr rest)
@@ -967,6 +980,14 @@ syntax-extend
 
 syntax-extend
     debug-stage
+
+    fn/cc define-type (_ name)
+        set-scope-symbol! syntax-scope name
+            type-new name
+
+    define-type (quote Callable)
+    define-type (quote Integer)
+    define-type (quote Real)
 
     #---
     set-type-symbol! string (quote apply-type) string-new
