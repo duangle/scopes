@@ -571,7 +571,7 @@ namespace bangra {
     T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
     T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) T(FN_StyleToString) \
     T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
-    T(FN_AnchorSource) \
+    T(FN_AnchorSource) T(FN_ImportC) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -600,8 +600,10 @@ namespace bangra {
     T(TYPE_SizeT, "size_t") \
     T(TYPE_Pointer, "pointer") \
     \
+    T(TYPE_R16, "r16") \
     T(TYPE_R32, "r32") \
     T(TYPE_R64, "r64") \
+    T(TYPE_R80, "r80") \
     \
     T(TYPE_List, "list") \
     T(TYPE_Syntax, "Syntax") \
@@ -1370,6 +1372,7 @@ public:
             file->close();
         }
         file->close();
+        delete file;
         return nullptr;
     }
 
@@ -3509,6 +3512,562 @@ static void stream_il(
 }
 
 //------------------------------------------------------------------------------
+// C BRIDGE (CLANG)
+//------------------------------------------------------------------------------
+
+class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
+public:
+    const List **dest;
+    clang::ASTContext *Context;
+    std::unordered_map<clang::RecordDecl *, bool> record_defined;
+    std::unordered_map<clang::EnumDecl *, bool> enum_defined;
+    std::unordered_map<Symbol, SourceFile *, Symbol::Hash> path_cache;
+    const String *emptystr;
+
+    CVisitor() : dest(nullptr), Context(NULL) {
+        emptystr = String::from("");
+    }
+
+    const Anchor *anchorFromLocation(clang::SourceLocation loc) {
+        auto &SM = Context->getSourceManager();
+
+        auto PLoc = SM.getPresumedLoc(loc);
+
+        if (PLoc.isValid()) {
+            auto fname = PLoc.getFilename();
+            const String *strpath = String::from_cstr(fname);
+            Symbol key(strpath);
+            auto it = path_cache.find(key);
+            SourceFile *sf = nullptr;
+            if (it == path_cache.end()) {
+                sf = SourceFile::from_file(strpath);
+                if (!sf) {
+                    sf = SourceFile::from_string(key, emptystr);
+                }
+                path_cache[key] = sf;
+            } else {
+                sf = it->second;
+            }
+            return Anchor::from(sf, PLoc.getLine(), PLoc.getColumn(), 0);
+        }
+
+        assert(false);
+        return nullptr;
+    }
+
+    void SetContext(clang::ASTContext * ctx, const List **_dest) {
+        Context = ctx;
+        dest = _dest;
+        *dest = EOL;
+    }
+
+    const List *GetFields(clang::RecordDecl * rd) {
+        auto &rl = Context->getASTRecordLayout(rd);
+
+        std::vector<Symbol> names;
+        std::vector<Type> types;
+        //auto anchors = new std::vector<Anchor>();
+
+        const List *result = EOL;
+
+        for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
+            clang::DeclarationName declname = it->getDeclName();
+
+            unsigned idx = it->getFieldIndex();
+            auto offset = rl.getFieldOffset(idx);
+            //unsigned width = it->getBitWidthValue(*Context);
+
+            if(it->isBitField() || (!it->isAnonymousStructOrUnion() && !declname)) {
+                break;
+            }
+            clang::QualType FT = it->getType();
+            Any fieldtype = TranslateType(FT);
+
+            auto name =  Symbol(String::from_stdstring(
+                it->isAnonymousStructOrUnion()?"":declname.getAsString()));
+            const Anchor *anchor = anchorFromLocation(it->getSourceRange().getBegin());
+            // todo: work offset into structure
+            result = List::from(
+                Syntax::from(anchor,
+                    List::from({
+                        Syntax::from(anchor, name),
+                        Syntax::from(anchor, fieldtype),
+                        Syntax::from(anchor, offset) })),
+                result);
+        }
+
+        return reverse_list_inplace(result);
+    }
+
+    Symbol make_unnamed(const char *name, void *ptr) {
+        return Symbol(format("%s_%p", name, ptr));
+    }
+
+    Any TranslateRecord(clang::RecordDecl *rd) {
+        if (!rd->isStruct() && !rd->isUnion())
+            location_error(String::from("can not translate record: is neither struct nor union"));
+
+        Symbol name(String::from_stdstring(rd->getName().data()));
+        if (name == SYM_Unnamed) {
+            name = make_unnamed(rd->isUnion()?"union":"struct", rd);
+        }
+
+        const Anchor *anchor = anchorFromLocation(
+            rd->getSourceRange().getBegin());
+        Any head = Syntax::from(anchor,
+            rd->isUnion()?Symbol("union"):Symbol("struct"));
+        Any sxname = Syntax::from(anchor, name);
+
+        clang::RecordDecl * defn = rd->getDefinition();
+        if (defn && !record_defined[rd]) {
+            record_defined[rd] = true;
+
+            const List *fields = GetFields(defn);
+
+            auto &rl = Context->getASTRecordLayout(rd);
+            auto align = (size_t)rl.getAlignment().getQuantity();
+            auto size = (size_t)rl.getSize().getQuantity();
+
+            *dest = List::from(
+                Syntax::from(anchor,
+                    List::from({
+                        head,
+                        sxname,
+                        Syntax::from(anchor, fields),
+                        Syntax::from(anchor, size),
+                        Syntax::from(anchor, align) })),
+                *dest);
+        }
+
+        return List::from({head, sxname});
+    }
+
+    Any TranslateEnum(clang::EnumDecl *ed) {
+        Symbol name(String::from_stdstring(ed->getName()));
+        if (name == SYM_Unnamed) {
+            name = make_unnamed("enum", ed);
+        }
+
+        const Anchor *anchor = anchorFromLocation(
+            ed->getIntegerTypeRange().getBegin());
+
+        Any head = Syntax::from(anchor, Symbol("enum"));
+        Any sxname = Syntax::from(anchor, name);
+
+        clang::EnumDecl * defn = ed->getDefinition();
+        if (defn && !enum_defined[ed]) {
+            enum_defined[ed] = true;
+
+            auto tag_type = TranslateType(ed->getIntegerType());
+
+            const List *fields = EOL;
+            for (auto it : ed->enumerators()) {
+                const Anchor *anchor = anchorFromLocation(
+                    it->getSourceRange().getBegin());
+                auto &val = it->getInitVal();
+
+                auto name = it->getName().data();
+                auto value = val.getExtValue();
+
+                fields = List::from(
+                    Syntax::from(anchor,
+                        List::from({
+                            Syntax::from(anchor,
+                                Symbol(String::from_stdstring(name))),
+                            Syntax::from(anchor, value) })),
+                    fields);
+            }
+
+            *dest = List::from(
+                Syntax::from(anchor,
+                    List::from({
+                        head,
+                        sxname,
+                        Syntax::from(anchor, tag_type),
+                        Syntax::from(anchor, reverse_list_inplace(fields)) })),
+                *dest);
+        }
+
+        return List::from({head, sxname});
+    }
+
+    Any TranslateType(clang::QualType T) {
+        using namespace clang;
+
+        const clang::Type *Ty = T.getTypePtr();
+        assert(Ty);
+
+        switch (Ty->getTypeClass()) {
+        case clang::Type::Elaborated: {
+            const ElaboratedType *et = dyn_cast<ElaboratedType>(Ty);
+            return TranslateType(et->getNamedType());
+        } break;
+        case clang::Type::Paren: {
+            const ParenType *pt = dyn_cast<ParenType>(Ty);
+            return TranslateType(pt->getInnerType());
+        } break;
+        case clang::Type::Typedef: {
+            const TypedefType *tt = dyn_cast<TypedefType>(Ty);
+            TypedefNameDecl * td = tt->getDecl();
+            const Anchor *anchor = anchorFromLocation(td->getSourceRange().getBegin());
+            return List::from({
+                Syntax::from(anchor, Symbol("typedef")),
+                Syntax::from(anchor, Symbol(String::from_stdstring(td->getName().data())))
+                });
+        } break;
+        case clang::Type::Record: {
+            const RecordType *RT = dyn_cast<RecordType>(Ty);
+            RecordDecl * rd = RT->getDecl();
+            return TranslateRecord(rd);
+        }  break;
+        case clang::Type::Enum: {
+            const clang::EnumType *ET = dyn_cast<clang::EnumType>(Ty);
+            EnumDecl * ed = ET->getDecl();
+            return TranslateEnum(ed);
+        } break;
+        case clang::Type::Builtin:
+            switch (cast<BuiltinType>(Ty)->getKind()) {
+            case clang::BuiltinType::Void:
+                return Type(TYPE_Nothing);
+            case clang::BuiltinType::Bool:
+                return Type(TYPE_Bool);
+            case clang::BuiltinType::Char_S:
+            case clang::BuiltinType::SChar:
+            case clang::BuiltinType::Char_U:
+            case clang::BuiltinType::UChar:
+            case clang::BuiltinType::Short:
+            case clang::BuiltinType::UShort:
+            case clang::BuiltinType::Int:
+            case clang::BuiltinType::UInt:
+            case clang::BuiltinType::Long:
+            case clang::BuiltinType::ULong:
+            case clang::BuiltinType::LongLong:
+            case clang::BuiltinType::ULongLong:
+            case clang::BuiltinType::WChar_S:
+            case clang::BuiltinType::WChar_U:
+            case clang::BuiltinType::Char16:
+            case clang::BuiltinType::Char32: {
+                int sz = Context->getTypeSize(T);
+                if (Ty->isUnsignedIntegerType()) {
+                    switch(sz) {
+                    case 8: return Type(TYPE_U8);
+                    case 16: return Type(TYPE_U16);
+                    case 32: return Type(TYPE_U32);
+                    case 64: return Type(TYPE_U64);
+                    default: break;
+                    }
+                } else {
+                    switch(sz) {
+                    case 8: return Type(TYPE_I8);
+                    case 16: return Type(TYPE_I16);
+                    case 32: return Type(TYPE_I32);
+                    case 64: return Type(TYPE_I64);
+                    default: break;
+                    }
+                }
+            } break;
+            case clang::BuiltinType::Half: return Type(TYPE_R16);
+            case clang::BuiltinType::Float:
+                return Type(TYPE_R32);
+            case clang::BuiltinType::Double:
+                return Type(TYPE_R64);
+            case clang::BuiltinType::LongDouble: return Type(TYPE_R80);
+            case clang::BuiltinType::NullPtr:
+            case clang::BuiltinType::UInt128:
+            default:
+                break;
+            }
+        case clang::Type::Complex:
+        case clang::Type::LValueReference:
+        case clang::Type::RValueReference:
+            break;
+        case clang::Type::Decayed: {
+            const clang::DecayedType *DTy = cast<clang::DecayedType>(Ty);
+            return TranslateType(DTy->getDecayedType());
+        } break;
+        case clang::Type::Pointer: {
+            const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
+            QualType ETy = PTy->getPointeeType();
+            Any pointee = TranslateType(ETy);
+            const Anchor *anchor = get_active_anchor();
+            return List::from({
+                Syntax::from(anchor, Symbol("pointer")),
+                Syntax::from(anchor, pointee)
+                });
+        } break;
+        case clang::Type::VariableArray:
+        case clang::Type::IncompleteArray:
+            break;
+        case clang::Type::ConstantArray: {
+            const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
+            Any at = TranslateType(ATy->getElementType());
+            uint64_t sz = ATy->getSize().getZExtValue();
+            const Anchor *anchor = get_active_anchor();
+            return List::from({
+                Syntax::from(anchor, Symbol("array")),
+                Syntax::from(anchor, at),
+                Syntax::from(anchor, sz)});
+        } break;
+        case clang::Type::ExtVector:
+        case clang::Type::Vector: {
+            const clang::VectorType *VT = cast<clang::VectorType>(T);
+            Any at = TranslateType(VT->getElementType());
+            uint64_t n = VT->getNumElements();
+            const Anchor *anchor = get_active_anchor();
+            return List::from({
+                Syntax::from(anchor, Symbol("vector")),
+                Syntax::from(anchor, at),
+                Syntax::from(anchor, n)});
+        } break;
+        case clang::Type::FunctionNoProto:
+        case clang::Type::FunctionProto: {
+            const clang::FunctionType *FT = cast<clang::FunctionType>(Ty);
+            return TranslateFuncType(FT);
+        } break;
+        case clang::Type::ObjCObject: break;
+        case clang::Type::ObjCInterface: break;
+        case clang::Type::ObjCObjectPointer: break;
+        case clang::Type::BlockPointer:
+        case clang::Type::MemberPointer:
+        case clang::Type::Atomic:
+        default:
+            break;
+        }
+        location_error(format("cannot convert type: %s (%s)\n",
+            T.getAsString().c_str(),
+            Ty->getTypeClassName()));
+        return none;
+    }
+
+    Any TranslateFuncType(const clang::FunctionType * f) {
+
+        const Anchor *anchor = get_active_anchor();
+
+        clang::QualType RT = f->getReturnType();
+
+        Any returntype = TranslateType(RT);
+
+        bool vararg = false;
+
+        const List *result = List::from(
+            Syntax::from(anchor, Symbol("fntype")), EOL);
+        result = List::from(Syntax::from(anchor, vararg), result);
+        result = List::from(Syntax::from(anchor, returntype), result);
+        const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
+        if(proto) {
+            vararg = proto->isVariadic();
+            for(size_t i = 0; i < proto->getNumParams(); i++) {
+                clang::QualType PT = proto->getParamType(i);
+                Any paramtype = TranslateType(PT);
+                result = List::from(
+                    Syntax::from(anchor, paramtype),
+                    result);
+            }
+        }
+
+        return reverse_list_inplace(result);
+    }
+
+    void exportExternal(Symbol name, Any type,
+        const Anchor *anchor) {
+        *dest = List::from(
+            Syntax::from(anchor,
+                List::from({
+                    Syntax::from(anchor, Symbol("external")),
+                    Syntax::from(anchor, name),
+                    Syntax::from(anchor, type)})),
+            *dest);
+    }
+
+    bool TraverseRecordDecl(clang::RecordDecl *rd) {
+        if (rd->isFreeStanding()) {
+            TranslateRecord(rd);
+        }
+        return true;
+    }
+
+    bool TraverseEnumDecl(clang::EnumDecl *ed) {
+        if (ed->isFreeStanding()) {
+            TranslateEnum(ed);
+        }
+        return true;
+    }
+
+    bool TraverseVarDecl(clang::VarDecl *vd) {
+        if (vd->isExternC()) {
+            const Anchor *anchor = anchorFromLocation(
+                vd->getSourceRange().getBegin());
+
+            Any type = TranslateType(vd->getType());
+
+            exportExternal(String::from_stdstring(vd->getName().data()), type, anchor);
+        }
+
+        return true;
+    }
+
+    bool TraverseTypedefDecl(clang::TypedefDecl *td) {
+
+        const Anchor *anchor = anchorFromLocation(td->getSourceRange().getBegin());
+
+        Any type = TranslateType(td->getUnderlyingType());
+
+        *dest = List::from(
+            Syntax::from(anchor,
+                List::from({
+                    Syntax::from(anchor, Symbol("typedef")),
+                    Syntax::from(anchor, Symbol(String::from_stdstring(td->getName().data()))),
+                    Syntax::from(anchor, type)})),
+            *dest);
+
+        return true;
+    }
+
+    bool TraverseFunctionDecl(clang::FunctionDecl *f) {
+        clang::DeclarationName DeclName = f->getNameInfo().getName();
+        std::string FuncName = DeclName.getAsString();
+        const clang::FunctionType * fntyp = f->getType()->getAs<clang::FunctionType>();
+
+        if(!fntyp)
+            return true;
+
+        if(f->getStorageClass() == clang::SC_Static) {
+            return true;
+        }
+
+        Any functype = TranslateFuncType(fntyp);
+
+        std::string InternalName = FuncName;
+        clang::AsmLabelAttr * asmlabel = f->getAttr<clang::AsmLabelAttr>();
+        if(asmlabel) {
+            InternalName = asmlabel->getLabel();
+            #ifndef __linux__
+                //In OSX and Windows LLVM mangles assembler labels by adding a '\01' prefix
+                InternalName.insert(InternalName.begin(), '\01');
+            #endif
+        }
+        const Anchor *anchor = anchorFromLocation(f->getSourceRange().getBegin());
+
+        exportExternal(Symbol(String::from_stdstring(FuncName)), functype, anchor);
+
+        return true;
+    }
+};
+
+class CodeGenProxy : public clang::ASTConsumer {
+public:
+    const List **dest;
+
+    CVisitor visitor;
+
+    CodeGenProxy(const List **dest_) : dest(dest_) {}
+    virtual ~CodeGenProxy() {}
+
+    virtual void Initialize(clang::ASTContext &Context) {
+        visitor.SetContext(&Context, dest);
+    }
+
+    virtual bool HandleTopLevelDecl(clang::DeclGroupRef D) {
+        for (clang::DeclGroupRef::iterator b = D.begin(), e = D.end(); b != e; ++b)
+            visitor.TraverseDecl(*b);
+        return true;
+    }
+};
+
+// see ASTConsumers.h for more utilities
+class BangEmitLLVMOnlyAction : public clang::EmitLLVMOnlyAction {
+public:
+    const List **dest;
+
+    BangEmitLLVMOnlyAction(const List **dest_) :
+        EmitLLVMOnlyAction((llvm::LLVMContext *)LLVMGetGlobalContext()),
+        dest(dest_)
+    {
+    }
+
+    std::unique_ptr<clang::ASTConsumer> CreateASTConsumer(clang::CompilerInstance &CI,
+                                                 clang::StringRef InFile) override {
+
+        std::vector< std::unique_ptr<clang::ASTConsumer> > consumers;
+        consumers.push_back(clang::EmitLLVMOnlyAction::CreateASTConsumer(CI, InFile));
+        consumers.push_back(llvm::make_unique<CodeGenProxy>(dest));
+        return llvm::make_unique<clang::MultiplexConsumer>(std::move(consumers));
+    }
+};
+
+static LLVMExecutionEngineRef ee = nullptr;
+
+static void init_llvm() {
+    LLVMEnablePrettyStackTrace();
+    LLVMLinkInMCJIT();
+    //LLVMLinkInInterpreter();
+    LLVMInitializeNativeTarget();
+    LLVMInitializeNativeAsmParser();
+    LLVMInitializeNativeAsmPrinter();
+    LLVMInitializeNativeDisassembler();
+
+    char *errormsg = nullptr;
+    if (LLVMCreateJITCompilerForModule(&ee,
+        LLVMModuleCreateWithName("main"), 0, &errormsg)) {
+        stb_fprintf(stderr, "error: %s\n", errormsg);
+        exit(1);
+    }
+}
+
+static const List *import_c_module (
+    const std::string &path, const std::vector<std::string> &args,
+    const char *buffer = nullptr) {
+    using namespace clang;
+
+    std::vector<const char *> aargs;
+    aargs.push_back("clang");
+    aargs.push_back(path.c_str());
+    for (size_t i = 0; i < args.size(); ++i) {
+        aargs.push_back(args[i].c_str());
+    }
+
+    CompilerInstance compiler;
+    compiler.setInvocation(createInvocationFromCommandLine(aargs));
+
+    if (buffer) {
+        auto &opts = compiler.getPreprocessorOpts();
+
+        llvm::MemoryBuffer * membuffer =
+            llvm::MemoryBuffer::getMemBuffer(buffer, "<buffer>").release();
+
+        opts.addRemappedFile(path, membuffer);
+    }
+
+    // Create the compilers actual diagnostics engine.
+    compiler.createDiagnostics();
+
+    // Infer the builtin include path if unspecified.
+    //~ if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
+        //~ compiler.getHeaderSearchOpts().ResourceDir.empty())
+        //~ compiler.getHeaderSearchOpts().ResourceDir =
+            //~ CompilerInvocation::GetResourcesPath(bangra_argv[0], MainAddr);
+
+    LLVMModuleRef M = NULL;
+
+
+    const List *result = EOL;
+
+    // Create and execute the frontend to generate an LLVM bitcode module.
+    std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(&result));
+    if (compiler.ExecuteAction(*Act)) {
+        M = (LLVMModuleRef)Act->takeModule().release();
+        assert(M);
+        //llvm_modules.push_back(M);
+        LLVMAddModule(ee, M);
+        return reverse_list_inplace(result);
+    } else {
+        location_error(String::from("compilation failed"));
+    }
+
+    return nullptr;
+}
+
+//------------------------------------------------------------------------------
 // INTERPRETER
 //------------------------------------------------------------------------------
 
@@ -3916,6 +4475,18 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     case KW_Globals: {
         CHECKARGS(0, 0);
         RETARGS(globals);
+    } break;
+    case FN_ImportC: {
+        int count = CHECKARGS(2, -1);
+        const String *path = in.args[1];
+        const String *buffer = in.args[2];
+        std::vector<std::string> args;
+        for (int i = 3; i <= count; ++i) {
+            const String *arg = in.args[i];
+            args.push_back(arg->data);
+        }
+        const List *result = import_c_module(path->data, args, buffer->data);
+        RETARGS(result);
     } break;
     case FN_InterpreterVersion: {
         CHECKARGS(0, 0);
@@ -5075,6 +5646,7 @@ static void setup_stdio() {
 int main(int argc, char *argv[]) {
     using namespace bangra;
     Symbol::_init_symbols();
+    init_llvm();
 
     setup_stdio();
     bangra_argc = argc;
