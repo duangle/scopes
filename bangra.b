@@ -55,21 +55,45 @@ syntax-apply-block
                 set-scope-symbol! env (Symbol-new "error")
                     fn/cc "error" (_ msg)
                         (ref@ active-xfunc) (active-frame) (active-anchor)
-                            string-join "error: " msg
+                            string-join
+                                default-styler style-error "error:"
+                                string-join " " msg
                 set-scope-symbol! env (Symbol-new "syntax-error")
                     fn/cc "syntax-error" (_ anchor msg)
-                        (ref@ active-xfunc) (active-frame) anchor
-                            string-join "syntax error: " msg
+                        (ref@ active-xfunc) (active-frame)
+                            branch (type== (typeof anchor) Anchor)
+                                fn/cc (_) anchor
+                                fn/cc (_)
+                                    syntax->anchor anchor
+                            string-join
+                                default-styler style-error "syntax error:"
+                                string-join " " msg
 
             ref-new
                 fn/cc default-exception-handler (_ frame anchor msg)
                     io-write "Traceback:\n"
                     io-write
                         Frame-format frame
-                    io-write
-                        repr anchor
-                    io-write " "
+                    branch (type== (typeof anchor) Anchor)
+                        fn/cc (_)
+                            io-write
+                                style->string style-location
+                            io-write
+                                string (Anchor-path anchor)
+                            io-write ":"
+                            io-write
+                                string (Anchor-line-number anchor)
+                            io-write ":"
+                            io-write
+                                string (Anchor-column anchor)
+                            io-write ":"
+                            io-write
+                                style->string style-none
+                            io-write " "
+                        fn/cc (_)
                     io-write msg
+                    io-write "\n"
+                    io-write (Anchor-source anchor)
                     io-write "\n"
                     exit
 
@@ -3070,6 +3094,58 @@ syntax-extend
         else content
     set-scope-symbol! syntax-scope (quote require) find-module
     \ syntax-scope
+
+#-------------------------------------------------------------------------------
+# C INTERFACE
+#-------------------------------------------------------------------------------
+
+fn external-fn (name rtype argtypes...)
+    let f =
+        ffi-symbol name
+    fn empty ()
+    fn (...)
+        # validate arguments
+        loop-for n t in (zip-fill (va-iter ...) (va-iter argtypes...) none none)
+            assert (not (none? t))
+                .. "excess argument, "
+                    repr (va-countof argtypes...)
+                    \ " argument(s) required"
+            assert ((typeof n) == t)
+                .. "argument of type " (repr t) " expected, got " (repr (typeof n))
+            continue
+        ffi-call f rtype ...
+
+# (external <name> : <return-type> <- <arg> ...)
+define external
+    block-macro
+        fn expand-external (topexpr)
+            let expr = (@ topexpr 0)
+            let rest = (slice topexpr 1)
+            let expr = (slice expr 1)
+            let name = (@ expr 0)
+            if (not (symbol? (syntax->datum name)))
+                syntax-error name "symbol expected"
+            let expr = (slice expr 1)
+            if ((@ expr 0) != (quote :))
+                syntax-error (@ expr 0) "expected ':'"
+            let expr = (slice expr 1)
+            let rtype = (@ expr 0)
+            let expr = (slice expr 1)
+            if ((@ expr 0) != (quote <-))
+                syntax-error (@ expr 0) "expected '<-'"
+            let args = (slice expr 1)
+            cons
+                qquote-syntax
+                    {let} (unquote name) =
+                        {external-fn}
+                            unquote
+                                datum->syntax
+                                    string
+                                        syntax->datum name
+                                    \ name
+                            unquote rtype
+                            unquote-splice args
+                \ rest
 
 #-------------------------------------------------------------------------------
 # REPL

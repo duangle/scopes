@@ -569,7 +569,9 @@ namespace bangra {
     T(FN_Bitcast) T(FN_FormatFrame) T(FN_ActiveFrame) T(FN_ClosureEq) \
     T(FN_ParameterAnchor) T(FN_FrameEq) T(FN_TypeSizeOf) T(FN_DefaultStyler) \
     T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
-    T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) \
+    T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) T(FN_StyleToString) \
+    T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
+    T(FN_AnchorSource) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -636,6 +638,9 @@ namespace bangra {
     \
     /* builtin and global functions */ \
     T(FN_Alignof, "alignof") T(FN_Args, "args") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
+    T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
+    T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
+    T(FN_AnchorSource, "Anchor-source") \
     T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
     T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
     T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
@@ -644,7 +649,7 @@ namespace bangra {
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
-    T(FN_DefaultStyler, "default-styler") \
+    T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
     T(FN_FormatFrame, "Frame-format") \
     T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
@@ -1347,34 +1352,34 @@ public:
         return (const char *)ptr;
     }
 
-    static SourceFile *open(Symbol _path, const String *str = nullptr) {
-        if (str) {
-            SourceFile *file = new SourceFile(_path);
-            // loading from string buffer rather than file
-            file->ptr = (void *)str->data;
-            file->length = str->count;
-            file->_str = str;
-            return file;
-        } else {
-            auto it = file_cache.find(_path);
-            if (it != file_cache.end()) {
-                return it->second;
-            }
-            SourceFile *file = new SourceFile(_path);
-            file->fd = ::open(_path.name()->data, O_RDONLY);
-            if (file->fd >= 0) {
-                file->length = lseek(file->fd, 0, SEEK_END);
-                file->ptr = mmap(nullptr,
-                    file->length, PROT_READ, MAP_PRIVATE, file->fd, 0);
-                if (file->ptr != MAP_FAILED) {
-                    file_cache[_path] = file;
-                    return file;
-                }
-                file->close();
+    static SourceFile *from_file(Symbol _path) {
+        auto it = file_cache.find(_path);
+        if (it != file_cache.end()) {
+            return it->second;
+        }
+        SourceFile *file = new SourceFile(_path);
+        file->fd = ::open(_path.name()->data, O_RDONLY);
+        if (file->fd >= 0) {
+            file->length = lseek(file->fd, 0, SEEK_END);
+            file->ptr = mmap(nullptr,
+                file->length, PROT_READ, MAP_PRIVATE, file->fd, 0);
+            if (file->ptr != MAP_FAILED) {
+                file_cache[_path] = file;
+                return file;
             }
             file->close();
         }
+        file->close();
         return nullptr;
+    }
+
+    static SourceFile *from_string(Symbol _path, const String *str) {
+        SourceFile *file = new SourceFile(_path);
+        // loading from string buffer rather than file
+        file->ptr = (void *)str->data;
+        file->length = str->count;
+        file->_str = str;
+        return file;
     }
 
     StyledStream &stream(StyledStream &ost, int offset,
@@ -3700,6 +3705,33 @@ static const Closure *apply_unknown_type = nullptr;
 static const Closure *exception_handler = nullptr;
 static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out) {
     switch(in.enter.builtin.value()) {
+    case FN_AnchorPath: {
+        CHECKARGS(1, 1);
+        const Anchor *anchor = in.args[1];
+        RETARGS(anchor->path());
+    } break;
+    case FN_AnchorLineNumber: {
+        CHECKARGS(1, 1);
+        const Anchor *anchor = in.args[1];
+        RETARGS(anchor->lineno);
+    } break;
+    case FN_AnchorColumn: {
+        CHECKARGS(1, 1);
+        const Anchor *anchor = in.args[1];
+        RETARGS(anchor->column);
+    } break;
+    case FN_AnchorOffset: {
+        CHECKARGS(1, 1);
+        const Anchor *anchor = in.args[1];
+        RETARGS(anchor->offset);
+    } break;
+    case FN_AnchorSource: {
+        CHECKARGS(1, 1);
+        const Anchor *anchor = in.args[1];
+        StyledString ss;
+        anchor->stream_source_line(ss.out);
+        RETARGS(ss.str());
+    } break;
     case FN_Args: {
         CHECKARGS(0, 0);
         out.args = { none };
@@ -3948,7 +3980,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     case FN_ListLoad: {
         CHECKARGS(1, 1);
         const String *path = in.args[1];
-        LexerParser parser(SourceFile::open(path));
+        LexerParser parser(SourceFile::from_file(path));
         RETARGS(parser.parse());
     } break;
     case FN_ListParse: {
@@ -3964,7 +3996,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         }
         assert(text);
         assert(path);
-        LexerParser parser(SourceFile::open(path, text));
+        LexerParser parser(SourceFile::from_string(path, text));
         RETARGS(parser.parse());
     } break;
     case FN_ListNext: {
@@ -3999,6 +4031,13 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         CHECKARGS(1, 1);
         Parameter *param = in.args[1];
         RETARGS(param->name);
+    } break;
+    case FN_StyleToString: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Symbol>();
+        StyledString ss;
+        ss.out << in.args[1].symbol.known_value();
+        RETARGS(ss.str());
     } break;
     case FN_Write: {
         CHECKARGS(1, 1);
@@ -4990,6 +5029,7 @@ static void init_globals() {
     globals->bind(TYPE_Closure, Type(TYPE_Closure));
     globals->bind(TYPE_Frame, Type(TYPE_Frame));
     globals->bind(TYPE_Pointer, Type(TYPE_Pointer));
+    globals->bind(TYPE_Anchor, Type(TYPE_Anchor));
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
 #define T1 T2
@@ -5058,12 +5098,19 @@ int main(int argc, char *argv[]) {
 
     init_globals();
 
+    SourceFile *sf = nullptr;
+#ifdef BANGRA_DEBUG
     char sourcepath[1024];
     strncpy(sourcepath, bangra_interpreter_dir, 1024);
     strncat(sourcepath, "/bangra.b", 1024);
 
     Symbol name = String::from_cstr(sourcepath);
-    SourceFile *sf = SourceFile::open(name);
+    sf = SourceFile::from_file(name);
+#else
+    sf = SourceFile::from_string(Symbol("<boot>"),
+        String::from((const char *)bangra_b, bangra_b_len));
+#endif
+
     if (!sf) {
         location_error(String::from("bootscript missing\n"));
     }
