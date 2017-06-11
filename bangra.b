@@ -79,13 +79,13 @@ syntax-apply-block
                             io-write
                                 style->string style-location
                             io-write
-                                string (Anchor-path anchor)
+                                string-new (Anchor-path anchor)
                             io-write ":"
                             io-write
-                                string (Anchor-line-number anchor)
+                                string-new (Anchor-line-number anchor)
                             io-write ":"
                             io-write
-                                string (Anchor-column anchor)
+                                string-new (Anchor-column anchor)
                             io-write ":"
                             io-write
                                 style->string style-none
@@ -97,524 +97,515 @@ syntax-apply-block
                     io-write "\n"
                     exit
 
-        fn/cc error (_ msg)
-            call
-                Scope@ env (Symbol-new "error")
-                \ msg
-        fn/cc syntax-error (_ anchor msg)
-            call
-                Scope@ env (Symbol-new "syntax-error")
-                \ anchor msg
-
         set-scope-symbol! env (Symbol-new "scope-list-wildcard-symbol")
             Symbol-new "#list"
         set-scope-symbol! env (Symbol-new "Macro")
             type-new (Symbol-new "Macro")
 
-        fn/cc expand (_ topit env)
-            fn/cc expand-fn/cc (_ topit env)
-                fn/cc process-name (_ anchor it subenv)
-                    fn/cc expand-parameter (_ sxparam)
-                        call
-                            fn/cc (return param-anchor param-name)
-                                branch (type== (typeof param-name) Parameter)
-                                    fn/cc (_)
-                                        return param-name
-                                    fn/cc (_)
+        call
+            fn/cc (_
+                    Macro
+                    scope-list-wildcard-symbol
+                    error
+                    syntax-error
+                    xpcall)
+                fn/cc expand (_ topit env)
+                    fn/cc expand-fn/cc (_ topit env)
+                        fn/cc process-name (_ anchor it subenv)
+                            fn/cc expand-parameter (_ sxparam)
                                 call
-                                    fn/cc (_ param)
-                                        set-scope-symbol! subenv param-name param
-                                        \ param
-                                    Parameter-new param-anchor param-name Any
+                                    fn/cc (return param-anchor param-name)
+                                        branch (type== (typeof param-name) Parameter)
+                                            fn/cc (_)
+                                                return param-name
+                                            fn/cc (_)
                                         call
-                                            fn/cc (_ namestr)
+                                            fn/cc (_ param)
+                                                set-scope-symbol! subenv param-name param
+                                                \ param
+                                            Parameter-new param-anchor param-name Any
                                                 call
-                                                    fn/cc (_ slen u3)
-                                                        branch (u64>= slen u3)
-                                                            fn/cc (_)
-                                                                string==
-                                                                    string-slice namestr
-                                                                        u64- slen u3
-                                                                        \ slen
-                                                                    \ "..."
-                                                            fn/cc (_) false
-                                                    string-countof namestr
-                                                    u64-new 3
-                                            string-new param-name
-                            syntax->anchor sxparam
-                            syntax->datum sxparam
+                                                    fn/cc (_ namestr)
+                                                        call
+                                                            fn/cc (_ slen u3)
+                                                                branch (u64>= slen u3)
+                                                                    fn/cc (_)
+                                                                        string==
+                                                                            string-slice namestr
+                                                                                u64- slen u3
+                                                                                \ slen
+                                                                            \ "..."
+                                                                    fn/cc (_) false
+                                                            string-countof namestr
+                                                            u64-new 3
+                                                    string-new param-name
+                                    syntax->anchor sxparam
+                                    syntax->datum sxparam
 
-                    fn/cc process-params (_ func it)
-                        fn/cc process-body (return)
-                            call
-                                fn/cc (_ result)
-                                    translate-label-body! func anchor result
-                                expand (list-next it) subenv
-                            # return result
-                            return
-                                list-cons
-                                    datum->quoted-syntax func anchor
-                                    list-next topit
-                                \ env
-
-                        fn/cc process-param (_ params)
-                            branch (list-empty? params)
-                                \ process-body
-                                fn/cc (_)
-                                    label-append-parameter! func
-                                        expand-parameter (list-at params)
-                                    process-param
-                                        list-next params
-                        call
-                            fn/cc (_ sxplist)
-                                call
-                                    fn/cc (_ params)
-                                        branch (list-empty? params)
-                                            fn/cc (_)
-                                                syntax-error (syntax->anchor params)
-                                                    \ "explicit continuation parameter missing"
-                                            fn/cc (_)
-                                                process-param params
-                                    syntax->datum sxplist
-                            list-at it
-
-                    call
-                        fn/cc (_ tryfunc-name)
-                            branch (type== (typeof tryfunc-name) Symbol)
-                                fn/cc (_)
-                                    # named self-binding
+                            fn/cc process-params (_ func it)
+                                fn/cc process-body (return)
                                     call
-                                        fn/cc (_ func)
-                                            set-scope-symbol! env tryfunc-name func
-                                            process-params func
-                                                list-next it
-                                        Label-new anchor tryfunc-name
-                                fn/cc (_)
-                                    branch (type== (typeof tryfunc-name) string)
+                                        fn/cc (_ result)
+                                            translate-label-body! func anchor result
+                                        expand (list-next it) subenv
+                                    # return result
+                                    return
+                                        list-cons
+                                            datum->quoted-syntax func anchor
+                                            list-next topit
+                                        \ env
+
+                                fn/cc process-param (_ params)
+                                    branch (list-empty? params)
+                                        \ process-body
                                         fn/cc (_)
-                                            # named lambda
-                                            process-params
-                                                Label-new anchor (Symbol-new tryfunc-name)
-                                                list-next it
-                                        fn/cc (_)
-                                            # unnamed lambda
-                                            process-params
-                                                Label-new anchor (Symbol-new "")
-                                                \ it
-                        syntax->datum (list-at it)
-
-                call
-                    fn/cc (_ it)
-                        call process-name
-                            syntax->anchor (list-at it)
-                            list-next it
-                            Scope-new env
-
-                    syntax->datum (list-at topit)
-
-            fn/cc expand-any (_ topit env)
-                fn/cc expand-list-or-symbol (_ expr anchor)
-
-                    fn/cc expand-call-list (_)
-                        call
-                            fn/cc (return outlist outenv)
-                                return
-                                    list-cons
-                                        datum->quoted-syntax outlist anchor
-                                        list-next topit
-                                    \ outenv
-                            expand expr env
-
-                    fn/cc expand-wildcard-list (_)
-                        call
-                            fn/cc (_ default-handler)
-                                branch (type== (typeof default-handler) Nothing)
-                                    fn/cc (_)
-                                        expand-call-list
-                                    fn/cc (_)
+                                            label-append-parameter! func
+                                                expand-parameter (list-at params)
+                                            process-param
+                                                list-next params
+                                call
+                                    fn/cc (_ sxplist)
                                         call
-                                            fn/cc (_ result-list)
-                                                branch (type== (typeof result-list) Nothing)
+                                            fn/cc (_ params)
+                                                branch (list-empty? params)
                                                     fn/cc (_)
-                                                        expand-call-list
+                                                        syntax-error (syntax->anchor params)
+                                                            \ "explicit continuation parameter missing"
                                                     fn/cc (_)
-                                                        branch (list-empty? result-list)
+                                                        process-param params
+                                            syntax->datum sxplist
+                                    list-at it
+
+                            call
+                                fn/cc (_ tryfunc-name)
+                                    branch (type== (typeof tryfunc-name) Symbol)
+                                        fn/cc (_)
+                                            # named self-binding
+                                            call
+                                                fn/cc (_ func)
+                                                    set-scope-symbol! env tryfunc-name func
+                                                    process-params func
+                                                        list-next it
+                                                Label-new anchor tryfunc-name
+                                        fn/cc (_)
+                                            branch (type== (typeof tryfunc-name) string)
+                                                fn/cc (_)
+                                                    # named lambda
+                                                    process-params
+                                                        Label-new anchor (Symbol-new tryfunc-name)
+                                                        list-next it
+                                                fn/cc (_)
+                                                    # unnamed lambda
+                                                    process-params
+                                                        Label-new anchor (Symbol-new "")
+                                                        \ it
+                                syntax->datum (list-at it)
+
+                        call
+                            fn/cc (_ it)
+                                call process-name
+                                    syntax->anchor (list-at it)
+                                    list-next it
+                                    Scope-new env
+
+                            syntax->datum (list-at topit)
+
+                    fn/cc expand-any (_ topit env)
+                        fn/cc expand-list-or-symbol (_ expr anchor)
+
+                            fn/cc expand-call-list (_)
+                                call
+                                    fn/cc (return outlist outenv)
+                                        return
+                                            list-cons
+                                                datum->quoted-syntax outlist anchor
+                                                list-next topit
+                                            \ outenv
+                                    expand expr env
+
+                            fn/cc expand-wildcard-list (_)
+                                call
+                                    fn/cc (_ default-handler)
+                                        branch (type== (typeof default-handler) Nothing)
+                                            fn/cc (_)
+                                                expand-call-list
+                                            fn/cc (_)
+                                                call
+                                                    fn/cc (_ result-list)
+                                                        branch (type== (typeof result-list) Nothing)
                                                             fn/cc (_)
                                                                 expand-call-list
                                                             fn/cc (_)
-                                                                expand result-list env
-                                            default-handler topit env
-                            Scope@ env (Symbol-new "#list")
+                                                                branch (list-empty? result-list)
+                                                                    fn/cc (_)
+                                                                        expand-call-list
+                                                                    fn/cc (_)
+                                                                        expand result-list env
+                                                    default-handler topit env
+                                    Scope@ env scope-list-wildcard-symbol
 
-                    fn/cc expand-macro-list (_ f topit env)
-                        call
-                            fn/cc (_ result-list result-env)
-                                branch (type== (typeof result-list) Nothing)
-                                    fn/cc (_)
-                                        expand-wildcard-list
-                                    fn/cc (_)
-                                        branch (list-empty? result-list)
-                                            fn/cc (return)
-                                                return result-list result-env
-                                            fn/cc (_)
-                                                expand result-list result-env
-
-                            f topit env
-
-                    fn/cc expand-list (return)
-                        branch
-                            list-empty? expr
-                            fn/cc (_)
-                                syntax-error anchor "expression is empty"
-                            fn/cc (_)
-                        call
-                            fn/cc (_ head)
+                            fn/cc expand-macro-list (_ f topit env)
                                 call
-                                    fn/cc (_ head-type)
-                                        branch (type== head-type Builtin)
+                                    fn/cc (_ result-list result-env)
+                                        branch (type== (typeof result-list) Nothing)
                                             fn/cc (_)
-                                                branch (Builtin== head fn/cc)
-                                                    fn/cc (_)
-                                                        return (expand-fn/cc topit env)
-                                                    fn/cc (_)
+                                                expand-wildcard-list
                                             fn/cc (_)
-                                                branch (type== head-type
-                                                    (Scope@ env (Symbol-new "Macro")))
+                                                branch (list-empty? result-list)
+                                                    fn/cc (return)
+                                                        return result-list result-env
                                                     fn/cc (_)
-                                                        return
-                                                            expand-macro-list
-                                                                bitcast Closure head
-                                                                \ topit env
+                                                        expand result-list result-env
+                                    f topit env
+
+                            fn/cc expand-list (return)
+                                branch
+                                    list-empty? expr
+                                    fn/cc (_)
+                                        syntax-error anchor "expression is empty"
+                                    fn/cc (_)
+                                call
+                                    fn/cc (_ head)
+                                        call
+                                            fn/cc (_ head-type)
+                                                branch (type== head-type Builtin)
                                                     fn/cc (_)
-                                        # expand-macro-list (macro->Label head)
-                                        expand-wildcard-list
+                                                        branch (Builtin== head fn/cc)
+                                                            fn/cc (_)
+                                                                return (expand-fn/cc topit env)
+                                                            fn/cc (_)
+                                                    fn/cc (_)
+                                                        branch (type== head-type Macro)
+                                                            fn/cc (_)
+                                                                return
+                                                                    expand-macro-list
+                                                                        bitcast Closure head
+                                                                        \ topit env
+                                                            fn/cc (_)
+                                                # expand-macro-list (macro->Label head)
+                                                expand-wildcard-list
 
-                                    typeof head
-                            call
-                                fn/cc (_ head)
-                                    branch (type== (typeof head) Symbol)
-                                        fn/cc (_)
-                                            Scope@ env head
-                                        fn/cc (_) head
-                                syntax->datum
-                                    list-at expr
+                                            typeof head
+                                    call
+                                        fn/cc (_ head)
+                                            branch (type== (typeof head) Symbol)
+                                                fn/cc (_)
+                                                    Scope@ env head
+                                                fn/cc (_) head
+                                        syntax->datum
+                                            list-at expr
 
-                    fn/cc expand-symbol (_ value value-exists?)
-                        branch value-exists?
-                            fn/cc (_)
-                                branch (type== (typeof value) list)
-                                    fn/cc (return)
-                                        # quote lists
-                                        return
-                                            list-cons
-                                                list-cons
-                                                    datum->quoted-syntax
-                                                        \ form-quote anchor
+                            fn/cc expand-symbol (_ value value-exists?)
+                                branch value-exists?
+                                    fn/cc (_)
+                                        branch (type== (typeof value) list)
+                                            fn/cc (return)
+                                                # quote lists
+                                                return
+                                                    list-cons
+                                                        list-cons
+                                                            datum->quoted-syntax
+                                                                \ form-quote anchor
+                                                            list-cons
+                                                                datum->quoted-syntax value anchor
+                                                                \ eol
+                                                        list-next topit
+                                                    \ env
+                                            fn/cc (return)
+                                                return
                                                     list-cons
                                                         datum->quoted-syntax value anchor
-                                                        \ eol
-                                                list-next topit
-                                            \ env
-                                    fn/cc (return)
-                                        return
-                                            list-cons
-                                                datum->quoted-syntax value anchor
-                                                list-next topit
-                                            \ env
-                            fn/cc (_)
-                                fn/cc missing-symbol-error (_)
-                                    syntax-error anchor
-                                        string-join "no value bound to name "
-                                            string-join (repr expr) " in scope"
-                                missing-symbol-error
+                                                        list-next topit
+                                                    \ env
+                                    fn/cc (_)
+                                        fn/cc missing-symbol-error (_)
+                                            syntax-error anchor
+                                                string-join "no value bound to name "
+                                                    string-join (repr expr) " in scope"
+                                        missing-symbol-error
 
-                    call
-                        fn/cc (_ expr-type)
-                            branch (type== expr-type list)
-                                \ expand-list
-                                fn/cc (_)
-                                    branch (type== expr-type Symbol)
+                            call
+                                fn/cc (_ expr-type)
+                                    branch (type== expr-type list)
+                                        \ expand-list
                                         fn/cc (_)
-                                            expand-symbol (Scope@ env expr)
-                                        fn/cc (return)
-                                            return topit env
-                        typeof expr
+                                            branch (type== expr-type Symbol)
+                                                fn/cc (_)
+                                                    expand-symbol (Scope@ env expr)
+                                                fn/cc (return)
+                                                    return topit env
+                                typeof expr
 
-                call
-                    fn/cc (_ expr)
-                        branch
-                            syntax-quoted? expr
-                            fn/cc (return)
-                                return topit env
-                            fn/cc (_)
-                                expand-list-or-symbol
-                                    syntax->datum expr
-                                    syntax->anchor expr
-                    list-at topit
-
-            branch (list-empty? topit)
-                fn/cc (return)
-                    return topit env
-                fn/cc (_)
-                    call
-                        fn/cc (_ nextlist nextscope)
-                            branch (list-empty? nextlist)
-                                fn/cc (return)
-                                    return nextlist nextscope
-                                fn/cc (_)
-                                    call
-                                        fn/cc (return restlist restscope)
-                                            return
-                                                list-cons (list-at nextlist) restlist
-                                                \ restscope
-                                        expand
-                                            list-next nextlist
-                                            \ nextscope
-                        expand-any topit env
-
-        fn/cc list-new (_ ...)
-            branch
-                i32== (va-countof ...) 0
-                fn/cc (_) eol
-                fn/cc (_)
-                    call
-                        fn/cc (_ at ...)
-                            list-cons at
-                                list-new ...
-                        \ ...
-
-        fn/cc none? (_ x)
-            type== (typeof x) Nothing
-
-        fn/cc syntax-quote (_ value)
-            datum->quoted-syntax
-                syntax->datum value
-                syntax->anchor value
-
-        fn/cc syntax-cons (_ at next)
-            call
-                fn/cc (_ anchor)
-                    datum->syntax
-                        list-cons
-                            branch (type== (typeof at) Syntax)
-                                fn/cc (_) at
-                                fn/cc (_)
-                                    datum->syntax at anchor
-                            syntax->datum next
-                        \ anchor
-                branch (type== (typeof at) Syntax)
-                    fn/cc (_)
-                        syntax->anchor at
-                    fn/cc (_)
-                        branch (type== (typeof next) Syntax)
-                            fn/cc (_)
-                                syntax->anchor next
-                            fn/cc (_)
-                                error "either argument must be a syntax object"
-
-        fn/cc syntax-list (_ ...)
-            fn/cc find-anchor (_ ...)
-                branch
-                    i32== (va-countof ...) 0
-                    fn/cc (_)
-                        error "no syntax object in argument list"
-                    fn/cc (_)
                         call
-                            fn/cc (_ at ...)
-                                branch (type== (typeof at) Syntax)
+                            fn/cc (_ expr)
+                                branch
+                                    syntax-quoted? expr
+                                    fn/cc (return)
+                                        return topit env
                                     fn/cc (_)
-                                        syntax->anchor at
+                                        expand-list-or-symbol
+                                            syntax->datum expr
+                                            syntax->anchor expr
+                            list-at topit
+
+                    branch (list-empty? topit)
+                        fn/cc (return)
+                            return topit env
+                        fn/cc (_)
+                            call
+                                fn/cc (_ nextlist nextscope)
+                                    branch (list-empty? nextlist)
+                                        fn/cc (return)
+                                            return nextlist nextscope
+                                        fn/cc (_)
+                                            call
+                                                fn/cc (return restlist restscope)
+                                                    return
+                                                        list-cons (list-at nextlist) restlist
+                                                        \ restscope
+                                                expand
+                                                    list-next nextlist
+                                                    \ nextscope
+                                expand-any topit env
+
+                fn/cc list-new (_ ...)
+                    branch
+                        i32== (va-countof ...) 0
+                        fn/cc (_) eol
+                        fn/cc (_)
+                            call
+                                fn/cc (_ at ...)
+                                    list-cons at
+                                        list-new ...
+                                \ ...
+
+                fn/cc none? (_ x)
+                    type== (typeof x) Nothing
+
+                fn/cc syntax-quote (_ value)
+                    datum->quoted-syntax
+                        syntax->datum value
+                        syntax->anchor value
+
+                fn/cc syntax-cons (_ at next)
+                    call
+                        fn/cc (_ anchor)
+                            datum->syntax
+                                list-cons
+                                    branch (type== (typeof at) Syntax)
+                                        fn/cc (_) at
+                                        fn/cc (_)
+                                            datum->syntax at anchor
+                                    syntax->datum next
+                                \ anchor
+                        branch (type== (typeof at) Syntax)
+                            fn/cc (_)
+                                syntax->anchor at
+                            fn/cc (_)
+                                branch (type== (typeof next) Syntax)
                                     fn/cc (_)
-                                        find-anchor ...
-                            \ ...
-            call
-                fn/cc (_ anchor)
-                    fn/cc build (_ ...)
+                                        syntax->anchor next
+                                    fn/cc (_)
+                                        error "either argument must be a syntax object"
+
+                fn/cc syntax-list (_ ...)
+                    fn/cc find-anchor (_ ...)
                         branch
                             i32== (va-countof ...) 0
-                            fn/cc (_) eol
+                            fn/cc (_)
+                                error "no syntax object in argument list"
                             fn/cc (_)
                                 call
                                     fn/cc (_ at ...)
-                                        list-cons
-                                            branch (type== (typeof at) Syntax)
-                                                fn/cc (_) at
-                                                fn/cc (_)
-                                                    datum->syntax at anchor
-                                            build ...
+                                        branch (type== (typeof at) Syntax)
+                                            fn/cc (_)
+                                                syntax->anchor at
+                                            fn/cc (_)
+                                                find-anchor ...
                                     \ ...
-                    datum->syntax
-                        build ...
-                        \ anchor
-                find-anchor ...
-
-        fn/cc list@ (_ x i)
-            branch (i32<= i 0)
-                fn/cc (_)
-                    list-at x
-                fn/cc (_)
-                    list@ (list-next x) (i32- i 1)
-
-        fn/cc va@ (_ i ...)
-            branch (i32<= i 0)
-                fn/cc (_) ...
-                fn/cc (_)
                     call
-                        fn/cc (_ at ...)
-                            va@ (i32- i 1) ...
-                        \ ...
+                        fn/cc (_ anchor)
+                            fn/cc build (_ ...)
+                                branch
+                                    i32== (va-countof ...) 0
+                                    fn/cc (_) eol
+                                    fn/cc (_)
+                                        call
+                                            fn/cc (_ at ...)
+                                                list-cons
+                                                    branch (type== (typeof at) Syntax)
+                                                        fn/cc (_) at
+                                                        fn/cc (_)
+                                                            datum->syntax at anchor
+                                                    build ...
+                                            \ ...
+                            datum->syntax
+                                build ...
+                                \ anchor
+                        find-anchor ...
 
-        fn/cc list-slice (_ value i0 i1)
-            call
-                fn/cc (_ i0 i1)
-                    fn/cc walk-i0 (_ l i)
-                        branch (i64< i i0)
+                fn/cc list@ (_ x i)
+                    branch (i32<= i 0)
+                        fn/cc (_)
+                            list-at x
+                        fn/cc (_)
+                            list@ (list-next x) (i32- i 1)
+
+                fn/cc va@ (_ i ...)
+                    branch (i32<= i 0)
+                        fn/cc (_) ...
+                        fn/cc (_)
+                            call
+                                fn/cc (_ at ...)
+                                    va@ (i32- i 1) ...
+                                \ ...
+
+                fn/cc list-slice (_ value i0 i1)
+                    call
+                        fn/cc (_ i0 i1)
+                            fn/cc walk-i0 (_ l i)
+                                branch (i64< i i0)
+                                    fn/cc (_)
+                                        walk-i0 (list-next l) (i64+ i (i64-new 1))
+                                    fn/cc (_) l
+                            call
+                                fn/cc (_ l)
+                                    call
+                                        fn/cc (_ count)
+                                            branch (i64== (i64- i1 i0) count)
+                                                fn/cc (_) l
+                                                fn/cc (_)
+                                                    # need to chop off tail, which requires creating a new list
+                                                    fn/cc walk-i1 (_ l i)
+                                                        branch (i64< i i1)
+                                                            fn/cc (_)
+                                                                list-cons
+                                                                    list-at l
+                                                                    walk-i1 (list-next l) (i64+ i (i64-new 1))
+                                                            fn/cc (_) eol
+                                                    walk-i1 l i0
+
+                                        branch (list-empty? l)
+                                            fn/cc (_) (i64-new 0)
+                                            fn/cc (_) (i64-new (list-countof l))
+                                walk-i0 value (i64-new 0)
+                        i64-new i0
+                        i64-new i1
+
+                fn/cc print (_ ...)
+                    fn/cc print-arg (_ at ...)
+                        branch (type== (typeof at) string)
                             fn/cc (_)
-                                walk-i0 (list-next l) (i64+ i (i64-new 1))
-                            fn/cc (_) l
-                    call
-                        fn/cc (_ l)
+                                io-write at
+                            fn/cc (_)
+                                io-write (repr at)
+                        branch
+                            i32== (va-countof ...) 0
+                            fn/cc (_)
+                                io-write "\n"
+                            fn/cc (_)
+                                io-write " "
+                                print-arg ...
+                    branch
+                        i32== (va-countof ...) 0
+                        fn/cc (_)
+                            io-write "\n"
+                        fn/cc (_)
+                            print-arg ...
+
+                # support for type attributes
+                call
+                    fn/cc (_ typemaps sym-apply-type)
+                        fn/cc get-typemap (_ type)
                             call
-                                fn/cc (_ count)
-                                    branch (i64== (i64- i1 i0) count)
-                                        fn/cc (_) l
-                                        fn/cc (_)
-                                            # need to chop off tail, which requires creating a new list
-                                            fn/cc walk-i1 (_ l i)
-                                                branch (i64< i i1)
-                                                    fn/cc (_)
-                                                        list-cons
-                                                            list-at l
-                                                            walk-i1 (list-next l) (i64+ i (i64-new 1))
-                                                    fn/cc (_) eol
-                                            walk-i1 l i0
+                                fn/cc (_ typename)
+                                    call
+                                        fn/cc (_ typemap succeeded)
+                                            branch succeeded
+                                                fn/cc (_) typemap
+                                                fn/cc (_)
+                                                    call
+                                                        fn/cc (_ typemap)
+                                                            set-scope-symbol! typemaps
+                                                                \ typename typemap
+                                                            \ typemap
+                                                        Scope-new
+                                        Scope@ typemaps typename
+                                type-name type
 
-                                branch (list-empty? l)
-                                    fn/cc (_) (i64-new 0)
-                                    fn/cc (_) (i64-new (list-countof l))
-                        walk-i0 value (i64-new 0)
-                i64-new i0
-                i64-new i1
-
-        fn/cc print (_ ...)
-            fn/cc print-arg (_ at ...)
-                branch (type== (typeof at) string)
-                    fn/cc (_)
-                        io-write at
-                    fn/cc (_)
-                        io-write (repr at)
-                branch
-                    i32== (va-countof ...) 0
-                    fn/cc (_)
-                        io-write "\n"
-                    fn/cc (_)
-                        io-write " "
-                        print-arg ...
-            branch
-                i32== (va-countof ...) 0
-                fn/cc (_)
-                    io-write "\n"
-                fn/cc (_)
-                    print-arg ...
-
-        # support for type attributes
-        call
-            fn/cc (_ typemaps sym-apply-type)
-                fn/cc get-typemap (_ type)
-                    call
-                        fn/cc (_ typename)
-                            call
-                                fn/cc (_ typemap succeeded)
-                                    branch succeeded
-                                        fn/cc (_) typemap
-                                        fn/cc (_)
-                                            call
-                                                fn/cc (_ typemap)
-                                                    set-scope-symbol! typemaps
-                                                        \ typename typemap
-                                                    \ typemap
-                                                Scope-new
-                                Scope@ typemaps typename
-                        type-name type
-
-                set-scope-symbol! env (Symbol-new "set-type-symbol!")
-                    fn/cc set-type-symbol! (_ type name value)
-                        call
-                            fn/cc (_ typemap)
-                                set-scope-symbol! typemap name value
-                            get-typemap type
-                set-scope-symbol! env (Symbol-new "type@")
-                    call
-                        fn/cc (_ super)
-                            fn/cc type@ (return typeref name)
+                        set-scope-symbol! env (Symbol-new "set-type-symbol!")
+                            fn/cc set-type-symbol! (_ type name value)
                                 call
                                     fn/cc (_ typemap)
+                                        set-scope-symbol! typemap name value
+                                    get-typemap type
+
+                        set-scope-symbol! env (Symbol-new "type@")
+                            call
+                                fn/cc (_ super)
+                                    fn/cc type@ (return typeref name)
                                         call
-                                            fn/cc (_ value ok)
-                                                branch ok
-                                                    fn/cc (_)
-                                                        return value true
-                                                    fn/cc (_)
+                                            fn/cc (_ typemap)
                                                 call
-                                                    fn/cc (_ supertype ok)
+                                                    fn/cc (_ value ok)
                                                         branch ok
                                                             fn/cc (_)
-                                                                type@ supertype name
-                                                            fn/cc (return)
-                                                                return none false
-                                                    Scope@ typemap super
-                                            Scope@ typemap name
-                                    get-typemap typeref
-                        Symbol-new "super"
+                                                                return value true
+                                                            fn/cc (_)
+                                                        call
+                                                            fn/cc (_ supertype ok)
+                                                                branch ok
+                                                                    fn/cc (_)
+                                                                        type@ supertype name
+                                                                    fn/cc (return)
+                                                                        return none false
+                                                            Scope@ typemap super
+                                                    Scope@ typemap name
+                                            get-typemap typeref
+                                Symbol-new "super"
 
-                fn/cc type@ (_ type name)
+                        call
+                            fn/cc (_ type@)
+                                fn/cc apply-error (_ anchor enter)
+                                    syntax-error anchor
+                                        string-join "don't know how to apply value of type "
+                                            repr (typeof enter)
+
+                                # make types callable
+                                set-global-apply-fallback!
+                                    fn/cc (_ anchor enter ...)
+                                        call
+                                            fn/cc (_ func success)
+                                                #print func enter
+                                                branch success
+                                                    fn/cc (_)
+                                                        func enter ...
+                                                    fn/cc (_)
+                                                        apply-error anchor enter
+                                            type@ (typeof enter) sym-apply-type
+                            Scope@ env (Symbol-new "type@")
+
+                    Scope-new
+                    Symbol-new "call"
+
+                fn/cc eval (_ expr env)
                     call
-                        Scope@ env (Symbol-new "type@")
-                        \ type name
+                        fn/cc (_ expr anchor)
+                            call
+                                fn/cc (_ expanded-expr)
+                                    translate anchor expanded-expr
+                                expand expr
+                                    branch (none? env)
+                                        fn/cc (_) (globals)
+                                        fn/cc (_) env
+                        branch (type== (typeof expr) Syntax)
+                            fn/cc (return)
+                                return
+                                    syntax->datum expr
+                                    syntax->anchor expr
+                            fn/cc (return)
+                                return expr (active-anchor)
 
-                fn/cc apply-error (_ anchor enter)
-                    syntax-error anchor
-                        string-join "don't know how to apply value of type "
-                            repr (typeof enter)
-
-                # make types callable
-                set-global-apply-fallback!
-                    fn/cc (return anchor enter ...)
-                        branch (type== (typeof enter) type)
-                            fn/cc (_)
-                                call
-                                    fn/cc (_ apply-type success)
-                                        branch success
-                                            fn/cc (_)
-                                                return
-                                                    apply-type ...
-                                            fn/cc (_)
-                                    type@ enter sym-apply-type
-                            fn/cc (_)
-                        apply-error anchor enter
-
-            Scope-new
-            Symbol-new "apply-type"
-
-        fn/cc eval (_ expr env)
-            call
-                fn/cc (_ expr anchor)
-                    call
-                        fn/cc (_ expanded-expr)
-                            translate anchor expanded-expr
-                        expand expr
-                            branch (none? env)
-                                fn/cc (_) (globals)
-                                fn/cc (_) env
-                branch (type== (typeof expr) Syntax)
-                    fn/cc (return)
-                        return
-                            syntax->datum expr
-                            syntax->anchor expr
-                    fn/cc (return)
-                        return expr (active-anchor)
-        call
-            fn/cc (_ Macro)
                 fn/cc block-scope-macro (_ f)
                     branch (type== (typeof f) Closure)
                         fn/cc (_)
@@ -622,71 +613,93 @@ syntax-apply-block
                             error "closure expected"
                     bitcast Macro f
                 set-scope-symbol! env (Symbol-new "block-scope-macro") block-scope-macro
-            Scope@ env (Symbol-new "Macro")
 
-        set-scope-symbol! env (Symbol-new "print") print
-        set-scope-symbol! env (Symbol-new "debug-stage")
-            fn/cc debug-stage (_)
-                io-write "."
-                io-flush
-        set-scope-symbol! env (Symbol-new "eval") eval
-        set-scope-symbol! env (Symbol-new "string==") string==
-        set-scope-symbol! env (Symbol-new "string<") string<
-        set-scope-symbol! env (Symbol-new "none?") none?
-        set-scope-symbol! env (Symbol-new "list-new") list-new
-        set-scope-symbol! env (Symbol-new "list-slice") list-slice
-        set-scope-symbol! env (Symbol-new "syntax-list") syntax-list
-        set-scope-symbol! env (Symbol-new "syntax-quote") syntax-quote
-        set-scope-symbol! env (Symbol-new "syntax-cons") syntax-cons
-        set-scope-symbol! env (Symbol-new "list@") list@
-        set-scope-symbol! env (Symbol-new "va@") va@
-        set-scope-symbol! env (Symbol-new "expand") expand
-        set-scope-symbol! env (Symbol-new "cons") list-cons
-        set-scope-symbol! env (Symbol-new "syntax-extend")
-            bitcast
-                Scope@ env (Symbol-new "Macro")
-                fn/cc expand-syntax-extend (_ topit env)
-                    call
-                        fn/cc (_ expr rest)
+                set-scope-symbol! env (Symbol-new "print") print
+                set-scope-symbol! env (Symbol-new "debug-stage")
+                    fn/cc debug-stage (_)
+                        io-write "."
+                        io-flush
+                set-scope-symbol! env (Symbol-new "eval") eval
+                set-scope-symbol! env (Symbol-new "string==") string==
+                set-scope-symbol! env (Symbol-new "string<") string<
+                set-scope-symbol! env (Symbol-new "none?") none?
+                set-scope-symbol! env (Symbol-new "list-new") list-new
+                set-scope-symbol! env (Symbol-new "list-slice") list-slice
+                set-scope-symbol! env (Symbol-new "syntax-list") syntax-list
+                set-scope-symbol! env (Symbol-new "syntax-quote") syntax-quote
+                set-scope-symbol! env (Symbol-new "syntax-cons") syntax-cons
+                set-scope-symbol! env (Symbol-new "list@") list@
+                set-scope-symbol! env (Symbol-new "va@") va@
+                set-scope-symbol! env (Symbol-new "expand") expand
+                set-scope-symbol! env (Symbol-new "cons") list-cons
+                set-scope-symbol! env (Symbol-new "syntax-extend")
+                    bitcast Macro
+                        fn/cc expand-syntax-extend (_ topit env)
                             call
-                                fn/cc (_ anchor body)
+                                fn/cc (_ expr rest)
                                     call
-                                        fn/cc (return expr)
-                                            return rest
-                                                call
-                                                    syntax->datum (list-at expr)
-                                                    \ env
-                                        expand
-                                            list-cons
-                                                datum->syntax
+                                        fn/cc (_ anchor body)
+                                            call
+                                                fn/cc (return expr)
+                                                    return rest
+                                                        call
+                                                            syntax->datum (list-at expr)
+                                                            \ env
+                                                expand
                                                     list-cons
-                                                        datum->syntax fn/cc anchor
-                                                        list-cons
-                                                            datum->syntax
-                                                                list-new # parameters
-                                                                    datum->syntax (Symbol-new "return") anchor
-                                                                    datum->syntax (Symbol-new "syntax-scope") anchor
-                                                                \ anchor
-                                                            \ body
-                                                    \ anchor
-                                                \ eol
-                                            \ env
-                                syntax->anchor expr
-                                list-next (syntax->datum expr)
-                        list-at topit
-                        list-next topit
+                                                        datum->syntax
+                                                            list-cons
+                                                                datum->syntax fn/cc anchor
+                                                                list-cons
+                                                                    datum->syntax
+                                                                        list-new # parameters
+                                                                            datum->syntax (Symbol-new "return") anchor
+                                                                            datum->syntax (Symbol-new "syntax-scope") anchor
+                                                                        \ anchor
+                                                                    \ body
+                                                            \ anchor
+                                                        \ eol
+                                                    \ env
+                                        syntax->anchor expr
+                                        list-next (syntax->datum expr)
+                                list-at topit
+                                list-next topit
 
-        # run rest of file through macro expansion
-        call
-            fn/cc (_ result)
+                # run rest of file through macro expansion
                 call
-                    translate anchor result
-            expand exprs env
+                    fn/cc (_ result)
+                        call
+                            translate anchor result
+                    expand exprs env
+            Scope@ env (Symbol-new "Macro") # Macro
+            Symbol-new "#list" # scope-list-wildcard-symbol
+            Scope@ env (Symbol-new "error") # error
+            Scope@ env (Symbol-new "syntax-error") # syntax-error
+            Scope@ env (Symbol-new "xpcall") # xpcall
 
 debug-stage
 
 syntax-extend
     debug-stage
+
+    call
+        fn/cc (_ sym-apply-type)
+            fn/cc apply-error (_ enter)
+                error
+                    string-join "don't know how to apply type "
+                        repr enter
+            set-type-symbol! type (Symbol-new "call")
+                fn/cc (return enter ...)
+                    call
+                        fn/cc (_ func success)
+                            branch success
+                                fn/cc (_)
+                                    return
+                                        func ...
+                                fn/cc (_)
+                                    apply-error enter
+                        type@ enter sym-apply-type
+        Symbol-new "apply-type"
 
     call
         fn/cc (_ super-key)
@@ -2407,14 +2420,14 @@ syntax-extend
                     make-iter x
 
     set-type-symbol! list (quote iter)
-        fn list-iter (self)
+        fn gen-list-iter (self)
             return countable-rslice-iter self
     set-type-symbol! Scope (quote iter)
-        fn scope-iter (self)
+        fn gen-scope-iter (self)
             return scope-iter
                 fn () (return self none)
     set-type-symbol! string (quote iter)
-        fn string-iter (self)
+        fn gen-string-iter (self)
             return countable-iter
                 fn () (return self (size_t 0))
     set-type-symbol! Label (quote iter)
@@ -3094,58 +3107,6 @@ syntax-extend
         else content
     set-scope-symbol! syntax-scope (quote require) find-module
     \ syntax-scope
-
-#-------------------------------------------------------------------------------
-# C INTERFACE
-#-------------------------------------------------------------------------------
-
-fn external-fn (name rtype argtypes...)
-    let f =
-        ffi-symbol name
-    fn empty ()
-    fn (...)
-        # validate arguments
-        loop-for n t in (zip-fill (va-iter ...) (va-iter argtypes...) none none)
-            assert (not (none? t))
-                .. "excess argument, "
-                    repr (va-countof argtypes...)
-                    \ " argument(s) required"
-            assert ((typeof n) == t)
-                .. "argument of type " (repr t) " expected, got " (repr (typeof n))
-            continue
-        ffi-call f rtype ...
-
-# (external <name> : <return-type> <- <arg> ...)
-define external
-    block-macro
-        fn expand-external (topexpr)
-            let expr = (@ topexpr 0)
-            let rest = (slice topexpr 1)
-            let expr = (slice expr 1)
-            let name = (@ expr 0)
-            if (not (symbol? (syntax->datum name)))
-                syntax-error name "symbol expected"
-            let expr = (slice expr 1)
-            if ((@ expr 0) != (quote :))
-                syntax-error (@ expr 0) "expected ':'"
-            let expr = (slice expr 1)
-            let rtype = (@ expr 0)
-            let expr = (slice expr 1)
-            if ((@ expr 0) != (quote <-))
-                syntax-error (@ expr 0) "expected '<-'"
-            let args = (slice expr 1)
-            cons
-                qquote-syntax
-                    {let} (unquote name) =
-                        {external-fn}
-                            unquote
-                                datum->syntax
-                                    string
-                                        syntax->datum name
-                                    \ name
-                            unquote rtype
-                            unquote-splice args
-                \ rest
 
 #-------------------------------------------------------------------------------
 # REPL

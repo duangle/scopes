@@ -571,7 +571,7 @@ namespace bangra {
     T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
     T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) T(FN_StyleToString) \
     T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
-    T(FN_AnchorSource) T(FN_ImportC) \
+    T(FN_AnchorSource) T(FN_ParseC) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -657,7 +657,7 @@ namespace bangra {
     T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
     T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
-    T(FN_ExternLibrary, "extern-library") T(FN_External, "external") \
+    T(FN_ExternLibrary, "extern-library") \
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
     T(FN_FrameEq, "Frame==") \
@@ -737,6 +737,16 @@ namespace bangra {
     T(SYM_InterpreterDir, "interpreter-dir") \
     T(SYM_InterpreterPath, "interpreter-path") \
     T(SYM_InterpreterTimestamp, "interpreter-timestamp") \
+    \
+    /* parse-c keywords */ \
+    T(SYM_Struct, "struct") \
+    T(SYM_Union, "union") \
+    T(SYM_TypeDef, "typedef") \
+    T(SYM_Enum, "enum") \
+    T(SYM_Array, "array") \
+    T(SYM_Vector, "vector") \
+    T(SYM_FNType, "fntype") \
+    T(SYM_External, "external") \
     \
     /* styles */ \
     T(Style_None, "style-none") \
@@ -3551,8 +3561,7 @@ public:
             return Anchor::from(sf, PLoc.getLine(), PLoc.getColumn(), 0);
         }
 
-        assert(false);
-        return nullptr;
+        return get_active_anchor();
     }
 
     void SetContext(clang::ASTContext * ctx, const List **_dest) {
@@ -3588,11 +3597,7 @@ public:
             const Anchor *anchor = anchorFromLocation(it->getSourceRange().getBegin());
             // todo: work offset into structure
             result = List::from(
-                Syntax::from(anchor,
-                    List::from({
-                        Syntax::from(anchor, name),
-                        Syntax::from(anchor, fieldtype),
-                        Syntax::from(anchor, offset) })),
+                List::from({name, fieldtype, anchor, offset}),
                 result);
         }
 
@@ -3614,9 +3619,7 @@ public:
 
         const Anchor *anchor = anchorFromLocation(
             rd->getSourceRange().getBegin());
-        Any head = Syntax::from(anchor,
-            rd->isUnion()?Symbol("union"):Symbol("struct"));
-        Any sxname = Syntax::from(anchor, name);
+        Any head = rd->isUnion()?Symbol(SYM_Union):Symbol(SYM_Struct);
 
         clang::RecordDecl * defn = rd->getDefinition();
         if (defn && !record_defined[rd]) {
@@ -3629,17 +3632,11 @@ public:
             auto size = (size_t)rl.getSize().getQuantity();
 
             *dest = List::from(
-                Syntax::from(anchor,
-                    List::from({
-                        head,
-                        sxname,
-                        Syntax::from(anchor, fields),
-                        Syntax::from(anchor, size),
-                        Syntax::from(anchor, align) })),
+                List::from({head, name, fields, anchor, size, align}),
                 *dest);
         }
 
-        return List::from({head, sxname});
+        return List::from({head, name});
     }
 
     Any TranslateEnum(clang::EnumDecl *ed) {
@@ -3651,8 +3648,7 @@ public:
         const Anchor *anchor = anchorFromLocation(
             ed->getIntegerTypeRange().getBegin());
 
-        Any head = Syntax::from(anchor, Symbol("enum"));
-        Any sxname = Syntax::from(anchor, name);
+        Any head = Symbol(SYM_Enum);
 
         clang::EnumDecl * defn = ed->getDefinition();
         if (defn && !enum_defined[ed]) {
@@ -3670,25 +3666,20 @@ public:
                 auto value = val.getExtValue();
 
                 fields = List::from(
-                    Syntax::from(anchor,
                         List::from({
-                            Syntax::from(anchor,
-                                Symbol(String::from_stdstring(name))),
-                            Syntax::from(anchor, value) })),
+                            Symbol(String::from_stdstring(name)),
+                            value, anchor }),
                     fields);
             }
 
             *dest = List::from(
-                Syntax::from(anchor,
                     List::from({
-                        head,
-                        sxname,
-                        Syntax::from(anchor, tag_type),
-                        Syntax::from(anchor, reverse_list_inplace(fields)) })),
+                        head, name,
+                        tag_type, anchor, reverse_list_inplace(fields) }),
                 *dest);
         }
 
-        return List::from({head, sxname});
+        return List::from({head, name});
     }
 
     Any TranslateType(clang::QualType T) {
@@ -3709,11 +3700,8 @@ public:
         case clang::Type::Typedef: {
             const TypedefType *tt = dyn_cast<TypedefType>(Ty);
             TypedefNameDecl * td = tt->getDecl();
-            const Anchor *anchor = anchorFromLocation(td->getSourceRange().getBegin());
-            return List::from({
-                Syntax::from(anchor, Symbol("typedef")),
-                Syntax::from(anchor, Symbol(String::from_stdstring(td->getName().data())))
-                });
+            return List::from({ Symbol(SYM_TypeDef),
+                Symbol(String::from_stdstring(td->getName().data()))});
         } break;
         case clang::Type::Record: {
             const RecordType *RT = dyn_cast<RecordType>(Ty);
@@ -3789,11 +3777,7 @@ public:
             const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
             Any pointee = TranslateType(ETy);
-            const Anchor *anchor = get_active_anchor();
-            return List::from({
-                Syntax::from(anchor, Symbol("pointer")),
-                Syntax::from(anchor, pointee)
-                });
+            return List::from({ Symbol(OP_Mul), pointee });
         } break;
         case clang::Type::VariableArray:
         case clang::Type::IncompleteArray:
@@ -3802,22 +3786,14 @@ public:
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
             Any at = TranslateType(ATy->getElementType());
             uint64_t sz = ATy->getSize().getZExtValue();
-            const Anchor *anchor = get_active_anchor();
-            return List::from({
-                Syntax::from(anchor, Symbol("array")),
-                Syntax::from(anchor, at),
-                Syntax::from(anchor, sz)});
+            return List::from({ Symbol(SYM_Array), at, sz });
         } break;
         case clang::Type::ExtVector:
         case clang::Type::Vector: {
             const clang::VectorType *VT = cast<clang::VectorType>(T);
             Any at = TranslateType(VT->getElementType());
             uint64_t n = VT->getNumElements();
-            const Anchor *anchor = get_active_anchor();
-            return List::from({
-                Syntax::from(anchor, Symbol("vector")),
-                Syntax::from(anchor, at),
-                Syntax::from(anchor, n)});
+            return List::from({ Symbol(SYM_Vector), at, n });
         } break;
         case clang::Type::FunctionNoProto:
         case clang::Type::FunctionProto: {
@@ -3841,27 +3817,22 @@ public:
 
     Any TranslateFuncType(const clang::FunctionType * f) {
 
-        const Anchor *anchor = get_active_anchor();
-
         clang::QualType RT = f->getReturnType();
 
         Any returntype = TranslateType(RT);
 
         bool vararg = false;
 
-        const List *result = List::from(
-            Syntax::from(anchor, Symbol("fntype")), EOL);
-        result = List::from(Syntax::from(anchor, vararg), result);
-        result = List::from(Syntax::from(anchor, returntype), result);
+        const List *result = List::from( Symbol(SYM_FNType), EOL);
+        result = List::from(vararg, result);
+        result = List::from(returntype, result);
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
         if(proto) {
             vararg = proto->isVariadic();
             for(size_t i = 0; i < proto->getNumParams(); i++) {
                 clang::QualType PT = proto->getParamType(i);
                 Any paramtype = TranslateType(PT);
-                result = List::from(
-                    Syntax::from(anchor, paramtype),
-                    result);
+                result = List::from(paramtype, result);
             }
         }
 
@@ -3871,12 +3842,7 @@ public:
     void exportExternal(Symbol name, Any type,
         const Anchor *anchor) {
         *dest = List::from(
-            Syntax::from(anchor,
-                List::from({
-                    Syntax::from(anchor, Symbol("external")),
-                    Syntax::from(anchor, name),
-                    Syntax::from(anchor, type)})),
-            *dest);
+                List::from({ Symbol(SYM_External), name, type }), *dest);
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
@@ -3913,11 +3879,9 @@ public:
         Any type = TranslateType(td->getUnderlyingType());
 
         *dest = List::from(
-            Syntax::from(anchor,
-                List::from({
-                    Syntax::from(anchor, Symbol("typedef")),
-                    Syntax::from(anchor, Symbol(String::from_stdstring(td->getName().data()))),
-                    Syntax::from(anchor, type)})),
+            List::from({ Symbol(SYM_TypeDef),
+                Symbol(String::from_stdstring(td->getName().data())),
+                type, anchor}),
             *dest);
 
         return true;
@@ -4163,12 +4127,9 @@ static ffi_type *create_ffi_type(Type type) {
     case TYPE_U64: return &ffi_type_uint64;
     case TYPE_R32: return &ffi_type_float;
     case TYPE_R64: return &ffi_type_double;
-    case TYPE_Pointer: return &ffi_type_pointer;
-    default: {
-        StyledString ss;
-        ss.out << "can not translate value of type " << type << " to C type";
-        location_error(ss.str());
-    } break;
+    case TYPE_Pointer:
+    default:
+        return &ffi_type_pointer;
     }
     return nullptr;
 }
@@ -4206,8 +4167,8 @@ static void run_ffi_function(Instruction &in, Instruction &out) {
         case TYPE_I64: case TYPE_U64: avalues[i] = (void *)&arg.i64; break;
         case TYPE_R32: avalues[i] = (void *)&arg.r32; break;
         case TYPE_R64: avalues[i] = (void *)&arg.r64; break;
-        case TYPE_Pointer: avalues[i] = (void *)&arg.pointer; break;
-        default: break;
+        case TYPE_Pointer:
+        default: avalues[i] = (void *)&arg.pointer; break;
         }
     }
     auto prep_result = ffi_prep_cif(
@@ -4381,6 +4342,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         CHECKARGS(1, 1);
         StyledStream ss(std::cout);
         stream_expr(ss, in.args[1], StreamExprFormat());
+        RETARGS(in.args[1]);
     } break;
     case FN_Exit: return false;
 #define UNOP_CASE(NAME, TYPE, MEMBER, OP) \
@@ -4476,7 +4438,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         CHECKARGS(0, 0);
         RETARGS(globals);
     } break;
-    case FN_ImportC: {
+    case FN_ParseC: {
         int count = CHECKARGS(2, -1);
         const String *path = in.args[1];
         const String *buffer = in.args[2];
@@ -4674,7 +4636,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     } break;
     case FN_ScopeNextSymbol: {
         CHECKARGS(2,2);
-        Scope *scope = in.args[2];
+        Scope *scope = in.args[1];
         switch(in.args[2].type.value()) {
         case TYPE_Nothing: {
             auto it = scope->map.begin();
@@ -4775,8 +4737,18 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     } break;
     case FN_SymbolNew: {
         CHECKARGS(1, 1);
-        const String *str = in.args[1];
-        RETARGS(Symbol(str));
+        switch(in.args[1].type.value()) {
+        case TYPE_String: {
+            const String *str = in.args[1];
+            RETARGS(Symbol(str));
+        } break;
+        case TYPE_Type: {
+            RETARGS(in.args[1].typeref.name());
+        } break;
+        default:
+            location_error(String::from("string or type expected"));
+            break;
+        }
     } break;
     case FN_SymbolEq: {
         CHECKARGS(2, 2);
