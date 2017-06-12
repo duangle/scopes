@@ -571,7 +571,8 @@ namespace bangra {
     T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
     T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) T(FN_StyleToString) \
     T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
-    T(FN_AnchorSource) T(FN_ParseC) \
+    T(FN_AnchorSource) T(FN_ParseC) T(FN_Load) T(FN_Store) T(FN_MemCpy) \
+    T(FN_Malloc) T(FN_Free) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -597,7 +598,6 @@ namespace bangra {
     T(TYPE_U32, "u32") \
     T(TYPE_U64, "u64") \
     \
-    T(TYPE_SizeT, "size_t") \
     T(TYPE_Pointer, "pointer") \
     \
     T(TYPE_R16, "r16") \
@@ -618,6 +618,8 @@ namespace bangra {
     \
     T(TYPE_Closure, "Closure") \
     T(TYPE_Frame, "Frame") \
+    \
+    T(TYPE_SizeT, "size_t") \
     \
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
@@ -660,7 +662,7 @@ namespace bangra {
     T(FN_ExternLibrary, "extern-library") \
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
-    T(FN_FrameEq, "Frame==") \
+    T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
@@ -676,7 +678,10 @@ namespace bangra {
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
-    T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") T(FN_IsNone, "none?") \
+    T(FN_Malloc, "malloc") \
+    T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") \
+    T(FN_MemCpy, "memcpy") \
+    T(FN_IsNone, "none?") \
     T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
     T(FN_ParameterEq, "Parameter==") \
     T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
@@ -689,7 +694,8 @@ namespace bangra {
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeEq, "Scope==") \
     T(FN_ScopeNew, "Scope-new") T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
-    T(FN_Slice, "slice") T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
+    T(FN_Slice, "slice") T(FN_Store, "store") \
+    T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
     T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
     T(FN_StructOf, "structof") \
@@ -1587,6 +1593,7 @@ public:
         case TYPE_Builtin:
         case TYPE_Symbol: return sizeof(uint64_t);
 
+        case TYPE_Pointer:
         case TYPE_String:
         case TYPE_Syntax:
         case TYPE_Anchor:
@@ -1680,6 +1687,7 @@ struct Any {
         uint16_t u16;
         uint32_t u32;
         uint64_t u64;
+        size_t sizeval;
         float r32;
         double r64;
         Type typeref;
@@ -1758,6 +1766,32 @@ struct Any {
             case TYPE_Frame: return dest(frame);
             case TYPE_Closure: return dest(closure);
             default: return dest(pointer);
+        }
+    }
+
+    size_t bytesize() const {
+        return type.bytesize();
+    }
+
+    void *getaddr() {
+        switch(type.value()) {
+            case TYPE_Nothing: return nullptr;
+            case TYPE_Symbol:
+            case TYPE_Builtin:
+            case TYPE_Type: return (void *)&symbol;
+            case TYPE_Bool: return (void *)&i1;
+            case TYPE_U8:
+            case TYPE_I8: return (void *)&i8;
+            case TYPE_U16:
+            case TYPE_I16: return (void *)&i16;
+            case TYPE_U32:
+            case TYPE_I32: return (void *)&i32;
+            case TYPE_U64:
+            case TYPE_I64: return (void *)&i64;
+            case TYPE_R32: return (void *)&r32;
+            case TYPE_R64: return (void *)&r64;
+            default:
+                return (void *)&pointer;
         }
     }
 
@@ -4344,7 +4378,8 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         stream_expr(ss, in.args[1], StreamExprFormat());
         RETARGS(in.args[1]);
     } break;
-    case FN_Exit: return false;
+    case FN_Exit:
+        return false;
 #define UNOP_CASE(NAME, TYPE, MEMBER, OP) \
     case NAME: { \
         CHECKARGS(1, 1); \
@@ -4434,21 +4469,14 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         stream_frame(ss.out, frame, StreamFrameFormat());
         RETARGS(ss.str());
     } break;
+    case FN_Free: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_Pointer>();
+        free(in.args[1].pointer);
+    } break;
     case KW_Globals: {
         CHECKARGS(0, 0);
         RETARGS(globals);
-    } break;
-    case FN_ParseC: {
-        int count = CHECKARGS(2, -1);
-        const String *path = in.args[1];
-        const String *buffer = in.args[2];
-        std::vector<std::string> args;
-        for (int i = 3; i <= count; ++i) {
-            const String *arg = in.args[i];
-            args.push_back(arg->data);
-        }
-        const List *result = import_c_module(path->data, args, buffer->data);
-        RETARGS(result);
     } break;
     case FN_InterpreterVersion: {
         CHECKARGS(0, 0);
@@ -4537,6 +4565,29 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         const List *a = in.args[1];
         RETARGS((a == EOL)?EOL:a->next);
     } break;
+    case FN_Load: {
+        CHECKARGS(2, 2);
+        in.args[1].verify<TYPE_Type>();
+        in.args[2].verify<TYPE_Pointer>();
+        Any dest = none;
+        dest.type = in.args[1].typeref;
+        void *dst = dest.getaddr();
+        void *src = in.args[2].pointer;
+        size_t sz = in.args[1].typeref.bytesize();
+        memcpy(dst, src, sz);
+    } break;
+    case FN_Malloc: {
+        CHECKARGS(1, 1);
+        in.args[1].verify<TYPE_U64>();
+        RETARGS(Any::from_pointer(malloc(in.args[1].sizeval)));
+    } break;
+    case FN_MemCpy: {
+        CHECKARGS(3, 3);
+        in.args[1].verify<TYPE_Pointer>();
+        in.args[2].verify<TYPE_Pointer>();
+        in.args[3].verify<TYPE_U64>();
+        memcpy(in.args[1].pointer, in.args[2].pointer, in.args[3].sizeval);
+    } break;
     case OP_Not: {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_Bool>();
@@ -4572,10 +4623,17 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         ss.out << in.args[1].symbol.known_value();
         RETARGS(ss.str());
     } break;
-    case FN_Write: {
-        CHECKARGS(1, 1);
-        const String *s = in.args[1];
-        std::cout << s->data;
+    case FN_ParseC: {
+        int count = CHECKARGS(2, -1);
+        const String *path = in.args[1];
+        const String *buffer = in.args[2];
+        std::vector<std::string> args;
+        for (int i = 3; i <= count; ++i) {
+            const String *arg = in.args[i];
+            args.push_back(arg->data);
+        }
+        const List *result = import_c_module(path->data, args, buffer->data);
+        RETARGS(result);
     } break;
     case FN_Prompt: {
         switch(CHECKARGS(1, 2)) {
@@ -4676,6 +4734,14 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         Scope *scope = in.args[1];
         in.args[2].verify<TYPE_Symbol>();
         scope->bind(in.args[2].symbol, in.args[3]);
+    } break;
+    case FN_Store: {
+        CHECKARGS(2, 2);
+        in.args[1].verify<TYPE_Pointer>();
+        size_t sz = in.args[2].bytesize();
+        void *dst = in.args[1].pointer;
+        void *src = in.args[2].getaddr();
+        memcpy(dst, src, sz);
     } break;
     case FN_StringCmp: {
         CHECKARGS(2, 2);
@@ -4811,6 +4877,11 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     } break;
     case FN_VaCountOf: {
         RETARGS(CHECKARGS(0, -1));
+    } break;
+    case FN_Write: {
+        CHECKARGS(1, 1);
+        const String *s = in.args[1];
+        std::cout << s->data;
     } break;
     default: {
         StyledString ss;

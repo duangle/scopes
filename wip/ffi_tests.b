@@ -16,14 +16,132 @@ fn unpack-list (values)
         return (list-at values)
             unpack-list (list-next values)
 
+fn align (offset align)
+    & (offset + align - (u64 1))
+        ~ (align - (u64 1))
+
+define stacktype
+    type (quote stacktype)
+
 define array
-    type (quote array)
+    let T =
+        type (quote array)
+    set-type-symbol! T (quote super) stacktype
+    \ T
+
+define arrayof
+    fn (atype ...)
+        let count =
+            va-countof ...
+        let T =
+            array atype count
+        let ET = T.element
+        let ptr =
+            bitcast size_t
+                malloc (sizeof T)
+        let stride = T.stride
+        if (ET <: stacktype)
+            print "stacktype!"
+            let sz =
+                sizeof ET
+            # memory is at pointer address
+            loop-for i k in (enumerate (va-iter ...))
+                memcpy
+                    bitcast pointer
+                        ptr + stride * (u64 i)
+                    bitcast pointer k
+                    \ sz
+                continue
+        else
+            loop-for i k in (enumerate (va-iter ...))
+                store
+                    bitcast pointer
+                        ptr + stride * (u64 i)
+                    \ k
+                continue
+
 define struct
-    type (quote struct)
+    let T =
+        type (quote struct)
+    set-type-symbol! T (quote super) stacktype
+    \ T
+
 define union
-    type (quote union)
+    let T =
+        type (quote union)
+    set-type-symbol! T (quote super) stacktype
+    \ T
 define cfunction
     type (quote cfunction)
+define null
+    bitcast pointer (size_t 0)
+
+syntax-extend
+    fn config-numtype (ty)
+        let sz = (type-sizeof ty)
+        set-type-symbol! ty (quote size) sz
+        set-type-symbol! ty (quote alignment) sz
+
+    config-numtype i8
+    config-numtype i16
+    config-numtype i32
+    config-numtype i64
+
+    config-numtype u8
+    config-numtype u16
+    config-numtype u32
+    config-numtype u64
+
+    config-numtype r32
+    config-numtype r64
+
+    config-numtype pointer
+
+    set-type-symbol! pointer (quote apply-type)
+        fn (ET)
+            assert (type? ET)
+            let T =
+                type
+                    Symbol
+                        .. "&" (string (Symbol ET))
+            if (none? (type@ T (quote super)))
+                set-type-symbol! T (quote super) pointer
+                set-type-symbol! T (quote element) ET
+            \ T
+
+    set-type-symbol! array (quote apply-type)
+        fn (ET size)
+            let size = (u64 size)
+            let T =
+                type
+                    Symbol
+                        .. "[" (string (Symbol ET)) " x " (string size) "]"
+            let stride =
+                align
+                    sizeof ET
+                    alignof ET
+
+            if (none? (type@ T (quote super)))
+                set-type-symbol! T (quote super) array
+                set-type-symbol! T (quote element) ET
+                set-type-symbol! T (quote alignment) (alignof ET)
+                set-type-symbol! T (quote stride) stride
+                set-type-symbol! T (quote count) size
+                set-type-symbol! T (quote size) (stride * size)
+            \ T
+
+    \ syntax-scope
+
+define rawstring
+    let rawstring = (pointer i8)
+    set-type-symbol! rawstring (quote apply-type)
+        fn (s)
+            assert ((typeof s) == string)
+            let s = (bitcast u64 s)
+            let s = s + (u64 8)
+            bitcast rawstring s
+
+    \ rawstring
 
 fn parse-c-defs (defs)
     let env = (Scope)
@@ -148,31 +266,14 @@ fn parse-c-defs (defs)
 
     set-scope-symbol! handlers (quote *)
         fn handle-pointer (type-expr)
-            let ET =
+            pointer
                 parse type-expr
-            assert (type? ET)
-            let T =
-                type
-                    Symbol
-                        .. "&" (string (Symbol ET))
-            if (none? (type@ T (quote super)))
-                set-type-symbol! T (quote super) pointer
-                set-type-symbol! T (quote element) ET
-            \ T
 
     set-scope-symbol! handlers (quote array)
         fn handle-array (type-expr size)
-            let ET =
+            array
                 parse type-expr
-            let T =
-                type
-                    Symbol
-                        .. "[" (string (Symbol ET)) " x " (string size) "]"
-            if (none? (type@ T (quote super)))
-                set-type-symbol! T (quote super) array
-                set-type-symbol! T (quote element) ET
-                set-type-symbol! T (quote size) size
-            \ T
+                \ size
 
     set-scope-symbol! handlers (quote typedef)
         fn handle-typedef (name type-expr anchor)
@@ -192,20 +293,62 @@ fn parse-c-defs (defs)
 
     \ env
 
-let llvm-defs =
-    parse-c "llvm-import.c" "
-        #include <llvm-c/Core.h>
-        #include <llvm-c/ExecutionEngine.h>
-        "
-        \ "-I" (.. interpreter-dir "/clang/include")
-        \ "-I" (.. interpreter-dir "/clang/lib/clang/3.9.1/include")
+syntax-extend
+    let llvm-defs =
+        parse-c "llvm-import.c" "
+            #include <llvm-c/Core.h>
+            #include <llvm-c/ExecutionEngine.h>
+            #include <stdlib.h>
+            "
+            \ "-I" (.. interpreter-dir "/clang/include")
+            \ "-I" (.. interpreter-dir "/clang/lib/clang/3.9.1/include")
 
-let llvm =
-    parse-c-defs llvm-defs
+    let llvm =
+        parse-c-defs llvm-defs
+    set-scope-symbol! syntax-scope (quote malloc) llvm.malloc
+    loop-for k v in llvm
+        if ((slice (string k) 0 4) == "LLVM")
+            set-scope-symbol! syntax-scope k v
+        continue
 
-#loop-for k v in llvm
-    print k v
-    continue
+    \ syntax-scope
 
-print
-    (llvm.LLVMInt32Type)
+
+do
+    let
+        LLVMFalse = 0
+        LLVMTrue = 1
+    #LLVMDumpType
+        LLVMInt32Type;
+
+
+
+    let builder = (LLVMCreateBuilder)
+    let module = (LLVMModuleCreateWithName (rawstring "testmodule"))
+    let functype = (LLVMFunctionType
+            (LLVMInt32Type) (bitcast (pointer LLVMTypeRef) null) (u32 0) LLVMFalse)
+    let func = (LLVMAddFunction module (rawstring "testfunc") functype)
+    let bb = (LLVMAppendBasicBlock func (rawstring "entry"))
+    LLVMPositionBuilderAtEnd builder bb
+    LLVMBuildRet builder (LLVMConstInt (LLVMInt32Type) (u64 303) LLVMFalse)
+    LLVMDumpValue func
+    # outputs:
+    # define i32 @testfunc() {
+    #   ret i32 303
+    # }
+    print
+        arrayof
+            array int 4
+            arrayof int 1 2 3 4
+            arrayof int 5 6 7 8
+            arrayof int 9 10 11 12
+    print "yup"
+ #
+    let ee1 = (arrayof LLVMExecutionEngineRef (bitcast LLVMExecutionEngineRef null))
+    let errormsg1 = (arrayof rawstring (bitcast rawstring null))
+    if ((LLVMCreateJITCompilerForModule ee1 module (uint 0) errormsg1) == LLVMTrue)
+        error (string (@ errormsg1 0))
+    let ee = (@ ee1 0)
+    let fptr = (bitcast (pointer (cfunction int32 (tuple) false))
+            (LLVMGetPointerToGlobal ee func))
+    assert ((fptr) == 303)

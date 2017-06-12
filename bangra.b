@@ -708,7 +708,10 @@ syntax-extend
                     fn/cc (_ sa success)
                         branch success
                             fn/cc (_)
-                                type== sa b
+                                branch (type== sa b)
+                                    fn/cc (_) true
+                                    fn/cc (_)
+                                        type< sa b
                             fn/cc (_) false
                     type@ a super-key
             set-scope-symbol! syntax-scope (Symbol-new "type<") type<
@@ -1315,14 +1318,6 @@ syntax-extend
             return
                 not (> (countof x) (size_t 0))
     set-scope-symbol! syntax-scope
-        quote load
-        fn/cc "load" (return path)
-            return
-                eval
-                    list-load path
-                    globals
-                    \ path
-    set-scope-symbol! syntax-scope
         quote macro
         fn/cc "macro" (return f)
             return
@@ -1634,8 +1629,9 @@ define alignof
     let sym = (Symbol "alignment")
     fn/cc "alignof" (return x)
         assert (type? x) "type expected"
-        return
+        let size =
             @ x sym
+        ? (none? size) (size_t 1) size
 
 define ::@
     block-macro
