@@ -184,6 +184,8 @@ WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_BINOPS, DEF_BINOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_ARITHMETIC_UNOPS, DEF_UNOP_FUNC)
 WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, DEF_SHIFTOP_FUNC)
 
+void bangra_FN_Write(const char *);
+
 #if defined __cplusplus
 }
 #endif
@@ -221,6 +223,7 @@ WALK_INTEGER_TYPES(WALK_INTEGER_SHIFTOPS, DEF_SHIFTOP_FUNC)
 
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
+#include <llvm-c/Analysis.h>
 
 #include "llvm/IR/Module.h"
 
@@ -1616,7 +1619,7 @@ public:
 
     StyledStream& stream(StyledStream& ost) const {
         ost << Style_Type;
-        name().name()->stream(ost, "");
+        ost << name().name()->data;
         ost << Style_None;
         return ost;
     }
@@ -3116,7 +3119,9 @@ public:
                 Label *live_label = kv.first;
                 if (!visited.count(live_label)) {
                     visited.insert(live_label);
-                    tempscope.push_back(live_label);
+                    if (reachable.count(live_label)) {
+                        tempscope.push_back(live_label);
+                    }
                 }
             }
         }
@@ -3305,96 +3310,10 @@ static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
 }
 
 //------------------------------------------------------------------------------
-// FRAME PRINTER
-//------------------------------------------------------------------------------
-
-struct StreamFrameFormat {
-};
-
-struct StreamFrame : StreamAnchors {
-    StreamFrameFormat fmt;
-
-    StreamFrame(StyledStream &_ss, const StreamFrameFormat &_fmt) :
-        StreamAnchors(_ss), fmt(_fmt) {
-    }
-
-    const Frame *find_return_frame(const Frame *frame) {
-        while (frame) {
-            if (!frame->args.empty()) {
-                Any cont = frame->args[0];
-                if (cont.type == TYPE_Closure) {
-                    return cont.closure->frame;
-                }
-            }
-            frame = frame->parent;
-        }
-        return nullptr;
-    }
-
-    Symbol get_good_frame_name(const Frame *frame) {
-        while (frame) {
-            Symbol name = frame->label->name;
-            if (name != SYM_Unnamed)
-                return name;
-            frame = frame->parent;
-        }
-        return SYM_Unnamed;
-    }
-
-    void stream(const Frame *frame) {
-
-        if (!frame) return;
-
-        std::deque<const Frame *> frames = { frame };
-        Symbol lastname = get_good_frame_name(frame);
-        while (frame) {
-            const Frame *nextframe = find_return_frame(frame);
-            if (nextframe) {
-                auto name = get_good_frame_name(nextframe);
-                if (name != lastname) {
-                    frames.push_front(nextframe);
-                    lastname = name;
-                }
-            }
-            frame = nextframe;
-        }
-
-        size_t count = frames.size();
-        for (size_t i = 0; i < count; ++i) {
-            const Frame *frame = frames[i];
-
-            if ((i < 5) || (i >= (count - 5))) {
-                Label *label = frame->label;
-                const Anchor *anchor = label->body.anchor;
-
-                ss << anchor;
-                ss << " [" << "#" << (i + 1) << "] ";
-                Symbol name = get_good_frame_name(frame);
-                if (name == SYM_Unnamed) {
-                    ss << "in anonymous function";
-                } else {
-                    ss << "in function '" << name.name()->data << "'";
-                }
-                ss << std::endl;
-                anchor->stream_source_line(ss);
-            } else if (i == 5) {
-                ss << "..." << std::endl;
-            }
-        }
-    }
-};
-
-static void stream_frame(
-    StyledStream &_ss, const Frame *frame, StreamFrameFormat _fmt) {
-    StreamFrame streamer(_ss, _fmt);
-    streamer.stream(frame);
-}
-
-//------------------------------------------------------------------------------
 // IL PRINTER
 //------------------------------------------------------------------------------
 
-struct StreamILFormat {
+struct StreamLabelFormat {
     enum Tagging {
         All,
         Line,
@@ -3406,41 +3325,41 @@ struct StreamILFormat {
     Tagging follow;
     bool show_users;
 
-    StreamILFormat() :
+    StreamLabelFormat() :
         anchors(None),
         follow(All),
         show_users(false)
         {}
 
-    static StreamILFormat debug_scope() {
-        StreamILFormat fmt;
+    static StreamLabelFormat debug_scope() {
+        StreamLabelFormat fmt;
         fmt.follow = Scope;
         fmt.show_users = true;
         return fmt;
     }
 
-    static StreamILFormat debug_single() {
-        StreamILFormat fmt;
+    static StreamLabelFormat debug_single() {
+        StreamLabelFormat fmt;
         fmt.follow = None;
         fmt.show_users = true;
         return fmt;
     }
 };
 
-struct StreamIL : StreamAnchors {
-    StreamILFormat fmt;
+struct StreamLabel : StreamAnchors {
+    StreamLabelFormat fmt;
     bool line_anchors;
     bool atom_anchors;
     bool follow_labels;
     bool follow_scope;
     std::unordered_set<Label *> visited;
 
-    StreamIL(StyledStream &_ss, const StreamILFormat &_fmt) :
+    StreamLabel(StyledStream &_ss, const StreamLabelFormat &_fmt) :
         StreamAnchors(_ss), fmt(_fmt) {
-        line_anchors = (fmt.anchors == StreamILFormat::Line);
-        atom_anchors = (fmt.anchors == StreamILFormat::All);
-        follow_labels = (fmt.follow == StreamILFormat::All);
-        follow_scope = (fmt.follow == StreamILFormat::Scope);
+        line_anchors = (fmt.anchors == StreamLabelFormat::Line);
+        atom_anchors = (fmt.anchors == StreamLabelFormat::All);
+        follow_labels = (fmt.follow == StreamLabelFormat::All);
+        follow_scope = (fmt.follow == StreamLabelFormat::Scope);
     }
 
     void stream_label_label(Label *alabel) {
@@ -3549,10 +3468,205 @@ struct StreamIL : StreamAnchors {
 
 };
 
-static void stream_il(
-    StyledStream &_ss, Label *label, const StreamILFormat &_fmt) {
-    StreamIL streamer(_ss, _fmt);
+static void stream_label(
+    StyledStream &_ss, Label *label, const StreamLabelFormat &_fmt) {
+    StreamLabel streamer(_ss, _fmt);
     streamer.stream(label);
+}
+
+//------------------------------------------------------------------------------
+// IL MANGLING
+//------------------------------------------------------------------------------
+
+typedef std::unordered_map<ILNode *, std::vector<Any> > MangleMap;
+
+static Any first(const std::vector<Any> &values) {
+    return values.empty()?none:values.front();
+}
+
+static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
+    Any enter = entry->body.enter;
+    std::vector<Any> &args = entry->body.args;
+    std::vector<Any> &body = ll->body.args;
+    if (enter.type == TYPE_Label) {
+        auto it = map.find(enter.label);
+        if (it != map.end()) {
+            enter = first(it->second);
+        }
+    } else if (enter.type == TYPE_Parameter) {
+        auto it = map.find(enter.parameter);
+        if (it != map.end()) {
+            enter = first(it->second);
+        }
+    }
+    ll->body.anchor = entry->body.anchor;
+    ll->body.enter = enter;
+
+    StyledStream ss(std::cout);
+    size_t lasti = (args.size() - 1);
+    for (size_t i = 0; i < args.size(); ++i) {
+        Any arg = args[i];
+        if (arg.type == TYPE_Label) {
+            auto it = map.find(arg.label);
+            if (it != map.end()) {
+                body.push_back(first(it->second));
+            } else {
+                body.push_back(arg);
+            }
+        } else if (arg.type == TYPE_Parameter) {
+            auto it = map.find(arg.parameter);
+            if (it != map.end()) {
+                if (i == lasti) {
+                    body.insert(body.begin(),
+                        it->second.begin(), it->second.end());
+                } else {
+                    body.push_back(first(it->second));
+                }
+            } else {
+                body.push_back(arg);
+            }
+        } else {
+            body.push_back(arg);
+        }
+    }
+
+    ll->link_backrefs();
+}
+
+static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map) {
+
+    std::vector<Label *> entry_scope;
+    entry->build_scope(entry_scope);
+
+    // remap entry point
+    Label *le = Label::from(entry);
+    le->set_parameters(params);
+
+    // create new labels and map new parameters
+    for (auto &&l : entry_scope) {
+        Label *ll = Label::from(l);
+        l->paired = ll;
+        map.insert(MangleMap::value_type(l, {Any(ll)}));
+        ll->params.reserve(l->params.size());
+        for (auto &&param : l->params) {
+            Parameter *pparam = Parameter::from(param);
+            map.insert(MangleMap::value_type(l, {Any(pparam)}));
+            ll->append(pparam);
+        }
+    }
+
+    // remap label bodies
+    for (auto &&l : entry_scope) {
+        Label *ll = l->paired;
+        l->paired = nullptr;
+        mangle_remap_body(ll, l, map);
+    }
+    mangle_remap_body(le, entry, map);
+
+    #if 0
+    StyledStream ss(std::cout);
+    ss << "IN[\n";
+    stream_il(ss, entry, StreamILFormat::debug_single());
+    for (auto && l : entry_scope) {
+        stream_il(ss, l, StreamILFormat::debug_single());
+    }
+    ss << "]IN\n";
+    ss << "OUT[\n";
+    stream_il(ss, le, StreamILFormat::debug_single());
+    for (auto && l : entry_scope) {
+        auto it = map.find(l);
+        stream_il(ss, it->second, StreamILFormat::debug_single());
+    }
+    ss << "]OUT\n";
+    #endif
+
+    return le;
+}
+
+//------------------------------------------------------------------------------
+// FRAME PRINTER
+//------------------------------------------------------------------------------
+
+struct StreamFrameFormat {
+};
+
+struct StreamFrame : StreamAnchors {
+    StreamFrameFormat fmt;
+
+    StreamFrame(StyledStream &_ss, const StreamFrameFormat &_fmt) :
+        StreamAnchors(_ss), fmt(_fmt) {
+    }
+
+    const Frame *find_return_frame(const Frame *frame) {
+        while (frame) {
+            if (!frame->args.empty()) {
+                Any cont = frame->args[0];
+                if (cont.type == TYPE_Closure) {
+                    return cont.closure->frame;
+                }
+            }
+            frame = frame->parent;
+        }
+        return nullptr;
+    }
+
+    Symbol get_good_frame_name(const Frame *frame) {
+        while (frame) {
+            Symbol name = frame->label->name;
+            if (name != SYM_Unnamed)
+                return name;
+            frame = frame->parent;
+        }
+        return SYM_Unnamed;
+    }
+
+    void stream(const Frame *frame) {
+
+        if (!frame) return;
+
+        std::deque<const Frame *> frames = { frame };
+        Symbol lastname = get_good_frame_name(frame);
+        while (frame) {
+            const Frame *nextframe = find_return_frame(frame);
+            if (nextframe) {
+                auto name = get_good_frame_name(nextframe);
+                if (name != lastname) {
+                    frames.push_front(nextframe);
+                    lastname = name;
+                }
+            }
+            frame = nextframe;
+        }
+
+        size_t count = frames.size();
+        for (size_t i = 0; i < count; ++i) {
+            const Frame *frame = frames[i];
+
+            if ((i < 5) || (i >= (count - 5))) {
+                Label *label = frame->label;
+                const Anchor *anchor = label->body.anchor;
+
+                ss << anchor;
+                ss << " [" << "#" << (i + 1) << "] ";
+                Symbol name = get_good_frame_name(frame);
+                if (name == SYM_Unnamed) {
+                    ss << "in anonymous function";
+                } else {
+                    ss << "in function '" << name.name()->data << "'";
+                }
+                ss << std::endl;
+                anchor->stream_source_line(ss);
+            } else if (i == 5) {
+                ss << "..." << std::endl;
+            }
+        }
+    }
+};
+
+static void stream_frame(
+    StyledStream &_ss, const Frame *frame, StreamFrameFormat _fmt) {
+    StreamFrame streamer(_ss, _fmt);
+    streamer.stream(frame);
 }
 
 //------------------------------------------------------------------------------
@@ -4117,8 +4231,8 @@ static void default_exception_handler(const Exception &exc) {
 }
 
 template<int mincount, int maxcount>
-inline int checkargs(const Instruction &in) {
-    int count = (int)in.args.size() - 1;
+inline int checkargs(size_t argsize) {
+    int count = (int)argsize - 1;
     if ((mincount <= 0) && (maxcount == -1)) {
         return count;
     }
@@ -4135,7 +4249,7 @@ inline int checkargs(const Instruction &in) {
 }
 
 #define CHECKARGS(MINARGS, MAXARGS) \
-    checkargs<MINARGS, MAXARGS>(in)
+    checkargs<MINARGS, MAXARGS>(in.args.size())
 #define RETARGS(...) \
     out.args = { none, __VA_ARGS__ }
 
@@ -5087,6 +5201,488 @@ loop:
 }
 
 //------------------------------------------------------------------------------
+// IL->IR LOWERING
+//------------------------------------------------------------------------------
+
+struct TypedLabelInfo {
+    std::vector<Type> types;
+};
+
+typedef std::unordered_map<Type, TypedLabelInfo, Type::Hash> TypedLabelInfos;
+static TypedLabelInfos typed_label_infos;
+
+static bool is_typed_label(Type type) {
+    return typed_label_infos.count(type);
+}
+
+static const TypedLabelInfo &get_typed_label_info(Type type) {
+    auto it = typed_label_infos.find(type);
+    assert(it != typed_label_infos.end());
+    return it->second;
+}
+
+static Type TypedLabel(const std::vector<Type> &types) {
+    assert(!types.empty());
+    std::stringstream ss;
+    ss << "λ(";
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (i > 1) {
+            ss << " ";
+        }
+        ss << types[i].name().name()->data;
+    }
+    ss << ")";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto it = typed_label_infos.find(type);
+    if (it == typed_label_infos.end()) {
+        TypedLabelInfo tli;
+        tli.types = types;
+        typed_label_infos.insert({ type, tli });
+    }
+    return type;
+}
+
+//------------------------------------------------------------------------------
+
+struct TypeSetInfo {
+    std::unordered_set<Type, Type::Hash> types;
+};
+
+typedef std::unordered_map<Type, TypeSetInfo, Type::Hash> TypeSetInfos;
+static TypeSetInfos typeset_infos;
+
+static bool is_typeset(Type type) {
+    return typeset_infos.count(type);
+}
+
+static const TypeSetInfo &get_typeset_info(Type type) {
+    auto it = typeset_infos.find(type);
+    assert(it != typeset_infos.end());
+    return it->second;
+}
+
+static Type TypeSet(const std::vector<Type> &types) {
+    std::unordered_set<Type, Type::Hash> typeset;
+
+    for (auto &&entry : types) {
+        if (is_typeset(entry)) {
+            auto &&tsi = get_typeset_info(entry);
+            for (auto &&t : tsi.types) {
+                typeset.insert(t);
+            }
+        } else {
+            typeset.insert(entry);
+        }
+    }
+
+    assert(!typeset.count(TYPE_Any));
+    assert(!typeset.empty());
+
+    if (typeset.size() == 1) {
+        return *typeset.begin();
+    }
+
+    std::vector<Type> type_array;
+    std::copy(typeset.begin(), typeset.end(), type_array.end());
+
+    std::sort(type_array.begin(), type_array.end());
+
+    std::stringstream ss;
+    ss << "Or[";
+    for (size_t i = 0; i < type_array.size(); ++i) {
+        if (i > 1) {
+            ss << " ";
+        }
+        ss << type_array[i].name().name()->data;
+    }
+    ss << "]";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto it = typeset_infos.find(type);
+    if (it == typeset_infos.end()) {
+        TypeSetInfo tsi;
+        tsi.types = typeset;
+        typeset_infos.insert({ type, tsi });
+    }
+
+    return type;
+}
+
+//------------------------------------------------------------------------------
+
+struct GenerateCtx {
+    typedef std::unordered_map<ILNode *, LLVMValueRef> NodeLLVMMap;
+
+    std::unordered_map<const String *, LLVMValueRef> string2value;
+
+    NodeLLVMMap node2value;
+    LLVMModuleRef module;
+    LLVMBuilderRef builder;
+
+    LLVMTypeRef voidT;
+    LLVMTypeRef rawstringT;
+
+#define B_LLVM_BUILTINS() \
+    T(FN_Write, voidT, rawstringT)
+
+#define T(NAME, RET, ...) \
+    LLVMValueRef llvm_ ## NAME;
+    B_LLVM_BUILTINS()
+#undef T
+
+    void define_builtin_functions() {
+        voidT = LLVMVoidType();
+        rawstringT = LLVMPointerType(LLVMInt8Type(), 0);
+#define T(NAME, RET, ...) \
+    { \
+        LLVMTypeRef args[] = { __VA_ARGS__ }; \
+        llvm_ ## NAME = LLVMAddFunction(module, "bangra_" #NAME, \
+            LLVMFunctionType(RET, args, sizeof(args) / sizeof(LLVMTypeRef), false)); \
+    }
+        B_LLVM_BUILTINS();
+#undef T
+    }
+
+#undef DEFINE_BUILTIN
+
+    static bool all_parameters_lowered(Label *label) {
+        for (auto &&param : label->params) {
+            if (param->vararg)
+                return false;
+            switch (param->type.value()) {
+            case TYPE_Any:
+            case TYPE_Type:
+            case TYPE_Label:
+                return false;
+            default: {
+                if (is_typeset(param->type))
+                    return false;
+                if (is_typed_label(param->type) && (param->index != 0))
+                    return false;
+            } break;
+            }
+        }
+        return true;
+    }
+
+    static bool has_free_parameters(Label *label) {
+        std::vector<Label *> scope;
+        label->build_scope(scope);
+        scope.push_back(label);
+        std::unordered_set<Label *> labels;
+        for (auto &&label : scope) {
+            labels.insert(label);
+        }
+        for (auto &&label : scope) {
+            auto &&enter = label->body.enter;
+            if (enter.type == TYPE_Parameter && !labels.count(enter.parameter->label))
+                return true;
+            for (auto &&arg : label->body.args) {
+                if (arg.type == TYPE_Parameter && !labels.count(arg.parameter->label))
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    static bool is_basic_block_like(Label *label) {
+        if (label->body.args.empty())
+            return true;
+        auto &&cont = label->body.args[0];
+        if (cont.type == TYPE_Nothing)
+            return true;
+        return false;
+    }
+
+    static LLVMTypeRef type_to_llvm_type(Type type) {
+        switch (type.value()) {
+        case TYPE_Nothing: return LLVMVoidType();
+        case TYPE_Bool: return LLVMInt1Type();
+        case TYPE_I8: return LLVMInt8Type();
+        case TYPE_I16: return LLVMInt16Type();
+        case TYPE_I32: return LLVMInt32Type();
+        case TYPE_I64: return LLVMInt64Type();
+        default: {
+            location_error(String::from("cannot convert type"));
+        } break;
+        }
+        return nullptr;
+    }
+
+    static LLVMTypeRef return_type_to_llvm_type(Type type) {
+        TypedLabelInfo tli = get_typed_label_info(type);
+        assert(tli.types[0] == TYPE_Nothing);
+        size_t count = tli.types.size() - 1;
+        if (!count) {
+            return LLVMVoidType();
+        }
+        LLVMTypeRef element_types[count];
+        for (size_t i = 0; i < count; ++i) {
+            Type arg = tli.types[i + 1];
+            element_types[i] = type_to_llvm_type(arg);
+        }
+        if (count == 1) {
+            return element_types[0];
+        } else {
+            return LLVMStructType(element_types, count, false);
+        }
+    }
+
+    LLVMValueRef string_to_value(const String *str) {
+        auto it = string2value.find(str);
+        if (it == string2value.end()) {
+            LLVMValueRef indices[] = {
+                LLVMConstInt(LLVMInt32Type(), 0, false),
+                LLVMConstInt(LLVMInt32Type(), 0, false)
+            };
+            LLVMValueRef s = LLVMConstString(str->data, str->count, false);
+            LLVMValueRef g = LLVMAddGlobal(module, LLVMTypeOf(s), "");
+            LLVMSetInitializer(g, s);
+            LLVMSetGlobalConstant(g, true);
+            LLVMSetLinkage(g, LLVMPrivateLinkage);
+            LLVMValueRef result = LLVMConstGEP(g, indices, 2);
+            string2value[str] = result;
+            return result;
+        } else {
+            return it->second;
+        }
+    }
+
+    LLVMValueRef argument_to_value(Any value) {
+        switch(value.type.value()) {
+        case TYPE_String: {
+            return string_to_value(value.string);
+        } break;
+        default: {
+            assert(false && "todo: convert argument type");
+        } break;
+        }
+        return nullptr;
+    }
+
+    void write_label_body(LLVMValueRef func, Label *label) {
+        auto &&body = label->body;
+        auto &&enter = body.enter;
+        auto &&args = body.args;
+
+        size_t argcount = args.size() - 1;
+        LLVMValueRef values[argcount];
+        for (size_t i = 0; i < argcount; ++i) {
+            values[i] = argument_to_value(args[i + 1]);
+        }
+        LLVMValueRef retvalue = nullptr;
+        switch(enter.type.value()) {
+        case TYPE_Builtin: {
+            switch(enter.builtin.value()) {
+            case FN_Write: {
+                LLVMBuildCall(builder, llvm_FN_Write, values, argcount, "");
+            } break;
+            default: {
+                assert(false && "todo: translate builtin");
+            } break;
+            }
+        } break;
+        default: {
+            assert(false && "todo: translate non-builtin call");
+        } break;
+        }
+
+        Any contarg = args[0];
+        if (contarg.type == TYPE_Parameter) {
+            if (retvalue) {
+                LLVMBuildRet(builder, retvalue);
+            } else {
+                LLVMBuildRetVoid(builder);
+            }
+        } else if (contarg.type == TYPE_Label) {
+            auto bb = label_to_basic_block(func, contarg.label);
+            LLVMBuildBr(builder, bb);
+        } else {
+            assert(false && "todo: continuing with unexpected value");
+        }
+    }
+
+    LLVMBasicBlockRef label_to_basic_block(LLVMValueRef func, Label *label) {
+        //LLVMValueRef LLVMGetBasicBlockParent(LLVMBasicBlockRef BB);
+        auto old_bb = LLVMGetInsertBlock(builder);
+        auto bb = LLVMAppendBasicBlock(func, "");
+        LLVMPositionBuilderAtEnd(builder, bb);
+        write_label_body(func, label);
+
+        LLVMPositionBuilderAtEnd(builder, old_bb);
+        return bb;
+    }
+
+    LLVMValueRef label_to_function(Label *label) {
+        const char *name = label->name.name()->data;
+
+        auto &&params = label->params;
+        auto &&contparam = params[0];
+        LLVMTypeRef return_type = return_type_to_llvm_type(contparam->type);
+
+        size_t paramcount = label->params.size() - 1;
+        LLVMTypeRef arg_types[paramcount];
+        for (size_t i = 0; i < paramcount; ++i) {
+            arg_types[i] = type_to_llvm_type(params[i + 1]->type);
+        }
+        auto functype = LLVMFunctionType(return_type, arg_types, paramcount, false);
+        auto func = LLVMAddFunction(module, name, functype);
+        node2value[label] = func;
+
+        auto bb = LLVMAppendBasicBlock(func, "");
+        LLVMPositionBuilderAtEnd(builder, bb);
+
+        write_label_body(func, label);
+
+        return func;
+    }
+
+    std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
+        assert(!has_free_parameters(entry));
+        assert(all_parameters_lowered(entry));
+        assert(!is_basic_block_like(entry));
+
+        const char *name = entry->name.name()->data;
+        module = LLVMModuleCreateWithName(name);
+        builder = LLVMCreateBuilder();
+        define_builtin_functions();
+
+        auto func = label_to_function(entry);
+
+        LLVMDumpModule(module);
+        char *errmsg = NULL;
+        LLVMVerifyModule(module, LLVMAbortProcessAction, &errmsg);
+        LLVMDisposeMessage(errmsg);
+
+        return std::pair<LLVMModuleRef, LLVMValueRef>(module, func);
+    }
+
+};
+
+static std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
+    GenerateCtx ctx;
+    return ctx.generate(entry);
+}
+
+//------------------------------------------------------------------------------
+// NORMALIZE
+//------------------------------------------------------------------------------
+
+#define CHECKARGS(MINARGS, MAXARGS) \
+    checkargs<MINARGS, MAXARGS>(args.size())
+
+#define RETARGTYPES(...) \
+    retargtypes = { TYPE_Nothing, __VA_ARGS__ }
+
+struct NormalizeCtx {
+    std::vector<Label *> todo;
+
+    Label *typify(Label *label, const std::vector<Type> &argtypes) {
+        MangleMap map;
+        std::vector<Parameter *> newparams;
+        for (size_t i = 0; i < label->params.size(); ++i) {
+            Parameter *param = label->params[i];
+            Parameter *newparam = Parameter::from(param);
+            if (i >= argtypes.size()) {
+                newparam->type = TYPE_Nothing;
+            } else {
+                Type argtype = argtypes[i];
+                newparam->type = argtype;
+                newparams.push_back(newparam);
+            }
+            map[param] = {newparam};
+        }
+        label = mangle(label, newparams, map);
+        todo.push_back(label);
+        return label;
+    }
+
+    void type_continuation(Any &dest, const std::vector<Type> &argtypes) {
+        switch (dest.type.value()) {
+        case TYPE_Parameter: {
+            Parameter *param = dest.parameter;
+            switch(param->type.value()) {
+            case TYPE_Nothing: {
+                location_error(String::from("attempting to call none continuation"));
+            } break;
+            case TYPE_Label:
+            case TYPE_Any: {
+                param->type = TypedLabel(argtypes);
+            } break;
+            default: {
+                param->type = TypeSet({param->type, TypedLabel(argtypes)});
+            } break;
+            }
+        } break;
+        case TYPE_Label: {
+            dest = typify(dest.label, argtypes);
+        } break;
+        default: {
+            apply_type_error(dest);
+        } break;
+        }
+    }
+
+    void process() {
+        while (!todo.empty()) {
+            Label *label = todo.back();
+            todo.pop_back();
+            normalize(label);
+        }
+    }
+
+    Label *normalize(Label *entry) {
+
+        set_active_anchor(entry->body.anchor);
+
+        auto &&enter = entry->body.enter;
+        auto &&args = entry->body.args;
+        switch(enter.type.value()) {
+        case TYPE_Builtin: {
+            if (args.empty()) {
+                location_error(String::from("calling builtin without return argument"));
+            }
+            Any &retcont = args[0];
+            std::vector<Type> retargtypes = { TYPE_Nothing };
+            switch(enter.builtin.value()) {
+            case FN_Write: {
+                CHECKARGS(1, 1);
+            } break;
+            default: {
+                StyledString ss;
+                ss.out << "builtin " << enter.builtin << " is not implemented";
+                location_error(ss.str());
+            } break;
+            }
+            entry->unlink_backrefs();
+            type_continuation(retcont, retargtypes);
+            entry->link_backrefs();
+        } break;
+        case TYPE_Label: {
+            assert(false && "todo: call to label"); // todo
+        } break;
+        case TYPE_Parameter: {
+            assert(false && "todo: call to parameter"); // todo
+        } break;
+        default: {
+            apply_type_error(enter);
+        } break;
+        }
+
+        return entry;
+    }
+};
+
+#undef CHECKARGS
+#undef RETARGS
+
+static Label *normalize(Label *entry) {
+    NormalizeCtx ctx;
+    Label *result = ctx.normalize(entry);
+    ctx.process();
+    return result;
+}
+
+//------------------------------------------------------------------------------
 // IL TRANSLATOR
 //------------------------------------------------------------------------------
 
@@ -5738,12 +6334,39 @@ int main(int argc, char *argv[]) {
         Instruction cmd;
         cmd.enter = fn;
         cmd.args = { Builtin(FN_Exit) };
-        interpreter_loop(cmd);
+
+        StyledStream ss(std::cout);
+        std::cout << "non-normalized:" << std::endl;
+        stream_label(ss, fn, StreamLabelFormat());
+        std::cout << std::endl;
+        fn = normalize(fn);
+        std::cout << "normalized:" << std::endl;
+        stream_label(ss, fn, StreamLabelFormat::debug_scope());
+        std::cout << std::endl;
+
+        auto result = generate(fn);
+
+        auto module = result.first;
+        auto func = result.second;
+        LLVMExecutionEngineRef ee = nullptr;
+        char *errormsg = nullptr;
+        if (LLVMCreateJITCompilerForModule(&ee, module, 0, &errormsg)) {
+            location_error(String::from_cstr(errormsg));
+        }
+        typedef void (*MainFuncType)();
+        MainFuncType fptr = (MainFuncType)LLVMGetPointerToGlobal(ee, func);
+        fptr();
+
+        //interpreter_loop(cmd);
     } catch (const Exception &exc) {
         default_exception_handler(exc);
     }
 
     return 0;
+}
+
+void bangra_FN_Write(const char *s) {
+    fputs(s, stdout);
 }
 
 #endif // BANGRA_CPP_IMPL
