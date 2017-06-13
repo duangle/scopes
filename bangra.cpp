@@ -3517,7 +3517,7 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
             auto it = map.find(arg.parameter);
             if (it != map.end()) {
                 if (i == lasti) {
-                    body.insert(body.begin(),
+                    body.insert(body.end(),
                         it->second.begin(), it->second.end());
                 } else {
                     body.push_back(first(it->second));
@@ -5283,14 +5283,17 @@ static Type TypeSet(const std::vector<Type> &types) {
     }
 
     std::vector<Type> type_array;
-    std::copy(typeset.begin(), typeset.end(), type_array.end());
+    type_array.reserve(typeset.size());
+    for (auto &&entry : typeset) {
+        type_array.push_back(entry);
+    }
 
     std::sort(type_array.begin(), type_array.end());
 
     std::stringstream ss;
     ss << "Or[";
     for (size_t i = 0; i < type_array.size(); ++i) {
-        if (i > 1) {
+        if (i > 0) {
             ss << " ";
         }
         ss << type_array[i].name().name()->data;
@@ -5310,15 +5313,21 @@ static Type TypeSet(const std::vector<Type> &types) {
 //------------------------------------------------------------------------------
 
 struct GenerateCtx {
-    typedef std::unordered_map<ILNode *, LLVMValueRef> NodeLLVMMap;
-
     std::unordered_map<const String *, LLVMValueRef> string2value;
 
-    NodeLLVMMap node2value;
+    std::unordered_map<Label *, LLVMValueRef> label2func;
+    std::unordered_map<Label *, LLVMBasicBlockRef> label2bb;
+    std::unordered_map<Parameter *, LLVMValueRef> param2value;
+
     LLVMModuleRef module;
     LLVMBuilderRef builder;
 
     LLVMTypeRef voidT;
+    LLVMTypeRef i1T;
+    LLVMTypeRef i8T;
+    LLVMTypeRef i16T;
+    LLVMTypeRef i32T;
+    LLVMTypeRef i64T;
     LLVMTypeRef rawstringT;
 
 #define B_LLVM_BUILTINS() \
@@ -5331,6 +5340,11 @@ struct GenerateCtx {
 
     void define_builtin_functions() {
         voidT = LLVMVoidType();
+        i1T = LLVMInt1Type();
+        i8T = LLVMInt8Type();
+        i16T = LLVMInt16Type();
+        i32T = LLVMInt32Type();
+        i64T = LLVMInt64Type();
         rawstringT = LLVMPointerType(LLVMInt8Type(), 0);
 #define T(NAME, RET, ...) \
     { \
@@ -5393,14 +5407,15 @@ struct GenerateCtx {
         return false;
     }
 
-    static LLVMTypeRef type_to_llvm_type(Type type) {
+    LLVMTypeRef type_to_llvm_type(Type type) {
         switch (type.value()) {
-        case TYPE_Nothing: return LLVMVoidType();
-        case TYPE_Bool: return LLVMInt1Type();
-        case TYPE_I8: return LLVMInt8Type();
-        case TYPE_I16: return LLVMInt16Type();
-        case TYPE_I32: return LLVMInt32Type();
-        case TYPE_I64: return LLVMInt64Type();
+        case TYPE_Nothing: return voidT;
+        case TYPE_Bool: return i1T;
+        case TYPE_I8: return i8T;
+        case TYPE_I16: return i16T;
+        case TYPE_I32: return i32T;
+        case TYPE_I64: return i64T;
+        case TYPE_String: return rawstringT;
         default: {
             location_error(String::from("cannot convert type"));
         } break;
@@ -5408,7 +5423,7 @@ struct GenerateCtx {
         return nullptr;
     }
 
-    static LLVMTypeRef return_type_to_llvm_type(Type type) {
+    LLVMTypeRef return_type_to_llvm_type(Type type) {
         TypedLabelInfo tli = get_typed_label_info(type);
         assert(tli.types[0] == TYPE_Nothing);
         size_t count = tli.types.size() - 1;
@@ -5452,14 +5467,25 @@ struct GenerateCtx {
         case TYPE_String: {
             return string_to_value(value.string);
         } break;
+        case TYPE_Parameter: {
+            auto it = param2value.find(value.parameter);
+            if (it == param2value.end()) {
+                StyledString ss;
+                ss.out << "untranslated parameter: " << value.parameter;
+                location_error(ss.str());
+            }
+            return it->second;
+        } break;
         default: {
-            assert(false && "todo: convert argument type");
+            StyledString ss;
+            ss.out << "cannot convert argument of type " << value.type;
+            location_error(ss.str());
         } break;
         }
         return nullptr;
     }
 
-    void write_label_body(LLVMValueRef func, Label *label) {
+    void write_label_body(Label *label) {
         auto &&body = label->body;
         auto &&enter = body.enter;
         auto &&args = body.args;
@@ -5481,6 +5507,16 @@ struct GenerateCtx {
             } break;
             }
         } break;
+        case TYPE_Label: {
+            assert(!args.empty());
+            if (is_basic_block_like(enter.label)) {
+                LLVMBasicBlockRef bb = label_to_basic_block(enter.label);
+                LLVMBuildBr(builder, bb);
+            } else {
+                LLVMValueRef newfunc = label_to_function(enter.label);
+                LLVMBuildCall(builder, newfunc, values, argcount, "");
+            }
+        } break;
         default: {
             assert(false && "todo: translate non-builtin call");
         } break;
@@ -5494,46 +5530,66 @@ struct GenerateCtx {
                 LLVMBuildRetVoid(builder);
             }
         } else if (contarg.type == TYPE_Label) {
-            auto bb = label_to_basic_block(func, contarg.label);
+            auto bb = label_to_basic_block(contarg.label);
             LLVMBuildBr(builder, bb);
         } else {
             assert(false && "todo: continuing with unexpected value");
         }
     }
 
-    LLVMBasicBlockRef label_to_basic_block(LLVMValueRef func, Label *label) {
-        //LLVMValueRef LLVMGetBasicBlockParent(LLVMBasicBlockRef BB);
-        auto old_bb = LLVMGetInsertBlock(builder);
-        auto bb = LLVMAppendBasicBlock(func, "");
-        LLVMPositionBuilderAtEnd(builder, bb);
-        write_label_body(func, label);
+    LLVMBasicBlockRef label_to_basic_block(Label *label) {
+        auto it = label2bb.find(label);
+        if (it == label2bb.end()) {
+            auto old_bb = LLVMGetInsertBlock(builder);
+            LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
+            auto bb = LLVMAppendBasicBlock(func, "");
+            label2bb[label] = bb;
+            LLVMPositionBuilderAtEnd(builder, bb);
+            write_label_body(label);
 
-        LLVMPositionBuilderAtEnd(builder, old_bb);
-        return bb;
+            LLVMPositionBuilderAtEnd(builder, old_bb);
+            return bb;
+        } else {
+            return it->second;
+        }
     }
 
     LLVMValueRef label_to_function(Label *label) {
-        const char *name = label->name.name()->data;
+        auto it = label2func.find(label);
+        if (it == label2func.end()) {
+            auto old_bb = LLVMGetInsertBlock(builder);
+            const char *name = label->name.name()->data;
 
-        auto &&params = label->params;
-        auto &&contparam = params[0];
-        LLVMTypeRef return_type = return_type_to_llvm_type(contparam->type);
+            auto &&params = label->params;
+            auto &&contparam = params[0];
+            LLVMTypeRef return_type = return_type_to_llvm_type(contparam->type);
 
-        size_t paramcount = label->params.size() - 1;
-        LLVMTypeRef arg_types[paramcount];
-        for (size_t i = 0; i < paramcount; ++i) {
-            arg_types[i] = type_to_llvm_type(params[i + 1]->type);
+            size_t paramcount = label->params.size() - 1;
+            LLVMTypeRef arg_types[paramcount];
+            for (size_t i = 0; i < paramcount; ++i) {
+                arg_types[i] = type_to_llvm_type(params[i + 1]->type);
+            }
+            auto functype = LLVMFunctionType(return_type, arg_types, paramcount, false);
+            auto func = LLVMAddFunction(module, name, functype);
+
+            for (size_t i = 0; i < paramcount; ++i) {
+                Parameter *param = params[i + 1];
+                auto pvalue = LLVMGetParam(func, i);
+                param2value[param] = pvalue;
+            }
+
+            label2func[label] = func;
+
+            auto bb = LLVMAppendBasicBlock(func, "");
+            LLVMPositionBuilderAtEnd(builder, bb);
+
+            write_label_body(label);
+
+            LLVMPositionBuilderAtEnd(builder, old_bb);
+            return func;
+        } else {
+            return it->second;
         }
-        auto functype = LLVMFunctionType(return_type, arg_types, paramcount, false);
-        auto func = LLVMAddFunction(module, name, functype);
-        node2value[label] = func;
-
-        auto bb = LLVMAppendBasicBlock(func, "");
-        LLVMPositionBuilderAtEnd(builder, bb);
-
-        write_label_body(func, label);
-
-        return func;
     }
 
     std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
@@ -5575,8 +5631,27 @@ static std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
 
 struct NormalizeCtx {
     std::vector<Label *> todo;
+    struct LabelInstances {
+        std::unordered_map<Type, Label *, Type::Hash> instances;
+    };
+    std::unordered_map<Label *, LabelInstances> label2instance;
 
     Label *typify(Label *label, const std::vector<Type> &argtypes) {
+
+        std::vector<Type> hashargs = { TYPE_Nothing };
+        for (size_t i = 1; i < argtypes.size(); ++i) {
+            hashargs.push_back(argtypes[i]);
+        }
+        auto labeltype = TypedLabel(hashargs);
+
+        auto it = label2instance.find(label);
+        if (it != label2instance.end()) {
+            auto it2 = it->second.instances.find(labeltype);
+            if (it2 != it->second.instances.end()) {
+                return it2->second;
+            }
+        }
+
         MangleMap map;
         std::vector<Parameter *> newparams;
         for (size_t i = 0; i < label->params.size(); ++i) {
@@ -5591,12 +5666,15 @@ struct NormalizeCtx {
             }
             map[param] = {newparam};
         }
-        label = mangle(label, newparams, map);
-        todo.push_back(label);
-        return label;
+        Label *newlabel = mangle(label, newparams, map);
+        if (it == label2instance.end()) {
+            it = label2instance.insert({label, LabelInstances()}).first;
+        }
+        it->second.instances.insert({labeltype, newlabel});
+        return normalize(newlabel);
     }
 
-    void type_continuation(Any &dest, const std::vector<Type> &argtypes) {
+    Any type_continuation(Any dest, const std::vector<Type> &argtypes) {
         switch (dest.type.value()) {
         case TYPE_Parameter: {
             Parameter *param = dest.parameter;
@@ -5620,14 +5698,7 @@ struct NormalizeCtx {
             apply_type_error(dest);
         } break;
         }
-    }
-
-    void process() {
-        while (!todo.empty()) {
-            Label *label = todo.back();
-            todo.pop_back();
-            normalize(label);
-        }
+        return dest;
     }
 
     Label *normalize(Label *entry) {
@@ -5636,12 +5707,11 @@ struct NormalizeCtx {
 
         auto &&enter = entry->body.enter;
         auto &&args = entry->body.args;
+        assert(!args.empty());
+        Any retcont = args[0];
+
         switch(enter.type.value()) {
         case TYPE_Builtin: {
-            if (args.empty()) {
-                location_error(String::from("calling builtin without return argument"));
-            }
-            Any &retcont = args[0];
             std::vector<Type> retargtypes = { TYPE_Nothing };
             switch(enter.builtin.value()) {
             case FN_Write: {
@@ -5653,12 +5723,41 @@ struct NormalizeCtx {
                 location_error(ss.str());
             } break;
             }
+
+            Any newcont = type_continuation(retcont, retargtypes);
             entry->unlink_backrefs();
-            type_continuation(retcont, retargtypes);
+            args[0] = newcont;
             entry->link_backrefs();
         } break;
         case TYPE_Label: {
-            assert(false && "todo: call to label"); // todo
+            std::vector<Type> argtypes = {};
+            for (auto &&arg : args) {
+                if (arg.type == TYPE_Parameter) {
+                    argtypes.push_back(arg.parameter->type);
+                } else {
+                    argtypes.push_back(arg.type);
+                }
+            }
+            Label *newenter = typify(enter.label, argtypes);
+            entry->unlink_backrefs();
+            enter = newenter;
+            entry->link_backrefs();
+
+            assert(!newenter->params.empty());
+            Type rettype = newenter->params[0]->type;
+            if (!is_typed_label(rettype)) {
+                StyledString ss;
+                ss.out << "continuation of typed label type expected, got " << rettype << std::endl;
+                stream_label(ss.out, newenter, StreamLabelFormat::debug_single());
+                location_error(ss.str());
+            }
+
+            auto &&tli = get_typed_label_info(rettype);
+            std::vector<Type> retargtypes = tli.types;
+            Any newcont = type_continuation(retcont, retargtypes);
+            entry->unlink_backrefs();
+            args[0] = newcont;
+            entry->link_backrefs();
         } break;
         case TYPE_Parameter: {
             assert(false && "todo: call to parameter"); // todo
@@ -5677,9 +5776,7 @@ struct NormalizeCtx {
 
 static Label *normalize(Label *entry) {
     NormalizeCtx ctx;
-    Label *result = ctx.normalize(entry);
-    ctx.process();
-    return result;
+    return ctx.normalize(entry);
 }
 
 //------------------------------------------------------------------------------
@@ -6341,7 +6438,7 @@ int main(int argc, char *argv[]) {
         std::cout << std::endl;
         fn = normalize(fn);
         std::cout << "normalized:" << std::endl;
-        stream_label(ss, fn, StreamLabelFormat::debug_scope());
+        stream_label(ss, fn, StreamLabelFormat());
         std::cout << std::endl;
 
         auto result = generate(fn);

@@ -23,8 +23,12 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
+fn/cc puts (_ s)
+    io-write s
+    io-write "\n"
 
-io-write "hello "
-io-write "world"
-io-write "\n"
+puts "hello world 1"
+puts "hello world 2"
+
+
 
