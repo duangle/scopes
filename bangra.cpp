@@ -1857,6 +1857,9 @@ struct Any {
         }
     }
 
+    template<KnownSymbol T>
+    void verify_indirect() const;
+
     operator const List *() const { verify<TYPE_List>(); return list; }
     operator const Syntax *() const { verify<TYPE_Syntax>(); return syntax; }
     operator const Anchor *() const { verify<TYPE_Anchor>(); return anchor; }
@@ -2959,6 +2962,19 @@ public:
     }
 };
 
+template<KnownSymbol T>
+void Any::verify_indirect() const {
+    Type t = type;
+    if (t == TYPE_Parameter) {
+        t = parameter->type;
+    }
+    if (t != T) {
+        StyledString ss;
+        ss.out << "type " << Type(T) << " expected, got " << t;
+        location_error(ss.str());
+    }
+}
+
 static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
     param->stream(ss);
     return ss;
@@ -3550,7 +3566,7 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
         ll->params.reserve(l->params.size());
         for (auto &&param : l->params) {
             Parameter *pparam = Parameter::from(param);
-            map.insert(MangleMap::value_type(l, {Any(pparam)}));
+            map.insert(MangleMap::value_type(param, {Any(pparam)}));
             ll->append(pparam);
         }
     }
@@ -5226,7 +5242,7 @@ static Type TypedLabel(const std::vector<Type> &types) {
     std::stringstream ss;
     ss << "λ(";
     for (size_t i = 0; i < types.size(); ++i) {
-        if (i > 1) {
+        if (i > 0) {
             ss << " ";
         }
         ss << types[i].name().name()->data;
@@ -5312,8 +5328,17 @@ static Type TypeSet(const std::vector<Type> &types) {
 
 //------------------------------------------------------------------------------
 
+static bool is_basic_block_like(Label *label) {
+    if (label->params.empty())
+        return true;
+    if (label->params[0]->type == TYPE_Nothing)
+        return true;
+    return false;
+}
+
+
 struct GenerateCtx {
-    std::unordered_map<const String *, LLVMValueRef> string2value;
+    std::unordered_map<Symbol, LLVMValueRef, Symbol::Hash> string2value;
 
     std::unordered_map<Label *, LLVMValueRef> label2func;
     std::unordered_map<Label *, LLVMBasicBlockRef> label2bb;
@@ -5398,26 +5423,21 @@ struct GenerateCtx {
         return false;
     }
 
-    static bool is_basic_block_like(Label *label) {
-        if (label->body.args.empty())
-            return true;
-        auto &&cont = label->body.args[0];
-        if (cont.type == TYPE_Nothing)
-            return true;
-        return false;
-    }
-
     LLVMTypeRef type_to_llvm_type(Type type) {
         switch (type.value()) {
         case TYPE_Nothing: return voidT;
         case TYPE_Bool: return i1T;
-        case TYPE_I8: return i8T;
-        case TYPE_I16: return i16T;
-        case TYPE_I32: return i32T;
-        case TYPE_I64: return i64T;
+        case TYPE_I8:
+        case TYPE_U8: return i8T;
+        case TYPE_I16:
+        case TYPE_U16: return i16T;
+        case TYPE_I32:
+        case TYPE_U32: return i32T;
+        case TYPE_I64:
+        case TYPE_U64: return i64T;
         case TYPE_String: return rawstringT;
         default: {
-            location_error(String::from("cannot convert type"));
+            location_error(String::from("IL->IR: cannot convert type"));
         } break;
         }
         return nullptr;
@@ -5443,7 +5463,8 @@ struct GenerateCtx {
     }
 
     LLVMValueRef string_to_value(const String *str) {
-        auto it = string2value.find(str);
+        auto sym = Symbol(str);
+        auto it = string2value.find(sym);
         if (it == string2value.end()) {
             LLVMValueRef indices[] = {
                 LLVMConstInt(LLVMInt32Type(), 0, false),
@@ -5455,7 +5476,7 @@ struct GenerateCtx {
             LLVMSetGlobalConstant(g, true);
             LLVMSetLinkage(g, LLVMPrivateLinkage);
             LLVMValueRef result = LLVMConstGEP(g, indices, 2);
-            string2value[str] = result;
+            string2value[sym] = result;
             return result;
         } else {
             return it->second;
@@ -5464,6 +5485,16 @@ struct GenerateCtx {
 
     LLVMValueRef argument_to_value(Any value) {
         switch(value.type.value()) {
+        case TYPE_Bool:
+            return LLVMConstInt(i1T, value.i1, false);
+        case TYPE_I8: return LLVMConstInt(i8T, value.i8, true);
+        case TYPE_I16: return LLVMConstInt(i16T, value.i16, true);
+        case TYPE_I32: return LLVMConstInt(i32T, value.i32, true);
+        case TYPE_I64: return LLVMConstInt(i64T, value.i64, true);
+        case TYPE_U8: return LLVMConstInt(i8T, value.u8, false);
+        case TYPE_U16: return LLVMConstInt(i16T, value.u16, false);
+        case TYPE_U32: return LLVMConstInt(i32T, value.u32, false);
+        case TYPE_U64: return LLVMConstInt(i64T, value.u64, false);
         case TYPE_String: {
             return string_to_value(value.string);
         } break;
@@ -5471,14 +5502,21 @@ struct GenerateCtx {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
                 StyledString ss;
-                ss.out << "untranslated parameter: " << value.parameter;
+                ss.out << "IL->IR: untranslated parameter: " << value.parameter;
                 location_error(ss.str());
             }
             return it->second;
         } break;
+        case TYPE_Label: {
+            if (is_basic_block_like(value.label)) {
+                return LLVMBasicBlockAsValue(label_to_basic_block(value.label));
+            } else {
+                return label_to_function(value.label);
+            }
+        } break;
         default: {
             StyledString ss;
-            ss.out << "cannot convert argument of type " << value.type;
+            ss.out << "IL->IR: cannot convert argument of type " << value.type;
             location_error(ss.str());
         } break;
         }
@@ -5502,6 +5540,14 @@ struct GenerateCtx {
             case FN_Write: {
                 LLVMBuildCall(builder, llvm_FN_Write, values, argcount, "");
             } break;
+            case FN_Branch: {
+                assert(argcount == 3);
+                assert(LLVMValueIsBasicBlock(values[1]));
+                assert(LLVMValueIsBasicBlock(values[2]));
+                LLVMBuildCondBr(builder, values[0],
+                    LLVMValueAsBasicBlock(values[1]),
+                    LLVMValueAsBasicBlock(values[2]));
+            } break;
             default: {
                 assert(false && "todo: translate builtin");
             } break;
@@ -5509,12 +5555,34 @@ struct GenerateCtx {
         } break;
         case TYPE_Label: {
             assert(!args.empty());
-            if (is_basic_block_like(enter.label)) {
-                LLVMBasicBlockRef bb = label_to_basic_block(enter.label);
-                LLVMBuildBr(builder, bb);
+            LLVMValueRef value = argument_to_value(enter);
+            if (LLVMValueIsBasicBlock(value)) {
+                auto bbfrom = LLVMGetInsertBlock(builder);
+                // assign phi nodes
+                auto &&params = enter.label->params;
+                LLVMBasicBlockRef incobbs[] = { bbfrom };
+                for (size_t i = 1; i < params.size(); ++i) {
+                    Parameter *param = params[i];
+                    LLVMValueRef phinode = argument_to_value(param);
+                    LLVMValueRef incovals[] = { values[i - 1] };
+                    LLVMAddIncoming(phinode, incovals, incobbs, 1);
+                }
+                LLVMBuildBr(builder, LLVMValueAsBasicBlock(value));
             } else {
-                LLVMValueRef newfunc = label_to_function(enter.label);
-                LLVMBuildCall(builder, newfunc, values, argcount, "");
+                retvalue = LLVMBuildCall(builder, value, values, argcount, "");
+                if (LLVMGetReturnType(LLVMGetElementType(LLVMTypeOf(value))) == voidT)
+                    retvalue = nullptr;
+            }
+        } break;
+        case TYPE_Parameter: {
+            // must be a return
+            assert(enter.parameter->index == 0);
+            if (argcount > 1) {
+                assert(false && "todo: multiple return values");
+            } else if (argcount == 1) {
+                LLVMBuildRet(builder, values[0]);
+            } else {
+                LLVMBuildRetVoid(builder);
             }
         } break;
         default: {
@@ -5532,6 +5600,7 @@ struct GenerateCtx {
         } else if (contarg.type == TYPE_Label) {
             auto bb = label_to_basic_block(contarg.label);
             LLVMBuildBr(builder, bb);
+        } else if (contarg.type == TYPE_Nothing) {
         } else {
             assert(false && "todo: continuing with unexpected value");
         }
@@ -5542,9 +5611,23 @@ struct GenerateCtx {
         if (it == label2bb.end()) {
             auto old_bb = LLVMGetInsertBlock(builder);
             LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
-            auto bb = LLVMAppendBasicBlock(func, "");
+            const char *name = label->name.name()->data;
+            auto bb = LLVMAppendBasicBlock(func, name);
             label2bb[label] = bb;
             LLVMPositionBuilderAtEnd(builder, bb);
+
+            auto &&params = label->params;
+            if (!params.empty()) {
+                size_t paramcount = label->params.size() - 1;
+                for (size_t i = 0; i < paramcount; ++i) {
+                    Parameter *param = params[i + 1];
+                    auto pvalue = LLVMBuildPhi(builder,
+                        type_to_llvm_type(param->type),
+                        param->name.name()->data);
+                    param2value[param] = pvalue;
+                }
+            }
+
             write_label_body(label);
 
             LLVMPositionBuilderAtEnd(builder, old_bb);
@@ -5636,6 +5719,49 @@ struct NormalizeCtx {
     };
     std::unordered_map<Label *, LabelInstances> label2instance;
 
+    struct HashLabelNodePair {
+        std::size_t operator()(const std::pair<Label *, ILNode *> & s) const {
+            std::size_t h1 = std::hash<Label *>{}(s.first);
+            std::size_t h2 = std::hash<ILNode *>{}(s.second);
+            return h1 ^ (h2 << 1);
+        }
+    };
+
+    std::unordered_map<std::pair<Label *, ILNode *>, Label *, HashLabelNodePair> labels2ic;
+
+    Label *inline_continuation(Label *label, Any cont) {
+        ILNode *node = nullptr;
+        switch(cont.type.value()) {
+        case TYPE_Nothing: break;
+        case TYPE_Label: node = cont.label; break;
+        case TYPE_Parameter: node = cont.parameter; break;
+        default: {
+            location_error(String::from("continuation must be label, parameter or none"));
+        } break;
+        }
+
+        auto it = labels2ic.find({label, node });
+        if (it == labels2ic.end()) {
+            if (is_basic_block_like(label)) {
+                return label;
+            }
+            assert(label->params.size() == 1);
+
+            MangleMap map;
+            std::vector<Parameter *> newparams;
+            Parameter *param = label->params[0];
+            Parameter *newparam = Parameter::from(param);
+            newparam->type = TYPE_Nothing;
+            map[param] = {cont};
+            Label *newlabel = mangle(label, newparams, map);
+            labels2ic.insert({{label, node}, newlabel});
+            normalize(newlabel);
+            return newlabel;
+        } else {
+            return it->second;
+        }
+    }
+
     Label *typify(Label *label, const std::vector<Type> &argtypes) {
 
         std::vector<Type> hashargs = { TYPE_Nothing };
@@ -5654,24 +5780,58 @@ struct NormalizeCtx {
 
         MangleMap map;
         std::vector<Parameter *> newparams;
+        size_t lasti = label->params.size() - 1;
+        size_t srci = 0;
         for (size_t i = 0; i < label->params.size(); ++i) {
             Parameter *param = label->params[i];
-            Parameter *newparam = Parameter::from(param);
-            if (i >= argtypes.size()) {
-                newparam->type = TYPE_Nothing;
-            } else {
-                Type argtype = argtypes[i];
+            if (param->vararg) {
+                assert(i == lasti);
+                size_t ncount = argtypes.size();
+                if (srci < ncount) {
+                    ncount -= srci;
+                    std::vector<Any> vargs;
+                    for (size_t k = 0; k < ncount; ++k) {
+                        Parameter *newparam = Parameter::from(param);
+                        newparam->type = argtypes[srci + k];
+                        newparam->vararg = false;
+                        newparam->name = Symbol(SYM_Unnamed);
+                        newparams.push_back(newparam);
+                        vargs.push_back(newparam);
+                    }
+                    map[param] = vargs;
+                    srci = ncount;
+                } else {
+                    map[param] = {};
+                }
+            } else if (srci < argtypes.size()) {
+                Type argtype = argtypes[srci];
+                Parameter *newparam = Parameter::from(param);
                 newparam->type = argtype;
                 newparams.push_back(newparam);
+                map[param] = {newparam};
+                srci++;
+            } else {
+                map[param] = {none};
+                srci++;
             }
-            map[param] = {newparam};
         }
         Label *newlabel = mangle(label, newparams, map);
         if (it == label2instance.end()) {
             it = label2instance.insert({label, LabelInstances()}).first;
         }
         it->second.instances.insert({labeltype, newlabel});
-        return normalize(newlabel);
+
+#if 0
+        StyledStream ss(std::cout);
+        ss << "before:" << std::endl;
+        stream_label(ss, label, StreamLabelFormat::debug_scope());
+        ss << "after:" << std::endl;
+        stream_label(ss, newlabel, StreamLabelFormat::debug_scope());
+        ss << std::endl;
+#endif
+
+        normalize(newlabel);
+        return newlabel;
     }
 
     Any type_continuation(Any dest, const std::vector<Type> &argtypes) {
@@ -5701,7 +5861,7 @@ struct NormalizeCtx {
         return dest;
     }
 
-    Label *normalize(Label *entry) {
+    void normalize(Label *entry) {
 
         set_active_anchor(entry->body.anchor);
 
@@ -5712,22 +5872,42 @@ struct NormalizeCtx {
 
         switch(enter.type.value()) {
         case TYPE_Builtin: {
-            std::vector<Type> retargtypes = { TYPE_Nothing };
             switch(enter.builtin.value()) {
-            case FN_Write: {
-                CHECKARGS(1, 1);
+            case FN_Branch: {
+                CHECKARGS(3, 3);
+                args[1].verify_indirect<TYPE_Bool>();
+                Label *then_cond = args[2];
+                Label *else_cond = args[3];
+                Label *then_cond2 = inline_continuation(then_cond, args[0]);
+                Label *else_cond2 = inline_continuation(else_cond, args[0]);
+                entry->unlink_backrefs();
+                args[0] = none;
+                args[2] = then_cond2;
+                args[3] = else_cond2;
+                entry->link_backrefs();
             } break;
             default: {
-                StyledString ss;
-                ss.out << "builtin " << enter.builtin << " is not implemented";
-                location_error(ss.str());
+                std::vector<Type> retargtypes = { TYPE_Nothing };
+                switch(enter.builtin.value()) {
+                case FN_Write: {
+                    CHECKARGS(1, 1);
+                    // StyledStream ss(std::cout);
+                    // stream_label(ss, entry, StreamLabelFormat::debug_single());
+                    args[1].verify_indirect<TYPE_String>();
+                } break;
+                default: {
+                    StyledString ss;
+                    ss.out << "builtin " << enter.builtin << " is not implemented";
+                    location_error(ss.str());
+                } break;
+                }
+
+                Any newcont = type_continuation(retcont, retargtypes);
+                entry->unlink_backrefs();
+                args[0] = newcont;
+                entry->link_backrefs();
             } break;
             }
-
-            Any newcont = type_continuation(retcont, retargtypes);
-            entry->unlink_backrefs();
-            args[0] = newcont;
-            entry->link_backrefs();
         } break;
         case TYPE_Label: {
             std::vector<Type> argtypes = {};
@@ -5745,29 +5925,45 @@ struct NormalizeCtx {
 
             assert(!newenter->params.empty());
             Type rettype = newenter->params[0]->type;
-            if (!is_typed_label(rettype)) {
+            if (is_typed_label(rettype)) {
+                auto &&tli = get_typed_label_info(rettype);
+                std::vector<Type> retargtypes = tli.types;
+                Any newcont = type_continuation(retcont, retargtypes);
+                entry->unlink_backrefs();
+                args[0] = newcont;
+                entry->link_backrefs();
+            } else if (rettype == TYPE_Nothing) {
+                // basic-block style label jump, ignore
+            } else {
                 StyledString ss;
                 ss.out << "continuation of typed label type expected, got " << rettype << std::endl;
                 stream_label(ss.out, newenter, StreamLabelFormat::debug_single());
                 location_error(ss.str());
             }
-
-            auto &&tli = get_typed_label_info(rettype);
-            std::vector<Type> retargtypes = tli.types;
-            Any newcont = type_continuation(retcont, retargtypes);
-            entry->unlink_backrefs();
-            args[0] = newcont;
-            entry->link_backrefs();
         } break;
         case TYPE_Parameter: {
-            assert(false && "todo: call to parameter"); // todo
+            Parameter *param = enter.parameter;
+            if (param->index != 0) {
+                StyledString ss;
+                ss.out << "can't call higher order parameter" << std::endl;
+                stream_label(ss.out, entry, StreamLabelFormat::debug_single());
+                location_error(ss.str());
+            }
+
+            std::vector<Type> argtypes = {};
+            for (auto &&arg : args) {
+                if (arg.type == TYPE_Parameter) {
+                    argtypes.push_back(arg.parameter->type);
+                } else {
+                    argtypes.push_back(arg.type);
+                }
+            }
+            type_continuation(enter, argtypes);
         } break;
         default: {
             apply_type_error(enter);
         } break;
         }
-
-        return entry;
     }
 };
 
@@ -5776,7 +5972,8 @@ struct NormalizeCtx {
 
 static Label *normalize(Label *entry) {
     NormalizeCtx ctx;
-    return ctx.normalize(entry);
+    ctx.normalize(entry);
+    return entry;
 }
 
 //------------------------------------------------------------------------------
@@ -6114,6 +6311,8 @@ static Parameter *expand_parameter(Scope *env, Any value) {
     Any _value = sxvalue->datum;
     if (_value.type == TYPE_Parameter) {
         return _value.parameter;
+    } else if (_value.type == TYPE_List && _value.list == EOL) {
+        return Parameter::from(anchor, Symbol(SYM_Unnamed), TYPE_Nothing);
     } else {
         _value.verify<TYPE_Symbol>();
         Parameter *param = nullptr;
@@ -6166,13 +6365,13 @@ static const List *expand_fn_cc(Scope *env, const List *topit) {
     // hidden self-binding for subsequent macros
     subenv->bind(SYM_ThisFnCC, func);
 
-    while (params != EOL) {
-        func->append(expand_parameter(subenv, params->at));
-        params = params->next;
-    }
-    if (func->params.empty()) {
-        set_active_anchor(params_anchor);
-        location_error(String::from("explicit continuation parameter missing"));
+    if (params == EOL) {
+        func->append(Parameter::from(params_anchor, Symbol(SYM_Unnamed), TYPE_Nothing));
+    } else {
+        while (params != EOL) {
+            func->append(expand_parameter(subenv, params->at));
+            params = params->next;
+        }
     }
 
     const List *result = expand_expr_list(subenv, it);
@@ -6424,7 +6623,10 @@ int main(int argc, char *argv[]) {
     }
     LexerParser parser(sf);
     auto expr = parser.parse();
+#define CATCH_EXCEPTION 1
+#if CATCH_EXCEPTION
     try {
+#endif
         expr = expand_root(expr);
         Label *fn = translate_root(expr);
 
@@ -6455,9 +6657,12 @@ int main(int argc, char *argv[]) {
         fptr();
 
         //interpreter_loop(cmd);
+#if CATCH_EXCEPTION
     } catch (const Exception &exc) {
         default_exception_handler(exc);
+        throw exc;
     }
+#endif
 
     return 0;
 }
