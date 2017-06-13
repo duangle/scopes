@@ -576,6 +576,10 @@ namespace bangra {
     T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
     T(FN_AnchorSource) T(FN_ParseC) T(FN_Load) T(FN_Store) T(FN_MemCpy) \
     T(FN_Malloc) T(FN_Free) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) \
+    T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
+    T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
+    T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
     B_ALL_OP_DEFS()
 
 #define B_MAP_SYMBOLS() \
@@ -668,6 +672,10 @@ namespace bangra {
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
+    T(OP_ICmpEQ, "icmp==") T(OP_ICmpNE, "icmp!=") \
+    T(OP_ICmpUGT, "icmp>u") T(OP_ICmpUGE, "icmp>=u") T(OP_ICmpULT, "icmp<u") T(OP_ICmpULE, "icmp<=u") \
+    T(OP_ICmpSGT, "icmp>s") T(OP_ICmpSGE, "icmp>=s") T(OP_ICmpSLT, "icmp<s") T(OP_ICmpSLE, "icmp<=s") \
+    T(OP_Add, "add") T(OP_AddNUW, "add-nuw") T(OP_AddNSW, "add-nsw") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_InterpreterVersion, "interpreter-version") \
     B_ALL_OP_DEFS() \
@@ -731,7 +739,7 @@ namespace bangra {
     \
     /* builtin operator functions that can also be used as infix */ \
     T(OP_NotEq, "!=") T(OP_Mod, "%") T(OP_InMod, "%=") T(OP_BitAnd, "&") T(OP_InBitAnd, "&=") \
-    T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_Add, "+") T(OP_Incr, "++") \
+    T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_IFXAdd, "+") T(OP_Incr, "++") \
     T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_Sub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
     T(OP_Dot, ".") T(OP_Join, "..") T(OP_Div, "/") T(OP_InDiv, "/=") \
     T(OP_Colon, ":") T(OP_Let, ":=") T(OP_Less, "<") T(OP_LeftArrow, "<-") T(OP_Subtype, "<:") \
@@ -1666,6 +1674,42 @@ static StyledStream& operator<<(StyledStream& ost, Builtin builtin) {
 }
 
 //------------------------------------------------------------------------------
+// TYPE CHECK PREDICATES
+//------------------------------------------------------------------------------
+
+static void verify(Type typea, Type typeb) {
+    if (typea != typeb) {
+        StyledString ss;
+        ss.out << "type " << typea << " expected, got " << typeb;
+        location_error(ss.str());
+    }
+}
+
+template<KnownSymbol T>
+static void verify(Type type) {
+    verify(T, type);
+}
+
+static void verify_integer(Type type) {
+    switch(type.value()) {
+    case TYPE_Bool:
+    case TYPE_I8:
+    case TYPE_I16:
+    case TYPE_I32:
+    case TYPE_I64:
+    case TYPE_U8:
+    case TYPE_U16:
+    case TYPE_U32:
+    case TYPE_U64: return;
+    default: {
+        StyledString ss;
+        ss.out << "integer or bool type expected, got " << type;
+        location_error(ss.str());
+    } break;
+    }
+}
+
+//------------------------------------------------------------------------------
 // ANY
 //------------------------------------------------------------------------------
 
@@ -1850,15 +1894,12 @@ struct Any {
 
     template<KnownSymbol T>
     void verify() const {
-        if (type != T) {
-            StyledString ss;
-            ss.out << "type " << Type(T) << " expected, got " << type;
-            location_error(ss.str());
-        }
+        bangra::verify<T>(type);
     }
 
     template<KnownSymbol T>
     void verify_indirect() const;
+    Type indirect_type() const;
 
     operator const List *() const { verify<TYPE_List>(); return list; }
     operator const Syntax *() const { verify<TYPE_Syntax>(); return syntax; }
@@ -2964,14 +3005,14 @@ public:
 
 template<KnownSymbol T>
 void Any::verify_indirect() const {
-    Type t = type;
-    if (t == TYPE_Parameter) {
-        t = parameter->type;
-    }
-    if (t != T) {
-        StyledString ss;
-        ss.out << "type " << Type(T) << " expected, got " << t;
-        location_error(ss.str());
+    bangra::verify<T>(indirect_type());
+}
+
+Type Any::indirect_type() const {
+    if (type == TYPE_Parameter) {
+        return parameter->type;
+    } else {
+        return type;
     }
 }
 
@@ -3157,17 +3198,18 @@ public:
                 }
             }
 
-            static std::vector<Label *> subscope;
-            scope_label->build_scope(subscope);
-            for (auto &&live_label : subscope) {
-                if (!visited.count(live_label)) {
-                    visited.insert(live_label);
-                    if (reachable.count(live_label)) {
-                        tempscope.push_back(live_label);
+            for (auto &&param : scope_label->params) {
+                // every label using scope_label's parameters is live in scope
+                for (auto &&kv : param->users) {
+                    Label *live_label = kv.first;
+                    if (!visited.count(live_label)) {
+                        visited.insert(live_label);
+                        if (reachable.count(live_label)) {
+                            tempscope.push_back(live_label);
+                        }
                     }
                 }
             }
-
         }
     }
 
@@ -3549,7 +3591,12 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
     ll->link_backrefs();
 }
 
-static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map) {
+enum MangleFlag {
+    Mangle_Verbose = (1<<0),
+};
+
+static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map,
+    int verbose = 0) {
 
     std::vector<Label *> entry_scope;
     entry->build_scope(entry_scope);
@@ -3557,6 +3604,10 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     // remap entry point
     Label *le = Label::from(entry);
     le->set_parameters(params);
+        /*
+    if (recursive) {
+        map.insert(MangleMap::value_type(entry, {Any(le)}));
+    }*/
 
     // create new labels and map new parameters
     for (auto &&l : entry_scope) {
@@ -3579,22 +3630,22 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     }
     mangle_remap_body(le, entry, map);
 
-    #if 0
+    if (verbose & Mangle_Verbose) {
     StyledStream ss(std::cout);
     ss << "IN[\n";
-    stream_il(ss, entry, StreamILFormat::debug_single());
+    stream_label(ss, entry, StreamLabelFormat::debug_single());
     for (auto && l : entry_scope) {
-        stream_il(ss, l, StreamILFormat::debug_single());
+        stream_label(ss, l, StreamLabelFormat::debug_single());
     }
     ss << "]IN\n";
     ss << "OUT[\n";
-    stream_il(ss, le, StreamILFormat::debug_single());
+    stream_label(ss, le, StreamLabelFormat::debug_single());
     for (auto && l : entry_scope) {
         auto it = map.find(l);
-        stream_il(ss, it->second, StreamILFormat::debug_single());
+        stream_label(ss, it->second.front(), StreamLabelFormat::debug_single());
     }
     ss << "]OUT\n";
-    #endif
+    }
 
     return le;
 }
@@ -5328,6 +5379,16 @@ static Type TypeSet(const std::vector<Type> &types) {
 
 //------------------------------------------------------------------------------
 
+static bool first_order_type(Type type) {
+    switch (type.value()) {
+    case TYPE_Builtin:
+    case TYPE_Type:
+    case TYPE_Label:
+        return true;
+    default: return false;
+    }
+}
+
 static bool is_basic_block_like(Label *label) {
     if (label->params.empty())
         return true;
@@ -5336,6 +5397,25 @@ static bool is_basic_block_like(Label *label) {
     return false;
 }
 
+static bool has_free_parameters(Label *label) {
+    std::vector<Label *> scope;
+    label->build_scope(scope);
+    scope.push_back(label);
+    std::unordered_set<Label *> labels;
+    for (auto &&label : scope) {
+        labels.insert(label);
+    }
+    for (auto &&label : scope) {
+        auto &&enter = label->body.enter;
+        if (enter.type == TYPE_Parameter && !labels.count(enter.parameter->label))
+            return true;
+        for (auto &&arg : label->body.args) {
+            if (arg.type == TYPE_Parameter && !labels.count(arg.parameter->label))
+                return true;
+        }
+    }
+    return false;
+}
 
 struct GenerateCtx {
     std::unordered_map<Symbol, LLVMValueRef, Symbol::Hash> string2value;
@@ -5354,6 +5434,9 @@ struct GenerateCtx {
     LLVMTypeRef i32T;
     LLVMTypeRef i64T;
     LLVMTypeRef rawstringT;
+    LLVMTypeRef noneT;
+
+    LLVMValueRef noneV;
 
 #define B_LLVM_BUILTINS() \
     T(FN_Write, voidT, rawstringT)
@@ -5370,6 +5453,8 @@ struct GenerateCtx {
         i16T = LLVMInt16Type();
         i32T = LLVMInt32Type();
         i64T = LLVMInt64Type();
+        noneV = LLVMConstStruct(nullptr, 0, false);
+        noneT = LLVMTypeOf(noneV);
         rawstringT = LLVMPointerType(LLVMInt8Type(), 0);
 #define T(NAME, RET, ...) \
     { \
@@ -5403,29 +5488,9 @@ struct GenerateCtx {
         return true;
     }
 
-    static bool has_free_parameters(Label *label) {
-        std::vector<Label *> scope;
-        label->build_scope(scope);
-        scope.push_back(label);
-        std::unordered_set<Label *> labels;
-        for (auto &&label : scope) {
-            labels.insert(label);
-        }
-        for (auto &&label : scope) {
-            auto &&enter = label->body.enter;
-            if (enter.type == TYPE_Parameter && !labels.count(enter.parameter->label))
-                return true;
-            for (auto &&arg : label->body.args) {
-                if (arg.type == TYPE_Parameter && !labels.count(arg.parameter->label))
-                    return true;
-            }
-        }
-        return false;
-    }
-
     LLVMTypeRef type_to_llvm_type(Type type) {
         switch (type.value()) {
-        case TYPE_Nothing: return voidT;
+        case TYPE_Nothing: return noneT;
         case TYPE_Bool: return i1T;
         case TYPE_I8:
         case TYPE_U8: return i8T;
@@ -5485,6 +5550,8 @@ struct GenerateCtx {
 
     LLVMValueRef argument_to_value(Any value) {
         switch(value.type.value()) {
+        case TYPE_Nothing:
+            return noneV;
         case TYPE_Bool:
             return LLVMConstInt(i1T, value.i1, false);
         case TYPE_I8: return LLVMConstInt(i8T, value.i8, true);
@@ -5528,6 +5595,8 @@ struct GenerateCtx {
         auto &&enter = body.enter;
         auto &&args = body.args;
 
+        set_active_anchor(label->body.anchor);
+
         size_t argcount = args.size() - 1;
         LLVMValueRef values[argcount];
         for (size_t i = 0; i < argcount; ++i) {
@@ -5548,8 +5617,39 @@ struct GenerateCtx {
                     LLVMValueAsBasicBlock(values[1]),
                     LLVMValueAsBasicBlock(values[2]));
             } break;
+            case OP_ICmpEQ:
+            case OP_ICmpNE:
+            case OP_ICmpUGT:
+            case OP_ICmpUGE:
+            case OP_ICmpULT:
+            case OP_ICmpULE:
+            case OP_ICmpSGT:
+            case OP_ICmpSGE:
+            case OP_ICmpSLT:
+            case OP_ICmpSLE: {
+                LLVMIntPredicate pred;
+                switch(enter.builtin.value()) {
+                    case OP_ICmpEQ: pred = LLVMIntEQ; break;
+                    case OP_ICmpNE: pred = LLVMIntNE; break;
+                    case OP_ICmpUGT: pred = LLVMIntUGT; break;
+                    case OP_ICmpUGE: pred = LLVMIntUGE; break;
+                    case OP_ICmpULT: pred = LLVMIntULT; break;
+                    case OP_ICmpULE: pred = LLVMIntULE; break;
+                    case OP_ICmpSGT: pred = LLVMIntSGT; break;
+                    case OP_ICmpSGE: pred = LLVMIntSGE; break;
+                    case OP_ICmpSLT: pred = LLVMIntSLT; break;
+                    case OP_ICmpSLE: pred = LLVMIntSLE; break;
+                    default: assert(false); break;
+                }
+                retvalue = LLVMBuildICmp(builder, pred, values[0], values[1], "");
+            } break;
+            case OP_Add: retvalue = LLVMBuildAdd(builder, values[0], values[1], ""); break;
+            case OP_AddNUW: retvalue = LLVMBuildNUWAdd(builder, values[0], values[1], ""); break;
+            case OP_AddNSW: retvalue = LLVMBuildNSWAdd(builder, values[0], values[1], ""); break;
             default: {
-                assert(false && "todo: translate builtin");
+                StyledString ss;
+                ss.out << "IL->IR: unsupported builtin " << enter.builtin << " encountered";
+                location_error(ss.str());
             } break;
             }
         } break;
@@ -5578,7 +5678,7 @@ struct GenerateCtx {
             // must be a return
             assert(enter.parameter->index == 0);
             if (argcount > 1) {
-                assert(false && "todo: multiple return values");
+                LLVMBuildAggregateRet(builder, values, argcount);
             } else if (argcount == 1) {
                 LLVMBuildRet(builder, values[0]);
             } else {
@@ -5599,6 +5699,25 @@ struct GenerateCtx {
             }
         } else if (contarg.type == TYPE_Label) {
             auto bb = label_to_basic_block(contarg.label);
+            if (retvalue) {
+                auto bbfrom = LLVMGetInsertBlock(builder);
+                // assign phi nodes
+                auto &&params = contarg.label->params;
+                LLVMBasicBlockRef incobbs[] = { bbfrom };
+                for (size_t i = 1; i < params.size(); ++i) {
+                    Parameter *param = params[i];
+                    LLVMValueRef phinode = argument_to_value(param);
+                    LLVMValueRef incoval = nullptr;
+                    if (params.size() == 2) {
+                        // single argument
+                        incoval = retvalue;
+                    } else {
+                        // multiple arguments
+                        incoval = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                    }
+                    LLVMAddIncoming(phinode, &incoval, incobbs, 1);
+                }
+            }
             LLVMBuildBr(builder, bb);
         } else if (contarg.type == TYPE_Nothing) {
         } else {
@@ -5640,6 +5759,8 @@ struct GenerateCtx {
     LLVMValueRef label_to_function(Label *label) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
+            assert(!has_free_parameters(label));
+
             auto old_bb = LLVMGetInsertBlock(builder);
             const char *name = label->name.name()->data;
 
@@ -5713,6 +5834,8 @@ static std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
     retargtypes = { TYPE_Nothing, __VA_ARGS__ }
 
 struct NormalizeCtx {
+    StyledStream ss_cout;
+
     std::vector<Label *> todo;
     struct LabelInstances {
         std::unordered_map<Type, Label *, Type::Hash> instances;
@@ -5729,33 +5852,197 @@ struct NormalizeCtx {
 
     std::unordered_map<std::pair<Label *, ILNode *>, Label *, HashLabelNodePair> labels2ic;
 
-    Label *inline_continuation(Label *label, Any cont) {
-        ILNode *node = nullptr;
+
+    struct LabelArgs {
+        Label *label;
+        std::vector<Any> args;
+
+        bool operator==(const LabelArgs &other) const {
+            if (label != other.label) return false;
+            if (args.size() != other.args.size()) return false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                auto &&a = args[i];
+                auto &&b = other.args[i];
+                if (a.type != b.type) return false;
+                if ((a.type == TYPE_Any) || (a.type == TYPE_Nothing))
+                    continue;
+                switch(a.type.value()) {
+                case TYPE_Bool: if (a.i1 != b.i1) return false; break;
+                case TYPE_U8: case TYPE_I8: if (a.u8 != b.u8) return false; break;
+                case TYPE_U16: case TYPE_I16: if (a.u16 != b.u16) return false; break;
+                case TYPE_U32: case TYPE_I32: if (a.u32 != b.u32) return false; break;
+                case TYPE_U64: case TYPE_I64: if (a.u64 != b.u64) return false; break;
+                case TYPE_R32: if (a.r32 != b.r32) return false; break;
+                case TYPE_R64: if (a.r64 != b.r64) return false; break;
+                default: if (a.pointer != b.pointer) return false; break;
+                }
+            }
+            return true;
+        }
+    };
+    struct HashLabelArgs {
+        std::size_t operator()(const LabelArgs& s) const {
+            std::size_t h = std::hash<Label *>{}(s.label);
+            for (auto &&arg : s.args) {
+                if ((arg.type != TYPE_Any) && (arg.type != TYPE_Nothing)) {
+                    size_t h2;
+                    switch(arg.type.value()) {
+                    case TYPE_Bool: h2 = std::hash<bool>{}(arg.i1); break;
+                    case TYPE_U8: case TYPE_I8: h2 = std::hash<uint8_t>{}(arg.u8); break;
+                    case TYPE_U16: case TYPE_I16: h2 = std::hash<uint16_t>{}(arg.u16); break;
+                    case TYPE_U32: case TYPE_I32: h2 = std::hash<uint32_t>{}(arg.u32); break;
+                    case TYPE_U64: case TYPE_I64: h2 = std::hash<uint64_t>{}(arg.u64); break;
+                    case TYPE_R32: h2 = std::hash<float>{}(arg.r32); break;
+                    case TYPE_R64: h2 = std::hash<double>{}(arg.r64); break;
+                    default: h2 = std::hash<void *>{}(arg.pointer); break;
+                    }
+                    h = HashLen16(h, h2);
+                }
+            }
+            return h;
+        }
+    };
+
+    std::unordered_map<LabelArgs, Label *, HashLabelArgs> label2ia;
+
+    Label *start_entry;
+
+    NormalizeCtx() :
+        ss_cout(std::cout),
+        start_entry(nullptr)
+    {}
+
+    bool has_untyped_continuation(Label *label) {
+        if (label->params.empty()) return false;
+        switch(label->params[0]->type.value()) {
+        case TYPE_Label:
+        case TYPE_Any:
+        {
+            return true;
+        } break;
+        }
+        return false;
+    }
+
+    bool has_empty_parameters(Label *label) {
+        if (label->params.empty()) return true;
+        if (label->params.size() > 1) return false;
+        return label->params[0]->type == TYPE_Nothing;
+    }
+
+    ILNode *node_from_continuation(Any cont) {
         switch(cont.type.value()) {
-        case TYPE_Nothing: break;
-        case TYPE_Label: node = cont.label; break;
-        case TYPE_Parameter: node = cont.parameter; break;
+        case TYPE_Nothing: return nullptr;
+        case TYPE_Label: return cont.label;
+        case TYPE_Parameter: return cont.parameter;
         default: {
             location_error(String::from("continuation must be label, parameter or none"));
         } break;
         }
+        return nullptr;
+    }
+
+    // inlining the continuation of a branch label without arguments
+    Label *inline_branch_continuation(Label *label, Any cont) {
+        //ss_cout << "inline_branch_continuation: " << label << std::endl;
+
+        ILNode *node = node_from_continuation(cont);
 
         auto it = labels2ic.find({label, node });
         if (it == labels2ic.end()) {
             if (is_basic_block_like(label)) {
+                labels2ic.insert({{label, node}, label});
+                normalize(label);
                 return label;
+            } else {
+                assert(label->params.size() == 1);
+
+                MangleMap map;
+                std::vector<Parameter *> newparams;
+                Parameter *param = label->params[0];
+                Parameter *newparam = Parameter::from(param);
+                newparam->type = TYPE_Nothing;
+                newparams.push_back(newparam);
+                map[param] = {cont};
+                Label *newlabel = mangle(label, newparams, map);
+                labels2ic.insert({{label, node}, newlabel});
+                normalize(newlabel);
+                return newlabel;
             }
-            assert(label->params.size() == 1);
+        } else {
+            return it->second;
+        }
+    }
+
+    // inlining the arguments of an untyped scope (including continuation)
+    Label *inline_arguments(Label *label, const std::vector<Any> &args) {
+#if 0
+        ss_cout << "inline_arguments: " << label;
+        for (auto &&arg : args) {
+            ss_cout << " " << arg;
+        }
+        ss_cout << std::endl;
+#endif
+
+        struct LabelArgs la;
+        la.label = label;
+        la.args = args;
+        auto it = label2ia.find(la);
+        if (it == label2ia.end()) {
+            assert(!label->params.empty());
 
             MangleMap map;
             std::vector<Parameter *> newparams;
-            Parameter *param = label->params[0];
-            Parameter *newparam = Parameter::from(param);
-            newparam->type = TYPE_Nothing;
-            map[param] = {cont};
-            Label *newlabel = mangle(label, newparams, map);
-            labels2ic.insert({{label, node}, newlabel});
-            normalize(newlabel);
+            size_t lasti = label->params.size() - 1;
+            size_t srci = 0;
+            for (size_t i = 0; i < label->params.size(); ++i) {
+                Parameter *param = label->params[i];
+                if (param->vararg) {
+                    assert(i == lasti);
+                    size_t ncount = args.size();
+                    if (srci < ncount) {
+                        ncount -= srci;
+                        std::vector<Any> vargs;
+                        for (size_t k = 0; k < ncount; ++k) {
+                            Any value = args[srci + k];
+                            if (value.type == TYPE_Any) {
+                                Parameter *newparam = Parameter::from(param);
+                                newparam->vararg = false;
+                                newparam->type = TYPE_Any;
+                                newparam->name = Symbol(SYM_Unnamed);
+                                newparams.push_back(newparam);
+                                vargs.push_back(newparam);
+                            } else {
+                                vargs.push_back(value);
+                            }
+                        }
+                        map[param] = vargs;
+                        srci = ncount;
+                    } else {
+                        map[param] = {};
+                    }
+                } else if (srci < args.size()) {
+                    Any value = args[srci];
+                    if (value.type == TYPE_Any) {
+                        Parameter *newparam = Parameter::from(param);
+                        newparams.push_back(newparam);
+                        map[param] = {newparam};
+                    } else {
+                        if (!srci) {
+                            Parameter *newparam = Parameter::from(param);
+                            newparam->type = TYPE_Nothing;
+                            newparams.push_back(newparam);
+                        }
+                        map[param] = {value};
+                    }
+                    srci++;
+                } else {
+                    map[param] = {none};
+                    srci++;
+                }
+            }
+            Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
+            label2ia.insert({la, newlabel});
             return newlabel;
         } else {
             return it->second;
@@ -5763,6 +6050,8 @@ struct NormalizeCtx {
     }
 
     Label *typify(Label *label, const std::vector<Type> &argtypes) {
+        assert(!argtypes.empty());
+        assert(!label->params.empty());
 
         std::vector<Type> hashargs = { TYPE_Nothing };
         for (size_t i = 1; i < argtypes.size(); ++i) {
@@ -5806,7 +6095,11 @@ struct NormalizeCtx {
             } else if (srci < argtypes.size()) {
                 Type argtype = argtypes[srci];
                 Parameter *newparam = Parameter::from(param);
-                newparam->type = argtype;
+                if (srci == 0) {
+                    // don't touch type of continuation
+                } else {
+                    newparam->type = argtype;
+                }
                 newparams.push_back(newparam);
                 map[param] = {newparam};
                 srci++;
@@ -5831,10 +6124,16 @@ struct NormalizeCtx {
 #endif
 
         normalize(newlabel);
+        // assume continuation has never been called if it hasn't been typed
+        if (has_untyped_continuation(newlabel)) {
+            newlabel->params[0]->type = TYPE_Nothing;
+        }
         return newlabel;
     }
 
     Any type_continuation(Any dest, const std::vector<Type> &argtypes) {
+        //ss_cout << "type_continuation: " << dest << std::endl;
+
         switch (dest.type.value()) {
         case TYPE_Parameter: {
             Parameter *param = dest.parameter;
@@ -5861,14 +6160,43 @@ struct NormalizeCtx {
         return dest;
     }
 
+    static void verify_integer_ops(Any a, Any b) {
+        verify_integer(a.indirect_type());
+        verify(a.indirect_type(), b.indirect_type());
+    }
+
+    static bool const_ops(Any a, Any b) {
+        return ((a.type != TYPE_Parameter) && (b.type != TYPE_Parameter));
+    }
+
+    void copy_body(Label *dest, Label *source) {
+        dest->unlink_backrefs();
+        dest->body = source->body;
+        dest->link_backrefs();
+    }
+
+    static bool inlinable_argument(Any arg) {
+        //first_order_type(arg.type)
+        switch(arg.type.value()) {
+        case TYPE_Any:
+        case TYPE_Parameter: return false;
+        default: return true;
+        }
+    }
+
     void normalize(Label *entry) {
+    renormalize:
+        //ss_cout << "normalize: " << entry << std::endl;
 
         set_active_anchor(entry->body.anchor);
 
         auto &&enter = entry->body.enter;
         auto &&args = entry->body.args;
         assert(!args.empty());
-        Any retcont = args[0];
+#define RETARGS(...) \
+    enter = args[0]; \
+    args = { none, __VA_ARGS__ }; \
+    goto renormalize;
 
         switch(enter.type.value()) {
         case TYPE_Builtin: {
@@ -5876,15 +6204,36 @@ struct NormalizeCtx {
             case FN_Branch: {
                 CHECKARGS(3, 3);
                 args[1].verify_indirect<TYPE_Bool>();
-                Label *then_cond = args[2];
-                Label *else_cond = args[3];
-                Label *then_cond2 = inline_continuation(then_cond, args[0]);
-                Label *else_cond2 = inline_continuation(else_cond, args[0]);
-                entry->unlink_backrefs();
-                args[0] = none;
-                args[2] = then_cond2;
-                args[3] = else_cond2;
-                entry->link_backrefs();
+                // constant switch?
+                if (args[1].type == TYPE_Bool) {
+                    // either branch label is typed and binds no parameters,
+                    // so we can directly inline it
+                    if (args[1].i1) {
+                        copy_body(entry,
+                            inline_branch_continuation(args[2], args[0]));
+                    } else {
+                        copy_body(entry,
+                            inline_branch_continuation(args[3], args[0]));
+                    }
+                } else {
+                    Label *then_br = inline_branch_continuation(args[2], args[0]);
+                    Label *else_br = inline_branch_continuation(args[3], args[0]);
+                    entry->unlink_backrefs();
+                    args[0] = none;
+                    args[2] = then_br;
+                    args[3] = else_br;
+                    entry->link_backrefs();
+                }
+            } break;
+            case FN_TypeOf: {
+                CHECKARGS(1, 1);
+                RETARGS(args[1].indirect_type());
+            } break;
+            case FN_TypeEq: {
+                CHECKARGS(2, 2);
+                args[1].verify<TYPE_Type>();
+                args[2].verify<TYPE_Type>();
+                RETARGS(args[1].typeref == args[2].typeref);
             } break;
             default: {
                 std::vector<Type> retargtypes = { TYPE_Nothing };
@@ -5895,6 +6244,70 @@ struct NormalizeCtx {
                     // stream_label(ss, entry, StreamLabelFormat::debug_single());
                     args[1].verify_indirect<TYPE_String>();
                 } break;
+                case OP_ICmpEQ:
+                case OP_ICmpNE:
+                case OP_ICmpUGT:
+                case OP_ICmpUGE:
+                case OP_ICmpULT:
+                case OP_ICmpULE:
+                case OP_ICmpSGT:
+                case OP_ICmpSGE:
+                case OP_ICmpSLT:
+                case OP_ICmpSLE: {
+                    CHECKARGS(2, 2);
+                    verify_integer_ops(args[1], args[2]);
+                    if (const_ops(args[1], args[2])) {
+#define B_INT_OP2(OP, N) \
+    switch(args[1].type.value()) { \
+    case TYPE_Bool: result = (args[1].i1 OP args[2].i1); break; \
+    case TYPE_I8: \
+    case TYPE_U8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_I16: \
+    case TYPE_U16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_I32: \
+    case TYPE_U32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_I64: \
+    case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
+    default: assert(false); break; \
+    } break;
+                        bool result;
+                        switch(enter.builtin.value()) {
+                        case OP_ICmpEQ: B_INT_OP2(==, u);
+                        case OP_ICmpNE: B_INT_OP2(!=, u);
+                        case OP_ICmpUGT: B_INT_OP2(>, u);
+                        case OP_ICmpUGE: B_INT_OP2(>=, u);
+                        case OP_ICmpULT: B_INT_OP2(<, u);
+                        case OP_ICmpULE: B_INT_OP2(<=, u);
+                        case OP_ICmpSGT: B_INT_OP2(>, i);
+                        case OP_ICmpSGE: B_INT_OP2(>=, i);
+                        case OP_ICmpSLT: B_INT_OP2(<, i);
+                        case OP_ICmpSLE: B_INT_OP2(<=, i);
+                        default: assert(false); break;
+                        }
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(TYPE_Bool);
+                    }
+                } break;
+                case OP_Add:
+                case OP_AddNUW:
+                case OP_AddNSW: {
+                    CHECKARGS(2, 2);
+                    verify_integer_ops(args[1], args[2]);
+                    if (const_ops(args[1], args[2])) {
+                        Any result = none;
+                        switch(enter.builtin.value()) {
+                        case OP_Add: B_INT_OP2(+, u);
+                        case OP_AddNUW: B_INT_OP2(+, u);
+                        case OP_AddNSW: B_INT_OP2(+, i);
+                        default: assert(false); break;
+                        }
+                        result.type = args[1].type;
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(args[1].indirect_type());
+                    }
+                } break;
                 default: {
                     StyledString ss;
                     ss.out << "builtin " << enter.builtin << " is not implemented";
@@ -5902,43 +6315,121 @@ struct NormalizeCtx {
                 } break;
                 }
 
-                Any newcont = type_continuation(retcont, retargtypes);
+                Any newcont = type_continuation(args[0], retargtypes);
                 entry->unlink_backrefs();
                 args[0] = newcont;
                 entry->link_backrefs();
             } break;
             }
+#undef RETARGS
+#undef B_INT_OP2
         } break;
         case TYPE_Label: {
-            std::vector<Type> argtypes = {};
-            for (auto &&arg : args) {
-                if (arg.type == TYPE_Parameter) {
-                    argtypes.push_back(arg.parameter->type);
-                } else {
-                    argtypes.push_back(arg.type);
+            bool inline_cont = false;
+            Label *original = enter.label;
+        backtrack:
+            Label *lenter = original;
+            assert(!lenter->params.empty());
+            inline_cont |=
+                (!is_basic_block_like(lenter) && has_free_parameters(lenter));
+
+            bool inline_args = false;
+            if (!inline_cont) {
+                size_t numinlined = 1;
+                // check if any args are inlinable
+                for (size_t i = 1; i < args.size(); ++i) {
+                    auto &&arg = args[i];
+                    if (inlinable_argument(arg)) {
+                        inline_args = true;
+                        numinlined++;
+                    }
+                }
+                // if all args are being inlined and the continuation
+                // is constant, inline it as well
+                if (numinlined == args.size()) {
+                    if (inlinable_argument(args[0]))
+                        inline_cont = true;
                 }
             }
-            Label *newenter = typify(enter.label, argtypes);
-            entry->unlink_backrefs();
-            enter = newenter;
-            entry->link_backrefs();
 
-            assert(!newenter->params.empty());
-            Type rettype = newenter->params[0]->type;
-            if (is_typed_label(rettype)) {
-                auto &&tli = get_typed_label_info(rettype);
-                std::vector<Type> retargtypes = tli.types;
-                Any newcont = type_continuation(retcont, retargtypes);
+            std::vector<Any> oldargs = args;
+            if (inline_args || inline_cont) {
+                Any anyval = none;
+                anyval.type = TYPE_Any;
+                std::vector<Any> callargs;
+                std::vector<Any> keys;
+                if (inline_cont) {
+                    // continuation is directly inlined
+                    callargs.push_back(none);
+                    keys.push_back(args[0]);
+                } else {
+                    callargs.push_back(args[0]);
+                    keys.push_back(anyval);
+                }
+                for (size_t i = 1; i < args.size(); ++i) {
+                    auto &&arg = args[i];
+                    if (inlinable_argument(arg)) {
+                        keys.push_back(arg);
+                    } else {
+                        keys.push_back(anyval);
+                        callargs.push_back(arg);
+                    }
+                }
+                lenter = inline_arguments(lenter, keys);
                 entry->unlink_backrefs();
-                args[0] = newcont;
+                args = callargs;
                 entry->link_backrefs();
-            } else if (rettype == TYPE_Nothing) {
-                // basic-block style label jump, ignore
+            }
+
+            std::vector<Type> argtypes = {};
+            for (auto &&arg : args) {
+                argtypes.push_back(arg.indirect_type());
+            }
+            Label *newenter = typify(lenter, argtypes);
+
+            if (has_empty_parameters(newenter)) {
+                // since newenter is binding no new arguments, we can directly
+                // copy over its body
+                copy_body(entry, newenter);
             } else {
-                StyledString ss;
-                ss.out << "continuation of typed label type expected, got " << rettype << std::endl;
-                stream_label(ss.out, newenter, StreamLabelFormat::debug_single());
-                location_error(ss.str());
+                entry->unlink_backrefs();
+                enter = newenter;
+                entry->link_backrefs();
+
+                assert(!newenter->params.empty());
+                Type rettype = newenter->params[0]->type;
+                //ss_cout << entry << ": return type of " << newenter << " is " << rettype << std::endl;
+                if (is_typed_label(rettype)) {
+                    auto &&tli = get_typed_label_info(rettype);
+                    std::vector<Type> retargtypes = tli.types;
+                    for (size_t i = 1; i < retargtypes.size(); ++i) {
+                        if (first_order_type(retargtypes[i])) {
+                            // function returns one or multiple first order types
+                            // which means the continuation has to be dropped into
+                            // this one
+                            inline_cont = true;
+                            // revert args
+                            entry->unlink_backrefs();
+                            args = oldargs;
+                            entry->link_backrefs();
+                            goto backtrack;
+                        }
+                    }
+                    Any newcont = type_continuation(args[0], retargtypes);
+                    entry->unlink_backrefs();
+                    args[0] = newcont;
+                    entry->link_backrefs();
+                } else if (rettype == TYPE_Nothing) {
+                    // basic-block style label jump, null our continuation argument
+                    entry->unlink_backrefs();
+                    args[0] = none;
+                    entry->link_backrefs();
+                } else {
+                    StyledString ss;
+                    ss.out << "continuation of typed label type expected, got " << rettype << std::endl;
+                    stream_label(ss.out, newenter, StreamLabelFormat::debug_single());
+                    location_error(ss.str());
+                }
             }
         } break;
         case TYPE_Parameter: {
@@ -5947,16 +6438,14 @@ struct NormalizeCtx {
                 StyledString ss;
                 ss.out << "can't call higher order parameter" << std::endl;
                 stream_label(ss.out, entry, StreamLabelFormat::debug_single());
+                ss.out << std::endl;
+                stream_label(ss.out, start_entry, StreamLabelFormat());
                 location_error(ss.str());
             }
 
             std::vector<Type> argtypes = {};
             for (auto &&arg : args) {
-                if (arg.type == TYPE_Parameter) {
-                    argtypes.push_back(arg.parameter->type);
-                } else {
-                    argtypes.push_back(arg.type);
-                }
+                argtypes.push_back(arg.indirect_type());
             }
             type_continuation(enter, argtypes);
         } break;
@@ -5972,6 +6461,7 @@ struct NormalizeCtx {
 
 static Label *normalize(Label *entry) {
     NormalizeCtx ctx;
+    ctx.start_entry = entry;
     ctx.normalize(entry);
     return entry;
 }
