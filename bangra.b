@@ -140,25 +140,25 @@
             io-write "false"
 
 # polymorphic return type and inlined type checking
-    fn/cc print-value (_ value)
-        call
-            fn/cc (_ value-type)
-                branch (type== value-type i32)
-                    fn/cc (_)
-                        io-write "<number>\n"
-                        \ "hello"
-                    fn/cc (_)
-                        branch (type== value-type string)
-                            fn/cc (_)
-                                io-write value
-                                io-write "\n"
-                                \ false
-                            fn/cc (_)
-                                io-write "???\n"
-            typeof value
+fn/cc print-value (_ value)
+    call
+        fn/cc (_ value-type)
+            branch (type== value-type i32)
+                fn/cc (_)
+                    io-write "<number>\n"
+                    \ "hello"
+                fn/cc (_)
+                    branch (type== value-type string)
+                        fn/cc (_)
+                            io-write value
+                            io-write "\n"
+                            \ false
+                        fn/cc (_)
+                            io-write "???\n"
+        typeof value
+print-value
     print-value
-        print-value
-            print-value 3
+        print-value 3
 
 # typify
     fn/cc f (_ s)

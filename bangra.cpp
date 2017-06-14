@@ -228,6 +228,10 @@ void bangra_FN_Write(const char *);
 #include <llvm-c/Disassembler.h>
 
 #include "llvm/IR/Module.h"
+#include "llvm/ExecutionEngine/SectionMemoryManager.h"
+#include "llvm/ExecutionEngine/ExecutionEngine.h"
+#include "llvm/ExecutionEngine/JITEventListener.h"
+#include "llvm/Object/SymbolSize.h"
 
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -282,6 +286,10 @@ void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base) {
 }
 void bangra_strtoull(uint64_t *v, const char* str, char** endptr, int base) {
     *v = std::strtoull(str, endptr, base);
+}
+
+static size_t align(size_t offset, size_t align) {
+    return (offset + align - 1) & ~(align - 1);
 }
 
 static char parse_hexchar(char c) {
@@ -7106,7 +7114,7 @@ void build_and_run_opt_passes(LLVMModuleRef module) {
     passBuilder = LLVMPassManagerBuilderCreate();
     LLVMPassManagerBuilderSetOptLevel(passBuilder, 3);
     LLVMPassManagerBuilderSetSizeLevel(passBuilder, 0);
-    LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
+    //LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
 
     LLVMPassManagerRef functionPasses =
       LLVMCreateFunctionPassManagerForModule(module);
@@ -7147,7 +7155,35 @@ static void pprint(int pos, unsigned char *buf, int len, const char *disasm) {
   printf("   %s\n", disasm);
 }
 
-static void do_disassemble(LLVMTargetMachineRef tm, void *fptr) {
+static uint8_t *mm_allocate_code_section_cb(
+  void *Opaque, uintptr_t size, unsigned alignment, unsigned sectionID,
+  const char *sectionName) {
+    //std::cout << "allocating code section: " << sectionName << " " << size << " " << alignment << std::endl;
+    return static_cast<llvm::SectionMemoryManager*>(Opaque)->allocateCodeSection(
+        size, alignment, sectionID, sectionName);
+}
+static uint8_t *mm_allocate_data_section_cb(
+  void *Opaque, uintptr_t size, unsigned alignment, unsigned sectionID,
+  const char *sectionName, LLVMBool isReadOnly) {
+    //std::cout << "allocating data section: " << sectionName << " " << size << " " << alignment << std::endl;
+    return static_cast<llvm::SectionMemoryManager*>(Opaque)->allocateDataSection(
+        size, alignment, sectionID, sectionName, isReadOnly);
+}
+static LLVMBool mm_finalize_memory_cb(void *Opaque, char **errMsg) {
+    std::string errMsgString;
+    bool result =
+        static_cast<llvm::SectionMemoryManager*>(Opaque)->finalizeMemory(&errMsgString);
+    if (result) {
+        *errMsg = LLVMCreateMessage(errMsgString.c_str());
+        return 1;
+    }
+    return 0;
+}
+static void mm_destroy_cb(void *Opaque) {
+    delete static_cast<llvm::SectionMemoryManager*>(Opaque);
+}
+
+static void do_disassemble(LLVMTargetMachineRef tm, void *fptr, int siz) {
 
     unsigned char *buf = (unsigned char *)fptr;
 
@@ -7167,7 +7203,6 @@ static void do_disassemble(LLVMTargetMachineRef tm, void *fptr) {
   }
 
   pos = 0;
-  int siz = 96 * 1024;
   while (pos < siz) {
     size_t l = LLVMDisasmInstruction(D, buf + pos, siz - pos, 0, outline,
                                      sizeof(outline));
@@ -7177,15 +7212,49 @@ static void do_disassemble(LLVMTargetMachineRef tm, void *fptr) {
         break;
     } else {
       pprint(pos, buf + pos, l, outline);
-      if (l == 1 && buf[pos] == 0xc3) {
-         break;
-      }
       pos += l;
     }
   }
 
   LLVMDisasmDispose(D);
 }
+
+class DisassemblyListener : public llvm::JITEventListener {
+public:
+    llvm::ExecutionEngine *ee;
+    DisassemblyListener(llvm::ExecutionEngine *_ee) : ee(_ee) {}
+
+    std::unordered_map<void *, size_t> sizes;
+
+    void InitializeDebugData(
+        llvm::StringRef name,
+        llvm::object::SymbolRef::Type type, uint64_t sz) {
+        if(type == llvm::object::SymbolRef::ST_Function) {
+            #if !defined(__arm__) && !defined(__linux__)
+            name = name.substr(1);
+            #endif
+            void * addr = (void*)ee->getFunctionAddress(name);
+            if(addr) {
+                assert(addr);
+                sizes[addr] = sz;
+            }
+        }
+    }
+
+    virtual void NotifyObjectEmitted(
+        const llvm::object::ObjectFile &Obj,
+        const llvm::RuntimeDyld::LoadedObjectInfo &L) {
+        std::cout << "emitted!\n";
+        auto size_map = llvm::object::computeSymbolSizes(Obj);
+        for(auto & S : size_map) {
+            llvm::object::SymbolRef sym = S.first;
+            auto name = sym.getName();
+            auto type = sym.getType();
+            if(name && type)
+                InitializeDebugData(name.get(),type.get(),S.second);
+        }
+    }
+};
 
 int main(int argc, char *argv[]) {
     using namespace bangra;
@@ -7263,11 +7332,24 @@ int main(int argc, char *argv[]) {
         LLVMMCJITCompilerOptions opts;
         LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
         opts.OptLevel = 0;
+#if 0
+        auto mcjmm = LLVMCreateSimpleMCJITMemoryManager(
+            new llvm::SectionMemoryManager(),
+            mm_allocate_code_section_cb,
+            mm_allocate_data_section_cb,
+            mm_finalize_memory_cb,
+            mm_destroy_cb);
+        opts.MCJMM = mcjmm;
+#endif
 
         if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
             sizeof(opts), &errormsg)) {
             location_error(String::from_cstr(errormsg));
         }
+
+        llvm::ExecutionEngine *pEE = reinterpret_cast<llvm::ExecutionEngine*>(ee);
+        auto listener = new DisassemblyListener(pEE);
+        pEE->RegisterJITEventListener(listener);
 
         auto td = LLVMGetExecutionEngineTargetData(ee);
         auto tm = LLVMGetExecutionEngineTargetMachine(ee);
@@ -7291,9 +7373,20 @@ int main(int argc, char *argv[]) {
 
         typedef void (*MainFuncType)();
         void *pfunc = LLVMGetPointerToGlobal(ee, func);
-        //do_disassemble(tm, pfunc);
+        {
+            auto it = listener->sizes.find(pfunc);
+            if (it != listener->sizes.end()) {
+                do_disassemble(tm, pfunc, it->second);
+            } else {
+                std::cout << "no disassembly available\n";
+            }
+        }
         MainFuncType fptr = (MainFuncType)pfunc;
         fptr();
+
+#if 0
+        LLVMDisposeMCJITMemoryManager(mcjmm);
+#endif
 
         //interpreter_loop(cmd);
 #if CATCH_EXCEPTION
