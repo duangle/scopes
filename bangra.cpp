@@ -575,7 +575,8 @@ namespace bangra {
     T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) T(FN_StyleToString) \
     T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
     T(FN_AnchorSource) T(FN_ParseC) T(FN_Load) T(FN_Store) T(FN_MemCpy) \
-    T(FN_Malloc) T(FN_Free) \
+    T(FN_Malloc) T(FN_Free) T(FN_Typify) T(FN_CompilerError) T(FN_IsConstant) \
+    T(FN_Mystify) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
@@ -648,7 +649,8 @@ namespace bangra {
     T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
     \
     /* builtin and global functions */ \
-    T(FN_Alignof, "alignof") T(FN_Args, "args") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
+    T(FN_Alignof, "alignof") \
+    T(FN_Args, "args") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
@@ -657,7 +659,9 @@ namespace bangra {
     T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
     T(FN_BuiltinEq, "Builtin==") \
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
-    T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_Countof, "countof") \
+    T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_IsConstant, "constant?") \
+    T(FN_Countof, "countof") \
+    T(FN_CompilerError, "compiler-error") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
     T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
@@ -689,7 +693,7 @@ namespace bangra {
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
-    T(FN_Malloc, "malloc") \
+    T(FN_Malloc, "malloc") T(FN_Mystify, "mystify") \
     T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") \
     T(FN_MemCpy, "memcpy") \
     T(FN_IsNone, "none?") \
@@ -721,6 +725,7 @@ namespace bangra {
     T(FN_Translate, "translate") \
     T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
     T(FN_TypeSizeOf, "type-sizeof") \
+    T(FN_Typify, "typify") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -3140,13 +3145,15 @@ public:
                 }
 
                 switch(arg.type.value()) {
-                case TYPE_Parameter: {
+#if 0
+                    case TYPE_Parameter: {
                     Label *label = arg.parameter->label;
                     if (label && !labels.count(label)) {
                         labels.insert(label);
                         stack.push_back(label);
                     }
                 } break;
+#endif
                 case TYPE_Label: {
                     Label *label = arg.label;
                     if (!labels.count(label)) {
@@ -3604,11 +3611,6 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     // remap entry point
     Label *le = Label::from(entry);
     le->set_parameters(params);
-        /*
-    if (recursive) {
-        map.insert(MangleMap::value_type(entry, {Any(le)}));
-    }*/
-
     // create new labels and map new parameters
     for (auto &&l : entry_scope) {
         Label *ll = Label::from(l);
@@ -5617,6 +5619,9 @@ struct GenerateCtx {
                     LLVMValueAsBasicBlock(values[1]),
                     LLVMValueAsBasicBlock(values[2]));
             } break;
+            case FN_Mystify: {
+                retvalue = values[0];
+            } break;
             case OP_ICmpEQ:
             case OP_ICmpNE:
             case OP_ICmpUGT:
@@ -5759,7 +5764,11 @@ struct GenerateCtx {
     LLVMValueRef label_to_function(Label *label) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
-            assert(!has_free_parameters(label));
+            if (has_free_parameters(label)) {
+                StyledString ss;
+                ss.out << "function " << label << " has free variables";
+                location_error(ss.str());
+            }
 
             auto old_bb = LLVMGetInsertBlock(builder);
             const char *name = label->name.name()->data;
@@ -5826,12 +5835,6 @@ static std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
 //------------------------------------------------------------------------------
 // NORMALIZE
 //------------------------------------------------------------------------------
-
-#define CHECKARGS(MINARGS, MAXARGS) \
-    checkargs<MINARGS, MAXARGS>(args.size())
-
-#define RETARGTYPES(...) \
-    retargtypes = { TYPE_Nothing, __VA_ARGS__ }
 
 struct NormalizeCtx {
     StyledStream ss_cout;
@@ -6124,10 +6127,6 @@ struct NormalizeCtx {
 #endif
 
         normalize(newlabel);
-        // assume continuation has never been called if it hasn't been typed
-        if (has_untyped_continuation(newlabel)) {
-            newlabel->params[0]->type = TYPE_Nothing;
-        }
         return newlabel;
     }
 
@@ -6176,7 +6175,6 @@ struct NormalizeCtx {
     }
 
     static bool inlinable_argument(Any arg) {
-        //first_order_type(arg.type)
         switch(arg.type.value()) {
         case TYPE_Any:
         case TYPE_Parameter: return false;
@@ -6193,6 +6191,12 @@ struct NormalizeCtx {
         auto &&enter = entry->body.enter;
         auto &&args = entry->body.args;
         assert(!args.empty());
+#define CHECKARGS(MINARGS, MAXARGS) \
+    checkargs<MINARGS, MAXARGS>(args.size())
+
+#define RETARGTYPES(...) \
+    retargtypes = { TYPE_Nothing, __VA_ARGS__ }
+
 #define RETARGS(...) \
     enter = args[0]; \
     args = { none, __VA_ARGS__ }; \
@@ -6235,6 +6239,27 @@ struct NormalizeCtx {
                 args[2].verify<TYPE_Type>();
                 RETARGS(args[1].typeref == args[2].typeref);
             } break;
+            case FN_Typify: {
+                CHECKARGS(2, -1);
+                args[1].verify<TYPE_Label>();
+                std::vector<Type> argtypes = { TYPE_Nothing };
+                for (size_t i = 2; i < args.size(); ++i) {
+                    args[i].verify<TYPE_Type>();
+                    argtypes.push_back(args[i].typeref);
+                }
+                assert(!argtypes.empty());
+                Label *result = typify(args[1], argtypes);
+                stream_label(ss_cout, result, StreamLabelFormat());
+                RETARGS(result);
+            } break;
+            case FN_CompilerError: {
+                CHECKARGS(1, 1);
+                location_error(args[1]);
+            } break;
+            case FN_IsConstant: {
+                CHECKARGS(1, 1);
+                RETARGS((args[1].type != TYPE_Parameter));
+            } break;
             default: {
                 std::vector<Type> retargtypes = { TYPE_Nothing };
                 switch(enter.builtin.value()) {
@@ -6243,6 +6268,10 @@ struct NormalizeCtx {
                     // StyledStream ss(std::cout);
                     // stream_label(ss, entry, StreamLabelFormat::debug_single());
                     args[1].verify_indirect<TYPE_String>();
+                } break;
+                case FN_Mystify: {
+                    CHECKARGS(1, 1);
+                    RETARGTYPES(args[1].indirect_type());
                 } break;
                 case OP_ICmpEQ:
                 case OP_ICmpNE:
@@ -6322,7 +6351,9 @@ struct NormalizeCtx {
             } break;
             }
 #undef RETARGS
+#undef RETARGTYPES
 #undef B_INT_OP2
+#undef CHECKARGS
         } break;
         case TYPE_Label: {
             bool inline_cont = false;
@@ -6330,25 +6361,20 @@ struct NormalizeCtx {
         backtrack:
             Label *lenter = original;
             assert(!lenter->params.empty());
-            inline_cont |=
-                (!is_basic_block_like(lenter) && has_free_parameters(lenter));
+            inline_cont = inline_cont ||
+                (!is_basic_block_like(lenter)
+                && has_free_parameters(lenter));
 
             bool inline_args = false;
+
             if (!inline_cont) {
-                size_t numinlined = 1;
-                // check if any args are inlinable
+                // all constant arguments will be inlined
                 for (size_t i = 1; i < args.size(); ++i) {
                     auto &&arg = args[i];
                     if (inlinable_argument(arg)) {
                         inline_args = true;
-                        numinlined++;
+                        break;
                     }
-                }
-                // if all args are being inlined and the continuation
-                // is constant, inline it as well
-                if (numinlined == args.size()) {
-                    if (inlinable_argument(args[0]))
-                        inline_cont = true;
                 }
             }
 
@@ -6391,6 +6417,8 @@ struct NormalizeCtx {
                 // since newenter is binding no new arguments, we can directly
                 // copy over its body
                 copy_body(entry, newenter);
+                // not sure why this is necessary, but apparently it is
+                goto renormalize;
             } else {
                 entry->unlink_backrefs();
                 enter = newenter;
@@ -6453,11 +6481,13 @@ struct NormalizeCtx {
             apply_type_error(enter);
         } break;
         }
+
+        // assume continuation has never been called if it hasn't been typed
+        if (has_untyped_continuation(entry)) {
+            entry->params[0]->type = TYPE_Nothing;
+        }
     }
 };
-
-#undef CHECKARGS
-#undef RETARGS
 
 static Label *normalize(Label *entry) {
     NormalizeCtx ctx;

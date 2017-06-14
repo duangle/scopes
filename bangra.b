@@ -49,20 +49,25 @@
     puts "hello world" 10
 
 # tail-recursive program that uses closures
-    fn/cc print-loop (_ s n)
-        fn/cc puts (_ s)
-            io-write s
-            io-write "\n"
-        fn/cc loop (_ i)
-            branch (icmp== i n)
-                fn/cc (_)
-                fn/cc (_)
-                    puts s
-                    loop (add i 1)
-        loop 0
+fn/cc print-loop (_ s n)
+    fn/cc puts (_ s)
+        io-write s
+        io-write "\n"
+    fn/cc loop (_ i)
+        branch (icmp== i n)
+            fn/cc (_)
+            fn/cc (_)
+                puts s
+                loop (add i 1)
+    loop
+        mystify 0
 
-    print-loop "hello world" 5
-    print-loop "hello world" 5
+call
+    fn/cc (_ txt)
+        print-loop txt 5
+        print-loop txt 5
+    \ "hello world"
+
 
 # program using closure
     fn/cc puts (return s)
@@ -135,25 +140,52 @@
             io-write "false"
 
 # polymorphic return type and inlined type checking
-fn/cc print-value (_ value)
-    call
-        fn/cc (_ value-type)
-            branch (type== value-type i32)
-                fn/cc (_)
-                    io-write "<number>\n"
-                    \ "hello"
-                fn/cc (_)
-                    branch (type== value-type string)
-                        fn/cc (_)
-                            io-write value
-                            io-write "\n"
-                            \ false
-                        fn/cc (_)
-                            io-write "???\n"
-        typeof value
-print-value
+    fn/cc print-value (_ value)
+        call
+            fn/cc (_ value-type)
+                branch (type== value-type i32)
+                    fn/cc (_)
+                        io-write "<number>\n"
+                        \ "hello"
+                    fn/cc (_)
+                        branch (type== value-type string)
+                            fn/cc (_)
+                                io-write value
+                                io-write "\n"
+                                \ false
+                            fn/cc (_)
+                                io-write "???\n"
+            typeof value
     print-value
-        print-value 3
+        print-value
+            print-value 3
+
+# typify
+    fn/cc f (_ s)
+        io-write s
+
+    typify f string
+
+# church encoding
+    fn/cc string->fn (_ s)
+        fn/cc (_ f)
+            f s
+
+    fn/cc io-write-fn (_ f)
+        f io-write
+
+    io-write-fn
+        string->fn "hello\n"
+
+# static assertion
+    branch (type== (typeof 1) i32)
+        fn/cc (_)
+        fn/cc (_)
+            compiler-error "static assertion failed: argument not i32"
+    branch (constant? (add 1 2))
+        fn/cc (_)
+        fn/cc (_)
+            compiler-error "static assertion failed: argument not constant"
 
 
 \ none
