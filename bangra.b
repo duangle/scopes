@@ -49,24 +49,24 @@
     puts "hello world" 10
 
 # tail-recursive program that uses closures
-fn/cc print-loop (_ s n)
-    fn/cc puts (_ s)
-        io-write s
-        io-write "\n"
-    fn/cc loop (_ i)
-        branch (icmp== i n)
-            fn/cc (_)
-            fn/cc (_)
-                puts s
-                loop (add i 1)
-    loop
-        mystify 0
+    fn/cc print-loop (_ s n)
+        fn/cc puts (_ s)
+            io-write s
+            io-write "\n"
+        fn/cc loop (_ i)
+            branch (icmp== i n)
+                fn/cc (_)
+                fn/cc (_)
+                    puts s
+                    loop (add i 1)
+        loop
+            mystify 0
 
-call
-    fn/cc (_ txt)
-        print-loop txt 5
-        print-loop txt 5
-    \ "hello world"
+    call
+        fn/cc (_ txt)
+            print-loop txt 5
+            print-loop txt 5
+        \ "hello world"
 
 
 # program using closure
@@ -187,9 +187,7 @@ call
         fn/cc (_)
             compiler-error "static assertion failed: argument not constant"
 
-
 \ none
-
 
 
 

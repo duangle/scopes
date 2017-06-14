@@ -224,6 +224,8 @@ void bangra_FN_Write(const char *);
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
 #include <llvm-c/Analysis.h>
+#include <llvm-c/Transforms/PassManagerBuilder.h>
+#include <llvm-c/Disassembler.h>
 
 #include "llvm/IR/Module.h"
 
@@ -5784,6 +5786,7 @@ struct GenerateCtx {
             }
             auto functype = LLVMFunctionType(return_type, arg_types, paramcount, false);
             auto func = LLVMAddFunction(module, name, functype);
+            LLVMSetLinkage(func, LLVMPrivateLinkage);
 
             for (size_t i = 0; i < paramcount; ++i) {
                 Parameter *param = params[i + 1];
@@ -5816,6 +5819,7 @@ struct GenerateCtx {
         define_builtin_functions();
 
         auto func = label_to_function(entry);
+        LLVMSetLinkage(func, LLVMExternalLinkage);
 
         LLVMDumpModule(module);
         char *errmsg = NULL;
@@ -7096,7 +7100,92 @@ static void setup_stdio() {
     }
 }
 
+void build_and_run_opt_passes(LLVMModuleRef module) {
+    LLVMPassManagerBuilderRef passBuilder;
+
+    passBuilder = LLVMPassManagerBuilderCreate();
+    LLVMPassManagerBuilderSetOptLevel(passBuilder, 3);
+    LLVMPassManagerBuilderSetSizeLevel(passBuilder, 0);
+    LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
+
+    LLVMPassManagerRef functionPasses =
+      LLVMCreateFunctionPassManagerForModule(module);
+    LLVMPassManagerRef modulePasses =
+      LLVMCreatePassManager();
+
+    LLVMPassManagerBuilderPopulateFunctionPassManager(passBuilder,
+                                                      functionPasses);
+    LLVMPassManagerBuilderPopulateModulePassManager(passBuilder, modulePasses);
+
+    LLVMPassManagerBuilderDispose(passBuilder);
+
+    LLVMInitializeFunctionPassManager(functionPasses);
+    for (LLVMValueRef value = LLVMGetFirstFunction(module);
+         value; value = LLVMGetNextFunction(value))
+      LLVMRunFunctionPassManager(functionPasses, value);
+    LLVMFinalizeFunctionPassManager(functionPasses);
+
+    LLVMRunPassManager(modulePasses, module);
+
+    LLVMDisposePassManager(functionPasses);
+    LLVMDisposePassManager(modulePasses);
+}
+
 } // namespace bangra
+
+static void pprint(int pos, unsigned char *buf, int len, const char *disasm) {
+  int i;
+  printf("%04x:  ", pos);
+  for (i = 0; i < 8; i++) {
+    if (i < len) {
+      printf("%02x ", buf[i]);
+    } else {
+      printf("   ");
+    }
+  }
+
+  printf("   %s\n", disasm);
+}
+
+static void do_disassemble(LLVMTargetMachineRef tm, void *fptr) {
+
+    unsigned char *buf = (unsigned char *)fptr;
+
+  LLVMDisasmContextRef D = LLVMCreateDisasmCPUFeatures(
+    LLVMGetTargetMachineTriple(tm),
+    LLVMGetTargetMachineCPU(tm),
+    LLVMGetTargetMachineFeatureString(tm),
+    NULL, 0, NULL, NULL);
+    LLVMSetDisasmOptions(D,
+        LLVMDisassembler_Option_PrintImmHex);
+  char outline[1024];
+  int pos;
+
+  if (!D) {
+    printf("ERROR: Couldn't create disassembler\n");
+    return;
+  }
+
+  pos = 0;
+  int siz = 96 * 1024;
+  while (pos < siz) {
+    size_t l = LLVMDisasmInstruction(D, buf + pos, siz - pos, 0, outline,
+                                     sizeof(outline));
+    if (!l) {
+      pprint(pos, buf + pos, 1, "\t???");
+      pos++;
+        break;
+    } else {
+      pprint(pos, buf + pos, l, outline);
+      if (l == 1 && buf[pos] == 0xc3) {
+         break;
+      }
+      pos += l;
+    }
+  }
+
+  LLVMDisasmDispose(D);
+}
 
 int main(int argc, char *argv[]) {
     using namespace bangra;
@@ -7167,13 +7256,43 @@ int main(int argc, char *argv[]) {
 
         auto module = result.first;
         auto func = result.second;
+
         LLVMExecutionEngineRef ee = nullptr;
         char *errormsg = nullptr;
-        if (LLVMCreateJITCompilerForModule(&ee, module, 0, &errormsg)) {
+
+        LLVMMCJITCompilerOptions opts;
+        LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
+        opts.OptLevel = 0;
+
+        if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
+            sizeof(opts), &errormsg)) {
             location_error(String::from_cstr(errormsg));
         }
+
+        auto td = LLVMGetExecutionEngineTargetData(ee);
+        auto tm = LLVMGetExecutionEngineTargetMachine(ee);
+
+        build_and_run_opt_passes(module);
+
+        std::cout << "\noptimized:" << std::endl;
+        LLVMDumpModule(module);
+
+#if 0
+        LLVMMemoryBufferRef membuf = nullptr;
+        if (LLVMTargetMachineEmitToMemoryBuffer(tm, module, LLVMAssemblyFile,
+            &errormsg, &membuf)) {
+            location_error(String::from_cstr(errormsg));
+        }
+        assert(membuf);
+        std::cout <<
+            String::from(LLVMGetBufferStart(membuf), LLVMGetBufferSize(membuf))->data << std::endl;
+        LLVMDisposeMemoryBuffer(membuf);
+#endif
+
         typedef void (*MainFuncType)();
-        MainFuncType fptr = (MainFuncType)LLVMGetPointerToGlobal(ee, func);
+        void *pfunc = LLVMGetPointerToGlobal(ee, func);
+        //do_disassemble(tm, pfunc);
+        MainFuncType fptr = (MainFuncType)pfunc;
         fptr();
 
         //interpreter_loop(cmd);
