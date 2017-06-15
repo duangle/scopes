@@ -7155,34 +7155,6 @@ static void pprint(int pos, unsigned char *buf, int len, const char *disasm) {
   printf("   %s\n", disasm);
 }
 
-static uint8_t *mm_allocate_code_section_cb(
-  void *Opaque, uintptr_t size, unsigned alignment, unsigned sectionID,
-  const char *sectionName) {
-    //std::cout << "allocating code section: " << sectionName << " " << size << " " << alignment << std::endl;
-    return static_cast<llvm::SectionMemoryManager*>(Opaque)->allocateCodeSection(
-        size, alignment, sectionID, sectionName);
-}
-static uint8_t *mm_allocate_data_section_cb(
-  void *Opaque, uintptr_t size, unsigned alignment, unsigned sectionID,
-  const char *sectionName, LLVMBool isReadOnly) {
-    //std::cout << "allocating data section: " << sectionName << " " << size << " " << alignment << std::endl;
-    return static_cast<llvm::SectionMemoryManager*>(Opaque)->allocateDataSection(
-        size, alignment, sectionID, sectionName, isReadOnly);
-}
-static LLVMBool mm_finalize_memory_cb(void *Opaque, char **errMsg) {
-    std::string errMsgString;
-    bool result =
-        static_cast<llvm::SectionMemoryManager*>(Opaque)->finalizeMemory(&errMsgString);
-    if (result) {
-        *errMsg = LLVMCreateMessage(errMsgString.c_str());
-        return 1;
-    }
-    return 0;
-}
-static void mm_destroy_cb(void *Opaque) {
-    delete static_cast<llvm::SectionMemoryManager*>(Opaque);
-}
-
 static void do_disassemble(LLVMTargetMachineRef tm, void *fptr, int siz) {
 
     unsigned char *buf = (unsigned char *)fptr;
@@ -7332,15 +7304,6 @@ int main(int argc, char *argv[]) {
         LLVMMCJITCompilerOptions opts;
         LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
         opts.OptLevel = 0;
-#if 0
-        auto mcjmm = LLVMCreateSimpleMCJITMemoryManager(
-            new llvm::SectionMemoryManager(),
-            mm_allocate_code_section_cb,
-            mm_allocate_data_section_cb,
-            mm_finalize_memory_cb,
-            mm_destroy_cb);
-        opts.MCJMM = mcjmm;
-#endif
 
         if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
             sizeof(opts), &errormsg)) {
@@ -7359,18 +7322,6 @@ int main(int argc, char *argv[]) {
         std::cout << "\noptimized:" << std::endl;
         LLVMDumpModule(module);
 
-#if 0
-        LLVMMemoryBufferRef membuf = nullptr;
-        if (LLVMTargetMachineEmitToMemoryBuffer(tm, module, LLVMAssemblyFile,
-            &errormsg, &membuf)) {
-            location_error(String::from_cstr(errormsg));
-        }
-        assert(membuf);
-        std::cout <<
-            String::from(LLVMGetBufferStart(membuf), LLVMGetBufferSize(membuf))->data << std::endl;
-        LLVMDisposeMemoryBuffer(membuf);
-#endif
-
         typedef void (*MainFuncType)();
         void *pfunc = LLVMGetPointerToGlobal(ee, func);
         {
@@ -7383,10 +7334,6 @@ int main(int argc, char *argv[]) {
         }
         MainFuncType fptr = (MainFuncType)pfunc;
         fptr();
-
-#if 0
-        LLVMDisposeMCJITMemoryManager(mcjmm);
-#endif
 
         //interpreter_loop(cmd);
 #if CATCH_EXCEPTION
