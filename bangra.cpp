@@ -550,17 +550,7 @@ namespace bangra {
     T2T(UNAME, LNAME, Pow, **) \
     T2T(UNAME, LNAME, Mod, %)
 
-#define B_ALL_OP_DEFS() \
-    B_IOP_DEFS(I8, i8) \
-    B_IOP_DEFS(I16, i16) \
-    B_IOP_DEFS(I32, i32) \
-    B_IOP_DEFS(I64, i64) \
-    B_IOP_DEFS(U8, u8) \
-    B_IOP_DEFS(U16, u16) \
-    B_IOP_DEFS(U32, u32) \
-    B_IOP_DEFS(U64, u64) \
-    B_ROP_DEFS(R32, r32) \
-    B_ROP_DEFS(R64, r64)
+#define B_ALL_OP_DEFS()
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
@@ -1740,17 +1730,9 @@ struct Any {
     Type type;
     union {
         char content[8];
-        bool i1;
-        int8_t i8;
-        int16_t i16;
-        int32_t i32;
         int64_t i64;
-        uint8_t u8;
-        uint16_t u16;
-        uint32_t u32;
         uint64_t u64;
         size_t sizeval;
-        float r32;
         double r64;
         Type typeref;
         const String *string;
@@ -1770,16 +1752,16 @@ struct Any {
 
     Any(Nothing x) : type(TYPE_Nothing) {}
     Any(Type x) : type(TYPE_Type), typeref(x) {}
-    Any(bool x) : type(TYPE_Bool), i1(x) {}
-    Any(int8_t x) : type(TYPE_I8), i8(x) {}
-    Any(int16_t x) : type(TYPE_I16), i16(x) {}
-    Any(int32_t x) : type(TYPE_I32), i32(x) {}
+    Any(bool x) : type(TYPE_Bool), u64(x) {}
+    Any(int8_t x) : type(TYPE_I8), i64(x) {}
+    Any(int16_t x) : type(TYPE_I16), i64(x) {}
+    Any(int32_t x) : type(TYPE_I32), i64(x) {}
     Any(int64_t x) : type(TYPE_I64), i64(x) {}
-    Any(uint8_t x) : type(TYPE_U8), u8(x) {}
-    Any(uint16_t x) : type(TYPE_U16), u16(x) {}
-    Any(uint32_t x) : type(TYPE_U32), u32(x) {}
+    Any(uint8_t x) : type(TYPE_U8), u64(x) {}
+    Any(uint16_t x) : type(TYPE_U16), u64(x) {}
+    Any(uint32_t x) : type(TYPE_U32), u64(x) {}
     Any(uint64_t x) : type(TYPE_U64), u64(x) {}
-    Any(float x) : type(TYPE_R32), r32(x) {}
+    Any(float x) : type(TYPE_R32), r64(x) {}
     Any(double x) : type(TYPE_R64), r64(x) {}
     Any(const String *x) : type(TYPE_String), string(x) {}
     Any(Symbol x) : type(TYPE_Symbol), symbol(x) {}
@@ -1804,16 +1786,16 @@ struct Any {
         switch(type.value()) {
             case TYPE_Nothing: return dest(none);
             case TYPE_Type: return dest(typeref);
-            case TYPE_Bool: return dest(i1);
-            case TYPE_I8: return dest(i8);
-            case TYPE_I16: return dest(i16);
-            case TYPE_I32: return dest(i32);
+            case TYPE_Bool: return dest((bool)u64);
+            case TYPE_I8: return dest((int8_t)i64);
+            case TYPE_I16: return dest((int16_t)i64);
+            case TYPE_I32: return dest((int32_t)i64);
             case TYPE_I64: return dest(i64);
-            case TYPE_U8: return dest(u8);
-            case TYPE_U16: return dest(u16);
-            case TYPE_U32: return dest(u32);
+            case TYPE_U8: return dest((uint8_t)u64);
+            case TYPE_U16: return dest((uint16_t)u64);
+            case TYPE_U32: return dest((uint32_t)u64);
             case TYPE_U64: return dest(u64);
-            case TYPE_R32: return dest(r32);
+            case TYPE_R32: return dest((float)r64);
             case TYPE_R64: return dest(r64);
             case TYPE_String: return dest(string);
             case TYPE_Symbol: return dest(symbol);
@@ -1833,28 +1815,6 @@ struct Any {
 
     size_t bytesize() const {
         return type.bytesize();
-    }
-
-    void *getaddr() {
-        switch(type.value()) {
-            case TYPE_Nothing: return nullptr;
-            case TYPE_Symbol:
-            case TYPE_Builtin:
-            case TYPE_Type: return (void *)&symbol;
-            case TYPE_Bool: return (void *)&i1;
-            case TYPE_U8:
-            case TYPE_I8: return (void *)&i8;
-            case TYPE_U16:
-            case TYPE_I16: return (void *)&i16;
-            case TYPE_U32:
-            case TYPE_I32: return (void *)&i32;
-            case TYPE_U64:
-            case TYPE_I64: return (void *)&i64;
-            case TYPE_R32: return (void *)&r32;
-            case TYPE_R64: return (void *)&r64;
-            default:
-                return (void *)&pointer;
-        }
     }
 
     struct AnyStreamer {
@@ -4373,6 +4333,7 @@ static ffi_type *get_ffi_type(Type type) {
 }
 
 static void run_ffi_function(Instruction &in, Instruction &out) {
+#if 0
     int argcount = CHECKARGS(2, -1) - 2;
     Any enter = in.args[1];
     Any rettype = in.args[2];
@@ -4408,21 +4369,22 @@ static void run_ffi_function(Instruction &in, Instruction &out) {
     ffi_call(&cif, FFI_FN(enter.pointer), (void *)result.content, avalues);
 
     RETARGS(result);
+#endif
 }
 
 template<typename T>
 static T cast_number(const Any &value) {
     switch(value.type.value()) {
-    case TYPE_Bool: return (T)value.i1;
-    case TYPE_I8: return (T)value.i8;
-    case TYPE_I16: return (T)value.i16;
-    case TYPE_I32: return (T)value.i32;
+    case TYPE_Bool:
+    case TYPE_I8:
+    case TYPE_I16:
+    case TYPE_I32:
     case TYPE_I64: return (T)value.i64;
-    case TYPE_U8: return (T)value.u8;
-    case TYPE_U16: return (T)value.u16;
-    case TYPE_U32: return (T)value.u32;
+    case TYPE_U8:
+    case TYPE_U16:
+    case TYPE_U32:
     case TYPE_U64: return (T)value.u64;
-    case TYPE_R32: return (T)value.r32;
+    case TYPE_R32:
     case TYPE_R64: return (T)value.r64;
     default: {
         StyledString ss;
@@ -4507,7 +4469,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         CHECKARGS(3, 3);
         Any cond = in.args[1];
         cond.verify<TYPE_Bool>();
-        out.enter = in.args[cond.i1?2:3];
+        out.enter = in.args[cond.u64?2:3];
         out.args = { in.args[0] };
     } break;
     case FN_BuiltinEq: {
@@ -4597,27 +4559,18 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     case FN_ ## UNAME ## LShift: { \
         CHECKARGS(2, 2); \
         in.args[1].verify<TYPE_ ## UNAME>(); \
-        RETARGS(in.args[1]. LNAME << cast_number<int32_t>(in.args[2])); \
+        RETARGS((LNAME)in.args[1].u64 << cast_number<int32_t>(in.args[2])); \
     } break; \
     case FN_ ## UNAME ## RShift: { \
         CHECKARGS(2, 2); \
         in.args[1].verify<TYPE_ ## UNAME>(); \
-        RETARGS(in.args[1]. LNAME >> cast_number<int32_t>(in.args[2])); \
+        RETARGS((LNAME)in.args[1].u64 >> cast_number<int32_t>(in.args[2])); \
     } break
-    BINOP_CASE(FN_BoolEq, TYPE_Bool, i1, ==);
     BINOP_CASE(FN_ParameterEq, TYPE_Parameter, parameter, ==);
     BINOP_CASE(FN_LabelEq, TYPE_Label, label, ==);
     BINOP_CASE(FN_ScopeEq, TYPE_Scope, scope, ==);
     BINOP_CASE(FN_FrameEq, TYPE_Frame, frame, ==);
     BINOP_CASE(FN_ClosureEq, TYPE_Closure, closure, ==);
-    SHIFT_CASES(I8, i8);
-    SHIFT_CASES(I16, i16);
-    SHIFT_CASES(I32, i32);
-    SHIFT_CASES(I64, i64);
-    SHIFT_CASES(U8, u8);
-    SHIFT_CASES(U16, u16);
-    SHIFT_CASES(U32, u32);
-    SHIFT_CASES(U64, u64);
 #define T0(NAME, STR)
 #define T1(UNAME, LNAME, PFIX, OP) \
     UNOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, OP);
@@ -4633,16 +4586,6 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
 #undef BINOP_CASE
 #undef TBINOP_CASE
 #undef UNOP_CASE
-    case FN_I8New: CHECKARGS(1, 1); RETARGS(cast_number<int8_t>(in.args[1])); break;
-    case FN_I16New: CHECKARGS(1, 1); RETARGS(cast_number<int16_t>(in.args[1])); break;
-    case FN_I32New: CHECKARGS(1, 1); RETARGS(cast_number<int32_t>(in.args[1])); break;
-    case FN_I64New: CHECKARGS(1, 1); RETARGS(cast_number<int64_t>(in.args[1])); break;
-    case FN_U8New: CHECKARGS(1, 1); RETARGS(cast_number<uint8_t>(in.args[1])); break;
-    case FN_U16New: CHECKARGS(1, 1); RETARGS(cast_number<uint16_t>(in.args[1])); break;
-    case FN_U32New: CHECKARGS(1, 1); RETARGS(cast_number<uint32_t>(in.args[1])); break;
-    case FN_U64New: CHECKARGS(1, 1); RETARGS(cast_number<uint64_t>(in.args[1])); break;
-    case FN_R32New: CHECKARGS(1, 1); RETARGS(cast_number<float>(in.args[1])); break;
-    case FN_R64New: CHECKARGS(1, 1); RETARGS(cast_number<double>(in.args[1])); break;
     case FN_FFISymbol: {
         CHECKARGS(1, 1);
         const String *str = in.args[1];
@@ -4758,17 +4701,6 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         const List *a = in.args[1];
         RETARGS((a == EOL)?EOL:a->next);
     } break;
-    case FN_Load: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Type>();
-        in.args[2].verify<TYPE_Pointer>();
-        Any dest = none;
-        dest.type = in.args[1].typeref;
-        void *dst = dest.getaddr();
-        void *src = in.args[2].pointer;
-        size_t sz = in.args[1].typeref.bytesize();
-        memcpy(dst, src, sz);
-    } break;
     case FN_Malloc: {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_U64>();
@@ -4784,7 +4716,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     case OP_Not: {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_Bool>();
-        RETARGS(!in.args[1].i1);
+        RETARGS((bool)(!in.args[1].u64));
     } break;
     case FN_ParameterAnchor: {
         CHECKARGS(1, 1);
@@ -4797,7 +4729,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         in.args[3].verify<TYPE_Type>();
         in.args[4].verify<TYPE_Bool>();
         Parameter *param = nullptr;
-        if (in.args[4].i1) {
+        if (in.args[4].u64) {
             param = Parameter::vararg_from(in.args[1], in.args[2].symbol, in.args[3].type);
         } else {
             param = Parameter::from(in.args[1], in.args[2].symbol, in.args[3].type);
@@ -4927,14 +4859,6 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         Scope *scope = in.args[1];
         in.args[2].verify<TYPE_Symbol>();
         scope->bind(in.args[2].symbol, in.args[3]);
-    } break;
-    case FN_Store: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Pointer>();
-        size_t sz = in.args[2].bytesize();
-        void *dst = in.args[1].pointer;
-        void *src = in.args[2].getaddr();
-        memcpy(dst, src, sz);
     } break;
     case FN_StringCmp: {
         CHECKARGS(2, 2);
@@ -5564,15 +5488,14 @@ struct GenerateCtx {
         switch(value.type.value()) {
         case TYPE_Nothing:
             return noneV;
-        case TYPE_Bool:
-            return LLVMConstInt(i1T, value.i1, false);
-        case TYPE_I8: return LLVMConstInt(i8T, value.i8, true);
-        case TYPE_I16: return LLVMConstInt(i16T, value.i16, true);
-        case TYPE_I32: return LLVMConstInt(i32T, value.i32, true);
+        case TYPE_I8:
+        case TYPE_I16:
+        case TYPE_I32:
         case TYPE_I64: return LLVMConstInt(i64T, value.i64, true);
-        case TYPE_U8: return LLVMConstInt(i8T, value.u8, false);
-        case TYPE_U16: return LLVMConstInt(i16T, value.u16, false);
-        case TYPE_U32: return LLVMConstInt(i32T, value.u32, false);
+        case TYPE_Bool:
+        case TYPE_U8:
+        case TYPE_U16:
+        case TYPE_U32:
         case TYPE_U64: return LLVMConstInt(i64T, value.u64, false);
         case TYPE_String: {
             return string_to_value(value.string);
@@ -5882,12 +5805,12 @@ struct NormalizeCtx {
                 if ((a.type == TYPE_Any) || (a.type == TYPE_Nothing))
                     continue;
                 switch(a.type.value()) {
-                case TYPE_Bool: if (a.i1 != b.i1) return false; break;
-                case TYPE_U8: case TYPE_I8: if (a.u8 != b.u8) return false; break;
-                case TYPE_U16: case TYPE_I16: if (a.u16 != b.u16) return false; break;
-                case TYPE_U32: case TYPE_I32: if (a.u32 != b.u32) return false; break;
+                case TYPE_Bool:
+                case TYPE_U8: case TYPE_I8:
+                case TYPE_U16: case TYPE_I16:
+                case TYPE_U32: case TYPE_I32:
                 case TYPE_U64: case TYPE_I64: if (a.u64 != b.u64) return false; break;
-                case TYPE_R32: if (a.r32 != b.r32) return false; break;
+                case TYPE_R32:
                 case TYPE_R64: if (a.r64 != b.r64) return false; break;
                 default: if (a.pointer != b.pointer) return false; break;
                 }
@@ -5902,12 +5825,12 @@ struct NormalizeCtx {
                 if ((arg.type != TYPE_Any) && (arg.type != TYPE_Nothing)) {
                     size_t h2;
                     switch(arg.type.value()) {
-                    case TYPE_Bool: h2 = std::hash<bool>{}(arg.i1); break;
-                    case TYPE_U8: case TYPE_I8: h2 = std::hash<uint8_t>{}(arg.u8); break;
-                    case TYPE_U16: case TYPE_I16: h2 = std::hash<uint16_t>{}(arg.u16); break;
-                    case TYPE_U32: case TYPE_I32: h2 = std::hash<uint32_t>{}(arg.u32); break;
+                    case TYPE_Bool:
+                    case TYPE_U8: case TYPE_I8:
+                    case TYPE_U16: case TYPE_I16:
+                    case TYPE_U32: case TYPE_I32:
                     case TYPE_U64: case TYPE_I64: h2 = std::hash<uint64_t>{}(arg.u64); break;
-                    case TYPE_R32: h2 = std::hash<float>{}(arg.r32); break;
+                    case TYPE_R32:
                     case TYPE_R64: h2 = std::hash<double>{}(arg.r64); break;
                     default: h2 = std::hash<void *>{}(arg.pointer); break;
                     }
@@ -6224,7 +6147,7 @@ struct NormalizeCtx {
                 if (args[1].type == TYPE_Bool) {
                     // either branch label is typed and binds no parameters,
                     // so we can directly inline it
-                    if (args[1].i1) {
+                    if (args[1].u64) {
                         copy_body(entry,
                             inline_branch_continuation(args[2], args[0]));
                     } else {
@@ -6300,13 +6223,13 @@ struct NormalizeCtx {
                     if (const_ops(args[1], args[2])) {
 #define B_INT_OP2(OP, N) \
     switch(args[1].type.value()) { \
-    case TYPE_Bool: result = (args[1].i1 OP args[2].i1); break; \
+    case TYPE_Bool: \
     case TYPE_I8: \
-    case TYPE_U8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_U8: \
     case TYPE_I16: \
-    case TYPE_U16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_U16: \
     case TYPE_I32: \
-    case TYPE_U32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_U32: \
     case TYPE_I64: \
     case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
@@ -6711,7 +6634,7 @@ static void translate_function_expr_list(
     if (enter.type != TYPE_Nothing) {
         assert(!args.empty());
         if ((args[0].type == TYPE_Bool)
-            && !(args[0].i1)) {
+            && !(args[0].u64)) {
             if (is_return_callable(enter, args)) {
                 args[0] = none;
             } else {
