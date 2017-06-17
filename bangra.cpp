@@ -1795,25 +1795,47 @@ static Type Tuple(const std::vector<Type> &types) {
 // FUNCTION TYPE
 //------------------------------------------------------------------------------
 
+enum {
+    // takes variable number of arguments
+    FF_Varargs = (1 << 0),
+    // can be evaluated at compile time
+    FF_Pure = (1 << 1),
+};
+
 struct FunctionInfo {
     Type return_type;
     std::vector<Type> argument_types;
-    bool vararg;
+    uint32_t flags;
 
-    FunctionInfo() : return_type(TYPE_Nothing), vararg(false) {}
+    bool vararg() const {
+        return flags & FF_Varargs;
+    }
+    bool pure() const {
+        return flags & FF_Pure;
+    }
+    FunctionInfo() : return_type(TYPE_Nothing), flags(0) {}
 };
 
 static TypeFactory<FunctionInfo> functions;
 
 static Type Function(Type return_type,
-    const std::vector<Type> &argument_types, bool vararg = false) {
+    const std::vector<Type> &argument_types, uint32_t flags = 0) {
     std::stringstream ss;
-    ss <<  return_type.name().name()->data << "<-(";
+    ss <<  return_type.name().name()->data;
+    if (flags & FF_Pure) {
+        ss << "<~";
+    } else {
+        ss << "<-";
+    }
+    ss << "(";
     for (size_t i = 0; i < argument_types.size(); ++i) {
         if (i > 0) {
             ss << " ";
         }
         ss << argument_types[i].name().name()->data;
+    }
+    if (flags & FF_Varargs) {
+        ss << " ...";
     }
     ss << ")";
     auto type = Type(Symbol(String::from_stdstring(ss.str())));
@@ -1822,7 +1844,7 @@ static Type Function(Type return_type,
         auto &&ti = result.first->second;
         ti.return_type = return_type;
         ti.argument_types = argument_types;
-        ti.vararg = vararg;
+        ti.flags = flags;
     }
     return type;
 }
@@ -2179,9 +2201,17 @@ struct Any {
     Type type;
     union {
         char content[8];
+        bool i1;
+        int8_t i8;
+        int16_t i16;
+        int32_t i32;
         int64_t i64;
+        int8_t u8;
+        int16_t u16;
+        int32_t u32;
         uint64_t u64;
         size_t sizeval;
+        float r32;
         double r64;
         Type typeref;
         const String *string;
@@ -2201,16 +2231,16 @@ struct Any {
 
     Any(Nothing x) : type(TYPE_Nothing) {}
     Any(Type x) : type(TYPE_Type), typeref(x) {}
-    Any(bool x) : type(TYPE_Bool), u64(x) {}
-    Any(int8_t x) : type(TYPE_I8), i64(x) {}
-    Any(int16_t x) : type(TYPE_I16), i64(x) {}
-    Any(int32_t x) : type(TYPE_I32), i64(x) {}
+    Any(bool x) : type(TYPE_Bool), i1(x) {}
+    Any(int8_t x) : type(TYPE_I8), i8(x) {}
+    Any(int16_t x) : type(TYPE_I16), i16(x) {}
+    Any(int32_t x) : type(TYPE_I32), i32(x) {}
     Any(int64_t x) : type(TYPE_I64), i64(x) {}
-    Any(uint8_t x) : type(TYPE_U8), u64(x) {}
-    Any(uint16_t x) : type(TYPE_U16), u64(x) {}
-    Any(uint32_t x) : type(TYPE_U32), u64(x) {}
+    Any(uint8_t x) : type(TYPE_U8), u8(x) {}
+    Any(uint16_t x) : type(TYPE_U16), u16(x) {}
+    Any(uint32_t x) : type(TYPE_U32), u32(x) {}
     Any(uint64_t x) : type(TYPE_U64), u64(x) {}
-    Any(float x) : type(TYPE_R32), r64(x) {}
+    Any(float x) : type(TYPE_R32), r32(x) {}
     Any(double x) : type(TYPE_R64), r64(x) {}
     Any(const String *x) : type(TYPE_String), string(x) {}
     Any(Symbol x) : type(TYPE_Symbol), symbol(x) {}
@@ -2235,16 +2265,16 @@ struct Any {
         switch(type.value()) {
             case TYPE_Nothing: return dest(none);
             case TYPE_Type: return dest(typeref);
-            case TYPE_Bool: return dest((bool)u64);
-            case TYPE_I8: return dest((int8_t)i64);
-            case TYPE_I16: return dest((int16_t)i64);
-            case TYPE_I32: return dest((int32_t)i64);
+            case TYPE_Bool: return dest(i1);
+            case TYPE_I8: return dest(i8);
+            case TYPE_I16: return dest(i16);
+            case TYPE_I32: return dest(i32);
             case TYPE_I64: return dest(i64);
-            case TYPE_U8: return dest((uint8_t)u64);
-            case TYPE_U16: return dest((uint16_t)u64);
-            case TYPE_U32: return dest((uint32_t)u64);
+            case TYPE_U8: return dest(u8);
+            case TYPE_U16: return dest(u16);
+            case TYPE_U32: return dest(u32);
             case TYPE_U64: return dest(u64);
-            case TYPE_R32: return dest((float)r64);
+            case TYPE_R32: return dest(r32);
             case TYPE_R64: return dest(r64);
             case TYPE_String: return dest(string);
             case TYPE_Symbol: return dest(symbol);
@@ -4741,98 +4771,19 @@ static StyledStream& operator<<(StyledStream& ost, Instruction instr) {
 #define RETARGS(...) \
     out.args = { none, __VA_ARGS__ }
 
-static std::unordered_map<Type, ffi_type *, Type::Hash> ffi_types;
-
-static ffi_type *new_type() {
-    ffi_type *result = (ffi_type *)malloc(sizeof(ffi_type));
-    memset(result, 0, sizeof(ffi_type));
-    return result;
-}
-
-static ffi_type *create_ffi_type(Type type) {
-    switch(type.value()) {
-    case TYPE_Nothing: return &ffi_type_void;
-    case TYPE_Bool: return &ffi_type_uint8;
-    case TYPE_I8: return &ffi_type_sint8;
-    case TYPE_I16: return &ffi_type_sint16;
-    case TYPE_I32: return &ffi_type_sint32;
-    case TYPE_I64: return &ffi_type_sint64;
-    case TYPE_U8: return &ffi_type_uint8;
-    case TYPE_U16: return &ffi_type_uint16;
-    case TYPE_U32: return &ffi_type_uint32;
-    case TYPE_U64: return &ffi_type_uint64;
-    case TYPE_R32: return &ffi_type_float;
-    case TYPE_R64: return &ffi_type_double;
-    default:
-        return &ffi_type_pointer;
-    }
-    return nullptr;
-}
-
-static ffi_type *get_ffi_type(Type type) {
-    auto it = ffi_types.find(type);
-    if (it == ffi_types.end()) {
-        auto result = create_ffi_type(type);
-        ffi_types[type] = result;
-        return result;
-    } else {
-        return it->second;
-    }
-}
-
-static void run_ffi_function(Instruction &in, Instruction &out) {
-#if 0
-    int argcount = CHECKARGS(2, -1) - 2;
-    Any enter = in.args[1];
-    Any rettype = in.args[2];
-
-    enter.verify<TYPE_Pointer>();
-    rettype.verify<TYPE_Type>();
-
-    ffi_cif cif;
-    ffi_type *argtypes[argcount];
-    void *avalues[argcount];
-    for (int i = 0; i < argcount; ++i) {
-        Any &arg = in.args[3 + i];
-        argtypes[i] = get_ffi_type(arg.type);
-        switch(arg.type.value()) {
-        case TYPE_Bool: avalues[i] = (void *)&arg.i1; break;
-        case TYPE_I8:  case TYPE_U8:  avalues[i] = (void *)&arg.i8; break;
-        case TYPE_I16: case TYPE_U16: avalues[i] = (void *)&arg.i16; break;
-        case TYPE_I32: case TYPE_U32: avalues[i] = (void *)&arg.i32; break;
-        case TYPE_I64: case TYPE_U64: avalues[i] = (void *)&arg.i64; break;
-        case TYPE_R32: avalues[i] = (void *)&arg.r32; break;
-        case TYPE_R64: avalues[i] = (void *)&arg.r64; break;
-        case TYPE_Pointer:
-        default: avalues[i] = (void *)&arg.pointer; break;
-        }
-    }
-    auto prep_result = ffi_prep_cif(
-        &cif, FFI_DEFAULT_ABI, argcount, get_ffi_type(rettype.typeref), argtypes);
-    assert(prep_result == FFI_OK);
-
-    Any result = none;
-    result.type = rettype.typeref;
-    result.i64 = 0;
-    ffi_call(&cif, FFI_FN(enter.pointer), (void *)result.content, avalues);
-
-    RETARGS(result);
-#endif
-}
-
 template<typename T>
 static T cast_number(const Any &value) {
     switch(value.type.value()) {
-    case TYPE_Bool:
-    case TYPE_I8:
-    case TYPE_I16:
-    case TYPE_I32:
+    case TYPE_Bool: return (T)value.i1;
+    case TYPE_I8: return (T)value.i8;
+    case TYPE_I16: return (T)value.i16;
+    case TYPE_I32: return (T)value.i32;
     case TYPE_I64: return (T)value.i64;
-    case TYPE_U8:
-    case TYPE_U16:
-    case TYPE_U32:
+    case TYPE_U8: return (T)value.u8;
+    case TYPE_U16: return (T)value.u16;
+    case TYPE_U32: return (T)value.u32;
     case TYPE_U64: return (T)value.u64;
-    case TYPE_R32:
+    case TYPE_R32: return (T)value.r32;
     case TYPE_R64: return (T)value.r64;
     default: {
         StyledString ss;
@@ -4916,7 +4867,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         CHECKARGS(3, 3);
         Any cond = in.args[1];
         cond.verify<TYPE_Bool>();
-        out.enter = in.args[cond.u64?2:3];
+        out.enter = in.args[cond.i1?2:3];
         out.args = { in.args[0] };
     } break;
     case FN_BuiltinEq: {
@@ -5163,7 +5114,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     case OP_Not: {
         CHECKARGS(1, 1);
         in.args[1].verify<TYPE_Bool>();
-        RETARGS((bool)(!in.args[1].u64));
+        RETARGS(!in.args[1].i1);
     } break;
     case FN_ParameterAnchor: {
         CHECKARGS(1, 1);
@@ -5176,7 +5127,7 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
         in.args[3].verify<TYPE_Type>();
         in.args[4].verify<TYPE_Bool>();
         Parameter *param = nullptr;
-        if (in.args[4].u64) {
+        if (in.args[4].i1) {
             param = Parameter::vararg_from(in.args[1], in.args[2].symbol, in.args[3].type);
         } else {
             param = Parameter::from(in.args[1], in.args[2].symbol, in.args[3].type);
@@ -5840,7 +5791,7 @@ struct GenerateCtx {
             }
             return LLVMFunctionType(
                 type_to_llvm_type(fi.return_type),
-                elements, count, fi.vararg);
+                elements, count, fi.vararg());
         } break;
         case CAT_TypedLabel:
         case CAT_TypeSet:
@@ -5902,14 +5853,14 @@ struct GenerateCtx {
         switch(value.type.value()) {
         case TYPE_Nothing:
             return noneV;
-        case TYPE_I8: return LLVMConstInt(i8T, value.i64, true);
-        case TYPE_I16: return LLVMConstInt(i16T, value.i64, true);
-        case TYPE_I32: return LLVMConstInt(i32T, value.i64, true);
+        case TYPE_I8: return LLVMConstInt(i8T, value.i8, true);
+        case TYPE_I16: return LLVMConstInt(i16T, value.i16, true);
+        case TYPE_I32: return LLVMConstInt(i32T, value.i32, true);
         case TYPE_I64: return LLVMConstInt(i64T, value.i64, true);
-        case TYPE_Bool: return LLVMConstInt(i1T, value.u64, false);
-        case TYPE_U8: return LLVMConstInt(i8T, value.u64, false);
-        case TYPE_U16: return LLVMConstInt(i16T, value.u64, false);
-        case TYPE_U32: return LLVMConstInt(i32T, value.u64, false);
+        case TYPE_Bool: return LLVMConstInt(i1T, value.i1, false);
+        case TYPE_U8: return LLVMConstInt(i8T, value.u8, false);
+        case TYPE_U16: return LLVMConstInt(i16T, value.u16, false);
+        case TYPE_U32: return LLVMConstInt(i32T, value.u32, false);
         case TYPE_U64: return LLVMConstInt(i64T, value.u64, false);
         case TYPE_Parameter: {
             auto it = param2value.find(value.parameter);
@@ -6249,16 +6200,18 @@ struct NormalizeCtx {
                 auto &&a = args[i];
                 auto &&b = other.args[i];
                 if (a.type != b.type) return false;
-                if ((a.type == TYPE_Any) || (a.type == TYPE_Nothing))
-                    continue;
                 switch(a.type.value()) {
-                case TYPE_Bool:
-                case TYPE_U8: case TYPE_I8:
-                case TYPE_U16: case TYPE_I16:
-                case TYPE_U32: case TYPE_I32:
+                case TYPE_Bool: if (a.i1 != b.i1) return false; break;
+                case TYPE_U8: case TYPE_I8: if (a.u8 != b.u8) return false; break;
+                case TYPE_U16: case TYPE_I16: if (a.u16 != b.u16) return false; break;
+                case TYPE_U32: case TYPE_I32: if (a.u32 != b.u32) return false; break;
                 case TYPE_U64: case TYPE_I64: if (a.u64 != b.u64) return false; break;
-                case TYPE_R32:
+                case TYPE_R32: if (a.r32 != b.r32) return false; break;
                 case TYPE_R64: if (a.r64 != b.r64) return false; break;
+                case TYPE_Any:
+                case TYPE_Void:
+                case TYPE_Nothing:
+                    break;
                 default: if (a.pointer != b.pointer) return false; break;
                 }
             }
@@ -6272,12 +6225,12 @@ struct NormalizeCtx {
                 if ((arg.type != TYPE_Any) && (arg.type != TYPE_Nothing)) {
                     size_t h2;
                     switch(arg.type.value()) {
-                    case TYPE_Bool:
-                    case TYPE_U8: case TYPE_I8:
-                    case TYPE_U16: case TYPE_I16:
-                    case TYPE_U32: case TYPE_I32:
+                    case TYPE_Bool: h2 = std::hash<bool>{}(arg.i1); break;
+                    case TYPE_U8: case TYPE_I8: h2 = std::hash<uint8_t>{}(arg.u8); break;
+                    case TYPE_U16: case TYPE_I16: h2 = std::hash<uint16_t>{}(arg.u16); break;
+                    case TYPE_U32: case TYPE_I32: h2 = std::hash<uint32_t>{}(arg.u32); break;
                     case TYPE_U64: case TYPE_I64: h2 = std::hash<uint64_t>{}(arg.u64); break;
-                    case TYPE_R32:
+                    case TYPE_R32: h2 = std::hash<float>{}(arg.r32); break;
                     case TYPE_R64: h2 = std::hash<double>{}(arg.r64); break;
                     default: h2 = std::hash<void *>{}(arg.pointer); break;
                     }
@@ -6321,7 +6274,9 @@ struct NormalizeCtx {
         case TYPE_Label: return cont.label;
         case TYPE_Parameter: return cont.parameter;
         default: {
-            location_error(String::from("continuation must be label, parameter or none"));
+            StyledString ss;
+            ss.out << "don't know how to apply continuation of type " << cont.type;
+            location_error(ss.str());
         } break;
         }
         return nullptr;
@@ -6549,8 +6504,12 @@ struct NormalizeCtx {
         verify(a.indirect_type(), b.indirect_type());
     }
 
+    static bool is_const(Any a) {
+        return (a.type != TYPE_Parameter);
+    }
+
     static bool const_ops(Any a, Any b) {
-        return ((a.type != TYPE_Parameter) && (b.type != TYPE_Parameter));
+        return is_const(a) && is_const(b);
     }
 
     void copy_body(Label *dest, Label *source) {
@@ -6583,8 +6542,10 @@ struct NormalizeCtx {
     retargtypes = { TYPE_Nothing, __VA_ARGS__ }
 
 #define RETARGS(...) \
+    entry->unlink_backrefs(); \
     enter = args[0]; \
     args = { none, __VA_ARGS__ }; \
+    entry->link_backrefs(); \
     goto renormalize;
 
         switch(enter.type.value()) {
@@ -6597,7 +6558,7 @@ struct NormalizeCtx {
                 if (args[1].type == TYPE_Bool) {
                     // either branch label is typed and binds no parameters,
                     // so we can directly inline it
-                    if (args[1].u64) {
+                    if (args[1].i1) {
                         copy_body(entry,
                             inline_branch_continuation(args[2], args[0]));
                     } else {
@@ -6699,14 +6660,14 @@ struct NormalizeCtx {
                     if (const_ops(args[1], args[2])) {
 #define B_INT_OP2(OP, N) \
     switch(args[1].type.value()) { \
-    case TYPE_Bool: \
-    case TYPE_I8: \
-    case TYPE_U8: \
-    case TYPE_I16: \
-    case TYPE_U16: \
-    case TYPE_I32: \
-    case TYPE_U32: \
-    case TYPE_I64: \
+    case TYPE_Bool: result = (args[1].i1 OP args[2].i1); break; \
+    case TYPE_I8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_U8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_I16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_U16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_I32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_U32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_I64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
     } break;
@@ -6894,21 +6855,55 @@ struct NormalizeCtx {
                 auto &&pi = pointers.get(enter.type);
                 auto &&fi = functions.get(pi.element_type);
 
-                std::vector<Type> retargtypes = { TYPE_Nothing };
-                if (fi.return_type != TYPE_Void) {
-                    if (tuples.is(fi.return_type)) {
-                        auto &&ti = tuples.get(fi.return_type);
-                        for (size_t i = 0; i < ti.types.size(); ++i) {
-                            retargtypes.push_back(ti.types[i]);
-                        }
-                    } else {
-                        retargtypes.push_back(fi.return_type);
+                bool const_call = true;
+                for (size_t i = 1; i < args.size(); ++i) {
+                    auto &&arg = args[i];
+                    if (!inlinable_argument(arg)) {
+                        const_call = false;
+                        break;
                     }
                 }
-                Any newcont = type_continuation(args[0], retargtypes);
-                entry->unlink_backrefs();
-                args[0] = newcont;
-                entry->link_backrefs();
+
+                if (const_call && fi.pure()) {
+                    assert(!args.empty());
+                    Any result = run_ffi_function(enter, &args[1], args.size() - 1);
+
+                    entry->unlink_backrefs();
+                    enter = args[0];
+                    args = { none };
+                    if (fi.return_type != TYPE_Void) {
+                        if (tuples.is(fi.return_type)) {
+                            // unpack
+                            auto &&ti = tuples.get(fi.return_type);
+                            for (size_t i = 0; i < ti.types.size(); ++i) {
+                                args.push_back(
+                                    wrap_pointer(ti.types[i],
+                                    (void *)(
+                                        (char *)result.pointer + ti.offsets[i])));
+                            }
+                        } else {
+                            args.push_back(result);
+                        }
+                    }
+                    entry->link_backrefs();
+                    goto renormalize;
+                } else {
+                    std::vector<Type> retargtypes = { TYPE_Nothing };
+                    if (fi.return_type != TYPE_Void) {
+                        if (tuples.is(fi.return_type)) {
+                            auto &&ti = tuples.get(fi.return_type);
+                            for (size_t i = 0; i < ti.types.size(); ++i) {
+                                retargtypes.push_back(ti.types[i]);
+                            }
+                        } else {
+                            retargtypes.push_back(fi.return_type);
+                        }
+                    }
+                    Any newcont = type_continuation(args[0], retargtypes);
+                    entry->unlink_backrefs();
+                    args[0] = newcont;
+                    entry->link_backrefs();
+                }
             } else {
                 apply_type_error(enter);
             }
@@ -6920,6 +6915,242 @@ struct NormalizeCtx {
             entry->params[0]->type = TYPE_Nothing;
         }
     }
+
+    std::unordered_map<Type, ffi_type *, Type::Hash> ffi_types;
+
+    ffi_type *new_type() {
+        ffi_type *result = (ffi_type *)malloc(sizeof(ffi_type));
+        memset(result, 0, sizeof(ffi_type));
+        return result;
+    }
+
+    ffi_type *create_ffi_type(Type type) {
+        switch(type.value()) {
+        case TYPE_Void:
+        case TYPE_Nothing: return &ffi_type_void;
+        case TYPE_Bool: return &ffi_type_uint8;
+        case TYPE_I8: return &ffi_type_sint8;
+        case TYPE_I16: return &ffi_type_sint16;
+        case TYPE_I32: return &ffi_type_sint32;
+        case TYPE_I64: return &ffi_type_sint64;
+        case TYPE_U8: return &ffi_type_uint8;
+        case TYPE_U16: return &ffi_type_uint16;
+        case TYPE_U32: return &ffi_type_uint32;
+        case TYPE_U64: return &ffi_type_uint64;
+        case TYPE_R32: return &ffi_type_float;
+        case TYPE_R64: return &ffi_type_double;
+        default: break;
+        }
+
+        switch(category_of(type)) {
+        case CAT_Pointer: return &ffi_type_pointer;
+        case CAT_Typename: {
+            auto &&tn = typenames.get(type);
+            if (!tn.finalized) {
+                StyledString ss;
+                ss.out << "FFI: cannot convert opaque type " << type;
+                location_error(ss.str());
+            }
+            return create_ffi_type(tn.storage_type);
+        } break;
+        case CAT_Array: {
+            auto &&ai = arrays.get(type);
+            size_t count = ai.count;
+            ffi_type *ty = (ffi_type *)malloc(sizeof(ffi_type));
+            ty->size = 0;
+            ty->alignment = 0;
+            ty->type = FFI_TYPE_STRUCT;
+            ty->elements = (ffi_type **)malloc(sizeof(ffi_type*) * (count + 1));
+            ffi_type *element_type = create_ffi_type(ai.element_type);
+            for (size_t i = 0; i < count; ++i) {
+                ty->elements[i] = element_type;
+            }
+            ty->elements[count] = nullptr;
+            return ty;
+        } break;
+        case CAT_Tuple: {
+            auto &&ti = tuples.get(type);
+            size_t count = ti.types.size();
+            ffi_type *ty = (ffi_type *)malloc(sizeof(ffi_type));
+            ty->size = 0;
+            ty->alignment = 0;
+            ty->type = FFI_TYPE_STRUCT;
+            ty->elements = (ffi_type **)malloc(sizeof(ffi_type*) * (count + 1));
+            for (size_t i = 0; i < count; ++i) {
+                ty->elements[i] = create_ffi_type(ti.types[i]);
+            }
+            ty->elements[count] = nullptr;
+            return ty;
+        } break;
+        case CAT_Union: {
+            auto &&ui = unions.get(type);
+            size_t count = ui.types.size();
+            size_t sz = ui.size;
+            size_t al = ui.align;
+            ffi_type *ty = (ffi_type *)malloc(sizeof(ffi_type));
+            ty->size = 0;
+            ty->alignment = 0;
+            ty->type = FFI_TYPE_STRUCT;
+            // find member with the same alignment
+            for (size_t i = 0; i < count; ++i) {
+                Type ET = ui.types[i];
+                size_t etal = align_of(ET);
+                if (etal == al) {
+                    size_t remsz = sz - size_of(ET);
+                    ffi_type *tvalue = create_ffi_type(ET);
+                    if (remsz) {
+                        ty->elements = (ffi_type **)malloc(sizeof(ffi_type*) * 3);
+                        ty->elements[0] = tvalue;
+                        ty->elements[1] = create_ffi_type(Array(TYPE_I8, remsz));
+                        ty->elements[2] = nullptr;
+                    } else {
+                        ty->elements = (ffi_type **)malloc(sizeof(ffi_type*) * 2);
+                        ty->elements[0] = tvalue;
+                        ty->elements[1] = nullptr;
+                    }
+                    return ty;
+                }
+            }
+            // should never get here
+            assert(false);
+        } break;
+        default: break;
+        };
+
+        StyledString ss;
+        ss.out << "FFI: cannot convert argument of type " << type;
+        location_error(ss.str());
+        return nullptr;
+    }
+
+    ffi_type *get_ffi_type(Type type) {
+        auto it = ffi_types.find(type);
+        if (it == ffi_types.end()) {
+            auto result = create_ffi_type(type);
+            ffi_types[type] = result;
+            return result;
+        } else {
+            return it->second;
+        }
+    }
+
+    Any wrap_pointer(Type type, void *ptr) {
+        Any result = none;
+        result.type = type;
+        switch(type.value()) {
+        case TYPE_I8: case TYPE_U8:
+            result.u8 = *(uint8_t *)ptr;
+            return result;
+        case TYPE_I16: case TYPE_U16:
+            result.u16 = *(uint16_t *)ptr;
+            return result;
+        case TYPE_I32: case TYPE_U32:
+            result.u32 = *(uint32_t *)ptr;
+            return result;
+        case TYPE_I64: case TYPE_U64:
+            result.u64 = *(uint64_t *)ptr;
+            return result;
+        case TYPE_Bool:
+            result.i1 = *(bool *)ptr;
+            return result;
+        default: break;
+        }
+
+        switch(category_of(type)) {
+        case CAT_Pointer:
+            result.pointer = *(void **)ptr;
+            return result;
+        case CAT_Typename: {
+            auto &&tn = typenames.get(type);
+            if (!tn.finalized) {
+                StyledString ss;
+                ss.out << "FFI: cannot wrap opaque type " << type;
+                location_error(ss.str());
+            }
+            result = wrap_pointer(tn.storage_type, ptr);
+            result.type = type;
+            return result;
+        } break;
+        case CAT_Array:
+        case CAT_Vector:
+        case CAT_Tuple:
+        case CAT_Union:
+            result.pointer = ptr;
+            return result;
+        default: break;
+        };
+
+        StyledString ss;
+        ss.out << "FFI: cannot wrap data of type " << type;
+        location_error(ss.str());
+        return none;
+    }
+
+    void *get_ffi_argument(Type type, Any &value, bool create = false) {
+        switch(type.value()) {
+        case TYPE_Void: return value.content;
+        case TYPE_I8: case TYPE_U8: return (void *)&value.u8;
+        case TYPE_I16: case TYPE_U16: return (void *)&value.u16;
+        case TYPE_I32: case TYPE_U32: return (void *)&value.u32;
+        case TYPE_I64: case TYPE_U64: return (void *)&value.u64;
+        case TYPE_Bool: return (void *)&value.i1;
+        default: break;
+        }
+
+        switch(category_of(type)) {
+        case CAT_Pointer: return (void *)&value.pointer;
+        case CAT_Typename: {
+            auto &&tn = typenames.get(type);
+            if (!tn.finalized) {
+                StyledString ss;
+                ss.out << "FFI: cannot convert opaque type " << type;
+                location_error(ss.str());
+            }
+            return get_ffi_argument(tn.storage_type, value, create);
+        } break;
+        case CAT_Array:
+        case CAT_Vector:
+        case CAT_Tuple:
+        case CAT_Union:
+            if (create) {
+                value.pointer = malloc(size_of(type));
+            }
+            return value.pointer;
+        default: break;
+        };
+
+        StyledString ss;
+        ss.out << "FFI: cannot convert argument of type " << type;
+        location_error(ss.str());
+        return nullptr;
+    }
+
+    Any run_ffi_function(Any enter, Any *args, size_t argcount) {
+        assert(is_function_pointer(enter.type));
+        auto &&pi = pointers.get(enter.type);
+        auto &&fi = functions.get(pi.element_type);
+
+        Type rettype = fi.return_type;
+
+        ffi_cif cif;
+        ffi_type *argtypes[argcount];
+        void *avalues[argcount];
+        for (size_t i = 0; i < argcount; ++i) {
+            Any &arg = args[i];
+            argtypes[i] = get_ffi_type(arg.type);
+            avalues[i] = get_ffi_argument(arg.type, arg);
+        }
+        auto prep_result = ffi_prep_cif(
+            &cif, FFI_DEFAULT_ABI, argcount, get_ffi_type(rettype), argtypes);
+        assert(prep_result == FFI_OK);
+
+        Any result = Any::from_pointer(rettype, nullptr);
+        ffi_call(&cif, FFI_FN(enter.pointer),
+            get_ffi_argument(result.type, result, true), avalues);
+
+        return result;
+    }
+
 };
 
 static Label *normalize(Label *entry) {
@@ -7132,7 +7363,7 @@ static void translate_function_expr_list(
     if (enter.type != TYPE_Nothing) {
         assert(!args.empty());
         if ((args[0].type == TYPE_Bool)
-            && !(args[0].u64)) {
+            && !args[0].i1) {
             if (is_return_callable(enter, args)) {
                 args[0] = none;
             } else {
@@ -7521,7 +7752,8 @@ static void init_globals() {
     globals->bind(Symbol("print-number"),
         Any::from_pointer(Pointer(Function(
             Tuple({TYPE_I32,TYPE_I32}),
-            {TYPE_I32, TYPE_I32, TYPE_I32})),
+            {TYPE_I32, TYPE_I32, TYPE_I32},
+            FF_Pure)),
             (void *)bangra_print_number));
 
     globals->bind(KW_True, true);
@@ -7619,7 +7851,7 @@ void build_and_run_opt_passes(LLVMModuleRef module) {
     passBuilder = LLVMPassManagerBuilderCreate();
     LLVMPassManagerBuilderSetOptLevel(passBuilder, 3);
     LLVMPassManagerBuilderSetSizeLevel(passBuilder, 0);
-    //LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
+    LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
 
     LLVMPassManagerRef functionPasses =
       LLVMCreateFunctionPassManagerForModule(module);
@@ -7820,7 +8052,7 @@ int main(int argc, char *argv[]) {
         //auto td = LLVMGetExecutionEngineTargetData(ee);
         auto tm = LLVMGetExecutionEngineTargetMachine(ee);
 
-#if 0
+#if 1
         build_and_run_opt_passes(module);
 
         std::cout << "\noptimized:" << std::endl;
