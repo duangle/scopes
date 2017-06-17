@@ -160,6 +160,9 @@ print-value
     print-value
         print-value 3
 
+print-number 303
+    print-number 1 2 3
+
 # typify
     fn/cc f (_ s)
         io-write s
@@ -177,19 +180,19 @@ print-value
     io-write-fn
         string->fn "hello\n"
 
-syntax-apply-block
+#syntax-apply-block
     fn/cc (_ anchor exprs env)
         dump anchor
 
 # static assertion
-branch (type== (typeof 1) i32)
-    fn/cc (_)
-    fn/cc (_)
-        compiler-error "static assertion failed: argument not i32"
-branch (constant? (add 1 2))
-    fn/cc (_)
-    fn/cc (_)
-        compiler-error "static assertion failed: argument not constant"
+    branch (type== (typeof 1) i32)
+        fn/cc (_)
+        fn/cc (_)
+            compiler-error "static assertion failed: argument not i32"
+    branch (constant? (add 1 2))
+        fn/cc (_)
+        fn/cc (_)
+            compiler-error "static assertion failed: argument not constant"
 
 
 \ none

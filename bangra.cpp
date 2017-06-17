@@ -552,7 +552,7 @@ namespace bangra {
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
-    T(FN_Branch) T(FN_Write) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
+    T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_ListAt) T(FN_ListNext) \
     T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) \
     T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
@@ -585,6 +585,7 @@ namespace bangra {
     T(SYM_Unnamed, "") \
     \
     /* types */ \
+    T(TYPE_Void, "void") \
     T(TYPE_Nothing, "Nothing") \
     T(TYPE_Any, "Any") \
     \
@@ -1791,6 +1792,48 @@ static Type Tuple(const std::vector<Type> &types) {
 }
 
 //------------------------------------------------------------------------------
+// FUNCTION TYPE
+//------------------------------------------------------------------------------
+
+struct FunctionInfo {
+    Type return_type;
+    std::vector<Type> argument_types;
+    bool vararg;
+
+    FunctionInfo() : return_type(TYPE_Nothing), vararg(false) {}
+};
+
+static TypeFactory<FunctionInfo> functions;
+
+static Type Function(Type return_type,
+    const std::vector<Type> &argument_types, bool vararg = false) {
+    std::stringstream ss;
+    ss <<  return_type.name().name()->data << "<-(";
+    for (size_t i = 0; i < argument_types.size(); ++i) {
+        if (i > 0) {
+            ss << " ";
+        }
+        ss << argument_types[i].name().name()->data;
+    }
+    ss << ")";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = functions.insert(type);
+    if (result.second) {
+        auto &&ti = result.first->second;
+        ti.return_type = return_type;
+        ti.argument_types = argument_types;
+        ti.vararg = vararg;
+    }
+    return type;
+}
+
+static bool is_function_pointer(Type type) {
+    if (!pointers.is(type)) return false;
+    auto &&pi = pointers.get(type);
+    return functions.is(pi.element_type);
+}
+
+//------------------------------------------------------------------------------
 // UNION TYPE
 //------------------------------------------------------------------------------
 
@@ -1974,6 +2017,7 @@ enum Category {
     CAT_Typename,
     CAT_TypedLabel,
     CAT_TypeSet,
+    CAT_Function,
 };
 
 static Category category_of(Type T) {
@@ -1989,6 +2033,8 @@ static Category category_of(Type T) {
         return CAT_Tuple;
     } else if (unions.is(T)) {
         return CAT_Union;
+    } else if (functions.is(T)) {
+        return CAT_Function;
     }
     return CAT_Basic;
 }
@@ -5670,7 +5716,7 @@ struct GenerateCtx {
     LLVMValueRef noneV;
 
 #define B_LLVM_BUILTINS() \
-    T(FN_Write, voidT, type_to_llvm_type(TYPE_String))
+    T(FN_Write, voidT, type_to_llvm_type(TYPE_Any))
 
 #define T(NAME, RET, ...) \
     LLVMValueRef llvm_ ## NAME;
@@ -5721,6 +5767,7 @@ struct GenerateCtx {
 
     LLVMTypeRef create_llvm_type(Type type) {
         switch (type.value()) {
+        case TYPE_Void: return voidT;
         case TYPE_Nothing: return noneT;
         case TYPE_Bool: return i1T;
         case TYPE_I8:
@@ -5784,6 +5831,17 @@ struct GenerateCtx {
             return LLVMStructCreateNamed(
                 LLVMGetGlobalContext(), type.name().name()->data);
         } break;
+        case CAT_Function: {
+            auto &fi = functions.get(type);
+            size_t count = fi.argument_types.size();
+            LLVMTypeRef elements[count];
+            for (size_t i = 0; i < count; ++i) {
+                elements[i] = type_to_llvm_type(fi.argument_types[i]);
+            }
+            return LLVMFunctionType(
+                type_to_llvm_type(fi.return_type),
+                elements, count, fi.vararg);
+        } break;
         case CAT_TypedLabel:
         case CAT_TypeSet:
         default: break;
@@ -5797,10 +5855,9 @@ struct GenerateCtx {
 
     void finalize_types() {
         // look for typenames that need completion
-        for (auto &&it : type_todo) {
-            Type T = it;
-            if (!typenames.is(T))
-                continue;
+        for (size_t i = 0; i < type_todo.size(); ++i) {
+            Type T = type_todo[i];
+            assert(typenames.is(T));
             auto &&tn = typenames.get(T);
             if (!tn.finalized)
                 continue;
@@ -6006,7 +6063,18 @@ struct GenerateCtx {
             }
         } break;
         default: {
-            assert(false && "todo: translate non-builtin call");
+            if (is_function_pointer(enter.type)) {
+                auto &&pi = pointers.get(enter.type);
+                auto &&fi = functions.get(pi.element_type);
+
+                auto ret = LLVMBuildCall(builder,
+                    argument_to_value(enter), values, argcount, "");
+                if (fi.return_type != TYPE_Void) {
+                    retvalue = ret;
+                }
+            } else {
+                assert(false && "todo: translate non-builtin call");
+            }
         } break;
         }
 
@@ -6822,7 +6890,28 @@ struct NormalizeCtx {
             type_continuation(enter, argtypes);
         } break;
         default: {
-            apply_type_error(enter);
+            if (is_function_pointer(enter.type)) {
+                auto &&pi = pointers.get(enter.type);
+                auto &&fi = functions.get(pi.element_type);
+
+                std::vector<Type> retargtypes = { TYPE_Nothing };
+                if (fi.return_type != TYPE_Void) {
+                    if (tuples.is(fi.return_type)) {
+                        auto &&ti = tuples.get(fi.return_type);
+                        for (size_t i = 0; i < ti.types.size(); ++i) {
+                            retargtypes.push_back(ti.types[i]);
+                        }
+                    } else {
+                        retargtypes.push_back(fi.return_type);
+                    }
+                }
+                Any newcont = type_continuation(args[0], retargtypes);
+                entry->unlink_backrefs();
+                args[0] = newcont;
+                entry->link_backrefs();
+            } else {
+                apply_type_error(enter);
+            }
         } break;
         }
 
@@ -7371,7 +7460,7 @@ static Any expand_root(Any expr, Scope *scope = nullptr) {
         tn.finalize(Pointer(ET)); \
     }
 
-#define DEFINE_OPAQUE_HANDLE_TYPE(CT, T, ...) { \
+#define DEFINE_OPAQUE_HANDLE_TYPE(CT, T) { \
         Typename(Type(T).name(), true); \
         auto &&tn = typenames.get(T); \
         tn.finalize(Pointer(Typename(Symbol("_" #CT), true))); \
@@ -7381,19 +7470,18 @@ static void init_types() {
     Type ty_size = TYPE_U64;
 
     DEFINE_BASIC_TYPE(Type, TYPE_Type, TYPE_U64);
-    DEFINE_BASIC_TYPE(Symbol, TYPE_Symbol, TYPE_U64);
+    //DEFINE_BASIC_TYPE(Symbol, TYPE_Symbol, TYPE_U64);
+    //DEFINE_BASIC_TYPE(Builtin, TYPE_Builtin, TYPE_U64);
 
     DEFINE_STRUCT_TYPE(Any, TYPE_Any,
         TYPE_Type,
         TYPE_U64
     );
 
-    DEFINE_OPAQUE_HANDLE_TYPE(SourceFile, TYPE_SourceFile,
-        Pointer(TYPE_SourceFile),
-        TYPE_I32,
-        TYPE_I32,
-        TYPE_I32
-    );
+    DEFINE_OPAQUE_HANDLE_TYPE(SourceFile, TYPE_SourceFile);
+    //DEFINE_OPAQUE_HANDLE_TYPE(Label, TYPE_Label);
+    //DEFINE_OPAQUE_HANDLE_TYPE(Parameter, TYPE_Parameter);
+    //DEFINE_OPAQUE_HANDLE_TYPE(Scope, TYPE_Scope);
 
     DEFINE_STRUCT_HANDLE_TYPE(Anchor, TYPE_Anchor,
         Pointer(TYPE_SourceFile),
@@ -7416,7 +7504,26 @@ static void init_types() {
 
 #undef DEFINE_STRUCT_TYPE
 
+static void bangra_FN_Write(const String *value) {
+    fputs(value->data, stdout);
+}
+typedef struct { int x,y; } I2;
+static I2 bangra_print_number(int a, int b, int c) {
+    std::cout << a << " " << b << " " << c << std::endl;
+    return { c , b };
+}
+
 static void init_globals() {
+
+    globals->bind(FN_Write,
+        Any::from_pointer(Pointer(Function(TYPE_Void, {TYPE_String})),
+            (void *)bangra_FN_Write));
+    globals->bind(Symbol("print-number"),
+        Any::from_pointer(Pointer(Function(
+            Tuple({TYPE_I32,TYPE_I32}),
+            {TYPE_I32, TYPE_I32, TYPE_I32})),
+            (void *)bangra_print_number));
+
     globals->bind(KW_True, true);
     globals->bind(KW_False, false);
     globals->bind(KW_ListEmpty, EOL);
@@ -7713,10 +7820,12 @@ int main(int argc, char *argv[]) {
         //auto td = LLVMGetExecutionEngineTargetData(ee);
         auto tm = LLVMGetExecutionEngineTargetMachine(ee);
 
+#if 0
         build_and_run_opt_passes(module);
 
         std::cout << "\noptimized:" << std::endl;
         LLVMDumpModule(module);
+#endif
 
         typedef void (*MainFuncType)();
         void *pfunc = LLVMGetPointerToGlobal(ee, func);
@@ -7729,6 +7838,7 @@ int main(int argc, char *argv[]) {
             }
         }
         MainFuncType fptr = (MainFuncType)pfunc;
+        std::cout << "executing:" << std::endl;
         fptr();
 
         //interpreter_loop(cmd);
@@ -7740,11 +7850,6 @@ int main(int argc, char *argv[]) {
 #endif
 
     return 0;
-}
-extern "C" {
-void bangra_FN_Write(const bangra::String *s) {
-    fputs(s->data, stdout);
-}
 }
 
 #endif // BANGRA_CPP_IMPL
