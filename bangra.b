@@ -181,9 +181,38 @@
     io-write-fn
         string->fn "hello\n"
 
-#syntax-apply-block
-    fn/cc (_ anchor exprs env)
-        dump anchor
+# deferring remaining expressions to bootstrap parser
+    syntax-apply-block
+        fn/cc (_ anchor exprs env)
+            fn/cc walk-list (_ l depth)
+                fn/cc print-spaces (_ depth)
+                    branch (icmp== depth 0)
+                        fn/cc (_)
+                        fn/cc (_)
+                            io-write " "
+                            print-spaces (sub depth 1)
+
+                call
+                    fn/cc loop (_ l)
+                        branch (list-empty? l)
+                            fn/cc (_) true
+                            fn/cc (_)
+                                print-spaces depth
+                                branch (type== (extract-value (list-at l) 0) Syntax)
+                                    fn/cc (_)
+                                        io-write "is a syntax\n"
+                                    fn/cc (_)
+                                io-write
+                                    repr
+                                        list-at l
+                                io-write "\n"
+                                loop
+                                    list-next l
+                    \ l
+
+            walk-list
+                mystify exprs
+                mystify 0
 
 # static assertion
     branch (type== (typeof 1) i32)
@@ -196,28 +225,28 @@
             compiler-error "static assertion failed: argument not constant"
 
 # importing C code
-call
-    fn/cc (_ lib)
-        call
-            fn/cc (_ sinf printf)
-                printf
-                    string->rawstring "test: %f\n"
-                    sinf 0.5235987755982989
-            Any-extract
-                Scope@ lib 'sinf
-            Any-extract
-                Scope@ lib 'printf
+    call
+        fn/cc (_ lib)
+            call
+                fn/cc (_ sinf printf)
+                    printf
+                        string->rawstring "test: %f\n"
+                        sinf 0.5235987755982989
+                purify
+                    Any-extract
+                        Scope@ lib 'sinf
+                Any-extract
+                    Scope@ lib 'printf
 
-    import-c "testdata.c" "
-        float sinf(float);
-        int printf( const char* format, ... );
-        "
-        \ eol
+        import-c "testdata.c" "
+            float sinf(float);
+            int printf( const char* format, ... );
+            "
+            \ eol
 
-# repr
-#dump
-    string->rawstring "hello"
-
+# sext
+dump
+    sext (trunc 32 i8) i64
 
 \ none
 

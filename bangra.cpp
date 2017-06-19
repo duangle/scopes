@@ -555,10 +555,13 @@ namespace bangra {
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_IsConstant) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
-    T(OP_Add) T(OP_AddNUW) T(OP_AddNSW)
+    T(FN_Purify) T(FN_Mystify) T(FN_TypeOf) \
+    T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
+    T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
+    T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -651,6 +654,7 @@ namespace bangra {
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
     T(FN_ExternLibrary, "extern-library") \
     T(FN_ExtractMemory, "extract-memory") \
+    T(FN_ExtractValue, "extract-value") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
@@ -659,6 +663,7 @@ namespace bangra {
     T(OP_ICmpUGT, "icmp>u") T(OP_ICmpUGE, "icmp>=u") T(OP_ICmpULT, "icmp<u") T(OP_ICmpULE, "icmp<=u") \
     T(OP_ICmpSGT, "icmp>s") T(OP_ICmpSGE, "icmp>=s") T(OP_ICmpSLT, "icmp<s") T(OP_ICmpSLE, "icmp<=s") \
     T(OP_Add, "add") T(OP_AddNUW, "add-nuw") T(OP_AddNSW, "add-nsw") \
+    T(OP_Sub, "sub") T(OP_SubNUW, "sub-nuw") T(OP_SubNSW, "sub-nsw") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_InterpreterVersion, "interpreter-version") \
     B_ALL_OP_DEFS() \
@@ -680,7 +685,9 @@ namespace bangra {
     T(FN_ParameterEq, "Parameter==") \
     T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
     T(FN_ParameterAnchor, "Parameter-anchor") \
-    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") T(FN_Write, "io-write") \
+    T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
+    T(FN_Purify, "purify") \
+    T(FN_Write, "io-write") \
     T(FN_Flush, "io-flush") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
@@ -702,7 +709,8 @@ namespace bangra {
     T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
-    T(FN_Translate, "translate") \
+    T(FN_Translate, "translate") T(FN_Trunc, "trunc") \
+    T(FN_ZExt, "zext") T(FN_SExt, "sext") \
     T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
     T(FN_TypeSizeOf, "type-sizeof") \
     T(FN_Typify, "typify") \
@@ -725,7 +733,7 @@ namespace bangra {
     /* builtin operator functions that can also be used as infix */ \
     T(OP_NotEq, "!=") T(OP_Mod, "%") T(OP_InMod, "%=") T(OP_BitAnd, "&") T(OP_InBitAnd, "&=") \
     T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_IFXAdd, "+") T(OP_Incr, "++") \
-    T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_Sub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
+    T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_IFXSub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
     T(OP_Dot, ".") T(OP_Join, "..") T(OP_Div, "/") T(OP_InDiv, "/=") \
     T(OP_Colon, ":") T(OP_Let, ":=") T(OP_Less, "<") T(OP_LeftArrow, "<-") T(OP_Subtype, "<:") \
     T(OP_ShiftL, "<<") T(OP_LessThan, "<=") T(OP_Set, "=") T(OP_Eq, "==") \
@@ -1616,6 +1624,15 @@ static void verify_integer(Type type) {
     }
 }
 
+static void verify_range(size_t idx, size_t count) {
+    if (idx >= count) {
+        StyledString ss;
+        ss.out << "index out of range (" << idx
+            << " > " << count << ")";
+        location_error(ss.str());
+    }
+}
+
 //------------------------------------------------------------------------------
 // TYPE FACTORIES
 //------------------------------------------------------------------------------
@@ -1639,284 +1656,6 @@ struct TypeFactory {
         return descs.insert({type, T()});
     }
 };
-
-//------------------------------------------------------------------------------
-// POINTER TYPE
-//------------------------------------------------------------------------------
-
-struct PointerInfo {
-    Type element_type;
-
-    PointerInfo() : element_type(TYPE_Nothing) {}
-
-    static size_t size() {
-        return sizeof(uint64_t);
-    }
-};
-
-static TypeFactory<PointerInfo> pointers;
-
-static Type Pointer(Type element_type) {
-    std::stringstream ss;
-    ss << element_type.name().name()->data << "*";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = pointers.insert(type);
-    if (result.second) {
-        auto &&pi = result.first->second;
-        pi.element_type = element_type;
-    }
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// ARRAY TYPE
-//------------------------------------------------------------------------------
-
-struct StorageInfo {
-    size_t size;
-    size_t align;
-};
-
-struct ArrayInfo : StorageInfo {
-    Type element_type;
-    size_t count;
-
-    ArrayInfo() : element_type(TYPE_Nothing), count(0) {}
-};
-
-static TypeFactory<ArrayInfo> arrays;
-
-static Type Array(Type element_type, size_t count) {
-    std::stringstream ss;
-    ss << "[" << element_type.name().name()->data << " x " << count << "]";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = arrays.insert(type);
-    if (result.second) {
-        auto &&ai = result.first->second;
-        ai.element_type = element_type;
-        ai.count = count;
-        ai.size = size_of(element_type) * count;
-        ai.align = align_of(element_type);
-    }
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// VECTOR TYPE
-//------------------------------------------------------------------------------
-
-struct VectorInfo : StorageInfo {
-    Type element_type;
-    size_t count;
-
-    VectorInfo() : element_type(TYPE_Nothing), count(0) {}
-};
-
-static TypeFactory<VectorInfo> vectors;
-
-static Type Vector(Type element_type, size_t count) {
-    std::stringstream ss;
-    ss << "<" << element_type.name().name()->data << " x " << count << ">";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = vectors.insert(type);
-    if (result.second) {
-        auto &&ai = result.first->second;
-        ai.element_type = element_type;
-        ai.count = count;
-        ai.size = size_of(element_type) * count;
-        ai.align = align_of(element_type);
-    }
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// FUNCTION TYPE
-//------------------------------------------------------------------------------
-
-enum {
-    // takes variable number of arguments
-    FF_Variadic = (1 << 0),
-    // can be evaluated at compile time
-    FF_Pure = (1 << 1),
-};
-
-struct FunctionInfo {
-    Type return_type;
-    std::vector<Type> argument_types;
-    uint32_t flags;
-
-    bool vararg() const {
-        return flags & FF_Variadic;
-    }
-    bool pure() const {
-        return flags & FF_Pure;
-    }
-    FunctionInfo() : return_type(TYPE_Nothing), flags(0) {}
-};
-
-static TypeFactory<FunctionInfo> functions;
-
-static Type Function(Type return_type,
-    const std::vector<Type> &argument_types, uint32_t flags = 0) {
-    std::stringstream ss;
-    ss <<  return_type.name().name()->data;
-    if (flags & FF_Pure) {
-        ss << "<~";
-    } else {
-        ss << "<-";
-    }
-    ss << "(";
-    for (size_t i = 0; i < argument_types.size(); ++i) {
-        if (i > 0) {
-            ss << " ";
-        }
-        ss << argument_types[i].name().name()->data;
-    }
-    if (flags & FF_Variadic) {
-        ss << " ...";
-    }
-    ss << ")";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = functions.insert(type);
-    if (result.second) {
-        auto &&ti = result.first->second;
-        ti.return_type = return_type;
-        ti.argument_types = argument_types;
-        ti.flags = flags;
-    }
-    return type;
-}
-
-static bool is_function_pointer(Type type) {
-    if (!pointers.is(type)) return false;
-    auto &&pi = pointers.get(type);
-    return functions.is(pi.element_type);
-}
-
-//------------------------------------------------------------------------------
-// UNION TYPE
-//------------------------------------------------------------------------------
-
-struct UnionInfo : StorageInfo {
-    std::vector<Type> types;
-};
-
-static TypeFactory<UnionInfo> unions;
-
-static Type Union(const std::vector<Type> &types) {
-    std::stringstream ss;
-    ss << "{";
-    for (size_t i = 0; i < types.size(); ++i) {
-        if (i > 0) {
-            ss << " | ";
-        }
-        ss << types[i].name().name()->data;
-    }
-    ss << "}";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = unions.insert(type);
-    if (result.second) {
-        auto &&ui = result.first->second;
-        ui.types = types;
-        size_t sz = 0;
-        size_t al = 1;
-        for (size_t i = 0; i < types.size(); ++i) {
-            Type ET = types[i];
-            sz = std::max(sz, size_of(ET));
-            al = std::max(al, align_of(ET));
-        }
-        ui.size = align(sz, al);
-        ui.align = al;
-    }
-
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// TYPED LABEL TYPE
-//------------------------------------------------------------------------------
-
-struct TypedLabelInfo {
-    std::vector<Type> types;
-};
-
-static TypeFactory<TypedLabelInfo> typed_labels;
-
-static Type TypedLabel(const std::vector<Type> &types) {
-    assert(!types.empty());
-    std::stringstream ss;
-    ss << "λ(";
-    for (size_t i = 0; i < types.size(); ++i) {
-        if (i > 0) {
-            ss << " ";
-        }
-        ss << types[i].name().name()->data;
-    }
-    ss << ")";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = typed_labels.insert(type);
-    if (result.second) {
-        auto &&tli = result.first->second;
-        tli.types = types;
-    }
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// TYPESET TYPE
-//------------------------------------------------------------------------------
-
-struct TypeSetInfo {
-    std::unordered_set<Type, Type::Hash> types;
-};
-
-static TypeFactory<TypeSetInfo> typesets;
-
-static Type TypeSet(const std::vector<Type> &types) {
-    std::unordered_set<Type, Type::Hash> typeset;
-
-    for (auto &&entry : types) {
-        if (typesets.is(entry)) {
-            auto &&tsi = typesets.get(entry);
-            for (auto &&t : tsi.types) {
-                typeset.insert(t);
-            }
-        } else {
-            typeset.insert(entry);
-        }
-    }
-
-    assert(!typeset.count(TYPE_Any));
-    assert(!typeset.empty());
-
-    if (typeset.size() == 1) {
-        return *typeset.begin();
-    }
-
-    std::vector<Type> type_array;
-    type_array.reserve(typeset.size());
-    for (auto &&entry : typeset) {
-        type_array.push_back(entry);
-    }
-
-    std::sort(type_array.begin(), type_array.end());
-
-    std::stringstream ss;
-    for (size_t i = 0; i < type_array.size(); ++i) {
-        if (i > 0) {
-            ss << " | ";
-        }
-        ss << type_array[i].name().name()->data;
-    }
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = typesets.insert(type);
-    if (result.second) {
-        auto &&tsi = result.first->second;
-        tsi.types = typeset;
-    }
-
-    return type;
-}
 
 //------------------------------------------------------------------------------
 // BUILTIN
@@ -2146,6 +1885,317 @@ static StyledStream& operator<<(StyledStream& ost, Any value) {
 static Any wrap_pointer(Type type, void *ptr);
 
 //------------------------------------------------------------------------------
+// POINTER TYPE
+//------------------------------------------------------------------------------
+
+struct PointerInfo {
+    Type element_type;
+
+    PointerInfo() : element_type(TYPE_Nothing) {}
+
+    static size_t size() {
+        return sizeof(uint64_t);
+    }
+};
+
+static TypeFactory<PointerInfo> pointers;
+
+static Type Pointer(Type element_type) {
+    std::stringstream ss;
+    ss << element_type.name().name()->data << "*";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = pointers.insert(type);
+    if (result.second) {
+        auto &&pi = result.first->second;
+        pi.element_type = element_type;
+    }
+    return type;
+}
+
+//------------------------------------------------------------------------------
+// ARRAY TYPE
+//------------------------------------------------------------------------------
+
+struct StorageInfo {
+    size_t size;
+    size_t align;
+};
+
+struct ArrayInfo : StorageInfo {
+    Type element_type;
+    size_t count;
+    size_t stride;
+
+    ArrayInfo() : element_type(TYPE_Nothing), count(0) {}
+
+    Any unpack(void *src, size_t i) {
+        return wrap_pointer(type_at_index(i),
+            (void *)((char *)src + stride * i));
+    }
+
+    Type type_at_index(size_t i) {
+        verify_range(i, count);
+        return element_type;
+    }
+};
+
+static TypeFactory<ArrayInfo> arrays;
+
+static Type Array(Type element_type, size_t count) {
+    std::stringstream ss;
+    ss << "[" << element_type.name().name()->data << " x " << count << "]";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = arrays.insert(type);
+    if (result.second) {
+        auto &&ai = result.first->second;
+        ai.element_type = element_type;
+        ai.count = count;
+        ai.stride = size_of(element_type);
+        ai.size = ai.stride * count;
+        ai.align = align_of(element_type);
+    }
+    return type;
+}
+
+//------------------------------------------------------------------------------
+// VECTOR TYPE
+//------------------------------------------------------------------------------
+
+struct VectorInfo : StorageInfo {
+    Type element_type;
+    size_t count;
+    size_t stride;
+
+    VectorInfo() : element_type(TYPE_Nothing), count(0) {}
+
+    Any unpack(void *src, size_t i) {
+        return wrap_pointer(type_at_index(i),
+            (void *)((char *)src + stride * i));
+    }
+
+    Type type_at_index(size_t i) {
+        verify_range(i, count);
+        return element_type;
+    }
+};
+
+static TypeFactory<VectorInfo> vectors;
+
+static Type Vector(Type element_type, size_t count) {
+    std::stringstream ss;
+    ss << "<" << element_type.name().name()->data << " x " << count << ">";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = vectors.insert(type);
+    if (result.second) {
+        auto &&ai = result.first->second;
+        ai.element_type = element_type;
+        ai.count = count;
+        ai.stride = size_of(element_type);
+        ai.size = ai.stride * count;
+        ai.align = align_of(element_type);
+    }
+    return type;
+}
+
+//------------------------------------------------------------------------------
+// FUNCTION TYPE
+//------------------------------------------------------------------------------
+
+enum {
+    // takes variable number of arguments
+    FF_Variadic = (1 << 0),
+    // can be evaluated at compile time
+    FF_Pure = (1 << 1),
+};
+
+struct FunctionInfo {
+    Type return_type;
+    std::vector<Type> argument_types;
+    uint32_t flags;
+
+    bool vararg() const {
+        return flags & FF_Variadic;
+    }
+    bool pure() const {
+        return flags & FF_Pure;
+    }
+    FunctionInfo() : return_type(TYPE_Nothing), flags(0) {}
+};
+
+static TypeFactory<FunctionInfo> functions;
+
+static Type Function(Type return_type,
+    const std::vector<Type> &argument_types, uint32_t flags = 0) {
+    std::stringstream ss;
+    ss <<  return_type.name().name()->data;
+    if (flags & FF_Pure) {
+        ss << "<~";
+    } else {
+        ss << "<-";
+    }
+    ss << "(";
+    for (size_t i = 0; i < argument_types.size(); ++i) {
+        if (i > 0) {
+            ss << " ";
+        }
+        ss << argument_types[i].name().name()->data;
+    }
+    if (flags & FF_Variadic) {
+        ss << " ...";
+    }
+    ss << ")";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = functions.insert(type);
+    if (result.second) {
+        auto &&ti = result.first->second;
+        ti.return_type = return_type;
+        ti.argument_types = argument_types;
+        ti.flags = flags;
+    }
+    return type;
+}
+
+static bool is_function_pointer(Type type) {
+    if (!pointers.is(type)) return false;
+    auto &&pi = pointers.get(type);
+    return functions.is(pi.element_type);
+}
+
+//------------------------------------------------------------------------------
+// UNION TYPE
+//------------------------------------------------------------------------------
+
+struct UnionInfo : StorageInfo {
+    std::vector<Type> types;
+
+    Any unpack(void *src, size_t i) {
+        return wrap_pointer(type_at_index(i), src);
+    }
+
+    Type type_at_index(size_t i) {
+        verify_range(i, types.size());
+        return types[i];
+    }
+};
+
+static TypeFactory<UnionInfo> unions;
+
+static Type Union(const std::vector<Type> &types) {
+    std::stringstream ss;
+    ss << "{";
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (i > 0) {
+            ss << " | ";
+        }
+        ss << types[i].name().name()->data;
+    }
+    ss << "}";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = unions.insert(type);
+    if (result.second) {
+        auto &&ui = result.first->second;
+        ui.types = types;
+        size_t sz = 0;
+        size_t al = 1;
+        for (size_t i = 0; i < types.size(); ++i) {
+            Type ET = types[i];
+            sz = std::max(sz, size_of(ET));
+            al = std::max(al, align_of(ET));
+        }
+        ui.size = align(sz, al);
+        ui.align = al;
+    }
+
+    return type;
+}
+
+//------------------------------------------------------------------------------
+// TYPED LABEL TYPE
+//------------------------------------------------------------------------------
+
+struct TypedLabelInfo {
+    std::vector<Type> types;
+};
+
+static TypeFactory<TypedLabelInfo> typed_labels;
+
+static Type TypedLabel(const std::vector<Type> &types) {
+    assert(!types.empty());
+    std::stringstream ss;
+    ss << "λ(";
+    for (size_t i = 0; i < types.size(); ++i) {
+        if (i > 0) {
+            ss << " ";
+        }
+        ss << types[i].name().name()->data;
+    }
+    ss << ")";
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = typed_labels.insert(type);
+    if (result.second) {
+        auto &&tli = result.first->second;
+        tli.types = types;
+    }
+    return type;
+}
+
+//------------------------------------------------------------------------------
+// TYPESET TYPE
+//------------------------------------------------------------------------------
+
+struct TypeSetInfo {
+    std::unordered_set<Type, Type::Hash> types;
+};
+
+static TypeFactory<TypeSetInfo> typesets;
+
+static Type TypeSet(const std::vector<Type> &types) {
+    std::unordered_set<Type, Type::Hash> typeset;
+
+    for (auto &&entry : types) {
+        if (typesets.is(entry)) {
+            auto &&tsi = typesets.get(entry);
+            for (auto &&t : tsi.types) {
+                typeset.insert(t);
+            }
+        } else {
+            typeset.insert(entry);
+        }
+    }
+
+    assert(!typeset.count(TYPE_Any));
+    assert(!typeset.empty());
+
+    if (typeset.size() == 1) {
+        return *typeset.begin();
+    }
+
+    std::vector<Type> type_array;
+    type_array.reserve(typeset.size());
+    for (auto &&entry : typeset) {
+        type_array.push_back(entry);
+    }
+
+    std::sort(type_array.begin(), type_array.end());
+
+    std::stringstream ss;
+    for (size_t i = 0; i < type_array.size(); ++i) {
+        if (i > 0) {
+            ss << " | ";
+        }
+        ss << type_array[i].name().name()->data;
+    }
+    auto type = Type(Symbol(String::from_stdstring(ss.str())));
+    auto result = typesets.insert(type);
+    if (result.second) {
+        auto &&tsi = result.first->second;
+        tsi.types = typeset;
+    }
+
+    return type;
+}
+
+//------------------------------------------------------------------------------
 // TUPLE TYPE
 //------------------------------------------------------------------------------
 
@@ -2154,10 +2204,14 @@ struct TupleInfo : StorageInfo {
     std::vector<size_t> offsets;
 
     Any unpack(void *src, size_t i) {
-        return wrap_pointer(types[i],
+        return wrap_pointer(type_at_index(i),
             (void *)((char *)src + offsets[i]));
     }
 
+    Type type_at_index(size_t i) {
+        verify_range(i, types.size());
+        return types[i];
+    }
 };
 
 static TypeFactory<TupleInfo> tuples;
@@ -2272,6 +2326,20 @@ static Type Typename(Symbol name, bool builtin = false) {
     return type;
 }
 
+static Type storage_type(Type T) {
+    if (typenames.is(T)) {
+        auto &tn = typenames.get(T);
+        if (!tn.finalized) {
+            StyledString ss;
+            ss.out << "type " << T << " is opaque";
+            location_error(ss.str());
+        }
+        return tn.storage_type;
+    } else {
+        return T;
+    }
+}
+
 //------------------------------------------------------------------------------
 // TYPE INQUIRIES
 //------------------------------------------------------------------------------
@@ -2306,6 +2374,37 @@ static Category category_of(Type T) {
         return CAT_Function;
     }
     return CAT_Basic;
+}
+
+
+template<Category cat>
+static void verify_category(Type T) {
+    if (category_of(T) != cat) {
+        StyledString ss;
+        switch(cat) {
+        case CAT_Basic: ss.out << "primitive"; break;
+        case CAT_Pointer: ss.out << "pointer"; break;
+        case CAT_Array: ss.out << "array"; break;
+        case CAT_Vector: ss.out << "vector"; break;
+        case CAT_Tuple: ss.out << "tuple"; break;
+        case CAT_Union: ss.out << "union"; break;
+        case CAT_Typename: ss.out << "typename"; break;
+        case CAT_TypedLabel: ss.out << "typed label"; break;
+        case CAT_TypeSet: ss.out << "typeset"; break;
+        case CAT_Function: ss.out << "function"; break;
+        default: break;
+        }
+        ss.out << " expected, got " << T;
+        location_error(ss.str());
+    }
+}
+
+static void verify_function_pointer(Type type) {
+    if (!is_function_pointer(type)) {
+        StyledString ss;
+        ss.out << "function pointer expected, got " << type;
+        location_error(ss.str());
+    }
 }
 
 static size_t size_of(Type T) {
@@ -4838,6 +4937,41 @@ static void default_exception_handler(const Exception &exc) {
     exit(1);
 }
 
+static int integer_type_bit_size(Type T) {
+    switch(T.value()) {
+    case TYPE_Bool: return 1;
+    case TYPE_I8: case TYPE_U8: return 8;
+    case TYPE_I16: case TYPE_U16: return 16;
+    case TYPE_I32: case TYPE_U32: return 32;
+    case TYPE_I64: case TYPE_U64: return 64;
+    default: assert(false); break;
+    }
+    return 0;
+}
+
+template<typename T>
+static T cast_number(const Any &value) {
+    switch(value.type.value()) {
+    case TYPE_Bool: return (T)value.i1;
+    case TYPE_I8: return (T)value.i8;
+    case TYPE_I16: return (T)value.i16;
+    case TYPE_I32: return (T)value.i32;
+    case TYPE_I64: return (T)value.i64;
+    case TYPE_U8: return (T)value.u8;
+    case TYPE_U16: return (T)value.u16;
+    case TYPE_U32: return (T)value.u32;
+    case TYPE_U64: return (T)value.u64;
+    case TYPE_R32: return (T)value.r32;
+    case TYPE_R64: return (T)value.r64;
+    default: {
+        StyledString ss;
+        ss.out << "type " << value.type << " can not be converted to numerical type";
+        location_error(ss.str());
+    } break;
+    }
+    return 0;
+}
+
 #if 0
 
 struct Instruction {
@@ -4872,29 +5006,6 @@ static StyledStream& operator<<(StyledStream& ost, Instruction instr) {
     checkargs<MINARGS, MAXARGS>(in.args.size())
 #define RETARGS(...) \
     out.args = { none, __VA_ARGS__ }
-
-template<typename T>
-static T cast_number(const Any &value) {
-    switch(value.type.value()) {
-    case TYPE_Bool: return (T)value.i1;
-    case TYPE_I8: return (T)value.i8;
-    case TYPE_I16: return (T)value.i16;
-    case TYPE_I32: return (T)value.i32;
-    case TYPE_I64: return (T)value.i64;
-    case TYPE_U8: return (T)value.u8;
-    case TYPE_U16: return (T)value.u16;
-    case TYPE_U32: return (T)value.u32;
-    case TYPE_U64: return (T)value.u64;
-    case TYPE_R32: return (T)value.r32;
-    case TYPE_R64: return (T)value.r64;
-    default: {
-        StyledString ss;
-        ss.out << "type " << value.type << " can not be converted to numerical type";
-        location_error(ss.str());
-    } break;
-    }
-    return 0;
-}
 
 template<typename T>
 static T PowT(T a, T b) {
@@ -5825,21 +5936,21 @@ struct GenerateCtx {
 
         switch(category_of(type)) {
         case CAT_Pointer: return LLVMPointerType(
-            type_to_llvm_type(pointers.get(type).element_type), 0);
+            _type_to_llvm_type(pointers.get(type).element_type), 0);
         case CAT_Array: {
             auto &&ai = arrays.get(type);
-            return LLVMArrayType(type_to_llvm_type(ai.element_type), ai.count);
+            return LLVMArrayType(_type_to_llvm_type(ai.element_type), ai.count);
         } break;
         case CAT_Vector: {
             auto &&vi = vectors.get(type);
-            return LLVMVectorType(type_to_llvm_type(vi.element_type), vi.count);
+            return LLVMVectorType(_type_to_llvm_type(vi.element_type), vi.count);
         } break;
         case CAT_Tuple: {
             auto &&ti = tuples.get(type);
             size_t count = ti.types.size();
             LLVMTypeRef elements[count];
             for (size_t i = 0; i < count; ++i) {
-                elements[i] = type_to_llvm_type(ti.types[i]);
+                elements[i] = _type_to_llvm_type(ti.types[i]);
             }
             return LLVMStructType(elements, count, false);
         } break;
@@ -5855,7 +5966,7 @@ struct GenerateCtx {
                 if (etal == al) {
                     size_t remsz = sz - size_of(ET);
                     LLVMTypeRef values[2];
-                    values[0] = type_to_llvm_type(ET);
+                    values[0] = _type_to_llvm_type(ET);
                     if (remsz) {
                         // too small, add padding
                         values[1] = LLVMArrayType(i8T, remsz);
@@ -5889,10 +6000,10 @@ struct GenerateCtx {
             size_t count = fi.argument_types.size();
             LLVMTypeRef elements[count];
             for (size_t i = 0; i < count; ++i) {
-                elements[i] = type_to_llvm_type(fi.argument_types[i]);
+                elements[i] = _type_to_llvm_type(fi.argument_types[i]);
             }
             return LLVMFunctionType(
-                type_to_llvm_type(fi.return_type),
+                _type_to_llvm_type(fi.return_type),
                 elements, count, fi.vararg());
         } break;
         case CAT_TypedLabel:
@@ -5907,14 +6018,14 @@ struct GenerateCtx {
     }
 
     void finalize_types() {
-        // look for typenames that need completion
-        for (size_t i = 0; i < type_todo.size(); ++i) {
-            Type T = type_todo[i];
+        while (!type_todo.empty()) {
+            Type T = type_todo.back();
+            type_todo.pop_back();
             assert(typenames.is(T));
             auto &&tn = typenames.get(T);
             if (!tn.finalized)
                 continue;
-            LLVMTypeRef LLT = type_to_llvm_type(T);
+            LLVMTypeRef LLT = _type_to_llvm_type(T);
             Type ST = tn.storage_type;
             switch(category_of(ST)) {
             case CAT_Tuple: {
@@ -5922,7 +6033,7 @@ struct GenerateCtx {
                 size_t count = ti.types.size();
                 LLVMTypeRef elements[count];
                 for (size_t i = 0; i < count; ++i) {
-                    elements[i] = type_to_llvm_type(ti.types[i]);
+                    elements[i] = _type_to_llvm_type(ti.types[i]);
                 }
                 LLVMStructSetBody(LLT, elements, count, false);
             } break;
@@ -5938,7 +6049,7 @@ struct GenerateCtx {
                     if (etal == al) {
                         size_t remsz = sz - size_of(ET);
                         LLVMTypeRef values[2];
-                        values[0] = type_to_llvm_type(ET);
+                        values[0] = _type_to_llvm_type(ET);
                         if (remsz) {
                             // too small, add padding
                             values[1] = LLVMArrayType(i8T, remsz);
@@ -5955,7 +6066,7 @@ struct GenerateCtx {
         }
     }
 
-    LLVMTypeRef type_to_llvm_type(Type type) {
+    LLVMTypeRef _type_to_llvm_type(Type type) {
         auto it = type_cache.find(type);
         if (it == type_cache.end()) {
             LLVMTypeRef result = create_llvm_type(type);
@@ -5964,6 +6075,12 @@ struct GenerateCtx {
         } else {
             return it->second;
         }
+    }
+
+    LLVMTypeRef type_to_llvm_type(Type type) {
+        auto typeref = _type_to_llvm_type(type);
+        finalize_types();
+        return typeref;
     }
 
     LLVMTypeRef return_type_to_llvm_type(Type type) {
@@ -6101,6 +6218,10 @@ struct GenerateCtx {
             case FN_Mystify: {
                 retvalue = values[0];
             } break;
+            case FN_ExtractValue: {
+                retvalue = LLVMBuildExtractValue(
+                    builder, values[0], cast_number<int32_t>(args[2]), "");
+            } break;
             case OP_ICmpEQ:
             case OP_ICmpNE:
             case OP_ICmpUGT:
@@ -6130,6 +6251,9 @@ struct GenerateCtx {
             case OP_Add: retvalue = LLVMBuildAdd(builder, values[0], values[1], ""); break;
             case OP_AddNUW: retvalue = LLVMBuildNUWAdd(builder, values[0], values[1], ""); break;
             case OP_AddNSW: retvalue = LLVMBuildNSWAdd(builder, values[0], values[1], ""); break;
+            case OP_Sub: retvalue = LLVMBuildSub(builder, values[0], values[1], ""); break;
+            case OP_SubNUW: retvalue = LLVMBuildNUWSub(builder, values[0], values[1], ""); break;
+            case OP_SubNSW: retvalue = LLVMBuildNSWSub(builder, values[0], values[1], ""); break;
             default: {
                 StyledString ss;
                 ss.out << "IL->IR: unsupported builtin " << enter.builtin << " encountered";
@@ -6797,17 +6921,25 @@ struct NormalizeCtx {
                 CHECKARGS(1, 1);
                 RETARGS(args[1].indirect_type());
             } break;
-            case FN_TypeEq: {
-                CHECKARGS(2, 2);
-                args[1].verify<TYPE_Type>();
-                args[2].verify<TYPE_Type>();
-                RETARGS(args[1].typeref == args[2].typeref);
-            } break;
             case FN_AnyExtract: {
                 CHECKARGS(1, 1);
                 args[1].verify<TYPE_Any>();
                 Any arg = *args[1].ref;
                 RETARGS(arg);
+            } break;
+            case FN_Purify: {
+                CHECKARGS(1, 1);
+                Any arg = args[1];
+                verify_function_pointer(arg.type);
+                auto &pi = pointers.get(arg.type);
+                auto &fi = functions.get(pi.element_type);
+                if (fi.flags & FF_Pure) {
+                    RETARGS(args[1]);
+                } else {
+                    arg.type = Pointer(Function(
+                        fi.return_type, fi.argument_types, fi.flags | FF_Pure));
+                    RETARGS(arg);
+                }
             } break;
             case FN_Typify: {
                 CHECKARGS(2, -1);
@@ -6869,6 +7001,110 @@ struct NormalizeCtx {
                     CHECKARGS(1, 1);
                     RETARGTYPES(args[1].indirect_type());
                 } break;
+                case FN_ExtractValue: {
+                    CHECKARGS(1, -1);
+                    size_t idx = cast_number<size_t>(args[2]);
+                    if (is_const(args[1])) {
+                        Type T = storage_type(args[1].type);
+                        switch(category_of(T)) {
+                        case CAT_Array: {
+                            auto &ai = arrays.get(T);
+                            RETARGS(ai.unpack(args[1].pointer, idx));
+                        } break;
+                        case CAT_Tuple: {
+                            auto &ti = tuples.get(T);
+                            RETARGS(ti.unpack(args[1].pointer, idx));
+                        } break;
+                        case CAT_Union: {
+                            auto &ui = unions.get(T);
+                            RETARGS(ui.unpack(args[1].pointer, idx));
+                        } break;
+                        default: {
+                            StyledString ss;
+                            ss.out << "can not extract value from type " << T;
+                            location_error(ss.str());
+                        } break;
+                        }
+                    } else {
+                        Type T = storage_type(args[1].indirect_type());
+                        switch(category_of(T)) {
+                        case CAT_Array: {
+                            auto &ai = arrays.get(T);
+                            RETARGTYPES(ai.type_at_index(idx));
+                        } break;
+                        case CAT_Tuple: {
+                            auto &ti = tuples.get(T);
+                            RETARGTYPES(ti.type_at_index(idx));
+                        } break;
+                        case CAT_Union: {
+                            auto &ui = unions.get(T);
+                            RETARGTYPES(ui.type_at_index(idx));
+                        } break;
+                        default: {
+                            StyledString ss;
+                            ss.out << "can not extract value from type " << T;
+                            location_error(ss.str());
+                        } break;
+                        }
+                    }
+                } break;
+                case FN_Trunc: {
+                    CHECKARGS(2, 2);
+                    Type T = args[1].indirect_type();
+                    verify_integer(T);
+                    args[2].verify<TYPE_Type>();
+                    Type DestT = args[2].typeref;
+                    verify_integer(DestT);
+                    if (is_const(args[1])) {
+                        Any result = args[1];
+                        result.type = DestT;
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(DestT);
+                    }
+                } break;
+                case FN_ZExt: {
+                    CHECKARGS(2, 2);
+                    Type T = args[1].indirect_type();
+                    verify_integer(T);
+                    args[2].verify<TYPE_Type>();
+                    Type DestT = args[2].typeref;
+                    verify_integer(DestT);
+                    if (is_const(args[1])) {
+                        Any result = args[1];
+                        result.type = DestT;
+                        int oldbitnum = integer_type_bit_size(T);
+                        int newbitnum = integer_type_bit_size(DestT);
+                        for (int i = oldbitnum; i < newbitnum; ++i) {
+                            result.u64 &= ~(1ull << i);
+                        }
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(DestT);
+                    }
+                } break;
+                case FN_SExt: {
+                    CHECKARGS(2, 2);
+                    Type T = args[1].indirect_type();
+                    verify_integer(T);
+                    args[2].verify<TYPE_Type>();
+                    Type DestT = args[2].typeref;
+                    verify_integer(DestT);
+                    if (is_const(args[1])) {
+                        Any result = args[1];
+                        result.type = DestT;
+                        int oldbitnum = integer_type_bit_size(T);
+                        int newbitnum = integer_type_bit_size(DestT);
+                        uint64_t bit = (result.u64 >> (oldbitnum - 1)) & 1ull;
+                        for (int i = oldbitnum; i < newbitnum; ++i) {
+                            result.u64 &= ~(1ull << i);
+                            result.u64 |= bit << i;
+                        }
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(DestT);
+                    }
+                } break;
                 case OP_ICmpEQ:
                 case OP_ICmpNE:
                 case OP_ICmpUGT:
@@ -6914,25 +7150,28 @@ struct NormalizeCtx {
                         RETARGTYPES(TYPE_Bool);
                     }
                 } break;
-                case OP_Add:
-                case OP_AddNUW:
-                case OP_AddNSW: {
-                    CHECKARGS(2, 2);
-                    verify_integer_ops(args[1], args[2]);
-                    if (const_ops(args[1], args[2])) {
-                        Any result = none;
-                        switch(enter.builtin.value()) {
-                        case OP_Add: B_INT_OP2(+, u);
-                        case OP_AddNUW: B_INT_OP2(+, u);
-                        case OP_AddNSW: B_INT_OP2(+, i);
-                        default: assert(false); break;
-                        }
-                        result.type = args[1].type;
-                        RETARGS(result);
-                    } else {
-                        RETARGTYPES(args[1].indirect_type());
-                    }
-                } break;
+#define IARITH_OPS(NAME, OP) \
+    case OP_ ## NAME: \
+    case OP_ ## NAME ## NUW: \
+    case OP_ ## NAME ## NSW: { \
+        CHECKARGS(2, 2); \
+        verify_integer_ops(args[1], args[2]); \
+        if (const_ops(args[1], args[2])) { \
+            Any result = none; \
+            switch(enter.builtin.value()) { \
+            case OP_ ## NAME: B_INT_OP2(OP, u); \
+            case OP_ ## NAME ## NUW: B_INT_OP2(OP, u); \
+            case OP_ ## NAME ## NSW: B_INT_OP2(OP, i); \
+            default: assert(false); break; \
+            } \
+            result.type = args[1].type; \
+            RETARGS(result); \
+        } else { \
+            RETARGTYPES(args[1].indirect_type()); \
+        } \
+    } break;
+                IARITH_OPS(Add, +)
+                IARITH_OPS(Sub, -)
                 default: {
                     StyledString ss;
                     ss.out << "builtin " << enter.builtin << " is not implemented";
@@ -7280,6 +7519,8 @@ struct NormalizeCtx {
         case TYPE_I16: case TYPE_U16: return (void *)&value.u16;
         case TYPE_I32: case TYPE_U32: return (void *)&value.u32;
         case TYPE_I64: case TYPE_U64: return (void *)&value.u64;
+        case TYPE_R32: return (void *)&value.r32;
+        case TYPE_R64: return (void *)&value.r64;
         case TYPE_Bool: return (void *)&value.i1;
         default: break;
         }
@@ -7934,11 +8175,17 @@ static void init_types() {
         TYPE_I32
     );
 
-    DEFINE_STRUCT_HANDLE_TYPE(List, TYPE_List,
-        TYPE_Any,
-        Pointer(TYPE_List),
-        ty_size
-    );
+    {
+        Type cellT = Typename(Symbol("_List"), true);
+        auto &&tn = typenames.get(cellT);
+        auto ET = Tuple({ TYPE_Any, Pointer(cellT), ty_size });
+        assert(sizeof(List) == size_of(ET));
+        tn.finalize(ET);
+
+        typenames
+            .get(Typename(Type(TYPE_List).name(), true))
+            .finalize(Pointer(cellT));
+    }
 
     DEFINE_STRUCT_HANDLE_TYPE(String, TYPE_String,
         ty_size,
@@ -7961,6 +8208,22 @@ typedef struct { int x,y; } I2;
 static I2 bangra_print_number(int a, int b, int c) {
     std::cout << a << " " << b << " " << c << std::endl;
     return { c , b };
+}
+
+static Any f_list_at(const List *l) {
+    return (l == EOL)?none:l->at;
+}
+static const List *f_list_next(const List *l) {
+    return (l == EOL)?EOL:l->next;
+}
+static const List *f_list_cons(Any at, const List *next) {
+    return List::from(at, next);
+}
+static bool f_list_empty(const List *l) {
+    return (l == EOL);
+}
+static size_t f_list_count(const List *l) {
+    return (l == EOL)?0:l->count;
 }
 
 static Scope *f_import_c(const String *path,
@@ -7991,6 +8254,10 @@ static const char *f_string2rawstring(const String *str) {
     return str->data;
 }
 
+static bool f_type_eq(Type A, Type B) {
+    return A == B;
+}
+
 static void init_globals() {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -8003,12 +8270,27 @@ static void init_globals() {
             (void *)FUNC));
 
     Type rawstring = Pointer(TYPE_I8);
+    Type sizeT = TYPE_Nothing;
+    if (sizeof(size_t) == sizeof(uint64_t)) {
+        sizeT = TYPE_U64;
+    } else {
+        sizeT = TYPE_U32;
+    }
 
-    DEFINE_PURE_C_FUNCTION(FN_ImportC, f_import_c, TYPE_Scope, TYPE_String, TYPE_String, TYPE_List)
-    DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol)
-    DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String)
-    DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any)
+    DEFINE_PURE_C_FUNCTION(FN_ImportC, f_import_c, TYPE_Scope, TYPE_String, TYPE_String, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol);
+    DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String);
+    DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_StringToRawstring, f_string2rawstring, rawstring, TYPE_String);
+    DEFINE_PURE_C_FUNCTION(FN_TypeEq, f_type_eq, TYPE_Bool, TYPE_Type, TYPE_Type);
+
+    DEFINE_PURE_C_FUNCTION(FN_ListAt, f_list_at, TYPE_Any, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_ListNext, f_list_next, TYPE_List, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_ListCons, f_list_cons, TYPE_List, TYPE_Any, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_IsListEmpty, f_list_empty, TYPE_Bool, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_ListCountOf, f_list_count, sizeT, TYPE_List);
+
+
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String)
 
     globals->bind(Symbol("print-number"),
