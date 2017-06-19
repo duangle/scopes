@@ -199,14 +199,24 @@
 call
     fn/cc (_ lib)
         call
-            fn/cc (_ sinf)
-                sinf 0.5
-            Scope@ lib (Symbol-new "sinf")
+            fn/cc (_ sinf printf)
+                printf
+                    string->rawstring "test: %f\n"
+                    sinf 0.5235987755982989
+            Any-extract
+                Scope@ lib 'sinf
+            Any-extract
+                Scope@ lib 'printf
 
     import-c "testdata.c" "
         float sinf(float);
+        int printf( const char* format, ... );
         "
         \ eol
+
+# repr
+#dump
+    string->rawstring "hello"
 
 
 \ none

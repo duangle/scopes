@@ -552,45 +552,13 @@ namespace bangra {
 #define B_ALL_OP_DEFS()
 
 // list of symbols to be exposed as builtins to the default global namespace
-#if 0
-#define B_GLOBALS() \
-    T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) T(FN_IsListEmpty) \
-    T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_ListAt) T(FN_ListNext) \
-    T(FN_ListCons) T(FN_IsListEmpty) T(FN_DatumToQuotedSyntax) \
-    T(FN_TypeEq) T(FN_TypeOf) T(FN_ScopeAt) T(FN_SyntaxToDatum) T(FN_SyntaxToAnchor) \
-    T(FN_StringJoin) T(FN_Repr) T(FN_IsSyntaxQuoted) T(SFXFN_SetScopeSymbol) \
-    T(FN_ParameterNew) T(SFXFN_TranslateLabelBody) T(SFXFN_LabelAppendParameter) \
-    T(FN_LabelNew) T(FN_SymbolNew) T(FN_ScopeNew) T(FN_SymbolEq) T(FN_Translate) \
-    T(FN_BuiltinEq) T(FN_VaCountOf) \
-    T(FN_DatumToSyntax) T(FN_TypeName) T(SFXFN_SetGlobalApplyFallback) \
-    T(FN_ListCountOf) T(FN_StringNew) T(FN_TypeNew) T(FN_RefNew) \
-    T(FN_BoolEq) T(FN_ParameterEq) T(FN_LabelEq) T(FN_ScopeEq) T(FN_StringCmp) \
-    T(FN_ListJoin) T(FN_StringCountOf) T(FN_StringAt) T(FN_RefAt) \
-    T(FN_StringSlice) T(FN_Dump) T(OP_Not) T(FN_ListLoad) T(FN_ListParse) \
-    T(SFXFN_SetExceptionHandler) T(SFXFN_RefSet) T(FN_Exit) T(FN_ActiveAnchor) \
-    T(FN_ScopeNextSymbol) T(FN_ParameterName) T(FN_LabelParameters) \
-    T(FN_Bitcast) T(FN_FormatFrame) T(FN_ActiveFrame) T(FN_ClosureEq) \
-    T(FN_ParameterAnchor) T(FN_FrameEq) T(FN_TypeSizeOf) T(FN_DefaultStyler) \
-    T(FN_Prompt) T(FN_InterpreterVersion) T(SFXFN_SetGlobals) T(FN_Args) \
-    T(KW_Globals) T(FN_Flush) T(FN_FFICall) T(FN_FFISymbol) T(FN_StyleToString) \
-    T(FN_AnchorPath) T(FN_AnchorLineNumber) T(FN_AnchorColumn) T(FN_AnchorOffset) \
-    T(FN_AnchorSource) T(FN_ParseC) T(FN_Load) T(FN_Store) T(FN_MemCpy) \
-    T(FN_Malloc) T(FN_Free) T(FN_Typify) T(FN_CompilerError) T(FN_IsConstant) \
-    T(FN_Mystify) T(FN_CompilerMessage) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) \
-    T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
-    T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
-    T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
-    B_ALL_OP_DEFS()
-#else
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW)
-#endif
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -663,6 +631,7 @@ namespace bangra {
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
+    T(FN_AnyExtract, "Any-extract") \
     T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
     T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
     T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
@@ -724,7 +693,8 @@ namespace bangra {
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
     T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
     T(FN_StructOf, "structof") \
-    T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "Symbol-new") \
+    T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "string->Symbol") \
+    T(FN_StringToRawstring, "string->rawstring") \
     T(FN_IsSymbol, "symbol?") \
     T(FN_SyntaxToAnchor, "syntax->anchor") T(FN_SyntaxToDatum, "syntax->datum") \
     T(FN_SyntaxCons, "syntax-cons") T(FN_SyntaxDo, "syntax-do") \
@@ -2720,6 +2690,7 @@ static StyledStream& operator<<(StyledStream& ost, const List *list);
     T(curly_open, '{') \
     T(curly_close, '}') \
     T(string, '"') \
+    T(quote, '\'') \
     T(symbol, 'S') \
     T(escape, '\\') \
     T(statement, ';') \
@@ -2934,6 +2905,7 @@ struct LexerParser {
         else if (c == '\\') { token = tok_escape; }
         else if (c == '"') { token = tok_string; read_string(c); }
         else if (c == ';') { token = tok_statement; }
+        else if (c == '\'') { token = tok_quote; }
         else if (c == ',') { token = tok_symbol; read_single_symbol(); }
         else if (read_int64() || read_uint64() || read_real32()) { token = tok_number; }
         else { token = tok_symbol; read_symbol(); }
@@ -3050,7 +3022,7 @@ struct LexerParser {
 
     // parses the next sequence and returns it wrapped in a cell that points
     // to prev
-    Any parse_any() {
+    Any parse_any(bool quoted = false) {
         assert(this->token != tok_eof);
         const Anchor *anchor = this->anchor();
         if (this->token == tok_open) {
@@ -3073,6 +3045,18 @@ struct LexerParser {
             return Syntax::from(anchor, get_symbol());
         } else if (this->token == tok_number) {
             return Syntax::from(anchor, get_number());
+        } else if (!quoted && (this->token == tok_quote)) {
+            this->read_token();
+            const Syntax *sx = parse_any(true);
+            const_cast<Syntax *>(sx)->anchor = anchor;
+            const_cast<Syntax *>(sx)->quoted = true;
+            if (sx->datum.type == TYPE_List) {
+                return Syntax::from_quoted(anchor,
+                    List::from({
+                        Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)),
+                        sx }));
+            }
+            return sx;
         } else {
             location_error(format("unexpected token: %c (%i)",
                 this->cursor[0], (int)this->cursor[0]));
@@ -5807,7 +5791,6 @@ struct GenerateCtx {
             if (param->vararg)
                 return false;
             switch (param->type.value()) {
-            case TYPE_Any:
             case TYPE_Type:
             case TYPE_Label:
                 return false;
@@ -6191,6 +6174,19 @@ struct GenerateCtx {
                 auto &&pi = pointers.get(enter.type);
                 auto &&fi = functions.get(pi.element_type);
 
+                size_t fargcount = fi.argument_types.size();
+                assert(argcount >= fargcount);
+                // make variadic calls C compatible
+                if (fi.flags & FF_Variadic) {
+                    for (size_t i = fargcount; i < argcount; ++i) {
+                        auto value = values[i];
+                        // floats need to be widened to doubles
+                        if (LLVMTypeOf(value) == r32T) {
+                            values[i] = LLVMBuildFPExt(builder, value, r64T, "");
+                        }
+                    }
+                }
+
                 auto ret = LLVMBuildCall(builder,
                     argument_to_value(enter), values, argcount, "");
                 if (fi.return_type != TYPE_Void) {
@@ -6381,7 +6377,6 @@ struct NormalizeCtx {
                 case TYPE_U64: case TYPE_I64: if (a.u64 != b.u64) return false; break;
                 case TYPE_R32: if (a.r32 != b.r32) return false; break;
                 case TYPE_R64: if (a.r64 != b.r64) return false; break;
-                case TYPE_Any:
                 case TYPE_Void:
                 case TYPE_Nothing:
                     break;
@@ -6490,9 +6485,9 @@ struct NormalizeCtx {
     // inlining the arguments of an untyped scope (including continuation)
     Label *inline_arguments(Label *label, const std::vector<Any> &args) {
 #if 0
-        ss_cout << "inline_arguments: " << label;
-        for (auto &&arg : args) {
-            ss_cout << " " << arg;
+        ss_cout << "inline-arguments " << label << ":";
+        for (size_t i = 0; i < args.size(); ++i) {
+            ss_cout << " " << args[i];
         }
         ss_cout << std::endl;
 #endif
@@ -6518,7 +6513,7 @@ struct NormalizeCtx {
                         std::vector<Any> vargs;
                         for (size_t k = 0; k < ncount; ++k) {
                             Any value = args[srci + k];
-                            if (value.type == TYPE_Any) {
+                            if (value.type == TYPE_Void) {
                                 Parameter *newparam = Parameter::from(param);
                                 newparam->vararg = false;
                                 newparam->type = TYPE_Any;
@@ -6536,7 +6531,7 @@ struct NormalizeCtx {
                     }
                 } else if (srci < args.size()) {
                     Any value = args[srci];
-                    if (value.type == TYPE_Any) {
+                    if (value.type == TYPE_Void) {
                         Parameter *newparam = Parameter::from(param);
                         newparams.push_back(newparam);
                         map[param] = {newparam};
@@ -6563,6 +6558,14 @@ struct NormalizeCtx {
     }
 
     Label *typify(Label *label, const std::vector<Type> &argtypes) {
+#if 0
+        ss_cout << "typify " << label << ":";
+        for (size_t i = 0; i < argtypes.size(); ++i) {
+            ss_cout << " " << argtypes[i];
+        }
+        ss_cout << std::endl;
+#endif
+
         assert(!argtypes.empty());
         assert(!label->params.empty());
 
@@ -6580,51 +6583,86 @@ struct NormalizeCtx {
             }
         }
 
-        MangleMap map;
-        std::vector<Parameter *> newparams;
-        size_t lasti = label->params.size() - 1;
-        size_t srci = 0;
-        for (size_t i = 0; i < label->params.size(); ++i) {
-            Parameter *param = label->params[i];
-            if (srci > 0) {
-                assert(param->type == TYPE_Any);
-            }
-            if (param->vararg) {
-                assert(i == lasti);
-                size_t ncount = argtypes.size();
-                if (srci < ncount) {
-                    ncount -= srci;
-                    std::vector<Any> vargs;
-                    for (size_t k = 0; k < ncount; ++k) {
-                        Parameter *newparam = Parameter::from(param);
-                        newparam->type = argtypes[srci + k];
-                        newparam->vararg = false;
-                        newparam->name = Symbol(SYM_Unnamed);
-                        newparams.push_back(newparam);
-                        vargs.push_back(newparam);
+        bool needs_typing = false;
+        {
+            // check if function needs typing
+            size_t srci = 1;
+            for (size_t i = 1; i < label->params.size(); ++i) {
+                Parameter *param = label->params[i];
+                if (param->vararg) {
+                    // vararg parameters must be expanded
+                    assert(param->type == TYPE_Any);
+                    needs_typing = true;
+                    break;
+                } else if (srci < argtypes.size()) {
+                    Type argtype = argtypes[srci];
+                    if (param->type != argtype) {
+                        needs_typing = true;
+                        break;
+                    } else {
+                        srci++;
                     }
-                    map[param] = vargs;
-                    srci = ncount;
                 } else {
-                    map[param] = {};
+                    needs_typing = true;
+                    break;
                 }
-            } else if (srci < argtypes.size()) {
-                Type argtype = argtypes[srci];
-                Parameter *newparam = Parameter::from(param);
-                if (srci == 0) {
-                    // don't touch type of continuation
-                } else {
-                    newparam->type = argtype;
-                }
-                newparams.push_back(newparam);
-                map[param] = {newparam};
-                srci++;
-            } else {
-                map[param] = {none};
-                srci++;
             }
         }
-        Label *newlabel = mangle(label, newparams, map);
+
+        Label *newlabel = nullptr;
+        if (needs_typing) {
+            MangleMap map;
+            std::vector<Parameter *> newparams;
+            size_t lasti = label->params.size() - 1;
+            size_t srci = 0;
+            for (size_t i = 0; i < label->params.size(); ++i) {
+                Parameter *param = label->params[i];
+                if (srci > 0) {
+                    if (param->type != TYPE_Any) {
+                        StyledString ss;
+                        ss.out << "parameter is already typed as " << param->type;
+                        location_error(ss.str());
+                    }
+                }
+                if (param->vararg) {
+                    assert(i == lasti);
+                    size_t ncount = argtypes.size();
+                    if (srci < ncount) {
+                        ncount -= srci;
+                        std::vector<Any> vargs;
+                        for (size_t k = 0; k < ncount; ++k) {
+                            Parameter *newparam = Parameter::from(param);
+                            newparam->type = argtypes[srci + k];
+                            newparam->vararg = false;
+                            newparam->name = Symbol(SYM_Unnamed);
+                            newparams.push_back(newparam);
+                            vargs.push_back(newparam);
+                        }
+                        map[param] = vargs;
+                        srci = ncount;
+                    } else {
+                        map[param] = {};
+                    }
+                } else if (srci < argtypes.size()) {
+                    Type argtype = argtypes[srci];
+                    Parameter *newparam = Parameter::from(param);
+                    if (srci == 0) {
+                        // don't touch type of continuation
+                    } else {
+                        newparam->type = argtype;
+                    }
+                    newparams.push_back(newparam);
+                    map[param] = {newparam};
+                    srci++;
+                } else {
+                    map[param] = {none};
+                    srci++;
+                }
+            }
+            newlabel = mangle(label, newparams, map);
+        } else {
+            newlabel = label;
+        }
         if (it == label2instance.end()) {
             it = label2instance.insert({label, LabelInstances()}).first;
         }
@@ -6693,7 +6731,6 @@ struct NormalizeCtx {
 
     static bool inlinable_argument(Any arg) {
         switch(arg.type.value()) {
-        case TYPE_Any:
         case TYPE_Parameter: return false;
         default: return true;
         }
@@ -6720,6 +6757,14 @@ struct NormalizeCtx {
     args = { none, __VA_ARGS__ }; \
     entry->link_backrefs(); \
     goto renormalize;
+
+#if 0
+        ss_cout << enter << std::endl;
+        for (size_t i = 0; i < args.size(); ++i) {
+            ss_cout << i << ": " << args[i] << std::endl;
+        }
+        ss_cout << std::endl;
+#endif
 
         switch(enter.type.value()) {
         case TYPE_Builtin: {
@@ -6757,6 +6802,12 @@ struct NormalizeCtx {
                 args[1].verify<TYPE_Type>();
                 args[2].verify<TYPE_Type>();
                 RETARGS(args[1].typeref == args[2].typeref);
+            } break;
+            case FN_AnyExtract: {
+                CHECKARGS(1, 1);
+                args[1].verify<TYPE_Any>();
+                Any arg = *args[1].ref;
+                RETARGS(arg);
             } break;
             case FN_Typify: {
                 CHECKARGS(2, -1);
@@ -6926,7 +6977,7 @@ struct NormalizeCtx {
             std::vector<Any> oldargs = args;
             if (inline_args || inline_cont) {
                 Any anyval = none;
-                anyval.type = TYPE_Any;
+                anyval.type = TYPE_Void;
                 std::vector<Any> callargs;
                 std::vector<Any> keys;
                 if (inline_cont) {
@@ -7028,6 +7079,23 @@ struct NormalizeCtx {
                 auto &&pi = pointers.get(enter.type);
                 auto &&fi = functions.get(pi.element_type);
 
+                verify_function_argument_count(fi, args.size() - 1);
+
+                size_t fargcount = fi.argument_types.size();
+                for (size_t i = 1; i < args.size(); ++i) {
+                    Any &arg = args[i];
+                    size_t k = i - 1;
+                    Type argT = arg.indirect_type();
+                    if (k < fargcount) {
+                        Type ft = fi.argument_types[k];
+                        if (ft != argT) {
+                            StyledString ss;
+                            ss.out << "argument of type " << ft << " expected, got " << argT;
+                            location_error(ss.str());
+                        }
+                    }
+                }
+
                 bool const_call = true;
                 for (size_t i = 1; i < args.size(); ++i) {
                     auto &&arg = args[i];
@@ -7050,11 +7118,7 @@ struct NormalizeCtx {
                             auto &&ti = tuples.get(fi.return_type);
                             size_t count = ti.types.size();
                             for (size_t i = 0; i < count; ++i) {
-                                Any arg = ti.unpack(result.pointer, i);
-                                if (arg.type == TYPE_Any) {
-                                    arg = *arg.ref;
-                                }
-                                args.push_back(arg);
+                                args.push_back(ti.unpack(result.pointer, i));
                             }
                         } else {
                             args.push_back(result);
@@ -7248,10 +7312,31 @@ struct NormalizeCtx {
         return nullptr;
     }
 
+    void verify_function_argument_count(const FunctionInfo &fi, size_t argcount) {
+
+        size_t fargcount = fi.argument_types.size();
+        if (fi.flags & FF_Variadic) {
+            if (argcount < fargcount) {
+                StyledString ss;
+                ss.out << "FFI: argument count mismatch (need at least "
+                    << fargcount << ", got " << argcount << ")";
+                location_error(ss.str());
+            }
+        } else {
+            if (argcount != fargcount) {
+                StyledString ss;
+                ss.out << "FFI: argument count mismatch (need "
+                    << fargcount << ", got " << argcount << ")";
+                location_error(ss.str());
+            }
+        }
+    }
+
     Any run_ffi_function(Any enter, Any *args, size_t argcount) {
-        assert(is_function_pointer(enter.type));
         auto &&pi = pointers.get(enter.type);
         auto &&fi = functions.get(pi.element_type);
+
+        size_t fargcount = fi.argument_types.size();
 
         Type rettype = fi.return_type;
 
@@ -7263,18 +7348,20 @@ struct NormalizeCtx {
             argtypes[i] = get_ffi_type(arg.type);
             avalues[i] = get_ffi_argument(arg.type, arg);
         }
-        auto prep_result = ffi_prep_cif(
-            &cif, FFI_DEFAULT_ABI, argcount, get_ffi_type(rettype), argtypes);
+        ffi_status prep_result;
+        if (fi.flags & FF_Variadic) {
+            prep_result = ffi_prep_cif_var(
+                &cif, FFI_DEFAULT_ABI, fargcount, argcount, get_ffi_type(rettype), argtypes);
+        } else {
+            prep_result = ffi_prep_cif(
+                &cif, FFI_DEFAULT_ABI, argcount, get_ffi_type(rettype), argtypes);
+        }
         assert(prep_result == FFI_OK);
 
         Any result = Any::from_pointer(rettype, nullptr);
         ffi_call(&cif, FFI_FN(enter.pointer),
             get_ffi_argument(result.type, result, true), avalues);
-        if (result.type == TYPE_Any) {
-            return *result.ref;
-        } else {
-            return result;
-        }
+        return result;
     }
 
 };
@@ -7861,6 +7948,12 @@ static void init_types() {
 
 #undef DEFINE_STRUCT_TYPE
 
+static const String *f_repr(Any value) {
+    StyledString ss;
+    ss.out << value;
+    return ss.str();
+}
+
 static void f_write(const String *value) {
     fputs(value->data, stdout);
 }
@@ -7894,6 +7987,10 @@ static Symbol f_symbol_new(const String *str) {
     return Symbol(str);
 }
 
+static const char *f_string2rawstring(const String *str) {
+    return str->data;
+}
+
 static void init_globals() {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -7905,9 +8002,13 @@ static void init_globals() {
         Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Pure)), \
             (void *)FUNC));
 
-    DEFINE_PURE_C_FUNCTION(FN_ImportC, f_import_c, TYPE_Scope, TYPE_String, TYPE_List)
+    Type rawstring = Pointer(TYPE_I8);
+
+    DEFINE_PURE_C_FUNCTION(FN_ImportC, f_import_c, TYPE_Scope, TYPE_String, TYPE_String, TYPE_List)
     DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol)
     DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String)
+    DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any)
+    DEFINE_PURE_C_FUNCTION(FN_StringToRawstring, f_string2rawstring, rawstring, TYPE_String);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String)
 
     globals->bind(Symbol("print-number"),
@@ -8151,30 +8252,29 @@ int main(int argc, char *argv[]) {
         bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
     }
 
-    SourceFile *sf = nullptr;
-#ifdef BANGRA_DEBUG
-    char sourcepath[1024];
-    strncpy(sourcepath, bangra_interpreter_dir, 1024);
-    strncat(sourcepath, "/bangra.b", 1024);
-
-    Symbol name = String::from_cstr(sourcepath);
-    sf = SourceFile::from_file(name);
-#else
-    sf = SourceFile::from_string(Symbol("<boot>"),
-        String::from((const char *)bangra_b, bangra_b_len));
-#endif
-
-    if (!sf) {
-        location_error(String::from("bootscript missing\n"));
-    }
-    LexerParser parser(sf);
-    auto expr = parser.parse();
 #define CATCH_EXCEPTION 1
 #if CATCH_EXCEPTION
     try {
 #endif
         init_types();
         init_globals();
+
+        SourceFile *sf = nullptr;
+#ifdef BANGRA_DEBUG
+        char sourcepath[1024];
+        strncpy(sourcepath, bangra_interpreter_dir, 1024);
+        strncat(sourcepath, "/bangra.b", 1024);
+        Symbol name = String::from_cstr(sourcepath);
+        sf = SourceFile::from_file(name);
+#else
+        sf = SourceFile::from_string(Symbol("<boot>"),
+            String::from((const char *)bangra_b, bangra_b_len));
+#endif
+        if (!sf) {
+            location_error(String::from("bootscript missing\n"));
+        }
+        LexerParser parser(sf);
+        auto expr = parser.parse();
 
         expr = expand_root(expr);
         Label *fn = translate_root(expr);

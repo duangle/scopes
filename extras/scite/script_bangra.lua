@@ -98,7 +98,7 @@ local token_square_close = ']'
 local token_curly_open = '{'
 local token_curly_close = '}'
 local token_string = '"'
-local token_sqstring = "'"
+local token_quote = "'"
 local token_symbol = 'S'
 local token_escape = '\\'
 local token_statement = ';'
@@ -330,8 +330,7 @@ local function Lexer()
                 readString(c)
                 break
             elseif (c == '\'') then
-                token = token_sqstring
-                readString(c)
+                token = token_quote
                 break
             elseif (c == ';') then
                 token = token_statement
@@ -450,8 +449,8 @@ function OnStyle(styler)
             editor:SetStyling(length, S_NUMBER)
         elseif token == token_string then
             editor:SetStyling(length, S_STRING)
-        elseif token == token_sqstring then
-            editor:SetStyling(length, S_SQ_STRING)
+        elseif token == token_quote then
+            editor:SetStyling(length, S_OPERATOR)
         elseif brace_tokens[token] then
             editor:SetStyling(length, S_BRACE)
         end
