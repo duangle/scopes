@@ -98,12 +98,12 @@ char **bangra_argv;
 int unescape_string(char *buf);
 int escape_string(char *buf, const char *str, int strcount, const char *quote_chars);
 
-void bangra_strtof(float *v, const char *str, char **str_end, int base );
+void bangra_strtod(double *v, const char *str, char **str_end, int base );
 void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base);
 void bangra_strtoull(uint64_t *v, const char* str, char** endptr, int base);
 
-void bangra_r32_mod(float *out, float a, float b);
-void bangra_r64_mod(double *out, double a, double b);
+void bangra_f32_mod(float *out, float a, float b);
+void bangra_f64_mod(double *out, double a, double b);
 
 bool bangra_is_debug();
 
@@ -171,8 +171,8 @@ const char *bangra_compile_time_date();
     T(u32, uint32_t, T2) \
     T(u64, uint64_t, T2)
 #define WALK_REAL_TYPES(T, T2) \
-    T(r32, float, T2) \
-    T(r64, double, T2)
+    T(f32, float, T2) \
+    T(f64, double, T2)
 #define WALK_PRIMITIVE_TYPES(T, T2) \
     WALK_INTEGER_TYPES(T, T2) \
     WALK_REAL_TYPES(T, T2)
@@ -277,8 +277,8 @@ namespace blobs {
 // UTILITIES
 //------------------------------------------------------------------------------
 
-void bangra_strtof(float *v, const char *str, char **str_end, int base ) {
-    *v = std::strtof(str, str_end);
+void bangra_strtod(double *v, const char *str, char **str_end, int base ) {
+    *v = std::strtod(str, str_end);
 }
 void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base) {
     *v = std::strtoll(str, endptr, base);
@@ -438,8 +438,8 @@ inline T powimpl(T base, T exponent) {
     return result;
 }
 
-void bangra_r32_mod(float *out, float a, float b) { *out = std::fmod(a,b); }
-void bangra_r64_mod(double *out, double a, double b) { *out = std::fmod(a,b); }
+void bangra_f32_mod(float *out, float a, float b) { *out = std::fmod(a,b); }
+void bangra_f64_mod(double *out, double a, double b) { *out = std::fmod(a,b); }
 
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_BINOPS, IMPL_BINOP_FUNC)
 WALK_PRIMITIVE_TYPES(WALK_ARITHMETIC_WRAP_BINOPS, IMPL_WRAP_BINOP_FUNC)
@@ -555,13 +555,17 @@ namespace bangra {
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_IsConstant) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
-    T(FN_Purify) T(FN_Mystify) T(FN_TypeOf) \
+    T(FN_Purify) T(FN_Mystify) T(FN_TypeOf) T(FN_Bitcast) \
+    T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
-    T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW)
+    T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW) \
+    T(OP_Mul) T(OP_MulNUW) T(OP_MulNSW) \
+    T(OP_SDiv) T(OP_UDiv) \
+    T(OP_SRem) T(OP_URem)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -588,8 +592,8 @@ namespace bangra {
     T(TYPE_U64, "u64") \
     \
     T(TYPE_R16, "r16") \
-    T(TYPE_R32, "r32") \
-    T(TYPE_R64, "r64") \
+    T(TYPE_F32, "f32") \
+    T(TYPE_F64, "f64") \
     T(TYPE_R80, "r80") \
     \
     T(TYPE_List, "list") \
@@ -634,9 +638,10 @@ namespace bangra {
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
-    T(FN_AnyExtract, "Any-extract") \
+    T(FN_AnyExtract, "Any-extract") T(FN_AnyWrap, "Any-wrap") \
     T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
-    T(FN_Bitcast, "bitcast") T(FN_BlockMacro, "block-macro") \
+    T(FN_Bitcast, "bitcast") T(FN_IntToPtr, "inttoptr") T(FN_PtrToInt, "ptrtoint") \
+    T(FN_BlockMacro, "block-macro") \
     T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
     T(FN_BuiltinEq, "Builtin==") \
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
@@ -654,7 +659,7 @@ namespace bangra {
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
     T(FN_ExternLibrary, "extern-library") \
     T(FN_ExtractMemory, "extract-memory") \
-    T(FN_ExtractValue, "extract-value") \
+    T(FN_ExtractValue, "extractvalue") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
@@ -664,6 +669,9 @@ namespace bangra {
     T(OP_ICmpSGT, "icmp>s") T(OP_ICmpSGE, "icmp>=s") T(OP_ICmpSLT, "icmp<s") T(OP_ICmpSLE, "icmp<=s") \
     T(OP_Add, "add") T(OP_AddNUW, "add-nuw") T(OP_AddNSW, "add-nsw") \
     T(OP_Sub, "sub") T(OP_SubNUW, "sub-nuw") T(OP_SubNSW, "sub-nsw") \
+    T(OP_Mul, "mul") T(OP_MulNUW, "mul-nuw") T(OP_MulNSW, "mul-nsw") \
+    T(OP_SDiv, "sdiv") T(OP_UDiv, "udiv") \
+    T(OP_SRem, "srem") T(OP_URem, "urem") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_InterpreterVersion, "interpreter-version") \
     B_ALL_OP_DEFS() \
@@ -732,7 +740,7 @@ namespace bangra {
     \
     /* builtin operator functions that can also be used as infix */ \
     T(OP_NotEq, "!=") T(OP_Mod, "%") T(OP_InMod, "%=") T(OP_BitAnd, "&") T(OP_InBitAnd, "&=") \
-    T(OP_Mul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_IFXAdd, "+") T(OP_Incr, "++") \
+    T(OP_IFXMul, "*") T(OP_Pow, "**") T(OP_InMul, "*=") T(OP_IFXAdd, "+") T(OP_Incr, "++") \
     T(OP_InAdd, "+=") T(OP_Comma, ",") T(OP_IFXSub, "-") T(OP_Decr, "--") T(OP_InSub, "-=") \
     T(OP_Dot, ".") T(OP_Join, "..") T(OP_Div, "/") T(OP_InDiv, "/=") \
     T(OP_Colon, ":") T(OP_Let, ":=") T(OP_Less, "<") T(OP_LeftArrow, "<-") T(OP_Subtype, "<:") \
@@ -1002,6 +1010,17 @@ struct StyledStream {
     StyledStream& stream_number(uint8_t x) {
         _ssf(_ost, Style_Number); _ost << (int)x; _ssf(_ost, Style_None);
         return *this;
+    }
+
+    StyledStream& stream_number(double x) {
+        size_t size = stb_snprintf( nullptr, 0, "%g", x );
+        char dest[size+1];
+        stb_snprintf( dest, size + 1, "%g", x );
+        _ssf(_ost, Style_Number); _ost << dest; _ssf(_ost, Style_None);
+        return *this;
+    }
+    StyledStream& stream_number(float x) {
+        return stream_number((double)x);
     }
 
     template<typename T>
@@ -1628,7 +1647,7 @@ static void verify_range(size_t idx, size_t count) {
     if (idx >= count) {
         StyledString ss;
         ss.out << "index out of range (" << idx
-            << " > " << count << ")";
+            << " >= " << count << ")";
         location_error(ss.str());
     }
 }
@@ -1714,13 +1733,13 @@ struct Any {
         int16_t i16;
         int32_t i32;
         int64_t i64;
-        int8_t u8;
-        int16_t u16;
-        int32_t u32;
+        uint8_t u8;
+        uint16_t u16;
+        uint32_t u32;
         uint64_t u64;
         size_t sizeval;
-        float r32;
-        double r64;
+        float f32;
+        double f64;
         Type typeref;
         const String *string;
         Symbol symbol;
@@ -1737,7 +1756,7 @@ struct Any {
         void *pointer;
     };
 
-    Any(Nothing x) : type(TYPE_Nothing) {}
+    Any(Nothing x) : type(TYPE_Nothing), u64(0) {}
     Any(Type x) : type(TYPE_Type), typeref(x) {}
     Any(bool x) : type(TYPE_Bool), i1(x) {}
     Any(int8_t x) : type(TYPE_I8), i8(x) {}
@@ -1748,8 +1767,8 @@ struct Any {
     Any(uint16_t x) : type(TYPE_U16), u16(x) {}
     Any(uint32_t x) : type(TYPE_U32), u32(x) {}
     Any(uint64_t x) : type(TYPE_U64), u64(x) {}
-    Any(float x) : type(TYPE_R32), r32(x) {}
-    Any(double x) : type(TYPE_R64), r64(x) {}
+    Any(float x) : type(TYPE_F32), f32(x) {}
+    Any(double x) : type(TYPE_F64), f64(x) {}
     Any(const String *x) : type(TYPE_String), string(x) {}
     Any(Symbol x) : type(TYPE_Symbol), symbol(x) {}
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
@@ -1767,76 +1786,6 @@ struct Any {
     // a catch-all for unsupported types
     template<typename T>
     Any(const T &x);
-
-    template<typename T>
-    void dispatch(const T &dest) const {
-        switch(type.value()) {
-            case TYPE_Nothing: return dest(none);
-            case TYPE_Type: return dest(typeref);
-            case TYPE_Bool: return dest(i1);
-            case TYPE_I8: return dest(i8);
-            case TYPE_I16: return dest(i16);
-            case TYPE_I32: return dest(i32);
-            case TYPE_I64: return dest(i64);
-            case TYPE_U8: return dest(u8);
-            case TYPE_U16: return dest(u16);
-            case TYPE_U32: return dest(u32);
-            case TYPE_U64: return dest(u64);
-            case TYPE_R32: return dest(r32);
-            case TYPE_R64: return dest(r64);
-            case TYPE_String: return dest(string);
-            case TYPE_Symbol: return dest(symbol);
-            case TYPE_Syntax: return dest(syntax);
-            case TYPE_Anchor: return dest(anchor);
-            case TYPE_List: return dest(list);
-            case TYPE_Builtin: return dest(builtin);
-            case TYPE_Label: return dest(label);
-            case TYPE_Parameter: return dest(parameter);
-            case TYPE_Scope: return dest(scope);
-            case TYPE_Ref: return dest(ref);
-            case TYPE_Frame: return dest(frame);
-            case TYPE_Closure: return dest(closure);
-            default: return dest(pointer);
-        }
-    }
-
-    struct AnyStreamer {
-        StyledStream& ost;
-        const Type &type;
-        bool annotate_type;
-        AnyStreamer(StyledStream& _ost, const Type &_type, bool _annotate_type) :
-            ost(_ost), type(_type), annotate_type(_annotate_type) {}
-        void stream_type_suffix() const {
-            if (annotate_type) {
-                ost << Style_Operator << ":" << Style_None;
-                ost << type;
-            }
-        }
-        template<typename T>
-        void operator ()(const T &x) const {
-            ost << x;
-            stream_type_suffix();
-        }
-        template<typename T>
-        void naked(const T &x) const {
-            ost << x;
-        }
-        // these types are streamed without type tag
-        void operator ()(const Nothing &x) const { naked(x); }
-        void operator ()(bool x) const { naked(x); }
-        void operator ()(int32_t x) const { naked(x); }
-        void operator ()(const String *x) const { naked(x); }
-        void operator ()(const Syntax *x) const { naked(x); }
-        void operator ()(const List *x) const { naked(x); }
-        void operator ()(Symbol x) const { naked(x); }
-        void operator ()(Type x) const { naked(x); }
-        void operator ()(Any *x) const {
-            ost << Style_Operator << "[" << Style_None;
-            x->stream(ost);
-            ost << Style_Operator << "]" << Style_None;
-            stream_type_suffix();
-        }
-    };
 
     Any toref() {
         Any *pvalue = new Any(*this);
@@ -1869,8 +1818,64 @@ struct Any {
     operator Scope *() const { verify<TYPE_Scope>(); return scope; }
     operator Parameter *() const { verify<TYPE_Parameter>(); return parameter; }
 
+    struct AnyStreamer {
+        StyledStream& ost;
+        const Type &type;
+        bool annotate_type;
+        AnyStreamer(StyledStream& _ost, const Type &_type, bool _annotate_type) :
+            ost(_ost), type(_type), annotate_type(_annotate_type) {}
+        void stream_type_suffix() const {
+            if (annotate_type) {
+                ost << Style_Operator << ":" << Style_None;
+                ost << type;
+            }
+        }
+        template<typename T>
+        void naked(const T &x) const {
+            ost << x;
+        }
+        template<typename T>
+        void typed(const T &x) const {
+            ost << x;
+            stream_type_suffix();
+        }
+    };
+
     StyledStream& stream(StyledStream& ost, bool annotate_type = true) const {
-        dispatch(AnyStreamer(ost, type, annotate_type));
+        AnyStreamer as(ost, type, annotate_type);
+        switch(type.value()) {
+            case TYPE_Nothing: as.naked(none); break;
+            case TYPE_Type: as.naked(typeref); break;
+            case TYPE_Bool: as.naked(i1); break;
+            case TYPE_I8: as.typed(i8); break;
+            case TYPE_I16: as.typed(i16); break;
+            case TYPE_I32: as.naked(i32); break;
+            case TYPE_I64: as.typed(i64); break;
+            case TYPE_U8: as.typed(u8); break;
+            case TYPE_U16: as.typed(u16); break;
+            case TYPE_U32: as.typed(u32); break;
+            case TYPE_U64: as.typed(u64); break;
+            case TYPE_F32: as.naked(f32); break;
+            case TYPE_F64: as.typed(f64); break;
+            case TYPE_String: as.naked(string); break;
+            case TYPE_Symbol: as.naked(symbol); break;
+            case TYPE_Syntax: as.naked(syntax); break;
+            case TYPE_Anchor: as.typed(anchor); break;
+            case TYPE_List: as.naked(list); break;
+            case TYPE_Builtin: as.typed(builtin); break;
+            case TYPE_Label: as.typed(label); break;
+            case TYPE_Parameter: as.typed(parameter); break;
+            case TYPE_Scope: as.typed(scope); break;
+            case TYPE_Ref:
+                ost << Style_Operator << "[" << Style_None;
+                ref->stream(ost);
+                ost << Style_Operator << "]" << Style_None;
+                as.stream_type_suffix();
+                break;
+            case TYPE_Frame: as.typed(frame); break;
+            case TYPE_Closure: as.typed(closure); break;
+            default: as.typed(pointer); break;
+        }
         return ost;
     }
 };
@@ -1893,6 +1898,9 @@ struct PointerInfo {
 
     PointerInfo() : element_type(TYPE_Nothing) {}
 
+    Any unpack(void *src) {
+        return wrap_pointer(element_type, src);
+    }
     static size_t size() {
         return sizeof(uint64_t);
     }
@@ -2392,7 +2400,6 @@ static void verify_category(Type T) {
         case CAT_TypedLabel: ss.out << "typed label"; break;
         case CAT_TypeSet: ss.out << "typeset"; break;
         case CAT_Function: ss.out << "function"; break;
-        default: break;
         }
         ss.out << " expected, got " << T;
         location_error(ss.str());
@@ -2424,8 +2431,8 @@ static size_t size_of(Type T) {
     case TYPE_I64:
     case TYPE_U64: return sizeof(int64_t);
 
-    case TYPE_R32: return sizeof(float);
-    case TYPE_R64: return sizeof(double);
+    case TYPE_F32: return sizeof(float);
+    case TYPE_F64: return sizeof(double);
     default: {
     } break;
     }
@@ -2468,8 +2475,8 @@ static size_t align_of(Type T) {
     case TYPE_I64:
     case TYPE_U64: return sizeof(int64_t);
 
-    case TYPE_R32: return sizeof(float);
-    case TYPE_R64: return sizeof(double);
+    case TYPE_F32: return sizeof(float);
+    case TYPE_F64: return sizeof(double);
     default: {
     } break;
     }
@@ -2510,6 +2517,12 @@ static Any wrap_pointer(Type type, void *ptr) {
         return result;
     case TYPE_I64: case TYPE_U64:
         result.u64 = *(uint64_t *)ptr;
+        return result;
+    case TYPE_F32:
+        result.f32 = *(float *)ptr;
+        return result;
+    case TYPE_F64:
+        result.f64 = *(float *)ptr;
         return result;
     case TYPE_Bool:
         result.i1 = *(bool *)ptr;
@@ -2952,31 +2965,138 @@ struct LexerParser {
         }
     }
 
+    template<unsigned N>
+    bool is_suffix(const char (&str)[N]) {
+        if (string_len != (N - 1)) {
+            return false;
+        }
+        return !strncmp(string, str, N - 1);
+    }
+
+    enum {
+        RN_Invalid = 0,
+        RN_Untyped = 1,
+        RN_Typed = 2,
+    };
+
     template<typename T>
-    bool read_number(void (*strton)(T *, const char*, char**, int)) {
+    int read_integer(void (*strton)(T *, const char*, char**, int)) {
         char *cend;
         errno = 0;
         T srcval;
         strton(&srcval, cursor, &cend, 0);
         if ((cend == cursor)
             || (errno == ERANGE)
-            || (cend > eof)
-            || ((!isspace(*cend)) && (!strchr(TOKEN_TERMINATORS, *cend)))) {
-            return false;
+            || (cend > eof)) {
+            return RN_Invalid;
         }
         value = Any(srcval);
         next_cursor = cend;
-        return true;
+        if ((cend != eof)
+            && (!isspace(*cend))
+            && (!strchr(TOKEN_TERMINATORS, *cend))) {
+            if (strchr(".e", *cend)) return false;
+            // suffix
+            next_token();
+            read_symbol();
+            return RN_Typed;
+        } else {
+            return RN_Untyped;
+        }
+    }
+
+    template<typename T>
+    int read_real(void (*strton)(T *, const char*, char**, int)) {
+        char *cend;
+        errno = 0;
+        T srcval;
+        strton(&srcval, cursor, &cend, 0);
+        if ((cend == cursor)
+            || (errno == ERANGE)
+            || (cend > eof)) {
+            return RN_Invalid;
+        }
+        value = Any(srcval);
+        next_cursor = cend;
+        if ((cend != eof)
+            && (!isspace(*cend))
+            && (!strchr(TOKEN_TERMINATORS, *cend))) {
+            // suffix
+            next_token();
+            read_symbol();
+            return RN_Typed;
+        } else {
+            return RN_Untyped;
+        }
+    }
+
+    bool select_integer_suffix() {
+        if (is_suffix(":i8")) { value = Any(value.i8); return true; }
+        else if (is_suffix(":i16")) { value = Any(value.i16); return true; }
+        else if (is_suffix(":i32")) { value = Any(value.i32); return true; }
+        else if (is_suffix(":i64")) { value = Any(value.i64); return true; }
+        else if (is_suffix(":u8")) { value = Any(value.u8); return true; }
+        else if (is_suffix(":u16")) { value = Any(value.u16); return true; }
+        else if (is_suffix(":u32")) { value = Any(value.u32); return true; }
+        else if (is_suffix(":u64")) { value = Any(value.u64); return true; }
+        else if (is_suffix(":isize")) { value = Any(value.i64); return true; }
+        else if (is_suffix(":usize")) { value = Any(value.u64); return true; }
+        else {
+            StyledString ss;
+            ss.out << "invalid suffix for integer literal: "
+                << String::from(string, string_len);
+            location_error(ss.str());
+            return false;
+        }
+    }
+
+    bool select_real_suffix() {
+        if (is_suffix(":f32")) { value = Any((float)value.f64); return true; }
+        else if (is_suffix(":f64")) { value = Any(value.f64); return true; }
+        else {
+            StyledString ss;
+            ss.out << "invalid suffix for floating point literal: "
+                << String::from(string, string_len);
+            location_error(ss.str());
+            return false;
+        }
     }
 
     bool read_int64() {
-        return read_number(bangra_strtoll);
+        switch(read_integer(bangra_strtoll)) {
+        case RN_Invalid: return false;
+        case RN_Untyped:
+            if ((value.i64 >= -0x80000000ll) && (value.i64 <= 0x7fffffffll)) {
+                value = Any(int32_t(value.i64));
+            } else if ((value.i64 >= 0x80000000ll) && (value.i64 <= 0xffffffffll)) {
+                value = Any(uint32_t(value.i64));
+            }
+            return true;
+        case RN_Typed:
+            return select_integer_suffix();
+        default: assert(false); return false;
+        }
     }
     bool read_uint64() {
-        return read_number(bangra_strtoull);
+        switch(read_integer(bangra_strtoull)) {
+        case RN_Invalid: return false;
+        case RN_Untyped:
+            return true;
+        case RN_Typed:
+            return select_integer_suffix();
+        default: assert(false); return false;
+        }
     }
-    bool read_real32() {
-        return read_number(bangra_strtof);
+    bool read_real64() {
+        switch(read_real(bangra_strtod)) {
+        case RN_Invalid: return false;
+        case RN_Untyped:
+            value = Any(float(value.f64));
+            return true;
+        case RN_Typed:
+            return select_real_suffix();
+        default: assert(false); return false;
+        }
     }
 
     void next_token() {
@@ -3006,7 +3126,7 @@ struct LexerParser {
         else if (c == ';') { token = tok_statement; }
         else if (c == '\'') { token = tok_quote; }
         else if (c == ',') { token = tok_symbol; read_single_symbol(); }
-        else if (read_int64() || read_uint64() || read_real32()) { token = tok_number; }
+        else if (read_int64() || read_uint64() || read_real64()) { token = tok_number; }
         else { token = tok_symbol; read_symbol(); }
     done:
         return token;
@@ -3028,14 +3148,6 @@ struct LexerParser {
         return String::from(dest, size);
     }
     Any get_number() {
-        if ((value.type == TYPE_I64)
-            && (value.i64 <= 0x7fffffffll)
-            && (value.i64 >= -0x80000000ll)) {
-            return int32_t(value.i64);
-        } else if ((value.type == TYPE_U64)
-            && (value.u64 <= 0xffffffffull)) {
-            return uint32_t(value.u64);
-        }
         return value;
     }
     Any get() {
@@ -3407,7 +3519,7 @@ struct StreamExpr : StreamAnchors {
                     case TYPE_Symbol:
                     case TYPE_String:
                     case TYPE_I32:
-                    case TYPE_R32:
+                    case TYPE_F32:
                         break;
                     default: return true;
                     }
@@ -3762,9 +3874,44 @@ public:
         }
     }
 
+    void build_reachable(std::vector<Label *> &labels, std::unordered_set<Label *> &visited) {
+        labels.clear();
+        visited.clear();
+
+        visited.insert(this);
+        std::vector<Label *> stack = { this };
+        while (!stack.empty()) {
+            Label *parent = stack.back();
+            stack.pop_back();
+            labels.push_back(parent);
+
+            int size = (int)parent->body.args.size();
+            for (int i = -1; i < size; ++i) {
+                Any arg = none;
+                if (i == -1) {
+                    arg = parent->body.enter;
+                } else {
+                    arg = parent->body.args[i];
+                }
+
+                switch(arg.type.value()) {
+                case TYPE_Label: {
+                    Label *label = arg.label;
+                    if (!visited.count(label)) {
+                        visited.insert(label);
+                        stack.push_back(label);
+                    }
+                } break;
+                default: break;
+                }
+            }
+        }
+    }
+
     void build_reachable(std::unordered_set<Label *> &labels) {
         labels.clear();
 
+        labels.insert(this);
         std::vector<Label *> stack = { this };
         while (!stack.empty()) {
             Label *parent = stack.back();
@@ -3780,15 +3927,6 @@ public:
                 }
 
                 switch(arg.type.value()) {
-#if 0
-                    case TYPE_Parameter: {
-                    Label *label = arg.parameter->label;
-                    if (label && !labels.count(label)) {
-                        labels.insert(label);
-                        stack.push_back(label);
-                    }
-                } break;
-#endif
                 case TYPE_Label: {
                     Label *label = arg.label;
                     if (!labels.count(label)) {
@@ -4008,6 +4146,90 @@ static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
     closure->stream(ss);
     return ss;
 }
+
+//------------------------------------------------------------------------------
+// SCC
+//------------------------------------------------------------------------------
+
+// build strongly connected component map of label graph
+// uses Dijkstra's Path-based strong component algorithm
+struct SCCBuilder {
+    struct Group {
+        std::vector<Label *> labels;
+    };
+
+    std::vector<Label *> S;
+    std::vector<Label *> P;
+    std::unordered_map<Label *, size_t> Cmap;
+    std::vector<Group> groups;
+    std::unordered_map<Label *, size_t> SCCmap;
+    size_t C;
+
+    SCCBuilder(Label *top) :
+        C(0) {
+        walk(top);
+    }
+
+    Group &group(Label *l) {
+        auto it = SCCmap.find(l);
+        assert(it != SCCmap.end());
+        return groups[it->second];
+    }
+
+    void walk(Label *obj) {
+        Cmap[obj] = C++;
+        S.push_back(obj);
+        P.push_back(obj);
+
+        int size = (int)obj->body.args.size();
+        for (int i = -1; i < size; ++i) {
+            Any arg = none;
+            if (i == -1) {
+                arg = obj->body.enter;
+            } else {
+                arg = obj->body.args[i];
+            }
+
+            switch(arg.type.value()) {
+            case TYPE_Label: {
+                Label *label = arg.label;
+
+                auto it = Cmap.find(label);
+                if (it == Cmap.end()) {
+                    walk(label);
+                } else if (!SCCmap.count(label)) {
+                    size_t Cw = it->second;
+                    while (true) {
+                        assert(!P.empty());
+                        auto it = Cmap.find(P.back());
+                        assert(it != Cmap.end());
+                        if (it->second <= Cw) break;
+                        P.pop_back();
+                    }
+                }
+            } break;
+            default: break;
+            }
+        }
+
+        assert(!P.empty());
+        if (P.back() == obj) {
+            groups.emplace_back();
+            Group &scc = groups.back();
+            while (true) {
+                assert(!S.empty());
+                Label *q = S.back();
+                scc.labels.push_back(q);
+                SCCmap[q] = groups.size() - 1;
+                S.pop_back();
+                if (q == obj) {
+                    break;
+                }
+            }
+            P.pop_back();
+        }
+    }
+};
 
 //------------------------------------------------------------------------------
 // IL PRINTER
@@ -4614,9 +4836,9 @@ public:
             } break;
             case clang::BuiltinType::Half: return Type(TYPE_R16);
             case clang::BuiltinType::Float:
-                return Type(TYPE_R32);
+                return Type(TYPE_F32);
             case clang::BuiltinType::Double:
-                return Type(TYPE_R64);
+                return Type(TYPE_F64);
             case clang::BuiltinType::LongDouble: return Type(TYPE_R80);
             case clang::BuiltinType::NullPtr:
             case clang::BuiltinType::UInt128:
@@ -4961,8 +5183,8 @@ static T cast_number(const Any &value) {
     case TYPE_U16: return (T)value.u16;
     case TYPE_U32: return (T)value.u32;
     case TYPE_U64: return (T)value.u64;
-    case TYPE_R32: return (T)value.r32;
-    case TYPE_R64: return (T)value.r64;
+    case TYPE_F32: return (T)value.f32;
+    case TYPE_F64: return (T)value.f64;
     default: {
         StyledString ss;
         ss.out << "type " << value.type << " can not be converted to numerical type";
@@ -5874,8 +6096,8 @@ struct GenerateCtx {
     LLVMTypeRef i16T;
     LLVMTypeRef i32T;
     LLVMTypeRef i64T;
-    LLVMTypeRef r32T;
-    LLVMTypeRef r64T;
+    LLVMTypeRef f32T;
+    LLVMTypeRef f64T;
     LLVMTypeRef rawstringT;
     LLVMTypeRef noneT;
 
@@ -5888,8 +6110,8 @@ struct GenerateCtx {
         i16T = LLVMInt16Type();
         i32T = LLVMInt32Type();
         i64T = LLVMInt64Type();
-        r32T = LLVMFloatType();
-        r64T = LLVMDoubleType();
+        f32T = LLVMFloatType();
+        f64T = LLVMDoubleType();
         noneV = LLVMConstStruct(nullptr, 0, false);
         noneT = LLVMTypeOf(noneV);
         rawstringT = LLVMPointerType(LLVMInt8Type(), 0);
@@ -5929,8 +6151,8 @@ struct GenerateCtx {
         case TYPE_U32: return i32T;
         case TYPE_I64:
         case TYPE_U64: return i64T;
-        case TYPE_R32: return r32T;
-        case TYPE_R64: return r64T;
+        case TYPE_F32: return f32T;
+        case TYPE_F64: return f64T;
         default: break;
         }
 
@@ -6115,8 +6337,8 @@ struct GenerateCtx {
         case TYPE_U16: return LLVMConstInt(i16T, value.u16, false);
         case TYPE_U32: return LLVMConstInt(i32T, value.u32, false);
         case TYPE_U64: return LLVMConstInt(i64T, value.u64, false);
-        case TYPE_R32: return LLVMConstReal(r32T, value.r32);
-        case TYPE_R64: return LLVMConstReal(r64T, value.r64);
+        case TYPE_F32: return LLVMConstReal(f32T, value.f32);
+        case TYPE_F64: return LLVMConstReal(f64T, value.f64);
         case TYPE_Parameter: {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
@@ -6198,30 +6420,60 @@ struct GenerateCtx {
 
         set_active_anchor(label->body.anchor);
 
+        assert(!args.empty());
         size_t argcount = args.size() - 1;
-        LLVMValueRef values[argcount];
-        for (size_t i = 0; i < argcount; ++i) {
-            values[i] = argument_to_value(args[i + 1]);
-        }
+        size_t argn = 1;
+#define READ_ANY(NAME) \
+        assert(argn <= argcount); \
+        Any &NAME = args[argn++];
+#define READ_VALUE(NAME) \
+        assert(argn <= argcount); \
+        LLVMValueRef NAME = argument_to_value(args[argn++]);
+#define READ_TYPE(NAME) \
+        assert(argn <= argcount); \
+        assert(args[argn].type == TYPE_Type); \
+        LLVMTypeRef NAME = type_to_llvm_type(args[argn++].typeref);
+
         LLVMValueRef retvalue = nullptr;
         switch(enter.type.value()) {
         case TYPE_Builtin: {
             switch(enter.builtin.value()) {
             case FN_Branch: {
-                assert(argcount == 3);
-                assert(LLVMValueIsBasicBlock(values[1]));
-                assert(LLVMValueIsBasicBlock(values[2]));
-                LLVMBuildCondBr(builder, values[0],
-                    LLVMValueAsBasicBlock(values[1]),
-                    LLVMValueAsBasicBlock(values[2]));
+                READ_VALUE(cond);
+                READ_VALUE(then_block);
+                READ_VALUE(else_block);
+                assert(LLVMValueIsBasicBlock(then_block));
+                assert(LLVMValueIsBasicBlock(else_block));
+                LLVMBuildCondBr(builder, cond,
+                    LLVMValueAsBasicBlock(then_block),
+                    LLVMValueAsBasicBlock(else_block));
             } break;
             case FN_Mystify: {
-                retvalue = values[0];
+                READ_VALUE(val);
+                retvalue = val;
             } break;
             case FN_ExtractValue: {
+                READ_VALUE(val);
+                READ_ANY(index);
                 retvalue = LLVMBuildExtractValue(
-                    builder, values[0], cast_number<int32_t>(args[2]), "");
+                    builder, val, cast_number<int32_t>(index), "");
             } break;
+            case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildBitCast(builder, val, ty, ""); } break;
+            case FN_IntToPtr: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildIntToPtr(builder, val, ty, ""); } break;
+            case FN_PtrToInt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildPtrToInt(builder, val, ty, ""); } break;
+            case FN_Trunc: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildTrunc(builder, val, ty, ""); } break;
+            case FN_SExt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildSExt(builder, val, ty, ""); } break;
+            case FN_ZExt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildZExt(builder, val, ty, ""); } break;
+            case FN_Load: { READ_VALUE(val);
+                retvalue = LLVMBuildLoad(builder, val, ""); } break;
+            case FN_Store: { READ_VALUE(val); READ_VALUE(ptr);
+                retvalue = LLVMBuildStore(builder, val, ptr); } break;
             case OP_ICmpEQ:
             case OP_ICmpNE:
             case OP_ICmpUGT:
@@ -6232,6 +6484,7 @@ struct GenerateCtx {
             case OP_ICmpSGE:
             case OP_ICmpSLT:
             case OP_ICmpSLE: {
+                READ_VALUE(a); READ_VALUE(b);
                 LLVMIntPredicate pred;
                 switch(enter.builtin.value()) {
                     case OP_ICmpEQ: pred = LLVMIntEQ; break;
@@ -6246,14 +6499,34 @@ struct GenerateCtx {
                     case OP_ICmpSLE: pred = LLVMIntSLE; break;
                     default: assert(false); break;
                 }
-                retvalue = LLVMBuildICmp(builder, pred, values[0], values[1], "");
+                retvalue = LLVMBuildICmp(builder, pred, a, b, "");
             } break;
-            case OP_Add: retvalue = LLVMBuildAdd(builder, values[0], values[1], ""); break;
-            case OP_AddNUW: retvalue = LLVMBuildNUWAdd(builder, values[0], values[1], ""); break;
-            case OP_AddNSW: retvalue = LLVMBuildNSWAdd(builder, values[0], values[1], ""); break;
-            case OP_Sub: retvalue = LLVMBuildSub(builder, values[0], values[1], ""); break;
-            case OP_SubNUW: retvalue = LLVMBuildNUWSub(builder, values[0], values[1], ""); break;
-            case OP_SubNSW: retvalue = LLVMBuildNSWSub(builder, values[0], values[1], ""); break;
+            case OP_Add: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildAdd(builder, a, b, ""); } break;
+            case OP_AddNUW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNUWAdd(builder, a, b, ""); } break;
+            case OP_AddNSW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNSWAdd(builder, a, b, ""); } break;
+            case OP_Sub: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildSub(builder, a, b, ""); } break;
+            case OP_SubNUW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNUWSub(builder, a, b, ""); } break;
+            case OP_SubNSW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNSWSub(builder, a, b, ""); } break;
+            case OP_Mul: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildMul(builder, a, b, ""); } break;
+            case OP_MulNUW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNUWMul(builder, a, b, ""); } break;
+            case OP_MulNSW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNSWMul(builder, a, b, ""); } break;
+            case OP_SDiv: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildSDiv(builder, a, b, ""); } break;
+            case OP_UDiv: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildUDiv(builder, a, b, ""); } break;
+            case OP_SRem: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildSRem(builder, a, b, ""); } break;
+            case OP_URem: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildURem(builder, a, b, ""); } break;
             default: {
                 StyledString ss;
                 ss.out << "IL->IR: unsupported builtin " << enter.builtin << " encountered";
@@ -6262,7 +6535,10 @@ struct GenerateCtx {
             }
         } break;
         case TYPE_Label: {
-            assert(!args.empty());
+            LLVMValueRef values[argcount];
+            for (size_t i = 0; i < argcount; ++i) {
+                values[i] = argument_to_value(args[i + 1]);
+            }
             LLVMValueRef value = argument_to_value(enter);
             if (LLVMValueIsBasicBlock(value)) {
                 auto bbfrom = LLVMGetInsertBlock(builder);
@@ -6283,6 +6559,10 @@ struct GenerateCtx {
             }
         } break;
         case TYPE_Parameter: {
+            LLVMValueRef values[argcount];
+            for (size_t i = 0; i < argcount; ++i) {
+                values[i] = argument_to_value(args[i + 1]);
+            }
             // must be a return
             assert(enter.parameter->index == 0);
             if (argcount > 1) {
@@ -6294,6 +6574,10 @@ struct GenerateCtx {
             }
         } break;
         default: {
+            LLVMValueRef values[argcount];
+            for (size_t i = 0; i < argcount; ++i) {
+                values[i] = argument_to_value(args[i + 1]);
+            }
             if (is_function_pointer(enter.type)) {
                 auto &&pi = pointers.get(enter.type);
                 auto &&fi = functions.get(pi.element_type);
@@ -6305,8 +6589,8 @@ struct GenerateCtx {
                     for (size_t i = fargcount; i < argcount; ++i) {
                         auto value = values[i];
                         // floats need to be widened to doubles
-                        if (LLVMTypeOf(value) == r32T) {
-                            values[i] = LLVMBuildFPExt(builder, value, r64T, "");
+                        if (LLVMTypeOf(value) == f32T) {
+                            values[i] = LLVMBuildFPExt(builder, value, f64T, "");
                         }
                     }
                 }
@@ -6356,6 +6640,9 @@ struct GenerateCtx {
             assert(false && "todo: continuing with unexpected value");
         }
     }
+#undef READ_ANY
+#undef READ_VALUE
+#undef READ_TYPE
 
     LLVMBasicBlockRef label_to_basic_block(Label *label) {
         auto it = label2bb.find(label);
@@ -6499,8 +6786,8 @@ struct NormalizeCtx {
                 case TYPE_U16: case TYPE_I16: if (a.u16 != b.u16) return false; break;
                 case TYPE_U32: case TYPE_I32: if (a.u32 != b.u32) return false; break;
                 case TYPE_U64: case TYPE_I64: if (a.u64 != b.u64) return false; break;
-                case TYPE_R32: if (a.r32 != b.r32) return false; break;
-                case TYPE_R64: if (a.r64 != b.r64) return false; break;
+                case TYPE_F32: if (a.f32 != b.f32) return false; break;
+                case TYPE_F64: if (a.f64 != b.f64) return false; break;
                 case TYPE_Void:
                 case TYPE_Nothing:
                     break;
@@ -6522,8 +6809,8 @@ struct NormalizeCtx {
                     case TYPE_U16: case TYPE_I16: h2 = std::hash<uint16_t>{}(arg.u16); break;
                     case TYPE_U32: case TYPE_I32: h2 = std::hash<uint32_t>{}(arg.u32); break;
                     case TYPE_U64: case TYPE_I64: h2 = std::hash<uint64_t>{}(arg.u64); break;
-                    case TYPE_R32: h2 = std::hash<float>{}(arg.r32); break;
-                    case TYPE_R64: h2 = std::hash<double>{}(arg.r64); break;
+                    case TYPE_F32: h2 = std::hash<float>{}(arg.f32); break;
+                    case TYPE_F64: h2 = std::hash<double>{}(arg.f64); break;
                     default: h2 = std::hash<void *>{}(arg.pointer); break;
                     }
                     h = HashLen16(h, h2);
@@ -6860,6 +7147,82 @@ struct NormalizeCtx {
         }
     }
 
+    Label *lower2cff(Label *entry) {
+        StyledStream ss(std::cout);
+        Any voidarg = none;
+        voidarg.type = TYPE_Void;
+
+
+        size_t numchanges = 0;
+        size_t iterations = 0;
+        do {
+            numchanges = 0;
+            iterations++;
+            if (iterations > 256) {
+                location_error(String::from(
+                    "free variable elimination not terminated after 256 iterations"));
+            }
+
+            std::vector<Label *> labels;
+            std::unordered_set<Label *> visited;
+            entry->build_reachable(labels, visited);
+
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                Label *l = *it;
+                if (is_basic_block_like(l))
+                    continue;
+                if (!has_free_parameters(l))
+                    continue;
+                ss << "illegal: ";
+                stream_label(ss, l, StreamLabelFormat::debug_single());
+                auto users_copy = l->users;
+                // continuation must be eliminated
+                for (auto kv = users_copy.begin(); kv != users_copy.end(); ++kv) {
+                    Label *user = kv->first;
+                    if (!visited.count(user)) {
+                        ss << "warning: unreachable user encountered" << std::endl;
+                        continue;
+                    }
+                    auto &&enter = user->body.enter;
+                    auto &&args = user->body.args;
+                    for (size_t i = 0; i < args.size(); ++i) {
+                        auto &&arg = args[i];
+                        if ((arg.type == TYPE_Label) && (arg.label == l)) {
+                            assert(false && "unexpected use of label as argument");
+                        }
+                    }
+                    if ((enter.type == TYPE_Label) && (enter.label == l)) {
+                        assert(!args.empty());
+
+                        auto &&cont = args[0];
+                        if ((cont.type == TYPE_Parameter)
+                            && (cont.parameter->label == l)) {
+                            ss << "skipping recursive call" << std::endl;
+                        } else {
+                            std::vector<Any> newargs = { cont };
+                            for (size_t i = 1; i < l->params.size(); ++i) {
+                                newargs.push_back(voidarg);
+                            }
+                            Label *newl = inline_arguments(l, newargs);
+
+                            ss << l << "(" << cont << ") -> " << newl << std::endl;
+
+                            user->unlink_backrefs();
+                            cont = none;
+                            enter = newl;
+                            user->link_backrefs();
+                            numchanges++;
+                        }
+                    } else {
+                        ss << "warning: invalidated user encountered" << std::endl;
+                    }
+                }
+            }
+        } while (numchanges);
+
+        return entry;
+    }
+
     void normalize(Label *entry) {
     renormalize:
         //ss_cout << "normalize: " << entry << std::endl;
@@ -6925,6 +7288,12 @@ struct NormalizeCtx {
                 CHECKARGS(1, 1);
                 args[1].verify<TYPE_Any>();
                 Any arg = *args[1].ref;
+                RETARGS(arg);
+            } break;
+            case FN_AnyWrap: {
+                CHECKARGS(1, 1);
+                Any arg = args[1].toref();
+                arg.type = TYPE_Any;
                 RETARGS(arg);
             } break;
             case FN_Purify: {
@@ -7048,6 +7417,60 @@ struct NormalizeCtx {
                         }
                     }
                 } break;
+                case FN_Load: {
+                    CHECKARGS(1, 1);
+                    Type T = storage_type(args[1].indirect_type());
+                    verify_category<CAT_Pointer>(T);
+                    auto &pi = pointers.get(T);
+                    if (is_const(args[1])) {
+                        RETARGS(pi.unpack(args[1].pointer));
+                    } else {
+                        RETARGTYPES(pi.element_type);
+                    }
+                } break;
+                case FN_Bitcast: {
+                    CHECKARGS(2, 2);
+                    // todo: verify source and dest type are non-aggregate
+                    // also, both must be of same category
+                    args[2].verify<TYPE_Type>();
+                    Type DestT = args[2].typeref;
+                    if (is_const(args[1])) {
+                        Any result = args[1];
+                        result.type = DestT;
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(DestT);
+                    }
+                } break;
+                case FN_IntToPtr: {
+                    CHECKARGS(2, 2);
+                    verify_integer(args[1].indirect_type());
+                    args[2].verify<TYPE_Type>();
+                    Type DestT = args[2].typeref;
+                    verify_category<CAT_Pointer>(storage_type(DestT));
+                    if (is_const(args[1])) {
+                        Any result = args[1];
+                        result.type = DestT;
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(DestT);
+                    }
+                } break;
+                case FN_PtrToInt: {
+                    CHECKARGS(2, 2);
+                    verify_category<CAT_Pointer>(
+                        storage_type(args[1].indirect_type()));
+                    args[2].verify<TYPE_Type>();
+                    Type DestT = args[2].typeref;
+                    verify_integer(DestT);
+                    if (is_const(args[1])) {
+                        Any result = args[1];
+                        result.type = DestT;
+                        RETARGS(result);
+                    } else {
+                        RETARGTYPES(DestT);
+                    }
+                } break;
                 case FN_Trunc: {
                     CHECKARGS(2, 2);
                     Type T = args[1].indirect_type();
@@ -7150,7 +7573,7 @@ struct NormalizeCtx {
                         RETARGTYPES(TYPE_Bool);
                     }
                 } break;
-#define IARITH_OPS(NAME, OP) \
+#define IARITH_NUW_NSW_OPS(NAME, OP) \
     case OP_ ## NAME: \
     case OP_ ## NAME ## NUW: \
     case OP_ ## NAME ## NSW: { \
@@ -7170,8 +7593,29 @@ struct NormalizeCtx {
             RETARGTYPES(args[1].indirect_type()); \
         } \
     } break;
-                IARITH_OPS(Add, +)
-                IARITH_OPS(Sub, -)
+#define IARITH_S_U_OPS(NAME, OP) \
+    case OP_S ## NAME: \
+    case OP_U ## NAME: { \
+        CHECKARGS(2, 2); \
+        verify_integer_ops(args[1], args[2]); \
+        if (const_ops(args[1], args[2])) { \
+            Any result = none; \
+            switch(enter.builtin.value()) { \
+            case OP_U ## NAME: B_INT_OP2(OP, u); \
+            case OP_S ## NAME: B_INT_OP2(OP, i); \
+            default: assert(false); break; \
+            } \
+            result.type = args[1].type; \
+            RETARGS(result); \
+        } else { \
+            RETARGTYPES(args[1].indirect_type()); \
+        } \
+    } break;
+                IARITH_NUW_NSW_OPS(Add, +)
+                IARITH_NUW_NSW_OPS(Sub, -)
+                IARITH_NUW_NSW_OPS(Mul, *)
+                IARITH_S_U_OPS(Div, /)
+                IARITH_S_U_OPS(Rem, %)
                 default: {
                     StyledString ss;
                     ss.out << "builtin " << enter.builtin << " is not implemented";
@@ -7196,9 +7640,7 @@ struct NormalizeCtx {
         backtrack:
             Label *lenter = original;
             assert(!lenter->params.empty());
-            inline_cont = inline_cont ||
-                (!is_basic_block_like(lenter)
-                && has_free_parameters(lenter));
+            //assert(is_basic_block_like(lenter) || !has_free_parameters(lenter));
 
             bool inline_args = false;
 
@@ -7288,6 +7730,13 @@ struct NormalizeCtx {
                     entry->unlink_backrefs();
                     args[0] = none;
                     entry->link_backrefs();
+                } else if (rettype == TYPE_Any) {
+                    ss_cout << "warning: continuation untyped after template instantiation" << std::endl;
+                    // can happen when a recursive label is reentered
+
+                    // ideally we shouldn't even typify a recursive label twice
+                    // one solution could be to always walk early terminating branches
+                    // first, but is probably not guaranteed to be stable.
                 } else {
                     StyledString ss;
                     ss.out << "continuation of typed label type expected, got " << rettype << std::endl;
@@ -7415,8 +7864,8 @@ struct NormalizeCtx {
         case TYPE_U16: return &ffi_type_uint16;
         case TYPE_U32: return &ffi_type_uint32;
         case TYPE_U64: return &ffi_type_uint64;
-        case TYPE_R32: return &ffi_type_float;
-        case TYPE_R64: return &ffi_type_double;
+        case TYPE_F32: return &ffi_type_float;
+        case TYPE_F64: return &ffi_type_double;
         default: break;
         }
 
@@ -7519,8 +7968,8 @@ struct NormalizeCtx {
         case TYPE_I16: case TYPE_U16: return (void *)&value.u16;
         case TYPE_I32: case TYPE_U32: return (void *)&value.u32;
         case TYPE_I64: case TYPE_U64: return (void *)&value.u64;
-        case TYPE_R32: return (void *)&value.r32;
-        case TYPE_R64: return (void *)&value.r64;
+        case TYPE_F32: return (void *)&value.f32;
+        case TYPE_F64: return (void *)&value.f64;
         case TYPE_Bool: return (void *)&value.i1;
         default: break;
         }
@@ -7611,6 +8060,22 @@ static Label *normalize(Label *entry) {
     NormalizeCtx ctx;
     ctx.start_entry = entry;
     ctx.normalize(entry);
+    {
+        StyledStream ss(std::cout);
+
+        SCCBuilder scc(entry);
+        for (size_t i = 0; i < scc.groups.size(); ++i) {
+            auto &&group = scc.groups[i];
+            if (group.labels.size() > 1) {
+                ss << "group #" << i << std::endl;
+                for (size_t k = 0; k < group.labels.size(); ++k) {
+                    stream_label(ss, group.labels[k], StreamLabelFormat::debug_single());
+                }
+                ss << std::endl;
+            }
+        }
+    }
+    ctx.lower2cff(entry);
     return entry;
 }
 
@@ -8187,6 +8652,11 @@ static void init_types() {
             .finalize(Pointer(cellT));
     }
 
+    DEFINE_STRUCT_HANDLE_TYPE(Syntax, TYPE_Syntax,
+        TYPE_Anchor,
+        TYPE_Any,
+        TYPE_Bool);
+
     DEFINE_STRUCT_HANDLE_TYPE(String, TYPE_String,
         ty_size,
         Array(TYPE_I8, 1)
@@ -8327,8 +8797,8 @@ static void init_globals() {
     globals->bind(TYPE_U16, Type(TYPE_U16));
     globals->bind(TYPE_U32, Type(TYPE_U32));
     globals->bind(TYPE_U64, Type(TYPE_U64));
-    globals->bind(TYPE_R32, Type(TYPE_R32));
-    globals->bind(TYPE_R64, Type(TYPE_R64));
+    globals->bind(TYPE_F32, Type(TYPE_F32));
+    globals->bind(TYPE_F64, Type(TYPE_F64));
 
     if (sizeof(size_t) == sizeof(uint64_t)) {
         globals->bind(TYPE_SizeT, Type(TYPE_U64));
@@ -8565,6 +9035,7 @@ int main(int argc, char *argv[]) {
         std::cout << "non-normalized:" << std::endl;
         stream_label(ss, fn, StreamLabelFormat());
         std::cout << std::endl;
+
         fn = normalize(fn);
         std::cout << "normalized:" << std::endl;
         stream_label(ss, fn, StreamLabelFormat());

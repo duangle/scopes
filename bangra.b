@@ -182,37 +182,71 @@
         string->fn "hello\n"
 
 # deferring remaining expressions to bootstrap parser
-    syntax-apply-block
-        fn/cc (_ anchor exprs env)
-            fn/cc walk-list (_ l depth)
-                fn/cc print-spaces (_ depth)
-                    branch (icmp== depth 0)
-                        fn/cc (_)
-                        fn/cc (_)
-                            io-write " "
-                            print-spaces (sub depth 1)
+syntax-apply-block
+    fn/cc (_ anchor exprs env)
+        fn/cc list-empty? (_ l)
+            icmp== (ptrtoint l size_t) 0:usize
+        fn/cc list-at (_ l)
+            branch (list-empty? l)
+                fn/cc (_) (Any-wrap none)
+                fn/cc (_) (extractvalue (load l) 0)
+        fn/cc list-next (_ l)
+            branch (list-empty? l)
+                fn/cc (_) eol
+                fn/cc (_)
+                    bitcast (extractvalue (load l) 1) list
+        fn/cc list-at-next (_ l)
+            branch (list-empty? l)
+                fn/cc (_)
+                    _ (Any-wrap none) eol
+                fn/cc (_)
+                    _
+                        extractvalue (load l) 0
+                        bitcast (extractvalue (load l) 1) list
+        fn/cc list-countof (_ l)
+            extractvalue (load l) 2
 
-                call
-                    fn/cc loop (_ l)
-                        branch (list-empty? l)
-                            fn/cc (_) true
-                            fn/cc (_)
-                                print-spaces depth
-                                branch (type== (extract-value (list-at l) 0) Syntax)
-                                    fn/cc (_)
-                                        io-write "is a syntax\n"
-                                    fn/cc (_)
-                                io-write
-                                    repr
-                                        list-at l
-                                io-write "\n"
-                                loop
-                                    list-next l
-                    \ l
+        fn/cc maybe-unsyntax (_ val)
+            branch (type== (extractvalue val 0) Syntax)
+                fn/cc (_)
+                    extractvalue (load (inttoptr (extractvalue val 1) Syntax)) 1
+                fn/cc (_) val
 
-            walk-list
-                mystify exprs
-                mystify 0
+        fn/cc walk-list (_ l depth)
+            fn/cc print-spaces (_ depth)
+                branch (icmp== depth 0)
+                    fn/cc (_)
+                    fn/cc (_)
+                        io-write " "
+                        print-spaces (sub depth 1)
+
+            call
+                fn/cc loop (_ l)
+                    branch (list-empty? l)
+                        fn/cc (_) true
+                        fn/cc (_)
+                            call
+                                fn/cc (_ at next)
+                                    dump at next
+                                    print-spaces depth
+                                    io-write
+                                        repr
+                                            maybe-unsyntax at
+                                    io-write "\n"
+                                    #branch (type== (extractvalue (list-at l) 0) Syntax)
+                                        fn/cc (_)
+                                            io-write "is a syntax\n"
+                                        fn/cc (_)
+                                    io-write
+                                        repr at
+                                    io-write "\n"
+                                    loop next
+                                list-at-next l
+                \ l
+
+        walk-list
+            mystify exprs
+            mystify 0
 
 # static assertion
     branch (type== (typeof 1) i32)
@@ -225,28 +259,48 @@
             compiler-error "static assertion failed: argument not constant"
 
 # importing C code
-    call
-        fn/cc (_ lib)
-            call
-                fn/cc (_ sinf printf)
-                    printf
-                        string->rawstring "test: %f\n"
-                        sinf 0.5235987755982989
-                purify
-                    Any-extract
-                        Scope@ lib 'sinf
+call
+    fn/cc (_ lib)
+        call
+            fn/cc (_ sinf printf)
+                printf
+                    string->rawstring "test: %f\n"
+                    sinf 0.5235987755982989
+            purify
                 Any-extract
-                    Scope@ lib 'printf
+                    Scope@ lib 'sinf
+            Any-extract
+                Scope@ lib 'printf
 
-        import-c "testdata.c" "
-            float sinf(float);
-            int printf( const char* format, ... );
-            "
-            \ eol
+    import-c "testdata.c" "
+        float sinf(float);
+        int printf( const char* format, ... );
+        "
+        \ eol
 
-# sext
-dump
-    sext (trunc 32 i8) i64
+# mutual recursion
+    fn/cc even? (eret ei)
+        fn/cc odd? (oret oi)
+            branch (icmp>s oi 0)
+                fn/cc (_)
+                    even? (sub oi 1)
+                fn/cc (_)
+                    _ false
+
+        branch (icmp>s ei 0)
+            fn/cc (_)
+                odd? (sub ei 1)
+            fn/cc (_)
+                _ true
+
+    branch
+        even? 5
+        fn/cc (_)
+            io-write "even\n"
+        fn/cc (_)
+            io-write "odd\n"
+
+
 
 \ none
 
