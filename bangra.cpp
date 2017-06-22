@@ -7655,11 +7655,10 @@ struct NormalizeCtx {
                 }
             }
 
-            std::vector<Any> oldargs = args;
+            std::vector<Any> callargs;
             if (inline_args || inline_cont) {
                 Any anyval = none;
                 anyval.type = TYPE_Void;
-                std::vector<Any> callargs;
                 std::vector<Any> keys;
                 if (inline_cont) {
                     // continuation is directly inlined
@@ -7679,13 +7678,12 @@ struct NormalizeCtx {
                     }
                 }
                 lenter = inline_arguments(lenter, keys);
-                entry->unlink_backrefs();
-                args = callargs;
-                entry->link_backrefs();
+            } else {
+                callargs = args;
             }
 
             std::vector<Type> argtypes = {};
-            for (auto &&arg : args) {
+            for (auto &&arg : callargs) {
                 argtypes.push_back(arg.indirect_type());
             }
             Label *newenter = typify(lenter, argtypes);
@@ -7697,10 +7695,6 @@ struct NormalizeCtx {
                 // not sure why this is necessary, but apparently it is
                 goto renormalize;
             } else {
-                entry->unlink_backrefs();
-                enter = newenter;
-                entry->link_backrefs();
-
                 assert(!newenter->params.empty());
                 Type rettype = newenter->params[0]->type;
                 //ss_cout << entry << ": return type of " << newenter << " is " << rettype << std::endl;
@@ -7709,25 +7703,31 @@ struct NormalizeCtx {
                     std::vector<Type> retargtypes = tli.types;
                     for (size_t i = 1; i < retargtypes.size(); ++i) {
                         if (first_order_type(retargtypes[i])) {
-                            ss_cout << "warning: backtracking" << std::endl;
+                            ss_cout << "warning: first order result, backtracking" << std::endl;
                             // function returns one or multiple first order types
                             // which means the continuation has to be dropped into
                             // this one
                             inline_cont = true;
-                            // revert args
-                            entry->unlink_backrefs();
-                            args = oldargs;
-                            entry->link_backrefs();
                             goto backtrack;
                         }
                     }
                     Any newcont = type_continuation(args[0], retargtypes);
                     entry->unlink_backrefs();
+                    enter = newenter;
+                    args = callargs;
                     args[0] = newcont;
                     entry->link_backrefs();
+                } else if (typesets.is(rettype)) {
+                    // polymorphic return types can't be used natively, which
+                    // means the continuation has to be dropped into this one
+                    ss_cout << "warning: polymorphic result, backtracking" << std::endl;
+                    inline_cont = true;
+                    goto backtrack;
                 } else if (rettype == TYPE_Nothing) {
                     // basic-block style label jump, null our continuation argument
                     entry->unlink_backrefs();
+                    enter = newenter;
+                    args = callargs;
                     args[0] = none;
                     entry->link_backrefs();
                 } else if (rettype == TYPE_Any) {
@@ -7737,6 +7737,10 @@ struct NormalizeCtx {
                     // ideally we shouldn't even typify a recursive label twice
                     // one solution could be to always walk early terminating branches
                     // first, but is probably not guaranteed to be stable.
+                    entry->unlink_backrefs();
+                    enter = newenter;
+                    args = callargs;
+                    entry->link_backrefs();
                 } else {
                     StyledString ss;
                     ss.out << "continuation of typed label type expected, got " << rettype << std::endl;

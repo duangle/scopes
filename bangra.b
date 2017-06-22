@@ -184,6 +184,11 @@
 # deferring remaining expressions to bootstrap parser
 syntax-apply-block
     fn/cc (_ anchor exprs env)
+        fn/cc type== (_ a b)
+            icmp==
+                bitcast a u64
+                bitcast b u64
+
         fn/cc list-empty? (_ l)
             icmp== (ptrtoint l size_t) 0:usize
         fn/cc list-at (_ l)
@@ -206,20 +211,66 @@ syntax-apply-block
         fn/cc list-countof (_ l)
             extractvalue (load l) 2
 
+        fn/cc Any-typeof (_ val)
+            extractvalue val 0
+        fn/cc Any-payload (_ val)
+            extractvalue val 1
+
+        fn/cc list? (_ val)
+            type== (Any-typeof val) list
+
+        fn/cc Any-extract-list (_ val)
+            inttoptr (Any-payload val) list
+
+        fn/cc Any-extract-Syntax (_ val)
+            inttoptr (Any-payload val) Syntax
+
+        fn/cc Any-extract-Symbol (_ val)
+            bitcast (Any-payload val) Symbol
+
+        fn/cc Any-extract-i32 (_ val)
+            trunc (Any-payload val) i32
+
         fn/cc maybe-unsyntax (_ val)
-            branch (type== (extractvalue val 0) Syntax)
+            branch (type== (Any-typeof val) Syntax)
                 fn/cc (_)
-                    extractvalue (load (inttoptr (extractvalue val 1) Syntax)) 1
+                    extractvalue (load (Any-extract-Syntax val)) 1
                 fn/cc (_) val
 
-        fn/cc walk-list (_ l depth)
-            fn/cc print-spaces (_ depth)
-                branch (icmp== depth 0)
-                    fn/cc (_)
-                    fn/cc (_)
-                        io-write " "
-                        print-spaces (sub depth 1)
+        fn/cc Any-dispatch (return val)
+            call
+                fn/cc try0 (() T)
+                    fn/cc failed ()
+                        return none
+                    fn/cc try3 ()
+                        branch (type== T i32)
+                            fn/cc ()
+                                return (Any-extract-i32 val)
+                            \ failed
+                    fn/cc try2 ()
+                        branch (type== T Symbol)
+                            fn/cc ()
+                                return (Any-extract-Symbol val)
+                            \ try3
+                    fn/cc try1 ()
+                        branch (type== T Syntax)
+                            fn/cc ()
+                                return (Any-extract-Syntax val)
+                            \ try2
+                    branch (type== T list)
+                        fn/cc ()
+                            return (Any-extract-list val)
+                        \ try1
+                Any-typeof val
 
+        fn/cc print-spaces (_ depth)
+            branch (icmp== depth 0)
+                fn/cc (_)
+                fn/cc (_)
+                    io-write "    "
+                    print-spaces (sub depth 1)
+
+        fn/cc walk-list (_ on-leaf l depth)
             call
                 fn/cc loop (_ l)
                     branch (list-empty? l)
@@ -227,24 +278,29 @@ syntax-apply-block
                         fn/cc (_)
                             call
                                 fn/cc (_ at next)
-                                    dump at next
-                                    print-spaces depth
-                                    io-write
-                                        repr
-                                            maybe-unsyntax at
-                                    io-write "\n"
-                                    #branch (type== (extractvalue (list-at l) 0) Syntax)
-                                        fn/cc (_)
-                                            io-write "is a syntax\n"
-                                        fn/cc (_)
-                                    io-write
-                                        repr at
-                                    io-write "\n"
+                                    call
+                                        fn/cc (_ value)
+                                            branch (list? value)
+                                                fn/cc (_)
+                                                    print-spaces depth
+                                                    io-write ";\n"
+                                                    walk-list on-leaf
+                                                        Any-extract-list value
+                                                        add depth 1
+                                                fn/cc (_)
+                                                    on-leaf value depth
+                                        maybe-unsyntax at
                                     loop next
                                 list-at-next l
                 \ l
 
         walk-list
+            fn/cc on-leaf (_ value depth)
+                print-spaces depth
+                Any-dispatch value
+                io-write
+                    repr value
+                io-write "\n"
             mystify exprs
             mystify 0
 
@@ -258,6 +314,17 @@ syntax-apply-block
         fn/cc (_)
             compiler-error "static assertion failed: argument not constant"
 
+# naive factorial
+fn/cc fac (_ n)
+    branch (icmp<=s n 1)
+        fn/cc (_) 1
+        fn/cc (_)
+            mul n
+                call
+                    fn/cc (_ n-1)
+                        fac n-1
+                    sub n 1
+
 # importing C code
 call
     fn/cc (_ lib)
@@ -266,6 +333,10 @@ call
                 printf
                     string->rawstring "test: %f\n"
                     sinf 0.5235987755982989
+                printf
+                    string->rawstring "fac: %i\n"
+                    fac
+                        mystify 5
             purify
                 Any-extract
                     Scope@ lib 'sinf
