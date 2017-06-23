@@ -23,166 +23,35 @@
     This is the bangra boot script. It implements the remaining standard
     functions and macros, parses the command-line and then enters the REPL.
 
-# basic branching and phi node merging
-    fn/cc puts (_ s br)
-        io-write s
-        io-write
-            branch br
-                fn/cc (_) "\n"
-                fn/cc (_) ""
+fn/cc string->rawstring (_ s)
+    getelementptr s 0 1 0
 
-    puts "hello world, " false
-    puts "hello world" true
-
-# tail-recursive program that avoids closures
-    fn/cc puts (return s n)
-        fn/cc loop (() i)
-            branch (icmp== i n)
-                fn/cc ()
-                    return
-                fn/cc ()
-                    io-write s
-                    io-write "\n"
-                    cc/call loop none (add i 1)
-        cc/call loop none 0
-
-    puts "hello world" 10
-
-# tail-recursive program that uses closures
-    fn/cc print-loop (_ s n)
-        fn/cc puts (_ s)
-            io-write s
-            io-write "\n"
-        fn/cc loop (_ i)
-            branch (icmp== i n)
-                fn/cc (_)
-                fn/cc (_)
-                    puts s
-                    loop (add i 1)
-        loop
-            mystify 0
-
-    call
-        fn/cc (_ txt)
-            print-loop txt 5
-            print-loop txt 5
-        \ "hello world"
-
-
-# program using closure
-    fn/cc puts (return s)
-        fn/cc do-stuff (_ t)
-            io-write s
-            io-write t
-        do-stuff "\n"
-
-    puts "hello world"
-
-# passing template as first-order argument
-    fn/cc square-brackets (_ s)
-        io-write "["; io-write s; io-write "]"
-    fn/cc round-brackets (_ s)
-        io-write "("; io-write s; io-write ")"
-    fn/cc apply-brackets (_ f s)
-        f s
-        io-write "\n"
-
-    apply-brackets square-brackets "hello"
-    apply-brackets square-brackets "world"
-    apply-brackets round-brackets "hello"
-    apply-brackets round-brackets "world"
-
-# passing builtin as first-order argument
-    call
-        fn/cc (_ f)
-            f "yes\n"
-            f "no\n"
-        \ io-write
-
-# return function dynamically
-    fn/cc square-brackets (_ s)
-        io-write "["; io-write s; io-write "]"
-    fn/cc round-brackets (_ s)
-        io-write "("; io-write s; io-write ")"
-    fn/cc bracket (_ use-square?)
-        branch use-square?
-            fn/cc (_) square-brackets
-            fn/cc (_) round-brackets
-    fn/cc apply-brackets (_ f s)
-        f s
-        io-write "\n"
-
-    apply-brackets (bracket true) "hello"
-    apply-brackets (bracket true) "world"
-    apply-brackets (bracket false) "hello"
-    apply-brackets (bracket false) "world"
-
-# locally bound function names
-    call
-        fn/cc (_ f1 f2)
-            f1 "huh"
-            f2 "oh"
-            f1 "hmm!"
-            f2 "oh la la"
-
-        fn/cc (_ s)
-            io-write s
-            io-write "?\n"
-        fn/cc (_ s)
-            io-write s
-            io-write "!\n"
-
-# branch with constant argument
-    branch true
-        fn/cc (_)
-            io-write "true"
-        fn/cc (_)
-            io-write "false"
-
-# polymorphic return type and inlined type checking
-    fn/cc print-value (_ value)
+# importing C code
+call
+    fn/cc (_ lib)
         call
-            fn/cc (_ value-type)
-                branch (type== value-type i32)
-                    fn/cc (_)
-                        io-write "<number>\n"
-                        \ "hello"
-                    fn/cc (_)
-                        branch (type== value-type string)
-                            fn/cc (_)
-                                io-write value
-                                io-write "\n"
-                                \ false
-                            fn/cc (_)
-                                io-write "???\n"
-            typeof value
-    print-value
-        print-value
-            print-value 3
+            fn/cc (_ sinf printf)
+                printf
+                    string->rawstring "test: %f\n"
+                    sinf 0.5235987755982989
+                #printf
+                    string->rawstring "fac: %i\n"
+                    fac
+                        mystify 5
+            purify
+                Any-extract
+                    Scope@ lib 'sinf
+            Any-extract
+                Scope@ lib 'printf
 
-# calling a pure c function that returns multiple arguments
-    print-number 303
-        print-number 1 2 3
-
-# typify
-    fn/cc f (_ s)
-        io-write s
-
-    typify f string
-
-# church encoding
-    fn/cc string->fn (_ s)
-        fn/cc (_ f)
-            f s
-
-    fn/cc io-write-fn (_ f)
-        f io-write
-
-    io-write-fn
-        string->fn "hello\n"
+    import-c "testdata.c" "
+        float sinf(float);
+        int printf( const char* format, ... );
+        "
+        \ eol
 
 # deferring remaining expressions to bootstrap parser
-syntax-apply-block
+#syntax-apply-block
     fn/cc (_ anchor exprs env)
         fn/cc type== (_ a b)
             icmp==
@@ -315,39 +184,39 @@ syntax-apply-block
             compiler-error "static assertion failed: argument not constant"
 
 # naive factorial
-fn/cc fac (_ n)
-    branch (icmp<=s n 1)
-        fn/cc (_) 1
-        fn/cc (_)
-            mul n
-                call
-                    fn/cc (_ n-1)
-                        fac n-1
-                    sub n 1
+    fn/cc fac (_ n)
+        branch (icmp<=s n 1)
+            fn/cc (_) 1
+            fn/cc (_)
+                mul n
+                    call
+                        fn/cc (_ n-1)
+                            fac n-1
+                        sub n 1
 
 # importing C code
-call
-    fn/cc (_ lib)
-        call
-            fn/cc (_ sinf printf)
-                printf
-                    string->rawstring "test: %f\n"
-                    sinf 0.5235987755982989
-                printf
-                    string->rawstring "fac: %i\n"
-                    fac
-                        mystify 5
-            purify
+    call
+        fn/cc (_ lib)
+            call
+                fn/cc (_ sinf printf)
+                    printf
+                        string->rawstring "test: %f\n"
+                        sinf 0.5235987755982989
+                    printf
+                        string->rawstring "fac: %i\n"
+                        fac
+                            mystify 5
+                purify
+                    Any-extract
+                        Scope@ lib 'sinf
                 Any-extract
-                    Scope@ lib 'sinf
-            Any-extract
-                Scope@ lib 'printf
+                    Scope@ lib 'printf
 
-    import-c "testdata.c" "
-        float sinf(float);
-        int printf( const char* format, ... );
-        "
-        \ eol
+        import-c "testdata.c" "
+            float sinf(float);
+            int printf( const char* format, ... );
+            "
+            \ eol
 
 # mutual recursion
     fn/cc even? (eret ei)

@@ -561,6 +561,7 @@ namespace bangra {
     T(FN_Purify) T(FN_Mystify) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
+    T(FN_GetElementPtr) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
     T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW) \
     T(OP_Mul) T(OP_MulNUW) T(OP_MulNSW) \
@@ -660,6 +661,7 @@ namespace bangra {
     T(FN_ExternLibrary, "extern-library") \
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_ExtractValue, "extractvalue") \
+    T(FN_GetElementPtr, "getelementptr") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
@@ -1600,6 +1602,7 @@ public:
     }
 };
 
+static bool is_opaque(Type T);
 static size_t size_of(Type T);
 static size_t align_of(Type T);
 
@@ -1895,8 +1898,13 @@ static Any wrap_pointer(Type type, void *ptr);
 
 struct PointerInfo {
     Type element_type;
+    size_t stride;
 
     PointerInfo() : element_type(TYPE_Nothing) {}
+
+    void *getelementptr(void *src, size_t i) {
+        return (void *)((char *)src + stride * i);
+    }
 
     Any unpack(void *src) {
         return wrap_pointer(element_type, src);
@@ -1916,6 +1924,11 @@ static Type Pointer(Type element_type) {
     if (result.second) {
         auto &&pi = result.first->second;
         pi.element_type = element_type;
+        if (is_opaque(element_type)) {
+            pi.stride = 0;
+        } else {
+            pi.stride = size_of(element_type);
+        }
     }
     return type;
 }
@@ -1936,9 +1949,13 @@ struct ArrayInfo : StorageInfo {
 
     ArrayInfo() : element_type(TYPE_Nothing), count(0) {}
 
+    void *getelementptr(void *src, size_t i) {
+        verify_range(i, count);
+        return (void *)((char *)src + stride * i);
+    }
+
     Any unpack(void *src, size_t i) {
-        return wrap_pointer(type_at_index(i),
-            (void *)((char *)src + stride * i));
+        return wrap_pointer(type_at_index(i), getelementptr(src, i));
     }
 
     Type type_at_index(size_t i) {
@@ -1976,9 +1993,13 @@ struct VectorInfo : StorageInfo {
 
     VectorInfo() : element_type(TYPE_Nothing), count(0) {}
 
+    void *getelementptr(void *src, size_t i) {
+        verify_range(i, count);
+        return (void *)((char *)src + stride * i);
+    }
+
     Any unpack(void *src, size_t i) {
-        return wrap_pointer(type_at_index(i),
-            (void *)((char *)src + stride * i));
+        return wrap_pointer(type_at_index(i), getelementptr(src, i));
     }
 
     Type type_at_index(size_t i) {
@@ -2211,9 +2232,13 @@ struct TupleInfo : StorageInfo {
     std::vector<Type> types;
     std::vector<size_t> offsets;
 
+    void *getelementptr(void *src, size_t i) {
+        verify_range(i, offsets.size());
+        return (void *)((char *)src + offsets[i]);
+    }
+
     Any unpack(void *src, size_t i) {
-        return wrap_pointer(type_at_index(i),
-            (void *)((char *)src + offsets[i]));
+        return wrap_pointer(type_at_index(i), getelementptr(src, i));
     }
 
     Type type_at_index(size_t i) {
@@ -2414,9 +2439,25 @@ static void verify_function_pointer(Type type) {
     }
 }
 
+static bool is_opaque(Type T) {
+    switch (T.value()) {
+    case TYPE_Void:
+    case TYPE_Nothing: return true;
+    default: break;
+    }
+    switch(category_of(T)) {
+    case CAT_Function: return true;
+    case CAT_Typename: {
+        auto &&tn = typenames.get(T);
+        return !tn.finalized;
+    } break;
+    default: break;
+    }
+    return false;
+}
+
 static size_t size_of(Type T) {
     switch(T.value()) {
-    case TYPE_Nothing: return 0;
     case TYPE_Bool: return sizeof(bool);
 
     case TYPE_I8:
@@ -2460,7 +2501,6 @@ static size_t size_of(Type T) {
 
 static size_t align_of(Type T) {
     switch(T.value()) {
-    case TYPE_Nothing: return 0;
     case TYPE_Bool: return sizeof(bool);
 
     case TYPE_I8:
@@ -6458,6 +6498,16 @@ struct GenerateCtx {
                 retvalue = LLVMBuildExtractValue(
                     builder, val, cast_number<int32_t>(index), "");
             } break;
+            case FN_GetElementPtr: {
+                READ_VALUE(pointer);
+                assert(argcount > 1);
+                size_t count = argcount - 1;
+                LLVMValueRef indices[count];
+                for (size_t i = 0; i < count; ++i) {
+                    indices[i] = argument_to_value(args[argn + i]);
+                }
+                retvalue = LLVMBuildGEP(builder, pointer, indices, count, "");
+            } break;
             case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildBitCast(builder, val, ty, ""); } break;
             case FN_IntToPtr: { READ_VALUE(val); READ_TYPE(ty);
@@ -7371,7 +7421,7 @@ struct NormalizeCtx {
                     RETARGTYPES(args[1].indirect_type());
                 } break;
                 case FN_ExtractValue: {
-                    CHECKARGS(1, -1);
+                    CHECKARGS(2, 2);
                     size_t idx = cast_number<size_t>(args[2]);
                     if (is_const(args[1])) {
                         Type T = storage_type(args[1].type);
@@ -7415,6 +7465,58 @@ struct NormalizeCtx {
                             location_error(ss.str());
                         } break;
                         }
+                    }
+                } break;
+                case FN_GetElementPtr: {
+                    CHECKARGS(2, -1);
+                    Type T = storage_type(args[1].indirect_type());
+                    verify_category<CAT_Pointer>(T);
+                    auto &pi = pointers.get(T);
+                    T = pi.element_type;
+                    bool const_result = is_const(args[1]);
+                    void *ptr = const_result?args[1].pointer:nullptr;
+                    if (const_result && is_const(args[2])) {
+                        size_t idx = cast_number<size_t>(args[2]);
+                        ptr = pi.getelementptr(ptr, idx);
+                    } else {
+                        verify_integer(args[2].indirect_type());
+                    }
+
+                    for (size_t i = 3; i < args.size(); ++i) {
+                        T = storage_type(T);
+                        auto &&arg = args[i];
+                        switch(category_of(T)) {
+                        case CAT_Array: {
+                            auto &ai = arrays.get(T);
+                            T = ai.element_type;
+                            if (const_result && is_const(arg)) {
+                                size_t idx = cast_number<size_t>(arg);
+                                ptr = ai.getelementptr(ptr, idx);
+                            } else {
+                                verify_integer(arg.indirect_type());
+                                const_result = false;
+                            }
+                        } break;
+                        case CAT_Tuple: {
+                            size_t idx = cast_number<size_t>(arg);
+                            auto &ti = tuples.get(T);
+                            T = ti.type_at_index(idx);
+                            if (const_result) {
+                                ptr = ti.getelementptr(ptr, idx);
+                            }
+                        } break;
+                        default: {
+                            StyledString ss;
+                            ss.out << "can not get element pointer from type " << T;
+                            location_error(ss.str());
+                        } break;
+                        }
+                    }
+                    T = Pointer(T);
+                    if (const_result) {
+                        RETARGS(Any::from_pointer(T, ptr));
+                    } else {
+                        RETARGTYPES(T);
                     }
                 } break;
                 case FN_Load: {
@@ -8684,22 +8786,6 @@ static I2 bangra_print_number(int a, int b, int c) {
     return { c , b };
 }
 
-static Any f_list_at(const List *l) {
-    return (l == EOL)?none:l->at;
-}
-static const List *f_list_next(const List *l) {
-    return (l == EOL)?EOL:l->next;
-}
-static const List *f_list_cons(Any at, const List *next) {
-    return List::from(at, next);
-}
-static bool f_list_empty(const List *l) {
-    return (l == EOL);
-}
-static size_t f_list_count(const List *l) {
-    return (l == EOL)?0:l->count;
-}
-
 static Scope *f_import_c(const String *path,
     const String *content, const List *arglist) {
     std::vector<std::string> args;
@@ -8728,9 +8814,6 @@ static const char *f_string2rawstring(const String *str) {
     return str->data;
 }
 
-static bool f_type_eq(Type A, Type B) {
-    return A == B;
-}
 
 static void init_globals() {
 
@@ -8755,15 +8838,6 @@ static void init_globals() {
     DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any);
-    DEFINE_PURE_C_FUNCTION(FN_StringToRawstring, f_string2rawstring, rawstring, TYPE_String);
-    DEFINE_PURE_C_FUNCTION(FN_TypeEq, f_type_eq, TYPE_Bool, TYPE_Type, TYPE_Type);
-
-    DEFINE_PURE_C_FUNCTION(FN_ListAt, f_list_at, TYPE_Any, TYPE_List);
-    DEFINE_PURE_C_FUNCTION(FN_ListNext, f_list_next, TYPE_List, TYPE_List);
-    DEFINE_PURE_C_FUNCTION(FN_ListCons, f_list_cons, TYPE_List, TYPE_Any, TYPE_List);
-    DEFINE_PURE_C_FUNCTION(FN_IsListEmpty, f_list_empty, TYPE_Bool, TYPE_List);
-    DEFINE_PURE_C_FUNCTION(FN_ListCountOf, f_list_count, sizeT, TYPE_List);
-
 
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String)
 
@@ -9008,7 +9082,7 @@ int main(int argc, char *argv[]) {
         bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
     }
 
-#define CATCH_EXCEPTION 1
+#define CATCH_EXCEPTION 0
 #if CATCH_EXCEPTION
     try {
 #endif
