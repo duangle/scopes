@@ -2090,6 +2090,14 @@ static bool is_function_pointer(Type type) {
     return functions.is(pi.element_type);
 }
 
+static bool is_pure_function_pointer(Type type) {
+    if (!pointers.is(type)) return false;
+    auto &&pi = pointers.get(type);
+    if (!functions.is(pi.element_type)) return false;
+    auto &&fi = functions.get(pi.element_type);
+    return fi.flags & FF_Pure;
+}
+
 //------------------------------------------------------------------------------
 // UNION TYPE
 //------------------------------------------------------------------------------
@@ -2192,7 +2200,6 @@ static Type TypeSet(const std::vector<Type> &types) {
         }
     }
 
-    assert(!typeset.count(TYPE_Any));
     assert(!typeset.empty());
 
     if (typeset.size() == 1) {
@@ -3763,6 +3770,10 @@ public:
     int index;
     bool vararg;
 
+    bool is_typed() const {
+        return type != TYPE_Void;
+    }
+
     StyledStream &stream_local(StyledStream &ss) const {
         if ((name != SYM_Unnamed) || !label) {
             ss << Style_Comment << "%" << Style_Symbol;
@@ -3774,7 +3785,7 @@ public:
         if (vararg) {
             ss << Style_Keyword << "…" << Style_None;
         }
-        if (type != TYPE_Any) {
+        if (is_typed()) {
             ss << Style_Operator << ":" << Style_None << type;
         }
         return ss;
@@ -3853,7 +3864,7 @@ protected:
 
     Label(const Anchor *_anchor, Symbol _name) :
         uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
-        normalized(false)
+        foldable(false), typed(false)
         {}
 
 public:
@@ -3864,7 +3875,27 @@ public:
     Body body;
     LabelTag tag;
     Label *paired;
-    bool normalized;
+    uint64_t flags;
+    // if the label body contains a constant expression, the content is foldable
+    bool foldable;
+    // arguments have been typed
+    bool typed;
+
+    Label *get_label_enter() const {
+        assert(body.enter.type == TYPE_Label);
+        return body.enter.label;
+    }
+
+    Builtin get_builtin_enter() const {
+        assert(body.enter.type == TYPE_Builtin);
+        return body.enter.builtin;
+    }
+
+    Label *get_label_cont() const {
+        assert(!body.args.empty());
+        assert(body.args[0].type == TYPE_Label);
+        return body.args[0].label;
+    }
 
     void use(const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
@@ -4075,7 +4106,8 @@ public:
     // only inherits name and anchor
     static Label *from(const Label *label) {
         Label *result = new Label(label->anchor, label->name);
-        result->normalized = label->normalized;
+        result->foldable = label->foldable;
+        result->typed = label->typed;
         return result;
     }
 
@@ -4095,7 +4127,7 @@ public:
         value->append(
             Parameter::from(_anchor,
                 Symbol(format("return-%s", _name.name()->data)),
-                TYPE_Any));
+                TYPE_Void));
         return value;
     }
 
@@ -4289,12 +4321,21 @@ struct StreamLabelFormat {
     Tagging anchors;
     Tagging follow;
     bool show_users;
+    bool show_foldable;
 
     StreamLabelFormat() :
         anchors(None),
         follow(All),
-        show_users(false)
+        show_users(false),
+        show_foldable(false)
         {}
+
+    static StreamLabelFormat debug_all() {
+        StreamLabelFormat fmt;
+        fmt.follow = All;
+        fmt.show_foldable = true;
+        return fmt;
+    }
 
     static StreamLabelFormat debug_scope() {
         StreamLabelFormat fmt;
@@ -4380,6 +4421,9 @@ struct StreamLabel : StreamAnchors {
         visited.insert(alabel);
         if (line_anchors) {
             stream_anchor(alabel->anchor);
+        }
+        if (fmt.show_foldable && !alabel->foldable) {
+            ss << Style_Comment << "? " << Style_None;
         }
         alabel->stream(ss, fmt.show_users);
         ss << Style_Operator << ":" << Style_None;
@@ -6905,7 +6949,7 @@ struct NormalizeCtx {
         std::size_t operator()(const LabelArgs& s) const {
             std::size_t h = std::hash<Label *>{}(s.label);
             for (auto &&arg : s.args) {
-                if ((arg.type != TYPE_Any) && (arg.type != TYPE_Nothing)) {
+                if ((arg.type != TYPE_Void) && (arg.type != TYPE_Nothing)) {
                     size_t h2;
                     switch(arg.type.value()) {
                     case TYPE_Bool: h2 = std::hash<bool>{}(arg.i1); break;
@@ -6935,20 +6979,18 @@ struct NormalizeCtx {
 
     bool has_untyped_continuation(Label *label) {
         if (label->params.empty()) return false;
-        switch(label->params[0]->type.value()) {
-        case TYPE_Label:
-        case TYPE_Any:
-        {
-            return true;
-        } break;
-        }
-        return false;
+        return !label->params[0]->is_typed();
     }
 
     bool has_empty_parameters(Label *label) {
         if (label->params.empty()) return true;
         if (label->params.size() > 1) return false;
         return label->params[0]->type == TYPE_Nothing;
+    }
+
+    bool has_empty_continuation(Label *label) {
+        if (label->body.args.empty()) return true;
+        return label->body.args[0].type == TYPE_Nothing;
     }
 
     ILNode *node_from_continuation(Any cont) {
@@ -6975,7 +7017,8 @@ struct NormalizeCtx {
         if (it == labels2ic.end()) {
             if (is_basic_block_like(label)) {
                 labels2ic.insert({{label, node}, label});
-                normalize(label);
+                label->typed = true;
+                label->foldable = true;
                 return label;
             } else {
                 assert(label->params.size() == 1);
@@ -6989,7 +7032,8 @@ struct NormalizeCtx {
                 map[param] = {cont};
                 Label *newlabel = mangle(label, newparams, map);
                 labels2ic.insert({{label, node}, newlabel});
-                normalize(newlabel);
+                newlabel->typed = true;
+                newlabel->foldable = true;
                 return newlabel;
             }
         } else {
@@ -7031,7 +7075,7 @@ struct NormalizeCtx {
                             if (value.type == TYPE_Void) {
                                 Parameter *newparam = Parameter::from(param);
                                 newparam->vararg = false;
-                                newparam->type = TYPE_Any;
+                                newparam->type = TYPE_Void;
                                 newparam->name = Symbol(SYM_Unnamed);
                                 newparams.push_back(newparam);
                                 vargs.push_back(newparam);
@@ -7066,6 +7110,10 @@ struct NormalizeCtx {
             }
             Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
             label2ia.insert({la, newlabel});
+            if (!has_args(newlabel)) {
+                newlabel->typed = true;
+                newlabel->foldable = true;
+            }
             return newlabel;
         } else {
             return it->second;
@@ -7106,7 +7154,7 @@ struct NormalizeCtx {
                 Parameter *param = label->params[i];
                 if (param->vararg) {
                     // vararg parameters must be expanded
-                    assert(param->type == TYPE_Any);
+                    assert(!param->is_typed());
                     needs_typing = true;
                     break;
                 } else if (srci < argtypes.size()) {
@@ -7133,7 +7181,7 @@ struct NormalizeCtx {
             for (size_t i = 0; i < label->params.size(); ++i) {
                 Parameter *param = label->params[i];
                 if (srci > 0) {
-                    if (param->type != TYPE_Any) {
+                    if (param->is_typed()) {
                         StyledString ss;
                         ss.out << "parameter is already typed as " << param->type;
                         location_error(ss.str());
@@ -7191,8 +7239,9 @@ struct NormalizeCtx {
         stream_label(ss, newlabel, StreamLabelFormat::debug_scope());
         ss << std::endl;
 #endif
+        newlabel->typed = true;
+        newlabel->foldable = true;
 
-        normalize(newlabel);
         return newlabel;
     }
 
@@ -7206,8 +7255,7 @@ struct NormalizeCtx {
             case TYPE_Nothing: {
                 location_error(String::from("attempting to call none continuation"));
             } break;
-            case TYPE_Label:
-            case TYPE_Any: {
+            case TYPE_Void: {
                 param->type = TypedLabel(argtypes);
             } break;
             default: {
@@ -7223,6 +7271,34 @@ struct NormalizeCtx {
         } break;
         }
         return dest;
+    }
+
+    void type_continuation(Parameter *param, Type T) {
+        switch(param->type.value()) {
+        case TYPE_Nothing: {
+            location_error(String::from("attempting to call none continuation"));
+        } break;
+        case TYPE_Void: {
+            param->type = T;
+        } break;
+        default: {
+            param->type = TypeSet({param->type, T});
+        } break;
+        }
+    }
+
+    void type_continuation(Parameter *param, const std::vector<Type> &argtypes) {
+        switch(param->type.value()) {
+        case TYPE_Nothing: {
+            location_error(String::from("attempting to call none continuation"));
+        } break;
+        case TYPE_Void: {
+            param->type = TypedLabel(argtypes);
+        } break;
+        default: {
+            param->type = TypeSet({param->type, TypedLabel(argtypes)});
+        } break;
+        }
     }
 
     static void verify_integer_ops(Any a, Any b) {
@@ -7249,6 +7325,859 @@ struct NormalizeCtx {
         case TYPE_Parameter: return false;
         default: return true;
         }
+    }
+
+    void mark_foldable(Label *entry) {
+
+        while (!entry->foldable) {
+            ss_cout << "marking " << entry << " as foldable" << std::endl;
+
+            entry->foldable = true;
+
+            auto &&args = entry->body.args;
+            assert(!args.empty());
+
+            auto &&cont = args[0];
+            if (cont.type == TYPE_Label) {
+                entry = cont.label;
+            } else {
+                break;
+            }
+        }
+
+    }
+
+    static bool has_args(Label *l) {
+        return l->params.size() > 1;
+    }
+
+    static bool is_foldable(Label *l) {
+        return l->foldable;
+    }
+
+    static bool is_typed(Label *l) {
+        return l->typed;
+    }
+
+    static bool is_continuing_to_label(Label *l) {
+        auto &&args = l->body.args;
+        assert(!args.empty());
+        return args[0].type == TYPE_Label;
+    }
+
+    static bool is_calling_label(Label *l) {
+        auto &&enter = l->body.enter;
+        return enter.type == TYPE_Label;
+    }
+
+    static bool is_calling_continuation(Label *l) {
+        auto &&args = l->body.args;
+        assert(!args.empty());
+        return (args[0].type == TYPE_Parameter) && (args[0].parameter->index == 0);
+    }
+
+    static bool is_calling_builtin(Label *l) {
+        auto &&enter = l->body.enter;
+        return enter.type == TYPE_Builtin;
+    }
+
+    static bool is_calling_function(Label *l) {
+        auto &&enter = l->body.enter;
+        return is_function_pointer(enter.type);
+    }
+
+    static bool is_calling_pure_function(Label *l) {
+        auto &&enter = l->body.enter;
+        return is_pure_function_pointer(enter.type);
+    }
+
+    static bool is_return_param_typed(Label *l) {
+        auto &&params = l->params;
+        assert(!params.empty());
+        return params[0]->is_typed();
+    }
+
+    static bool all_params_typed(Label *l) {
+        auto &&params = l->params;
+        for (size_t i = 1; i < params.size(); ++i) {
+            if (!params[i]->is_typed())
+                return false;
+        }
+        return true;
+    }
+
+    static bool all_args_typed(Label *l) {
+        auto &&args = l->body.args;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if ((args[i].type == TYPE_Parameter)
+                && (!args[i].parameter->is_typed()))
+                return false;
+        }
+        return true;
+    }
+
+    static bool all_args_constant(Label *l) {
+        auto &&args = l->body.args;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (!is_const(args[i]))
+                return false;
+        }
+        return true;
+    }
+
+    static bool has_constant_args(Label *l) {
+        auto &&args = l->body.args;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (is_const(args[i]))
+                return true;
+        }
+        return false;
+    }
+
+    static bool is_called_by(Label *callee, Label *caller) {
+        auto &&enter = caller->body.enter;
+        return (enter.type == TYPE_Label) && (enter.label == callee);
+    }
+
+    static bool is_called_by(Parameter *callee, Label *caller) {
+        auto &&enter = caller->body.enter;
+        return (enter.type == TYPE_Parameter) && (enter.parameter == callee);
+    }
+
+    static bool is_continuing_from(Label *callee, Label *caller) {
+        auto &&args = caller->body.args;
+        assert(!args.empty());
+        return (args[0].type == TYPE_Label) && (args[0].label == callee);
+    }
+
+    static bool is_continuing_from(Parameter *callee, Label *caller) {
+        auto &&args = caller->body.args;
+        assert(!args.empty());
+        return (args[0].type == TYPE_Parameter) && (args[0].parameter == callee);
+    }
+
+    void verify_function_argument_signature(FunctionInfo &fi, Label *l) {
+        auto &&args = l->body.args;
+        verify_function_argument_count(fi, args.size() - 1);
+
+        size_t fargcount = fi.argument_types.size();
+        for (size_t i = 1; i < args.size(); ++i) {
+            Any &arg = args[i];
+            size_t k = i - 1;
+            Type argT = arg.indirect_type();
+            if (k < fargcount) {
+                Type ft = fi.argument_types[k];
+                if (ft != argT) {
+                    StyledString ss;
+                    ss.out << "argument of type " << ft << " expected, got " << argT;
+                    location_error(ss.str());
+                }
+            }
+        }
+    }
+
+    void argtypes_from_function_call(Label *l, std::vector<Type> &retargtypes) {
+
+        auto &&enter = l->body.enter;
+        //auto &&args = l->body.args;
+
+        auto &&pi = pointers.get(enter.type);
+        auto &&fi = functions.get(pi.element_type);
+
+        verify_function_argument_signature(fi, l);
+
+        retargtypes = { TYPE_Nothing };
+        if (fi.return_type != TYPE_Void) {
+            if (tuples.is(fi.return_type)) {
+                auto &&ti = tuples.get(fi.return_type);
+                for (size_t i = 0; i < ti.types.size(); ++i) {
+                    retargtypes.push_back(ti.types[i]);
+                }
+            } else {
+                retargtypes.push_back(fi.return_type);
+            }
+        }
+    }
+
+    void fold_pure_function_call(Label *l) {
+        ss_cout << "folding pure function call in " << l << std::endl;
+
+        auto &&enter = l->body.enter;
+        auto &&args = l->body.args;
+
+        auto &&pi = pointers.get(enter.type);
+        auto &&fi = functions.get(pi.element_type);
+
+        verify_function_argument_signature(fi, l);
+
+        assert(!args.empty());
+        Any result = run_ffi_function(enter, &args[1], args.size() - 1);
+
+        l->unlink_backrefs();
+        enter = args[0];
+        args = { none };
+        if (fi.return_type != TYPE_Void) {
+            if (tuples.is(fi.return_type)) {
+                // unpack
+                auto &&ti = tuples.get(fi.return_type);
+                size_t count = ti.types.size();
+                for (size_t i = 0; i < count; ++i) {
+                    args.push_back(ti.unpack(result.pointer, i));
+                }
+            } else {
+                args.push_back(result);
+            }
+        }
+        l->link_backrefs();
+    }
+
+    void fold_constant_label_arguments(Label *l) {
+        ss_cout << "folding constant arguments in " << l << std::endl;
+
+        // inline constant arguments
+        std::vector<Any> callargs;
+        Any anyval = none;
+        anyval.type = TYPE_Void;
+        std::vector<Any> keys;
+        auto &&enter = l->body.enter;
+        assert(enter.type == TYPE_Label);
+        auto &&args = l->body.args;
+        callargs.push_back(args[0]);
+        keys.push_back(anyval);
+        for (size_t i = 1; i < args.size(); ++i) {
+            auto &&arg = args[i];
+            if (is_const(arg)) {
+                keys.push_back(arg);
+            } else {
+                keys.push_back(anyval);
+                callargs.push_back(arg);
+            }
+        }
+        Label *newl = inline_arguments(enter.label, keys);
+        l->unlink_backrefs();
+        enter = newl;
+        args = callargs;
+        l->link_backrefs();
+    }
+
+    void type_label_call(Label *l) {
+        ss_cout << "typing label in " << l << std::endl;
+
+        auto &&enter = l->body.enter;
+        assert(enter.type == TYPE_Label);
+        auto &&args = l->body.args;
+        std::vector<Type> argtypes = {};
+        for (auto &&arg : args) {
+            argtypes.push_back(arg.indirect_type());
+        }
+        Label *newenter = typify(enter.label, argtypes);
+        l->unlink_backrefs();
+        enter = newenter;
+        l->link_backrefs();
+    }
+
+    // returns true if the builtin folds regardless of whether the arguments are
+    // constant
+    bool builtin_always_folds(Builtin builtin) {
+        switch(builtin.value()) {
+        case FN_TypeOf: return true;
+        default: return false;
+        }
+    }
+
+    bool builtin_never_folds(Builtin builtin) {
+        switch(builtin.value()) {
+        case FN_Mystify: return true;
+        default: return false;
+        }
+    }
+
+#define CHECKARGS(MINARGS, MAXARGS) \
+    checkargs<MINARGS, MAXARGS>(args.size())
+
+#define RETARGTYPES(...) \
+    retargtypes = { TYPE_Nothing, __VA_ARGS__ }
+
+#define RETARGS(...) \
+    l->unlink_backrefs(); \
+    enter = args[0]; \
+    args = { none, __VA_ARGS__ }; \
+    l->link_backrefs();
+
+    void argtypes_from_builtin_call(Label *l, std::vector<Type> &retargtypes) {
+        auto &&enter = l->body.enter;
+        auto &&args = l->body.args;
+        assert(enter.type == TYPE_Builtin);
+        switch(enter.builtin.value()) {
+        case FN_Mystify: {
+            CHECKARGS(1, 1);
+            RETARGTYPES(args[1].indirect_type());
+        } break;
+        case OP_ICmpEQ:
+        case OP_ICmpNE:
+        case OP_ICmpUGT:
+        case OP_ICmpUGE:
+        case OP_ICmpULT:
+        case OP_ICmpULE:
+        case OP_ICmpSGT:
+        case OP_ICmpSGE:
+        case OP_ICmpSLT:
+        case OP_ICmpSLE: {
+            CHECKARGS(2, 2);
+            verify_integer_ops(args[1], args[2]);
+            RETARGTYPES(TYPE_Bool);
+        } break;
+#define IARITH_NUW_NSW_OPS(NAME, OP) \
+    case OP_ ## NAME: \
+    case OP_ ## NAME ## NUW: \
+    case OP_ ## NAME ## NSW: { \
+        CHECKARGS(2, 2); \
+        verify_integer_ops(args[1], args[2]); \
+        RETARGTYPES(args[1].indirect_type()); \
+    } break;
+#define IARITH_S_U_OPS(NAME, OP) \
+    case OP_S ## NAME: \
+    case OP_U ## NAME: { \
+        CHECKARGS(2, 2); \
+        verify_integer_ops(args[1], args[2]); \
+        RETARGTYPES(args[1].indirect_type()); \
+    } break;
+        IARITH_NUW_NSW_OPS(Add, +)
+        IARITH_NUW_NSW_OPS(Sub, -)
+        IARITH_NUW_NSW_OPS(Mul, *)
+        IARITH_S_U_OPS(Div, /)
+        IARITH_S_U_OPS(Rem, %)
+#undef IARITH_NUW_NSW_OPS
+#undef IARITH_S_U_OPS
+        default: {
+            StyledString ss;
+            ss.out << "can not type builtin " << enter.builtin;
+            location_error(ss.str());
+        } break;
+        }
+    }
+
+    void fold_builtin_call(Label *l) {
+        ss_cout << "folding builtin call in " << l << std::endl;
+
+        auto &&enter = l->body.enter;
+        auto &&args = l->body.args;
+        assert(enter.type == TYPE_Builtin);
+        switch(enter.builtin.value()) {
+        case FN_Branch: {
+            CHECKARGS(3, 3);
+            args[1].verify<TYPE_Bool>();
+            // either branch label is typed and binds no parameters,
+            // so we can directly inline it
+            Label *newl = nullptr;
+            if (args[1].i1) {
+                newl = inline_branch_continuation(args[2], args[0]);
+            } else {
+                newl = inline_branch_continuation(args[3], args[0]);
+            }
+            copy_body(l, newl);
+        } break;
+        case FN_Bitcast: {
+            CHECKARGS(2, 2);
+            // todo: verify source and dest type are non-aggregate
+            // also, both must be of same category
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            Any result = args[1];
+            result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_TypeOf: {
+            CHECKARGS(1, 1);
+            RETARGS(args[1].indirect_type());
+        } break;
+        case FN_GetElementPtr: {
+            CHECKARGS(2, -1);
+            Type T = storage_type(args[1].type);
+            verify_category<CAT_Pointer>(T);
+            auto &pi = pointers.get(T);
+            T = pi.element_type;
+            void *ptr = args[1].pointer;
+            size_t idx = cast_number<size_t>(args[2]);
+            ptr = pi.getelementptr(ptr, idx);
+
+            for (size_t i = 3; i < args.size(); ++i) {
+                T = storage_type(T);
+                auto &&arg = args[i];
+                switch(category_of(T)) {
+                case CAT_Array: {
+                    auto &ai = arrays.get(T);
+                    T = ai.element_type;
+                    size_t idx = cast_number<size_t>(arg);
+                    ptr = ai.getelementptr(ptr, idx);
+                } break;
+                case CAT_Tuple: {
+                    size_t idx = cast_number<size_t>(arg);
+                    auto &ti = tuples.get(T);
+                    T = ti.type_at_index(idx);
+                    ptr = ti.getelementptr(ptr, idx);
+                } break;
+                default: {
+                    StyledString ss;
+                    ss.out << "can not get element pointer from type " << T;
+                    location_error(ss.str());
+                } break;
+                }
+            }
+            T = Pointer(T);
+            RETARGS(Any::from_pointer(T, ptr));
+        } break;
+        case FN_AnyExtract: {
+            CHECKARGS(1, 1);
+            args[1].verify<TYPE_Any>();
+            Any arg = *args[1].ref;
+            RETARGS(arg);
+        } break;
+        case FN_AnyWrap: {
+            CHECKARGS(1, 1);
+            Any arg = args[1].toref();
+            arg.type = TYPE_Any;
+            RETARGS(arg);
+        } break;
+        case FN_Purify: {
+            CHECKARGS(1, 1);
+            Any arg = args[1];
+            verify_function_pointer(arg.type);
+            auto &pi = pointers.get(arg.type);
+            auto &fi = functions.get(pi.element_type);
+            if (fi.flags & FF_Pure) {
+                RETARGS(args[1]);
+            } else {
+                arg.type = Pointer(Function(
+                    fi.return_type, fi.argument_types, fi.flags | FF_Pure));
+                RETARGS(arg);
+            }
+        } break;
+        case FN_Typify: {
+            CHECKARGS(2, -1);
+            args[1].verify<TYPE_Label>();
+            std::vector<Type> argtypes = { TYPE_Nothing };
+            for (size_t i = 2; i < args.size(); ++i) {
+                args[i].verify<TYPE_Type>();
+                argtypes.push_back(args[i].typeref);
+            }
+            assert(!argtypes.empty());
+            Label *result = typify(args[1], argtypes);
+            stream_label(ss_cout, result, StreamLabelFormat());
+            RETARGS(result);
+        } break;
+        case FN_CompilerError: {
+            CHECKARGS(1, 1);
+            location_error(args[1]);
+        } break;
+        case FN_CompilerMessage: {
+            CHECKARGS(1, 1);
+            args[1].verify<TYPE_String>();
+            ss_cout << args[1].string->data << std::endl;
+            RETARGS();
+        } break;
+        case FN_Dump: {
+            CHECKARGS(1, -1);
+            for (size_t i = 1; i < args.size(); ++i) {
+                stream_expr(ss_cout, args[i], StreamExprFormat());
+            }
+            l->unlink_backrefs();
+            enter = args[0];
+            args[0] = none;
+            l->link_backrefs();
+        } break;
+        case FN_IsConstant: {
+            CHECKARGS(1, 1);
+            RETARGS((args[1].type != TYPE_Parameter));
+        } break;
+        case OP_ICmpEQ:
+        case OP_ICmpNE:
+        case OP_ICmpUGT:
+        case OP_ICmpUGE:
+        case OP_ICmpULT:
+        case OP_ICmpULE:
+        case OP_ICmpSGT:
+        case OP_ICmpSGE:
+        case OP_ICmpSLT:
+        case OP_ICmpSLE: {
+            CHECKARGS(2, 2);
+            verify_integer_ops(args[1], args[2]);
+#define B_INT_OP2(OP, N) \
+    switch(args[1].type.value()) { \
+    case TYPE_Bool: result = (args[1].i1 OP args[2].i1); break; \
+    case TYPE_I8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_U8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_I16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_U16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_I32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_U32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_I64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
+    case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
+    default: assert(false); break; \
+    } break;
+            bool result;
+            switch(enter.builtin.value()) {
+            case OP_ICmpEQ: B_INT_OP2(==, u);
+            case OP_ICmpNE: B_INT_OP2(!=, u);
+            case OP_ICmpUGT: B_INT_OP2(>, u);
+            case OP_ICmpUGE: B_INT_OP2(>=, u);
+            case OP_ICmpULT: B_INT_OP2(<, u);
+            case OP_ICmpULE: B_INT_OP2(<=, u);
+            case OP_ICmpSGT: B_INT_OP2(>, i);
+            case OP_ICmpSGE: B_INT_OP2(>=, i);
+            case OP_ICmpSLT: B_INT_OP2(<, i);
+            case OP_ICmpSLE: B_INT_OP2(<=, i);
+            default: assert(false); break;
+            }
+            RETARGS(result);
+        } break;
+#define IARITH_NUW_NSW_OPS(NAME, OP) \
+    case OP_ ## NAME: \
+    case OP_ ## NAME ## NUW: \
+    case OP_ ## NAME ## NSW: { \
+        CHECKARGS(2, 2); \
+        verify_integer_ops(args[1], args[2]); \
+        Any result = none; \
+        switch(enter.builtin.value()) { \
+        case OP_ ## NAME: B_INT_OP2(OP, u); \
+        case OP_ ## NAME ## NUW: B_INT_OP2(OP, u); \
+        case OP_ ## NAME ## NSW: B_INT_OP2(OP, i); \
+        default: assert(false); break; \
+        } \
+        result.type = args[1].type; \
+        RETARGS(result); \
+    } break;
+#define IARITH_S_U_OPS(NAME, OP) \
+    case OP_S ## NAME: \
+    case OP_U ## NAME: { \
+        CHECKARGS(2, 2); \
+        verify_integer_ops(args[1], args[2]); \
+        Any result = none; \
+        switch(enter.builtin.value()) { \
+        case OP_U ## NAME: B_INT_OP2(OP, u); \
+        case OP_S ## NAME: B_INT_OP2(OP, i); \
+        default: assert(false); break; \
+        } \
+        result.type = args[1].type; \
+        RETARGS(result); \
+    } break;
+        IARITH_NUW_NSW_OPS(Add, +)
+        IARITH_NUW_NSW_OPS(Sub, -)
+        IARITH_NUW_NSW_OPS(Mul, *)
+        IARITH_S_U_OPS(Div, /)
+        IARITH_S_U_OPS(Rem, %)
+        default: {
+            StyledString ss;
+            ss.out << "can not inline builtin " << enter.builtin;
+            location_error(ss.str());
+        } break;
+        }
+    }
+
+    void inline_branch_continuations(Label *l) {
+        auto &&args = l->body.args;
+        CHECKARGS(3, 3);
+        args[1].verify_indirect<TYPE_Bool>();
+        Label *then_br = inline_branch_continuation(args[2], args[0]);
+        Label *else_br = inline_branch_continuation(args[3], args[0]);
+        l->unlink_backrefs();
+        args[0] = none;
+        args[2] = then_br;
+        args[3] = else_br;
+        l->link_backrefs();
+    }
+
+#undef IARITH_NUW_NSW_OPS
+#undef IARITH_S_U_OPS
+#undef B_INT_OP2
+#undef CHECKARGS
+#undef RETARGTYPES
+#undef RETARGS
+
+    bool can_type_continuation(Label *caller) {
+        if (!(is_foldable(caller) && all_args_typed(caller)))
+            return false;
+        if (is_calling_function(caller)) {
+            if (is_calling_pure_function(caller)
+                && all_args_constant(caller)) {
+                return false;
+            } else {
+                return true;
+            }
+        }
+        if (is_calling_builtin(caller)) {
+            if ((all_args_constant(caller)
+                    && !builtin_never_folds(caller->get_builtin_enter()))
+                || builtin_always_folds(caller->get_builtin_enter())
+                || (caller->get_builtin_enter() == FN_Branch)) {
+                return false;
+            } else {
+                return true;
+            }
+        }
+        if (is_calling_label(caller)
+            && is_return_param_typed(caller->get_label_enter()))
+            return true;
+        return false;
+    }
+
+    bool all_users_ready_to_type_continuation(Parameter *param,
+        std::unordered_set<Label *> &visited) {
+        auto &&users = param->users;
+        size_t counted = 0;
+        Label *owner = param->label;
+        assert(owner);
+        if (is_called_by(param, owner)) {
+            return true;
+        }
+        if (is_continuing_from(param, owner)
+            && can_type_continuation(owner)) {
+            return true;
+        }
+        // ensure all labels are foldable and their call arguments typed
+        for (auto kv = users.begin(); kv != users.end(); ++kv) {
+            Label *user = kv->first;
+            if (!visited.count(user)) { continue; }
+            if (is_called_by(param, user)) {
+                if (!(is_foldable(user) && all_args_typed(user)))
+                    return false;
+                counted++;
+            }
+            if (is_continuing_from(param, user)) {
+                if (!can_type_continuation(user))
+                    return false;
+                counted++;
+            }
+        }
+        if (!counted) {
+            ss_cout << "nothing is typing this continuation" << std::endl;
+        }
+        return counted > 0;
+    }
+
+    static bool forwards_continuation_immediately(Label *l) {
+        assert(!l->params.empty());
+        return is_continuing_from(l->params[0], l);
+    }
+
+    static bool returns_immediately(Label *l) {
+        assert(!l->params.empty());
+        return is_called_by(l->params[0], l);
+    }
+
+    bool type_label_continuation_from_label_return_type(Label *l) {
+        ss_cout << "typing label continuation from label return type in " << l << std::endl;
+        auto &&enter = l->body.enter;
+        auto &&args = l->body.args;
+        assert(enter.type == TYPE_Label);
+        Label *enter_label = enter.label;
+        assert(!args.empty());
+
+        // if enter_label calls cont_param directly, inline it
+        if (returns_immediately(enter_label)
+            || forwards_continuation_immediately(enter_label)) {
+            Any voidarg = none;
+            voidarg.type = TYPE_Void;
+
+            std::vector<Any> newargs = { args[0] };
+            for (size_t i = 1; i < enter_label->params.size(); ++i) {
+                newargs.push_back(voidarg);
+            }
+            Label *newl = inline_arguments(enter_label, newargs);
+            l->unlink_backrefs();
+            args[0] = none;
+            enter = newl;
+            l->link_backrefs();
+            return true;
+        } else {
+            assert(!enter_label->params.empty());
+            Parameter *cont_param = enter_label->params[0];
+            Type cont_type = cont_param->type;
+
+            if (typed_labels.is(cont_type)) {
+                assert(args[0].type == TYPE_Label);
+                Label *next_label = args[0].label;
+                auto &&tli = typed_labels.get(cont_type);
+                Label *newenter = typify(next_label, tli.types);
+                l->unlink_backrefs();
+                args[0] = newenter;
+                l->link_backrefs();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void type_label_continuation_from_builtin_call(Label *l) {
+        auto &&args = l->body.args;
+        assert(args[0].type == TYPE_Label);
+        Label *next_label = args[0].label;
+        std::vector<Type> argtypes;
+        argtypes_from_builtin_call(l, argtypes);
+        Label *newenter = typify(next_label, argtypes);
+        l->unlink_backrefs();
+        args[0] = newenter;
+        l->link_backrefs();
+    }
+
+    void type_continuation_from_calling_label(Parameter *param, Label *user) {
+        auto &&args = user->body.args;
+        std::vector<Type> argtypes = {};
+        for (auto &&arg : args) {
+            argtypes.push_back(arg.indirect_type());
+        }
+        type_continuation(param, argtypes);
+    }
+
+    void type_continuation_from_label_body(Parameter *param, Label *user) {
+        if (is_calling_function(user)) {
+            std::vector<Type> argtypes;
+            argtypes_from_function_call(user, argtypes);
+            type_continuation(param, argtypes);
+        } else if (is_calling_builtin(user)) {
+            std::vector<Type> argtypes;
+            argtypes_from_builtin_call(user, argtypes);
+            type_continuation(param, argtypes);
+        } else if (is_calling_label(user)) {
+            Type T = user->get_label_enter()->params[0]->type;
+            assert(typesets.is(T) || typed_labels.is(T));
+            type_continuation(param, T);
+        } else {
+            assert(false && "todo: illegal call");
+        }
+    }
+
+    void type_continuation_from_labels(Parameter *param,
+        std::unordered_set<Label *> &visited) {
+        ss_cout << "typing continuation " << param << " from labels" << std::endl;
+        auto &&users = param->users;
+        Label *owner = param->label;
+        assert(owner);
+        if (is_called_by(param, owner)) {
+            type_continuation_from_calling_label(param, owner);
+            return;
+        } else if (is_continuing_from(param, owner)) {
+            type_continuation_from_label_body(param, owner);
+            return;
+        }
+        // ensure all labels are foldable and their call arguments typed
+        for (auto kv = users.begin(); kv != users.end(); ++kv) {
+            Label *user = kv->first;
+            if (!visited.count(user)) {
+                ss_cout << "warning: unreachable user encountered" << std::endl;
+                continue;
+            }
+            if (is_called_by(param, user)) {
+                type_continuation_from_calling_label(param, user);
+            } else if (is_continuing_from(param, user)) {
+                type_continuation_from_label_body(param, user);
+            }
+        }
+    }
+
+    void normalize2(Label *entry) {
+
+        entry->foldable = true;
+        //mark_foldable(entry);
+
+        size_t numchanges;
+        size_t iterations = 0;
+        do {
+            numchanges = 0;
+            iterations++;
+            ss_cout << "------------------------------------------" << iterations << std::endl;
+            if (iterations == 128) {
+
+                /*location_error(String::from(
+                    "normalization not terminated after 256 iterations"));*/
+                ss_cout << "normalization terminated early" << std::endl;
+                return;
+            }
+
+            std::vector<Label *> labels;
+            std::unordered_set<Label *> visited;
+            entry->build_reachable(labels, visited);
+
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                Label *l = *it;
+                if (!is_foldable(l))
+                    continue;
+
+                set_active_anchor(l->body.anchor);
+
+                if (!all_args_typed(l))
+                    continue;
+                if (is_calling_function(l)) {
+                    if (is_calling_pure_function(l)
+                        && all_args_constant(l)) {
+                        fold_pure_function_call(l);
+                        numchanges++;
+                    }
+                } else if (is_calling_builtin(l)) {
+                    if ((all_args_constant(l)
+                        && !builtin_never_folds(l->get_builtin_enter()))
+                        || builtin_always_folds(l->get_builtin_enter())) {
+                        fold_builtin_call(l);
+                        numchanges++;
+                    } else {
+                        if (l->get_builtin_enter() == FN_Branch) {
+                            if (!has_empty_continuation(l)) {
+                                inline_branch_continuations(l);
+                                numchanges++;
+                            }
+                        } else if (is_continuing_to_label(l)
+                            && !all_params_typed(l->get_label_cont())) {
+                            type_label_continuation_from_builtin_call(l);
+                            numchanges++;
+                        }
+                    }
+                }
+                if (is_calling_label(l)) {
+                    if (has_constant_args(l)) {
+                        fold_constant_label_arguments(l);
+                        numchanges++;
+                    }
+                    {
+                        auto &&enter = l->body.enter;
+                        assert(enter.type == TYPE_Label);
+                        if (!all_params_typed(enter.label)) {
+                            type_label_call(l);
+                            numchanges++;
+                        } else if (/* all_params_typed(enter.label) && */
+                            is_return_param_typed(enter.label)
+                            && ((is_continuing_to_label(l)
+                                && (!all_params_typed(l->get_label_cont())
+                                    || returns_immediately(l->get_label_enter())))
+                                || forwards_continuation_immediately(l->get_label_enter()))) {
+                            if (type_label_continuation_from_label_return_type(l)) {
+                                numchanges++;
+                            }
+                        }
+                    }
+                    {
+                        auto &&enter = l->body.enter;
+                        assert(enter.type == TYPE_Label);
+                        if (!has_args(enter.label)
+                            && is_basic_block_like(enter.label)) {
+                            ss_cout << "folding jump to label in " << l << std::endl;
+                            copy_body(l, enter.label);
+                            numchanges++;
+                        }
+                    }
+                }
+                if (!is_return_param_typed(l)
+                    && all_params_typed(l)) {
+                    // attempt to type return parameter from users
+                    Parameter *param = l->params[0];
+                    if (all_users_ready_to_type_continuation(param, visited)) {
+                        type_continuation_from_labels(param, visited);
+                        numchanges++;
+                    }
+                }
+            }
+        } while (numchanges);
+
+        ss_cout << "normalized in " << iterations << " iterations" << std::endl;
     }
 
     Label *lower2cff(Label *entry) {
@@ -7327,14 +8256,11 @@ struct NormalizeCtx {
         return entry;
     }
 
+#if 0
     void normalize(Label *entry) {
         auto &&enter = entry->body.enter;
         auto &&args = entry->body.args;
 
-        if (entry->normalized) {
-            ss_cout << "THIS ONE IS ALREADY NORMAL" << std::endl;
-        }
-        entry->normalized = true;
     renormalize:
         assert(!args.empty());
         //ss_cout << "normalize: " << entry << std::endl;
@@ -7892,7 +8818,7 @@ struct NormalizeCtx {
                     args = callargs;
                     args[0] = none;
                     entry->link_backrefs();
-                } else if (rettype == TYPE_Any) {
+                } else if (!newenter->params[0]->is_typed()) {
                     ss_cout << "warning: continuation untyped after template instantiation" << std::endl;
                     // can happen when a recursive label is reentered
 
@@ -8008,6 +8934,7 @@ struct NormalizeCtx {
             entry->params[0]->type = TYPE_Nothing;
         }
     }
+#endif
 
     std::unordered_map<Type, ffi_type *, Type::Hash> ffi_types;
 
@@ -8225,7 +9152,9 @@ struct NormalizeCtx {
 static Label *normalize(Label *entry) {
     NormalizeCtx ctx;
     ctx.start_entry = entry;
-    ctx.normalize(entry);
+    //ctx.normalize(entry);
+    ctx.normalize2(entry);
+#if 0
     {
         StyledStream ss(std::cout);
 
@@ -8241,7 +9170,8 @@ static Label *normalize(Label *entry) {
             }
         }
     }
-    ctx.lower2cff(entry);
+#endif
+    //ctx.lower2cff(entry);
     return entry;
 }
 
@@ -8335,7 +9265,7 @@ loop:
                 location_error(String::from("unexpected return in argument list"));
             }
             Label *next = Label::continuation_from(anchor, Symbol(SYM_Unnamed));
-            next->append(Parameter::vararg_from(anchor, Symbol(SYM_Unnamed), TYPE_Any));
+            next->append(Parameter::vararg_from(anchor, Symbol(SYM_Unnamed), TYPE_Void));
             assert(!result.args.empty());
             _args[0] = next;
             br(state, _enter, _args, anchor);
@@ -8586,9 +9516,9 @@ static Parameter *expand_parameter(Scope *env, Any value) {
         _value.verify<TYPE_Symbol>();
         Parameter *param = nullptr;
         if (_value.symbol == KW_Parenthesis) {
-            param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Any);
+            param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
         } else {
-            param = Parameter::from(anchor, _value.symbol, TYPE_Any);
+            param = Parameter::from(anchor, _value.symbol, TYPE_Void);
         }
         env->bind(_value.symbol, param);
         return param;
@@ -9171,12 +10101,12 @@ int main(int argc, char *argv[]) {
 
         StyledStream ss(std::cout);
         std::cout << "non-normalized:" << std::endl;
-        stream_label(ss, fn, StreamLabelFormat());
+        stream_label(ss, fn, StreamLabelFormat::debug_all());
         std::cout << std::endl;
 
         fn = normalize(fn);
         std::cout << "normalized:" << std::endl;
-        stream_label(ss, fn, StreamLabelFormat());
+        stream_label(ss, fn, StreamLabelFormat::debug_all());
         std::cout << std::endl;
 
 

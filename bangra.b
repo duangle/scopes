@@ -48,28 +48,28 @@ fn/cc string->rawstring (_ s)
     getelementptr s 0 1 0
 
 # importing C code
-call
-    fn/cc (_ lib)
-        call
-            fn/cc (_ sinf printf)
-                printf
-                    string->rawstring "test: %f\n"
-                    sinf 0.5235987755982989
-                #printf
-                    string->rawstring "fac: %i\n"
-                    fac
-                        mystify 5
-            purify
+    call
+        fn/cc (_ lib)
+            call
+                fn/cc (_ sinf printf)
+                    printf
+                        string->rawstring "test: %f\n"
+                        sinf 0.5235987755982989
+                    #printf
+                        string->rawstring "fac: %i\n"
+                        fac
+                            mystify 5
+                purify
+                    Any-extract
+                        Scope@ lib 'sinf
                 Any-extract
-                    Scope@ lib 'sinf
-            Any-extract
-                Scope@ lib 'printf
+                    Scope@ lib 'printf
 
-    import-c "testdata.c" "
-        float sinf(float);
-        int printf( const char* format, ... );
-        "
-        \ eol
+        import-c "testdata.c" "
+            float sinf(float);
+            int printf( const char* format, ... );
+            "
+            \ eol
 
 # deferring remaining expressions to bootstrap parser
 #syntax-apply-block
@@ -235,26 +235,27 @@ call
             \ eol
 
 # mutual recursion
-    fn/cc even? (eret ei)
-        fn/cc odd? (oret oi)
-            branch (icmp>s oi 0)
-                fn/cc (_)
-                    even? (sub oi 1)
-                fn/cc (_)
-                    _ false
-
-        branch (icmp>s ei 0)
+fn/cc even? (eret ei)
+    fn/cc odd? (oret oi)
+        branch (icmp>s oi 0)
             fn/cc (_)
-                odd? (sub ei 1)
+                even? (sub oi 1)
             fn/cc (_)
-                _ true
+                _ false
 
-    branch
-        even? 5
+    branch (icmp>s ei 0)
         fn/cc (_)
-            io-write "even\n"
+            odd? (sub ei 1)
         fn/cc (_)
-            io-write "odd\n"
+            _ true
+
+branch
+    even?
+        mystify 5
+    fn/cc (_)
+        io-write "even\n"
+    fn/cc (_)
+        io-write "odd\n"
 
 
 
