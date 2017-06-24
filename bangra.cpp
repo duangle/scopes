@@ -561,7 +561,7 @@ namespace bangra {
     T(FN_Purify) T(FN_Mystify) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
-    T(FN_GetElementPtr) \
+    T(FN_GetElementPtr) T(FN_CompilerError) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
     T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW) \
     T(OP_Mul) T(OP_MulNUW) T(OP_MulNSW) \
@@ -3852,7 +3852,8 @@ protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
-        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr)
+        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
+        normalized(false)
         {}
 
 public:
@@ -3863,6 +3864,7 @@ public:
     Body body;
     LabelTag tag;
     Label *paired;
+    bool normalized;
 
     void use(const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
@@ -4073,6 +4075,7 @@ public:
     // only inherits name and anchor
     static Label *from(const Label *label) {
         Label *result = new Label(label->anchor, label->name);
+        result->normalized = label->normalized;
         return result;
     }
 
@@ -6799,6 +6802,57 @@ struct GenerateCtx {
 // NORMALIZE
 //------------------------------------------------------------------------------
 
+/*
+this first version generally works but has several problems:
+1. it does not properly inline constant return values
+    ideally this should also be mixed: if a value is constant on all return paths,
+    the residual function should remain, and the return continuation of the caller
+    should not be inlined; but rather the constant value should be inlined into
+    the continuation of the caller.
+
+    if every return path has a different constant value at the same position, then
+    the return label must be inlined to ensure that the constant is reliably
+    propagated.
+
+2. it is forced to backtrack when it turns out that the return type is of
+   higher-order or polymorphic; the return label must then be inlined - this can
+   lead to compile time statements be issued twice; this can particularly cause
+   problems with creating new typenames, where the first typename is being
+   discarded and a second one with an unoptimal name returned.
+
+   an ideal solution walks every label just once.
+
+3. it has unbounded stack depth - ideally we would operate independent of stack
+   depth and avoid possible overflow issues.
+
+4. it attempts to derive the continuation type of a loop while it is still evaluating
+   its continuation type -- this can potentially lead to continuation types never
+   being typed.
+
+all solutions i've tried so far have been more or less walking functions bit by bit.
+i like the lower2cff approach of solving the unbound variable problem globally.
+i feel that even if it is not optimal, i would like to try global approaches to
+normalizing functions as well.
+
+the general idea here is that we globally rewrite labels out-of-order until we
+find no more rewrites to apply.
+
+(we can also use the chance to fix user pointers and regularly throw out unreachable
+labels that way.)
+
+
+* one issue is that operations on constants in branches are potentially illegal
+  because the branch the operation is in would have been pruned.
+
+  that means conditional branches need to be evaluated before any other constant
+  expression is folded.
+
+
+
+
+
+*/
+
 struct NormalizeCtx {
     StyledStream ss_cout;
 
@@ -7274,14 +7328,20 @@ struct NormalizeCtx {
     }
 
     void normalize(Label *entry) {
+        auto &&enter = entry->body.enter;
+        auto &&args = entry->body.args;
+
+        if (entry->normalized) {
+            ss_cout << "THIS ONE IS ALREADY NORMAL" << std::endl;
+        }
+        entry->normalized = true;
     renormalize:
+        assert(!args.empty());
         //ss_cout << "normalize: " << entry << std::endl;
 
         set_active_anchor(entry->body.anchor);
 
-        auto &&enter = entry->body.enter;
-        auto &&args = entry->body.args;
-        assert(!args.empty());
+
 #define CHECKARGS(MINARGS, MAXARGS) \
     checkargs<MINARGS, MAXARGS>(args.size())
 
@@ -9082,7 +9142,7 @@ int main(int argc, char *argv[]) {
         bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
     }
 
-#define CATCH_EXCEPTION 0
+#define CATCH_EXCEPTION 1
 #if CATCH_EXCEPTION
     try {
 #endif
