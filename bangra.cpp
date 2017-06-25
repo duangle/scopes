@@ -3864,7 +3864,7 @@ protected:
 
     Label(const Anchor *_anchor, Symbol _name) :
         uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
-        foldable(false), typed(false)
+        foldable(false), num_instances(0)
         {}
 
 public:
@@ -3878,8 +3878,7 @@ public:
     uint64_t flags;
     // if the label body contains a constant expression, the content is foldable
     bool foldable;
-    // arguments have been typed
-    bool typed;
+    uint64_t num_instances;
 
     Label *get_label_enter() const {
         assert(body.enter.type == TYPE_Label);
@@ -4104,10 +4103,11 @@ public:
         return new Label(_anchor, _name);
     }
     // only inherits name and anchor
-    static Label *from(const Label *label) {
+    static Label *from(Label *label) {
         Label *result = new Label(label->anchor, label->name);
         result->foldable = label->foldable;
-        result->typed = label->typed;
+        label->num_instances++;
+        result->num_instances = label->num_instances;
         return result;
     }
 
@@ -4245,10 +4245,23 @@ struct SCCBuilder {
         walk(top);
     }
 
-    Group &group(Label *l) {
+    bool is_recursive(Label *l) {
+        return group(l).labels.size() > 1;
+    }
+
+    bool contains(Label *l) {
+        auto it = SCCmap.find(l);
+        return it != SCCmap.end();
+    }
+
+    size_t group_id(Label *l) {
         auto it = SCCmap.find(l);
         assert(it != SCCmap.end());
-        return groups[it->second];
+        return it->second;
+    }
+
+    Group &group(Label *l) {
+        return groups[group_id(l)];
     }
 
     void walk(Label *obj) {
@@ -4334,6 +4347,7 @@ struct StreamLabelFormat {
         StreamLabelFormat fmt;
         fmt.follow = All;
         fmt.show_foldable = true;
+        fmt.show_users = true;
         return fmt;
     }
 
@@ -7017,8 +7031,7 @@ struct NormalizeCtx {
         if (it == labels2ic.end()) {
             if (is_basic_block_like(label)) {
                 labels2ic.insert({{label, node}, label});
-                label->typed = true;
-                label->foldable = true;
+                mark_foldable(label);
                 return label;
             } else {
                 assert(label->params.size() == 1);
@@ -7032,13 +7045,27 @@ struct NormalizeCtx {
                 map[param] = {cont};
                 Label *newlabel = mangle(label, newparams, map);
                 labels2ic.insert({{label, node}, newlabel});
-                newlabel->typed = true;
-                newlabel->foldable = true;
+                mark_foldable(newlabel);
                 return newlabel;
             }
         } else {
             return it->second;
         }
+    }
+
+    void verify_instance_count(Label *label) {
+        if (label->num_instances < 32)
+            return;
+        if (label->name == SYM_Unnamed)
+            return;
+        SCCBuilder scc(label);
+        if (!scc.is_recursive(label))
+            return;
+        set_active_anchor(label->anchor);
+        StyledString ss;
+        ss.out << "instance limit reached while unrolling named recursive function. "
+            "Use less constant arguments.";
+        location_error(ss.str());
     }
 
     // inlining the arguments of an untyped scope (including continuation)
@@ -7057,6 +7084,8 @@ struct NormalizeCtx {
         auto it = label2ia.find(la);
         if (it == label2ia.end()) {
             assert(!label->params.empty());
+
+            verify_instance_count(label);
 
             MangleMap map;
             std::vector<Parameter *> newparams;
@@ -7111,8 +7140,7 @@ struct NormalizeCtx {
             Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
             label2ia.insert({la, newlabel});
             if (!has_args(newlabel)) {
-                newlabel->typed = true;
-                newlabel->foldable = true;
+                mark_foldable(newlabel);
             }
             return newlabel;
         } else {
@@ -7174,6 +7202,8 @@ struct NormalizeCtx {
 
         Label *newlabel = nullptr;
         if (needs_typing) {
+            verify_instance_count(label);
+
             MangleMap map;
             std::vector<Parameter *> newparams;
             size_t lasti = label->params.size() - 1;
@@ -7239,8 +7269,7 @@ struct NormalizeCtx {
         stream_label(ss, newlabel, StreamLabelFormat::debug_scope());
         ss << std::endl;
 #endif
-        newlabel->typed = true;
-        newlabel->foldable = true;
+        mark_foldable(newlabel);
 
         return newlabel;
     }
@@ -7328,7 +7357,9 @@ struct NormalizeCtx {
     }
 
     void mark_foldable(Label *entry) {
+        entry->foldable = true;
 
+        /*
         while (!entry->foldable) {
             ss_cout << "marking " << entry << " as foldable" << std::endl;
 
@@ -7344,6 +7375,7 @@ struct NormalizeCtx {
                 break;
             }
         }
+        */
 
     }
 
@@ -7353,10 +7385,6 @@ struct NormalizeCtx {
 
     static bool is_foldable(Label *l) {
         return l->foldable;
-    }
-
-    static bool is_typed(Label *l) {
-        return l->typed;
     }
 
     static bool is_continuing_to_label(Label *l) {
@@ -7531,16 +7559,21 @@ struct NormalizeCtx {
         l->link_backrefs();
     }
 
-    void fold_constant_label_arguments(Label *l) {
+    bool fold_constant_label_arguments(Label *l) {
+        if (!has_constant_args(l)) {
+            return false;
+        }
+
         ss_cout << "folding constant arguments in " << l << std::endl;
+
+        auto &&enter = l->body.enter;
+        assert(enter.type == TYPE_Label);
 
         // inline constant arguments
         std::vector<Any> callargs;
         Any anyval = none;
         anyval.type = TYPE_Void;
         std::vector<Any> keys;
-        auto &&enter = l->body.enter;
-        assert(enter.type == TYPE_Label);
         auto &&args = l->body.args;
         callargs.push_back(args[0]);
         keys.push_back(anyval);
@@ -7553,11 +7586,14 @@ struct NormalizeCtx {
                 callargs.push_back(arg);
             }
         }
+
         Label *newl = inline_arguments(enter.label, keys);
         l->unlink_backrefs();
         enter = newl;
         args = callargs;
         l->link_backrefs();
+
+        return true;
     }
 
     void type_label_call(Label *l) {
@@ -7612,6 +7648,120 @@ struct NormalizeCtx {
         case FN_Mystify: {
             CHECKARGS(1, 1);
             RETARGTYPES(args[1].indirect_type());
+        } break;
+        case FN_Bitcast: {
+            CHECKARGS(2, 2);
+            // todo: verify source and dest type are non-aggregate
+            // also, both must be of same category
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            RETARGTYPES(DestT);
+        } break;
+        case FN_IntToPtr: {
+            CHECKARGS(2, 2);
+            verify_integer(args[1].indirect_type());
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_category<CAT_Pointer>(storage_type(DestT));
+            RETARGTYPES(DestT);
+        } break;
+        case FN_PtrToInt: {
+            CHECKARGS(2, 2);
+            verify_category<CAT_Pointer>(
+                storage_type(args[1].indirect_type()));
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            RETARGTYPES(DestT);
+        } break;
+        case FN_Trunc: {
+            CHECKARGS(2, 2);
+            Type T = args[1].indirect_type();
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            RETARGTYPES(DestT);
+        } break;
+        case FN_ZExt: {
+            CHECKARGS(2, 2);
+            Type T = args[1].indirect_type();
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            RETARGTYPES(DestT);
+        } break;
+        case FN_SExt: {
+            CHECKARGS(2, 2);
+            Type T = args[1].indirect_type();
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            RETARGTYPES(DestT);
+        } break;
+        case FN_ExtractValue: {
+            CHECKARGS(2, 2);
+            size_t idx = cast_number<size_t>(args[2]);
+            Type T = storage_type(args[1].indirect_type());
+            switch(category_of(T)) {
+            case CAT_Array: {
+                auto &ai = arrays.get(T);
+                RETARGTYPES(ai.type_at_index(idx));
+            } break;
+            case CAT_Tuple: {
+                auto &ti = tuples.get(T);
+                RETARGTYPES(ti.type_at_index(idx));
+            } break;
+            case CAT_Union: {
+                auto &ui = unions.get(T);
+                RETARGTYPES(ui.type_at_index(idx));
+            } break;
+            default: {
+                StyledString ss;
+                ss.out << "can not extract value from type " << T;
+                location_error(ss.str());
+            } break;
+            }
+        } break;
+        case FN_GetElementPtr: {
+            CHECKARGS(2, -1);
+            Type T = storage_type(args[1].indirect_type());
+            verify_category<CAT_Pointer>(T);
+            auto &pi = pointers.get(T);
+            T = pi.element_type;
+            verify_integer(args[2].indirect_type());
+            for (size_t i = 3; i < args.size(); ++i) {
+                T = storage_type(T);
+                auto &&arg = args[i];
+                switch(category_of(T)) {
+                case CAT_Array: {
+                    auto &ai = arrays.get(T);
+                    T = ai.element_type;
+                    verify_integer(arg.indirect_type());
+                } break;
+                case CAT_Tuple: {
+                    size_t idx = cast_number<size_t>(arg);
+                    auto &ti = tuples.get(T);
+                    T = ti.type_at_index(idx);
+                } break;
+                default: {
+                    StyledString ss;
+                    ss.out << "can not get element pointer from type " << T;
+                    location_error(ss.str());
+                } break;
+                }
+            }
+            T = Pointer(T);
+            RETARGTYPES(T);
+        } break;
+        case FN_Load: {
+            CHECKARGS(1, 1);
+            Type T = storage_type(args[1].indirect_type());
+            verify_category<CAT_Pointer>(T);
+            auto &pi = pointers.get(T);
+            RETARGTYPES(pi.element_type);
         } break;
         case OP_ICmpEQ:
         case OP_ICmpNE:
@@ -7687,9 +7837,105 @@ struct NormalizeCtx {
             result.type = DestT;
             RETARGS(result);
         } break;
+        case FN_IntToPtr: {
+            CHECKARGS(2, 2);
+            verify_integer(args[1].type);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_category<CAT_Pointer>(storage_type(DestT));
+            Any result = args[1];
+            result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_PtrToInt: {
+            CHECKARGS(2, 2);
+            verify_category<CAT_Pointer>(storage_type(args[1].type));
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            Any result = args[1];
+            result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_Trunc: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            Any result = args[1];
+            result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_ZExt: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            Any result = args[1];
+            result.type = DestT;
+            int oldbitnum = integer_type_bit_size(T);
+            int newbitnum = integer_type_bit_size(DestT);
+            for (int i = oldbitnum; i < newbitnum; ++i) {
+                result.u64 &= ~(1ull << i);
+            }
+            RETARGS(result);
+        } break;
+        case FN_SExt: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            Any result = args[1];
+            result.type = DestT;
+            int oldbitnum = integer_type_bit_size(T);
+            int newbitnum = integer_type_bit_size(DestT);
+            uint64_t bit = (result.u64 >> (oldbitnum - 1)) & 1ull;
+            for (int i = oldbitnum; i < newbitnum; ++i) {
+                result.u64 &= ~(1ull << i);
+                result.u64 |= bit << i;
+            }
+            RETARGS(result);
+        } break;
         case FN_TypeOf: {
             CHECKARGS(1, 1);
             RETARGS(args[1].indirect_type());
+        } break;
+        case FN_ExtractValue: {
+            CHECKARGS(2, 2);
+            size_t idx = cast_number<size_t>(args[2]);
+            Type T = storage_type(args[1].type);
+            switch(category_of(T)) {
+            case CAT_Array: {
+                auto &ai = arrays.get(T);
+                RETARGS(ai.unpack(args[1].pointer, idx));
+            } break;
+            case CAT_Tuple: {
+                auto &ti = tuples.get(T);
+                RETARGS(ti.unpack(args[1].pointer, idx));
+            } break;
+            case CAT_Union: {
+                auto &ui = unions.get(T);
+                RETARGS(ui.unpack(args[1].pointer, idx));
+            } break;
+            default: {
+                StyledString ss;
+                ss.out << "can not extract value from type " << T;
+                location_error(ss.str());
+            } break;
+            }
+        } break;
+        case FN_Load: {
+            CHECKARGS(1, 1);
+            Type T = storage_type(args[1].type);
+            verify_category<CAT_Pointer>(T);
+            auto &pi = pointers.get(T);
+            RETARGS(pi.unpack(args[1].pointer));
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
@@ -7768,7 +8014,8 @@ struct NormalizeCtx {
         } break;
         case FN_CompilerError: {
             CHECKARGS(1, 1);
-            location_error(args[1]);
+            //location_error(args[1]);
+            RETARGS();
         } break;
         case FN_CompilerMessage: {
             CHECKARGS(1, 1);
@@ -7875,6 +8122,8 @@ struct NormalizeCtx {
     }
 
     void inline_branch_continuations(Label *l) {
+        ss_cout << "inlining branch continuations in " << l << std::endl;
+
         auto &&args = l->body.args;
         CHECKARGS(3, 3);
         args[1].verify_indirect<TYPE_Bool>();
@@ -7894,7 +8143,7 @@ struct NormalizeCtx {
 #undef RETARGTYPES
 #undef RETARGS
 
-    bool can_type_continuation(Label *caller) {
+    bool can_type_continuation(Label *caller, bool same_group) {
         if (!(is_foldable(caller) && all_args_typed(caller)))
             return false;
         if (is_calling_function(caller)) {
@@ -7916,7 +8165,8 @@ struct NormalizeCtx {
             }
         }
         if (is_calling_label(caller)
-            && is_return_param_typed(caller->get_label_enter()))
+            && (is_return_param_typed(caller->get_label_enter())
+                || same_group))
             return true;
         return false;
     }
@@ -7931,9 +8181,26 @@ struct NormalizeCtx {
             return true;
         }
         if (is_continuing_from(param, owner)
-            && can_type_continuation(owner)) {
+            && can_type_continuation(owner, false)) {
             return true;
         }
+
+        SCCBuilder scc(owner);
+        size_t id = scc.group_id(owner);
+        #if 0
+        for (size_t i = 0; i < scc.groups.size(); ++i) {
+            auto &&group = scc.groups[i];
+            if (group.labels.size() > 1) {
+                ss_cout << "group #" << i << std::endl;
+                for (size_t k = 0; k < group.labels.size(); ++k) {
+                    stream_label(ss_cout, group.labels[k], StreamLabelFormat::debug_single());
+                }
+                ss_cout << std::endl;
+            }
+        }
+        #endif
+        bool recursive = (scc.groups[id].labels.size() > 1);
+
         // ensure all labels are foldable and their call arguments typed
         for (auto kv = users.begin(); kv != users.end(); ++kv) {
             Label *user = kv->first;
@@ -7944,13 +8211,23 @@ struct NormalizeCtx {
                 counted++;
             }
             if (is_continuing_from(param, user)) {
-                if (!can_type_continuation(user))
+                if (!can_type_continuation(user,
+                        scc.contains(user) && (id == scc.group_id(user))))
                     return false;
                 counted++;
             }
         }
-        if (!counted) {
-            ss_cout << "nothing is typing this continuation" << std::endl;
+        if (recursive) {
+            if (counted < 2) {
+                // should at least have two exit paths, if not, the loop is
+                // possibly never returning
+                ss_cout << "not typing continuation: only one exit path" << std::endl;
+                return false;
+            }
+        } else {
+            if (!counted) {
+                ss_cout << "nothing is typing this continuation" << std::endl;
+            }
         }
         return counted > 0;
     }
@@ -8009,11 +8286,25 @@ struct NormalizeCtx {
     }
 
     void type_label_continuation_from_builtin_call(Label *l) {
+        ss_cout << "typing label continuation from builtin call in " << l << std::endl;
         auto &&args = l->body.args;
         assert(args[0].type == TYPE_Label);
         Label *next_label = args[0].label;
         std::vector<Type> argtypes;
         argtypes_from_builtin_call(l, argtypes);
+        Label *newenter = typify(next_label, argtypes);
+        l->unlink_backrefs();
+        args[0] = newenter;
+        l->link_backrefs();
+    }
+
+    void type_label_continuation_from_function_call(Label *l) {
+        ss_cout << "typing label continuation from function call in " << l << std::endl;
+        auto &&args = l->body.args;
+        assert(args[0].type == TYPE_Label);
+        Label *next_label = args[0].label;
+        std::vector<Type> argtypes;
+        argtypes_from_function_call(l, argtypes);
         Label *newenter = typify(next_label, argtypes);
         l->unlink_backrefs();
         args[0] = newenter;
@@ -8040,8 +8331,11 @@ struct NormalizeCtx {
             type_continuation(param, argtypes);
         } else if (is_calling_label(user)) {
             Type T = user->get_label_enter()->params[0]->type;
-            assert(typesets.is(T) || typed_labels.is(T));
-            type_continuation(param, T);
+            if (T != TYPE_Void) { // happens with recursive functions
+                //ss_cout << "typing continuation with type " << T << std::endl;
+                assert(typesets.is(T) || typed_labels.is(T) || (T == TYPE_Nothing));
+                type_continuation(param, T);
+            }
         } else {
             assert(false && "todo: illegal call");
         }
@@ -8073,12 +8367,15 @@ struct NormalizeCtx {
                 type_continuation_from_label_body(param, user);
             }
         }
+        // if no typing has taken place, the return continuation is unused
+        if (!param->is_typed()) {
+            type_continuation(param, TYPE_Nothing);
+        }
     }
 
     void normalize2(Label *entry) {
 
-        entry->foldable = true;
-        //mark_foldable(entry);
+        mark_foldable(entry);
 
         size_t numchanges;
         size_t iterations = 0;
@@ -8086,7 +8383,7 @@ struct NormalizeCtx {
             numchanges = 0;
             iterations++;
             ss_cout << "------------------------------------------" << iterations << std::endl;
-            if (iterations == 128) {
+            if (iterations == 1024) {
 
                 /*location_error(String::from(
                     "normalization not terminated after 256 iterations"));*/
@@ -8112,6 +8409,15 @@ struct NormalizeCtx {
                         && all_args_constant(l)) {
                         fold_pure_function_call(l);
                         numchanges++;
+                    } else if (is_continuing_to_label(l)) {
+                        if (!all_params_typed(l->get_label_cont())) {
+                            type_label_continuation_from_function_call(l);
+                            numchanges++;
+                        } else if (!is_foldable(l->get_label_cont())) {
+                            ss_cout << "marking continuation in " << l << std::endl;
+                            mark_foldable(l->get_label_cont());
+                            numchanges++;
+                        }
                     }
                 } else if (is_calling_builtin(l)) {
                     if ((all_args_constant(l)
@@ -8125,16 +8431,20 @@ struct NormalizeCtx {
                                 inline_branch_continuations(l);
                                 numchanges++;
                             }
-                        } else if (is_continuing_to_label(l)
-                            && !all_params_typed(l->get_label_cont())) {
-                            type_label_continuation_from_builtin_call(l);
-                            numchanges++;
+                        } else if (is_continuing_to_label(l)) {
+                            if (!all_params_typed(l->get_label_cont())) {
+                                type_label_continuation_from_builtin_call(l);
+                                numchanges++;
+                            } else if (!is_foldable(l->get_label_cont())) {
+                                ss_cout << "marking continuation in " << l << std::endl;
+                                mark_foldable(l->get_label_cont());
+                                numchanges++;
+                            }
                         }
                     }
                 }
                 if (is_calling_label(l)) {
-                    if (has_constant_args(l)) {
-                        fold_constant_label_arguments(l);
+                    if (fold_constant_label_arguments(l)) {
                         numchanges++;
                     }
                     {
@@ -8143,18 +8453,23 @@ struct NormalizeCtx {
                         if (!all_params_typed(enter.label)) {
                             type_label_call(l);
                             numchanges++;
-                        } else if (/* all_params_typed(enter.label) && */
-                            is_return_param_typed(enter.label)
-                            && ((is_continuing_to_label(l)
-                                && (!all_params_typed(l->get_label_cont())
-                                    || returns_immediately(l->get_label_enter())))
-                                || forwards_continuation_immediately(l->get_label_enter()))) {
-                            if (type_label_continuation_from_label_return_type(l)) {
-                                numchanges++;
+                        } else if (is_return_param_typed(enter.label)) {
+                            if (is_continuing_to_label(l)) {
+                                if (!all_params_typed(l->get_label_cont())
+                                    || returns_immediately(l->get_label_enter())
+                                    || forwards_continuation_immediately(l->get_label_enter())) {
+                                    if (type_label_continuation_from_label_return_type(l)) {
+                                        numchanges++;
+                                    }
+                                } else if (!is_foldable(l->get_label_cont())) {
+                                    ss_cout << "marking continuation in " << l << std::endl;
+                                    mark_foldable(l->get_label_cont());
+                                    numchanges++;
+                                }
                             }
                         }
                     }
-                    {
+                    if (is_calling_label(l)) {
                         auto &&enter = l->body.enter;
                         assert(enter.type == TYPE_Label);
                         if (!has_args(enter.label)
@@ -9154,24 +9469,7 @@ static Label *normalize(Label *entry) {
     ctx.start_entry = entry;
     //ctx.normalize(entry);
     ctx.normalize2(entry);
-#if 0
-    {
-        StyledStream ss(std::cout);
-
-        SCCBuilder scc(entry);
-        for (size_t i = 0; i < scc.groups.size(); ++i) {
-            auto &&group = scc.groups[i];
-            if (group.labels.size() > 1) {
-                ss << "group #" << i << std::endl;
-                for (size_t k = 0; k < group.labels.size(); ++k) {
-                    stream_label(ss, group.labels[k], StreamLabelFormat::debug_single());
-                }
-                ss << std::endl;
-            }
-        }
-    }
-#endif
-    //ctx.lower2cff(entry);
+    ctx.lower2cff(entry);
     return entry;
 }
 

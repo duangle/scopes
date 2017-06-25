@@ -48,31 +48,31 @@ fn/cc string->rawstring (_ s)
     getelementptr s 0 1 0
 
 # importing C code
-    call
-        fn/cc (_ lib)
-            call
-                fn/cc (_ sinf printf)
-                    printf
-                        string->rawstring "test: %f\n"
-                        sinf 0.5235987755982989
-                    #printf
-                        string->rawstring "fac: %i\n"
-                        fac
-                            mystify 5
-                purify
-                    Any-extract
-                        Scope@ lib 'sinf
+#call
+    fn/cc (_ lib)
+        call
+            fn/cc (_ sinf printf)
+                printf
+                    string->rawstring "test: %f\n"
+                    sinf 0.5235987755982989
+                #printf
+                    string->rawstring "fac: %i\n"
+                    fac
+                        mystify 5
+            purify
                 Any-extract
-                    Scope@ lib 'printf
+                    Scope@ lib 'sinf
+            Any-extract
+                Scope@ lib 'printf
 
-        import-c "testdata.c" "
-            float sinf(float);
-            int printf( const char* format, ... );
-            "
-            \ eol
+    import-c "testdata.c" "
+        float sinf(float);
+        int printf( const char* format, ... );
+        "
+        \ eol
 
 # deferring remaining expressions to bootstrap parser
-#syntax-apply-block
+syntax-apply-block
     fn/cc (_ anchor exprs env)
         fn/cc list-empty? (_ l)
             icmp== (ptrtoint l size_t) 0:usize
@@ -182,7 +182,7 @@ fn/cc string->rawstring (_ s)
         walk-list
             fn/cc on-leaf (_ value depth)
                 print-spaces depth
-                Any-dispatch value
+                #Any-dispatch value
                 io-write
                     repr value
                 io-write "\n"
@@ -209,6 +209,8 @@ fn/cc string->rawstring (_ s)
                         fn/cc (_ n-1)
                             fac n-1
                         sub n 1
+
+    fac 5
 
 # importing C code
     call
@@ -250,14 +252,26 @@ fn/cc even? (eret ei)
             _ true
 
 branch
-    even?
-        mystify 5
+    even? 31
     fn/cc (_)
         io-write "even\n"
     fn/cc (_)
         io-write "odd\n"
 
 
+# tail-recursive program that avoids closures
+    fn/cc puts (return s n)
+        fn/cc loop (() i n)
+            branch (icmp== i n)
+                fn/cc ()
+                    return
+                fn/cc ()
+                    io-write s
+                    io-write "\n"
+                    cc/call loop none (add i 1) n
+        cc/call loop none 0 n
+
+    puts "hello world" 8
 
 \ none
 
