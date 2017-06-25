@@ -48,7 +48,7 @@ fn/cc string->rawstring (_ s)
     getelementptr s 0 1 0
 
 # importing C code
-#call
+call
     fn/cc (_ lib)
         call
             fn/cc (_ sinf printf)
@@ -72,7 +72,7 @@ fn/cc string->rawstring (_ s)
         \ eol
 
 # deferring remaining expressions to bootstrap parser
-syntax-apply-block
+#syntax-apply-block
     fn/cc (_ anchor exprs env)
         fn/cc list-empty? (_ l)
             icmp== (ptrtoint l size_t) 0:usize
@@ -182,7 +182,7 @@ syntax-apply-block
         walk-list
             fn/cc on-leaf (_ value depth)
                 print-spaces depth
-                #Any-dispatch value
+                Any-dispatch value
                 io-write
                     repr value
                 io-write "\n"
@@ -237,26 +237,26 @@ syntax-apply-block
             \ eol
 
 # mutual recursion
-fn/cc even? (eret ei)
-    fn/cc odd? (oret oi)
-        branch (icmp>s oi 0)
-            fn/cc (_)
-                even? (sub oi 1)
-            fn/cc (_)
-                _ false
+    fn/cc even? (eret ei)
+        fn/cc odd? (oret oi)
+            branch (icmp>s oi 0)
+                fn/cc (_)
+                    even? (sub oi 1)
+                fn/cc (_)
+                    _ false
 
-    branch (icmp>s ei 0)
-        fn/cc (_)
-            odd? (sub ei 1)
-        fn/cc (_)
-            _ true
+        branch (icmp>s ei 0)
+            fn/cc (_)
+                odd? (sub ei 1)
+            fn/cc (_)
+                _ true
 
-branch
-    even? 31
-    fn/cc (_)
-        io-write "even\n"
-    fn/cc (_)
-        io-write "odd\n"
+    branch
+        even? 31
+        fn/cc (_)
+            io-write "even\n"
+        fn/cc (_)
+            io-write "odd\n"
 
 
 # tail-recursive program that avoids closures

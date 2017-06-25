@@ -1881,6 +1881,14 @@ struct Any {
         }
         return ost;
     }
+
+    bool operator ==(const Any &other) const;
+
+    bool operator !=(const Any &other) const {
+        return !(*this == other);
+    }
+
+    size_t hash() const;
 };
 
 static StyledStream& operator<<(StyledStream& ost, Any value) {
@@ -2177,6 +2185,36 @@ static Type TypedLabel(const std::vector<Type> &types) {
 }
 
 //------------------------------------------------------------------------------
+// CONSTANT TYPE
+//------------------------------------------------------------------------------
+
+#if 0
+struct ConstantInfo {
+    Any value;
+
+    ConstantInfo() :
+        value(none) {
+    }
+};
+
+static TypeFactory<ConstantInfo> constants;
+
+static Type Constant(const Any &value) {
+    StyledString ss = StyledString::plain();
+    ss.out << "(const ";
+    value.stream(ss.out, false);
+    ss.out << ":" << value.type << ")";
+    auto type = Type(Symbol(ss.str()));
+    auto result = constants.insert(type);
+    if (result.second) {
+        auto &&ci = result.first->second;
+        ci.value = value;
+    }
+    return type;
+}
+#endif
+
+//------------------------------------------------------------------------------
 // TYPESET TYPE
 //------------------------------------------------------------------------------
 
@@ -2338,6 +2376,12 @@ void TypenameInfo::finalize(Type _type) {
     if (typenames.is(_type)) {
         location_error(String::from("cannot use typename as storage type"));
     }
+#if 0
+    if (constants.is(_type)) {
+        location_error(String::from("cannot use constant as storage type"));
+    }
+#endif
+
     storage_type = _type;
     finalized = true;
 }
@@ -2395,6 +2439,7 @@ enum Category {
     CAT_TypedLabel,
     CAT_TypeSet,
     CAT_Function,
+    //CAT_Constant,
 };
 
 static Category category_of(Type T) {
@@ -2412,6 +2457,10 @@ static Category category_of(Type T) {
         return CAT_Union;
     } else if (functions.is(T)) {
         return CAT_Function;
+#if 0
+    } else if (constants.is(T)) {
+        return CAT_Constant;
+#endif
     }
     return CAT_Basic;
 }
@@ -2605,6 +2654,117 @@ static Any wrap_pointer(Type type, void *ptr) {
     ss.out << "FFI: cannot wrap data of type " << type;
     location_error(ss.str());
     return none;
+}
+
+//------------------------------------------------------------------------------
+// ANY HASH & COMPARISON
+//------------------------------------------------------------------------------
+
+size_t Any::hash() const {
+    if (type == TYPE_String) {
+        return CityHash64(string->data, string->count);
+    }
+    if (is_opaque(type))
+        return 0;
+    Type T = storage_type(type);
+    switch(T.value()) {
+    case TYPE_Bool: return std::hash<bool>{}(i1);
+    case TYPE_U8: case TYPE_I8: return std::hash<uint8_t>{}(u8);
+    case TYPE_U16: case TYPE_I16: return std::hash<uint16_t>{}(u16);
+    case TYPE_U32: case TYPE_I32: return std::hash<uint32_t>{}(u32);
+    case TYPE_U64: case TYPE_I64: return std::hash<uint64_t>{}(u64);
+    case TYPE_F32: return std::hash<float>{}(f32);
+    case TYPE_F64: return std::hash<double>{}(f64);
+    default: break;
+    }
+    switch(category_of(T)) {
+    case CAT_Pointer:
+        return std::hash<void *>{}(pointer);
+    case CAT_Array: {
+        auto &&ai = arrays.get(T);
+        size_t h = 0;
+        for (size_t i = 0; i < ai.count; ++i) {
+            h = HashLen16(h, ai.unpack(pointer, i).hash());
+        }
+        return h;
+    } break;
+    case CAT_Vector:{
+        auto &&vi = vectors.get(T);
+        size_t h = 0;
+        for (size_t i = 0; i < vi.count; ++i) {
+            h = HashLen16(h, vi.unpack(pointer, i).hash());
+        }
+        return h;
+    } break;
+    case CAT_Tuple:{
+        auto &&ti = tuples.get(T);
+        size_t h = 0;
+        for (size_t i = 0; i < ti.types.size(); ++i) {
+            h = HashLen16(h, ti.unpack(pointer, i).hash());
+        }
+        return h;
+    } break;
+    case CAT_Union:
+        return CityHash64((const char *)pointer, size_of(T));
+    default:
+        assert(false && "unhashable value");
+    }
+    return 0;
+}
+
+bool Any::operator ==(const Any &other) const {
+    if (type != other.type) return false;
+    if (type == TYPE_String) {
+        if (string->count != other.string->count)
+            return false;
+        return !memcmp(string->data, other.string->data, string->count);
+    }
+    if (is_opaque(type))
+        return true;
+    Type T = storage_type(type);
+    switch(T.value()) {
+    case TYPE_Bool: return (i1 == other.i1);
+    case TYPE_U8: case TYPE_I8: return (u8 == other.u8);
+    case TYPE_U16: case TYPE_I16: return (u16 == other.u16);
+    case TYPE_U32: case TYPE_I32: return (u32 == other.u32);
+    case TYPE_U64: case TYPE_I64: return (u64 == other.u64);
+    case TYPE_F32: return (f32 == other.f32);
+    case TYPE_F64: return (f64 == other.f64);
+    default: break;
+    }
+    switch(category_of(T)) {
+    case CAT_Pointer:
+        return pointer == other.pointer;
+    case CAT_Array: {
+        auto &&ai = arrays.get(T);
+        for (size_t i = 0; i < ai.count; ++i) {
+            if (ai.unpack(pointer, i) != ai.unpack(other.pointer, i))
+                return false;
+        }
+        return true;
+    } break;
+    case CAT_Vector:{
+        auto &&vi = vectors.get(T);
+        for (size_t i = 0; i < vi.count; ++i) {
+            if (vi.unpack(pointer, i) != vi.unpack(other.pointer, i))
+                return false;
+        }
+        return true;
+    } break;
+    case CAT_Tuple:{
+        auto &&ti = tuples.get(T);
+        for (size_t i = 0; i < ti.types.size(); ++i) {
+            if (ti.unpack(pointer, i) != ti.unpack(other.pointer, i))
+                return false;
+        }
+        return true;
+    } break;
+    case CAT_Union:
+        return !memcmp(pointer, other.pointer, size_of(T));
+    default:
+        assert(false && "incomparable values");
+    }
+    return false;
 }
 
 //------------------------------------------------------------------------------
@@ -6924,7 +7084,7 @@ struct NormalizeCtx {
         std::size_t operator()(const std::pair<Label *, ILNode *> & s) const {
             std::size_t h1 = std::hash<Label *>{}(s.first);
             std::size_t h2 = std::hash<ILNode *>{}(s.second);
-            return h1 ^ (h2 << 1);
+            return HashLen16(h1, h2);
         }
     };
 
@@ -6941,20 +7101,8 @@ struct NormalizeCtx {
             for (size_t i = 0; i < args.size(); ++i) {
                 auto &&a = args[i];
                 auto &&b = other.args[i];
-                if (a.type != b.type) return false;
-                switch(a.type.value()) {
-                case TYPE_Bool: if (a.i1 != b.i1) return false; break;
-                case TYPE_U8: case TYPE_I8: if (a.u8 != b.u8) return false; break;
-                case TYPE_U16: case TYPE_I16: if (a.u16 != b.u16) return false; break;
-                case TYPE_U32: case TYPE_I32: if (a.u32 != b.u32) return false; break;
-                case TYPE_U64: case TYPE_I64: if (a.u64 != b.u64) return false; break;
-                case TYPE_F32: if (a.f32 != b.f32) return false; break;
-                case TYPE_F64: if (a.f64 != b.f64) return false; break;
-                case TYPE_Void:
-                case TYPE_Nothing:
-                    break;
-                default: if (a.pointer != b.pointer) return false; break;
-                }
+                if (a != b)
+                    return false;
             }
             return true;
         }
@@ -6963,20 +7111,7 @@ struct NormalizeCtx {
         std::size_t operator()(const LabelArgs& s) const {
             std::size_t h = std::hash<Label *>{}(s.label);
             for (auto &&arg : s.args) {
-                if ((arg.type != TYPE_Void) && (arg.type != TYPE_Nothing)) {
-                    size_t h2;
-                    switch(arg.type.value()) {
-                    case TYPE_Bool: h2 = std::hash<bool>{}(arg.i1); break;
-                    case TYPE_U8: case TYPE_I8: h2 = std::hash<uint8_t>{}(arg.u8); break;
-                    case TYPE_U16: case TYPE_I16: h2 = std::hash<uint16_t>{}(arg.u16); break;
-                    case TYPE_U32: case TYPE_I32: h2 = std::hash<uint32_t>{}(arg.u32); break;
-                    case TYPE_U64: case TYPE_I64: h2 = std::hash<uint64_t>{}(arg.u64); break;
-                    case TYPE_F32: h2 = std::hash<float>{}(arg.f32); break;
-                    case TYPE_F64: h2 = std::hash<double>{}(arg.f64); break;
-                    default: h2 = std::hash<void *>{}(arg.pointer); break;
-                    }
-                    h = HashLen16(h, h2);
-                }
+                h = HashLen16(h, arg.hash());
             }
             return h;
         }
@@ -8242,7 +8377,35 @@ struct NormalizeCtx {
         return is_called_by(l->params[0], l);
     }
 
-    bool type_label_continuation_from_label_return_type(Label *l) {
+    static bool returns_higher_order_type(Label *l) {
+        assert(!l->params.empty());
+        Type T = l->params[0]->type;
+        return typesets.is(T);
+    }
+
+    void inline_label_call(Label *l) {
+        auto &&enter = l->body.enter;
+        auto &&args = l->body.args;
+        assert(enter.type == TYPE_Label);
+        Label *enter_label = enter.label;
+        assert(!args.empty());
+        ss_cout << "inlining label call to " << enter_label << " in " << l << std::endl;
+
+        Any voidarg = none;
+        voidarg.type = TYPE_Void;
+
+        std::vector<Any> newargs = { args[0] };
+        for (size_t i = 1; i < enter_label->params.size(); ++i) {
+            newargs.push_back(voidarg);
+        }
+        Label *newl = inline_arguments(enter_label, newargs);
+        l->unlink_backrefs();
+        args[0] = none;
+        enter = newl;
+        l->link_backrefs();
+    }
+
+    void type_label_continuation_from_label_return_type(Label *l) {
         ss_cout << "typing label continuation from label return type in " << l << std::endl;
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
@@ -8250,39 +8413,19 @@ struct NormalizeCtx {
         Label *enter_label = enter.label;
         assert(!args.empty());
 
-        // if enter_label calls cont_param directly, inline it
-        if (returns_immediately(enter_label)
-            || forwards_continuation_immediately(enter_label)) {
-            Any voidarg = none;
-            voidarg.type = TYPE_Void;
+        assert(!enter_label->params.empty());
+        Parameter *cont_param = enter_label->params[0];
+        Type cont_type = cont_param->type;
 
-            std::vector<Any> newargs = { args[0] };
-            for (size_t i = 1; i < enter_label->params.size(); ++i) {
-                newargs.push_back(voidarg);
-            }
-            Label *newl = inline_arguments(enter_label, newargs);
+        if (typed_labels.is(cont_type)) {
+            assert(args[0].type == TYPE_Label);
+            Label *next_label = args[0].label;
+            auto &&tli = typed_labels.get(cont_type);
+            Label *newenter = typify(next_label, tli.types);
             l->unlink_backrefs();
-            args[0] = none;
-            enter = newl;
+            args[0] = newenter;
             l->link_backrefs();
-            return true;
-        } else {
-            assert(!enter_label->params.empty());
-            Parameter *cont_param = enter_label->params[0];
-            Type cont_type = cont_param->type;
-
-            if (typed_labels.is(cont_type)) {
-                assert(args[0].type == TYPE_Label);
-                Label *next_label = args[0].label;
-                auto &&tli = typed_labels.get(cont_type);
-                Label *newenter = typify(next_label, tli.types);
-                l->unlink_backrefs();
-                args[0] = newenter;
-                l->link_backrefs();
-                return true;
-            }
         }
-        return false;
     }
 
     void type_label_continuation_from_builtin_call(Label *l) {
@@ -8448,19 +8591,20 @@ struct NormalizeCtx {
                         numchanges++;
                     }
                     {
-                        auto &&enter = l->body.enter;
-                        assert(enter.type == TYPE_Label);
-                        if (!all_params_typed(enter.label)) {
+                        if (!all_params_typed(l->get_label_enter())) {
                             type_label_call(l);
                             numchanges++;
-                        } else if (is_return_param_typed(enter.label)) {
+                        } else if (is_return_param_typed(l->get_label_enter())) {
                             if (is_continuing_to_label(l)) {
-                                if (!all_params_typed(l->get_label_cont())
-                                    || returns_immediately(l->get_label_enter())
-                                    || forwards_continuation_immediately(l->get_label_enter())) {
-                                    if (type_label_continuation_from_label_return_type(l)) {
-                                        numchanges++;
-                                    }
+                                Label *enter_label = l->get_label_enter();
+                                if (/*returns_immediately(enter_label)
+                                    || forwards_continuation_immediately(enter_label)
+                                    ||*/ returns_higher_order_type(enter_label)) {
+                                    inline_label_call(l);
+                                    numchanges++;
+                                } else if (!all_params_typed(l->get_label_cont())) {
+                                    type_label_continuation_from_label_return_type(l);
+                                    numchanges++;
                                 } else if (!is_foldable(l->get_label_cont())) {
                                     ss_cout << "marking continuation in " << l << std::endl;
                                     mark_foldable(l->get_label_cont());
