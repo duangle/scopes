@@ -393,24 +393,26 @@ fn/cc print (return ...)
 # explicit instantiation
 fn/cc test-add (_ x1 y1 z1 w1 x2 y2 z2 w2)
     _
-        add x1 x2
-        add y1 y2
-        add z1 z2
-        add w1 w2
+        fadd x1 x2
+        fadd y1 y2
+        fadd z1 z2
+        fadd w1 w2
 fn/cc test-explicit-instantiation (_)
     dump-label test-add
     dump-label
-        typify test-add r32 r32 r32 r32 r32 r32 r32 r32
+        typify test-add f32 f32 f32 f32 f32 f32 f32 f32
     call
         fn/cc (_ f)
             dump f
             print
-                f 1 2 3 4 5 6 7 8
+                f 1. 2. 3. 4. 5. 6. 7. 8.
         compile
-            typify test-add r32 r32 r32 r32 r32 r32 r32 r32
+            typify test-add f32 f32 f32 f32 f32 f32 f32 f32
             \ 'dump-disassembly 'dump-module
 
 test-explicit-instantiation
+dump
+    frem 3.14:f64 1.0:f64
 
 # return function dynamically
 fn/cc square-brackets (_ s)

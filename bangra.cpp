@@ -534,7 +534,8 @@ namespace bangra {
     T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW) \
     T(OP_Mul) T(OP_MulNUW) T(OP_MulNSW) \
     T(OP_SDiv) T(OP_UDiv) \
-    T(OP_SRem) T(OP_URem)
+    T(OP_SRem) T(OP_URem) \
+    T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -641,6 +642,7 @@ namespace bangra {
     T(OP_Mul, "mul") T(OP_MulNUW, "mul-nuw") T(OP_MulNSW, "mul-nsw") \
     T(OP_SDiv, "sdiv") T(OP_UDiv, "udiv") \
     T(OP_SRem, "srem") T(OP_URem, "urem") \
+    T(OP_FAdd, "fadd") T(OP_FSub, "fsub") T(OP_FMul, "fmul") T(OP_FDiv, "fdiv") T(OP_FRem, "frem") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_InterpreterVersion, "interpreter-version") \
     T(FN_Iter, "iter") \
@@ -1627,6 +1629,18 @@ static void verify_integer(Type type) {
     default: {
         StyledString ss;
         ss.out << "integer or bool type expected, got " << type;
+        location_error(ss.str());
+    } break;
+    }
+}
+
+static void verify_real(Type type) {
+    switch(type.value()) {
+    case TYPE_F32:
+    case TYPE_F64: return;
+    default: {
+        StyledString ss;
+        ss.out << "real type expected, got " << type;
         location_error(ss.str());
     } break;
     }
@@ -6732,6 +6746,16 @@ struct GenerateCtx {
                 retvalue = LLVMBuildSRem(builder, a, b, ""); } break;
             case OP_URem: { READ_VALUE(a); READ_VALUE(b);
                 retvalue = LLVMBuildURem(builder, a, b, ""); } break;
+            case OP_FAdd: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFAdd(builder, a, b, ""); } break;
+            case OP_FSub: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFSub(builder, a, b, ""); } break;
+            case OP_FMul: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFMul(builder, a, b, ""); } break;
+            case OP_FDiv: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFDiv(builder, a, b, ""); } break;
+            case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFRem(builder, a, b, ""); } break;
             default: {
                 StyledString ss;
                 ss.out << "IL->IR: unsupported builtin " << enter.builtin << " encountered";
@@ -7457,6 +7481,11 @@ struct NormalizeCtx {
         verify(a.indirect_type(), b.indirect_type());
     }
 
+    static void verify_real_ops(Any a, Any b) {
+        verify_real(a.indirect_type());
+        verify(a.indirect_type(), b.indirect_type());
+    }
+
     static bool is_const(Any a) {
         return (a.type != TYPE_Parameter);
     }
@@ -7900,13 +7929,25 @@ struct NormalizeCtx {
         verify_integer_ops(args[1], args[2]); \
         RETARGTYPES(args[1].indirect_type()); \
     } break;
+#define FARITH_OP(NAME, OP) \
+    case OP_ ## NAME: { \
+        CHECKARGS(2, 2); \
+        verify_real_ops(args[1], args[2]); \
+        RETARGTYPES(args[1].indirect_type()); \
+    } break;
         IARITH_NUW_NSW_OPS(Add, +)
         IARITH_NUW_NSW_OPS(Sub, -)
         IARITH_NUW_NSW_OPS(Mul, *)
         IARITH_S_U_OPS(Div, /)
         IARITH_S_U_OPS(Rem, %)
+        FARITH_OP(FAdd, +)
+        FARITH_OP(FSub, -)
+        FARITH_OP(FMul, *)
+        FARITH_OP(FDiv, /)
+        FARITH_OP(FRem, %)
 #undef IARITH_NUW_NSW_OPS
 #undef IARITH_S_U_OPS
+#undef FARITH_OP
         default: {
             StyledString ss;
             ss.out << "can not type builtin " << enter.builtin;
@@ -8226,19 +8267,31 @@ struct NormalizeCtx {
     case TYPE_I64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
-    } break;
+    }
+#define B_FLOAT_OP2(OP) \
+    switch(args[1].type.value()) { \
+    case TYPE_F32: result = (args[1].f32 OP args[2].f32); break; \
+    case TYPE_F64: result = (args[1].f64 OP args[2].f64); break; \
+    default: assert(false); break; \
+    }
+#define B_FLOAT_OPF2(OP) \
+    switch(args[1].type.value()) { \
+    case TYPE_F32: result = OP(args[1].f32, args[2].f32); break; \
+    case TYPE_F64: result = OP(args[1].f64, args[2].f64); break; \
+    default: assert(false); break; \
+    }
             bool result;
             switch(enter.builtin.value()) {
-            case OP_ICmpEQ: B_INT_OP2(==, u);
-            case OP_ICmpNE: B_INT_OP2(!=, u);
-            case OP_ICmpUGT: B_INT_OP2(>, u);
-            case OP_ICmpUGE: B_INT_OP2(>=, u);
-            case OP_ICmpULT: B_INT_OP2(<, u);
-            case OP_ICmpULE: B_INT_OP2(<=, u);
-            case OP_ICmpSGT: B_INT_OP2(>, i);
-            case OP_ICmpSGE: B_INT_OP2(>=, i);
-            case OP_ICmpSLT: B_INT_OP2(<, i);
-            case OP_ICmpSLE: B_INT_OP2(<=, i);
+            case OP_ICmpEQ: B_INT_OP2(==, u); break;
+            case OP_ICmpNE: B_INT_OP2(!=, u); break;
+            case OP_ICmpUGT: B_INT_OP2(>, u); break;
+            case OP_ICmpUGE: B_INT_OP2(>=, u); break;
+            case OP_ICmpULT: B_INT_OP2(<, u); break;
+            case OP_ICmpULE: B_INT_OP2(<=, u); break;
+            case OP_ICmpSGT: B_INT_OP2(>, i); break;
+            case OP_ICmpSGE: B_INT_OP2(>=, i); break;
+            case OP_ICmpSLT: B_INT_OP2(<, i); break;
+            case OP_ICmpSLE: B_INT_OP2(<=, i); break;
             default: assert(false); break;
             }
             RETARGS(result);
@@ -8251,9 +8304,9 @@ struct NormalizeCtx {
         verify_integer_ops(args[1], args[2]); \
         Any result = none; \
         switch(enter.builtin.value()) { \
-        case OP_ ## NAME: B_INT_OP2(OP, u); \
-        case OP_ ## NAME ## NUW: B_INT_OP2(OP, u); \
-        case OP_ ## NAME ## NSW: B_INT_OP2(OP, i); \
+        case OP_ ## NAME: B_INT_OP2(OP, u); break; \
+        case OP_ ## NAME ## NUW: B_INT_OP2(OP, u); break; \
+        case OP_ ## NAME ## NSW: B_INT_OP2(OP, i); break; \
         default: assert(false); break; \
         } \
         result.type = args[1].type; \
@@ -8266,11 +8319,27 @@ struct NormalizeCtx {
         verify_integer_ops(args[1], args[2]); \
         Any result = none; \
         switch(enter.builtin.value()) { \
-        case OP_U ## NAME: B_INT_OP2(OP, u); \
-        case OP_S ## NAME: B_INT_OP2(OP, i); \
+        case OP_U ## NAME: B_INT_OP2(OP, u); break; \
+        case OP_S ## NAME: B_INT_OP2(OP, i); break; \
         default: assert(false); break; \
         } \
         result.type = args[1].type; \
+        RETARGS(result); \
+    } break;
+#define FARITH_OP(NAME, OP) \
+    case OP_ ## NAME: { \
+        CHECKARGS(2, 2); \
+        verify_real_ops(args[1], args[2]); \
+        Any result = none; \
+        B_FLOAT_OP2(OP); \
+        RETARGS(result); \
+    } break;
+#define FARITH_OPF(NAME, OP) \
+    case OP_ ## NAME: { \
+        CHECKARGS(2, 2); \
+        verify_real_ops(args[1], args[2]); \
+        Any result = none; \
+        B_FLOAT_OPF2(OP); \
         RETARGS(result); \
     } break;
         IARITH_NUW_NSW_OPS(Add, +)
@@ -8278,6 +8347,11 @@ struct NormalizeCtx {
         IARITH_NUW_NSW_OPS(Mul, *)
         IARITH_S_U_OPS(Div, /)
         IARITH_S_U_OPS(Rem, %)
+        FARITH_OP(FAdd, +)
+        FARITH_OP(FSub, -)
+        FARITH_OP(FMul, *)
+        FARITH_OP(FDiv, /)
+        FARITH_OPF(FRem, std::fmod)
         default: {
             StyledString ss;
             ss.out << "can not inline builtin " << enter.builtin;
@@ -8304,6 +8378,7 @@ struct NormalizeCtx {
 
 #undef IARITH_NUW_NSW_OPS
 #undef IARITH_S_U_OPS
+#undef FARITH_OP
 #undef B_INT_OP2
 #undef RETARGTYPES
 #undef CHECKARGS
