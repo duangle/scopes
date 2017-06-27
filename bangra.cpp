@@ -30,6 +30,9 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define BANGRA_VERSION_MINOR 7
 #define BANGRA_VERSION_PATCH 0
 
+#define BANGRA_DEBUG_CODEGEN 0
+#define BANGRA_OPTIMIZE_ASSEMBLY 1
+
 #ifndef BANGRA_CPP
 #define BANGRA_CPP
 
@@ -515,44 +518,6 @@ namespace bangra {
 // SYMBOL ENUM
 //------------------------------------------------------------------------------
 
-#define B_IOP_DEFS(UNAME, LNAME) \
-    T0(FN_ ## UNAME ## New, #LNAME "-new") \
-    T0(FN_ ## UNAME ## LShift, #LNAME "<<") \
-    T0(FN_ ## UNAME ## RShift, #LNAME ">>") \
-    T1(UNAME, LNAME, Not, ~) \
-    T2(UNAME, LNAME, Eq, ==) \
-    T2(UNAME, LNAME, NE, !=) \
-    T2(UNAME, LNAME, LT, <) \
-    T2(UNAME, LNAME, LE, <=) \
-    T2(UNAME, LNAME, GT, >) \
-    T2(UNAME, LNAME, GE, >=) \
-    T2(UNAME, LNAME, Add, +) \
-    T2(UNAME, LNAME, Sub, -) \
-    T2(UNAME, LNAME, Mul, *) \
-    T2(UNAME, LNAME, Div, /) \
-    T2(UNAME, LNAME, Mod, %) \
-    T2(UNAME, LNAME, And, &) \
-    T2(UNAME, LNAME, Or, |) \
-    T2(UNAME, LNAME, Xor, ^) \
-    T2T(UNAME, LNAME, Pow, **)
-
-#define B_ROP_DEFS(UNAME, LNAME) \
-    T0(FN_ ## UNAME ## New, #LNAME "-new") \
-    T2(UNAME, LNAME, Eq, ==) \
-    T2(UNAME, LNAME, NE, !=) \
-    T2(UNAME, LNAME, LT, <) \
-    T2(UNAME, LNAME, LE, <=) \
-    T2(UNAME, LNAME, GT, >) \
-    T2(UNAME, LNAME, GE, >=) \
-    T2(UNAME, LNAME, Add, +) \
-    T2(UNAME, LNAME, Sub, -) \
-    T2(UNAME, LNAME, Mul, *) \
-    T2(UNAME, LNAME, Div, /) \
-    T2T(UNAME, LNAME, Pow, **) \
-    T2T(UNAME, LNAME, Mod, %)
-
-#define B_ALL_OP_DEFS()
-
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) \
@@ -611,9 +576,6 @@ namespace bangra {
     \
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
-    \
-    T(TYPE_Closure, "Closure") \
-    T(TYPE_Frame, "Frame") \
     \
     T(TYPE_SizeT, "size_t") \
     \
@@ -679,7 +641,6 @@ namespace bangra {
     T(OP_SRem, "srem") T(OP_URem, "urem") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_InterpreterVersion, "interpreter-version") \
-    B_ALL_OP_DEFS() \
     T(FN_Iter, "iter") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
@@ -836,7 +797,7 @@ enum KnownSymbol {
 
 enum {
     TYPE_FIRST = TYPE_Nothing,
-    TYPE_LAST = TYPE_Frame,
+    TYPE_LAST = TYPE_Label,
 
     KEYWORD_FIRST = KW_CatRest,
     KEYWORD_LAST = KW_Yield,
@@ -1740,8 +1701,6 @@ struct List;
 struct Label;
 struct Parameter;
 struct Scope;
-struct Frame;
-struct Closure;
 
 struct Any {
     Type type;
@@ -1765,8 +1724,6 @@ struct Any {
         const Syntax *syntax;
         const Anchor *anchor;
         const List *list;
-        const Frame *frame;
-        const Closure *closure;
         Label *label;
         Parameter *parameter;
         Builtin builtin;
@@ -1793,8 +1750,6 @@ struct Any {
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
     Any(const Anchor *x) : type(TYPE_Anchor), anchor(x) {}
     Any(const List *x) : type(TYPE_List), list(x) {}
-    Any(const Frame *x) : type(TYPE_Frame), frame(x) {}
-    Any(const Closure *x) : type(TYPE_Closure), closure(x) {}
     Any(Label *x) : type(TYPE_Label), label(x) {}
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
@@ -1831,8 +1786,6 @@ struct Any {
     operator const Syntax *() const { verify<TYPE_Syntax>(); return syntax; }
     operator const Anchor *() const { verify<TYPE_Anchor>(); return anchor; }
     operator const String *() const { verify<TYPE_String>(); return string; }
-    operator const Frame *() const { verify<TYPE_Frame>(); return frame; }
-    operator const Closure *() const { verify<TYPE_Closure>(); return closure; }
     operator Label *() const { verify<TYPE_Label>(); return label; }
     operator Scope *() const { verify<TYPE_Scope>(); return scope; }
     operator Parameter *() const { verify<TYPE_Parameter>(); return parameter; }
@@ -1891,8 +1844,6 @@ struct Any {
                 ost << Style_Operator << "]" << Style_None;
                 as.stream_type_suffix();
                 break;
-            case TYPE_Frame: as.typed(frame); break;
-            case TYPE_Closure: as.typed(closure); break;
             default: as.typed(pointer); break;
         }
         return ost;
@@ -4061,7 +4012,7 @@ protected:
 
     Label(const Anchor *_anchor, Symbol _name) :
         uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
-        visible(false), num_instances(0)
+        num_instances(0)
         {}
 
 public:
@@ -4073,10 +4024,6 @@ public:
     LabelTag tag;
     Label *paired;
     uint64_t flags;
-    // visible labels can be evaluated; for hidden labels, it's not clear
-    // yet whether the content can be evaluated, as hidden labels depend
-    // on previous results, types and branches.
-    bool visible;
     uint64_t num_instances;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
@@ -4307,7 +4254,6 @@ public:
     // only inherits name and anchor
     static Label *from(Label *label) {
         Label *result = new Label(label->anchor, label->name);
-        result->visible = label->visible;
         label->num_instances++;
         result->num_instances = label->num_instances;
         return result;
@@ -4373,57 +4319,6 @@ void ILNode::stream_users(StyledStream &ss) const {
     }
 }
 
-struct Frame {
-    Frame(const Frame *_parent, Label *_label) :
-        parent(_parent), label(_label) {}
-
-    const Frame *parent;
-    Label *label;
-    std::vector<Any> args;
-
-    static Frame *from(const Frame *parent, Label *label) {
-        const Frame *top = parent;
-        #if 1
-        // truncate if we're remapping a label
-        while (top) {
-            if (top->label == label) {
-                parent = top->parent;
-            }
-            top = top->parent;
-        }
-        #endif
-        return new Frame(parent, label);
-    }
-
-};
-
-struct Closure {
-protected:
-
-    Closure(Label *_label, const Frame *_frame) :
-        label(_label), frame(_frame) {}
-
-public:
-    Label *label;
-    const Frame *frame;
-
-    static const Closure *from(Label *label, const Frame *frame) {
-        return new Closure(label, frame);
-    }
-
-    StyledStream &stream(StyledStream &ost) const {
-        ost << Style_Comment << "[" << Style_None;
-        label->stream_short(ost);
-        ost << Style_Comment << "]@" << Style_None << frame;
-        return ost;
-    }
-};
-
-static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
-    closure->stream(ss);
-    return ss;
-}
-
 //------------------------------------------------------------------------------
 // IL PRINTER
 //------------------------------------------------------------------------------
@@ -4439,19 +4334,16 @@ struct StreamLabelFormat {
     Tagging anchors;
     Tagging follow;
     bool show_users;
-    bool show_visible;
 
     StreamLabelFormat() :
         anchors(None),
         follow(All),
-        show_users(false),
-        show_visible(false)
+        show_users(false)
         {}
 
     static StreamLabelFormat debug_all() {
         StreamLabelFormat fmt;
         fmt.follow = All;
-        fmt.show_visible = true;
         fmt.show_users = true;
         return fmt;
     }
@@ -4547,9 +4439,6 @@ struct StreamLabel : StreamAnchors {
         visited.insert(alabel);
         if (line_anchors) {
             stream_anchor(alabel->anchor);
-        }
-        if (fmt.show_visible && !alabel->visible) {
-            ss << Style_Comment << "? " << Style_None;
         }
         alabel->stream(ss, fmt.show_users);
         ss << Style_Operator << ":" << Style_None;
@@ -4826,92 +4715,6 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     }
 
     return le;
-}
-
-//------------------------------------------------------------------------------
-// FRAME PRINTER
-//------------------------------------------------------------------------------
-
-struct StreamFrameFormat {
-};
-
-struct StreamFrame : StreamAnchors {
-    StreamFrameFormat fmt;
-
-    StreamFrame(StyledStream &_ss, const StreamFrameFormat &_fmt) :
-        StreamAnchors(_ss), fmt(_fmt) {
-    }
-
-    const Frame *find_return_frame(const Frame *frame) {
-        while (frame) {
-            if (!frame->args.empty()) {
-                Any cont = frame->args[0];
-                if (cont.type == TYPE_Closure) {
-                    return cont.closure->frame;
-                }
-            }
-            frame = frame->parent;
-        }
-        return nullptr;
-    }
-
-    Symbol get_good_frame_name(const Frame *frame) {
-        while (frame) {
-            Symbol name = frame->label->name;
-            if (name != SYM_Unnamed)
-                return name;
-            frame = frame->parent;
-        }
-        return SYM_Unnamed;
-    }
-
-    void stream(const Frame *frame) {
-
-        if (!frame) return;
-
-        std::deque<const Frame *> frames = { frame };
-        Symbol lastname = get_good_frame_name(frame);
-        while (frame) {
-            const Frame *nextframe = find_return_frame(frame);
-            if (nextframe) {
-                auto name = get_good_frame_name(nextframe);
-                if (name != lastname) {
-                    frames.push_front(nextframe);
-                    lastname = name;
-                }
-            }
-            frame = nextframe;
-        }
-
-        size_t count = frames.size();
-        for (size_t i = 0; i < count; ++i) {
-            const Frame *frame = frames[i];
-
-            if ((i < 5) || (i >= (count - 5))) {
-                Label *label = frame->label;
-                const Anchor *anchor = label->body.anchor;
-
-                ss << anchor;
-                ss << " [" << "#" << (i + 1) << "] ";
-                Symbol name = get_good_frame_name(frame);
-                if (name == SYM_Unnamed) {
-                    ss << "in anonymous function";
-                } else {
-                    ss << "in function '" << name.name()->data << "'";
-                }
-                ss << std::endl;
-                anchor->stream_source_line(ss);
-            } else if (i == 5) {
-                ss << "..." << std::endl;
-            }
-        }
-    }
-};
-
-static void stream_frame(
-    StyledStream &_ss, const Frame *frame, StreamFrameFormat _fmt) {
-    StreamFrame streamer(_ss, _fmt);
-    streamer.stream(frame);
 }
 
 //------------------------------------------------------------------------------
@@ -5730,7 +5533,6 @@ static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out
     BINOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, OP);
 #define T2T(UNAME, LNAME, PFIX, OP) \
     TBINOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, PFIX ## T);
-    B_ALL_OP_DEFS()
 #undef T0
 #undef T1
 #undef T2
@@ -6360,16 +6162,6 @@ loop:
 //------------------------------------------------------------------------------
 // IL->IR LOWERING
 //------------------------------------------------------------------------------
-
-static bool first_order_type(Type type) {
-    switch (type.value()) {
-    case TYPE_Builtin:
-    case TYPE_Type:
-    case TYPE_Label:
-        return true;
-    default: return false;
-    }
-}
 
 static bool is_basic_block_like(Label *label) {
     if (label->params.empty())
@@ -7085,7 +6877,9 @@ struct GenerateCtx {
 
         finalize_types();
 
+#if BANGRA_DEBUG_CODEGEN
         LLVMDumpModule(module);
+#endif
         char *errmsg = NULL;
         LLVMVerifyModule(module, LLVMAbortProcessAction, &errmsg);
         LLVMDisposeMessage(errmsg);
@@ -7149,26 +6943,13 @@ struct NormalizeCtx {
     Label *start_entry;
 
     NormalizeCtx() :
-        //ss_cout(std::cout),
+#if BANGRA_DEBUG_CODEGEN
+        ss_cout(std::cout),
+#else
         ss_cout(nullout),
+#endif
         start_entry(nullptr)
     {}
-
-    bool has_untyped_continuation(Label *label) {
-        if (label->params.empty()) return false;
-        return !label->params[0]->is_typed();
-    }
-
-    bool has_empty_parameters(Label *label) {
-        if (label->params.empty()) return true;
-        if (label->params.size() > 1) return false;
-        return label->params[0]->type == TYPE_Nothing;
-    }
-
-    bool has_empty_continuation(Label *label) {
-        if (label->body.args.empty()) return true;
-        return label->body.args[0].type == TYPE_Nothing;
-    }
 
     ILNode *node_from_continuation(Any cont) {
         switch(cont.type.value()) {
@@ -7194,7 +6975,6 @@ struct NormalizeCtx {
         if (it == labels2ic.end()) {
             if (is_basic_block_like(label)) {
                 labels2ic.insert({{label, node}, label});
-                mark_visible(label);
                 return label;
             } else {
                 assert(label->params.size() == 1);
@@ -7208,7 +6988,6 @@ struct NormalizeCtx {
                 map[param] = {cont};
                 Label *newlabel = mangle(label, newparams, map);
                 labels2ic.insert({{label, node}, newlabel});
-                mark_visible(newlabel);
                 return newlabel;
             }
         } else {
@@ -7302,9 +7081,6 @@ struct NormalizeCtx {
             }
             Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
             label2ia.insert({la, newlabel});
-            if (!has_args(newlabel)) {
-                mark_visible(newlabel);
-            }
             return newlabel;
         } else {
             return it->second;
@@ -7432,7 +7208,6 @@ struct NormalizeCtx {
         stream_label(ss, newlabel, StreamLabelFormat::debug_scope());
         ss << std::endl;
 #endif
-        mark_visible(newlabel);
 
         return newlabel;
     }
@@ -7465,34 +7240,6 @@ struct NormalizeCtx {
         return dest;
     }
 
-    void type_continuation(Parameter *param, Type T) {
-        switch(param->type.value()) {
-        case TYPE_Nothing: {
-            location_error(String::from("attempting to call none continuation"));
-        } break;
-        case TYPE_Void: {
-            param->type = T;
-        } break;
-        default: {
-            param->type = TypeSet({param->type, T});
-        } break;
-        }
-    }
-
-    void type_continuation(Parameter *param, const std::vector<Type> &argtypes) {
-        switch(param->type.value()) {
-        case TYPE_Nothing: {
-            location_error(String::from("attempting to call none continuation"));
-        } break;
-        case TYPE_Void: {
-            param->type = TypedLabel(argtypes);
-        } break;
-        default: {
-            param->type = TypeSet({param->type, TypedLabel(argtypes)});
-        } break;
-        }
-    }
-
     static void verify_integer_ops(Any a, Any b) {
         verify_integer(a.indirect_type());
         verify(a.indirect_type(), b.indirect_type());
@@ -7502,52 +7249,14 @@ struct NormalizeCtx {
         return (a.type != TYPE_Parameter);
     }
 
-    static bool const_ops(Any a, Any b) {
-        return is_const(a) && is_const(b);
-    }
-
     void copy_body(Label *dest, Label *source) {
         dest->unlink_backrefs();
         dest->body = source->body;
         dest->link_backrefs();
     }
 
-    static bool inlinable_argument(Any arg) {
-        switch(arg.type.value()) {
-        case TYPE_Parameter: return false;
-        default: return true;
-        }
-    }
-
-    void mark_visible(Label *entry) {
-        entry->visible = true;
-
-        /*
-        while (!entry->visible) {
-            ss_cout << "marking " << entry << " as visible" << std::endl;
-
-            entry->visible = true;
-
-            auto &&args = entry->body.args;
-            assert(!args.empty());
-
-            auto &&cont = args[0];
-            if (cont.type == TYPE_Label) {
-                entry = cont.label;
-            } else {
-                break;
-            }
-        }
-        */
-
-    }
-
     static bool has_args(Label *l) {
         return l->params.size() > 1;
-    }
-
-    static bool is_visible(Label *l) {
-        return l->visible;
     }
 
     static bool is_jumping(Label *l) {
@@ -8241,7 +7950,9 @@ struct NormalizeCtx {
         case FN_CompilerMessage: {
             CHECKARGS(1, 1);
             args[1].verify<TYPE_String>();
-            std::cout << args[1].string->data << std::endl;
+            StyledString ss;
+            ss.out << l->body.anchor << " message: " << args[1].string->data << std::endl;
+            std::cout << ss.str()->data;
             RETARGS();
         } break;
         case FN_Dump: {
@@ -8360,100 +8071,12 @@ struct NormalizeCtx {
 #undef RETARGTYPES
 #undef RETARGS
 
-    bool can_type_continuation(Label *caller, bool same_group) {
-        if (!(is_visible(caller) && all_args_typed(caller)))
-            return false;
-        if (is_calling_function(caller)) {
-            if (is_calling_pure_function(caller)
-                && all_args_constant(caller)) {
-                return false;
-            } else {
-                return true;
-            }
-        }
-        if (is_calling_builtin(caller)) {
-            if ((all_args_constant(caller)
-                    && !builtin_never_folds(caller->get_builtin_enter()))
-                || builtin_always_folds(caller->get_builtin_enter())
-                || (caller->get_builtin_enter() == FN_Branch)) {
-                return false;
-            } else {
-                return true;
-            }
-        }
-        if (is_calling_label(caller)
-            && (is_return_param_typed(caller->get_label_enter())
-                || same_group))
-            return true;
-        return false;
-    }
-
-    bool all_users_ready_to_type_continuation(Parameter *param,
-        std::unordered_set<Label *> &visited) {
-        auto &&users = param->users;
-        size_t counted = 0;
-        Label *owner = param->label;
-        assert(owner);
-        if (is_called_by(param, owner)) {
-            return true;
-        }
-        if (is_continuing_from(param, owner)) {
-            if (!can_type_continuation(owner, false))
-                return false;
-            counted++;
-        }
-
-        SCCBuilder scc(owner);
-        size_t id = scc.group_id(owner);
-        #if 0
-        for (size_t i = 0; i < scc.groups.size(); ++i) {
-            auto &&group = scc.groups[i];
-            if (group.labels.size() > 1) {
-                ss_cout << "group #" << i << std::endl;
-                for (size_t k = 0; k < group.labels.size(); ++k) {
-                    stream_label(ss_cout, group.labels[k], StreamLabelFormat::debug_single());
-                }
-                ss_cout << std::endl;
-            }
-        }
-        #endif
-        bool recursive = (scc.groups[id].labels.size() > 1);
-
-        // ensure all labels are visible and their call arguments typed
-        for (auto kv = users.begin(); kv != users.end(); ++kv) {
-            Label *user = kv->first;
-            if (!visited.count(user)) { continue; }
-            if (is_called_by(param, user)) {
-                if (!(is_visible(user) && all_args_typed(user)))
-                    return false;
-                counted++;
-            }
-            if (is_continuing_from(param, user)) {
-                if (!can_type_continuation(user,
-                        scc.contains(user) && (id == scc.group_id(user))))
-                    return false;
-                counted++;
-            }
-        }
-        if (recursive) {
-            if (counted < 2) {
-                // should at least have two exit paths, if not, the loop is
-                // possibly never returning
-                ss_cout << "not typing continuation: only one exit path" << std::endl;
-                return false;
-            }
-        } else {
-            if (!counted) {
-                ss_cout << "nothing is typing this continuation" << std::endl;
-            }
-        }
-        return counted > 0;
-    }
-
+    /*
     static bool forwards_continuation_immediately(Label *l) {
         assert(!l->params.empty());
         return is_continuing_from(l->params[0], l);
     }
+    */
 
     static bool returns_immediately(Label *l) {
         assert(!l->params.empty());
@@ -8538,33 +8161,6 @@ struct NormalizeCtx {
         l->link_backrefs();
     }
 
-    void type_label_continuation_from_label_return_type(Label *l) {
-        ss_cout << "typing label continuation from label return type in " << l << std::endl;
-        auto &&enter = l->body.enter;
-        auto &&args = l->body.args;
-        assert(enter.type == TYPE_Label);
-        Label *enter_label = enter.label;
-        assert(!args.empty());
-
-        assert(!enter_label->params.empty());
-        Parameter *cont_param = enter_label->params[0];
-        Type cont_type = cont_param->type;
-
-        if (typed_labels.is(cont_type)) {
-            assert(args[0].type == TYPE_Label);
-            Label *next_label = args[0].label;
-            auto &&tli = typed_labels.get(cont_type);
-
-            if (!enter_label->return_constants.empty()) {
-                next_label = inline_arguments(next_label, enter_label->return_constants);
-            }
-            next_label = typify(next_label, tli.types);
-            l->unlink_backrefs();
-            args[0] = next_label;
-            l->link_backrefs();
-        }
-    }
-
     void type_continuation_from_label_return_type(Label *l) {
         ss_cout << "typing continuation from label return type in " << l << std::endl;
         auto &&enter = l->body.enter;
@@ -8591,19 +8187,6 @@ struct NormalizeCtx {
         }
     }
 
-    void type_label_continuation_from_builtin_call(Label *l) {
-        ss_cout << "typing label continuation from builtin call in " << l << std::endl;
-        auto &&args = l->body.args;
-        assert(args[0].type == TYPE_Label);
-        Label *next_label = args[0].label;
-        std::vector<Type> argtypes;
-        argtypes_from_builtin_call(l, argtypes);
-        Label *newenter = typify(next_label, argtypes);
-        l->unlink_backrefs();
-        args[0] = newenter;
-        l->link_backrefs();
-    }
-
     void type_continuation_from_builtin_call(Label *l) {
         ss_cout << "typing continuation from builtin call in " << l << std::endl;
         std::vector<Type> argtypes;
@@ -8612,19 +8195,6 @@ struct NormalizeCtx {
         Any newarg = type_continuation(args[0], argtypes);
         l->unlink_backrefs();
         args[0] = newarg;
-        l->link_backrefs();
-    }
-
-    void type_label_continuation_from_function_call(Label *l) {
-        ss_cout << "typing label continuation from function call in " << l << std::endl;
-        auto &&args = l->body.args;
-        assert(args[0].type == TYPE_Label);
-        Label *next_label = args[0].label;
-        std::vector<Type> argtypes;
-        argtypes_from_function_call(l, argtypes);
-        Label *newenter = typify(next_label, argtypes);
-        l->unlink_backrefs();
-        args[0] = newenter;
         l->link_backrefs();
     }
 
@@ -8666,215 +8236,6 @@ struct NormalizeCtx {
                 consts[i] = none;
                 consts[i].type = TYPE_Void;
             }
-        }
-    }
-
-    void cut_constants_from_calling_label(std::vector<size_t> &const_indices, Label *user) {
-        auto &&args = user->body.args;
-        size_t i = const_indices.size();
-        while (i--) {
-            args.erase(args.begin() + const_indices[i]);
-        }
-    }
-
-    void cut_constants(std::vector<size_t> &const_indices,
-        Parameter *param, std::unordered_set<Label *> &visited) {
-        auto &&users = param->users;
-        Label *owner = param->label;
-        assert(owner);
-
-        if (is_called_by(param, owner)) {
-            cut_constants_from_calling_label(const_indices, owner);
-        } else {
-            // ensure all labels are visible and their call arguments typed
-            for (auto kv = users.begin(); kv != users.end(); ++kv) {
-                Label *user = kv->first;
-                if (!visited.count(user)) {
-                    continue;
-                }
-                if (is_called_by(param, user)) {
-                    cut_constants_from_calling_label(const_indices, user);
-                }
-            }
-        }
-    }
-
-    void collect_constants_from_calling_label(std::vector<Any> &consts, Label *user) {
-        auto &&args = user->body.args;
-        for (size_t i = 0; i < args.size(); ++i) {
-            set_const(consts, i, args[i]);
-        }
-    }
-
-    void collect_constants_from_label_body(std::vector<Any> &consts, Label *user) {
-        assert(is_calling_label(user));
-        Label *enter = user->get_label_enter();
-        Type T = enter->params[0]->type;
-        assert(typed_labels.is(T));
-        auto &&retconsts = enter->return_constants;
-        for (size_t i = 0; i < retconsts.size(); ++i) {
-            set_const(consts, i, retconsts[i]);
-        }
-    }
-
-    void collect_constants(Parameter *param, std::unordered_set<Label *> &visited) {
-        auto &&users = param->users;
-        Label *owner = param->label;
-        assert(owner);
-
-        auto &&retconsts = owner->return_constants;
-        assert(retconsts.empty());
-
-        if (is_called_by(param, owner)) {
-            collect_constants_from_calling_label(retconsts, owner);
-        } else {
-            if (is_continuing_from(param, owner)) {
-                collect_constants_from_label_body(retconsts, owner);
-            }
-            // ensure all labels are visible and their call arguments typed
-            for (auto kv = users.begin(); kv != users.end(); ++kv) {
-                Label *user = kv->first;
-                if (!visited.count(user)) {
-                    continue;
-                }
-                if (is_called_by(param, user)) {
-                    collect_constants_from_calling_label(retconsts, user);
-                } else if (is_continuing_from(param, user)) {
-                    collect_constants_from_label_body(retconsts, user);
-                }
-            }
-        }
-    }
-
-    void type_continuation_from_calling_label(Parameter *param, Label *user) {
-        auto &&args = user->body.args;
-        std::vector<Type> argtypes = {};
-        for (auto &&arg : args) {
-            if (is_const(arg)) {
-                argtypes.push_back(Constant(arg.indirect_type()));
-            } else {
-                argtypes.push_back(arg.indirect_type());
-            }
-        }
-        type_continuation(param, argtypes);
-    }
-
-    void type_continuation_from_label_body(Parameter *param, Label *user) {
-        if (is_calling_function(user)) {
-            std::vector<Type> argtypes;
-            argtypes_from_function_call(user, argtypes);
-            type_continuation(param, argtypes);
-        } else if (is_calling_builtin(user)) {
-            std::vector<Type> argtypes;
-            argtypes_from_builtin_call(user, argtypes);
-            type_continuation(param, argtypes);
-        } else if (is_calling_label(user)) {
-            Label *enter = user->get_label_enter();
-            Type T = enter->params[0]->type;
-            if (T != TYPE_Void) { // happens with recursive functions
-                bool is_typed_label = typed_labels.is(T);
-                //ss_cout << "typing continuation with type " << T << std::endl;
-                assert(typesets.is(T) || is_typed_label || (T == TYPE_Nothing));
-                if (is_typed_label && !enter->return_constants.empty()) {
-                    auto &&retconsts = enter->return_constants;
-                    TypedLabelInfo &tli = typed_labels.get(T);
-                    assert(retconsts.size() == tli.types.size());
-                    std::vector<Type> argtypes;
-                    for (size_t i = 0; i < tli.types.size(); ++i) {
-                        Type argtype = tli.types[i];
-                        if (retconsts[i].type != TYPE_Void) {
-                            argtype = Constant(argtype);
-                        }
-                        argtypes.push_back(argtype);
-                    }
-                    type_continuation(param, argtypes);
-                } else {
-                    type_continuation(param, T);
-                }
-            }
-        } else {
-            assert(false && "todo: illegal call");
-        }
-    }
-
-    void type_continuation_from_labels(Parameter *param,
-        std::unordered_set<Label *> &visited) {
-        ss_cout << "typing continuation " << param << " from labels" << std::endl;
-        auto &&users = param->users;
-        Label *owner = param->label;
-        assert(owner);
-
-        if (is_called_by(param, owner)) {
-            type_continuation_from_calling_label(param, owner);
-        } else {
-            if (is_continuing_from(param, owner)) {
-                type_continuation_from_label_body(param, owner);
-            }
-            // ensure all labels are visible and their call arguments typed
-            for (auto kv = users.begin(); kv != users.end(); ++kv) {
-                Label *user = kv->first;
-                if (!visited.count(user)) {
-                    ss_cout << "warning: unreachable user encountered" << std::endl;
-                    continue;
-                }
-                if (is_called_by(param, user)) {
-                    type_continuation_from_calling_label(param, user);
-                } else if (is_continuing_from(param, user)) {
-                    type_continuation_from_label_body(param, user);
-                }
-            }
-        }
-        // if no typing has taken place, the return continuation is unused
-        if (!param->is_typed()) {
-            type_continuation(param, TYPE_Nothing);
-            return;
-        }
-
-        Type T = param->type;
-        if (typed_labels.is(T)) {
-            auto &&tli = typed_labels.get(T);
-            if (tli.has_constants()) {
-                collect_constants(param, visited);
-                auto &&retconsts = owner->return_constants;
-                std::vector<size_t> const_indices;
-                std::vector<Type> argtypes = { TYPE_Nothing };
-                for (size_t i = 1; i < retconsts.size(); ++i) {
-                    if (retconsts[i].type != TYPE_Void) {
-                        const_indices.push_back(i);
-                    } else {
-                        assert(i < tli.types.size());
-                        Type ET = tli.types[i];
-                        if (constants.is(ET)) {
-                            ET = constants.get(ET).type;
-                        }
-                        argtypes.push_back(ET);
-                    }
-                }
-                if (const_indices.empty()) {
-                    // no common constants, regular return
-                    retconsts.clear();
-                    param->type = tli.strip_constants();
-                } else {
-                    // we can indeed strip some constants
-                    cut_constants(const_indices, param, visited);
-                    param->type = TypedLabel(argtypes);
-                }
-            }
-        } else if (typesets.is(T)) {
-            // will be inlined anyway, no problem for us
-
-            std::vector<Type> labeltypes;
-            ss_cout << "?? " << T << std::endl;
-            // strip possible constants
-            auto &&tsi = typesets.get(T);
-            for (auto &&L : tsi.types) {
-                assert(typed_labels.is(L));
-                auto &&tli = typed_labels.get(L);
-                if (tli.has_constants()) {
-                    labeltypes.push_back(tli.strip_constants());
-                }
-            }
-            param->type = TypeSet(labeltypes);
         }
     }
 
@@ -9846,7 +9207,6 @@ process:
     } else {
         return List::from(Syntax::from_quoted(anchor, expr), topit->next);
     }
-    goto process;
 }
 
 static Any expand_root(Any expr, Scope *scope = nullptr) {
@@ -10068,8 +9428,6 @@ static void init_globals() {
     globals->bind(TYPE_Ref, Type(TYPE_Ref));
     globals->bind(TYPE_Parameter, Type(TYPE_Parameter));
     globals->bind(TYPE_Scope, Type(TYPE_Scope));
-    globals->bind(TYPE_Closure, Type(TYPE_Closure));
-    globals->bind(TYPE_Frame, Type(TYPE_Frame));
     globals->bind(TYPE_Anchor, Type(TYPE_Anchor));
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
@@ -10282,16 +9640,19 @@ int main(int argc, char *argv[]) {
         expr = expand_root(expr);
         Label *fn = translate_root(expr);
 
+#if BANGRA_DEBUG_CODEGEN
         StyledStream ss(std::cout);
         std::cout << "non-normalized:" << std::endl;
         stream_label(ss, fn, StreamLabelFormat::debug_all());
         std::cout << std::endl;
+#endif
 
         fn = normalize(fn);
+#if BANGRA_DEBUG_CODEGEN
         std::cout << "normalized:" << std::endl;
         stream_label(ss, fn, StreamLabelFormat::debug_all());
         std::cout << std::endl;
-
+#endif
 
         GenerateCtx ctx;
         auto result = ctx.generate(fn);
@@ -10316,19 +9677,21 @@ int main(int argc, char *argv[]) {
         auto listener = new DisassemblyListener(pEE);
         pEE->RegisterJITEventListener(listener);
 
-        //auto td = LLVMGetExecutionEngineTargetData(ee);
-        auto tm = LLVMGetExecutionEngineTargetMachine(ee);
-
-#if 1
+#if BANGRA_OPTIMIZE_ASSEMBLY
         build_and_run_opt_passes(module);
 
+#if BANGRA_DEBUG_CODEGEN
         std::cout << "\noptimized:" << std::endl;
         LLVMDumpModule(module);
+#endif
 #endif
 
         typedef void (*MainFuncType)();
         void *pfunc = LLVMGetPointerToGlobal(ee, func);
+#if BANGRA_DEBUG_CODEGEN
         {
+            //auto td = LLVMGetExecutionEngineTargetData(ee);
+            auto tm = LLVMGetExecutionEngineTargetMachine(ee);
             auto it = listener->sizes.find(pfunc);
             if (it != listener->sizes.end()) {
                 do_disassemble(tm, pfunc, it->second);
@@ -10336,8 +9699,11 @@ int main(int argc, char *argv[]) {
                 std::cout << "no disassembly available\n";
             }
         }
+#endif
         MainFuncType fptr = (MainFuncType)pfunc;
+#if BANGRA_DEBUG_CODEGEN
         std::cout << "executing:" << std::endl;
+#endif
         fptr();
 
         //interpreter_loop(cmd);

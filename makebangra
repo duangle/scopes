@@ -35,7 +35,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
 && clang++ \
     -o $DIR/bangra \
     $DIR/bangra.cpp \
-    -pedantic \
+    -pedantic -Wall \
     $OPT_G -rdynamic \
     -ferror-limit=1 \
     $OPT_MODE -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
