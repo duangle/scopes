@@ -529,7 +529,7 @@ namespace bangra {
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_CompilerMessage) \
+    T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
     T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW) \
     T(OP_Mul) T(OP_MulNUW) T(OP_MulNSW) \
@@ -613,12 +613,14 @@ namespace bangra {
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_IsConstant, "constant?") \
     T(FN_Countof, "countof") \
+    T(FN_Compile, "compile") \
     T(FN_CompilerMessage, "compiler-message") \
     T(FN_CompilerError, "compiler-error") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
     T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
+    T(FN_DumpLabel, "dump-label") \
     T(FN_FormatFrame, "Frame-format") \
     T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
     T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
@@ -765,6 +767,10 @@ namespace bangra {
     T(SYM_Super, "super") \
     T(SYM_ApplyType, "apply-type") \
     T(SYM_Styler, "styler") \
+    \
+    /* compile flags */ \
+    T(SYM_DumpDisassembly, "dump-disassembly") \
+    T(SYM_DumpModule, "dump-module") \
     \
     /* ad-hoc builtin names */ \
     T(SYM_ExecuteReturn, "execute-return") \
@@ -1222,7 +1228,9 @@ protected:
     }
 
     static const String *get_symbol_name(Symbol id) {
-        return map_symbol_name[id];
+        auto it = map_symbol_name.find(id);
+        assert (it != map_symbol_name.end());
+        return it->second;
     }
 
     uint64_t _value;
@@ -1311,6 +1319,7 @@ public:
 
     StyledStream& stream(StyledStream& ost) const {
         auto s = name();
+        assert(s);
         ost << Style_Symbol << "'";
         s->stream(ost, SYMBOL_ESCAPE_CHARS);
         ost << Style_None;
@@ -4045,6 +4054,29 @@ public:
         return body.args[0].label;
     }
 
+    Type get_function_type() const {
+
+        std::vector<Type> rettypes;
+        std::vector<Type> argtypes;
+
+        for (size_t i = 1; i < params.size(); ++i) {
+            argtypes.push_back(params[i]->type);
+        }
+        auto &&tli = typed_labels.get(params[0]->type);
+        for (size_t i = 1; i < tli.types.size(); ++i) {
+            rettypes.push_back(tli.types[i]);
+        }
+
+        Type rtype = TYPE_Void;
+        if (rettypes.size() == 1) {
+            rtype = rettypes[0];
+        } else {
+            rtype = Tuple(rettypes);
+        }
+
+        return Function(rtype, argtypes);
+    }
+
     void use(const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
             arg.parameter->add_user(this, i);
@@ -4365,6 +4397,12 @@ struct StreamLabelFormat {
     static StreamLabelFormat single() {
         StreamLabelFormat fmt;
         fmt.follow = None;
+        return fmt;
+    }
+
+    static StreamLabelFormat scope() {
+        StreamLabelFormat fmt;
+        fmt.follow = Scope;
         return fmt;
     }
 
@@ -6191,6 +6229,37 @@ static bool has_free_parameters(Label *label) {
     return false;
 }
 
+static void build_and_run_opt_passes(LLVMModuleRef module) {
+    LLVMPassManagerBuilderRef passBuilder;
+
+    passBuilder = LLVMPassManagerBuilderCreate();
+    LLVMPassManagerBuilderSetOptLevel(passBuilder, 3);
+    LLVMPassManagerBuilderSetSizeLevel(passBuilder, 0);
+    LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
+
+    LLVMPassManagerRef functionPasses =
+      LLVMCreateFunctionPassManagerForModule(module);
+    LLVMPassManagerRef modulePasses =
+      LLVMCreatePassManager();
+
+    LLVMPassManagerBuilderPopulateFunctionPassManager(passBuilder,
+                                                      functionPasses);
+    LLVMPassManagerBuilderPopulateModulePassManager(passBuilder, modulePasses);
+
+    LLVMPassManagerBuilderDispose(passBuilder);
+
+    LLVMInitializeFunctionPassManager(functionPasses);
+    for (LLVMValueRef value = LLVMGetFirstFunction(module);
+         value; value = LLVMGetNextFunction(value))
+      LLVMRunFunctionPassManager(functionPasses, value);
+    LLVMFinalizeFunctionPassManager(functionPasses);
+
+    LLVMRunPassManager(modulePasses, module);
+
+    LLVMDisposePassManager(functionPasses);
+    LLVMDisposePassManager(modulePasses);
+}
+
 struct GenerateCtx {
     std::unordered_map<Label *, LLVMValueRef> label2func;
     std::unordered_map<Label *, LLVMBasicBlockRef> label2bb;
@@ -6888,6 +6957,149 @@ struct GenerateCtx {
     }
 
 };
+
+//------------------------------------------------------------------------------
+// IL COMPILER
+//------------------------------------------------------------------------------
+
+static void pprint(int pos, unsigned char *buf, int len, const char *disasm) {
+  int i;
+  printf("%04x:  ", pos);
+  for (i = 0; i < 8; i++) {
+    if (i < len) {
+      printf("%02x ", buf[i]);
+    } else {
+      printf("   ");
+    }
+  }
+
+  printf("   %s\n", disasm);
+}
+
+static void do_disassemble(LLVMTargetMachineRef tm, void *fptr, int siz) {
+
+    unsigned char *buf = (unsigned char *)fptr;
+
+  LLVMDisasmContextRef D = LLVMCreateDisasmCPUFeatures(
+    LLVMGetTargetMachineTriple(tm),
+    LLVMGetTargetMachineCPU(tm),
+    LLVMGetTargetMachineFeatureString(tm),
+    NULL, 0, NULL, NULL);
+    LLVMSetDisasmOptions(D,
+        LLVMDisassembler_Option_PrintImmHex);
+  char outline[1024];
+  int pos;
+
+  if (!D) {
+    printf("ERROR: Couldn't create disassembler\n");
+    return;
+  }
+
+  pos = 0;
+  while (pos < siz) {
+    size_t l = LLVMDisasmInstruction(D, buf + pos, siz - pos, 0, outline,
+                                     sizeof(outline));
+    if (!l) {
+      pprint(pos, buf + pos, 1, "\t???");
+      pos++;
+        break;
+    } else {
+      pprint(pos, buf + pos, l, outline);
+      pos += l;
+    }
+  }
+
+  LLVMDisasmDispose(D);
+}
+
+class DisassemblyListener : public llvm::JITEventListener {
+public:
+    llvm::ExecutionEngine *ee;
+    DisassemblyListener(llvm::ExecutionEngine *_ee) : ee(_ee) {}
+
+    std::unordered_map<void *, size_t> sizes;
+
+    void InitializeDebugData(
+        llvm::StringRef name,
+        llvm::object::SymbolRef::Type type, uint64_t sz) {
+        if(type == llvm::object::SymbolRef::ST_Function) {
+            #if !defined(__arm__) && !defined(__linux__)
+            name = name.substr(1);
+            #endif
+            void * addr = (void*)ee->getFunctionAddress(name);
+            if(addr) {
+                assert(addr);
+                sizes[addr] = sz;
+            }
+        }
+    }
+
+    virtual void NotifyObjectEmitted(
+        const llvm::object::ObjectFile &Obj,
+        const llvm::RuntimeDyld::LoadedObjectInfo &L) {
+        auto size_map = llvm::object::computeSymbolSizes(Obj);
+        for(auto & S : size_map) {
+            llvm::object::SymbolRef sym = S.first;
+            auto name = sym.getName();
+            auto type = sym.getType();
+            if(name && type)
+                InitializeDebugData(name.get(),type.get(),S.second);
+        }
+    }
+};
+
+enum {
+    CF_DumpDisassembly = (1 << 0),
+    CF_DumpModule = (1 << 1),
+};
+
+Any compile(Label *fn, uint64_t flags) {
+    GenerateCtx ctx;
+    auto result = ctx.generate(fn);
+
+    auto module = result.first;
+    auto func = result.second;
+
+    LLVMExecutionEngineRef ee = nullptr;
+    char *errormsg = nullptr;
+
+    LLVMMCJITCompilerOptions opts;
+    LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
+    opts.OptLevel = 0;
+
+    if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
+        sizeof(opts), &errormsg)) {
+        location_error(String::from_cstr(errormsg));
+    }
+    bangra::ee = ee;
+
+    llvm::ExecutionEngine *pEE = reinterpret_cast<llvm::ExecutionEngine*>(ee);
+    auto listener = new DisassemblyListener(pEE);
+    pEE->RegisterJITEventListener(listener);
+
+#if BANGRA_OPTIMIZE_ASSEMBLY
+    build_and_run_opt_passes(module);
+#endif
+    if (flags & CF_DumpModule) {
+        LLVMDumpModule(module);
+    }
+
+    void *pfunc = LLVMGetPointerToGlobal(ee, func);
+    if (flags & CF_DumpDisassembly) {
+        //auto td = LLVMGetExecutionEngineTargetData(ee);
+        auto tm = LLVMGetExecutionEngineTargetMachine(ee);
+        auto it = listener->sizes.find(pfunc);
+        if (it != listener->sizes.end()) {
+            do_disassemble(tm, pfunc, it->second);
+        } else {
+            std::cout << "no disassembly available\n";
+        }
+    }
+
+    return Any::from_pointer(
+        Pointer(fn->get_function_type()),
+        pfunc);
+}
 
 //------------------------------------------------------------------------------
 // NORMALIZE
@@ -7718,7 +7930,7 @@ struct NormalizeCtx {
         }
     }
 
-    void fold_builtin_call(Label *l) {
+    bool fold_builtin_call(Label *l) {
         ss_cout << "folding builtin call in " << l << std::endl;
 
         auto &&enter = l->body.enter;
@@ -7928,22 +8140,45 @@ struct NormalizeCtx {
                 RETARGS(arg);
             }
         } break;
-        case FN_Typify: {
-            CHECKARGS(2, -1);
-            args[1].verify<TYPE_Label>();
-            std::vector<Type> argtypes = { TYPE_Nothing };
+        case FN_Compile: {
+            CHECKARGS(1, -1);
+            Label *srcl = args[1];
+            uint64_t flags = 0;
             for (size_t i = 2; i < args.size(); ++i) {
-                args[i].verify<TYPE_Type>();
-                argtypes.push_back(args[i].typeref);
+                args[i].verify<TYPE_Symbol>();
+                Symbol sym = args[i].symbol;
+                uint64_t flag = 0;
+                switch(sym.value()) {
+                case SYM_DumpDisassembly: flag = CF_DumpDisassembly; break;
+                case SYM_DumpModule: flag = CF_DumpModule; break;
+                default: {
+                    StyledString ss;
+                    ss.out << "illegal option: " << sym;
+                    location_error(ss.str());
+                } break;
+                }
+                flags |= flag;
             }
-            assert(!argtypes.empty());
-            Label *result = typify(args[1], argtypes);
-            stream_label(ss_cout, result, StreamLabelFormat());
-            RETARGS(result);
+            RETARGS(compile(srcl, flags));
+        } break;
+        case FN_Typify: {
+            CHECKARGS(1, -1);
+            Label *srcl = args[1];
+            std::vector<Type> types = { TYPE_Void };
+            for (size_t i = 2; i < args.size(); ++i) {
+                Any val = args[i];
+                val.verify<TYPE_Type>();
+                types.push_back(val.typeref);
+            }
+            srcl = typify(srcl, types);
+            StyledStream ss(std::cerr);
+            push_label(l);
+            push_label(srcl);
+            RETARGS(srcl);
+            return false;
         } break;
         case FN_CompilerError: {
             CHECKARGS(1, 1);
-            print_traceback();
             location_error(args[1]);
             RETARGS();
         } break;
@@ -7957,8 +8192,10 @@ struct NormalizeCtx {
         } break;
         case FN_Dump: {
             CHECKARGS(1, -1);
+            StyledStream ss(std::cerr);
+            ss << l->body.anchor << " dump: ";
             for (size_t i = 1; i < args.size(); ++i) {
-                stream_expr(ss_cout, args[i], StreamExprFormat());
+                stream_expr(ss, args[i], StreamExprFormat());
             }
             l->unlink_backrefs();
             enter = args[0];
@@ -8047,6 +8284,7 @@ struct NormalizeCtx {
             location_error(ss.str());
         } break;
         }
+        return true;
     }
 
     void inline_branch_continuations(Label *l) {
@@ -8067,8 +8305,8 @@ struct NormalizeCtx {
 #undef IARITH_NUW_NSW_OPS
 #undef IARITH_S_U_OPS
 #undef B_INT_OP2
-#undef CHECKARGS
 #undef RETARGTYPES
+#undef CHECKARGS
 #undef RETARGS
 
     /*
@@ -8086,7 +8324,18 @@ struct NormalizeCtx {
     static bool returns_higher_order_type(Label *l) {
         assert(!l->params.empty());
         Type T = l->params[0]->type;
-        return typesets.is(T);
+        if (typesets.is(T)) return true;
+        if (!typed_labels.is(T)) return false;
+        auto &&tli = typed_labels.get(T);
+        for (size_t i = 1; i < tli.types.size(); ++i) {
+            switch (tli.types[i].value()) {
+            case TYPE_Label:
+            case TYPE_Type:
+                return true;
+            default: break;
+            }
+        }
+        return false;
     }
 
     void clear_continuation_arg(Label *l) {
@@ -8276,8 +8525,8 @@ struct NormalizeCtx {
         return todo.back();
     }
 
-    void normalize3(Label *entry) {
-
+    void normalize(Label *entry) {
+        try {
         done.clear();
         todo = { entry };
 
@@ -8305,8 +8554,13 @@ struct NormalizeCtx {
                 if ((all_args_constant(l)
                     && !builtin_never_folds(l->get_builtin_enter()))
                     || builtin_always_folds(l->get_builtin_enter())) {
-                    fold_builtin_call(l);
-                    goto process_body;
+                    if (fold_builtin_call(l)) {
+                        goto process_body;
+                    } else {
+                        // exception for typify: the new label has to be
+                        // normalized before we can continue
+                        continue;
+                    }
                 } else if (l->body.enter.builtin == FN_Branch) {
                     inline_branch_continuations(l);
                     auto &&args = l->body.args;
@@ -8384,7 +8638,14 @@ struct NormalizeCtx {
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
             } else {
-                assert(false && "calling unexpected target");
+                StyledString ss;
+                auto &&enter = l->body.enter;
+                if (!is_const(enter)) {
+                    ss.out << "unable to call variable of type " << enter.indirect_type();
+                } else {
+                    ss.out << "unable to call value of type " << enter.type;
+                }
+                location_error(ss.str());
             }
 
             ss_cout << "done: ";
@@ -8397,6 +8658,10 @@ struct NormalizeCtx {
             }
         }
 
+        } catch (const Exception &exc) {
+            print_traceback();
+            throw exc;
+        }
     }
 
     Label *lower2cff(Label *entry) {
@@ -8713,8 +8978,7 @@ struct NormalizeCtx {
 static Label *normalize(Label *entry) {
     NormalizeCtx ctx;
     ctx.start_entry = entry;
-    //ctx.normalize(entry);
-    ctx.normalize3(entry);
+    ctx.normalize(entry);
     ctx.lower2cff(entry);
     return entry;
 }
@@ -9332,6 +9596,11 @@ static Scope *f_import_c(const String *path,
     return import_c_module(path->data, args, content->data);
 }
 
+static void f_dump_label(Label *label) {
+    StyledStream ss(std::cerr);
+    stream_label(ss, label, StreamLabelFormat());
+}
+
 typedef struct { Any result; bool ok; } f_scope_at_result;
 static f_scope_at_result f_scope_at(Scope *scope, Symbol key) {
     Any result = none;
@@ -9372,6 +9641,7 @@ static void init_globals() {
     DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
 
+    DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String)
 
     globals->bind(Symbol("print-number"),
@@ -9469,124 +9739,7 @@ static void setup_stdio() {
     }
 }
 
-void build_and_run_opt_passes(LLVMModuleRef module) {
-    LLVMPassManagerBuilderRef passBuilder;
-
-    passBuilder = LLVMPassManagerBuilderCreate();
-    LLVMPassManagerBuilderSetOptLevel(passBuilder, 3);
-    LLVMPassManagerBuilderSetSizeLevel(passBuilder, 0);
-    LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
-
-    LLVMPassManagerRef functionPasses =
-      LLVMCreateFunctionPassManagerForModule(module);
-    LLVMPassManagerRef modulePasses =
-      LLVMCreatePassManager();
-
-    LLVMPassManagerBuilderPopulateFunctionPassManager(passBuilder,
-                                                      functionPasses);
-    LLVMPassManagerBuilderPopulateModulePassManager(passBuilder, modulePasses);
-
-    LLVMPassManagerBuilderDispose(passBuilder);
-
-    LLVMInitializeFunctionPassManager(functionPasses);
-    for (LLVMValueRef value = LLVMGetFirstFunction(module);
-         value; value = LLVMGetNextFunction(value))
-      LLVMRunFunctionPassManager(functionPasses, value);
-    LLVMFinalizeFunctionPassManager(functionPasses);
-
-    LLVMRunPassManager(modulePasses, module);
-
-    LLVMDisposePassManager(functionPasses);
-    LLVMDisposePassManager(modulePasses);
-}
-
 } // namespace bangra
-
-static void pprint(int pos, unsigned char *buf, int len, const char *disasm) {
-  int i;
-  printf("%04x:  ", pos);
-  for (i = 0; i < 8; i++) {
-    if (i < len) {
-      printf("%02x ", buf[i]);
-    } else {
-      printf("   ");
-    }
-  }
-
-  printf("   %s\n", disasm);
-}
-
-static void do_disassemble(LLVMTargetMachineRef tm, void *fptr, int siz) {
-
-    unsigned char *buf = (unsigned char *)fptr;
-
-  LLVMDisasmContextRef D = LLVMCreateDisasmCPUFeatures(
-    LLVMGetTargetMachineTriple(tm),
-    LLVMGetTargetMachineCPU(tm),
-    LLVMGetTargetMachineFeatureString(tm),
-    NULL, 0, NULL, NULL);
-    LLVMSetDisasmOptions(D,
-        LLVMDisassembler_Option_PrintImmHex);
-  char outline[1024];
-  int pos;
-
-  if (!D) {
-    printf("ERROR: Couldn't create disassembler\n");
-    return;
-  }
-
-  pos = 0;
-  while (pos < siz) {
-    size_t l = LLVMDisasmInstruction(D, buf + pos, siz - pos, 0, outline,
-                                     sizeof(outline));
-    if (!l) {
-      pprint(pos, buf + pos, 1, "\t???");
-      pos++;
-        break;
-    } else {
-      pprint(pos, buf + pos, l, outline);
-      pos += l;
-    }
-  }
-
-  LLVMDisasmDispose(D);
-}
-
-class DisassemblyListener : public llvm::JITEventListener {
-public:
-    llvm::ExecutionEngine *ee;
-    DisassemblyListener(llvm::ExecutionEngine *_ee) : ee(_ee) {}
-
-    std::unordered_map<void *, size_t> sizes;
-
-    void InitializeDebugData(
-        llvm::StringRef name,
-        llvm::object::SymbolRef::Type type, uint64_t sz) {
-        if(type == llvm::object::SymbolRef::ST_Function) {
-            #if !defined(__arm__) && !defined(__linux__)
-            name = name.substr(1);
-            #endif
-            void * addr = (void*)ee->getFunctionAddress(name);
-            if(addr) {
-                assert(addr);
-                sizes[addr] = sz;
-            }
-        }
-    }
-
-    virtual void NotifyObjectEmitted(
-        const llvm::object::ObjectFile &Obj,
-        const llvm::RuntimeDyld::LoadedObjectInfo &L) {
-        auto size_map = llvm::object::computeSymbolSizes(Obj);
-        for(auto & S : size_map) {
-            llvm::object::SymbolRef sym = S.first;
-            auto name = sym.getName();
-            auto type = sym.getType();
-            if(name && type)
-                InitializeDebugData(name.get(),type.get(),S.second);
-        }
-    }
-};
 
 int main(int argc, char *argv[]) {
     using namespace bangra;
@@ -9654,56 +9807,8 @@ int main(int argc, char *argv[]) {
         std::cout << std::endl;
 #endif
 
-        GenerateCtx ctx;
-        auto result = ctx.generate(fn);
-
-        auto module = result.first;
-        auto func = result.second;
-
-        LLVMExecutionEngineRef ee = nullptr;
-        char *errormsg = nullptr;
-
-        LLVMMCJITCompilerOptions opts;
-        LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
-        opts.OptLevel = 0;
-
-        if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
-            sizeof(opts), &errormsg)) {
-            location_error(String::from_cstr(errormsg));
-        }
-        bangra::ee = ee;
-
-        llvm::ExecutionEngine *pEE = reinterpret_cast<llvm::ExecutionEngine*>(ee);
-        auto listener = new DisassemblyListener(pEE);
-        pEE->RegisterJITEventListener(listener);
-
-#if BANGRA_OPTIMIZE_ASSEMBLY
-        build_and_run_opt_passes(module);
-
-#if BANGRA_DEBUG_CODEGEN
-        std::cout << "\noptimized:" << std::endl;
-        LLVMDumpModule(module);
-#endif
-#endif
-
         typedef void (*MainFuncType)();
-        void *pfunc = LLVMGetPointerToGlobal(ee, func);
-#if BANGRA_DEBUG_CODEGEN
-        {
-            //auto td = LLVMGetExecutionEngineTargetData(ee);
-            auto tm = LLVMGetExecutionEngineTargetMachine(ee);
-            auto it = listener->sizes.find(pfunc);
-            if (it != listener->sizes.end()) {
-                do_disassemble(tm, pfunc, it->second);
-            } else {
-                std::cout << "no disassembly available\n";
-            }
-        }
-#endif
-        MainFuncType fptr = (MainFuncType)pfunc;
-#if BANGRA_DEBUG_CODEGEN
-        std::cout << "executing:" << std::endl;
-#endif
+        MainFuncType fptr = (MainFuncType)compile(fn, 0).pointer;
         fptr();
 
         //interpreter_loop(cmd);

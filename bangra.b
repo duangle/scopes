@@ -183,9 +183,6 @@ fn/cc print (return ...)
                 \ 0
         load-printf
 
-print "the number is" (add 303 606) 1.0
-print "one more line"
-
 # deferring remaining expressions to bootstrap parser
 #syntax-apply-block
     fn/cc (_ anchor exprs env)
@@ -259,7 +256,7 @@ print "one more line"
                 print-spaces depth
                 #Any-dispatch value
                 io-write
-                    repr value
+                    Any-repr value
                 io-write "\n"
             unconst exprs
             unconst 0
@@ -393,23 +390,64 @@ print "one more line"
 
     puts "hello world" (unconst 8)
 
+# explicit instantiation
+fn/cc test-add (_ x1 y1 z1 w1 x2 y2 z2 w2)
+    _
+        add x1 x2
+        add y1 y2
+        add z1 z2
+        add w1 w2
+fn/cc test-explicit-instantiation (_)
+    dump-label test-add
+    dump-label
+        typify test-add r32 r32 r32 r32 r32 r32 r32 r32
+    call
+        fn/cc (_ f)
+            dump f
+            print
+                f 1 2 3 4 5 6 7 8
+        compile
+            typify test-add r32 r32 r32 r32 r32 r32 r32 r32
+            \ 'dump-disassembly 'dump-module
+
+test-explicit-instantiation
+
+# return function dynamically
+fn/cc square-brackets (_ s)
+    io-write "["; io-write s; io-write "]"
+fn/cc round-brackets (_ s)
+    io-write "("; io-write s; io-write ")"
+fn/cc bracket (_ use-square?)
+    branch (unconst use-square?)
+        fn/cc (_) square-brackets
+        fn/cc (_) round-brackets
+fn/cc apply-brackets (_ f s)
+    f s
+    io-write "\n"
+fn/cc test-dynamic-function-return (_)
+    apply-brackets (bracket true) "hello"
+    apply-brackets (bracket true) "world"
+    apply-brackets (bracket false) "hello"
+    apply-brackets (bracket false) "world"
+
 # polymorphic return type and inlined type checking
-    fn/cc print-value (_ value)
-        call
-            fn/cc (_ value-type)
-                branch (type== value-type i32)
-                    fn/cc (_)
-                        io-write "<number>\n"
-                        \ "hello"
-                    fn/cc (_)
-                        branch (type== value-type string)
-                            fn/cc (_)
-                                io-write value
-                                io-write "\n"
-                                \ false
-                            fn/cc (_)
-                                io-write "???\n"
-            typeof value
+fn/cc print-value (_ value)
+    call
+        fn/cc (_ value-type)
+            branch (type== value-type i32)
+                fn/cc (_)
+                    io-write "<number>\n"
+                    \ "hello"
+                fn/cc (_)
+                    branch (type== value-type string)
+                        fn/cc (_)
+                            io-write value
+                            io-write "\n"
+                            \ false
+                        fn/cc (_)
+                            io-write "???\n"
+        typeof value
+fn/cc test-polymorphic-return-type (_)
     print-value
         print-value
             print-value 3
