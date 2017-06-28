@@ -1168,6 +1168,44 @@ static const String *format( const char *fmt, ...) {
     return result;
 }
 
+// computes the levenshtein distance between two strings
+static size_t distance(const String *_s, const String *_t) {
+    const char *s = _s->data;
+    const char *t = _t->data;
+    const size_t n = _s->count;
+    const size_t m = _t->count;
+    if (!m) return n;
+    if (!n) return m;
+
+    size_t _v0[m + 1];
+    size_t _v1[m + 1];
+
+    size_t *v0 = _v0;
+    size_t *v1 = _v1;
+    for (size_t i = 0; i <= m; ++i) {
+        v0[i] = i;
+    }
+
+    for (size_t i = 0; i < n; ++i) {
+        v1[0] = i + 1;
+
+        for (size_t j = 0; j < m; ++j) {
+            size_t cost = (s[i] == t[j])?0:1;
+            v1[j + 1] = std::min(v1[j] + 1,
+                std::min(v0[j + 1] + 1, v0[j] + cost));
+        }
+
+        size_t *tmp = v0;
+        v0 = v1;
+        v1 = tmp;
+    }
+
+    //std::cout << "lev(" << s << ", " << t << ") = " << v0[m] << std::endl;
+
+    return v0[m];
+}
+
+
 //------------------------------------------------------------------------------
 // SYMBOL
 //------------------------------------------------------------------------------
@@ -2857,6 +2895,32 @@ public:
         if (it != map.end()) {
             map.erase(it);
         }
+    }
+
+    std::vector<Symbol> find_closest_match(Symbol name) const {
+        const String *s = name.name();
+        std::unordered_set<Symbol, Symbol::Hash> done;
+        std::vector<Symbol> best_syms;
+        size_t best_dist = (size_t)-1;
+        const Scope *self = this;
+        do {
+            for (auto &&k : self->map) {
+                Symbol sym = k.first;
+                if (done.count(sym))
+                    continue;
+                size_t dist = distance(s, sym.name());
+                if (dist == best_dist) {
+                    best_syms.push_back(sym);
+                } else if (dist < best_dist) {
+                    best_dist = dist;
+                    best_syms = { sym };
+                }
+                done.insert(sym);
+            }
+            self = self->parent;
+        } while (self);
+        std::sort(best_syms.begin(), best_syms.end());
+        return best_syms;
     }
 
     bool lookup(Symbol name, Any &dest) const {
@@ -9741,8 +9805,22 @@ process:
 
         Any result = none;
         if (!env->lookup(name, result)) {
-            location_error(
-                format("no value bound to name '%s' in scope", name.name()->data));
+            StyledString ss;
+            ss.out << "no value bound to name " << name.name()->data << " in scope.";
+            auto syms = env->find_closest_match(name);
+            if (!syms.empty()) {
+                ss.out << " Did you mean " << syms[0].name()->data;
+                for (size_t i = 1; i < syms.size(); ++i) {
+                    if ((i + 1) == syms.size()) {
+                        ss.out << " or ";
+                    } else {
+                        ss.out << ", ";
+                    }
+                    ss.out << syms[i].name()->data;
+                }
+                ss.out << "?";
+            }
+            location_error(ss.str());
         }
         if (result.type == TYPE_List) {
             const List *list = result.list;

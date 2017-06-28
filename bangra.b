@@ -52,21 +52,64 @@ fn/cc string->rawstring (_ s)
     getelementptr s 0 1 0
 
 fn/cc Any-typeof (_ val)
+    assert-typeof val Any
     extractvalue val 0
 fn/cc Any-payload (_ val)
+    assert-typeof val Any
     extractvalue val 1
 
 fn/cc Any-extract-list (_ val)
+    assert-typeof val Any
     inttoptr (Any-payload val) list
 
 fn/cc Any-extract-Syntax (_ val)
+    assert-typeof val Any
     inttoptr (Any-payload val) Syntax
 
 fn/cc Any-extract-Symbol (_ val)
+    assert-typeof val Any
     bitcast (Any-payload val) Symbol
 
 fn/cc Any-extract-i32 (_ val)
+    assert-typeof val Any
     trunc (Any-payload val) i32
+
+fn/cc list-empty? (_ l)
+    assert-typeof l list
+    icmp== (ptrtoint l size_t) 0:usize
+fn/cc list-at (_ l)
+    assert-typeof l list
+    branch (list-empty? l)
+        fn/cc (_) (Any-wrap none)
+        fn/cc (_) (extractvalue (load l) 0)
+fn/cc list-next (_ l)
+    assert-typeof l list
+    branch (list-empty? l)
+        fn/cc (_) eol
+        fn/cc (_)
+            bitcast (extractvalue (load l) 1) list
+fn/cc list-at-next (_ l)
+    assert-typeof l list
+    branch (list-empty? l)
+        fn/cc (_)
+            _ (Any-wrap none) eol
+        fn/cc (_)
+            _
+                extractvalue (load l) 0
+                bitcast (extractvalue (load l) 1) list
+fn/cc list-countof (_ l)
+    assert-typeof l list
+    extractvalue (load l) 2
+
+fn/cc Any-list? (_ val)
+    assert-typeof val Any
+    type== (Any-typeof val) list
+
+fn/cc maybe-unsyntax (_ val)
+    branch (type== (Any-typeof val) Syntax)
+        fn/cc (_)
+            extractvalue (load (Any-extract-Syntax val)) 1
+        fn/cc (_) val
 
 fn/cc Any-dispatch (return val)
     call
@@ -184,41 +227,8 @@ fn/cc print (return ...)
         load-printf
 
 # deferring remaining expressions to bootstrap parser
-#syntax-apply-block
+syntax-apply-block
     fn/cc (_ anchor exprs env)
-        fn/cc list-empty? (_ l)
-            icmp== (ptrtoint l size_t) 0:usize
-        fn/cc list-at (_ l)
-            branch (list-empty? l)
-                fn/cc (_) (Any-wrap none)
-                fn/cc (_) (extractvalue (load l) 0)
-        fn/cc list-next (_ l)
-            branch (list-empty? l)
-                fn/cc (_) eol
-                fn/cc (_)
-                    bitcast (extractvalue (load l) 1) list
-        fn/cc list-at-next (_ l)
-            branch (list-empty? l)
-                fn/cc (_)
-                    _ (Any-wrap none) eol
-                fn/cc (_)
-                    _
-                        extractvalue (load l) 0
-                        bitcast (extractvalue (load l) 1) list
-        fn/cc list-countof (_ l)
-            extractvalue (load l) 2
-
-        fn/cc list? (_ val)
-            type== (Any-typeof val) list
-
-        fn/cc maybe-unsyntax (_ val)
-            branch (type== (Any-typeof val) Syntax)
-                fn/cc (_)
-                    extractvalue (load (Any-extract-Syntax val)) 1
-                fn/cc (_) val
-
-
-
         fn/cc print-spaces (_ depth)
             branch (icmp== depth 0)
                 fn/cc (_)
@@ -236,7 +246,7 @@ fn/cc print (return ...)
                                 fn/cc (_ at next)
                                     call
                                         fn/cc (_ value)
-                                            branch (list? value)
+                                            branch (Any-list? value)
                                                 fn/cc (_)
                                                     print-spaces depth
                                                     io-write ";\n"
@@ -391,13 +401,14 @@ fn/cc print (return ...)
     puts "hello world" (unconst 8)
 
 # explicit instantiation
-fn/cc test-add (return x1 y1 z1 w1 x2 y2 z2 w2)
-    return
-        fadd x1 x2
-        fadd y1 y2
-        fadd z1 z2
-        fadd w1 w2
 fn/cc test-explicit-instantiation (_)
+    fn/cc test-add (return x1 y1 z1 w1 x2 y2 z2 w2)
+        return
+            fadd x1 x2
+            fadd y1 y2
+            fadd z1 z2
+            fadd w1 w2
+
     dump-label test-add
     dump-label
         typify test-add f32 f32 f32 f32 f32 f32 f32 f32
@@ -412,38 +423,37 @@ fn/cc test-explicit-instantiation (_)
 
 #test-explicit-instantiation
 
-dump
-    fptrunc 3.5:f64 f32
+fn/cc test-select-optimization (_)
+    fn/cc conditional-select (return opt i)
+        branch opt
+            fn/cc (_)
+                return
+                    add i 5
+            fn/cc (_)
+                return
+                    mul i 5
 
-fn/cc conditional-select (return opt i)
-    branch opt
-        fn/cc (_)
-            return
-                add i 5
-        fn/cc (_)
-            return
-                mul i 5
+    dump-label
+        typify conditional-select bool i32
 
-dump-label
-    typify conditional-select bool i32
-
-compile
-    typify conditional-select bool i32
-    \ 'dump-module 'dump-disassembly #'skip-opts
+    compile
+        typify conditional-select bool i32
+        \ 'dump-module 'dump-disassembly #'skip-opts
 
 # return function dynamically
-fn/cc square-brackets (_ s)
-    io-write "["; io-write s; io-write "]"
-fn/cc round-brackets (_ s)
-    io-write "("; io-write s; io-write ")"
-fn/cc bracket (_ use-square?)
-    branch (unconst use-square?)
-        fn/cc (_) square-brackets
-        fn/cc (_) round-brackets
-fn/cc apply-brackets (_ f s)
-    f s
-    io-write "\n"
 fn/cc test-dynamic-function-return (_)
+    fn/cc square-brackets (_ s)
+        io-write "["; io-write s; io-write "]"
+    fn/cc round-brackets (_ s)
+        io-write "("; io-write s; io-write ")"
+    fn/cc bracket (_ use-square?)
+        branch (unconst use-square?)
+            fn/cc (_) square-brackets
+            fn/cc (_) round-brackets
+    fn/cc apply-brackets (_ f s)
+        f s
+        io-write "\n"
+
     apply-brackets (bracket true) "hello"
     apply-brackets (bracket true) "world"
     apply-brackets (bracket false) "hello"
