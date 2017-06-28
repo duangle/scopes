@@ -530,11 +530,16 @@ namespace bangra {
     T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) \
+    T(FN_FPTrunc) T(FN_FPExt) \
+    T(FN_FPToUI) T(FN_FPToSI) \
+    T(FN_UIToFP) T(FN_SIToFP) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
     T(OP_Sub) T(OP_SubNUW) T(OP_SubNSW) \
     T(OP_Mul) T(OP_MulNUW) T(OP_MulNSW) \
     T(OP_SDiv) T(OP_UDiv) \
     T(OP_SRem) T(OP_URem) \
+    T(OP_Shl) T(OP_LShr) T(OP_AShr) \
+    T(OP_BAnd) T(OP_BOr) T(OP_BXor) \
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem)
 
 #define B_MAP_SYMBOLS() \
@@ -642,7 +647,12 @@ namespace bangra {
     T(OP_Mul, "mul") T(OP_MulNUW, "mul-nuw") T(OP_MulNSW, "mul-nsw") \
     T(OP_SDiv, "sdiv") T(OP_UDiv, "udiv") \
     T(OP_SRem, "srem") T(OP_URem, "urem") \
+    T(OP_Shl, "shl") T(OP_LShr, "lshr") T(OP_AShr, "ashr") \
+    T(OP_BAnd, "band") T(OP_BOr, "bor") T(OP_BXor, "bxor") \
     T(OP_FAdd, "fadd") T(OP_FSub, "fsub") T(OP_FMul, "fmul") T(OP_FDiv, "fdiv") T(OP_FRem, "frem") \
+    T(FN_FPTrunc, "fptrunc") T(FN_FPExt, "fpext") \
+    T(FN_FPToUI, "fptoui") T(FN_FPToSI, "fptosi") \
+    T(FN_UIToFP, "uitofp") T(FN_SIToFP, "sitofp") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_InterpreterVersion, "interpreter-version") \
     T(FN_Iter, "iter") \
@@ -773,6 +783,7 @@ namespace bangra {
     /* compile flags */ \
     T(SYM_DumpDisassembly, "dump-disassembly") \
     T(SYM_DumpModule, "dump-module") \
+    T(SYM_SkipOpts, "skip-opts") \
     \
     /* ad-hoc builtin names */ \
     T(SYM_ExecuteReturn, "execute-return") \
@@ -6746,6 +6757,18 @@ struct GenerateCtx {
                 retvalue = LLVMBuildSRem(builder, a, b, ""); } break;
             case OP_URem: { READ_VALUE(a); READ_VALUE(b);
                 retvalue = LLVMBuildURem(builder, a, b, ""); } break;
+            case OP_Shl: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildShl(builder, a, b, ""); } break;
+            case OP_LShr: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildLShr(builder, a, b, ""); } break;
+            case OP_AShr: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildAShr(builder, a, b, ""); } break;
+            case OP_BAnd: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildAnd(builder, a, b, ""); } break;
+            case OP_BOr: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildOr(builder, a, b, ""); } break;
+            case OP_BXor: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildXor(builder, a, b, ""); } break;
             case OP_FAdd: { READ_VALUE(a); READ_VALUE(b);
                 retvalue = LLVMBuildFAdd(builder, a, b, ""); } break;
             case OP_FSub: { READ_VALUE(a); READ_VALUE(b);
@@ -7073,8 +7096,9 @@ public:
 };
 
 enum {
-    CF_DumpDisassembly = (1 << 0),
-    CF_DumpModule = (1 << 1),
+    CF_DumpDisassembly  = (1 << 0),
+    CF_DumpModule       = (1 << 1),
+    CF_SkipOpts         = (1 << 2),
 };
 
 Any compile(Label *fn, uint64_t flags) {
@@ -7102,7 +7126,9 @@ Any compile(Label *fn, uint64_t flags) {
     pEE->RegisterJITEventListener(listener);
 
 #if BANGRA_OPTIMIZE_ASSEMBLY
-    build_and_run_opt_passes(module);
+    if (!(flags & CF_SkipOpts)) {
+        build_and_run_opt_passes(module);
+    }
 #endif
     if (flags & CF_DumpModule) {
         LLVMDumpModule(module);
@@ -7126,8 +7152,42 @@ Any compile(Label *fn, uint64_t flags) {
 }
 
 //------------------------------------------------------------------------------
+// COMMON ERRORS
+//------------------------------------------------------------------------------
+
+void invalid_op2_types_error(Type A, Type B) {
+    StyledString ss;
+    ss.out << "invalid operand types " << A << " and " << B;
+    location_error(ss.str());
+}
+
+//------------------------------------------------------------------------------
 // NORMALIZE
 //------------------------------------------------------------------------------
+
+#define B_ARITH_OPS() \
+        IARITH_NUW_NSW_OPS(Add, +) \
+        IARITH_NUW_NSW_OPS(Sub, -) \
+        IARITH_NUW_NSW_OPS(Mul, *) \
+         \
+        IARITH_OP(SDiv, /, i) \
+        IARITH_OP(UDiv, /, u) \
+        IARITH_OP(SRem, %, i) \
+        IARITH_OP(URem, %, u) \
+         \
+        IARITH_OP(BAnd, &, u) \
+        IARITH_OP(BOr, |, u) \
+        IARITH_OP(BXor, ^, u) \
+         \
+        IARITH_OP(Shl, <<, u) \
+        IARITH_OP(LShr, >>, u) \
+        IARITH_OP(AShr, >>, i) \
+         \
+        FARITH_OP(FAdd, +) \
+        FARITH_OP(FSub, -) \
+        FARITH_OP(FMul, *) \
+        FARITH_OP(FDiv, /) \
+        FARITH_OPF(FRem, std::fmod)
 
 struct NormalizeCtx {
     StyledStream ss_cout;
@@ -7820,6 +7880,84 @@ struct NormalizeCtx {
             verify_integer(DestT);
             RETARGTYPES(DestT);
         } break;
+        case FN_FPTrunc: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            if ((T == TYPE_F64) && (DestT == TYPE_F32)) {
+            } else { invalid_op2_types_error(T, DestT); }
+            RETARGTYPES(DestT);
+        } break;
+        case FN_FPExt: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            if ((T == TYPE_F32) && (DestT == TYPE_F64)) {
+            } else { invalid_op2_types_error(T, DestT); }
+            RETARGTYPES(DestT);
+        } break;
+        case FN_FPToUI: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            switch(T.value()) {
+            case TYPE_F32:
+            case TYPE_F64: break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            RETARGTYPES(DestT);
+        } break;
+        case FN_FPToSI: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            switch(T.value()) {
+            case TYPE_F32:
+            case TYPE_F64: break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            RETARGTYPES(DestT);
+        } break;
+        case FN_UIToFP: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            switch(DestT.value()) {
+            case TYPE_F32:
+            case TYPE_F64: break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            RETARGTYPES(DestT);
+        } break;
+        case FN_SIToFP: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            switch(DestT.value()) {
+            case TYPE_F32:
+            case TYPE_F64: break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            RETARGTYPES(DestT);
+        } break;
         case FN_ZExt: {
             CHECKARGS(2, 2);
             Type T = args[1].indirect_type();
@@ -7922,9 +8060,8 @@ struct NormalizeCtx {
         verify_integer_ops(args[1], args[2]); \
         RETARGTYPES(args[1].indirect_type()); \
     } break;
-#define IARITH_S_U_OPS(NAME, OP) \
-    case OP_S ## NAME: \
-    case OP_U ## NAME: { \
+#define IARITH_OP(NAME, OP, PFX) \
+    case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
         verify_integer_ops(args[1], args[2]); \
         RETARGTYPES(args[1].indirect_type()); \
@@ -7935,19 +8072,14 @@ struct NormalizeCtx {
         verify_real_ops(args[1], args[2]); \
         RETARGTYPES(args[1].indirect_type()); \
     } break;
-        IARITH_NUW_NSW_OPS(Add, +)
-        IARITH_NUW_NSW_OPS(Sub, -)
-        IARITH_NUW_NSW_OPS(Mul, *)
-        IARITH_S_U_OPS(Div, /)
-        IARITH_S_U_OPS(Rem, %)
-        FARITH_OP(FAdd, +)
-        FARITH_OP(FSub, -)
-        FARITH_OP(FMul, *)
-        FARITH_OP(FDiv, /)
-        FARITH_OP(FRem, %)
+#define FARITH_OPF FARITH_OP
+
+        B_ARITH_OPS()
+
 #undef IARITH_NUW_NSW_OPS
-#undef IARITH_S_U_OPS
+#undef IARITH_OP
 #undef FARITH_OP
+#undef FARITH_OPF
         default: {
             StyledString ss;
             ss.out << "can not type builtin " << enter.builtin;
@@ -8048,6 +8180,94 @@ struct NormalizeCtx {
             verify_integer(DestT);
             Any result = args[1];
             result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_FPTrunc: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            if ((T == TYPE_F64) && (DestT == TYPE_F32)) {
+                RETARGS((float)args[1].f64);
+            } else { invalid_op2_types_error(T, DestT); }
+        } break;
+        case FN_FPExt: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            if ((T == TYPE_F32) && (DestT == TYPE_F64)) {
+                RETARGS((double)args[1].f32);
+            } else { invalid_op2_types_error(T, DestT); }
+        } break;
+        case FN_FPToUI: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            uint64_t val = 0;
+            switch(T.value()) {
+            case TYPE_F32: val = (uint64_t)args[1].f32; break;
+            case TYPE_F64: val = (uint64_t)args[1].f64; break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            Any result = val;
+            result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_FPToSI: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_real(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_integer(DestT);
+            int64_t val = 0;
+            switch(T.value()) {
+            case TYPE_F32: val = (int64_t)args[1].f32; break;
+            case TYPE_F64: val = (int64_t)args[1].f64; break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            Any result = val;
+            result.type = DestT;
+            RETARGS(result);
+        } break;
+        case FN_UIToFP: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            uint64_t src = cast_number<uint64_t>(args[1]);
+            Any result = none;
+            switch(DestT.value()) {
+            case TYPE_F32: result = (float)src; break;
+            case TYPE_F64: result = (double)src; break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
+            RETARGS(result);
+        } break;
+        case FN_SIToFP: {
+            CHECKARGS(2, 2);
+            Type T = args[1].type;
+            verify_integer(T);
+            args[2].verify<TYPE_Type>();
+            Type DestT = args[2].typeref;
+            verify_real(DestT);
+            int64_t src = cast_number<int64_t>(args[1]);
+            Any result = none;
+            switch(DestT.value()) {
+            case TYPE_F32: result = (float)src; break;
+            case TYPE_F64: result = (double)src; break;
+            default: invalid_op2_types_error(T, DestT); break;
+            }
             RETARGS(result);
         } break;
         case FN_ZExt: {
@@ -8192,6 +8412,7 @@ struct NormalizeCtx {
                 switch(sym.value()) {
                 case SYM_DumpDisassembly: flag = CF_DumpDisassembly; break;
                 case SYM_DumpModule: flag = CF_DumpModule; break;
+                case SYM_SkipOpts: flag = CF_SkipOpts; break;
                 default: {
                     StyledString ss;
                     ss.out << "illegal option: " << sym;
@@ -8258,13 +8479,13 @@ struct NormalizeCtx {
 #define B_INT_OP2(OP, N) \
     switch(args[1].type.value()) { \
     case TYPE_Bool: result = (args[1].i1 OP args[2].i1); break; \
-    case TYPE_I8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case TYPE_I8: \
     case TYPE_U8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
-    case TYPE_I16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case TYPE_I16: \
     case TYPE_U16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
-    case TYPE_I32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case TYPE_I32: \
     case TYPE_U32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
-    case TYPE_I64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
+    case TYPE_I64: \
     case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
     }
@@ -8312,17 +8533,12 @@ struct NormalizeCtx {
         result.type = args[1].type; \
         RETARGS(result); \
     } break;
-#define IARITH_S_U_OPS(NAME, OP) \
-    case OP_S ## NAME: \
-    case OP_U ## NAME: { \
+#define IARITH_OP(NAME, OP, PFX) \
+    case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
         verify_integer_ops(args[1], args[2]); \
         Any result = none; \
-        switch(enter.builtin.value()) { \
-        case OP_U ## NAME: B_INT_OP2(OP, u); break; \
-        case OP_S ## NAME: B_INT_OP2(OP, i); break; \
-        default: assert(false); break; \
-        } \
+        B_INT_OP2(OP, PFX); \
         result.type = args[1].type; \
         RETARGS(result); \
     } break;
@@ -8342,16 +8558,8 @@ struct NormalizeCtx {
         B_FLOAT_OPF2(OP); \
         RETARGS(result); \
     } break;
-        IARITH_NUW_NSW_OPS(Add, +)
-        IARITH_NUW_NSW_OPS(Sub, -)
-        IARITH_NUW_NSW_OPS(Mul, *)
-        IARITH_S_U_OPS(Div, /)
-        IARITH_S_U_OPS(Rem, %)
-        FARITH_OP(FAdd, +)
-        FARITH_OP(FSub, -)
-        FARITH_OP(FMul, *)
-        FARITH_OP(FDiv, /)
-        FARITH_OPF(FRem, std::fmod)
+        B_ARITH_OPS()
+
         default: {
             StyledString ss;
             ss.out << "can not inline builtin " << enter.builtin;
@@ -8377,8 +8585,9 @@ struct NormalizeCtx {
     }
 
 #undef IARITH_NUW_NSW_OPS
-#undef IARITH_S_U_OPS
+#undef IARITH_OP
 #undef FARITH_OP
+#undef FARITH_OPF
 #undef B_INT_OP2
 #undef RETARGTYPES
 #undef CHECKARGS

@@ -124,7 +124,7 @@ fn/cc Any-dispatch (return val)
 # print function
 fn/cc print (return ...)
     fn/cc load-printf (_)
-        compiler-message "loading printf..."
+        #compiler-message "loading printf..."
         call
             fn/cc (_ lib)
                 call
@@ -391,8 +391,8 @@ fn/cc print (return ...)
     puts "hello world" (unconst 8)
 
 # explicit instantiation
-fn/cc test-add (_ x1 y1 z1 w1 x2 y2 z2 w2)
-    _
+fn/cc test-add (return x1 y1 z1 w1 x2 y2 z2 w2)
+    return
         fadd x1 x2
         fadd y1 y2
         fadd z1 z2
@@ -410,9 +410,26 @@ fn/cc test-explicit-instantiation (_)
             typify test-add f32 f32 f32 f32 f32 f32 f32 f32
             \ 'dump-disassembly 'dump-module
 
-test-explicit-instantiation
+#test-explicit-instantiation
+
 dump
-    frem 3.14:f64 1.0:f64
+    fptrunc 3.5:f64 f32
+
+fn/cc conditional-select (return opt i)
+    branch opt
+        fn/cc (_)
+            return
+                add i 5
+        fn/cc (_)
+            return
+                mul i 5
+
+dump-label
+    typify conditional-select bool i32
+
+compile
+    typify conditional-select bool i32
+    \ 'dump-module 'dump-disassembly #'skip-opts
 
 # return function dynamically
 fn/cc square-brackets (_ s)
