@@ -112,6 +112,7 @@ fn/cc maybe-unsyntax (_ val)
         fn/cc (_) val
 
 fn/cc Any-dispatch (return val)
+    assert-typeof val Any
     call
         fn/cc try0 (_ T)
             fn/cc failed (_)
@@ -226,41 +227,46 @@ fn/cc print (return ...)
                 \ 0
         load-printf
 
+fn/cc print-spaces (_ depth)
+    assert-typeof depth i32
+    branch (icmp== depth 0)
+        fn/cc (_)
+        fn/cc (_)
+            io-write "    "
+            print-spaces (sub depth 1)
+
+compile
+    typify print-spaces i32
+    \ 'dump-module 'skip-opts
+
+fn/cc walk-list (_ on-leaf l depth)
+    call
+        fn/cc loop (_ l)
+            branch (list-empty? l)
+                fn/cc (_) true
+                fn/cc (_)
+                    call
+                        fn/cc (_ at next)
+                            call
+                                fn/cc (_ value)
+                                    branch (Any-list? value)
+                                        fn/cc (_)
+                                            print-spaces depth
+                                            io-write ";\n"
+                                            walk-list on-leaf
+                                                Any-extract-list value
+                                                add depth 1
+                                        fn/cc (_)
+                                            on-leaf value depth
+                                            \ true
+                                maybe-unsyntax at
+                            loop next
+                        list-at-next l
+        \ l
+
 # deferring remaining expressions to bootstrap parser
 syntax-apply-block
     fn/cc (_ anchor exprs env)
-        fn/cc print-spaces (_ depth)
-            branch (icmp== depth 0)
-                fn/cc (_)
-                fn/cc (_)
-                    io-write "    "
-                    print-spaces (sub depth 1)
-
-        fn/cc walk-list (_ on-leaf l depth)
-            call
-                fn/cc loop (_ l)
-                    branch (list-empty? l)
-                        fn/cc (_) true
-                        fn/cc (_)
-                            call
-                                fn/cc (_ at next)
-                                    call
-                                        fn/cc (_ value)
-                                            branch (Any-list? value)
-                                                fn/cc (_)
-                                                    print-spaces depth
-                                                    io-write ";\n"
-                                                    walk-list on-leaf
-                                                        Any-extract-list value
-                                                        add depth 1
-                                                fn/cc (_)
-                                                    on-leaf value depth
-                                                    \ true
-                                        maybe-unsyntax at
-                                    loop next
-                                list-at-next l
-                \ l
-
         walk-list
             fn/cc on-leaf (_ value depth)
                 print-spaces depth

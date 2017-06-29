@@ -1775,6 +1775,12 @@ struct Parameter;
 struct Scope;
 
 struct Any {
+    struct Hash {
+        std::size_t operator()(const Any & s) const {
+            return s.hash();
+        }
+    };
+
     Type type;
     union {
         char content[8];
@@ -2866,7 +2872,7 @@ protected:
     Scope(Scope *_parent = nullptr) : parent(_parent) {}
 
 public:
-    std::unordered_map<Symbol, Any, Symbol::Hash> map;
+    std::unordered_map<Any, Any, Any::Hash> map;
     Scope *parent;
 
     size_t count() const {
@@ -2883,14 +2889,18 @@ public:
         return count;
     }
 
-    void bind(Symbol name, const Any &value) {
-        auto ret = map.insert(std::pair<Symbol, Any>(name, value));
+    void bind(KnownSymbol name, const Any &value) {
+        bind(Symbol(name), value);
+    }
+
+    void bind(const Any &name, const Any &value) {
+        auto ret = map.insert(std::pair<Any, Any>(name, value));
         if (!ret.second) {
             ret.first->second = value;
         }
     }
 
-    void del(Symbol name) {
+    void del(const Any &name) {
         auto it = map.find(name);
         if (it != map.end()) {
             map.erase(it);
@@ -2905,7 +2915,9 @@ public:
         const Scope *self = this;
         do {
             for (auto &&k : self->map) {
-                Symbol sym = k.first;
+                if (k.first.type != TYPE_Symbol)
+                    continue;
+                Symbol sym = k.first.symbol;
                 if (done.count(sym))
                     continue;
                 size_t dist = distance(s, sym.name());
@@ -2923,7 +2935,7 @@ public:
         return best_syms;
     }
 
-    bool lookup(Symbol name, Any &dest) const {
+    bool lookup(const Any &name, Any &dest) const {
         const Scope *self = this;
         do {
             auto it = self->map.find(name);
@@ -4022,7 +4034,7 @@ public:
 
     StyledStream &stream_local(StyledStream &ss) const {
         if ((name != SYM_Unnamed) || !label) {
-            ss << Style_Comment << "%" << Style_Symbol;
+            ss << Style_Symbol;
             name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
             ss << Style_None;
         } else {
@@ -4109,12 +4121,13 @@ protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
-        uid(++next_uid), anchor(_anchor), name(_name), paired(nullptr),
-        num_instances(0)
+        uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
+        paired(nullptr), num_instances(0)
         {}
 
 public:
-    uint64_t uid;
+    size_t uid;
+    Label *original;
     const Anchor *anchor;
     Symbol name;
     std::vector<Parameter *> params;
@@ -4336,9 +4349,13 @@ public:
     }
 
     StyledStream &stream_short(StyledStream &ss) const {
-        ss << Style_Keyword << "λ" << Style_Symbol;
-        name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
-        ss << Style_Operator << "#" << Style_None << uid;
+        if (name == SYM_Unnamed) {
+            ss << Style_Keyword << "λ" << Style_Symbol << uid;
+        } else {
+            ss << Style_Symbol;
+            name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
+        }
+        ss << Style_None;
         return ss;
     }
 
@@ -4359,9 +4376,16 @@ public:
             }
         }
         ss << Style_Operator << ")" << Style_None;
-        if (count && (params[0]->type != TYPE_Nothing)) {
-            ss << Style_Comment << CONT_SEP << Style_None;
-            params[0]->stream_local(ss);
+        if (count) {
+            Type rtype = params[0]->type;
+            if (rtype != TYPE_Nothing) {
+                ss << Style_Comment << CONT_SEP << Style_None;
+                if (rtype == TYPE_Void) {
+                    ss << Style_Comment << "?" << Style_None;
+                } else {
+                    params[0]->stream_local(ss);
+                }
+            }
             if (users) {
                 params[0]->stream_users(ss);
             }
@@ -4376,6 +4400,7 @@ public:
     static Label *from(Label *label) {
         Label *result = new Label(label->anchor, label->name);
         label->num_instances++;
+        result->original = label->original?label->original:label;
         result->num_instances = label->num_instances;
         return result;
     }
@@ -4420,6 +4445,7 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
     } else {
         ss << Style_Comment << "<unbound>" << Style_None;
     }
+    ss << Style_Comment << "." << Style_None;
     stream_local(ss);
     return ss;
 }
@@ -5442,849 +5468,6 @@ static T cast_number(const Any &value) {
     }
     return 0;
 }
-
-#if 0
-
-struct Instruction {
-    Any enter;
-    std::vector<Any> args;
-
-    Instruction() :
-        enter(none) {
-        args.reserve(256);
-    }
-
-    void clear() {
-        enter = none;
-        args.clear();
-    }
-
-    StyledStream &stream(StyledStream &ss) const {
-        ss << enter;
-        for (size_t i = 0; i < args.size(); ++i) {
-            ss << " " << args[i];
-        }
-        return ss;
-    }
-};
-
-static StyledStream& operator<<(StyledStream& ost, Instruction instr) {
-    instr.stream(ost);
-    return ost;
-}
-
-#define CHECKARGS(MINARGS, MAXARGS) \
-    checkargs<MINARGS, MAXARGS>(in.args.size())
-#define RETARGS(...) \
-    out.args = { none, __VA_ARGS__ }
-
-template<typename T>
-static T PowT(T a, T b) {
-    return powimpl(a, b);
-}
-
-template<typename T>
-static T ModT(T a, T b) {
-    return std::fmod(a, b);
-}
-
-static void translate_function_expr_list(
-    Label *func, const List *it, const Anchor *anchor);
-static Label *translate_root(const List *it, const Anchor *anchor);
-
-static const Closure *apply_unknown_type = nullptr;
-static const Closure *exception_handler = nullptr;
-static bool handle_builtin(const Frame *frame, Instruction &in, Instruction &out) {
-    switch(in.enter.builtin.value()) {
-    case FN_AnchorPath: {
-        CHECKARGS(1, 1);
-        const Anchor *anchor = in.args[1];
-        RETARGS(anchor->path());
-    } break;
-    case FN_AnchorLineNumber: {
-        CHECKARGS(1, 1);
-        const Anchor *anchor = in.args[1];
-        RETARGS(anchor->lineno);
-    } break;
-    case FN_AnchorColumn: {
-        CHECKARGS(1, 1);
-        const Anchor *anchor = in.args[1];
-        RETARGS(anchor->column);
-    } break;
-    case FN_AnchorOffset: {
-        CHECKARGS(1, 1);
-        const Anchor *anchor = in.args[1];
-        RETARGS(anchor->offset);
-    } break;
-    case FN_AnchorSource: {
-        CHECKARGS(1, 1);
-        const Anchor *anchor = in.args[1];
-        StyledString ss;
-        anchor->stream_source_line(ss.out);
-        RETARGS(ss.str());
-    } break;
-    case FN_Args: {
-        CHECKARGS(0, 0);
-        out.args = { none };
-        for (size_t i = 0; i < bangra_argc; ++i) {
-            const char *s = bangra_argv[i];
-            out.args.push_back(String::from_cstr(s));
-        }
-    } break;
-    case FN_ActiveAnchor: {
-        CHECKARGS(0, 0);
-        RETARGS(get_active_anchor());
-    } break;
-    case FN_ActiveFrame: {
-        CHECKARGS(0, 0);
-        RETARGS(frame);
-    } break;
-    case FN_Bitcast: {
-        CHECKARGS(2, 2);
-        // very dangerous
-        in.args[1].verify<TYPE_Type>();
-        Any result = in.args[2];
-        result.type = in.args[1].typeref;
-        RETARGS(result);
-    } break;
-    case FN_Branch: {
-        CHECKARGS(3, 3);
-        Any cond = in.args[1];
-        cond.verify<TYPE_Bool>();
-        out.enter = in.args[cond.i1?2:3];
-        out.args = { in.args[0] };
-    } break;
-    case FN_BuiltinEq: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Builtin>();
-        in.args[2].verify<TYPE_Builtin>();
-        RETARGS(Any(in.args[1].builtin == in.args[2].builtin));
-    } break;
-    case FN_DatumToSyntax: {
-        const Anchor *anchor = nullptr;
-        switch(CHECKARGS(1, 2)) {
-        case 1: {
-            switch(in.args[1].type.value()) {
-            case TYPE_Parameter: {
-                anchor = in.args[1].parameter->anchor;
-            } break;
-            case TYPE_Label: {
-                anchor = in.args[1].label->anchor;
-            } break;
-            case TYPE_Syntax: {
-                anchor = in.args[1].syntax->anchor;
-            } break;
-            default: {
-                location_error(String::from("can't extract anchor from datum."));
-            } break;
-            }
-        } break;
-        case 2: {
-            switch(in.args[2].type.value()) {
-            case TYPE_Syntax: {
-                anchor = in.args[2].syntax->anchor;
-            } break;
-            case TYPE_Anchor: {
-                anchor = in.args[2].anchor;
-            } break;
-            default: {
-                location_error(String::from("anchor or syntax expected."));
-            } break;
-            }
-        } break;
-        }
-        RETARGS(Syntax::from(anchor, in.args[1]));
-    } break;
-    case FN_DatumToQuotedSyntax: {
-        CHECKARGS(2, 2);
-        const Anchor *anchor = in.args[2];
-        RETARGS(Syntax::from_quoted(anchor, in.args[1]));
-    } break;
-    case FN_DefaultStyler: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Symbol>();
-        const String *s = in.args[2];
-        StyledString ss;
-        ss.out << (Style)in.args[1].symbol.known_value()
-            << s->data << Style_None;
-        RETARGS(ss.str());
-    } break;
-    case FN_Dump: {
-        CHECKARGS(1, 1);
-        StyledStream ss(std::cout);
-        stream_expr(ss, in.args[1], StreamExprFormat());
-        RETARGS(in.args[1]);
-    } break;
-    case FN_Exit:
-        return false;
-#define UNOP_CASE(NAME, TYPE, MEMBER, OP) \
-    case NAME: { \
-        CHECKARGS(1, 1); \
-        in.args[1].verify<TYPE>(); \
-        RETARGS(OP (in.args[1]. MEMBER)); \
-    } break
-#define BINOP_CASE(NAME, TYPE, MEMBER, OP) \
-    case NAME: { \
-        CHECKARGS(2, 2); \
-        in.args[1].verify<TYPE>(); \
-        in.args[2].verify<TYPE>(); \
-        RETARGS(in.args[1]. MEMBER OP in.args[2]. MEMBER); \
-    } break
-#define TBINOP_CASE(NAME, TYPE, MEMBER, OP) \
-    case NAME: { \
-        CHECKARGS(2, 2); \
-        in.args[1].verify<TYPE>(); \
-        in.args[2].verify<TYPE>(); \
-        RETARGS(OP(in.args[1]. MEMBER, in.args[2]. MEMBER)); \
-    } break
-#define SHIFT_CASES(UNAME, LNAME) \
-    case FN_ ## UNAME ## LShift: { \
-        CHECKARGS(2, 2); \
-        in.args[1].verify<TYPE_ ## UNAME>(); \
-        RETARGS((LNAME)in.args[1].u64 << cast_number<int32_t>(in.args[2])); \
-    } break; \
-    case FN_ ## UNAME ## RShift: { \
-        CHECKARGS(2, 2); \
-        in.args[1].verify<TYPE_ ## UNAME>(); \
-        RETARGS((LNAME)in.args[1].u64 >> cast_number<int32_t>(in.args[2])); \
-    } break
-    BINOP_CASE(FN_ParameterEq, TYPE_Parameter, parameter, ==);
-    BINOP_CASE(FN_LabelEq, TYPE_Label, label, ==);
-    BINOP_CASE(FN_ScopeEq, TYPE_Scope, scope, ==);
-    BINOP_CASE(FN_FrameEq, TYPE_Frame, frame, ==);
-    BINOP_CASE(FN_ClosureEq, TYPE_Closure, closure, ==);
-#define T0(NAME, STR)
-#define T1(UNAME, LNAME, PFIX, OP) \
-    UNOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, OP);
-#define T2(UNAME, LNAME, PFIX, OP) \
-    BINOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, OP);
-#define T2T(UNAME, LNAME, PFIX, OP) \
-    TBINOP_CASE(FN_ ## UNAME ## PFIX, TYPE_ ## UNAME, LNAME, PFIX ## T);
-#undef T0
-#undef T1
-#undef T2
-#undef T2T
-#undef BINOP_CASE
-#undef TBINOP_CASE
-#undef UNOP_CASE
-    case FN_FFISymbol: {
-        CHECKARGS(1, 1);
-        const String *str = in.args[1];
-        RETARGS(Any::from_pointer(dlsym(global_c_namespace, str->data)));
-    } break;
-    case FN_FFICall: {
-        run_ffi_function(in, out);
-    } break;
-    case FN_Flush: {
-        CHECKARGS(0, 0);
-        std::cout << std::flush;
-    } break;
-    case FN_FormatFrame: {
-        CHECKARGS(1, 1);
-        const Frame *frame = in.args[1];
-        StyledString ss;
-        stream_frame(ss.out, frame, StreamFrameFormat());
-        RETARGS(ss.str());
-    } break;
-    case FN_Free: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Pointer>();
-        free(in.args[1].pointer);
-    } break;
-    case KW_Globals: {
-        CHECKARGS(0, 0);
-        RETARGS(globals);
-    } break;
-    case FN_InterpreterVersion: {
-        CHECKARGS(0, 0);
-        RETARGS(BANGRA_VERSION_MAJOR,
-            BANGRA_VERSION_MINOR,
-            BANGRA_VERSION_PATCH);
-    } break;
-    case FN_IsListEmpty: {
-        CHECKARGS(1, 1);
-        const List *a = in.args[1];
-        RETARGS(a == EOL);
-    } break;
-    case FN_IsSyntaxQuoted: {
-        CHECKARGS(1, 1);
-        const Syntax *sx = in.args[1];
-        RETARGS(Any(sx->quoted));
-    } break;
-    case SFXFN_LabelAppendParameter: {
-        CHECKARGS(2, 2);
-        Label *label = in.args[1];
-        Parameter *param = in.args[2];
-        label->append(param);
-    } break;
-    case FN_LabelNew: {
-        CHECKARGS(2, 2);
-        in.args[2].verify<TYPE_Symbol>();
-        RETARGS(Label::from(in.args[1], in.args[2].symbol));
-    } break;
-    case FN_LabelParameters: {
-        CHECKARGS(1, 1);
-        Label *label = in.args[1];
-        out.args = { none };
-        size_t count = label->params.size();
-        for (size_t i = 0; i < count; ++i) {
-            out.args.push_back(label->params[i]);
-        }
-    } break;
-    case FN_ListAt: {
-        CHECKARGS(1, 1);
-        const List *a = in.args[1];
-        RETARGS((a == EOL)?none:a->at);
-    } break;
-    case FN_ListCons: {
-        CHECKARGS(2, 2);
-        RETARGS(List::from(in.args[1], in.args[2]));
-    } break;
-    case FN_ListCountOf: {
-        CHECKARGS(1, 1);
-        const List *l = in.args[1];
-        if (l == EOL) {
-            RETARGS((size_t)0);
-        } else {
-            RETARGS(l->count);
-        }
-    } break;
-    case FN_ListJoin: {
-        CHECKARGS(2, 2);
-        const List *a = in.args[1];
-        const List *b = in.args[2];
-        RETARGS(List::join(a, b));
-    } break;
-    case FN_ListLoad: {
-        CHECKARGS(1, 1);
-        const String *path = in.args[1];
-        LexerParser parser(SourceFile::from_file(path));
-        RETARGS(parser.parse());
-    } break;
-    case FN_ListParse: {
-        const String *text = nullptr;
-        const String *path = nullptr;
-        switch(CHECKARGS(1, 2)) {
-        case 1: {
-            text = in.args[1]; path = String::from("<string>");
-        } break;
-        case 2: {
-            text = in.args[1]; path = in.args[2];
-        } break;
-        }
-        assert(text);
-        assert(path);
-        LexerParser parser(SourceFile::from_string(path, text));
-        RETARGS(parser.parse());
-    } break;
-    case FN_ListNext: {
-        CHECKARGS(1, 1);
-        const List *a = in.args[1];
-        RETARGS((a == EOL)?EOL:a->next);
-    } break;
-    case FN_Malloc: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_U64>();
-        RETARGS(Any::from_pointer(malloc(in.args[1].sizeval)));
-    } break;
-    case FN_MemCpy: {
-        CHECKARGS(3, 3);
-        in.args[1].verify<TYPE_Pointer>();
-        in.args[2].verify<TYPE_Pointer>();
-        in.args[3].verify<TYPE_U64>();
-        memcpy(in.args[1].pointer, in.args[2].pointer, in.args[3].sizeval);
-    } break;
-    case OP_Not: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Bool>();
-        RETARGS(!in.args[1].i1);
-    } break;
-    case FN_ParameterAnchor: {
-        CHECKARGS(1, 1);
-        Parameter *param = in.args[1];
-        RETARGS(param->anchor);
-    } break;
-    case FN_ParameterNew: {
-        CHECKARGS(4, 4);
-        in.args[2].verify<TYPE_Symbol>();
-        in.args[3].verify<TYPE_Type>();
-        in.args[4].verify<TYPE_Bool>();
-        Parameter *param = nullptr;
-        if (in.args[4].i1) {
-            param = Parameter::vararg_from(in.args[1], in.args[2].symbol, in.args[3].type);
-        } else {
-            param = Parameter::from(in.args[1], in.args[2].symbol, in.args[3].type);
-        }
-        RETARGS(param);
-    } break;
-    case FN_ParameterName: {
-        CHECKARGS(1, 1);
-        Parameter *param = in.args[1];
-        RETARGS(param->name);
-    } break;
-    case FN_StyleToString: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Symbol>();
-        StyledString ss;
-        ss.out << in.args[1].symbol.known_value();
-        RETARGS(ss.str());
-    } break;
-    case FN_ParseC: {
-        int count = CHECKARGS(2, -1);
-        const String *path = in.args[1];
-        const String *buffer = in.args[2];
-        std::vector<std::string> args;
-        for (int i = 3; i <= count; ++i) {
-            const String *arg = in.args[i];
-            args.push_back(arg->data);
-        }
-        const List *result = import_c_module(path->data, args, buffer->data);
-        RETARGS(result);
-    } break;
-    case FN_Prompt: {
-        switch(CHECKARGS(1, 2)) {
-        case 2: {
-            const String *pre = in.args[2];
-            linenoisePreloadBuffer(pre->data);
-        }
-        case 1: {
-            const String *s = in.args[1];
-            const char *r = linenoise(s->data);
-            if (r) {
-                linenoiseHistoryAdd(r);
-                RETARGS(String::from_cstr(r));
-            }
-        } break;
-        default: break;
-        }
-    } break;
-    case FN_RefAt: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Ref>();
-        Any result = *in.args[1].ref;
-        RETARGS(result);
-    } break;
-    case SFXFN_RefSet: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Ref>();
-        *in.args[1].ref = in.args[2];
-    } break;
-    case FN_RefNew: {
-        CHECKARGS(1, 1);
-        RETARGS(in.args[1].toref());
-    } break;
-    case FN_Repr: {
-        CHECKARGS(1, 1);
-        StyledString ss;
-        ss.out << in.args[1];
-        RETARGS(ss.str());
-    } break;
-    case FN_ScopeAt: {
-        CHECKARGS(2, 2);
-        Scope *scope = in.args[1];
-        in.args[2].verify<TYPE_Symbol>();
-        Any result = none;
-        bool success = scope->lookup(in.args[2].symbol, result);
-        RETARGS(result, Any(success));
-    } break;
-    case FN_ScopeNew: {
-        switch(CHECKARGS(0, 1)) {
-        case 0: {
-            RETARGS(Scope::from());
-        } break;
-        case 1: {
-            RETARGS(Scope::from(in.args[1]));
-        } break;
-        default: break;
-        }
-    } break;
-    case FN_ScopeNextSymbol: {
-        CHECKARGS(2,2);
-        Scope *scope = in.args[1];
-        switch(in.args[2].type.value()) {
-        case TYPE_Nothing: {
-            auto it = scope->map.begin();
-            if (it != scope->map.end()) {
-                RETARGS(it->first, it->second);
-            }
-        } break;
-        case TYPE_Symbol: {
-            auto it = scope->map.find(in.args[2].symbol);
-            if (it != scope->map.end()) {
-                it++;
-                if (it != scope->map.end()) {
-                    RETARGS(it->first, it->second);
-                }
-            }
-        } break;
-        default:
-            location_error(String::from("symbol or none expected"));
-            break;
-        }
-    } break;
-    case SFXFN_SetExceptionHandler: {
-        CHECKARGS(1, 1);
-        exception_handler = in.args[1];
-    } break;
-    case SFXFN_SetGlobals: {
-        CHECKARGS(1, 1);
-        Scope *scope = in.args[1];
-        globals = scope;
-    } break;
-    case SFXFN_SetGlobalApplyFallback: {
-        CHECKARGS(1, 1);
-        apply_unknown_type = in.args[1];
-    } break;
-    case SFXFN_SetScopeSymbol: {
-        CHECKARGS(3, 3);
-        Scope *scope = in.args[1];
-        in.args[2].verify<TYPE_Symbol>();
-        scope->bind(in.args[2].symbol, in.args[3]);
-    } break;
-    case FN_StringCmp: {
-        CHECKARGS(2, 2);
-        const String *a = in.args[1];
-        const String *b = in.args[2];
-        if (a->count == b->count) {
-            RETARGS(memcmp(a->data, b->data, a->count));
-        } else if (a->count < b->count) {
-            RETARGS(Any(-1));
-        } else {
-            RETARGS(Any(1));
-        }
-    } break;
-    case FN_StringCountOf: {
-        CHECKARGS(1, 1);
-        const String *a = in.args[1];
-        RETARGS(a->count);
-    } break;
-    case FN_StringAt: {
-        CHECKARGS(2, 2);
-        const String *a = in.args[1];
-        int64_t offset = cast_number<int64_t>(in.args[2]);
-        while (offset < 0) {
-            offset += (int64_t)a->count;
-        }
-        if (offset > (int64_t)a->count) {
-            location_error(String::from("string index out of bounds"));
-        }
-        RETARGS(a->substr(offset, offset + 1));
-    } break;
-    case FN_StringJoin: {
-        CHECKARGS(2, 2);
-        const String *a = in.args[1];
-        const String *b = in.args[2];
-        RETARGS(String::join(a, b));
-    } break;
-    case FN_StringNew: {
-        CHECKARGS(1, 1);
-        switch(in.args[1].type.value()) {
-        case TYPE_String: {
-            RETARGS(in.args[1]);
-        } break;
-        case TYPE_Symbol: {
-            RETARGS(in.args[1].symbol.name());
-        } break;
-        default: {
-            StyledString ss = StyledString::plain();
-            in.args[1].stream(ss.out, false);
-            RETARGS(ss.str());
-        } break;
-        }
-    } break;
-    case FN_StringSlice: {
-        CHECKARGS(3, 3);
-        const String *a = in.args[1];
-        int64_t i0 = cast_number<int64_t>(in.args[2]);
-        int64_t i1 = cast_number<int64_t>(in.args[3]);
-        RETARGS(a->substr(i0, i1));
-    } break;
-    case FN_SymbolNew: {
-        CHECKARGS(1, 1);
-        switch(in.args[1].type.value()) {
-        case TYPE_String: {
-            const String *str = in.args[1];
-            RETARGS(Symbol(str));
-        } break;
-        case TYPE_Type: {
-            RETARGS(in.args[1].typeref.name());
-        } break;
-        default:
-            location_error(String::from("string or type expected"));
-            break;
-        }
-    } break;
-    case FN_SymbolEq: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Symbol>();
-        in.args[2].verify<TYPE_Symbol>();
-        RETARGS(in.args[1].symbol == in.args[2].symbol);
-    } break;
-    case FN_SyntaxToDatum: {
-        CHECKARGS(1, 1);
-        if (in.args[1].type == TYPE_Syntax) {
-            const Syntax *sx = in.args[1].syntax;
-            RETARGS(sx->datum);
-        } else {
-            RETARGS(in.args[1]);
-        }
-    } break;
-    case FN_SyntaxToAnchor: {
-        CHECKARGS(1, 1);
-        const Syntax *sx = in.args[1];
-        RETARGS(sx->anchor);
-    } break;
-    case FN_Translate: {
-        CHECKARGS(2, 2);
-        const Anchor *body_anchor = in.args[1];
-        const List *expr = in.args[2];
-        Label *label = translate_root(expr, body_anchor);
-        RETARGS(Closure::from(label, nullptr));
-    } break;
-    case SFXFN_TranslateLabelBody: {
-        CHECKARGS(3, 3);
-        Label *label = in.args[1];
-        const Anchor *body_anchor = in.args[2];
-        const List *expr = in.args[3];
-        translate_function_expr_list(label, expr, body_anchor);
-    } break;
-    case FN_TypeEq: {
-        CHECKARGS(2, 2);
-        in.args[1].verify<TYPE_Type>();
-        in.args[2].verify<TYPE_Type>();
-        RETARGS(in.args[1].typeref == in.args[2].typeref);
-    } break;
-    case FN_TypeNew: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Symbol>();
-        RETARGS(Type(in.args[1].symbol));
-    } break;
-    case FN_TypeOf: {
-        CHECKARGS(1, 1);
-        RETARGS(in.args[1].type);
-    } break;
-    case FN_TypeName: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Type>();
-        RETARGS(in.args[1].typeref.name());
-    } break;
-    case FN_TypeSizeOf: {
-        CHECKARGS(1, 1);
-        in.args[1].verify<TYPE_Type>();
-        RETARGS(in.args[1].typeref.bytesize());
-    } break;
-    case FN_VaCountOf: {
-        RETARGS(CHECKARGS(0, -1));
-    } break;
-    case FN_Write: {
-        CHECKARGS(1, 1);
-        const String *s = in.args[1];
-        std::cout << s->data;
-    } break;
-    default: {
-        StyledString ss;
-        ss.out << "builtin " << in.enter.builtin << " is not implemented";
-        location_error(ss.str());
-        return false;
-        } break;
-    }
-    return true;
-}
-
-#undef CHECKARGS
-#undef RETARGS
-
-static const Frame *find_frame(const Frame *frame, Parameter *param) {
-    while (frame) {
-        if (param->label == frame->label) {
-            return frame;
-        }
-        frame = frame->parent;
-    }
-    location_error(String::from("unbound parameter encountered"));
-    return nullptr;
-}
-
-static Any evaluate_param(const Frame *frame, Parameter *param) {
-    frame = find_frame(frame, param);
-    if (frame) {
-        if (param->vararg) {
-            if ((size_t)param->index < frame->args.size()) {
-                return frame->args[param->index];
-            } else {
-                return none;
-            }
-        } else {
-            return frame->args[param->index];
-        }
-    }
-    return none;
-}
-
-static void evaluate_param(std::vector<Any> &destargs,
-    const Frame *frame, Parameter *param) {
-    frame = find_frame(frame, param);
-    if (frame) {
-        if (param->vararg) {
-            auto &&args = frame->args;
-            size_t count = args.size();
-            for (size_t i = param->index; i < count; ++i) {
-                destargs.push_back(args[i]);
-            }
-        } else {
-            destargs.push_back(frame->args[param->index]);
-        }
-    }
-}
-
-static Any evaluate_enter(const Frame *frame, Any arg) {
-    switch(arg.type.value()) {
-    case TYPE_Parameter: {
-        return evaluate_param(frame, arg.parameter);
-    } break;
-    default: return arg;
-    }
-    return none;
-}
-
-static Any evaluate(const Frame *frame, Any arg) {
-    switch(arg.type.value()) {
-    case TYPE_Parameter: {
-        return evaluate_param(frame, arg.parameter);
-    } break;
-    case TYPE_Label: {
-        return Closure::from(arg.label, frame);
-    } break;
-    default: return arg;
-    }
-    return none;
-}
-
-static void evaluate(std::vector<Any> &destargs, const Frame *frame, Any arg) {
-    switch(arg.type.value()) {
-    case TYPE_Parameter: {
-        evaluate_param(destargs, frame, arg.parameter);
-    } break;
-    case TYPE_Label: {
-        destargs.push_back(Closure::from(arg.label, frame));
-    } break;
-    default: {
-        destargs.push_back(arg);
-    } break;
-    }
-}
-
-static void interpreter_loop(Instruction &_in) {
-    Instruction _out;
-
-    Instruction *in = &_in;
-    Instruction *out = &_out;
-
-    const Frame *frame = nullptr;
-
-restart_loop:
-    try {
-loop:
-    out->clear();
-    Any &enter = in->enter;
-    Any &next_enter = out->enter;
-    const std::vector<Any> &args = in->args;
-    std::vector<Any> &next_args = out->args;
-    switch(enter.type.value()) {
-    case TYPE_Closure: {
-        frame = enter.closure->frame;
-        enter = enter.closure->label;
-        goto loop;
-    } break;
-    case TYPE_Label: {
-        //debugger.enter_call(dest, cont, ...)
-
-        Label *label = enter.label;
-        Frame *nextframe = Frame::from(frame, label);
-        // map arguments
-        size_t srci = 0;
-        size_t rcount = args.size();
-        size_t pcount = label->params.size();
-        auto &&frameargs = nextframe->args;
-        frameargs.reserve(pcount);
-        for (size_t i = 0; i < pcount; ++i) {
-            Parameter *param = label->params[i];
-            if (param->vararg) {
-                assert(i != 0);
-                assert(i == (pcount - 1));
-
-                while (srci < rcount) {
-                    frameargs.push_back(args[srci++]);
-                }
-            } else if (srci < rcount) {
-                frameargs.push_back(args[srci]);
-                srci = srci + 1;
-            } else {
-                frameargs.push_back(none);
-            }
-        }
-        frame = nextframe;
-
-        next_enter = evaluate_enter(frame, label->body.enter);
-
-        auto &&args = label->body.args;
-        size_t acount = args.size();
-        if (acount) {
-            size_t alast = acount - 1;
-            for (size_t i = 0; i < alast; ++i) {
-                next_args.push_back(evaluate(frame, args[i]));
-            }
-            evaluate(next_args, frame, args[alast]);
-        }
-
-        if (label->body.anchor) {
-            set_active_anchor(label->body.anchor);
-        } else if (label->anchor) {
-            set_active_anchor(label->anchor);
-        }
-    } break;
-    case TYPE_Builtin: {
-        //debugger.enter_call(dest, cont, ...)
-        next_enter = args[0];
-        if (!handle_builtin(frame, *in, *out))
-            return;
-    } break;
-    default: {
-        if (apply_unknown_type) {
-            next_enter = apply_unknown_type;
-            next_args = { args[0], get_active_anchor(), enter };
-            for (size_t i = 1; i < args.size(); ++i) {
-                next_args.push_back(args[i]);
-            }
-        } else {
-            apply_type_error(enter);
-        }
-    } break;
-    }
-
-    // flip
-    Instruction *tmp = in;
-    in = out;
-    out = tmp;
-    goto loop;
-    } catch (const Exception &exc) {
-        if (!exception_handler) {
-        #if 1
-            StyledStream cerr(std::cout);
-            cerr << *in << std::endl;
-        #endif
-            default_exception_handler(exc);
-        } else {
-            in->enter = exception_handler;
-            Any cont = in->args[0];
-            in->args = { cont, exc.anchor, exc.msg };
-        }
-    }
-
-    goto restart_loop;
-}
-
-#endif
 
 //------------------------------------------------------------------------------
 // IL->IR LOWERING
@@ -8162,7 +7345,13 @@ struct NormalizeCtx {
         StyledStream ss(std::cerr);
         for (size_t i = 0; i < todo.size(); ++i) {
             Label *l = todo[i];
-            ss << l->body.anchor << " in " << l << std::endl;
+            ss << l->body.anchor << " in ";
+            if (l->name == SYM_Unnamed) {
+                ss << "anonymous function";
+            } else {
+                ss << l->name.name()->data;
+            }
+            ss << std::endl;
             l->body.anchor->stream_source_line(ss);
         }
     }
@@ -9410,8 +8599,8 @@ loop:
         // complex expression
         TranslateResult result = translate(state, sxvalue);
         state = result.state;
-        anchor = result.anchor;
-        assert(anchor);
+        //anchor = sx->anchor;
+        //assert(anchor);
         Any _enter = result.enter;
         Any arg = none;
         if (_enter.type != TYPE_Nothing) {
