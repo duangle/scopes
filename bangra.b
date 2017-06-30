@@ -24,7 +24,7 @@
     functions and macros, parses the command-line and then enters the REPL.
 
 fn/cc type? (_ T)
-    icmp== (bitcast type u64) (bitcast (typeof T) u64)
+    icmp== (ptrtoint type u64) (ptrtoint (typeof T) u64)
 
 fn/cc type== (_ a b)
     fn/cc assert-type (_ T)
@@ -35,7 +35,7 @@ fn/cc type== (_ a b)
                     string-join "type expected, not " (Any-repr (Any-wrap T))
     assert-type a
     assert-type b
-    icmp== (bitcast a u64) (bitcast b u64)
+    icmp== (ptrtoint a u64) (ptrtoint b u64)
 
 fn/cc assert-typeof (_ a T)
     branch (type== T (typeof a))

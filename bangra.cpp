@@ -514,6 +514,26 @@ static int stb_fprintf(FILE *out, const char *fmt, ...) {
 
 namespace bangra {
 
+using llvm::isa;
+using llvm::cast;
+using llvm::dyn_cast;
+
+template <typename R, typename... Args>
+static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
+    std::map<std::tuple<Args...>, R> table;
+    return [fn, table](Args... args) mutable -> R {
+        auto argt = std::make_tuple(args...);
+        auto memoized = table.find(argt);
+        if(memoized == table.end()) {
+            auto result = fn(args...);
+            table[argt] = result;
+            return result;
+        } else {
+            return memoized->second;
+        }
+    };
+}
+
 //------------------------------------------------------------------------------
 // SYMBOL ENUM
 //------------------------------------------------------------------------------
@@ -544,46 +564,6 @@ namespace bangra {
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
-    \
-    /* types */ \
-    T(TYPE_Void, "void") \
-    T(TYPE_Nothing, "Nothing") \
-    T(TYPE_Any, "Any") \
-    \
-    T(TYPE_Type, "type") \
-    T(TYPE_Symbol, "Symbol") \
-    T(TYPE_Builtin, "Builtin") \
-    \
-    T(TYPE_Bool, "bool") \
-    \
-    T(TYPE_I8, "i8") \
-    T(TYPE_I16, "i16") \
-    T(TYPE_I32, "i32") \
-    T(TYPE_I64, "i64") \
-    \
-    T(TYPE_U8, "u8") \
-    T(TYPE_U16, "u16") \
-    T(TYPE_U32, "u32") \
-    T(TYPE_U64, "u64") \
-    \
-    T(TYPE_R16, "r16") \
-    T(TYPE_F32, "f32") \
-    T(TYPE_F64, "f64") \
-    T(TYPE_R80, "r80") \
-    \
-    T(TYPE_List, "list") \
-    T(TYPE_Syntax, "Syntax") \
-    T(TYPE_Anchor, "Anchor") \
-    T(TYPE_String, "string") \
-    T(TYPE_Ref, "ref") \
-    \
-    T(TYPE_Scope, "Scope") \
-    T(TYPE_SourceFile, "SourceFile") \
-    \
-    T(TYPE_Parameter, "Parameter") \
-    T(TYPE_Label, "Label") \
-    \
-    T(TYPE_SizeT, "size_t") \
     \
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
@@ -815,9 +795,6 @@ enum KnownSymbol {
 };
 
 enum {
-    TYPE_FIRST = TYPE_Nothing,
-    TYPE_LAST = TYPE_Label,
-
     KEYWORD_FIRST = KW_CatRest,
     KEYWORD_LAST = KW_Yield,
 
@@ -1065,8 +1042,21 @@ static StyledStream& operator<<(StyledStream& ost, const Nothing &value) {
 //------------------------------------------------------------------------------
 
 struct String {
+    struct Hash {
+        std::size_t operator()(const String *s) const {
+            return CityHash64(s->data, s->count);
+        }
+    };
+
     size_t count;
     char data[1];
+
+    bool operator ==(const String &other) const {
+        if (count == other.count) {
+            return !memcmp(data, other.data, count);
+        }
+        return false;
+    }
 
     static String *alloc(size_t count) {
         String *str = (String *)malloc(
@@ -1560,98 +1550,105 @@ static StyledStream& operator<<(StyledStream& ost, const Anchor *anchor) {
 
 static void location_error(const String *msg);
 
-struct Type {
-    typedef KnownSymbol EnumT;
+enum TypeKind {
+    TK_Integer,
+    TK_Real,
+    TK_Pointer,
+    TK_Array,
+    TK_Vector,
+    TK_Tuple,
+    TK_Union,
+    TK_Typename,
+    TK_TypedLabel,
+    TK_TypeSet,
+    TK_Function,
+    TK_Constant,
+};
 
-    struct Hash {
-        std::size_t operator()(const bangra::Type & s) const {
-            return s.hash();
-        }
-    };
+struct Type {
+private:
+    const TypeKind _kind;
 
 protected:
-    Symbol _name;
+    const String *_name;
 
 public:
-    Type(EnumT id) :
-        _name(id) {
-    }
+    TypeKind kind() const { return _kind; } // for this codebase
 
-    Type(Symbol name) :
-        _name(name) {
-    }
+    Type(TypeKind kind) : _kind(kind), _name(Symbol(SYM_Unnamed).name()) {}
+    Type(const Type &other) = delete;
 
-    template<unsigned N>
-    Type(const char (&str)[N]) :
-        _name(Symbol(String::from(str))) {
-    }
-
-    Type(const String *str) :
-        _name(Symbol(str)) {
-    }
-
-    bool is_known() const {
-        return _name.is_known();
-    }
-
-    EnumT known_value() const {
-        return _name.known_value();
-    }
-
-    uint64_t value() const {
-        return _name.value();
-    }
-
-    // for std::map support
-    bool operator < (Type b) const {
-        return _name < b._name;
-    }
-
-    bool operator ==(Type b) const {
-        return _name == b._name;
-    }
-
-    bool operator !=(Type b) const {
-        return _name != b._name;
-    }
-
-    bool operator ==(EnumT b) const {
-        return _name == b;
-    }
-
-    bool operator !=(EnumT b) const {
-        return _name != b;
-    }
-
-    std::size_t hash() const {
-        return _name.hash();
-    }
-
-    Symbol name() const {
+    const String *name() const {
         return _name;
     }
 
     StyledStream& stream(StyledStream& ost) const {
         ost << Style_Type;
-        ost << name().name()->data;
+        ost << name()->data;
         ost << Style_None;
         return ost;
     }
 };
 
-static bool is_opaque(Type T);
-static size_t size_of(Type T);
-static size_t align_of(Type T);
+static bool is_opaque(const Type *T);
+static size_t size_of(const Type *T);
+static size_t align_of(const Type *T);
 
-static StyledStream& operator<<(StyledStream& ost, Type type) {
-    return type.stream(ost);
+static StyledStream& operator<<(StyledStream& ost, const Type *type) {
+    return type->stream(ost);
 }
+
+#define B_TYPES() \
+    /* types */ \
+    T(TYPE_Void, "void") \
+    T(TYPE_Nothing, "Nothing") \
+    T(TYPE_Any, "Any") \
+    \
+    T(TYPE_Type, "type") \
+    T(TYPE_Symbol, "Symbol") \
+    T(TYPE_Builtin, "Builtin") \
+    \
+    T(TYPE_Bool, "bool") \
+    \
+    T(TYPE_I8, "i8") \
+    T(TYPE_I16, "i16") \
+    T(TYPE_I32, "i32") \
+    T(TYPE_I64, "i64") \
+    \
+    T(TYPE_U8, "u8") \
+    T(TYPE_U16, "u16") \
+    T(TYPE_U32, "u32") \
+    T(TYPE_U64, "u64") \
+    \
+    T(TYPE_F16, "f16") \
+    T(TYPE_F32, "f32") \
+    T(TYPE_F64, "f64") \
+    T(TYPE_F80, "f80") \
+    \
+    T(TYPE_List, "list") \
+    T(TYPE_Syntax, "Syntax") \
+    T(TYPE_Anchor, "Anchor") \
+    T(TYPE_String, "string") \
+    T(TYPE_Ref, "ref") \
+    \
+    T(TYPE_Scope, "Scope") \
+    T(TYPE_SourceFile, "SourceFile") \
+    \
+    T(TYPE_Parameter, "Parameter") \
+    T(TYPE_Label, "Label") \
+    \
+    T(TYPE_SizeT, "size_t")
+
+#define T(TYPE, TYPENAME) \
+    static const Type *TYPE = nullptr;
+B_TYPES()
+#undef T
 
 //------------------------------------------------------------------------------
 // TYPE CHECK PREDICATES
 //------------------------------------------------------------------------------
 
-static void verify(Type typea, Type typeb) {
+static void verify(const Type *typea, const Type *typeb) {
     if (typea != typeb) {
         StyledString ss;
         ss.out << "type " << typea << " expected, got " << typeb;
@@ -1659,39 +1656,19 @@ static void verify(Type typea, Type typeb) {
     }
 }
 
-template<KnownSymbol T>
-static void verify(Type type) {
-    verify(T, type);
-}
-
-static void verify_integer(Type type) {
-    switch(type.value()) {
-    case TYPE_Bool:
-    case TYPE_I8:
-    case TYPE_I16:
-    case TYPE_I32:
-    case TYPE_I64:
-    case TYPE_U8:
-    case TYPE_U16:
-    case TYPE_U32:
-    case TYPE_U64: return;
-    default: {
+static void verify_integer(const Type *type) {
+    if (type->kind() != TK_Integer) {
         StyledString ss;
         ss.out << "integer or bool type expected, got " << type;
         location_error(ss.str());
-    } break;
     }
 }
 
-static void verify_real(Type type) {
-    switch(type.value()) {
-    case TYPE_F32:
-    case TYPE_F64: return;
-    default: {
+static void verify_real(const Type *type) {
+    if (type->kind() != TK_Real) {
         StyledString ss;
         ss.out << "real type expected, got " << type;
         location_error(ss.str());
-    } break;
     }
 }
 
@@ -1703,30 +1680,6 @@ static void verify_range(size_t idx, size_t count) {
         location_error(ss.str());
     }
 }
-
-//------------------------------------------------------------------------------
-// TYPE FACTORIES
-//------------------------------------------------------------------------------
-
-template<typename T>
-struct TypeFactory {
-    typedef std::unordered_map<Type, T, Type::Hash> DescMap;
-    DescMap descs;
-
-    bool is(Type type) {
-        return descs.count(type);
-    }
-
-    T &get(Type type) {
-        auto it = descs.find(type);
-        assert(it != descs.end());
-        return it->second;
-    }
-
-    std::pair<typename DescMap::iterator, bool> insert(Type type) {
-        return descs.insert({type, T()});
-    }
-};
 
 //------------------------------------------------------------------------------
 // BUILTIN
@@ -1781,7 +1734,7 @@ struct Any {
         }
     };
 
-    Type type;
+    const Type *type;
     union {
         char content[8];
         bool i1;
@@ -1796,7 +1749,7 @@ struct Any {
         size_t sizeval;
         float f32;
         double f64;
-        Type typeref;
+        const Type *typeref;
         const String *string;
         Symbol symbol;
         const Syntax *syntax;
@@ -1811,7 +1764,7 @@ struct Any {
     };
 
     Any(Nothing x) : type(TYPE_Nothing), u64(0) {}
-    Any(Type x) : type(TYPE_Type), typeref(x) {}
+    Any(const Type *x) : type(TYPE_Type), typeref(x) {}
     Any(bool x) : type(TYPE_Bool), i1(x) {}
     Any(int8_t x) : type(TYPE_I8), i8(x) {}
     Any(int16_t x) : type(TYPE_I16), i16(x) {}
@@ -1844,35 +1797,34 @@ struct Any {
         return pvalue;
     }
 
-    static Any from_pointer(Type type, void *ptr) {
+    static Any from_pointer(const Type *type, void *ptr) {
         Any val = none;
         val.type = type;
         val.pointer = ptr;
         return val;
     }
 
-    template<KnownSymbol T>
-    void verify() const {
-        bangra::verify<T>(type);
+    void verify(const Type *T) const {
+        bangra::verify(T, type);
     }
 
-    template<KnownSymbol T>
-    void verify_indirect() const;
-    Type indirect_type() const;
+    void verify_indirect(const Type *T) const;
+    const Type *indirect_type() const;
 
-    operator const List *() const { verify<TYPE_List>(); return list; }
-    operator const Syntax *() const { verify<TYPE_Syntax>(); return syntax; }
-    operator const Anchor *() const { verify<TYPE_Anchor>(); return anchor; }
-    operator const String *() const { verify<TYPE_String>(); return string; }
-    operator Label *() const { verify<TYPE_Label>(); return label; }
-    operator Scope *() const { verify<TYPE_Scope>(); return scope; }
-    operator Parameter *() const { verify<TYPE_Parameter>(); return parameter; }
+    operator const Type *() const { verify(TYPE_Type); return typeref; }
+    operator const List *() const { verify(TYPE_List); return list; }
+    operator const Syntax *() const { verify(TYPE_Syntax); return syntax; }
+    operator const Anchor *() const { verify(TYPE_Anchor); return anchor; }
+    operator const String *() const { verify(TYPE_String); return string; }
+    operator Label *() const { verify(TYPE_Label); return label; }
+    operator Scope *() const { verify(TYPE_Scope); return scope; }
+    operator Parameter *() const { verify(TYPE_Parameter); return parameter; }
 
     struct AnyStreamer {
         StyledStream& ost;
-        const Type &type;
+        const Type *type;
         bool annotate_type;
-        AnyStreamer(StyledStream& _ost, const Type &_type, bool _annotate_type) :
+        AnyStreamer(StyledStream& _ost, const Type *_type, bool _annotate_type) :
             ost(_ost), type(_type), annotate_type(_annotate_type) {}
         void stream_type_suffix() const {
             if (annotate_type) {
@@ -1893,37 +1845,34 @@ struct Any {
 
     StyledStream& stream(StyledStream& ost, bool annotate_type = true) const {
         AnyStreamer as(ost, type, annotate_type);
-        switch(type.value()) {
-            case TYPE_Nothing: as.naked(none); break;
-            case TYPE_Type: as.naked(typeref); break;
-            case TYPE_Bool: as.naked(i1); break;
-            case TYPE_I8: as.typed(i8); break;
-            case TYPE_I16: as.typed(i16); break;
-            case TYPE_I32: as.naked(i32); break;
-            case TYPE_I64: as.typed(i64); break;
-            case TYPE_U8: as.typed(u8); break;
-            case TYPE_U16: as.typed(u16); break;
-            case TYPE_U32: as.typed(u32); break;
-            case TYPE_U64: as.typed(u64); break;
-            case TYPE_F32: as.naked(f32); break;
-            case TYPE_F64: as.typed(f64); break;
-            case TYPE_String: as.naked(string); break;
-            case TYPE_Symbol: as.naked(symbol); break;
-            case TYPE_Syntax: as.naked(syntax); break;
-            case TYPE_Anchor: as.typed(anchor); break;
-            case TYPE_List: as.naked(list); break;
-            case TYPE_Builtin: as.typed(builtin); break;
-            case TYPE_Label: as.typed(label); break;
-            case TYPE_Parameter: as.typed(parameter); break;
-            case TYPE_Scope: as.typed(scope); break;
-            case TYPE_Ref:
-                ost << Style_Operator << "[" << Style_None;
-                ref->stream(ost);
-                ost << Style_Operator << "]" << Style_None;
-                as.stream_type_suffix();
-                break;
-            default: as.typed(pointer); break;
-        }
+        if (type == TYPE_Nothing) { as.naked(none); }
+        else if (type == TYPE_Type) { as.naked(typeref); }
+        else if (type == TYPE_Bool) { as.naked(i1); }
+        else if (type == TYPE_I8) { as.typed(i8); }
+        else if (type == TYPE_I16) { as.typed(i16); }
+        else if (type == TYPE_I32) { as.naked(i32); }
+        else if (type == TYPE_I64) { as.typed(i64); }
+        else if (type == TYPE_U8) { as.typed(u8); }
+        else if (type == TYPE_U16) { as.typed(u16); }
+        else if (type == TYPE_U32) { as.typed(u32); }
+        else if (type == TYPE_U64) { as.typed(u64); }
+        else if (type == TYPE_F32) { as.naked(f32); }
+        else if (type == TYPE_F64) { as.typed(f64); }
+        else if (type == TYPE_String) { as.naked(string); }
+        else if (type == TYPE_Symbol) { as.naked(symbol); }
+        else if (type == TYPE_Syntax) { as.naked(syntax); }
+        else if (type == TYPE_Anchor) { as.typed(anchor); }
+        else if (type == TYPE_List) { as.naked(list); }
+        else if (type == TYPE_Builtin) { as.typed(builtin); }
+        else if (type == TYPE_Label) { as.typed(label); }
+        else if (type == TYPE_Parameter) { as.typed(parameter); }
+        else if (type == TYPE_Scope) { as.typed(scope); }
+        else if (type == TYPE_Ref) {
+            ost << Style_Operator << "[" << Style_None;
+            ref->stream(ost);
+            ost << Style_Operator << "]" << Style_None;
+            as.stream_type_suffix();
+        } else { as.typed(pointer); }
         return ost;
     }
 
@@ -1943,140 +1892,379 @@ static StyledStream& operator<<(StyledStream& ost, Any value) {
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
-static Any wrap_pointer(Type type, void *ptr);
+static Any wrap_pointer(const Type *type, void *ptr);
+
+//------------------------------------------------------------------------------
+// TYPE FACTORIES
+//------------------------------------------------------------------------------
+
+template<typename T>
+struct TypeFactory {
+    struct TypeArgs {
+        std::vector<Any> args;
+
+        TypeArgs() {}
+        TypeArgs(const std::vector<Any> &_args) : args(_args) {}
+
+        bool operator==(const TypeArgs &other) const {
+            if (args.size() != other.args.size()) return false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                auto &&a = args[i];
+                auto &&b = other.args[i];
+                if (a != b)
+                    return false;
+            }
+            return true;
+        }
+
+        struct Hash {
+            std::size_t operator()(const TypeArgs& s) const {
+                std::size_t h = 0;
+                for (auto &&arg : s.args) {
+                    h = HashLen16(h, arg.hash());
+                }
+                return h;
+            }
+        };
+    };
+
+    typedef std::unordered_map<TypeArgs, T *, typename TypeArgs::Hash> ArgMap;
+
+    ArgMap map;
+
+    const Type *insert(const std::vector<Any> &args) {
+        TypeArgs ta(args);
+        typename ArgMap::iterator it = map.find(ta);
+        if (it == map.end()) {
+            T *t = new T(args);
+            map.insert({ta, t});
+            return t;
+        } else {
+            return it->second;
+        }
+    }
+
+    template <typename... Args>
+    const Type *insert(Args... args) {
+        TypeArgs ta({ args... });
+        typename ArgMap::iterator it = map.find(ta);
+        if (it == map.end()) {
+            T *t = new T(args...);
+            map.insert({ta, t});
+            return t;
+        } else {
+            return it->second;
+        }
+    }
+};
+
+//------------------------------------------------------------------------------
+// INTEGER TYPE
+//------------------------------------------------------------------------------
+
+struct IntegerType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Integer;
+    }
+
+    IntegerType(size_t _width, bool _issigned)
+        : Type(TK_Integer), width(_width), issigned(_issigned) {
+        std::stringstream ss;
+        if (_width == 1) {
+            assert(!_issigned);
+            ss << "bool";
+        } else {
+            if (issigned) {
+                ss << "i";
+            } else {
+                ss << "u";
+            }
+            ss << width;
+        }
+        _name = String::from_stdstring(ss.str());
+    }
+
+    size_t width;
+    bool issigned;
+};
+
+const Type *_Integer(size_t _width, bool _issigned) {
+    return new IntegerType(_width, _issigned);
+}
+static auto Integer = memoize(_Integer);
+
+//------------------------------------------------------------------------------
+// INTEGER TYPE
+//------------------------------------------------------------------------------
+
+struct RealType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Real;
+    }
+
+    RealType(size_t _width)
+        : Type(TK_Real), width(_width) {
+        std::stringstream ss;
+        ss << "f" << width;
+        _name = String::from_stdstring(ss.str());
+    }
+
+    size_t width;
+};
+
+const Type *_Real(size_t _width) {
+    return new RealType(_width);
+}
+static auto Real = memoize(_Real);
 
 //------------------------------------------------------------------------------
 // POINTER TYPE
 //------------------------------------------------------------------------------
 
-struct PointerInfo {
-    Type element_type;
-    size_t stride;
+struct PointerType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Pointer;
+    }
 
-    PointerInfo() : element_type(TYPE_Nothing) {}
+    PointerType(const Type *_element_type)
+        : Type(TK_Pointer), element_type(_element_type) {
+        std::stringstream ss;
+        ss << element_type->name()->data << "*";
+        _name = String::from_stdstring(ss.str());
 
-    void *getelementptr(void *src, size_t i) {
+        if (is_opaque(element_type)) {
+            stride = 0;
+        } else {
+            stride = size_of(element_type);
+        }
+    }
+
+    void *getelementptr(void *src, size_t i) const {
         return (void *)((char *)src + stride * i);
     }
 
-    Any unpack(void *src) {
+    Any unpack(void *src) const {
         return wrap_pointer(element_type, src);
     }
     static size_t size() {
         return sizeof(uint64_t);
     }
+
+    const Type *element_type;
+    size_t stride;
 };
 
-static TypeFactory<PointerInfo> pointers;
-
-static Type Pointer(Type element_type) {
-    std::stringstream ss;
-    ss << element_type.name().name()->data << "*";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = pointers.insert(type);
-    if (result.second) {
-        auto &&pi = result.first->second;
-        pi.element_type = element_type;
-        if (is_opaque(element_type)) {
-            pi.stride = 0;
-        } else {
-            pi.stride = size_of(element_type);
-        }
-    }
-    return type;
+static const Type *Pointer(const Type *element_type) {
+    static TypeFactory<PointerType> pointers;
+    return pointers.insert(element_type);
 }
 
 //------------------------------------------------------------------------------
 // ARRAY TYPE
 //------------------------------------------------------------------------------
 
-struct StorageInfo {
+struct StorageType : Type {
+
+    StorageType(TypeKind kind) : Type(kind) {}
+
     size_t size;
     size_t align;
 };
 
-struct ArrayInfo : StorageInfo {
-    Type element_type;
-    size_t count;
-    size_t stride;
+struct SizedStorageType : StorageType {
 
-    ArrayInfo() : element_type(TYPE_Nothing), count(0) {}
+    SizedStorageType(TypeKind kind, const Type *_element_type, size_t _count)
+        : StorageType(kind), element_type(_element_type), count(_count) {
+        stride = size_of(element_type);
+        size = stride * count;
+        align = align_of(element_type);
+    }
 
-    void *getelementptr(void *src, size_t i) {
+    void *getelementptr(void *src, size_t i) const {
         verify_range(i, count);
         return (void *)((char *)src + stride * i);
     }
 
-    Any unpack(void *src, size_t i) {
+    Any unpack(void *src, size_t i) const {
         return wrap_pointer(type_at_index(i), getelementptr(src, i));
     }
 
-    Type type_at_index(size_t i) {
+    const Type *type_at_index(size_t i) const {
         verify_range(i, count);
         return element_type;
     }
+
+    const Type *element_type;
+    size_t count;
+    size_t stride;
 };
 
-static TypeFactory<ArrayInfo> arrays;
-
-static Type Array(Type element_type, size_t count) {
-    std::stringstream ss;
-    ss << "[" << element_type.name().name()->data << " x " << count << "]";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = arrays.insert(type);
-    if (result.second) {
-        auto &&ai = result.first->second;
-        ai.element_type = element_type;
-        ai.count = count;
-        ai.stride = size_of(element_type);
-        ai.size = ai.stride * count;
-        ai.align = align_of(element_type);
+struct ArrayType : SizedStorageType {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Array;
     }
-    return type;
+
+    ArrayType(const Type *_element_type, size_t _count)
+        : SizedStorageType(TK_Array, _element_type, _count) {
+        std::stringstream ss;
+        ss << "[" << element_type->name()->data << " x " << count << "]";
+        _name = String::from_stdstring(ss.str());
+    }
+};
+
+static const Type *Array(const Type *element_type, size_t count) {
+    static TypeFactory<ArrayType> arrays;
+    return arrays.insert(element_type, count);
 }
 
 //------------------------------------------------------------------------------
 // VECTOR TYPE
 //------------------------------------------------------------------------------
 
-struct VectorInfo : StorageInfo {
-    Type element_type;
-    size_t count;
-    size_t stride;
-
-    VectorInfo() : element_type(TYPE_Nothing), count(0) {}
-
-    void *getelementptr(void *src, size_t i) {
-        verify_range(i, count);
-        return (void *)((char *)src + stride * i);
+struct VectorType : SizedStorageType {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Vector;
     }
 
-    Any unpack(void *src, size_t i) {
-        return wrap_pointer(type_at_index(i), getelementptr(src, i));
-    }
-
-    Type type_at_index(size_t i) {
-        verify_range(i, count);
-        return element_type;
+    VectorType(const Type *_element_type, size_t _count)
+        : SizedStorageType(TK_Vector, _element_type, _count) {
+        std::stringstream ss;
+        ss << "<" << element_type->name()->data << " x " << count << ">";
+        _name = String::from_stdstring(ss.str());
     }
 };
 
-static TypeFactory<VectorInfo> vectors;
+static const Type *Vector(const Type *element_type, size_t count) {
+    static TypeFactory<VectorType> vectors;
+    return vectors.insert(element_type, count);
+}
 
-static Type Vector(Type element_type, size_t count) {
-    std::stringstream ss;
-    ss << "<" << element_type.name().name()->data << " x " << count << ">";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = vectors.insert(type);
-    if (result.second) {
-        auto &&ai = result.first->second;
-        ai.element_type = element_type;
-        ai.count = count;
-        ai.stride = size_of(element_type);
-        ai.size = ai.stride * count;
-        ai.align = align_of(element_type);
+//------------------------------------------------------------------------------
+// TUPLE TYPE
+//------------------------------------------------------------------------------
+
+struct TupleType : StorageType {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Tuple;
     }
-    return type;
+
+    TupleType(const std::vector<Any> &_types)
+        : StorageType(TK_Tuple) {
+        types.reserve(_types.size());
+        for (auto &&arg : _types) {
+            types.push_back(arg);
+        }
+        std::stringstream ss;
+        ss << "{";
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (i > 0) {
+                ss << " ";
+            }
+            ss << types[i]->name()->data;
+        }
+        ss << "}";
+        _name = String::from_stdstring(ss.str());
+
+        offsets.resize(types.size());
+        size_t sz = 0;
+        size_t al = 1;
+        for (size_t i = 0; i < types.size(); ++i) {
+            const Type *ET = types[i];
+            size_t etal = align_of(ET);
+            sz = ::align(sz, etal);
+            offsets[i] = sz;
+            al = std::max(al, etal);
+            sz += size_of(ET);
+        }
+        size = ::align(sz, al);
+        align = al;
+    }
+
+    void *getelementptr(void *src, size_t i) const {
+        verify_range(i, offsets.size());
+        return (void *)((char *)src + offsets[i]);
+    }
+
+    Any unpack(void *src, size_t i) const {
+        return wrap_pointer(type_at_index(i), getelementptr(src, i));
+    }
+
+    const Type *type_at_index(size_t i) const {
+        verify_range(i, types.size());
+        return types[i];
+    }
+
+    std::vector<const Type *> types;
+    std::vector<size_t> offsets;
+};
+
+static const Type *Tuple(const std::vector<const Type *> &types) {
+    static TypeFactory<TupleType> tuples;
+    std::vector<Any> atypes;
+    atypes.reserve(types.size());
+    for (auto &&arg : types) {
+        atypes.push_back(arg);
+    }
+    return tuples.insert(atypes);
+}
+
+//------------------------------------------------------------------------------
+// UNION TYPE
+//------------------------------------------------------------------------------
+
+struct UnionType : StorageType {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Union;
+    }
+
+    UnionType(const std::vector<Any> &_types)
+        : StorageType(TK_Union) {
+        types.reserve(_types.size());
+        for (auto &&arg : _types) {
+            types.push_back(arg);
+        }
+        std::stringstream ss;
+        ss << "{";
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (i > 0) {
+                ss << " | ";
+            }
+            ss << types[i]->name()->data;
+        }
+        ss << "}";
+        _name = String::from_stdstring(ss.str());
+
+        size_t sz = 0;
+        size_t al = 1;
+        for (size_t i = 0; i < types.size(); ++i) {
+            const Type *ET = types[i];
+            sz = std::max(sz, size_of(ET));
+            al = std::max(al, align_of(ET));
+        }
+        size = ::align(sz, al);
+        align = al;
+    }
+
+    Any unpack(void *src, size_t i) const {
+        return wrap_pointer(type_at_index(i), src);
+    }
+
+    const Type *type_at_index(size_t i) const {
+        verify_range(i, types.size());
+        return types[i];
+    }
+
+    std::vector<const Type *> types;
+};
+
+static const Type *Union(const std::vector<const Type *> &types) {
+    static TypeFactory<UnionType> unions;
+    std::vector<Any> atypes;
+    atypes.reserve(types.size());
+    for (auto &&arg : types) {
+        atypes.push_back(arg);
+    }
+    return unions.insert(atypes);
 }
 
 //------------------------------------------------------------------------------
@@ -2090,10 +2278,38 @@ enum {
     FF_Pure = (1 << 1),
 };
 
-struct FunctionInfo {
-    Type return_type;
-    std::vector<Type> argument_types;
-    uint32_t flags;
+struct FunctionType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Function;
+    }
+
+    FunctionType(
+        const Type *_return_type, const Type *_argument_types, uint32_t _flags) :
+        Type(TK_Function),
+        return_type(_return_type),
+        argument_types(llvm::cast<TupleType>(_argument_types)->types),
+        flags(_flags) {
+
+        std::stringstream ss;
+        ss <<  return_type->name()->data;
+        if (flags & FF_Pure) {
+            ss << "<~";
+        } else {
+            ss << "<-";
+        }
+        ss << "(";
+        for (size_t i = 0; i < argument_types.size(); ++i) {
+            if (i > 0) {
+                ss << " ";
+            }
+            ss << argument_types[i]->name()->data;
+        }
+        if (flags & FF_Variadic) {
+            ss << " ...";
+        }
+        ss << ")";
+        _name = String::from_stdstring(ss.str());
+    }
 
     bool vararg() const {
         return flags & FF_Variadic;
@@ -2101,311 +2317,98 @@ struct FunctionInfo {
     bool pure() const {
         return flags & FF_Pure;
     }
-    FunctionInfo() : return_type(TYPE_Nothing), flags(0) {}
+
+    const Type *return_type;
+    std::vector<const Type *> argument_types;
+    uint32_t flags;
 };
 
-static TypeFactory<FunctionInfo> functions;
-
-static Type Function(Type return_type,
-    const std::vector<Type> &argument_types, uint32_t flags = 0) {
-    std::stringstream ss;
-    ss <<  return_type.name().name()->data;
-    if (flags & FF_Pure) {
-        ss << "<~";
-    } else {
-        ss << "<-";
-    }
-    ss << "(";
-    for (size_t i = 0; i < argument_types.size(); ++i) {
-        if (i > 0) {
-            ss << " ";
-        }
-        ss << argument_types[i].name().name()->data;
-    }
-    if (flags & FF_Variadic) {
-        ss << " ...";
-    }
-    ss << ")";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = functions.insert(type);
-    if (result.second) {
-        auto &&ti = result.first->second;
-        ti.return_type = return_type;
-        ti.argument_types = argument_types;
-        ti.flags = flags;
-    }
-    return type;
+static const Type *Function(const Type *return_type,
+    const std::vector<const Type *> &argument_types, uint32_t flags = 0) {
+    static TypeFactory<FunctionType> functions;
+    return functions.insert(return_type, Tuple(argument_types), flags);
 }
 
-static bool is_function_pointer(Type type) {
-    if (!pointers.is(type)) return false;
-    auto &&pi = pointers.get(type);
-    return functions.is(pi.element_type);
+static bool is_function_pointer(const Type *type) {
+    const PointerType *ptype = dyn_cast<PointerType>(type);
+    if (!ptype) return false;
+    return isa<FunctionType>(ptype->element_type);
 }
 
-static bool is_pure_function_pointer(Type type) {
-    if (!pointers.is(type)) return false;
-    auto &&pi = pointers.get(type);
-    if (!functions.is(pi.element_type)) return false;
-    auto &&fi = functions.get(pi.element_type);
-    return fi.flags & FF_Pure;
-}
-
-//------------------------------------------------------------------------------
-// UNION TYPE
-//------------------------------------------------------------------------------
-
-struct UnionInfo : StorageInfo {
-    std::vector<Type> types;
-
-    Any unpack(void *src, size_t i) {
-        return wrap_pointer(type_at_index(i), src);
-    }
-
-    Type type_at_index(size_t i) {
-        verify_range(i, types.size());
-        return types[i];
-    }
-};
-
-static TypeFactory<UnionInfo> unions;
-
-static Type Union(const std::vector<Type> &types) {
-    std::stringstream ss;
-    ss << "{";
-    for (size_t i = 0; i < types.size(); ++i) {
-        if (i > 0) {
-            ss << " | ";
-        }
-        ss << types[i].name().name()->data;
-    }
-    ss << "}";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = unions.insert(type);
-    if (result.second) {
-        auto &&ui = result.first->second;
-        ui.types = types;
-        size_t sz = 0;
-        size_t al = 1;
-        for (size_t i = 0; i < types.size(); ++i) {
-            Type ET = types[i];
-            sz = std::max(sz, size_of(ET));
-            al = std::max(al, align_of(ET));
-        }
-        ui.size = align(sz, al);
-        ui.align = al;
-    }
-
-    return type;
+static bool is_pure_function_pointer(const Type *type) {
+    const PointerType *ptype = dyn_cast<PointerType>(type);
+    if (!ptype) return false;
+    const FunctionType *ftype = dyn_cast<FunctionType>(ptype->element_type);
+    if (!ftype) return false;
+    return ftype->flags & FF_Pure;
 }
 
 //------------------------------------------------------------------------------
 // CONSTANT TYPE
 //------------------------------------------------------------------------------
 
-struct ConstantInfo {
-    Type type;
-
-    ConstantInfo() : type(TYPE_Void) {
+struct ConstantType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Constant;
     }
+
+    ConstantType(const Any &_value) :
+        Type(TK_Constant), value(_value) {
+        StyledString ss;
+        ss.out << "!" << value;
+        _name = ss.str();
+    }
+
+    Any value;
 };
 
-static TypeFactory<ConstantInfo> constants;
-
-static Type Constant(Type T) {
-    std::stringstream ss;
-    ss << "!" << T.name().name()->data;
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = constants.insert(type);
-    if (result.second) {
-        auto &&ci = result.first->second;
-        ci.type = T;
-    }
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// TYPED LABEL TYPE
-//------------------------------------------------------------------------------
-
-struct TypedLabelInfo {
-    std::vector<Type> types;
-
-    bool has_constants() const {
-        for (size_t i = 0; i < types.size(); ++i) {
-            if (constants.is(types[i]))
-                return true;
-        }
-        return false;
-    }
-
-    Type strip_constants() const;
-};
-
-static TypeFactory<TypedLabelInfo> typed_labels;
-
-static Type TypedLabel(const std::vector<Type> &types) {
-    assert(!types.empty());
-    std::stringstream ss;
-    ss << "λ(";
-    for (size_t i = 0; i < types.size(); ++i) {
-        if (i > 0) {
-            ss << " ";
-        }
-        ss << types[i].name().name()->data;
-    }
-    ss << ")";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = typed_labels.insert(type);
-    if (result.second) {
-        auto &&tli = result.first->second;
-        tli.types = types;
-    }
-    return type;
-}
-
-Type TypedLabelInfo::strip_constants() const {
-    std::vector<Type> dest_types;
-    dest_types.reserve(types.size());
-    for (size_t i = 0; i < types.size(); ++i) {
-        Type T = types[i];
-        if (constants.is(T)) {
-            ConstantInfo &ci = constants.get(T);
-            T = ci.type;
-        }
-        dest_types.push_back(T);
-    }
-    return TypedLabel(dest_types);
-}
-
-//------------------------------------------------------------------------------
-// TYPESET TYPE
-//------------------------------------------------------------------------------
-
-struct TypeSetInfo {
-    std::unordered_set<Type, Type::Hash> types;
-};
-
-static TypeFactory<TypeSetInfo> typesets;
-
-static Type TypeSet(const std::vector<Type> &types) {
-    std::unordered_set<Type, Type::Hash> typeset;
-
-    for (auto &&entry : types) {
-        if (typesets.is(entry)) {
-            auto &&tsi = typesets.get(entry);
-            for (auto &&t : tsi.types) {
-                typeset.insert(t);
-            }
-        } else {
-            typeset.insert(entry);
-        }
-    }
-
-    assert(!typeset.empty());
-
-    if (typeset.size() == 1) {
-        return *typeset.begin();
-    }
-
-    std::vector<Type> type_array;
-    type_array.reserve(typeset.size());
-    for (auto &&entry : typeset) {
-        type_array.push_back(entry);
-    }
-
-    std::sort(type_array.begin(), type_array.end());
-
-    std::stringstream ss;
-    for (size_t i = 0; i < type_array.size(); ++i) {
-        if (i > 0) {
-            ss << " | ";
-        }
-        ss << type_array[i].name().name()->data;
-    }
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = typesets.insert(type);
-    if (result.second) {
-        auto &&tsi = result.first->second;
-        tsi.types = typeset;
-    }
-
-    return type;
-}
-
-//------------------------------------------------------------------------------
-// TUPLE TYPE
-//------------------------------------------------------------------------------
-
-struct TupleInfo : StorageInfo {
-    std::vector<Type> types;
-    std::vector<size_t> offsets;
-
-    void *getelementptr(void *src, size_t i) {
-        verify_range(i, offsets.size());
-        return (void *)((char *)src + offsets[i]);
-    }
-
-    Any unpack(void *src, size_t i) {
-        return wrap_pointer(type_at_index(i), getelementptr(src, i));
-    }
-
-    Type type_at_index(size_t i) {
-        verify_range(i, types.size());
-        return types[i];
-    }
-};
-
-static TypeFactory<TupleInfo> tuples;
-
-static Type Tuple(const std::vector<Type> &types) {
-    std::stringstream ss;
-    ss << "{";
-    for (size_t i = 0; i < types.size(); ++i) {
-        if (i > 0) {
-            ss << " ";
-        }
-        ss << types[i].name().name()->data;
-    }
-    ss << "}";
-    auto type = Type(Symbol(String::from_stdstring(ss.str())));
-    auto result = tuples.insert(type);
-    if (result.second) {
-        auto &&ti = result.first->second;
-        ti.types = types;
-        ti.offsets.resize(types.size());
-        size_t sz = 0;
-        size_t al = 1;
-        for (size_t i = 0; i < types.size(); ++i) {
-            Type ET = types[i];
-            size_t etal = align_of(ET);
-            sz = align(sz, etal);
-            ti.offsets[i] = sz;
-            al = std::max(al, etal);
-            sz += size_of(ET);
-        }
-        ti.size = align(sz, al);
-        ti.align = al;
-    }
-    return type;
+static const Type *Constant(const Any &value) {
+    static TypeFactory<ConstantType> constants;
+    return constants.insert(value);
 }
 
 //------------------------------------------------------------------------------
 // TYPENAME
 //------------------------------------------------------------------------------
 
-struct TypenameInfo {
-    Type storage_type;
-    bool finalized;
-    std::vector<Symbol> field_names;
-    std::unordered_map<Symbol, Any, Symbol::Hash> symbols;
+struct TypenameType : Type {
+    static std::unordered_set<Symbol, Symbol::Hash> used_names;
 
-    TypenameInfo() :
-        storage_type(TYPE_Nothing),
-        finalized(false)
-    {}
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Typename;
+    }
 
-    void finalize(Type _type);
+    TypenameType(const String *name)
+        : Type(TK_Typename), storage_type(nullptr) {
+        auto ss = StyledString::plain();
+        name->stream(ss.out, " *");
+        const String *newstr = ss.str();
+
+        auto newname = Symbol(newstr);
+        size_t idx = 2;
+        while (used_names.count(newname)) {
+            // keep testing until we hit a name that's free
+            auto ss = StyledString::plain();
+            ss.out << newstr->data << "$" << idx++;
+            newname = Symbol(ss.str());
+        }
+        used_names.insert(newname);
+        _name = newname.name();
+    }
+
+    void finalize(const Type *_type) {
+        if (finalized()) {
+            location_error(String::from("typename is already final"));
+        }
+        if (isa<TypenameType>(_type)) {
+            location_error(String::from("cannot use typename as storage type"));
+        } else if (isa<ConstantType>(_type)) {
+            location_error(String::from("cannot use constant as storage type"));
+        }
+        storage_type = _type;
+    }
+
+    bool finalized() const { return storage_type != nullptr; }
 
     void bind(Symbol name, const Any &value) {
         auto ret = symbols.insert({ name, value });
@@ -2429,127 +2432,194 @@ struct TypenameInfo {
         }
         return false;
     }
+
+    const Type *storage_type;
+    std::vector<Symbol> field_names;
+    std::unordered_map<Symbol, Any, Symbol::Hash> symbols;
 };
 
-static TypeFactory<TypenameInfo> typenames;
-
-void TypenameInfo::finalize(Type _type) {
-    if (finalized) {
-        location_error(String::from("typename is already final"));
-    }
-    if (typenames.is(_type)) {
-        location_error(String::from("cannot use typename as storage type"));
-    }
-#if 0
-    if (constants.is(_type)) {
-        location_error(String::from("cannot use constant as storage type"));
-    }
-#endif
-
-    storage_type = _type;
-    finalized = true;
-}
+std::unordered_set<Symbol, Symbol::Hash> TypenameType::used_names;
 
 // always generates a new type
-static Type Typename(Symbol name, bool builtin = false) {
-    const String *str = name.name();
-    auto ss = StyledString::plain();
-    if (!builtin) {
-        ss.out << "$";
-    }
-    str->stream(ss.out, " *");
-    const String *newstr = ss.str();
-
-    auto type = Type(Symbol(newstr));
-    size_t idx = 2;
-    while (typenames.is(type)) {
-        // keep testing until we hit a name that's free
-        auto ss = StyledString::plain();
-        ss.out << newstr->data << idx++;
-        type = Type(Symbol(ss.str()));
-    }
-    auto result = typenames.insert(type);
-    assert(result.second);
-
-    return type;
+static const Type *Typename(const String *name) {
+    return new TypenameType(name);
 }
 
-static Type storage_type(Type T) {
-    if (typenames.is(T)) {
-        auto &tn = typenames.get(T);
-        if (!tn.finalized) {
-            StyledString ss;
-            ss.out << "type " << T << " is opaque";
-            location_error(ss.str());
-        }
-        return tn.storage_type;
-    } else {
-        return T;
+static const Type *storage_type(const Type *T) {
+    const TypenameType *tt = dyn_cast<TypenameType>(T);
+    if (!tt) return T;
+    if (!tt->finalized()) {
+        StyledString ss;
+        ss.out << "type " << T << " is opaque";
+        location_error(ss.str());
     }
+    return tt->storage_type;
+}
+
+//------------------------------------------------------------------------------
+// TYPED LABEL TYPE
+//------------------------------------------------------------------------------
+
+static const Type *TypedLabel(const std::vector<const Type *> &types);
+
+struct TypedLabelType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_TypedLabel;
+    }
+
+    TypedLabelType(const std::vector<Any> &_types)
+        : Type(TK_TypedLabel) {
+        types.reserve(_types.size());
+        for (auto &&arg : _types) {
+            types.push_back(arg);
+        }
+
+        std::stringstream ss;
+        ss << "λ(";
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (i > 0) {
+                ss << " ";
+            }
+            ss << types[i]->name()->data;
+        }
+        ss << ")";
+        _name = String::from_stdstring(ss.str());
+
+    }
+
+    bool has_constants() const {
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (isa<ConstantType>(types[i]))
+                return true;
+        }
+        return false;
+    }
+
+    const Type *strip_constants() const {
+        std::vector<const Type *> dest_types;
+        dest_types.reserve(types.size());
+        for (size_t i = 0; i < types.size(); ++i) {
+            const Type *T = types[i];
+            const ConstantType *ct = dyn_cast<ConstantType>(T);
+            if (ct) {
+                T = ct->value.type;
+            }
+            dest_types.push_back(T);
+        }
+        return TypedLabel(dest_types);
+    }
+
+    std::vector<const Type *> types;
+};
+
+static const Type *TypedLabel(const std::vector<const Type *> &types) {
+    static TypeFactory<TypedLabelType> typed_labels;
+    assert(!types.empty());
+    std::vector<Any> atypes;
+    atypes.reserve(types.size());
+    for (auto &&arg : types) {
+        atypes.push_back(arg);
+    }
+    return typed_labels.insert(atypes);
+}
+
+//------------------------------------------------------------------------------
+// TYPESET TYPE
+//------------------------------------------------------------------------------
+
+struct TypeSetType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_TypeSet;
+    }
+
+    TypeSetType(const std::vector<Any> &_types)
+        : Type(TK_TypeSet) {
+        types.reserve(_types.size());
+        for (auto &&arg : _types) {
+            types.push_back(arg);
+        }
+
+        std::stringstream ss;
+        ss << "<";
+        for (size_t i = 0; i < types.size(); ++i) {
+            if (i > 0) {
+                ss << " | ";
+            }
+            ss << types[i]->name()->data;
+        }
+        ss << ">";
+        _name = String::from_stdstring(ss.str());
+    }
+
+    std::vector<const Type *> types;
+};
+
+static const Type *TypeSet(const std::vector<const Type *> &types) {
+    static TypeFactory<TypeSetType> typesets;
+
+    std::unordered_set<const Type *> typeset;
+
+    for (auto &&entry : types) {
+        const TypeSetType *ts = dyn_cast<TypeSetType>(entry);
+        if (ts) {
+            for (auto &&t : ts->types) {
+                typeset.insert(t);
+            }
+        } else {
+            typeset.insert(entry);
+        }
+    }
+
+    assert(!typeset.empty());
+
+    if (typeset.size() == 1) {
+        return *typeset.begin();
+    }
+
+    std::vector<const Type *> type_array;
+    type_array.reserve(typeset.size());
+    for (auto &&entry : typeset) {
+        type_array.push_back(entry);
+    }
+
+    std::sort(type_array.begin(), type_array.end());
+
+    std::vector<Any> atypes;
+    atypes.reserve(type_array.size());
+    for (auto &&arg : type_array) {
+        atypes.push_back(arg);
+    }
+    return typesets.insert(atypes);
 }
 
 //------------------------------------------------------------------------------
 // TYPE INQUIRIES
 //------------------------------------------------------------------------------
 
-enum Category {
-    CAT_Basic = 0,
-    CAT_Pointer,
-    CAT_Array,
-    CAT_Vector,
-    CAT_Tuple,
-    CAT_Union,
-    CAT_Typename,
-    CAT_TypedLabel,
-    CAT_TypeSet,
-    CAT_Function,
-    CAT_Constant,
-};
-
-static Category category_of(Type T) {
-    if (pointers.is(T)) {
-        return CAT_Pointer;
-    } else if (typenames.is(T)) {
-        return CAT_Typename;
-    } else if (arrays.is(T)) {
-        return CAT_Array;
-    } else if (vectors.is(T)) {
-        return CAT_Vector;
-    } else if (tuples.is(T)) {
-        return CAT_Tuple;
-    } else if (unions.is(T)) {
-        return CAT_Union;
-    } else if (functions.is(T)) {
-        return CAT_Function;
-    } else if (constants.is(T)) {
-        return CAT_Constant;
-    }
-    return CAT_Basic;
-}
-
-
-template<Category cat>
-static void verify_category(Type T) {
-    if (category_of(T) != cat) {
+template<TypeKind tk>
+static void verify_kind(const Type *T) {
+    if (T->kind() != tk) {
         StyledString ss;
-        switch(cat) {
-        case CAT_Basic: ss.out << "primitive"; break;
-        case CAT_Pointer: ss.out << "pointer"; break;
-        case CAT_Array: ss.out << "array"; break;
-        case CAT_Vector: ss.out << "vector"; break;
-        case CAT_Tuple: ss.out << "tuple"; break;
-        case CAT_Union: ss.out << "union"; break;
-        case CAT_Typename: ss.out << "typename"; break;
-        case CAT_TypedLabel: ss.out << "typed label"; break;
-        case CAT_TypeSet: ss.out << "typeset"; break;
-        case CAT_Function: ss.out << "function"; break;
+        switch(tk) {
+        case TK_Integer: ss.out << "integer"; break;
+        case TK_Real: ss.out << "real"; break;
+        case TK_Pointer: ss.out << "pointer"; break;
+        case TK_Array: ss.out << "array"; break;
+        case TK_Vector: ss.out << "vector"; break;
+        case TK_Tuple: ss.out << "tuple"; break;
+        case TK_Union: ss.out << "union"; break;
+        case TK_Typename: ss.out << "typename"; break;
+        case TK_TypedLabel: ss.out << "typed label"; break;
+        case TK_TypeSet: ss.out << "typeset"; break;
+        case TK_Function: ss.out << "function"; break;
+        case TK_Constant: ss.out << "constant"; break;
         }
         ss.out << " expected, got " << T;
         location_error(ss.str());
     }
 }
 
-static void verify_function_pointer(Type type) {
+static void verify_function_pointer(const Type *type) {
     if (!is_function_pointer(type)) {
         StyledString ss;
         ss.out << "function pointer expected, got " << type;
@@ -2557,58 +2627,42 @@ static void verify_function_pointer(Type type) {
     }
 }
 
-static bool is_opaque(Type T) {
-    switch (T.value()) {
-    case TYPE_Void:
-    case TYPE_Nothing: return true;
-    default: break;
+static bool is_opaque(const Type *T) {
+    const TypenameType *tt = dyn_cast<TypenameType>(T);
+    if (tt) {
+        if (!tt->finalized()) {
+            return true;
+        } else {
+            T = tt->storage_type;
+        }
     }
-    switch(category_of(T)) {
-    case CAT_Constant:
-    case CAT_Function: return true;
-    case CAT_Typename: {
-        auto &&tn = typenames.get(T);
-        return !tn.finalized;
-    } break;
+    switch(T->kind()) {
+    case TK_TypedLabel:
+    case TK_TypeSet:
+    case TK_Constant:
+    case TK_Function: return true;
     default: break;
     }
     return false;
 }
 
-static size_t size_of(Type T) {
-    switch(T.value()) {
-    case TYPE_Bool: return sizeof(bool);
-
-    case TYPE_I8:
-    case TYPE_U8: return sizeof(int8_t);
-
-    case TYPE_I16:
-    case TYPE_U16: return sizeof(int16_t);
-
-    case TYPE_I32:
-    case TYPE_U32: return sizeof(int32_t);
-
-    case TYPE_I64:
-    case TYPE_U64: return sizeof(int64_t);
-
-    case TYPE_F32: return sizeof(float);
-    case TYPE_F64: return sizeof(double);
-    default: {
-    } break;
+static size_t size_of(const Type *T) {
+    switch(T->kind()) {
+    case TK_Integer: {
+        const IntegerType *it = cast<IntegerType>(T);
+        return (it->width + 7) / 8;
     }
-
-    switch(category_of(T)) {
-    case CAT_Pointer: return sizeof(uint64_t);
-    case CAT_Array: return arrays.get(T).size;
-    case CAT_Vector: return vectors.get(T).size;
-    case CAT_Tuple: return tuples.get(T).size;
-    case CAT_Union: return unions.get(T).size;
-    case CAT_Typename: {
-        auto &&tn = typenames.get(T);
-        if (tn.finalized) {
-            return size_of(tn.storage_type);
-        }
-    } break;
+    case TK_Real: {
+        const RealType *rt = cast<RealType>(T);
+        return (rt->width + 7) / 8;
+    }
+    case TK_Pointer: return PointerType::size();
+    case TK_Array: return cast<ArrayType>(T)->size;
+    case TK_Vector: return cast<VectorType>(T)->size;
+    case TK_Tuple: return cast<TupleType>(T)->size;
+    case TK_Union: return cast<UnionType>(T)->size;
+    case TK_Typename: return size_of(storage_type(cast<TypenameType>(T)));
+    case TK_Constant: return size_of(cast<ConstantType>(T)->value.type);
     default: break;
     }
 
@@ -2618,103 +2672,54 @@ static size_t size_of(Type T) {
     return -1;
 }
 
-static size_t align_of(Type T) {
-    switch(T.value()) {
-    case TYPE_Bool: return sizeof(bool);
-
-    case TYPE_I8:
-    case TYPE_U8: return sizeof(int8_t);
-
-    case TYPE_I16:
-    case TYPE_U16: return sizeof(int16_t);
-
-    case TYPE_I32:
-    case TYPE_U32: return sizeof(int32_t);
-
-    case TYPE_I64:
-    case TYPE_U64: return sizeof(int64_t);
-
-    case TYPE_F32: return sizeof(float);
-    case TYPE_F64: return sizeof(double);
-    default: {
-    } break;
+static size_t align_of(const Type *T) {
+    switch(T->kind()) {
+    case TK_Integer: {
+        const IntegerType *it = cast<IntegerType>(T);
+        return (it->width + 7) / 8;
     }
-
-    switch(category_of(T)) {
-    case CAT_Pointer: return sizeof(uint64_t);
-    case CAT_Array: return arrays.get(T).align;
-    case CAT_Vector: return vectors.get(T).align;
-    case CAT_Tuple: return tuples.get(T).align;
-    case CAT_Union: return unions.get(T).align;
-    case CAT_Typename: {
-        auto &&tn = typenames.get(T);
-        if (tn.finalized) {
-            return align_of(tn.storage_type);
-        }
-    } break;
+    case TK_Real: {
+        const RealType *rt = cast<RealType>(T);
+        return (rt->width + 7) / 8;
+    }
+    case TK_Pointer: return PointerType::size();
+    case TK_Array: return cast<ArrayType>(T)->align;
+    case TK_Vector: return cast<VectorType>(T)->align;
+    case TK_Tuple: return cast<TupleType>(T)->align;
+    case TK_Union: return cast<UnionType>(T)->align;
+    case TK_Typename: return align_of(storage_type(cast<TypenameType>(T)));
+    case TK_Constant: return align_of(cast<ConstantType>(T)->value.type);
     default: break;
     }
 
     StyledString ss;
-    ss.out << "opaque type " << T << " has no size";
+    ss.out << "opaque type " << T << " has no alignment";
     location_error(ss.str());
-    return -1;
+    return 1;
 }
 
-static Any wrap_pointer(Type type, void *ptr) {
+static Any wrap_pointer(const Type *type, void *ptr) {
     Any result = none;
     result.type = type;
-    switch(type.value()) {
-    case TYPE_I8: case TYPE_U8:
-        result.u8 = *(uint8_t *)ptr;
-        return result;
-    case TYPE_I16: case TYPE_U16:
-        result.u16 = *(uint16_t *)ptr;
-        return result;
-    case TYPE_I32: case TYPE_U32:
-        result.u32 = *(uint32_t *)ptr;
-        return result;
-    case TYPE_I64: case TYPE_U64:
-        result.u64 = *(uint64_t *)ptr;
-        return result;
-    case TYPE_F32:
-        result.f32 = *(float *)ptr;
-        return result;
-    case TYPE_F64:
-        result.f64 = *(float *)ptr;
-        return result;
-    case TYPE_Bool:
-        result.i1 = *(bool *)ptr;
-        return result;
-    default: break;
-    }
 
-    switch(category_of(type)) {
-    case CAT_Pointer:
-        result.pointer = *(void **)ptr;
+    type = storage_type(type);
+    switch(type->kind()) {
+    case TK_Integer:
+    case TK_Real:
+    case TK_Pointer:
+        memcpy(result.content, ptr, size_of(type));
         return result;
-    case CAT_Typename: {
-        auto &&tn = typenames.get(type);
-        if (!tn.finalized) {
-            StyledString ss;
-            ss.out << "FFI: cannot wrap opaque type " << type;
-            location_error(ss.str());
-        }
-        result = wrap_pointer(tn.storage_type, ptr);
-        result.type = type;
-        return result;
-    } break;
-    case CAT_Array:
-    case CAT_Vector:
-    case CAT_Tuple:
-    case CAT_Union:
+    case TK_Array:
+    case TK_Vector:
+    case TK_Tuple:
+    case TK_Union:
         result.pointer = ptr;
         return result;
     default: break;
-    };
+    }
 
     StyledString ss;
-    ss.out << "FFI: cannot wrap data of type " << type;
+    ss.out << "cannot wrap data of type " << type;
     location_error(ss.str());
     return none;
 }
@@ -2729,52 +2734,58 @@ size_t Any::hash() const {
     }
     if (is_opaque(type))
         return 0;
-    Type T = storage_type(type);
-    switch(T.value()) {
-    case TYPE_Bool: return std::hash<bool>{}(i1);
-    case TYPE_U8: case TYPE_I8: return std::hash<uint8_t>{}(u8);
-    case TYPE_U16: case TYPE_I16: return std::hash<uint16_t>{}(u16);
-    case TYPE_U32: case TYPE_I32: return std::hash<uint32_t>{}(u32);
-    case TYPE_U64: case TYPE_I64: return std::hash<uint64_t>{}(u64);
-    case TYPE_F32: return std::hash<float>{}(f32);
-    case TYPE_F64: return std::hash<double>{}(f64);
+    const Type *T = storage_type(type);
+    switch(T->kind()) {
+    case TK_Integer: {
+        switch(cast<IntegerType>(T)->width) {
+        case 1: return std::hash<bool>{}(i1);
+        case 8: return std::hash<uint8_t>{}(u8);
+        case 16: return std::hash<uint16_t>{}(u16);
+        case 32: return std::hash<uint32_t>{}(u32);
+        case 64: return std::hash<uint64_t>{}(u64);
+        default: break;
+        }
+    } break;
+    case TK_Real: {
+        switch(cast<RealType>(T)->width) {
+        case 32: return std::hash<float>{}(f32);
+        case 64: return std::hash<double>{}(f64);
+        default: break;
+        }
+    } break;
+    case TK_Pointer: return std::hash<void *>{}(pointer);
+    case TK_Array: {
+        auto ai = cast<ArrayType>(T);
+        size_t h = 0;
+        for (size_t i = 0; i < ai->count; ++i) {
+            h = HashLen16(h, ai->unpack(pointer, i).hash());
+        }
+        return h;
+    } break;
+    case TK_Vector: {
+        auto vi = cast<VectorType>(T);
+        size_t h = 0;
+        for (size_t i = 0; i < vi->count; ++i) {
+            h = HashLen16(h, vi->unpack(pointer, i).hash());
+        }
+        return h;
+    } break;
+    case TK_Tuple: {
+        auto ti = cast<TupleType>(T);
+        size_t h = 0;
+        for (size_t i = 0; i < ti->types.size(); ++i) {
+            h = HashLen16(h, ti->unpack(pointer, i).hash());
+        }
+        return h;
+    } break;
+    case TK_Union:
+        return CityHash64((const char *)pointer, size_of(T));
     default: break;
     }
-    switch(category_of(T)) {
-    case CAT_Pointer:
-        return std::hash<void *>{}(pointer);
-    case CAT_Array: {
-        auto &&ai = arrays.get(T);
-        size_t h = 0;
-        for (size_t i = 0; i < ai.count; ++i) {
-            h = HashLen16(h, ai.unpack(pointer, i).hash());
-        }
-        return h;
-    } break;
-    case CAT_Vector:{
-        auto &&vi = vectors.get(T);
-        size_t h = 0;
-        for (size_t i = 0; i < vi.count; ++i) {
-            h = HashLen16(h, vi.unpack(pointer, i).hash());
-        }
-        return h;
-    } break;
-    case CAT_Tuple:{
-        auto &&ti = tuples.get(T);
-        size_t h = 0;
-        for (size_t i = 0; i < ti.types.size(); ++i) {
-            h = HashLen16(h, ti.unpack(pointer, i).hash());
-        }
-        return h;
-    } break;
-    case CAT_Union:
-        return CityHash64((const char *)pointer, size_of(T));
-    default: {
-        StyledStream ss(std::cout);
-        ss << "unhashable value: " << T << std::endl;
-        assert(false && "unhashable value");
-    } break;
-    }
+
+    StyledStream ss(std::cout);
+    ss << "unhashable value: " << T << std::endl;
+    assert(false && "unhashable value");
     return 0;
 }
 
@@ -2787,49 +2798,58 @@ bool Any::operator ==(const Any &other) const {
     }
     if (is_opaque(type))
         return true;
-    Type T = storage_type(type);
-    switch(T.value()) {
-    case TYPE_Bool: return (i1 == other.i1);
-    case TYPE_U8: case TYPE_I8: return (u8 == other.u8);
-    case TYPE_U16: case TYPE_I16: return (u16 == other.u16);
-    case TYPE_U32: case TYPE_I32: return (u32 == other.u32);
-    case TYPE_U64: case TYPE_I64: return (u64 == other.u64);
-    case TYPE_F32: return (f32 == other.f32);
-    case TYPE_F64: return (f64 == other.f64);
+    const Type *T = storage_type(type);
+    switch(T->kind()) {
+    case TK_Integer: {
+        switch(cast<IntegerType>(T)->width) {
+        case 1: return (i1 == other.i1);
+        case 8: return (u8 == other.u8);
+        case 16: return (u16 == other.u16);
+        case 32: return (u32 == other.u32);
+        case 64: return (u64 == other.u64);
+        default: break;
+        }
+    } break;
+    case TK_Real: {
+        switch(cast<RealType>(T)->width) {
+        case 32: return (f32 == other.f32);
+        case 64: return (f64 == other.f64);
+        default: break;
+        }
+    } break;
+    case TK_Pointer: return pointer == other.pointer;
+    case TK_Array: {
+        auto ai = cast<ArrayType>(T);
+        for (size_t i = 0; i < ai->count; ++i) {
+            if (ai->unpack(pointer, i) != ai->unpack(other.pointer, i))
+                return false;
+        }
+        return true;
+    } break;
+    case TK_Vector: {
+        auto vi = cast<VectorType>(T);
+        for (size_t i = 0; i < vi->count; ++i) {
+            if (vi->unpack(pointer, i) != vi->unpack(other.pointer, i))
+                return false;
+        }
+        return true;
+    } break;
+    case TK_Tuple: {
+        auto ti = cast<TupleType>(T);
+        for (size_t i = 0; i < ti->types.size(); ++i) {
+            if (ti->unpack(pointer, i) != ti->unpack(other.pointer, i))
+                return false;
+        }
+        return true;
+    } break;
+    case TK_Union:
+        return !memcmp(pointer, other.pointer, size_of(T));
     default: break;
     }
-    switch(category_of(T)) {
-    case CAT_Pointer:
-        return pointer == other.pointer;
-    case CAT_Array: {
-        auto &&ai = arrays.get(T);
-        for (size_t i = 0; i < ai.count; ++i) {
-            if (ai.unpack(pointer, i) != ai.unpack(other.pointer, i))
-                return false;
-        }
-        return true;
-    } break;
-    case CAT_Vector:{
-        auto &&vi = vectors.get(T);
-        for (size_t i = 0; i < vi.count; ++i) {
-            if (vi.unpack(pointer, i) != vi.unpack(other.pointer, i))
-                return false;
-        }
-        return true;
-    } break;
-    case CAT_Tuple:{
-        auto &&ti = tuples.get(T);
-        for (size_t i = 0; i < ti.types.size(); ++i) {
-            if (ti.unpack(pointer, i) != ti.unpack(other.pointer, i))
-                return false;
-        }
-        return true;
-    } break;
-    case CAT_Union:
-        return !memcmp(pointer, other.pointer, size_of(T));
-    default:
-        assert(false && "incomparable values");
-    }
+
+    StyledStream ss(std::cout);
+    ss << "incomparable value: " << T << std::endl;
+    assert(false && "incomparable value");
     return false;
 }
 
@@ -2997,7 +3017,7 @@ public:
 };
 
 static Any unsyntax(const Any &e) {
-    e.verify<TYPE_Syntax>();
+    e.verify(TYPE_Syntax);
     return e.syntax->datum;
 }
 
@@ -3705,8 +3725,10 @@ static Style default_symbol_styler(Symbol name) {
         return Style_SfxFunction;
     else if ((val >= OPERATOR_FIRST) && (val <= OPERATOR_LAST))
         return Style_Operator;
+    /*
+    // TODO
     else if ((val >= TYPE_FIRST) && (val <= TYPE_LAST))
-        return Style_Type;
+        return Style_Type;*/
     return Style_Symbol;
 }
 
@@ -3819,15 +3841,11 @@ struct StreamExpr : StreamAnchors {
             auto it = e.list;
             while (it != EOL) {
                 auto q = maybe_unsyntax(it->at);
-                if (q.type.is_known()) {
-                    switch(q.type.known_value()) {
-                    case TYPE_Symbol:
-                    case TYPE_String:
-                    case TYPE_I32:
-                    case TYPE_F32:
-                        break;
-                    default: return true;
-                    }
+                if ((q.type == TYPE_Symbol)
+                    ||(q.type == TYPE_String)
+                    ||(q.type == TYPE_I32)
+                    ||(q.type == TYPE_F32)) {
+                    return true;
                 }
                 it = it->next;
             }
@@ -4016,14 +4034,14 @@ struct ILNode {
 
 struct Parameter : ILNode {
 protected:
-    Parameter(const Anchor *_anchor, Symbol _name, Type _type, bool _vararg) :
+    Parameter(const Anchor *_anchor, Symbol _name, const Type *_type, bool _vararg) :
         anchor(_anchor), name(_name), type(_type), label(nullptr), index(-1),
         vararg(_vararg) {}
 
 public:
     const Anchor *anchor;
     Symbol name;
-    Type type;
+    const Type *type;
     Label *label;
     int index;
     bool vararg;
@@ -4055,21 +4073,20 @@ public:
             _param->anchor, _param->name, _param->type, _param->vararg);
     }
 
-    static Parameter *from(const Anchor *_anchor, Symbol _name, Type _type) {
+    static Parameter *from(const Anchor *_anchor, Symbol _name, const Type *_type) {
         return new Parameter(_anchor, _name, _type, false);
     }
 
-    static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, Type _type) {
+    static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
         return new Parameter(_anchor, _name, _type, true);
     }
 };
 
-template<KnownSymbol T>
-void Any::verify_indirect() const {
-    bangra::verify<T>(indirect_type());
+void Any::verify_indirect(const Type *T) const {
+    bangra::verify(T, indirect_type());
 }
 
-Type Any::indirect_type() const {
+const Type *Any::indirect_type() const {
     if (type == TYPE_Parameter) {
         return parameter->type;
     } else {
@@ -4156,20 +4173,20 @@ public:
         return body.args[0].label;
     }
 
-    Type get_function_type() const {
+    const Type *get_function_type() const {
 
-        std::vector<Type> rettypes;
-        std::vector<Type> argtypes;
+        std::vector<const Type *> rettypes;
+        std::vector<const Type *> argtypes;
 
         for (size_t i = 1; i < params.size(); ++i) {
             argtypes.push_back(params[i]->type);
         }
-        auto &&tli = typed_labels.get(params[0]->type);
-        for (size_t i = 1; i < tli.types.size(); ++i) {
-            rettypes.push_back(tli.types[i]);
+        auto tl = cast<TypedLabelType>(params[0]->type);
+        for (size_t i = 1; i < tl->types.size(); ++i) {
+            rettypes.push_back(tl->types[i]);
         }
 
-        Type rtype = TYPE_Void;
+        const Type *rtype = TYPE_Void;
         if (rettypes.size() == 1) {
             rtype = rettypes[0];
         } else {
@@ -4249,15 +4266,12 @@ public:
                     arg = parent->body.args[i];
                 }
 
-                switch(arg.type.value()) {
-                case TYPE_Label: {
+                if (arg.type == TYPE_Label) {
                     Label *label = arg.label;
                     if (!visited.count(label)) {
                         visited.insert(label);
                         stack.push_back(label);
                     }
-                } break;
-                default: break;
                 }
             }
         }
@@ -4281,15 +4295,12 @@ public:
                     arg = parent->body.args[i];
                 }
 
-                switch(arg.type.value()) {
-                case TYPE_Label: {
+                if (arg.type == TYPE_Label) {
                     Label *label = arg.label;
                     if (!labels.count(label)) {
                         labels.insert(label);
                         stack.push_back(label);
                     }
-                } break;
-                default: break;
                 }
             }
         }
@@ -4377,7 +4388,7 @@ public:
         }
         ss << Style_Operator << ")" << Style_None;
         if (count) {
-            Type rtype = params[0]->type;
+            const Type *rtype = params[0]->type;
             if (rtype != TYPE_Nothing) {
                 ss << Style_Comment << CONT_SEP << Style_None;
                 if (rtype == TYPE_Void) {
@@ -4715,8 +4726,7 @@ struct SCCBuilder {
                 arg = obj->body.args[i];
             }
 
-            switch(arg.type.value()) {
-            case TYPE_Label: {
+            if (arg.type == TYPE_Label) {
                 Label *label = arg.label;
 
                 auto it = Cmap.find(label);
@@ -4732,8 +4742,6 @@ struct SCCBuilder {
                         P.pop_back();
                     }
                 }
-            } break;
-            default: break;
             }
         }
 
@@ -4877,7 +4885,7 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
 class CVisitor : public clang::RecursiveASTVisitor<CVisitor> {
 public:
 
-    typedef std::unordered_map<Symbol, Type, Symbol::Hash> NamespaceMap;
+    typedef std::unordered_map<Symbol, const Type *, Symbol::Hash> NamespaceMap;
 
     Scope *dest;
     clang::ASTContext *Context;
@@ -4914,11 +4922,11 @@ public:
         dest = _dest;
     }
 
-    void GetFields(TypenameInfo &tni, clang::RecordDecl * rd) {
+    void GetFields(TypenameType *tni, clang::RecordDecl * rd) {
         //auto &rl = Context->getASTRecordLayout(rd);
 
         std::vector<Symbol> names;
-        std::vector<Type> types;
+        std::vector<const Type *> types;
         //auto anchors = new std::vector<Anchor>();
 
         for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
@@ -4932,7 +4940,7 @@ public:
                 break;
             }
             clang::QualType FT = it->getType();
-            Type fieldtype = TranslateType(FT);
+            const Type *fieldtype = TranslateType(FT);
 
             // todo: work offset into structure
             names.push_back(
@@ -4942,31 +4950,31 @@ public:
             types.push_back(fieldtype);
         }
 
-        tni.finalize(rd->isUnion()?Union(types):Tuple(types));
-        tni.field_names = names;
+        tni->finalize(rd->isUnion()?Union(types):Tuple(types));
+        tni->field_names = names;
     }
 
-    Type get_typename(Symbol name, NamespaceMap &map) {
-        if (name == SYM_Unnamed) {
+    const Type *get_typename(Symbol name, NamespaceMap &map) {
+        if (name != SYM_Unnamed) {
             auto it = map.find(name);
             if (it != map.end()) {
                 return it->second;
             }
-            Type T = Typename(name);
+            const Type *T = Typename(name.name());
             auto ok = map.insert({name, T});
             assert(ok.second);
             return T;
         }
-        return Typename(name);
+        return Typename(name.name());
     }
 
-    Type TranslateRecord(clang::RecordDecl *rd) {
+    const Type *TranslateRecord(clang::RecordDecl *rd) {
         if (!rd->isStruct() && !rd->isUnion())
             location_error(String::from("can not translate record: is neither struct nor union"));
 
         Symbol name(String::from_stdstring(rd->getName().data()));
 
-        Type struct_type = get_typename(name,
+        const Type *struct_type = get_typename(name,
             rd->isUnion()?named_unions:named_structs);
 
         //const Anchor *anchor = anchorFromLocation(rd->getSourceRange().getBegin());
@@ -4975,7 +4983,9 @@ public:
         if (defn && !record_defined[rd]) {
             record_defined[rd] = true;
 
-            GetFields(typenames.get(struct_type), defn);
+            GetFields(
+                cast<TypenameType>(const_cast<Type *>(struct_type)),
+                defn);
 
             #if 0
             auto &rl = Context->getASTRecordLayout(rd);
@@ -4987,25 +4997,32 @@ public:
         return struct_type;
     }
 
-    Any make_integer(Type T, int64_t v) {
-        switch(T.value()) {
-        case TYPE_I8: return Any((int8_t)v);
-        case TYPE_I16: return Any((int16_t)v);
-        case TYPE_I32: return Any((int32_t)v);
-        case TYPE_I64: return Any((int64_t)v);
-        case TYPE_U8: return Any((uint8_t)v);
-        case TYPE_U16: return Any((uint16_t)v);
-        case TYPE_U32: return Any((uint32_t)v);
-        case TYPE_U64: return Any((uint64_t)v);
-        default: assert(false); return none;
+    Any make_integer(const Type *T, int64_t v) {
+        auto it = cast<IntegerType>(T);
+        if (it->issigned) {
+            switch(it->width) {
+            case 8: return Any((int8_t)v);
+            case 16: return Any((int16_t)v);
+            case 32: return Any((int32_t)v);
+            case 64: return Any((int64_t)v);
+            default: assert(false); return none;
+            }
+        } else {
+            switch(it->width) {
+            case 8: return Any((uint8_t)v);
+            case 16: return Any((uint16_t)v);
+            case 32: return Any((uint32_t)v);
+            case 64: return Any((uint64_t)v);
+            default: assert(false); return none;
+            }
         }
     }
 
-    Type TranslateEnum(clang::EnumDecl *ed) {
+    const Type *TranslateEnum(clang::EnumDecl *ed) {
 
         Symbol name(String::from_stdstring(ed->getName()));
 
-        Type enum_type = get_typename(name, named_enums);
+        const Type *enum_type = get_typename(name, named_enums);
 
         //const Anchor *anchor = anchorFromLocation(ed->getIntegerTypeRange().getBegin());
 
@@ -5013,10 +5030,10 @@ public:
         if (defn && !enum_defined[ed]) {
             enum_defined[ed] = true;
 
-            Type tag_type = TranslateType(ed->getIntegerType());
+            const Type *tag_type = TranslateType(ed->getIntegerType());
 
-            auto &tni = typenames.get(enum_type);
-            tni.finalize(tag_type);
+            auto tni = cast<TypenameType>(const_cast<Type *>(enum_type));
+            tni->finalize(tag_type);
 
             for (auto it : ed->enumerators()) {
                 //const Anchor *anchor = anchorFromLocation(it->getSourceRange().getBegin());
@@ -5025,7 +5042,7 @@ public:
                 auto name = Symbol(String::from_stdstring(it->getName().data()));
                 auto value = make_integer(tag_type, val.getExtValue());
 
-                tni.bind(name, value);
+                tni->bind(name, value);
                 dest->bind(name, value);
             }
         }
@@ -5033,7 +5050,7 @@ public:
         return enum_type;
     }
 
-    Type TranslateType(clang::QualType T) {
+    const Type *TranslateType(clang::QualType T) {
         using namespace clang;
 
         const clang::Type *Ty = T.getTypePtr();
@@ -5071,9 +5088,9 @@ public:
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
             case clang::BuiltinType::Void:
-                return Type(TYPE_Void);
+                return TYPE_Void;
             case clang::BuiltinType::Bool:
-                return Type(TYPE_Bool);
+                return TYPE_Bool;
             case clang::BuiltinType::Char_S:
             case clang::BuiltinType::SChar:
             case clang::BuiltinType::Char_U:
@@ -5091,30 +5108,14 @@ public:
             case clang::BuiltinType::Char16:
             case clang::BuiltinType::Char32: {
                 int sz = Context->getTypeSize(T);
-                if (Ty->isUnsignedIntegerType()) {
-                    switch(sz) {
-                    case 8: return Type(TYPE_U8);
-                    case 16: return Type(TYPE_U16);
-                    case 32: return Type(TYPE_U32);
-                    case 64: return Type(TYPE_U64);
-                    default: break;
-                    }
-                } else {
-                    switch(sz) {
-                    case 8: return Type(TYPE_I8);
-                    case 16: return Type(TYPE_I16);
-                    case 32: return Type(TYPE_I32);
-                    case 64: return Type(TYPE_I64);
-                    default: break;
-                    }
-                }
+                return Integer(sz, !Ty->isUnsignedIntegerType());
             } break;
-            case clang::BuiltinType::Half: return Type(TYPE_R16);
+            case clang::BuiltinType::Half: return TYPE_F16;
             case clang::BuiltinType::Float:
-                return Type(TYPE_F32);
+                return TYPE_F32;
             case clang::BuiltinType::Double:
-                return Type(TYPE_F64);
-            case clang::BuiltinType::LongDouble: return Type(TYPE_R80);
+                return TYPE_F64;
+            case clang::BuiltinType::LongDouble: return TYPE_F80;
             case clang::BuiltinType::NullPtr:
             case clang::BuiltinType::UInt128:
             default:
@@ -5138,14 +5139,14 @@ public:
             break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
-            Type at = TranslateType(ATy->getElementType());
+            const Type *at = TranslateType(ATy->getElementType());
             uint64_t sz = ATy->getSize().getZExtValue();
             return Array(at, sz);
         } break;
         case clang::Type::ExtVector:
         case clang::Type::Vector: {
             const clang::VectorType *VT = cast<clang::VectorType>(T);
-            Type at = TranslateType(VT->getElementType());
+            const Type *at = TranslateType(VT->getElementType());
             uint64_t n = VT->getNumElements();
             return Vector(at, n);
         } break;
@@ -5169,15 +5170,15 @@ public:
         return TYPE_Void;
     }
 
-    Type TranslateFuncType(const clang::FunctionType * f) {
+    const Type *TranslateFuncType(const clang::FunctionType * f) {
 
         clang::QualType RT = f->getReturnType();
 
-        Type returntype = TranslateType(RT);
+        const Type *returntype = TranslateType(RT);
 
         uint64_t flags = 0;
 
-        std::vector<Type> argtypes;
+        std::vector<const Type *> argtypes;
 
         const clang::FunctionProtoType * proto = f->getAs<clang::FunctionProtoType>();
         if(proto) {
@@ -5193,11 +5194,11 @@ public:
         return Function(returntype, argtypes, flags);
     }
 
-    void exportType(Symbol name, Type type) {
+    void exportType(Symbol name, const Type *type) {
         dest->bind(name, type);
     }
 
-    void exportExternal(Symbol name, Type type,
+    void exportExternal(Symbol name, const Type *type,
         const Anchor *anchor) {
         auto ptr = LLVMSearchForAddressOfSymbol(name.name()->data);
         assert(ptr);
@@ -5236,7 +5237,7 @@ public:
 
         //const Anchor *anchor = anchorFromLocation(td->getSourceRange().getBegin());
 
-        Type type = TranslateType(td->getUnderlyingType());
+        const Type *type = TranslateType(td->getUnderlyingType());
 
         Symbol name = Symbol(String::from_stdstring(td->getName().data()));
 
@@ -5258,7 +5259,7 @@ public:
             return true;
         }
 
-        Type functype = TranslateFuncType(fntyp);
+        const Type *functype = TranslateFuncType(fntyp);
 
         std::string InternalName = FuncName;
         clang::AsmLabelAttr * asmlabel = f->getAttr<clang::AsmLabelAttr>();
@@ -5434,38 +5435,44 @@ static void default_exception_handler(const Exception &exc) {
     exit(1);
 }
 
-static int integer_type_bit_size(Type T) {
-    switch(T.value()) {
-    case TYPE_Bool: return 1;
-    case TYPE_I8: case TYPE_U8: return 8;
-    case TYPE_I16: case TYPE_U16: return 16;
-    case TYPE_I32: case TYPE_U32: return 32;
-    case TYPE_I64: case TYPE_U64: return 64;
-    default: assert(false); break;
-    }
-    return 0;
+static int integer_type_bit_size(const Type *T) {
+    return (int)cast<IntegerType>(T)->width;
 }
 
 template<typename T>
 static T cast_number(const Any &value) {
-    switch(value.type.value()) {
-    case TYPE_Bool: return (T)value.i1;
-    case TYPE_I8: return (T)value.i8;
-    case TYPE_I16: return (T)value.i16;
-    case TYPE_I32: return (T)value.i32;
-    case TYPE_I64: return (T)value.i64;
-    case TYPE_U8: return (T)value.u8;
-    case TYPE_U16: return (T)value.u16;
-    case TYPE_U32: return (T)value.u32;
-    case TYPE_U64: return (T)value.u64;
-    case TYPE_F32: return (T)value.f32;
-    case TYPE_F64: return (T)value.f64;
-    default: {
-        StyledString ss;
-        ss.out << "type " << value.type << " can not be converted to numerical type";
-        location_error(ss.str());
-    } break;
+    auto it = dyn_cast<IntegerType>(value.type);
+    if (it) {
+        if (it->issigned) {
+            switch(it->width) {
+            case 8: return (T)value.i8;
+            case 16: return (T)value.i16;
+            case 32: return (T)value.i32;
+            case 64: return (T)value.i64;
+            default: break;
+            }
+        } else {
+            switch(it->width) {
+            case 1: return (T)value.i1;
+            case 8: return (T)value.u8;
+            case 16: return (T)value.u16;
+            case 32: return (T)value.u32;
+            case 64: return (T)value.u64;
+            default: break;
+            }
+        }
     }
+    auto ft = dyn_cast<RealType>(value.type);
+    if (ft) {
+        switch(ft->width) {
+        case 32: return (T)value.f32;
+        case 64: return (T)value.f64;
+        default: break;
+        }
+    }
+    StyledString ss;
+    ss.out << "type " << value.type << " can not be converted to numerical type";
+    location_error(ss.str());
     return 0;
 }
 
@@ -5536,8 +5543,8 @@ struct GenerateCtx {
     std::unordered_map<Label *, LLVMValueRef> label2func;
     std::unordered_map<Label *, LLVMBasicBlockRef> label2bb;
     std::unordered_map<Parameter *, LLVMValueRef> param2value;
-    std::unordered_map<Type, LLVMTypeRef, Type::Hash> type_cache;
-    std::vector<Type> type_todo;
+    std::unordered_map<const Type *, LLVMTypeRef> type_cache;
+    std::vector<const Type *> type_todo;
 
     LLVMModuleRef module;
     LLVMBuilderRef builder;
@@ -5581,67 +5588,55 @@ struct GenerateCtx {
         for (auto &&param : label->params) {
             if (param->vararg)
                 return false;
-            switch (param->type.value()) {
-            case TYPE_Type:
-            case TYPE_Label:
+            if ((param->type == TYPE_Type) || (param->type == TYPE_Label))
                 return false;
-            default: {
-                if (typesets.is(param->type))
-                    return false;
-                if (typed_labels.is(param->type) && (param->index != 0))
-                    return false;
-            } break;
-            }
+            if (isa<TypeSetType>(param->type))
+                return false;
+            if (isa<TypedLabelType>(param->type) && (param->index != 0))
+                return false;
         }
         return true;
     }
 
-    LLVMTypeRef create_llvm_type(Type type) {
-        switch (type.value()) {
-        case TYPE_Void: return voidT;
-        case TYPE_Nothing: return noneT;
-        case TYPE_Bool: return i1T;
-        case TYPE_I8:
-        case TYPE_U8: return i8T;
-        case TYPE_I16:
-        case TYPE_U16: return i16T;
-        case TYPE_I32:
-        case TYPE_U32: return i32T;
-        case TYPE_I64:
-        case TYPE_U64: return i64T;
-        case TYPE_F32: return f32T;
-        case TYPE_F64: return f64T;
-        default: break;
-        }
-
-        switch(category_of(type)) {
-        case CAT_Pointer: return LLVMPointerType(
-            _type_to_llvm_type(pointers.get(type).element_type), 0);
-        case CAT_Array: {
-            auto &&ai = arrays.get(type);
-            return LLVMArrayType(_type_to_llvm_type(ai.element_type), ai.count);
+    LLVMTypeRef create_llvm_type(const Type *type) {
+        switch(type->kind()) {
+        case TK_Integer:
+            return LLVMIntType(cast<IntegerType>(type)->width);
+        case TK_Real:
+            switch(cast<RealType>(type)->width) {
+            case 32: return f32T;
+            case 64: return f64T;
+            default: break;
+            }
+            break;
+        case TK_Pointer:
+            return LLVMPointerType(
+                _type_to_llvm_type(cast<PointerType>(type)->element_type), 0);
+        case TK_Array: {
+            auto ai = cast<ArrayType>(type);
+            return LLVMArrayType(_type_to_llvm_type(ai->element_type), ai->count);
         } break;
-        case CAT_Vector: {
-            auto &&vi = vectors.get(type);
-            return LLVMVectorType(_type_to_llvm_type(vi.element_type), vi.count);
+        case TK_Vector: {
+            auto vi = cast<VectorType>(type);
+            return LLVMVectorType(_type_to_llvm_type(vi->element_type), vi->count);
         } break;
-        case CAT_Tuple: {
-            auto &&ti = tuples.get(type);
-            size_t count = ti.types.size();
+        case TK_Tuple: {
+            auto ti = cast<TupleType>(type);
+            size_t count = ti->types.size();
             LLVMTypeRef elements[count];
             for (size_t i = 0; i < count; ++i) {
-                elements[i] = _type_to_llvm_type(ti.types[i]);
+                elements[i] = _type_to_llvm_type(ti->types[i]);
             }
             return LLVMStructType(elements, count, false);
         } break;
-        case CAT_Union: {
-            auto &&ui = unions.get(type);
-            size_t count = ui.types.size();
-            size_t sz = ui.size;
-            size_t al = ui.align;
+        case TK_Union: {
+            auto ui = cast<UnionType>(type);
+            size_t count = ui->types.size();
+            size_t sz = ui->size;
+            size_t al = ui->align;
             // find member with the same alignment
             for (size_t i = 0; i < count; ++i) {
-                Type ET = ui.types[i];
+                const Type *ET = ui->types[i];
                 size_t etal = align_of(ET);
                 if (etal == al) {
                     size_t remsz = sz - size_of(ET);
@@ -5659,35 +5654,33 @@ struct GenerateCtx {
             // should never get here
             assert(false);
         } break;
-        case CAT_Typename: {
-            auto &tn = typenames.get(type);
-            if (tn.finalized) {
-                switch(category_of(tn.storage_type)) {
-                case CAT_Tuple:
-                case CAT_Union: {
+        case TK_Typename: {
+            auto tn = cast<TypenameType>(type);
+            if (tn->finalized()) {
+                switch(tn->storage_type->kind()) {
+                case TK_Tuple:
+                case TK_Union: {
                     type_todo.push_back(type);
                 } break;
                 default: {
-                    return create_llvm_type(tn.storage_type);
+                    return create_llvm_type(tn->storage_type);
                 } break;
                 }
             }
             return LLVMStructCreateNamed(
-                LLVMGetGlobalContext(), type.name().name()->data);
+                LLVMGetGlobalContext(), type->name()->data);
         } break;
-        case CAT_Function: {
-            auto &fi = functions.get(type);
-            size_t count = fi.argument_types.size();
+        case TK_Function: {
+            auto fi = cast<FunctionType>(type);
+            size_t count = fi->argument_types.size();
             LLVMTypeRef elements[count];
             for (size_t i = 0; i < count; ++i) {
-                elements[i] = _type_to_llvm_type(fi.argument_types[i]);
+                elements[i] = _type_to_llvm_type(fi->argument_types[i]);
             }
             return LLVMFunctionType(
-                _type_to_llvm_type(fi.return_type),
-                elements, count, fi.vararg());
+                _type_to_llvm_type(fi->return_type),
+                elements, count, fi->vararg());
         } break;
-        case CAT_TypedLabel:
-        case CAT_TypeSet:
         default: break;
         };
 
@@ -5699,32 +5692,31 @@ struct GenerateCtx {
 
     void finalize_types() {
         while (!type_todo.empty()) {
-            Type T = type_todo.back();
+            const Type *T = type_todo.back();
             type_todo.pop_back();
-            assert(typenames.is(T));
-            auto &&tn = typenames.get(T);
-            if (!tn.finalized)
+            auto tn = cast<TypenameType>(T);
+            if (!tn->finalized())
                 continue;
             LLVMTypeRef LLT = _type_to_llvm_type(T);
-            Type ST = tn.storage_type;
-            switch(category_of(ST)) {
-            case CAT_Tuple: {
-                auto &&ti = tuples.get(ST);
-                size_t count = ti.types.size();
+            const Type *ST = tn->storage_type;
+            switch(ST->kind()) {
+            case TK_Tuple: {
+                auto ti = cast<TupleType>(ST);
+                size_t count = ti->types.size();
                 LLVMTypeRef elements[count];
                 for (size_t i = 0; i < count; ++i) {
-                    elements[i] = _type_to_llvm_type(ti.types[i]);
+                    elements[i] = _type_to_llvm_type(ti->types[i]);
                 }
                 LLVMStructSetBody(LLT, elements, count, false);
             } break;
-            case CAT_Union: {
-                auto &&ui = unions.get(ST);
-                size_t count = ui.types.size();
-                size_t sz = ui.size;
-                size_t al = ui.align;
+            case TK_Union: {
+                auto ui = cast<UnionType>(ST);
+                size_t count = ui->types.size();
+                size_t sz = ui->size;
+                size_t al = ui->align;
                 // find member with the same alignment
                 for (size_t i = 0; i < count; ++i) {
-                    Type ET = ui.types[i];
+                    const Type *ET = ui->types[i];
                     size_t etal = align_of(ET);
                     if (etal == al) {
                         size_t remsz = sz - size_of(ET);
@@ -5746,7 +5738,7 @@ struct GenerateCtx {
         }
     }
 
-    LLVMTypeRef _type_to_llvm_type(Type type) {
+    LLVMTypeRef _type_to_llvm_type(const Type *type) {
         auto it = type_cache.find(type);
         if (it == type_cache.end()) {
             LLVMTypeRef result = create_llvm_type(type);
@@ -5757,31 +5749,31 @@ struct GenerateCtx {
         }
     }
 
-    LLVMTypeRef type_to_llvm_type(Type type) {
+    LLVMTypeRef type_to_llvm_type(const Type *type) {
         auto typeref = _type_to_llvm_type(type);
         finalize_types();
         return typeref;
     }
 
-    LLVMTypeRef return_type_to_llvm_type(Type type) {
+    LLVMTypeRef return_type_to_llvm_type(const Type *type) {
         if (type == TYPE_Void) {
             StyledString ss;
             ss.out << "IL->IR: untyped continuation encountered";
             location_error(ss.str());
-        } else if (!typed_labels.is(type)) {
+        } else if (!isa<TypedLabelType>(type)) {
             StyledString ss;
             ss.out << "IL->IR: invalid continuation type: " << type;
             location_error(ss.str());
         }
-        auto &&tli = typed_labels.get(type);
-        assert(tli.types[0] == TYPE_Nothing);
-        size_t count = tli.types.size() - 1;
+        auto tli = cast<TypedLabelType>(type);
+        assert(tli->types[0] == TYPE_Nothing);
+        size_t count = tli->types.size() - 1;
         if (!count) {
             return LLVMVoidType();
         }
         LLVMTypeRef element_types[count];
         for (size_t i = 0; i < count; ++i) {
-            Type arg = tli.types[i + 1];
+            const Type *arg = tli->types[i + 1];
             element_types[i] = type_to_llvm_type(arg);
         }
         if (count == 1) {
@@ -5792,21 +5784,9 @@ struct GenerateCtx {
     }
 
     LLVMValueRef argument_to_value(Any value) {
-        switch(value.type.value()) {
-        case TYPE_Nothing:
+        if (value.type == TYPE_Nothing) {
             return noneV;
-        case TYPE_I8: return LLVMConstInt(i8T, value.i8, true);
-        case TYPE_I16: return LLVMConstInt(i16T, value.i16, true);
-        case TYPE_I32: return LLVMConstInt(i32T, value.i32, true);
-        case TYPE_I64: return LLVMConstInt(i64T, value.i64, true);
-        case TYPE_Bool: return LLVMConstInt(i1T, value.i1, false);
-        case TYPE_U8: return LLVMConstInt(i8T, value.u8, false);
-        case TYPE_U16: return LLVMConstInt(i16T, value.u16, false);
-        case TYPE_U32: return LLVMConstInt(i32T, value.u32, false);
-        case TYPE_U64: return LLVMConstInt(i64T, value.u64, false);
-        case TYPE_F32: return LLVMConstReal(f32T, value.f32);
-        case TYPE_F64: return LLVMConstReal(f64T, value.f64);
-        case TYPE_Parameter: {
+        } else if (value.type == TYPE_Parameter) {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
                 StyledString ss;
@@ -5814,19 +5794,45 @@ struct GenerateCtx {
                 location_error(ss.str());
             }
             return it->second;
-        } break;
-        case TYPE_Label: {
+        } else if (value.type == TYPE_Label) {
             if (is_basic_block_like(value.label)) {
                 return LLVMBasicBlockAsValue(label_to_basic_block(value.label));
             } else {
                 return label_to_function(value.label);
             }
-        } break;
-        default: break;
         }
 
-        switch(category_of(value.type)) {
-        case CAT_Pointer: {
+        switch(value.type->kind()) {
+        case TK_Integer: {
+            auto it = cast<IntegerType>(value.type);
+            if (it->issigned) {
+                switch(it->width) {
+                case 8: return LLVMConstInt(i8T, value.i8, true);
+                case 16: return LLVMConstInt(i16T, value.i16, true);
+                case 32: return LLVMConstInt(i32T, value.i32, true);
+                case 64: return LLVMConstInt(i64T, value.i64, true);
+                default: break;
+                }
+            } else {
+                switch(it->width) {
+                case 1: return LLVMConstInt(i1T, value.i1, false);
+                case 8: return LLVMConstInt(i8T, value.u8, false);
+                case 16: return LLVMConstInt(i16T, value.u16, false);
+                case 32: return LLVMConstInt(i32T, value.u32, false);
+                case 64: return LLVMConstInt(i64T, value.u64, false);
+                default: break;
+                }
+            }
+        } break;
+        case TK_Real: {
+            auto rt = cast<RealType>(value.type);
+            switch(rt->width) {
+            case 32: return LLVMConstReal(f32T, value.f32);
+            case 64: return LLVMConstReal(f64T, value.f64);
+            default: break;
+            }
+        } break;
+        case TK_Pointer: {
             LLVMTypeRef LLT = type_to_llvm_type(value.type);
             if (!value.pointer) {
                 return LLVMConstPointerNull(LLT);
@@ -5836,41 +5842,36 @@ struct GenerateCtx {
                     LLT);
             }
         } break;
-        case CAT_Typename: {
+        case TK_Typename: {
             LLVMTypeRef LLT = type_to_llvm_type(value.type);
-            auto &&tn = typenames.get(value.type);
-            switch(category_of(tn.storage_type)) {
-            case CAT_Tuple: {
-                auto &&ti = tuples.get(tn.storage_type);
-                size_t count = ti.types.size();
+            auto tn = cast<TypenameType>(value.type);
+            switch(tn->storage_type->kind()) {
+            case TK_Tuple: {
+                auto ti = cast<TupleType>(tn->storage_type);
+                size_t count = ti->types.size();
                 LLVMValueRef values[count];
                 for (size_t i = 0; i < count; ++i) {
-                    values[i] = argument_to_value(ti.unpack(value.pointer, i));
+                    values[i] = argument_to_value(ti->unpack(value.pointer, i));
                 }
                 return LLVMConstNamedStruct(LLT, values, count);
             } break;
             default: {
                 Any storage_value = value;
-                storage_value.type = tn.storage_type;
+                storage_value.type = tn->storage_type;
                 LLVMValueRef val = argument_to_value(storage_value);
                 return LLVMConstBitCast(val, LLT);
             } break;
             }
         } break;
-        case CAT_Tuple: {
-            auto &&ti = tuples.get(value.type);
-            size_t count = ti.types.size();
+        case TK_Tuple: {
+            auto ti = cast<TupleType>(value.type);
+            size_t count = ti->types.size();
             LLVMValueRef values[count];
             for (size_t i = 0; i < count; ++i) {
-                values[i] = argument_to_value(ti.unpack(value.pointer, i));
+                values[i] = argument_to_value(ti->unpack(value.pointer, i));
             }
             return LLVMConstStruct(values, count, false);
         } break;
-        case CAT_Array:
-        case CAT_Vector:
-        case CAT_Union:
-        case CAT_TypedLabel:
-        case CAT_TypeSet:
         default: break;
         };
 
@@ -5902,8 +5903,7 @@ struct GenerateCtx {
         LLVMTypeRef NAME = type_to_llvm_type(args[argn++].typeref);
 
         LLVMValueRef retvalue = nullptr;
-        switch(enter.type.value()) {
-        case TYPE_Builtin: {
+        if (enter.type == TYPE_Builtin) {
             switch(enter.builtin.value()) {
             case FN_Branch: {
                 READ_VALUE(cond);
@@ -6032,8 +6032,7 @@ struct GenerateCtx {
                 location_error(ss.str());
             } break;
             }
-        } break;
-        case TYPE_Label: {
+        } else if (enter.type == TYPE_Label) {
             LLVMValueRef values[argcount];
             for (size_t i = 0; i < argcount; ++i) {
                 values[i] = argument_to_value(args[i + 1]);
@@ -6056,8 +6055,7 @@ struct GenerateCtx {
                 if (LLVMGetReturnType(LLVMGetElementType(LLVMTypeOf(value))) == voidT)
                     retvalue = nullptr;
             }
-        } break;
-        case TYPE_Parameter: {
+        } else if (enter.type == TYPE_Parameter) {
             LLVMValueRef values[argcount];
             for (size_t i = 0; i < argcount; ++i) {
                 values[i] = argument_to_value(args[i + 1]);
@@ -6073,20 +6071,19 @@ struct GenerateCtx {
             } else {
                 LLVMBuildRetVoid(builder);
             }
-        } break;
-        default: {
+        } else {
             LLVMValueRef values[argcount];
             for (size_t i = 0; i < argcount; ++i) {
                 values[i] = argument_to_value(args[i + 1]);
             }
             if (is_function_pointer(enter.type)) {
-                auto &&pi = pointers.get(enter.type);
-                auto &&fi = functions.get(pi.element_type);
+                auto pi = cast<PointerType>(enter.type);
+                auto fi = cast<FunctionType>(pi->element_type);
 
-                size_t fargcount = fi.argument_types.size();
+                size_t fargcount = fi->argument_types.size();
                 assert(argcount >= fargcount);
                 // make variadic calls C compatible
-                if (fi.flags & FF_Variadic) {
+                if (fi->flags & FF_Variadic) {
                     for (size_t i = fargcount; i < argcount; ++i) {
                         auto value = values[i];
                         // floats need to be widened to doubles
@@ -6098,13 +6095,12 @@ struct GenerateCtx {
 
                 auto ret = LLVMBuildCall(builder,
                     argument_to_value(enter), values, argcount, "");
-                if (fi.return_type != TYPE_Void) {
+                if (fi->return_type != TYPE_Void) {
                     retvalue = ret;
                 }
             } else {
                 assert(false && "todo: translate non-builtin call");
             }
-        } break;
         }
 
         Any contarg = args[0];
@@ -6402,7 +6398,7 @@ Any compile(Label *fn, uint64_t flags) {
 // COMMON ERRORS
 //------------------------------------------------------------------------------
 
-void invalid_op2_types_error(Type A, Type B) {
+void invalid_op2_types_error(const Type *A, const Type *B) {
     StyledString ss;
     ss.out << "invalid operand types " << A << " and " << B;
     location_error(ss.str());
@@ -6440,7 +6436,7 @@ struct NormalizeCtx {
     StyledStream ss_cout;
 
     struct LabelInstances {
-        std::unordered_map<Type, Label *, Type::Hash> instances;
+        std::unordered_map<const Type *, Label *> instances;
     };
     std::unordered_map<Label *, LabelInstances> label2instance;
 
@@ -6495,15 +6491,16 @@ struct NormalizeCtx {
     {}
 
     ILNode *node_from_continuation(Any cont) {
-        switch(cont.type.value()) {
-        case TYPE_Nothing: return nullptr;
-        case TYPE_Label: return cont.label;
-        case TYPE_Parameter: return cont.parameter;
-        default: {
+        if (cont.type == TYPE_Nothing) {
+            return nullptr;
+        } else if (cont.type == TYPE_Label) {
+            return cont.label;
+        } else if (cont.type == TYPE_Parameter) {
+            return cont.parameter;
+        } else {
             StyledString ss;
             ss.out << "don't know how to apply continuation of type " << cont.type;
             location_error(ss.str());
-        } break;
         }
         return nullptr;
     }
@@ -6630,7 +6627,7 @@ struct NormalizeCtx {
         }
     }
 
-    Label *typify(Label *label, const std::vector<Type> &argtypes) {
+    Label *typify(Label *label, const std::vector<const Type *> &argtypes) {
 #if 0
         ss_cout << "typify " << label << ":";
         for (size_t i = 0; i < argtypes.size(); ++i) {
@@ -6642,7 +6639,7 @@ struct NormalizeCtx {
         assert(!argtypes.empty());
         assert(!label->params.empty());
 
-        std::vector<Type> hashargs = { TYPE_Nothing };
+        std::vector<const Type *> hashargs = { TYPE_Nothing };
         for (size_t i = 1; i < argtypes.size(); ++i) {
             hashargs.push_back(argtypes[i]);
         }
@@ -6668,7 +6665,7 @@ struct NormalizeCtx {
                     needs_typing = true;
                     break;
                 } else if (srci < argtypes.size()) {
-                    Type argtype = argtypes[srci];
+                    const Type *argtype = argtypes[srci];
                     if (param->type != argtype) {
                         needs_typing = true;
                         break;
@@ -6719,7 +6716,7 @@ struct NormalizeCtx {
                         map[param] = {};
                     }
                 } else if (srci < argtypes.size()) {
-                    Type argtype = argtypes[srci];
+                    const Type *argtype = argtypes[srci];
                     Parameter *newparam = Parameter::from(param);
                     if (srci == 0) {
                         // don't touch type of continuation
@@ -6755,30 +6752,22 @@ struct NormalizeCtx {
         return newlabel;
     }
 
-    Any type_continuation(Any dest, const std::vector<Type> &argtypes) {
+    Any type_continuation(Any dest, const std::vector<const Type *> &argtypes) {
         //ss_cout << "type_continuation: " << dest << std::endl;
 
-        switch (dest.type.value()) {
-        case TYPE_Parameter: {
+        if (dest.type == TYPE_Parameter) {
             Parameter *param = dest.parameter;
-            switch(param->type.value()) {
-            case TYPE_Nothing: {
+            if (param->type == TYPE_Nothing) {
                 location_error(String::from("attempting to call none continuation"));
-            } break;
-            case TYPE_Void: {
+            } else if (param->type == TYPE_Void) {
                 param->type = TypedLabel(argtypes);
-            } break;
-            default: {
+            } else {
                 param->type = TypeSet({param->type, TypedLabel(argtypes)});
-            } break;
             }
-        } break;
-        case TYPE_Label: {
+        } else if (dest.type == TYPE_Label) {
             dest = typify(dest.label, argtypes);
-        } break;
-        default: {
+        } else {
             apply_type_error(dest);
-        } break;
         }
         return dest;
     }
@@ -6909,17 +6898,17 @@ struct NormalizeCtx {
         return (args[0].type == TYPE_Parameter) && (args[0].parameter == callee);
     }
 
-    void verify_function_argument_signature(FunctionInfo &fi, Label *l) {
+    void verify_function_argument_signature(const FunctionType *fi, Label *l) {
         auto &&args = l->body.args;
         verify_function_argument_count(fi, args.size() - 1);
 
-        size_t fargcount = fi.argument_types.size();
+        size_t fargcount = fi->argument_types.size();
         for (size_t i = 1; i < args.size(); ++i) {
             Any &arg = args[i];
             size_t k = i - 1;
-            Type argT = arg.indirect_type();
+            const Type *argT = arg.indirect_type();
             if (k < fargcount) {
-                Type ft = fi.argument_types[k];
+                const Type *ft = fi->argument_types[k];
                 if (ft != argT) {
                     StyledString ss;
                     ss.out << "argument of type " << ft << " expected, got " << argT;
@@ -6929,25 +6918,25 @@ struct NormalizeCtx {
         }
     }
 
-    void argtypes_from_function_call(Label *l, std::vector<Type> &retargtypes) {
+    void argtypes_from_function_call(Label *l, std::vector<const Type *> &retargtypes) {
 
         auto &&enter = l->body.enter;
         //auto &&args = l->body.args;
 
-        auto &&pi = pointers.get(enter.type);
-        auto &&fi = functions.get(pi.element_type);
+        auto pi = cast<PointerType>(enter.type);
+        auto fi = cast<FunctionType>(pi->element_type);
 
         verify_function_argument_signature(fi, l);
 
         retargtypes = { TYPE_Nothing };
-        if (fi.return_type != TYPE_Void) {
-            if (tuples.is(fi.return_type)) {
-                auto &&ti = tuples.get(fi.return_type);
-                for (size_t i = 0; i < ti.types.size(); ++i) {
-                    retargtypes.push_back(ti.types[i]);
+        if (fi->return_type != TYPE_Void) {
+            if (isa<TupleType>(fi->return_type)) {
+                auto ti = cast<TupleType>(fi->return_type);
+                for (size_t i = 0; i < ti->types.size(); ++i) {
+                    retargtypes.push_back(ti->types[i]);
                 }
             } else {
-                retargtypes.push_back(fi.return_type);
+                retargtypes.push_back(fi->return_type);
             }
         }
     }
@@ -6958,22 +6947,22 @@ struct NormalizeCtx {
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
 
-        auto &&pi = pointers.get(enter.type);
-        auto &&fi = functions.get(pi.element_type);
+        auto pi = cast<PointerType>(enter.type);
+        auto fi = cast<FunctionType>(pi->element_type);
 
         verify_function_argument_signature(fi, l);
 
         assert(!args.empty());
         Any result = none;
 
-        if (fi.flags & FF_Variadic) {
+        if (fi->flags & FF_Variadic) {
             // convert C types
             size_t argcount = args.size() - 1;
             std::vector<Any> cargs;
             cargs.reserve(argcount);
             for (size_t i = 0; i < argcount; ++i) {
                 Any &srcarg = args[i + 1];
-                if (i >= fi.argument_types.size()) {
+                if (i >= fi->argument_types.size()) {
                     if (srcarg.type == TYPE_F32) {
                         cargs.push_back(Any((double)srcarg.f32));
                         continue;
@@ -6989,13 +6978,13 @@ struct NormalizeCtx {
         l->unlink_backrefs();
         enter = args[0];
         args = { none };
-        if (fi.return_type != TYPE_Void) {
-            if (tuples.is(fi.return_type)) {
+        if (fi->return_type != TYPE_Void) {
+            if (isa<TupleType>(fi->return_type)) {
                 // unpack
-                auto &&ti = tuples.get(fi.return_type);
-                size_t count = ti.types.size();
+                auto ti = cast<TupleType>(fi->return_type);
+                size_t count = ti->types.size();
                 for (size_t i = 0; i < count; ++i) {
-                    args.push_back(ti.unpack(result.pointer, i));
+                    args.push_back(ti->unpack(result.pointer, i));
                 }
             } else {
                 args.push_back(result);
@@ -7047,7 +7036,7 @@ struct NormalizeCtx {
         auto &&enter = l->body.enter;
         assert(enter.type == TYPE_Label);
         auto &&args = l->body.args;
-        std::vector<Type> argtypes = {};
+        std::vector<const Type *> argtypes = {};
         for (auto &&arg : args) {
             argtypes.push_back(arg.indirect_type());
         }
@@ -7084,7 +7073,7 @@ struct NormalizeCtx {
 #define RETARGTYPES(...) \
     retargtypes = { TYPE_Nothing, __VA_ARGS__ }
 
-    void argtypes_from_builtin_call(Label *l, std::vector<Type> &retargtypes) {
+    void argtypes_from_builtin_call(Label *l, std::vector<const Type *> &retargtypes) {
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
@@ -7097,42 +7086,42 @@ struct NormalizeCtx {
             CHECKARGS(2, 2);
             // todo: verify source and dest type are non-aggregate
             // also, both must be of same category
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             RETARGTYPES(DestT);
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
             verify_integer(args[1].indirect_type());
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
-            verify_category<CAT_Pointer>(storage_type(DestT));
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
+            verify_kind<TK_Pointer>(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_PtrToInt: {
             CHECKARGS(2, 2);
-            verify_category<CAT_Pointer>(
+            verify_kind<TK_Pointer>(
                 storage_type(args[1].indirect_type()));
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             RETARGTYPES(DestT);
         } break;
         case FN_Trunc: {
             CHECKARGS(2, 2);
-            Type T = args[1].indirect_type();
+            const Type *T = args[1].indirect_type();
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             RETARGTYPES(DestT);
         } break;
         case FN_FPTrunc: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
             if ((T == TYPE_F64) && (DestT == TYPE_F32)) {
             } else { invalid_op2_types_error(T, DestT); }
@@ -7140,10 +7129,10 @@ struct NormalizeCtx {
         } break;
         case FN_FPExt: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
             if ((T == TYPE_F32) && (DestT == TYPE_F64)) {
             } else { invalid_op2_types_error(T, DestT); }
@@ -7151,94 +7140,90 @@ struct NormalizeCtx {
         } break;
         case FN_FPToUI: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
-            switch(T.value()) {
-            case TYPE_F32:
-            case TYPE_F64: break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if ((T == TYPE_F32) || (T == TYPE_F64)) {
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             RETARGTYPES(DestT);
         } break;
         case FN_FPToSI: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
-            switch(T.value()) {
-            case TYPE_F32:
-            case TYPE_F64: break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if ((T == TYPE_F32) || (T == TYPE_F64)) {
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             RETARGTYPES(DestT);
         } break;
         case FN_UIToFP: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
-            switch(DestT.value()) {
-            case TYPE_F32:
-            case TYPE_F64: break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if ((DestT == TYPE_F32) || (DestT == TYPE_F64)) {
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             RETARGTYPES(DestT);
         } break;
         case FN_SIToFP: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
-            switch(DestT.value()) {
-            case TYPE_F32:
-            case TYPE_F64: break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if ((DestT == TYPE_F32) || (DestT == TYPE_F64)) {
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             RETARGTYPES(DestT);
         } break;
         case FN_ZExt: {
             CHECKARGS(2, 2);
-            Type T = args[1].indirect_type();
+            const Type *T = args[1].indirect_type();
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             RETARGTYPES(DestT);
         } break;
         case FN_SExt: {
             CHECKARGS(2, 2);
-            Type T = args[1].indirect_type();
+            const Type *T = args[1].indirect_type();
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             RETARGTYPES(DestT);
         } break;
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
             size_t idx = cast_number<size_t>(args[2]);
-            Type T = storage_type(args[1].indirect_type());
-            switch(category_of(T)) {
-            case CAT_Array: {
-                auto &ai = arrays.get(T);
-                RETARGTYPES(ai.type_at_index(idx));
+            const Type *T = storage_type(args[1].indirect_type());
+            switch(T->kind()) {
+            case TK_Array: {
+                auto ai = cast<ArrayType>(T);
+                RETARGTYPES(ai->type_at_index(idx));
             } break;
-            case CAT_Tuple: {
-                auto &ti = tuples.get(T);
-                RETARGTYPES(ti.type_at_index(idx));
+            case TK_Tuple: {
+                auto ti = cast<TupleType>(T);
+                RETARGTYPES(ti->type_at_index(idx));
             } break;
-            case CAT_Union: {
-                auto &ui = unions.get(T);
-                RETARGTYPES(ui.type_at_index(idx));
+            case TK_Union: {
+                auto ui = cast<UnionType>(T);
+                RETARGTYPES(ui->type_at_index(idx));
             } break;
             default: {
                 StyledString ss;
@@ -7249,24 +7234,24 @@ struct NormalizeCtx {
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
-            Type T = storage_type(args[1].indirect_type());
-            verify_category<CAT_Pointer>(T);
-            auto &pi = pointers.get(T);
-            T = pi.element_type;
+            const Type *T = storage_type(args[1].indirect_type());
+            verify_kind<TK_Pointer>(T);
+            auto pi = cast<PointerType>(T);
+            T = pi->element_type;
             verify_integer(args[2].indirect_type());
             for (size_t i = 3; i < args.size(); ++i) {
                 T = storage_type(T);
                 auto &&arg = args[i];
-                switch(category_of(T)) {
-                case CAT_Array: {
-                    auto &ai = arrays.get(T);
-                    T = ai.element_type;
+                switch(T->kind()) {
+                case TK_Array: {
+                    auto ai = cast<ArrayType>(T);
+                    T = ai->element_type;
                     verify_integer(arg.indirect_type());
                 } break;
-                case CAT_Tuple: {
+                case TK_Tuple: {
                     size_t idx = cast_number<size_t>(arg);
-                    auto &ti = tuples.get(T);
-                    T = ti.type_at_index(idx);
+                    auto ti = cast<TupleType>(T);
+                    T = ti->type_at_index(idx);
                 } break;
                 default: {
                     StyledString ss;
@@ -7280,10 +7265,10 @@ struct NormalizeCtx {
         } break;
         case FN_Load: {
             CHECKARGS(1, 1);
-            Type T = storage_type(args[1].indirect_type());
-            verify_category<CAT_Pointer>(T);
-            auto &pi = pointers.get(T);
-            RETARGTYPES(pi.element_type);
+            const Type *T = storage_type(args[1].indirect_type());
+            verify_kind<TK_Pointer>(T);
+            auto pi = cast<PointerType>(T);
+            RETARGTYPES(pi->element_type);
         } break;
         case OP_ICmpEQ:
         case OP_ICmpNE:
@@ -7383,7 +7368,7 @@ struct NormalizeCtx {
         } break;
         case FN_Branch: {
             CHECKARGS(3, 3);
-            args[1].verify<TYPE_Bool>();
+            args[1].verify(TYPE_Bool);
             // either branch label is typed and binds no parameters,
             // so we can directly inline it
             Label *newl = nullptr;
@@ -7398,8 +7383,8 @@ struct NormalizeCtx {
             CHECKARGS(2, 2);
             // todo: verify source and dest type are non-aggregate
             // also, both must be of same category
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             Any result = args[1];
             result.type = DestT;
             RETARGS(result);
@@ -7407,18 +7392,18 @@ struct NormalizeCtx {
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
             verify_integer(args[1].type);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
-            verify_category<CAT_Pointer>(storage_type(DestT));
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
+            verify_kind<TK_Pointer>(storage_type(DestT));
             Any result = args[1];
             result.type = DestT;
             RETARGS(result);
         } break;
         case FN_PtrToInt: {
             CHECKARGS(2, 2);
-            verify_category<CAT_Pointer>(storage_type(args[1].type));
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            verify_kind<TK_Pointer>(storage_type(args[1].type));
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             Any result = args[1];
             result.type = DestT;
@@ -7426,10 +7411,10 @@ struct NormalizeCtx {
         } break;
         case FN_Trunc: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             Any result = args[1];
             result.type = DestT;
@@ -7437,10 +7422,10 @@ struct NormalizeCtx {
         } break;
         case FN_FPTrunc: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
             if ((T == TYPE_F64) && (DestT == TYPE_F32)) {
                 RETARGS((float)args[1].f64);
@@ -7448,10 +7433,10 @@ struct NormalizeCtx {
         } break;
         case FN_FPExt: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
             if ((T == TYPE_F32) && (DestT == TYPE_F64)) {
                 RETARGS((double)args[1].f32);
@@ -7459,16 +7444,18 @@ struct NormalizeCtx {
         } break;
         case FN_FPToUI: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             uint64_t val = 0;
-            switch(T.value()) {
-            case TYPE_F32: val = (uint64_t)args[1].f32; break;
-            case TYPE_F64: val = (uint64_t)args[1].f64; break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if (T == TYPE_F32) {
+                val = (uint64_t)args[1].f32;
+            } else if (T == TYPE_F64) {
+                val = (uint64_t)args[1].f64;
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             Any result = val;
             result.type = DestT;
@@ -7476,16 +7463,18 @@ struct NormalizeCtx {
         } break;
         case FN_FPToSI: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_real(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             int64_t val = 0;
-            switch(T.value()) {
-            case TYPE_F32: val = (int64_t)args[1].f32; break;
-            case TYPE_F64: val = (int64_t)args[1].f64; break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if (T == TYPE_F32) {
+                val = (int64_t)args[1].f32;
+            } else if (T == TYPE_F64) {
+                val = (int64_t)args[1].f64;
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             Any result = val;
             result.type = DestT;
@@ -7493,42 +7482,46 @@ struct NormalizeCtx {
         } break;
         case FN_UIToFP: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
             uint64_t src = cast_number<uint64_t>(args[1]);
             Any result = none;
-            switch(DestT.value()) {
-            case TYPE_F32: result = (float)src; break;
-            case TYPE_F64: result = (double)src; break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if (DestT == TYPE_F32) {
+                result = (float)src;
+            } else if (DestT == TYPE_F64) {
+                result = (double)src;
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             RETARGS(result);
         } break;
         case FN_SIToFP: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_real(DestT);
             int64_t src = cast_number<int64_t>(args[1]);
             Any result = none;
-            switch(DestT.value()) {
-            case TYPE_F32: result = (float)src; break;
-            case TYPE_F64: result = (double)src; break;
-            default: invalid_op2_types_error(T, DestT); break;
+            if (DestT == TYPE_F32) {
+                result = (float)src;
+            } else if (DestT == TYPE_F64) {
+                result = (double)src;
+            } else {
+                invalid_op2_types_error(T, DestT);
             }
             RETARGS(result);
         } break;
         case FN_ZExt: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             Any result = args[1];
             result.type = DestT;
@@ -7541,10 +7534,10 @@ struct NormalizeCtx {
         } break;
         case FN_SExt: {
             CHECKARGS(2, 2);
-            Type T = args[1].type;
+            const Type *T = args[1].type;
             verify_integer(T);
-            args[2].verify<TYPE_Type>();
-            Type DestT = args[2].typeref;
+            args[2].verify(TYPE_Type);
+            const Type *DestT = args[2].typeref;
             verify_integer(DestT);
             Any result = args[1];
             result.type = DestT;
@@ -7564,19 +7557,19 @@ struct NormalizeCtx {
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
             size_t idx = cast_number<size_t>(args[2]);
-            Type T = storage_type(args[1].type);
-            switch(category_of(T)) {
-            case CAT_Array: {
-                auto &ai = arrays.get(T);
-                RETARGS(ai.unpack(args[1].pointer, idx));
+            const Type *T = storage_type(args[1].type);
+            switch(T->kind()) {
+            case TK_Array: {
+                auto ai = cast<ArrayType>(T);
+                RETARGS(ai->unpack(args[1].pointer, idx));
             } break;
-            case CAT_Tuple: {
-                auto &ti = tuples.get(T);
-                RETARGS(ti.unpack(args[1].pointer, idx));
+            case TK_Tuple: {
+                auto ti = cast<TupleType>(T);
+                RETARGS(ti->unpack(args[1].pointer, idx));
             } break;
-            case CAT_Union: {
-                auto &ui = unions.get(T);
-                RETARGS(ui.unpack(args[1].pointer, idx));
+            case TK_Union: {
+                auto ui = cast<UnionType>(T);
+                RETARGS(ui->unpack(args[1].pointer, idx));
             } break;
             default: {
                 StyledString ss;
@@ -7587,36 +7580,36 @@ struct NormalizeCtx {
         } break;
         case FN_Load: {
             CHECKARGS(1, 1);
-            Type T = storage_type(args[1].type);
-            verify_category<CAT_Pointer>(T);
-            auto &pi = pointers.get(T);
-            RETARGS(pi.unpack(args[1].pointer));
+            const Type *T = storage_type(args[1].type);
+            verify_kind<TK_Pointer>(T);
+            auto pi = cast<PointerType>(T);
+            RETARGS(pi->unpack(args[1].pointer));
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
-            Type T = storage_type(args[1].type);
-            verify_category<CAT_Pointer>(T);
-            auto &pi = pointers.get(T);
-            T = pi.element_type;
+            const Type *T = storage_type(args[1].type);
+            verify_kind<TK_Pointer>(T);
+            auto pi = cast<PointerType>(T);
+            T = pi->element_type;
             void *ptr = args[1].pointer;
             size_t idx = cast_number<size_t>(args[2]);
-            ptr = pi.getelementptr(ptr, idx);
+            ptr = pi->getelementptr(ptr, idx);
 
             for (size_t i = 3; i < args.size(); ++i) {
                 T = storage_type(T);
                 auto &&arg = args[i];
-                switch(category_of(T)) {
-                case CAT_Array: {
-                    auto &ai = arrays.get(T);
-                    T = ai.element_type;
+                switch(T->kind()) {
+                case TK_Array: {
+                    auto ai = cast<ArrayType>(T);
+                    T = ai->element_type;
                     size_t idx = cast_number<size_t>(arg);
-                    ptr = ai.getelementptr(ptr, idx);
+                    ptr = ai->getelementptr(ptr, idx);
                 } break;
-                case CAT_Tuple: {
+                case TK_Tuple: {
                     size_t idx = cast_number<size_t>(arg);
-                    auto &ti = tuples.get(T);
-                    T = ti.type_at_index(idx);
-                    ptr = ti.getelementptr(ptr, idx);
+                    auto ti = cast<TupleType>(T);
+                    T = ti->type_at_index(idx);
+                    ptr = ti->getelementptr(ptr, idx);
                 } break;
                 default: {
                     StyledString ss;
@@ -7630,7 +7623,7 @@ struct NormalizeCtx {
         } break;
         case FN_AnyExtract: {
             CHECKARGS(1, 1);
-            args[1].verify<TYPE_Any>();
+            args[1].verify(TYPE_Any);
             Any arg = *args[1].ref;
             RETARGS(arg);
         } break;
@@ -7644,13 +7637,13 @@ struct NormalizeCtx {
             CHECKARGS(1, 1);
             Any arg = args[1];
             verify_function_pointer(arg.type);
-            auto &pi = pointers.get(arg.type);
-            auto &fi = functions.get(pi.element_type);
-            if (fi.flags & FF_Pure) {
+            auto pi = cast<PointerType>(arg.type);
+            auto fi = cast<FunctionType>(pi->element_type);
+            if (fi->flags & FF_Pure) {
                 RETARGS(args[1]);
             } else {
                 arg.type = Pointer(Function(
-                    fi.return_type, fi.argument_types, fi.flags | FF_Pure));
+                    fi->return_type, fi->argument_types, fi->flags | FF_Pure));
                 RETARGS(arg);
             }
         } break;
@@ -7659,7 +7652,7 @@ struct NormalizeCtx {
             Label *srcl = args[1];
             uint64_t flags = 0;
             for (size_t i = 2; i < args.size(); ++i) {
-                args[i].verify<TYPE_Symbol>();
+                args[i].verify(TYPE_Symbol);
                 Symbol sym = args[i].symbol;
                 uint64_t flag = 0;
                 switch(sym.value()) {
@@ -7679,10 +7672,10 @@ struct NormalizeCtx {
         case FN_Typify: {
             CHECKARGS(1, -1);
             Label *srcl = args[1];
-            std::vector<Type> types = { TYPE_Void };
+            std::vector<const Type *> types = { TYPE_Void };
             for (size_t i = 2; i < args.size(); ++i) {
                 Any val = args[i];
-                val.verify<TYPE_Type>();
+                val.verify(TYPE_Type);
                 types.push_back(val.typeref);
             }
             srcl = typify(srcl, types);
@@ -7699,7 +7692,7 @@ struct NormalizeCtx {
         } break;
         case FN_CompilerMessage: {
             CHECKARGS(1, 1);
-            args[1].verify<TYPE_String>();
+            args[1].verify(TYPE_String);
             StyledString ss;
             ss.out << l->body.anchor << " message: " << args[1].string->data << std::endl;
             std::cout << ss.str()->data;
@@ -7730,28 +7723,24 @@ struct NormalizeCtx {
             CHECKARGS(2, 2);
             verify_integer_ops(args[1], args[2]);
 #define B_INT_OP2(OP, N) \
-    switch(args[1].type.value()) { \
-    case TYPE_Bool: result = (args[1].i1 OP args[2].i1); break; \
-    case TYPE_I8: \
-    case TYPE_U8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
-    case TYPE_I16: \
-    case TYPE_U16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
-    case TYPE_I32: \
-    case TYPE_U32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
-    case TYPE_I64: \
-    case TYPE_U64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
+    switch(cast<IntegerType>(args[1].type)->width) { \
+    case 1: result = (args[1].i1 OP args[2].i1); break; \
+    case 8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
+    case 16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
+    case 32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
+    case 64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
     }
 #define B_FLOAT_OP2(OP) \
-    switch(args[1].type.value()) { \
-    case TYPE_F32: result = (args[1].f32 OP args[2].f32); break; \
-    case TYPE_F64: result = (args[1].f64 OP args[2].f64); break; \
+    switch(cast<RealType>(args[1].type)->width) { \
+    case 32: result = (args[1].f32 OP args[2].f32); break; \
+    case 64: result = (args[1].f64 OP args[2].f64); break; \
     default: assert(false); break; \
     }
 #define B_FLOAT_OPF2(OP) \
-    switch(args[1].type.value()) { \
-    case TYPE_F32: result = OP(args[1].f32, args[2].f32); break; \
-    case TYPE_F64: result = OP(args[1].f64, args[2].f64); break; \
+    switch(cast<RealType>(args[1].type)->width) { \
+    case 32: result = OP(args[1].f32, args[2].f32); break; \
+    case 64: result = OP(args[1].f64, args[2].f64); break; \
     default: assert(false); break; \
     }
             bool result;
@@ -7827,7 +7816,7 @@ struct NormalizeCtx {
 
         auto &&args = l->body.args;
         CHECKARGS(3, 3);
-        args[1].verify_indirect<TYPE_Bool>();
+        args[1].verify_indirect(TYPE_Bool);
         Label *then_br = inline_branch_continuation(args[2], args[0]);
         Label *else_br = inline_branch_continuation(args[3], args[0]);
         l->unlink_backrefs();
@@ -7860,17 +7849,13 @@ struct NormalizeCtx {
 
     static bool returns_higher_order_type(Label *l) {
         assert(!l->params.empty());
-        Type T = l->params[0]->type;
-        if (typesets.is(T)) return true;
-        if (!typed_labels.is(T)) return false;
-        auto &&tli = typed_labels.get(T);
-        for (size_t i = 1; i < tli.types.size(); ++i) {
-            switch (tli.types[i].value()) {
-            case TYPE_Label:
-            case TYPE_Type:
-                return true;
-            default: break;
-            }
+        const Type *T = l->params[0]->type;
+        if (isa<TypeSetType>(T)) return true;
+        if (!isa<TypedLabelType>(T)) return false;
+        auto tli = cast<TypedLabelType>(T);
+        for (size_t i = 1; i < tli->types.size(); ++i) {
+            if (tli->types[i] == TYPE_Label) return true;
+            if (tli->types[i] == TYPE_Type) return true;
         }
         return false;
     }
@@ -7956,11 +7941,11 @@ struct NormalizeCtx {
         assert(!args.empty());
         assert(!enter_label->params.empty());
         Parameter *cont_param = enter_label->params[0];
-        Type cont_type = cont_param->type;
+        const Type *cont_type = cont_param->type;
 
-        if (typed_labels.is(cont_type)) {
-            auto &&tli = typed_labels.get(cont_type);
-            Any newarg = type_continuation(args[0], tli.types);
+        if (isa<TypedLabelType>(cont_type)) {
+            auto tli = cast<TypedLabelType>(cont_type);
+            Any newarg = type_continuation(args[0], tli->types);
             l->unlink_backrefs();
             args[0] = newarg;
             l->link_backrefs();
@@ -7975,7 +7960,7 @@ struct NormalizeCtx {
 
     void type_continuation_from_builtin_call(Label *l) {
         ss_cout << "typing continuation from builtin call in " << l << std::endl;
-        std::vector<Type> argtypes;
+        std::vector<const Type *> argtypes;
         argtypes_from_builtin_call(l, argtypes);
         auto &&args = l->body.args;
         Any newarg = type_continuation(args[0], argtypes);
@@ -7986,7 +7971,7 @@ struct NormalizeCtx {
 
     void type_continuation_from_function_call(Label *l) {
         ss_cout << "typing continuation from function call in " << l << std::endl;
-        std::vector<Type> argtypes;
+        std::vector<const Type *> argtypes;
         argtypes_from_function_call(l, argtypes);
         auto &&args = l->body.args;
         Any newarg = type_continuation(args[0], argtypes);
@@ -7999,7 +7984,7 @@ struct NormalizeCtx {
         ss_cout << "typing continuation call in " << l << std::endl;
         auto &&args = l->body.args;
         assert(args[0].type == TYPE_Nothing);
-        std::vector<Type> argtypes = {};
+        std::vector<const Type *> argtypes = {};
         for (auto &&arg : args) {
             argtypes.push_back(arg.indirect_type());
         }
@@ -8299,7 +8284,7 @@ struct NormalizeCtx {
         return entry;
     }
 
-    std::unordered_map<Type, ffi_type *, Type::Hash> ffi_types;
+    std::unordered_map<const Type *, ffi_type *> ffi_types;
 
     ffi_type *new_type() {
         ffi_type *result = (ffi_type *)malloc(sizeof(ffi_type));
@@ -8307,76 +8292,84 @@ struct NormalizeCtx {
         return result;
     }
 
-    ffi_type *create_ffi_type(Type type) {
-        switch(type.value()) {
-        case TYPE_Void:
-        case TYPE_Nothing: return &ffi_type_void;
-        case TYPE_Bool: return &ffi_type_uint8;
-        case TYPE_I8: return &ffi_type_sint8;
-        case TYPE_I16: return &ffi_type_sint16;
-        case TYPE_I32: return &ffi_type_sint32;
-        case TYPE_I64: return &ffi_type_sint64;
-        case TYPE_U8: return &ffi_type_uint8;
-        case TYPE_U16: return &ffi_type_uint16;
-        case TYPE_U32: return &ffi_type_uint32;
-        case TYPE_U64: return &ffi_type_uint64;
-        case TYPE_F32: return &ffi_type_float;
-        case TYPE_F64: return &ffi_type_double;
-        default: break;
-        }
+    ffi_type *create_ffi_type(const Type *type) {
+        if (type == TYPE_Void) return &ffi_type_void;
+        if (type == TYPE_Nothing) return &ffi_type_void;
 
-        switch(category_of(type)) {
-        case CAT_Pointer: return &ffi_type_pointer;
-        case CAT_Typename: {
-            auto &&tn = typenames.get(type);
-            if (!tn.finalized) {
-                StyledString ss;
-                ss.out << "FFI: cannot convert opaque type " << type;
-                location_error(ss.str());
+        switch(type->kind()) {
+        case TK_Integer: {
+            auto it = cast<IntegerType>(type);
+            if (it->issigned) {
+                switch (it->width) {
+                case 8: return &ffi_type_sint8;
+                case 16: return &ffi_type_sint16;
+                case 32: return &ffi_type_sint32;
+                case 64: return &ffi_type_sint64;
+                default: break;
+                }
+            } else {
+                switch (it->width) {
+                case 1: return &ffi_type_uint8;
+                case 8: return &ffi_type_uint8;
+                case 16: return &ffi_type_uint16;
+                case 32: return &ffi_type_uint32;
+                case 64: return &ffi_type_uint64;
+                default: break;
+                }
             }
-            return get_ffi_type(tn.storage_type);
         } break;
-        case CAT_Array: {
-            auto &&ai = arrays.get(type);
-            size_t count = ai.count;
+        case TK_Real: {
+            switch(cast<RealType>(type)->width) {
+            case 32: return &ffi_type_float;
+            case 64: return &ffi_type_double;
+            default: break;
+            }
+        } break;
+        case TK_Pointer: return &ffi_type_pointer;
+        case TK_Typename: {
+            return get_ffi_type(storage_type(type));
+        } break;
+        case TK_Array: {
+            auto ai = cast<ArrayType>(type);
+            size_t count = ai->count;
             ffi_type *ty = (ffi_type *)malloc(sizeof(ffi_type));
             ty->size = 0;
             ty->alignment = 0;
             ty->type = FFI_TYPE_STRUCT;
             ty->elements = (ffi_type **)malloc(sizeof(ffi_type*) * (count + 1));
-            ffi_type *element_type = get_ffi_type(ai.element_type);
+            ffi_type *element_type = get_ffi_type(ai->element_type);
             for (size_t i = 0; i < count; ++i) {
                 ty->elements[i] = element_type;
             }
             ty->elements[count] = nullptr;
             return ty;
         } break;
-        case CAT_Tuple: {
-            auto &&ti = tuples.get(type);
-            size_t count = ti.types.size();
+        case TK_Tuple: {
+            auto ti = cast<TupleType>(type);
+            size_t count = ti->types.size();
             ffi_type *ty = (ffi_type *)malloc(sizeof(ffi_type));
             ty->size = 0;
             ty->alignment = 0;
             ty->type = FFI_TYPE_STRUCT;
             ty->elements = (ffi_type **)malloc(sizeof(ffi_type*) * (count + 1));
             for (size_t i = 0; i < count; ++i) {
-                ty->elements[i] = get_ffi_type(ti.types[i]);
+                ty->elements[i] = get_ffi_type(ti->types[i]);
             }
             ty->elements[count] = nullptr;
             return ty;
         } break;
-        case CAT_Union: {
-            auto &&ui = unions.get(type);
-            size_t count = ui.types.size();
-            size_t sz = ui.size;
-            size_t al = ui.align;
+        case TK_Union: {
+            auto ui = cast<UnionType>(type);
+            size_t count = ui->types.size();
+            size_t sz = ui->size;
+            size_t al = ui->align;
             ffi_type *ty = (ffi_type *)malloc(sizeof(ffi_type));
             ty->size = 0;
             ty->alignment = 0;
             ty->type = FFI_TYPE_STRUCT;
             // find member with the same alignment
             for (size_t i = 0; i < count; ++i) {
-                Type ET = ui.types[i];
+                const Type *ET = ui->types[i];
                 size_t etal = align_of(ET);
                 if (etal == al) {
                     size_t remsz = sz - size_of(ET);
@@ -8406,7 +8399,7 @@ struct NormalizeCtx {
         return nullptr;
     }
 
-    ffi_type *get_ffi_type(Type type) {
+    ffi_type *get_ffi_type(const Type *type) {
         auto it = ffi_types.find(type);
         if (it == ffi_types.end()) {
             auto result = create_ffi_type(type);
@@ -8417,34 +8410,38 @@ struct NormalizeCtx {
         }
     }
 
-    void *get_ffi_argument(Type type, Any &value, bool create = false) {
-        switch(type.value()) {
-        case TYPE_Void: return value.content;
-        case TYPE_I8: case TYPE_U8: return (void *)&value.u8;
-        case TYPE_I16: case TYPE_U16: return (void *)&value.u16;
-        case TYPE_I32: case TYPE_U32: return (void *)&value.u32;
-        case TYPE_I64: case TYPE_U64: return (void *)&value.u64;
-        case TYPE_F32: return (void *)&value.f32;
-        case TYPE_F64: return (void *)&value.f64;
-        case TYPE_Bool: return (void *)&value.i1;
-        default: break;
+    void *get_ffi_argument(const Type *type, Any &value, bool create = false) {
+        if (type == TYPE_Void) {
+            return value.content;
         }
-
-        switch(category_of(type)) {
-        case CAT_Pointer: return (void *)&value.pointer;
-        case CAT_Typename: {
-            auto &&tn = typenames.get(type);
-            if (!tn.finalized) {
-                StyledString ss;
-                ss.out << "FFI: cannot convert opaque type " << type;
-                location_error(ss.str());
+        switch(type->kind()) {
+        case TK_Integer: {
+            auto it = cast<IntegerType>(type);
+            switch(it->width) {
+            case 1: return (void *)&value.i1;
+            case 8: return (void *)&value.u8;
+            case 16: return (void *)&value.u16;
+            case 32: return (void *)&value.u32;
+            case 64: return (void *)&value.u64;
+            default: break;
             }
-            return get_ffi_argument(tn.storage_type, value, create);
         } break;
-        case CAT_Array:
-        case CAT_Vector:
-        case CAT_Tuple:
-        case CAT_Union:
+        case TK_Real: {
+            auto rt = cast<RealType>(type);
+            switch(rt->width) {
+            case 32: return (void *)&value.f32;
+            case 64: return (void *)&value.f64;
+            default: break;
+            }
+        } break;
+        case TK_Pointer: return (void *)&value.pointer;
+        case TK_Typename: {
+            return get_ffi_argument(storage_type(type), value, create);
+        } break;
+        case TK_Array:
+        case TK_Vector:
+        case TK_Tuple:
+        case TK_Union:
             if (create) {
                 value.pointer = malloc(size_of(type));
             }
@@ -8458,10 +8455,10 @@ struct NormalizeCtx {
         return nullptr;
     }
 
-    void verify_function_argument_count(const FunctionInfo &fi, size_t argcount) {
+    void verify_function_argument_count(const FunctionType *fi, size_t argcount) {
 
-        size_t fargcount = fi.argument_types.size();
-        if (fi.flags & FF_Variadic) {
+        size_t fargcount = fi->argument_types.size();
+        if (fi->flags & FF_Variadic) {
             if (argcount < fargcount) {
                 StyledString ss;
                 ss.out << "FFI: argument count mismatch (need at least "
@@ -8479,12 +8476,12 @@ struct NormalizeCtx {
     }
 
     Any run_ffi_function(Any enter, Any *args, size_t argcount) {
-        auto &&pi = pointers.get(enter.type);
-        auto &&fi = functions.get(pi.element_type);
+        auto pi = cast<PointerType>(enter.type);
+        auto fi = cast<FunctionType>(pi->element_type);
 
-        size_t fargcount = fi.argument_types.size();
+        size_t fargcount = fi->argument_types.size();
 
-        Type rettype = fi.return_type;
+        const Type *rettype = fi->return_type;
 
         ffi_cif cif;
         ffi_type *argtypes[argcount];
@@ -8495,7 +8492,7 @@ struct NormalizeCtx {
             avalues[i] = get_ffi_argument(arg.type, arg);
         }
         ffi_status prep_result;
-        if (fi.flags & FF_Variadic) {
+        if (fi->flags & FF_Variadic) {
             prep_result = ffi_prep_cif_var(
                 &cif, FFI_DEFAULT_ABI, fargcount, argcount, get_ffi_type(rettype), argtypes);
         } else {
@@ -8858,7 +8855,7 @@ static Parameter *expand_parameter(Scope *env, Any value) {
     } else if (_value.type == TYPE_List && _value.list == EOL) {
         return Parameter::from(anchor, Symbol(SYM_Unnamed), TYPE_Nothing);
     } else {
-        _value.verify<TYPE_Symbol>();
+        _value.verify(TYPE_Symbol);
         Parameter *param = nullptr;
         if (_value.symbol == KW_Parenthesis) {
             param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
@@ -9042,52 +9039,78 @@ static Any expand_root(Any expr, Scope *scope = nullptr) {
 // GLOBALS
 //------------------------------------------------------------------------------
 
-#define DEFINE_BASIC_TYPE(CT, T, BODY) { \
-        Typename(Type(T).name(), true); \
-        auto &&tn = typenames.get(T); \
-        tn.finalize(BODY); \
-        assert(sizeof(CT) == size_of(Type(T))); \
+#define DEFINE_BASIC_TYPE(NAME, CT, T, BODY) { \
+        T = Typename(String::from(NAME)); \
+        auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
+        tn->finalize(BODY); \
+        assert(sizeof(CT) == size_of(T)); \
     }
 
-#define DEFINE_STRUCT_TYPE(CT, T, ...) { \
-        Typename(Type(T).name(), true); \
-        auto &&tn = typenames.get(T); \
-        tn.finalize(Tuple({ __VA_ARGS__ })); \
-        assert(sizeof(CT) == size_of(Type(T))); \
+#define DEFINE_STRUCT_TYPE(NAME, CT, T, ...) { \
+        T = Typename(String::from(NAME)); \
+        auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
+        tn->finalize(Tuple({ __VA_ARGS__ })); \
+        assert(sizeof(CT) == size_of(T)); \
     }
 
-#define DEFINE_STRUCT_HANDLE_TYPE(CT, T, ...) { \
-        Typename(Type(T).name(), true); \
-        auto &&tn = typenames.get(T); \
+#define DEFINE_STRUCT_HANDLE_TYPE(NAME, CT, T, ...) { \
+        T = Typename(String::from(NAME)); \
+        auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
         auto ET = Tuple({ __VA_ARGS__ }); \
         assert(sizeof(CT) == size_of(ET)); \
-        tn.finalize(Pointer(ET)); \
+        tn->finalize(Pointer(ET)); \
     }
 
-#define DEFINE_OPAQUE_HANDLE_TYPE(CT, T) { \
-        Typename(Type(T).name(), true); \
-        auto &&tn = typenames.get(T); \
-        tn.finalize(Pointer(Typename(Symbol("_" #CT), true))); \
+#define DEFINE_OPAQUE_HANDLE_TYPE(NAME, CT, T) { \
+        T = Typename(String::from(NAME)); \
+        auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
+        tn->finalize(Pointer(Typename(String::from("_" NAME)))); \
     }
 
 static void init_types() {
-    Type ty_size = TYPE_U64;
+    TYPE_Void = Typename(String::from("void"));
+    TYPE_Nothing = Typename(String::from("Nothing"));
 
-    DEFINE_BASIC_TYPE(Type, TYPE_Type, TYPE_U64);
-    DEFINE_BASIC_TYPE(Symbol, TYPE_Symbol, TYPE_U64);
-    DEFINE_BASIC_TYPE(Builtin, TYPE_Builtin, TYPE_U64);
+    TYPE_Bool = Integer(1, false);
 
-    DEFINE_STRUCT_TYPE(Any, TYPE_Any,
+    TYPE_I8 = Integer(8, true);
+    TYPE_I16 = Integer(16, true);
+    TYPE_I32 = Integer(32, true);
+    TYPE_I64 = Integer(64, true);
+
+    TYPE_U8 = Integer(8, false);
+    TYPE_U16 = Integer(16, false);
+    TYPE_U32 = Integer(32, false);
+    TYPE_U64 = Integer(64, false);
+
+    TYPE_F16 = Real(16);
+    TYPE_F32 = Real(32);
+    TYPE_F64 = Real(64);
+    TYPE_F80 = Real(80);
+
+    TYPE_Ref = Typename(String::from("ref"));
+
+    if (sizeof(size_t) == sizeof(uint64_t)) {
+        TYPE_SizeT = TYPE_U64;
+    } else {
+        TYPE_SizeT = TYPE_U32;
+    }
+
+    DEFINE_OPAQUE_HANDLE_TYPE("type", Type, TYPE_Type);
+    DEFINE_BASIC_TYPE("Symbol", Symbol, TYPE_Symbol, TYPE_U64);
+    DEFINE_BASIC_TYPE("Builtin", Builtin, TYPE_Builtin, TYPE_U64);
+
+    DEFINE_STRUCT_TYPE("Any", Any, TYPE_Any,
         TYPE_Type,
         TYPE_U64
     );
 
-    DEFINE_OPAQUE_HANDLE_TYPE(SourceFile, TYPE_SourceFile);
-    DEFINE_OPAQUE_HANDLE_TYPE(Label, TYPE_Label);
-    DEFINE_OPAQUE_HANDLE_TYPE(Parameter, TYPE_Parameter);
-    DEFINE_OPAQUE_HANDLE_TYPE(Scope, TYPE_Scope);
+    DEFINE_OPAQUE_HANDLE_TYPE("SourceFile", SourceFile, TYPE_SourceFile);
+    DEFINE_OPAQUE_HANDLE_TYPE("Label", Label, TYPE_Label);
+    DEFINE_OPAQUE_HANDLE_TYPE("Parameter", Parameter, TYPE_Parameter);
+    DEFINE_OPAQUE_HANDLE_TYPE("Scope", Scope, TYPE_Scope);
 
-    DEFINE_STRUCT_HANDLE_TYPE(Anchor, TYPE_Anchor,
+    DEFINE_STRUCT_HANDLE_TYPE("Anchor", Anchor, TYPE_Anchor,
         Pointer(TYPE_SourceFile),
         TYPE_I32,
         TYPE_I32,
@@ -9095,26 +9118,32 @@ static void init_types() {
     );
 
     {
-        Type cellT = Typename(Symbol("_List"), true);
-        auto &&tn = typenames.get(cellT);
-        auto ET = Tuple({ TYPE_Any, Pointer(cellT), ty_size });
-        assert(sizeof(List) == size_of(ET));
-        tn.finalize(ET);
+        TYPE_List = Typename(String::from("list"));
 
-        typenames
-            .get(Typename(Type(TYPE_List).name(), true))
-            .finalize(Pointer(cellT));
+        const Type *cellT = Typename(String::from("_list"));
+        auto tn = cast<TypenameType>(const_cast<Type *>(cellT));
+        auto ET = Tuple({ TYPE_Any, Pointer(cellT), TYPE_SizeT });
+        assert(sizeof(List) == size_of(ET));
+        tn->finalize(ET);
+
+        cast<TypenameType>(const_cast<Type *>(TYPE_List))
+            ->finalize(Pointer(cellT));
     }
 
-    DEFINE_STRUCT_HANDLE_TYPE(Syntax, TYPE_Syntax,
+    DEFINE_STRUCT_HANDLE_TYPE("Syntax", Syntax, TYPE_Syntax,
         TYPE_Anchor,
         TYPE_Any,
         TYPE_Bool);
 
-    DEFINE_STRUCT_HANDLE_TYPE(String, TYPE_String,
-        ty_size,
+    DEFINE_STRUCT_HANDLE_TYPE("string", String, TYPE_String,
+        TYPE_SizeT,
         Array(TYPE_I8, 1)
     );
+
+#define T(TYPE, TYPENAME) \
+    assert(TYPE);
+    B_TYPES()
+#undef T
 }
 
 #undef DEFINE_STRUCT_TYPE
@@ -9179,12 +9208,6 @@ static void init_globals() {
             (void *)FUNC));
 
     //Type rawstring = Pointer(TYPE_I8);
-    Type sizeT = TYPE_Nothing;
-    if (sizeof(size_t) == sizeof(uint64_t)) {
-        sizeT = TYPE_U64;
-    } else {
-        sizeT = TYPE_U32;
-    }
 
     DEFINE_PURE_C_FUNCTION(FN_ImportC, f_import_c, TYPE_Scope, TYPE_String, TYPE_String, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol);
@@ -9220,36 +9243,31 @@ static void init_globals() {
         globals->bind(sym, sym);
     }
 
-    globals->bind(TYPE_Bool, Type(TYPE_Bool));
-    globals->bind(TYPE_I8, Type(TYPE_I8));
-    globals->bind(TYPE_I16, Type(TYPE_I16));
-    globals->bind(TYPE_I32, Type(TYPE_I32));
-    globals->bind(TYPE_I64, Type(TYPE_I64));
-    globals->bind(TYPE_U8, Type(TYPE_U8));
-    globals->bind(TYPE_U16, Type(TYPE_U16));
-    globals->bind(TYPE_U32, Type(TYPE_U32));
-    globals->bind(TYPE_U64, Type(TYPE_U64));
-    globals->bind(TYPE_F32, Type(TYPE_F32));
-    globals->bind(TYPE_F64, Type(TYPE_F64));
-
-    if (sizeof(size_t) == sizeof(uint64_t)) {
-        globals->bind(TYPE_SizeT, Type(TYPE_U64));
-    } else {
-        globals->bind(TYPE_SizeT, Type(TYPE_U32));
-    }
-    globals->bind(TYPE_Symbol, Type(TYPE_Symbol));
-    globals->bind(TYPE_List, Type(TYPE_List));
-    globals->bind(TYPE_Any, Type(TYPE_Any));
-    globals->bind(TYPE_String, Type(TYPE_String));
-    globals->bind(TYPE_Builtin, Type(TYPE_Builtin));
-    globals->bind(TYPE_Nothing, Type(TYPE_Nothing));
-    globals->bind(TYPE_Type, Type(TYPE_Type));
-    globals->bind(TYPE_Syntax, Type(TYPE_Syntax));
-    globals->bind(TYPE_Label, Type(TYPE_Label));
-    globals->bind(TYPE_Ref, Type(TYPE_Ref));
-    globals->bind(TYPE_Parameter, Type(TYPE_Parameter));
-    globals->bind(TYPE_Scope, Type(TYPE_Scope));
-    globals->bind(TYPE_Anchor, Type(TYPE_Anchor));
+    globals->bind(Symbol("bool"), TYPE_Bool);
+    globals->bind(Symbol("i8"), TYPE_I8);
+    globals->bind(Symbol("i16"), TYPE_I16);
+    globals->bind(Symbol("i32"), TYPE_I32);
+    globals->bind(Symbol("i64"), TYPE_I64);
+    globals->bind(Symbol("u8"), TYPE_U8);
+    globals->bind(Symbol("u16"), TYPE_U16);
+    globals->bind(Symbol("u32"), TYPE_U32);
+    globals->bind(Symbol("u64"), TYPE_U64);
+    globals->bind(Symbol("f32"), TYPE_F32);
+    globals->bind(Symbol("f64"), TYPE_F64);
+    globals->bind(Symbol("size_t"), TYPE_SizeT);
+    globals->bind(Symbol("Symbol"), TYPE_Symbol);
+    globals->bind(Symbol("list"), TYPE_List);
+    globals->bind(Symbol("Any"), TYPE_Any);
+    globals->bind(Symbol("string"), TYPE_String);
+    globals->bind(Symbol("Builtin"), TYPE_Builtin);
+    globals->bind(Symbol("Nothing"), TYPE_Nothing);
+    globals->bind(Symbol("type"), TYPE_Type);
+    globals->bind(Symbol("Syntax"), TYPE_Syntax);
+    globals->bind(Symbol("Label"), TYPE_Label);
+    globals->bind(Symbol("ref"), TYPE_Ref);
+    globals->bind(Symbol("Parameter"), TYPE_Parameter);
+    globals->bind(Symbol("Scope"), TYPE_Scope);
+    globals->bind(Symbol("Anchor"), TYPE_Anchor);
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
 #define T1 T2
