@@ -547,9 +547,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
     T(FN_Purify) T(FN_Unconst) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
-    T(FN_ExtractValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
+    T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) \
+    T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
@@ -592,6 +592,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_AnchorSource, "Anchor-source") \
     T(FN_AnyExtract, "Any-extract") T(FN_AnyWrap, "Any-wrap") \
     T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
+    T(FN_BitCountOf, "bitcountof") T(FN_IsSigned, "signed?") \
     T(FN_Bitcast, "bitcast") T(FN_IntToPtr, "inttoptr") T(FN_PtrToInt, "ptrtoint") \
     T(FN_BlockMacro, "block-macro") \
     T(FN_BlockScopeMacro, "block-scope-macro") T(FN_BoolEq, "bool==") \
@@ -613,7 +614,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
     T(FN_ExternLibrary, "extern-library") \
     T(FN_ExtractMemory, "extract-memory") \
-    T(FN_ExtractValue, "extractvalue") \
+    T(FN_ExtractValue, "extractvalue") T(FN_InsertValue, "insertvalue") \
     T(FN_GetElementPtr, "getelementptr") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
@@ -654,6 +655,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
     T(FN_ParameterAnchor, "Parameter-anchor") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
+    T(FN_PointerType, "pointer-type") \
     T(FN_Purify, "purify") \
     T(FN_Write, "io-write") \
     T(FN_Flush, "io-flush") \
@@ -667,7 +669,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
     T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
-    T(FN_StructOf, "structof") \
+    T(FN_StructOf, "structof") T(FN_TypeStorage, "type-storage") \
     T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "string->Symbol") \
     T(FN_StringToRawstring, "string->rawstring") \
     T(FN_IsSymbol, "symbol?") \
@@ -683,6 +685,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_TypeSizeOf, "type-sizeof") \
     T(FN_Typify, "typify") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") \
+    T(FN_TypeKind, "type-kind") \
+    T(FN_Undef, "undef") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
     T(FN_ZipFill, "zip-fill") \
@@ -1550,19 +1554,25 @@ static StyledStream& operator<<(StyledStream& ost, const Anchor *anchor) {
 
 static void location_error(const String *msg);
 
+#define B_TYPE_KIND() \
+    T(TK_Integer, "type-kind-integer") \
+    T(TK_Real, "type-kind-real") \
+    T(TK_Pointer, "type-kind-pointer") \
+    T(TK_Array, "type-kind-array") \
+    T(TK_Vector, "type-kind-vector") \
+    T(TK_Tuple, "type-kind-tuple") \
+    T(TK_Union, "type-kind-union") \
+    T(TK_Typename, "type-kind-typename") \
+    T(TK_TypedLabel, "type-kind-label") \
+    T(TK_TypeSet, "type-kind-typeset") \
+    T(TK_Function, "type-kind-function") \
+    T(TK_Constant, "type-kind-constant")
+
 enum TypeKind {
-    TK_Integer,
-    TK_Real,
-    TK_Pointer,
-    TK_Array,
-    TK_Vector,
-    TK_Tuple,
-    TK_Union,
-    TK_Typename,
-    TK_TypedLabel,
-    TK_TypeSet,
-    TK_Function,
-    TK_Constant,
+#define T(NAME, BNAME) \
+    NAME,
+    B_TYPE_KIND()
+#undef T
 };
 
 struct Type {
@@ -2031,15 +2041,10 @@ struct PointerType : Type {
         std::stringstream ss;
         ss << element_type->name()->data << "*";
         _name = String::from_stdstring(ss.str());
-
-        if (is_opaque(element_type)) {
-            stride = 0;
-        } else {
-            stride = size_of(element_type);
-        }
     }
 
     void *getelementptr(void *src, size_t i) const {
+        size_t stride = size_of(element_type);
         return (void *)((char *)src + stride * i);
     }
 
@@ -2051,7 +2056,6 @@ struct PointerType : Type {
     }
 
     const Type *element_type;
-    size_t stride;
 };
 
 static const Type *Pointer(const Type *element_type) {
@@ -2722,6 +2726,52 @@ static Any wrap_pointer(const Type *type, void *ptr) {
     ss.out << "cannot wrap data of type " << type;
     location_error(ss.str());
     return none;
+}
+
+
+void *get_pointer(const Type *type, Any &value, bool create = false) {
+    if (type == TYPE_Void) {
+        return value.content;
+    }
+    switch(type->kind()) {
+    case TK_Integer: {
+        auto it = cast<IntegerType>(type);
+        switch(it->width) {
+        case 1: return (void *)&value.i1;
+        case 8: return (void *)&value.u8;
+        case 16: return (void *)&value.u16;
+        case 32: return (void *)&value.u32;
+        case 64: return (void *)&value.u64;
+        default: break;
+        }
+    } break;
+    case TK_Real: {
+        auto rt = cast<RealType>(type);
+        switch(rt->width) {
+        case 32: return (void *)&value.f32;
+        case 64: return (void *)&value.f64;
+        default: break;
+        }
+    } break;
+    case TK_Pointer: return (void *)&value.pointer;
+    case TK_Typename: {
+        return get_pointer(storage_type(type), value, create);
+    } break;
+    case TK_Array:
+    case TK_Vector:
+    case TK_Tuple:
+    case TK_Union:
+        if (create) {
+            value.pointer = malloc(size_of(type));
+        }
+        return value.pointer;
+    default: break;
+    };
+
+    StyledString ss;
+    ss.out << "cannot extract pointer from type " << type;
+    location_error(ss.str());
+    return nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -5925,6 +5975,15 @@ struct GenerateCtx {
                 retvalue = LLVMBuildExtractValue(
                     builder, val, cast_number<int32_t>(index), "");
             } break;
+            case FN_InsertValue: {
+                READ_VALUE(val);
+                READ_VALUE(eltval);
+                READ_ANY(index);
+                retvalue = LLVMBuildInsertValue(
+                    builder, val, eltval, cast_number<int32_t>(index), "");
+            } break;
+            case FN_Undef: { READ_TYPE(ty);
+                retvalue = LLVMGetUndef(ty); } break;
             case FN_GetElementPtr: {
                 READ_VALUE(pointer);
                 assert(argcount > 1);
@@ -5947,8 +6006,12 @@ struct GenerateCtx {
                 retvalue = LLVMBuildSExt(builder, val, ty, ""); } break;
             case FN_ZExt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildZExt(builder, val, ty, ""); } break;
-            case FN_Load: { READ_VALUE(val);
-                retvalue = LLVMBuildLoad(builder, val, ""); } break;
+            case FN_FPTrunc: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildFPTrunc(builder, val, ty, ""); } break;
+            case FN_FPExt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildFPExt(builder, val, ty, ""); } break;
+            case FN_Load: { READ_VALUE(ptr);
+                retvalue = LLVMBuildLoad(builder, ptr, ""); } break;
             case FN_Store: { READ_VALUE(val); READ_VALUE(ptr);
                 retvalue = LLVMBuildStore(builder, val, ptr); } break;
             case OP_ICmpEQ:
@@ -6240,7 +6303,13 @@ struct GenerateCtx {
         LLVMDumpModule(module);
 #endif
         char *errmsg = NULL;
-        LLVMVerifyModule(module, LLVMAbortProcessAction, &errmsg);
+        if (LLVMVerifyModule(module, LLVMReturnStatusAction, &errmsg)) {
+            LLVMDumpModule(module);
+            location_error(
+                String::join(
+                    String::from("IL->IR: "),
+                    String::from_cstr(errmsg)));
+        }
         LLVMDisposeMessage(errmsg);
 
         return std::pair<LLVMModuleRef, LLVMValueRef>(module, func);
@@ -7062,6 +7131,7 @@ struct NormalizeCtx {
     bool builtin_never_folds(Builtin builtin) {
         switch(builtin.value()) {
         case FN_Unconst:
+        case FN_Undef:
             return true;
         default: return false;
         }
@@ -7118,23 +7188,23 @@ struct NormalizeCtx {
         } break;
         case FN_FPTrunc: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].indirect_type();
             verify_real(T);
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
             verify_real(DestT);
-            if ((T == TYPE_F64) && (DestT == TYPE_F32)) {
+            if (cast<RealType>(T)->width >= cast<RealType>(DestT)->width) {
             } else { invalid_op2_types_error(T, DestT); }
             RETARGTYPES(DestT);
         } break;
         case FN_FPExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].indirect_type();
             verify_real(T);
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
             verify_real(DestT);
-            if ((T == TYPE_F32) && (DestT == TYPE_F64)) {
+            if (cast<RealType>(T)->width <= cast<RealType>(DestT)->width) {
             } else { invalid_op2_types_error(T, DestT); }
             RETARGTYPES(DestT);
         } break;
@@ -7232,6 +7302,37 @@ struct NormalizeCtx {
             } break;
             }
         } break;
+        case FN_InsertValue: {
+            CHECKARGS(3, 3);
+            const Type *T = storage_type(args[1].indirect_type());
+            const Type *ET = storage_type(args[2].indirect_type());
+            size_t idx = cast_number<size_t>(args[3]);
+            switch(T->kind()) {
+            case TK_Array: {
+                auto ai = cast<ArrayType>(T);
+                verify(storage_type(ai->type_at_index(idx)), ET);
+            } break;
+            case TK_Tuple: {
+                auto ti = cast<TupleType>(T);
+                verify(storage_type(ti->type_at_index(idx)), ET);
+            } break;
+            case TK_Union: {
+                auto ui = cast<UnionType>(T);
+                verify(storage_type(ui->type_at_index(idx)), ET);
+            } break;
+            default: {
+                StyledString ss;
+                ss.out << "can not insert value into type " << T;
+                location_error(ss.str());
+            } break;
+            }
+            RETARGTYPES(args[1].indirect_type());
+        } break;
+        case FN_Undef: {
+            CHECKARGS(1, 1);
+            args[1].verify(TYPE_Type);
+            RETARGTYPES(args[1].typeref);
+        } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
             const Type *T = storage_type(args[1].indirect_type());
@@ -7269,6 +7370,15 @@ struct NormalizeCtx {
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             RETARGTYPES(pi->element_type);
+        } break;
+        case FN_Store: {
+            CHECKARGS(2, 2);
+            const Type *T = storage_type(args[2].indirect_type());
+            verify_kind<TK_Pointer>(T);
+            auto pi = cast<PointerType>(T);
+            verify(storage_type(pi->element_type),
+                storage_type(args[1].indirect_type()));
+            RETARGTYPES();
         } break;
         case OP_ICmpEQ:
         case OP_ICmpNE:
@@ -7339,6 +7449,21 @@ struct NormalizeCtx {
             ss << std::endl;
             l->body.anchor->stream_source_line(ss);
         }
+    }
+
+    void *aligned_alloc(size_t sz, size_t al) {
+        assert(sz);
+        assert(al);
+        return reinterpret_cast<void *>(
+            ::align(reinterpret_cast<uintptr_t>(malloc(sz + al - 1)), al));
+    }
+
+    void *copy_storage(const Type *T, void *ptr) {
+        size_t sz = size_of(T);
+        size_t al = align_of(T);
+        void *destptr = aligned_alloc(sz, al);
+        memcpy(destptr, ptr, sz);
+        return destptr;
     }
 
     bool fold_builtin_call(Label *l) {
@@ -7578,12 +7703,61 @@ struct NormalizeCtx {
             } break;
             }
         } break;
+        case FN_InsertValue: {
+            CHECKARGS(3, 3);
+            const Type *T = storage_type(args[1].type);
+            const Type *ET = storage_type(args[2].type);
+            size_t idx = cast_number<size_t>(args[3]);
+
+            void *destptr = args[1].pointer;
+            void *offsetptr = nullptr;
+            switch(T->kind()) {
+            case TK_Array: {
+                destptr = copy_storage(T, destptr);
+                auto ai = cast<ArrayType>(T);
+                verify(storage_type(ai->type_at_index(idx)), ET);
+                offsetptr = ai->getelementptr(destptr, idx);
+            } break;
+            case TK_Tuple: {
+                destptr = copy_storage(T, destptr);
+                auto ti = cast<TupleType>(T);
+                verify(storage_type(ti->type_at_index(idx)), ET);
+                offsetptr = ti->getelementptr(destptr, idx);
+            } break;
+            case TK_Union: {
+                destptr = copy_storage(T, destptr);
+                auto ui = cast<UnionType>(T);
+                verify(storage_type(ui->type_at_index(idx)), ET);
+                offsetptr = destptr;
+            } break;
+            default: {
+                StyledString ss;
+                ss.out << "can not extract value from type " << T;
+                location_error(ss.str());
+            } break;
+            }
+            void *srcptr = get_pointer(ET, args[1]);
+            memcpy(offsetptr, srcptr, size_of(ET));
+            RETARGS(Any::from_pointer(args[1].type, destptr));
+        } break;
         case FN_Load: {
             CHECKARGS(1, 1);
             const Type *T = storage_type(args[1].type);
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             RETARGS(pi->unpack(args[1].pointer));
+        } break;
+        case FN_Store: {
+            CHECKARGS(2, 2);
+            const Type *T = storage_type(args[2].type);
+            verify_kind<TK_Pointer>(T);
+            auto pi = cast<PointerType>(T);
+            verify(storage_type(pi->element_type), storage_type(args[1].type));
+            void *destptr = args[2].pointer;
+            auto ET = args[1].type;
+            void *srcptr = get_pointer(ET, args[1]);
+            memcpy(destptr, srcptr, size_of(ET));
+            RETARGS();
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
@@ -7667,6 +7841,7 @@ struct NormalizeCtx {
                 }
                 flags |= flag;
             }
+            lower2cff(srcl);
             RETARGS(compile(srcl, flags));
         } break;
         case FN_Typify: {
@@ -8165,7 +8340,7 @@ struct NormalizeCtx {
                 if (!is_const(enter)) {
                     ss.out << "unable to call variable of type " << enter.indirect_type();
                 } else {
-                    ss.out << "unable to call value of type " << enter.type;
+                    ss.out << "unable to call constant of type " << enter.type;
                 }
                 location_error(ss.str());
             }
@@ -8410,51 +8585,6 @@ struct NormalizeCtx {
         }
     }
 
-    void *get_ffi_argument(const Type *type, Any &value, bool create = false) {
-        if (type == TYPE_Void) {
-            return value.content;
-        }
-        switch(type->kind()) {
-        case TK_Integer: {
-            auto it = cast<IntegerType>(type);
-            switch(it->width) {
-            case 1: return (void *)&value.i1;
-            case 8: return (void *)&value.u8;
-            case 16: return (void *)&value.u16;
-            case 32: return (void *)&value.u32;
-            case 64: return (void *)&value.u64;
-            default: break;
-            }
-        } break;
-        case TK_Real: {
-            auto rt = cast<RealType>(type);
-            switch(rt->width) {
-            case 32: return (void *)&value.f32;
-            case 64: return (void *)&value.f64;
-            default: break;
-            }
-        } break;
-        case TK_Pointer: return (void *)&value.pointer;
-        case TK_Typename: {
-            return get_ffi_argument(storage_type(type), value, create);
-        } break;
-        case TK_Array:
-        case TK_Vector:
-        case TK_Tuple:
-        case TK_Union:
-            if (create) {
-                value.pointer = malloc(size_of(type));
-            }
-            return value.pointer;
-        default: break;
-        };
-
-        StyledString ss;
-        ss.out << "FFI: cannot convert argument of type " << type;
-        location_error(ss.str());
-        return nullptr;
-    }
-
     void verify_function_argument_count(const FunctionType *fi, size_t argcount) {
 
         size_t fargcount = fi->argument_types.size();
@@ -8489,7 +8619,7 @@ struct NormalizeCtx {
         for (size_t i = 0; i < argcount; ++i) {
             Any &arg = args[i];
             argtypes[i] = get_ffi_type(arg.type);
-            avalues[i] = get_ffi_argument(arg.type, arg);
+            avalues[i] = get_pointer(arg.type, arg);
         }
         ffi_status prep_result;
         if (fi->flags & FF_Variadic) {
@@ -8503,7 +8633,7 @@ struct NormalizeCtx {
 
         Any result = Any::from_pointer(rettype, nullptr);
         ffi_call(&cif, FFI_FN(enter.pointer),
-            get_ffi_argument(result.type, result, true), avalues);
+            get_pointer(result.type, result, true), avalues);
         return result;
     }
 
@@ -8596,8 +8726,8 @@ loop:
         // complex expression
         TranslateResult result = translate(state, sxvalue);
         state = result.state;
-        //anchor = sx->anchor;
-        //assert(anchor);
+        const Anchor *anchor = sxvalue.syntax->anchor;
+        assert(anchor);
         Any _enter = result.enter;
         Any arg = none;
         if (_enter.type != TYPE_Nothing) {
@@ -9196,6 +9326,52 @@ static const String *f_string_join(const String *a, const String *b) {
     return String::join(a,b);
 }
 
+static size_t f_sizeof(const Type *T) {
+    return size_of(T);
+}
+
+static const Type *f_elementtype(const Type *T, int i) {
+    T = storage_type(T);
+    switch(T->kind()) {
+    case TK_Pointer: return cast<PointerType>(T)->element_type;
+    case TK_Array: return cast<ArrayType>(T)->element_type;
+    case TK_Tuple: return cast<TupleType>(T)->type_at_index(i);
+    case TK_Union: return cast<UnionType>(T)->type_at_index(i);
+    default: {
+        StyledString ss;
+        ss.out << "type " << T << " has no elements" << std::endl;
+        location_error(ss.str());
+    } break;
+    }
+    return nullptr;
+}
+
+static const Type *f_pointertype(const Type *T) {
+    return Pointer(T);
+}
+
+static const List *f_list_cons(Any at, const List *next) {
+    return List::from(at, next);
+}
+
+static int32_t f_type_kind(const Type *T) {
+    return T->kind();
+}
+
+static int32_t f_bitcountof(const Type *T) {
+    verify_kind<TK_Integer>(T);
+    return cast<IntegerType>(T)->width;
+}
+
+static bool f_issigned(const Type *T) {
+    verify_kind<TK_Integer>(T);
+    return cast<IntegerType>(T)->issigned;
+}
+
+static const Type *f_type_storage(const Type *T) {
+    return storage_type(T);
+}
+
 static void init_globals() {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -9207,16 +9383,25 @@ static void init_globals() {
         Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Pure)), \
             (void *)FUNC));
 
-    //Type rawstring = Pointer(TYPE_I8);
+    //const Type *rawstring = Pointer(TYPE_I8);
 
     DEFINE_PURE_C_FUNCTION(FN_ImportC, f_import_c, TYPE_Scope, TYPE_String, TYPE_String, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
+    DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
+    DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_SizeT, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_PointerType, f_pointertype, TYPE_Type, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_ListCons, f_list_cons, TYPE_List, TYPE_Any, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_TypeKind, f_type_kind, TYPE_I32, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_BitCountOf, f_bitcountof, TYPE_I32, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_IsSigned, f_issigned, TYPE_Bool, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_TypeStorage, f_type_storage, TYPE_Type, TYPE_Type);
 
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String)
+    DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
 
     globals->bind(Symbol("print-number"),
         Any::from_pointer(Pointer(Function(
@@ -9268,6 +9453,12 @@ static void init_globals() {
     globals->bind(Symbol("Parameter"), TYPE_Parameter);
     globals->bind(Symbol("Scope"), TYPE_Scope);
     globals->bind(Symbol("Anchor"), TYPE_Anchor);
+
+#define T(NAME, BNAME) \
+    globals->bind(Symbol(BNAME), (int32_t)NAME);
+    B_TYPE_KIND()
+#undef T
+
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
 #define T1 T2

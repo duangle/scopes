@@ -24,7 +24,7 @@
     functions and macros, parses the command-line and then enters the REPL.
 
 fn/cc type? (_ T)
-    icmp== (ptrtoint type u64) (ptrtoint (typeof T) u64)
+    icmp== (ptrtoint type size_t) (ptrtoint (typeof T) size_t)
 
 fn/cc type== (_ a b)
     fn/cc assert-type (_ T)
@@ -35,7 +35,7 @@ fn/cc type== (_ a b)
                     string-join "type expected, not " (Any-repr (Any-wrap T))
     assert-type a
     assert-type b
-    icmp== (ptrtoint a u64) (ptrtoint b u64)
+    icmp== (ptrtoint a size_t) (ptrtoint b size_t)
 
 fn/cc assert-typeof (_ a T)
     branch (type== T (typeof a))
@@ -99,7 +99,11 @@ fn/cc list-at-next (_ l)
                 bitcast (extractvalue (load l) 1) list
 fn/cc list-countof (_ l)
     assert-typeof l list
-    extractvalue (load l) 2
+    branch (list-empty? l)
+        fn/cc (_)
+            _ 0:u64
+        fn/cc (_)
+            extractvalue (load l) 2
 
 fn/cc Any-list? (_ val)
     assert-typeof val Any
@@ -137,6 +141,95 @@ fn/cc Any-dispatch (return val)
                     return (Any-extract-list val)
                 \ try1
         Any-typeof val
+
+#io-write "\n"
+
+#dump-label (typify cons Any list)
+
+fn/cc list-reverse (_ l)
+    assert-typeof l list
+    fn/cc loop (_ l next)
+        branch (list-empty? l)
+            fn/cc (_) next
+            fn/cc (_)
+                loop (list-next l) (list-cons (list-at l) next)
+    loop l eol
+
+fn/cc integer-type? (_ T)
+    icmp== (type-kind T) type-kind-integer
+fn/cc real-type? (_ T)
+    icmp== (type-kind T) type-kind-real
+fn/cc pointer-type? (_ T)
+    icmp== (type-kind T) type-kind-pointer
+fn/cc integer? (_ val)
+    integer-type? (typeof val)
+fn/cc real? (_ val)
+    real-type? (typeof val)
+fn/cc pointer? (_ val)
+    pointer-type? (typeof val)
+
+fn/cc Any-new (_ val)
+    fn/cc construct (_ outval)
+        insertvalue (insertvalue (undef Any) (typeof val) 0) outval 1
+
+    fn/cc wrap-unknown (_)
+        call
+            fn/cc (_ val)
+                fn/cc failed (_)
+                    compiler-error
+                        string-join "unable to wrap value of storage type "
+                            Any-repr (Any-wrap (typeof val))
+                fn/cc try-wrap-real (_)
+                    branch (real? val)
+                        fn/cc (_)
+                            construct
+                                bitcast (fpext val f64) u64
+                        \ failed
+                fn/cc try-wrap-integer (_)
+                    branch (integer? val)
+                        fn/cc (_)
+                            construct
+                                branch (signed? (typeof val))
+                                    fn/cc (_)
+                                        sext val u64
+                                    fn/cc (_)
+                                        zext val u64
+                        \ try-wrap-real
+                branch (pointer? val)
+                    fn/cc (_)
+                        compiler-message "wrapping pointer"
+                        construct
+                            ptrtoint val u64
+                    \ try-wrap-integer
+            bitcast val
+                type-storage (typeof val)
+
+    branch (constant? val)
+        fn/cc (_)
+            Any-wrap val
+        \ wrap-unknown
+
+
+fn/cc list-new (_ ...)
+    fn/cc loop (_ i tail)
+        branch (icmp== i 0)
+            fn/cc (_) tail
+            fn/cc (_)
+                loop (sub i 1)
+                    list-cons (Any-new (va@ (sub i 1) ...)) tail
+    loop (va-countof ...) eol
+
+#compile (typify Any-new string) 'dump-module
+
+io-write
+    Any-repr
+        Any-new (unconst true)
+
+#io-write
+    Any-repr
+        Any-new (Any-wrap 303:u64)
+list-new 1 (unconst 2)
+    list 4 5 6
 
 # calling polymorphic function
     Any-dispatch (Any-wrap 10)
