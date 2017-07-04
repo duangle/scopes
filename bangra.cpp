@@ -452,7 +452,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
-    T(FN_Branch) T(KW_FnCC) T(KW_SyntaxApplyBlock) \
+    T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) \
     T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
@@ -480,7 +480,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
     T(KW_Parenthesis, "...") \
-    T(KW_Assert, "assert") T(KW_Break, "break") \
+    T(KW_Assert, "assert") T(KW_Break, "break") T(KW_Label, "label") \
     T(KW_Call, "call") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
     T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
     T(KW_Else, "else") T(KW_ElseIf, "elseif") T(KW_EmptyList, "empty-list") \
@@ -6795,6 +6795,10 @@ struct NormalizeCtx {
         return enter.type == TYPE_Label;
     }
 
+    static bool is_return_parameter(Any val) {
+        return (val.type == TYPE_Parameter) && (val.parameter->index == 0);
+    }
+
     static bool is_calling_continuation(Label *l) {
         auto &&enter = l->body.enter;
         return (enter.type == TYPE_Parameter) && (enter.parameter->index == 0);
@@ -6834,6 +6838,7 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
             if ((args[i].type == TYPE_Parameter)
+                && (args[i].parameter->index != 0)
                 && (!args[i].parameter->is_typed()))
                 return false;
         }
@@ -6849,10 +6854,12 @@ struct NormalizeCtx {
         return true;
     }
 
-    static bool has_constant_args(Label *l) {
+    static bool has_foldable_args(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
             if (is_const(args[i]))
+                return true;
+            else if (is_return_parameter(args[i]))
                 return true;
         }
         return false;
@@ -6976,7 +6983,7 @@ struct NormalizeCtx {
     }
 
     bool fold_constant_label_arguments(Label *l) {
-        if (!has_constant_args(l)) {
+        if (!has_foldable_args(l)) {
             return false;
         }
 
@@ -6996,6 +7003,8 @@ struct NormalizeCtx {
         for (size_t i = 1; i < args.size(); ++i) {
             auto &&arg = args[i];
             if (is_const(arg)) {
+                keys.push_back(arg);
+            } else if (is_return_parameter(arg)) {
                 keys.push_back(arg);
             } else {
                 keys.push_back(anyval);
@@ -7988,7 +7997,7 @@ struct NormalizeCtx {
                 if (is_calling_label(user) && (user->get_label_enter() == owner)) {
                     if (is_continuing_to_label(user)) {
                         set_active_anchor(user->body.anchor);
-                        location_error(String::from("call exits scope prematurely"));
+                        location_error(String::from("return call must be last expression in function"));
                     }
                     //assert(!is_continuing_to_label(user));
                     clear_continuation_arg(user);
@@ -8071,7 +8080,9 @@ struct NormalizeCtx {
     void type_continuation_call(Label *l) {
         ss_cout << "typing continuation call in " << l << std::endl;
         auto &&args = l->body.args;
-        assert(args[0].type == TYPE_Nothing);
+        if (args[0].type != TYPE_Nothing) {
+            args[0].type = TYPE_Nothing;
+        }
         std::vector<const Type *> argtypes = {};
         for (auto &&arg : args) {
             argtypes.push_back(arg.indirect_type());
@@ -8606,8 +8617,11 @@ struct Expander {
         voidval.type = TYPE_Void;
     }
 
-    ~Expander() {
-        //assert(!state);
+    ~Expander() {}
+
+    bool is_goto_label(Any enter) {
+        return (enter.type == TYPE_Label)
+            && (enter.label->params[0]->type == TYPE_Nothing);
     }
 
     // arguments must include continuation
@@ -8621,6 +8635,7 @@ struct Expander {
             location_error(String::from("can not define body: continuation already exited."));
             return;
         }
+        assert(!is_goto_label(enter) || (args[0].type == TYPE_Nothing));
         assert(state->body.enter.type == TYPE_Nothing);
         assert(state->body.args.empty());
         state->body.enter = enter;
@@ -8634,11 +8649,15 @@ struct Expander {
         state = nullptr;
     }
 
+    bool is_parameter_or_label(Any val) {
+        return (val.type == TYPE_Parameter) || (val.type == TYPE_Label);
+    }
+
     Any write_dest(const Any &value, const Any &dest) {
         if (dest.type == TYPE_Symbol) {
             return value;
-        } else if (dest.type == TYPE_Parameter) {
-            if (next == EOL) {
+        } else if (is_parameter_or_label(dest)) {
+            if (last_expression()) {
                 br(dest, { none, value });
             }
             return value;
@@ -8647,13 +8666,13 @@ struct Expander {
         }
     }
 
-    void expand_function_body(const List *it, const Any &dest) {
+    void expand_function_body(const List *it, const Any &longdest) {
         if (it == EOL) {
-            br(dest, { none });
+            br(longdest, { none });
         } else {
             while (it) {
                 next = it->next;
-                expand(it->at, dest);
+                expand(it->at, longdest, longdest);
                 it = next;
             }
         }
@@ -8680,7 +8699,7 @@ struct Expander {
         }
     }
 
-    Any expand_fn_cc(const List *it, const Any &dest) {
+    Any expand_fn(const List *it, const Any &dest, const Any &longdest, bool label) {
         auto _anchor = get_active_anchor();
 
         verify_list_parameter_count(it, 1, -1);
@@ -8717,55 +8736,77 @@ struct Expander {
         subenv->bind(SYM_ThisFnCC, func);
 
         Expander subexpr(func, subenv);
-        if (params == EOL) {
-            func->append(Parameter::from(params_anchor, Symbol(SYM_Unnamed), TYPE_Nothing));
-        } else {
-            while (params != EOL) {
-                func->append(subexpr.expand_parameter(params->at));
-                params = params->next;
-            }
+        Parameter *retparam = Parameter::from(params_anchor, Symbol(SYM_Unnamed), label?TYPE_Nothing:TYPE_Void);
+        if (!label) {
+            subenv->bind(KW_Return, retparam);
+        }
+        func->append(retparam);
+
+        while (params != EOL) {
+            func->append(subexpr.expand_parameter(params->at));
+            params = params->next;
         }
 
-        subexpr.expand_function_body(it, func->params[0]);
+        subexpr.expand_function_body(it, label?longdest:Any(func->params[0]));
 
         set_active_anchor(_anchor);
         return write_dest(func, dest);
     }
 
-    bool is_return_enter(Any val) {
+    bool is_return_parameter(Any val) {
         return (val.type == TYPE_Parameter) && (val.parameter->index == 0);
     }
 
-    Any expand_indirect_call(const List *it, const Any &dest) {
+    bool last_expression() {
+        return next == EOL;
+    }
+
+    Any expand_call(const List *it, const Any &dest, Any longdest) {
         if (it == EOL)
             return write_dest(it, dest);
         auto _anchor = get_active_anchor();
         Expander subexp(state, env, it->next);
-        Any enter = subexp.expand(it->at, Symbol(SYM_Unnamed));
+        Any enter = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
         it = subexp.next;
         std::vector<Any> args;
         args.reserve(((it == EOL)?0:(it->count)) + 1);
         Label *nextstate = nullptr;
         Any result = none;
         if (dest.type == TYPE_Symbol) {
+            if (is_goto_label(enter)) {
+                location_error(
+                    String::from("jumping to label while evaluating an argument"));
+            }
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
             Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
             nextstate->append(param);
             args.push_back(nextstate);
+            longdest = nextstate;
             result = param;
-        } else if (dest.type == TYPE_Parameter) {
-            if (is_return_enter(enter)) {
+        } else if (is_parameter_or_label(dest)) {
+            if (dest.type == TYPE_Parameter) {
+                assert(dest.parameter->type != TYPE_Nothing);
+            }
+            if (is_return_parameter(enter)) {
+                assert(enter.parameter->type != TYPE_Nothing);
                 args.push_back(none);
-                if (next != EOL) {
+                if (!last_expression()) {
                     location_error(
                         String::from("return call must be last in statement list"));
                 }
+            } else if (is_goto_label(enter)) {
+                args.push_back(none);
+                if (!last_expression()) {
+                    location_error(
+                        String::from("jump to label must be last in statement list"));
+                }
             } else {
-                if (next == EOL) {
+                if (last_expression()) {
                     args.push_back(dest);
                 } else {
                     nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
                     args.push_back(nextstate);
+                    longdest = nextstate;
                 }
             }
         } else {
@@ -8773,7 +8814,7 @@ struct Expander {
         }
         while (it) {
             subexp.next = it->next;
-            args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed)));
+            args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed), longdest));
             it = subexp.next;
         }
         state = subexp.state;
@@ -8783,14 +8824,14 @@ struct Expander {
         return result;
     }
 
-    Any expand_syntax_apply_block(const List *it, const Any &dest) {
+    Any expand_syntax_apply_block(const List *it, const Any &dest, const Any &longdest) {
         auto _anchor = get_active_anchor();
         verify_list_parameter_count(it, 1, 1);
 
         it = it->next;
 
         Expander subexp(state, env, it->next);
-        Label *func = subexp.expand(it->at, Symbol(SYM_Unnamed));
+        Label *func = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
         it = subexp.next;
 
         std::vector<Any> args;
@@ -8819,7 +8860,7 @@ struct Expander {
         return result;
     }
 
-    Any expand(const Syntax *sx, const Any &dest) {
+    Any expand(const Syntax *sx, const Any &dest, const Any &longdest) {
         set_active_anchor(sx->anchor);
         if (sx->quoted) {
             // return as-is
@@ -8842,11 +8883,14 @@ struct Expander {
             if (head.type == TYPE_Builtin) {
                 Builtin func = head.builtin;
                 switch(func.value()) {
-                case KW_FnCC: {
-                    return expand_fn_cc(list, dest);
+                case KW_Fn: {
+                    return expand_fn(list, dest, longdest, false);
+                } break;
+                case KW_Label: {
+                    return expand_fn(list, dest, longdest, true);
                 } break;
                 case KW_SyntaxApplyBlock: {
-                    return expand_syntax_apply_block(list, dest);
+                    return expand_syntax_apply_block(list, dest, longdest);
                 } break;
                 case KW_Call: {
                     verify_list_parameter_count(list, 1, -1);
@@ -8857,7 +8901,7 @@ struct Expander {
                 }
             }
 
-            return expand_indirect_call(list, dest);
+            return expand_call(list, dest, longdest);
         } else if (expr.type == TYPE_Symbol) {
             Symbol name = expr.symbol;
 

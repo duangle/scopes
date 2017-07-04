@@ -24,196 +24,194 @@
     functions and macros, parses the command-line and optionally enters
     the REPL.
 
-fn/cc type? (_ T)
+fn type? (T)
     icmp== (ptrtoint type size_t) (ptrtoint (typeof T) size_t)
 
-fn/cc type== (_ a b)
-    fn/cc assert-type (_ T)
+fn type== (a b)
+    fn assert-type (T)
         branch (type? T)
-            fn/cc (_)
-            fn/cc (_)
+            label ()
+            label ()
                 compiler-error
                     string-join "type expected, not " (Any-repr (Any-wrap T))
     assert-type a
     assert-type b
     icmp== (ptrtoint a size_t) (ptrtoint b size_t)
 
-fn/cc assert-typeof (_ a T)
+fn assert-typeof (a T)
     branch (type== T (typeof a))
-        fn/cc (_)
-        fn/cc (_)
+        label ()
+        label ()
             compiler-error
                 string-join "type "
                     string-join (Any-repr (Any-wrap T))
                         string-join " expected, not "
                             Any-repr (Any-wrap (typeof a))
 
-fn/cc string->rawstring (_ s)
+fn string->rawstring (s)
     assert-typeof s string
     getelementptr s 0 1 0
 
-fn/cc Any-typeof (_ val)
+fn Any-typeof (val)
     assert-typeof val Any
     extractvalue val 0
-fn/cc Any-payload (_ val)
+fn Any-payload (val)
     assert-typeof val Any
     extractvalue val 1
 
-fn/cc Any-extract-list (_ val)
+fn Any-extract-list (val)
     assert-typeof val Any
     inttoptr (Any-payload val) list
 
-fn/cc Any-extract-Syntax (_ val)
+fn Any-extract-Syntax (val)
     assert-typeof val Any
     inttoptr (Any-payload val) Syntax
 
-fn/cc Any-extract-Symbol (_ val)
+fn Any-extract-Symbol (val)
     assert-typeof val Any
     bitcast (Any-payload val) Symbol
 
-fn/cc Any-extract-i32 (_ val)
+fn Any-extract-i32 (val)
     assert-typeof val Any
     trunc (Any-payload val) i32
 
-fn/cc list-empty? (_ l)
+fn list-empty? (l)
     assert-typeof l list
     icmp== (ptrtoint l size_t) 0:usize
-fn/cc list-at (_ l)
+fn list-at (l)
     assert-typeof l list
     branch (list-empty? l)
-        fn/cc (_) (Any-wrap none)
-        fn/cc (_) (extractvalue (load l) 0)
-fn/cc list-next (_ l)
+        label () (Any-wrap none)
+        label () (extractvalue (load l) 0)
+fn list-next (l)
     assert-typeof l list
     branch (list-empty? l)
-        fn/cc (_) eol
-        fn/cc (_)
+        label () eol
+        label ()
             bitcast (extractvalue (load l) 1) list
-fn/cc list-at-next (_ l)
+fn list-at-next (l)
     assert-typeof l list
     branch (list-empty? l)
-        fn/cc (_)
-            _ (Any-wrap none) eol
-        fn/cc (_)
-            _
+        label ()
+            return (Any-wrap none) eol
+        label ()
+            return
                 extractvalue (load l) 0
                 bitcast (extractvalue (load l) 1) list
-fn/cc list-countof (_ l)
+fn list-countof (l)
     assert-typeof l list
     branch (list-empty? l)
-        fn/cc (_)
-            _ 0:u64
-        fn/cc (_)
+        label () 0:u64
+        label ()
             extractvalue (load l) 2
 
-fn/cc Any-list? (_ val)
+fn Any-list? (val)
     assert-typeof val Any
     type== (Any-typeof val) list
 
-fn/cc maybe-unsyntax (_ val)
+fn maybe-unsyntax (val)
     branch (type== (Any-typeof val) Syntax)
-        fn/cc (_)
+        label ()
             extractvalue (load (Any-extract-Syntax val)) 1
-        fn/cc (_) val
+        label () val
 
-fn/cc Any-dispatch (return val)
+fn Any-dispatch (val)
     assert-typeof val Any
     call
-        fn/cc try0 (_ T)
-            fn/cc failed (_)
-                return none
-            fn/cc try3 (_)
+        label try0 (T)
+            label failed () none
+            label try3 ()
                 branch (type== T i32)
-                    fn/cc (_)
-                        return (Any-extract-i32 val)
+                    label ()
+                        Any-extract-i32 val
                     \ failed
-            fn/cc try2 (_)
+            label try2 ()
                 branch (type== T Symbol)
-                    fn/cc (_)
-                        return (Any-extract-Symbol val)
+                    label ()
+                        Any-extract-Symbol val
                     \ try3
-            fn/cc try1 (_)
+            label try1 ()
                 branch (type== T Syntax)
-                    fn/cc (_)
-                        return (Any-extract-Syntax val)
+                    label ()
+                        Any-extract-Syntax val
                     \ try2
             branch (type== T list)
-                fn/cc (_)
-                    return (Any-extract-list val)
+                label ()
+                    Any-extract-list val
                 \ try1
         Any-typeof val
 
-fn/cc list-reverse (_ l)
+fn list-reverse (l)
     assert-typeof l list
-    fn/cc loop (_ l next)
+    fn loop (l next)
         branch (list-empty? l)
-            fn/cc (_) next
-            fn/cc (_)
+            label () next
+            label ()
                 loop (list-next l) (list-cons (list-at l) next)
     loop l eol
 
-fn/cc integer-type? (_ T)
+fn integer-type? (T)
     icmp== (type-kind T) type-kind-integer
-fn/cc real-type? (_ T)
+fn real-type? (T)
     icmp== (type-kind T) type-kind-real
-fn/cc pointer-type? (_ T)
+fn pointer-type? (T)
     icmp== (type-kind T) type-kind-pointer
-fn/cc integer? (_ val)
+fn integer? (val)
     integer-type? (typeof val)
-fn/cc real? (_ val)
+fn real? (val)
     real-type? (typeof val)
-fn/cc pointer? (_ val)
+fn pointer? (val)
     pointer-type? (typeof val)
 
-fn/cc powi (_ base exponent)
+fn powi (base exponent)
     assert-typeof base i32
     assert-typeof exponent i32
-    fn/cc loop (_ result cur exponent)
+    fn loop (result cur exponent)
         branch (icmp== exponent 0)
-            fn/cc (_) result
-            fn/cc (_)
+            label () result
+            label ()
                 loop
                     branch (icmp== (band exponent 1) 0)
-                        fn/cc (_) result
-                        fn/cc (_)
+                        label () result
+                        label ()
                             mul result cur
                     mul cur cur
                     lshr exponent 1
     branch (constant? exponent)
-        fn/cc (_)
+        label ()
             loop 1 base exponent
-        fn/cc (_)
+        label ()
             loop (unconst 1) (unconst base) exponent
 
-fn/cc Any-new (_ val)
-    fn/cc construct (_ outval)
+fn Any-new (val)
+    fn construct (outval)
         insertvalue (insertvalue (undef Any) (typeof val) 0) outval 1
 
-    fn/cc wrap-unknown (_)
+    fn wrap-unknown ()
         call
-            fn/cc (_ val)
-                fn/cc failed (_)
+            fn (val)
+                label failed ()
                     compiler-error
                         string-join "unable to wrap value of storage type "
                             Any-repr (Any-wrap (typeof val))
-                fn/cc try-wrap-real (_)
+                label try-wrap-real ()
                     branch (real? val)
-                        fn/cc (_)
+                        label ()
                             construct
                                 bitcast (fpext val f64) u64
                         \ failed
-                fn/cc try-wrap-integer (_)
+                label try-wrap-integer ()
                     branch (integer? val)
-                        fn/cc (_)
+                        label ()
                             construct
                                 branch (signed? (typeof val))
-                                    fn/cc (_)
+                                    label ()
                                         sext val u64
-                                    fn/cc (_)
+                                    label ()
                                         zext val u64
                         \ try-wrap-real
                 branch (pointer? val)
-                    fn/cc (_)
+                    label ()
                         compiler-message "wrapping pointer"
                         construct
                             ptrtoint val u64
@@ -222,16 +220,16 @@ fn/cc Any-new (_ val)
                 type-storage (typeof val)
 
     branch (constant? val)
-        fn/cc (_)
+        label ()
             Any-wrap val
         \ wrap-unknown
 
 
-fn/cc list-new (_ ...)
-    fn/cc loop (_ i tail)
+fn list-new (...)
+    fn loop (i tail)
         branch (icmp== i 0)
-            fn/cc (_) tail
-            fn/cc (_)
+            label () tail
+            label ()
                 loop (sub i 1)
                     list-cons (Any-new (va@ (sub i 1) ...)) tail
     loop (va-countof ...) eol
@@ -266,14 +264,14 @@ fn/cc list-new (_ ...)
         \ eol
 
 # print function
-fn/cc print (return ...)
-    fn/cc load-printf (_)
+fn print (...)
+    fn load-printf ()
         #compiler-message "loading printf..."
         call
-            fn/cc (_ lib)
+            label (lib)
                 call
-                    fn/cc (_ printf)
-                        fn/cc (_ fmt ...)
+                    label (printf)
+                        fn (fmt ...)
                             printf (string->rawstring fmt) ...
                     Any-extract
                         Scope@ lib 'stb_printf
@@ -283,88 +281,103 @@ fn/cc print (return ...)
                 \ eol
 
     call
-        fn/cc (() printf)
-            fn/cc print-element (return val)
+        label (printf)
+            fn print-element (val)
                 call
-                    fn/cc (() T)
-                        fn/cc fail ()
+                    label (T)
+                        label fail ()
                             io-write "<value of type "
                             io-write (Any-repr (Any-wrap (typeof val)))
                             io-write ">"
-                            return
 
-                        fn/cc try-f32 ()
+                        label try-f32 ()
                             branch (type== T f32)
-                                fn/cc ()
+                                label ()
                                     printf "%g" val
-                                    return
                                 \ fail
-                        fn/cc try-i32 ()
+                        label try-i32 ()
                             branch (type== T i32)
-                                fn/cc ()
+                                label ()
                                     printf "%i" val
-                                    return
                                 \ try-f32
                         branch (type== T string)
-                            fn/cc ()
+                            label ()
                                 io-write val
-                                return
                             \ try-i32
                     typeof val
             call
-                fn/cc loop (() i)
+                label loop (i)
                     branch (icmp<s i (va-countof ...))
-                        fn/cc ()
+                        label ()
                             branch (icmp>s i 0)
-                                fn/cc (_)
+                                label ()
                                     io-write " "
-                                fn/cc (_)
+                                label ()
                             print-element (unconst (va@ i ...))
-                            cc/call loop none (add i 1)
-                        fn/cc ()
+                            loop (add i 1)
+                        label ()
                             io-write "\n"
-                            return
                 \ 0
         load-printf
 
-fn/cc print-spaces (_ depth)
+fn print-spaces (depth)
     assert-typeof depth i32
     branch (icmp== depth 0)
-        fn/cc (_)
-        fn/cc (_)
+        label ()
+        label ()
             io-write "    "
             print-spaces (sub depth 1)
 
-fn/cc walk-list (_ on-leaf l depth)
+fn dosomestuff (cont)
+    io-write "yep yep\n"
+    cont
+        label more ()
+            io-write "yop yop yop\n"
+
+fn testf ()
+    label done1 (cont)
+        io-write "yo yo yo 1\n"
+        cont
+    io-write "yo yo yo 3\n"
+    label done2 ()
+        io-write "yo yo yo 2\n"
+    io-write "yo yo yo 4\n"
+    dosomestuff done1
+    io-write "done.\n"
+
+dump-label testf
+testf
+
+fn walk-list (on-leaf l depth)
     call
-        fn/cc loop (_ l)
+        label loop (l)
             branch (list-empty? l)
-                fn/cc (_) true
-                fn/cc (_)
+                label () true
+                label ()
                     call
-                        fn/cc (_ at next)
+                        label (at next)
                             call
-                                fn/cc (_ value)
+                                label (value)
                                     branch (Any-list? value)
-                                        fn/cc (_)
+                                        label ()
                                             print-spaces depth
                                             io-write ";\n"
                                             walk-list on-leaf
                                                 Any-extract-list value
                                                 add depth 1
-                                        fn/cc (_)
+                                        label ()
                                             on-leaf value depth
                                             \ true
+                                    loop next
                                 maybe-unsyntax at
-                            loop next
                         list-at-next l
         \ l
 
 # deferring remaining expressions to bootstrap parser
 syntax-apply-block
-    fn/cc (_ anchor exprs env)
+    fn (anchor exprs env)
         walk-list
-            fn/cc on-leaf (_ value depth)
+            fn on-leaf (value depth)
                 print-spaces depth
                 #Any-dispatch value
                 io-write
