@@ -29,24 +29,22 @@ fn type? (T)
 
 fn type== (a b)
     fn assert-type (T)
-        branch (type? T)
-            label ()
-            label ()
-                compiler-error
-                    string-join "type expected, not " (Any-repr (Any-wrap T))
+        if (type? T)
+        else
+            compiler-error
+                string-join "type expected, not " (Any-repr (Any-wrap T))
     assert-type a
     assert-type b
     icmp== (ptrtoint a size_t) (ptrtoint b size_t)
 
 fn assert-typeof (a T)
-    branch (type== T (typeof a))
-        label ()
-        label ()
-            compiler-error
-                string-join "type "
-                    string-join (Any-repr (Any-wrap T))
-                        string-join " expected, not "
-                            Any-repr (Any-wrap (typeof a))
+    if (type== T (typeof a))
+    else
+        compiler-error
+            string-join "type "
+                string-join (Any-repr (Any-wrap T))
+                    string-join " expected, not "
+                        Any-repr (Any-wrap (typeof a))
 
 fn string->rawstring (s)
     assert-typeof s string
@@ -78,76 +76,63 @@ fn Any-extract-i32 (val)
 fn list-empty? (l)
     assert-typeof l list
     icmp== (ptrtoint l size_t) 0:usize
+
 fn list-at (l)
     assert-typeof l list
-    branch (list-empty? l)
-        label () (Any-wrap none)
-        label () (extractvalue (load l) 0)
+    if (list-empty? l)
+        Any-wrap none
+    else
+        extractvalue (load l) 0
+
 fn list-next (l)
     assert-typeof l list
-    branch (list-empty? l)
-        label () eol
-        label ()
-            bitcast (extractvalue (load l) 1) list
+    if (list-empty? l) eol
+    else
+        bitcast (extractvalue (load l) 1) list
+
 fn list-at-next (l)
     assert-typeof l list
-    branch (list-empty? l)
-        label ()
-            return (Any-wrap none) eol
-        label ()
-            return
-                extractvalue (load l) 0
-                bitcast (extractvalue (load l) 1) list
+    if (list-empty? l)
+        return (Any-wrap none) eol
+    else
+        return
+            extractvalue (load l) 0
+            bitcast (extractvalue (load l) 1) list
+
 fn list-countof (l)
     assert-typeof l list
-    branch (list-empty? l)
-        label () 0:u64
-        label ()
-            extractvalue (load l) 2
+    if (list-empty? l) 0:u64
+    else
+        extractvalue (load l) 2
 
 fn Any-list? (val)
     assert-typeof val Any
     type== (Any-typeof val) list
 
 fn maybe-unsyntax (val)
-    branch (type== (Any-typeof val) Syntax)
-        label ()
-            extractvalue (load (Any-extract-Syntax val)) 1
-        label () val
+    if (type== (Any-typeof val) Syntax)
+        extractvalue (load (Any-extract-Syntax val)) 1
+    else val
 
 fn Any-dispatch (val)
     assert-typeof val Any
-    call
-        label try0 (T)
-            label failed () none
-            label try3 ()
-                branch (type== T i32)
-                    label ()
-                        Any-extract-i32 val
-                    \ failed
-            label try2 ()
-                branch (type== T Symbol)
-                    label ()
-                        Any-extract-Symbol val
-                    \ try3
-            label try1 ()
-                branch (type== T Syntax)
-                    label ()
-                        Any-extract-Syntax val
-                    \ try2
-            branch (type== T list)
-                label ()
-                    Any-extract-list val
-                \ try1
-        Any-typeof val
+    let T = (Any-typeof val)
+    if (type== T list)
+        Any-extract-list val
+    elseif (type== T Syntax)
+        Any-extract-Syntax val
+    elseif (type== T Symbol)
+        Any-extract-Symbol val
+    elseif (type== T i32)
+        Any-extract-i32 val
+    else none
 
 fn list-reverse (l)
     assert-typeof l list
     fn loop (l next)
-        branch (list-empty? l)
-            label () next
-            label ()
-                loop (list-next l) (list-cons (list-at l) next)
+        if (list-empty? l) next
+        else
+            loop (list-next l) (list-cons (list-at l) next)
     loop l eol
 
 fn integer-type? (T)
@@ -166,72 +151,54 @@ fn pointer? (val)
 fn powi (base exponent)
     assert-typeof base i32
     assert-typeof exponent i32
-    fn loop (result cur exponent)
-        branch (icmp== exponent 0)
-            label () result
-            label ()
-                loop
-                    branch (icmp== (band exponent 1) 0)
-                        label () result
-                        label ()
-                            mul result cur
-                    mul cur cur
-                    lshr exponent 1
-    branch (constant? exponent)
-        label ()
-            loop 1 base exponent
-        label ()
-            loop (unconst 1) (unconst base) exponent
+    label loop (result cur exponent)
+        if (icmp== exponent 0) result
+        else
+            loop
+                if (icmp== (band exponent 1) 0) result
+                else
+                    mul result cur
+                mul cur cur
+                lshr exponent 1
+    if (constant? exponent)
+        loop 1 base exponent
+    else
+        loop (unconst 1) (unconst base) exponent
 
 fn Any-new (val)
     fn construct (outval)
         insertvalue (insertvalue (undef Any) (typeof val) 0) outval 1
 
-    fn wrap-unknown ()
-        call
-            fn (val)
-                label failed ()
-                    compiler-error
-                        string-join "unable to wrap value of storage type "
-                            Any-repr (Any-wrap (typeof val))
-                label try-wrap-real ()
-                    branch (real? val)
-                        label ()
-                            construct
-                                bitcast (fpext val f64) u64
-                        \ failed
-                label try-wrap-integer ()
-                    branch (integer? val)
-                        label ()
-                            construct
-                                branch (signed? (typeof val))
-                                    label ()
-                                        sext val u64
-                                    label ()
-                                        zext val u64
-                        \ try-wrap-real
-                branch (pointer? val)
-                    label ()
-                        compiler-message "wrapping pointer"
-                        construct
-                            ptrtoint val u64
-                    \ try-wrap-integer
+    if (constant? val)
+        Any-wrap val
+    else
+        let val =
             bitcast val
                 type-storage (typeof val)
-
-    branch (constant? val)
-        label ()
-            Any-wrap val
-        \ wrap-unknown
-
+        if (pointer? val)
+            compiler-message "wrapping pointer"
+            construct
+                ptrtoint val u64
+        elseif (integer? val)
+            construct
+                if (signed? (typeof val))
+                    sext val u64
+                else
+                    zext val u64
+        elseif (real? val)
+            construct
+                bitcast (fpext val f64) u64
+        else
+            compiler-error
+                string-join "unable to wrap value of storage type "
+                    Any-repr (Any-wrap (typeof val))
 
 fn list-new (...)
     fn loop (i tail)
-        branch (icmp== i 0)
-            label () tail
-            label ()
-                loop (sub i 1)
-                    list-cons (Any-new (va@ (sub i 1) ...)) tail
+        if (icmp== i 0) tail
+        else
+            loop (sub i 1)
+                list-cons (Any-new (va@ (sub i 1) ...)) tail
     loop (va-countof ...) eol
 
 #compile (typify Any-new string) 'dump-module
@@ -267,110 +234,70 @@ fn list-new (...)
 fn print (...)
     fn load-printf ()
         #compiler-message "loading printf..."
-        call
-            label (lib)
-                call
-                    label (printf)
-                        fn (fmt ...)
-                            printf (string->rawstring fmt) ...
-                    Any-extract
-                        Scope@ lib 'stb_printf
+        let lib =
             import-c "printf.c" "
                 int stb_printf(const char *fmt, ...);
                 "
                 \ eol
+        let printf =
+            Any-extract
+                Scope@ lib 'stb_printf
+        fn (fmt ...)
+            printf (string->rawstring fmt) ...
 
-    call
-        label (printf)
-            fn print-element (val)
-                call
-                    label (T)
-                        label fail ()
-                            io-write "<value of type "
-                            io-write (Any-repr (Any-wrap (typeof val)))
-                            io-write ">"
-
-                        label try-f32 ()
-                            branch (type== T f32)
-                                label ()
-                                    printf "%g" val
-                                \ fail
-                        label try-i32 ()
-                            branch (type== T i32)
-                                label ()
-                                    printf "%i" val
-                                \ try-f32
-                        branch (type== T string)
-                            label ()
-                                io-write val
-                            \ try-i32
-                    typeof val
-            call
-                label loop (i)
-                    branch (icmp<s i (va-countof ...))
-                        label ()
-                            branch (icmp>s i 0)
-                                label ()
-                                    io-write " "
-                                label ()
-                            print-element (unconst (va@ i ...))
-                            loop (add i 1)
-                        label ()
-                            io-write "\n"
-                \ 0
+    let printf =
         load-printf
+
+    fn print-element (val)
+        let T = (typeof val)
+        if (type== T string)
+            io-write val
+        elseif (type== T i32)
+            printf "%i" val
+        elseif (type== T f32)
+            printf "%g" val
+        else
+            io-write "<value of type "
+            io-write (Any-repr (Any-wrap (typeof val)))
+            io-write ">"
+    call
+        label loop (i)
+            if (icmp<s i (va-countof ...))
+                if (icmp>s i 0)
+                    io-write " "
+                else # do nothing
+                print-element (unconst (va@ i ...))
+                loop (add i 1)
+            else
+                io-write "\n"
+        \ 0
 
 fn print-spaces (depth)
     assert-typeof depth i32
-    branch (icmp== depth 0)
-        label ()
-        label ()
-            io-write "    "
-            print-spaces (sub depth 1)
-
-fn dosomestuff (cont)
-    io-write "yep yep\n"
-    cont
-        label more ()
-            io-write "yop yop yop\n"
-
-fn testf ()
-    label done1 (cont)
-        io-write "yo yo yo 1\n"
-        cont
-    io-write "yo yo yo 3\n"
-    label done2 ()
-        io-write "yo yo yo 2\n"
-    io-write "yo yo yo 4\n"
-    dosomestuff done1
-    io-write "done.\n"
-
-dump-label testf
-testf
+    if (icmp== depth 0)
+    else
+        io-write "    "
+        print-spaces (sub depth 1)
 
 fn walk-list (on-leaf l depth)
     call
         label loop (l)
-            branch (list-empty? l)
-                label () true
-                label ()
-                    call
-                        label (at next)
-                            call
-                                label (value)
-                                    branch (Any-list? value)
-                                        label ()
-                                            print-spaces depth
-                                            io-write ";\n"
-                                            walk-list on-leaf
-                                                Any-extract-list value
-                                                add depth 1
-                                        label ()
-                                            on-leaf value depth
-                                            \ true
-                                    loop next
-                                maybe-unsyntax at
-                        list-at-next l
+            if (list-empty? l) true
+            else
+                let at next =
+                    list-at-next l
+                let value =
+                    maybe-unsyntax at
+                if (Any-list? value)
+                    print-spaces depth
+                    io-write ";\n"
+                    walk-list on-leaf
+                        Any-extract-list value
+                        add depth 1
+                else
+                    on-leaf value depth
+                    \ true
+                loop next
         \ l
 
 # deferring remaining expressions to bootstrap parser

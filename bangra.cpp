@@ -461,7 +461,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) \
+    T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
+    T(KW_If) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
@@ -3548,12 +3549,6 @@ struct LexerParser {
             const Syntax *sx = parse_any(true);
             const_cast<Syntax *>(sx)->anchor = anchor;
             const_cast<Syntax *>(sx)->quoted = true;
-            if (sx->datum.type == TYPE_List) {
-                return Syntax::from_quoted(anchor,
-                    List::from({
-                        Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)),
-                        sx }));
-            }
             return sx;
         } else {
             location_error(format("unexpected token: %c (%i)",
@@ -8678,6 +8673,16 @@ struct Expander {
         }
     }
 
+    bool ends_with_parenthesis(Symbol sym) {
+        if (sym == KW_Parenthesis)
+            return true;
+        const String *str = sym.name();
+        if (str->count < 3)
+            return false;
+        const char *dot = str->data + str->count - 3;
+        return !strcmp(dot, "...");
+    }
+
     Parameter *expand_parameter(Any value) {
         const Syntax *sxvalue = value;
         const Anchor *anchor = sxvalue->anchor;
@@ -8689,7 +8694,7 @@ struct Expander {
         } else {
             _value.verify(TYPE_Symbol);
             Parameter *param = nullptr;
-            if (_value.symbol == KW_Parenthesis) {
+            if (ends_with_parenthesis(_value.symbol)) {
                 param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
             } else {
                 param = Parameter::from(anchor, _value.symbol, TYPE_Void);
@@ -8761,22 +8766,157 @@ struct Expander {
         return next == EOL;
     }
 
+    // (let x ... = args ...)
+    // ...
+    Any expand_let(const List *it, const Any &dest, const Any &longdest) {
+
+        verify_list_parameter_count(it, 3, -1);
+        it = it->next;
+
+        auto _anchor = get_active_anchor();
+
+        Label *nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+
+        // read parameter names
+        while (it) {
+            auto name = unsyntax(it->at);
+            if ((name.type == TYPE_Symbol)
+                && (name.symbol == OP_Set))
+                break;
+            nextstate->append(expand_parameter(it->at));
+            it = it->next;
+        }
+
+        if (it == EOL) {
+            location_error(String::from("= expected"));
+        }
+
+        std::vector<Any> args;
+        args.reserve(it->count);
+        args.push_back(none);
+
+        it = it->next;
+
+        // read init values
+        Expander subexp(state, env);
+        while (it) {
+            subexp.next = it->next;
+            args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed), longdest));
+            it = subexp.next;
+        }
+        set_active_anchor(_anchor);
+        state = subexp.state;
+        br(nextstate, args);
+        state = nextstate;
+
+        Any result = none;
+        if (nextstate->params.size() > 1) {
+            return nextstate->params[1];
+        } else {
+            return result;
+        }
+    }
+
+    // (if cond body ...)
+    // [(elseif cond body ...)]
+    // [(else body ...)]
+    Any expand_if(const List *it, const Any &dest, Any longdest) {
+        auto _anchor = get_active_anchor();
+
+        std::vector<const List *> branches;
+
+    collect_branch:
+        verify_list_parameter_count(it, 1, -1);
+        branches.push_back(it);
+
+        it = next;
+        next = it->next;
+
+        if (it == EOL) {
+            location_error(String::from("elseif or else expected"));
+        }
+
+        const Syntax *sx = it->at;
+        it = sx->datum;
+        if (it == EOL) {
+            location_error(String::from("elseif or else expected"));
+        }
+        auto head = unsyntax(it->at);
+        if (head == Symbol(KW_ElseIf)) {
+            goto collect_branch;
+        } else if (head == Symbol(KW_Else)) {
+            branches.push_back(it);
+        } else {
+            const Syntax *sxhead = it->at;
+            set_active_anchor(sxhead->anchor);
+            location_error(String::from("elseif or else expected"));
+        }
+
+        Label *nextstate = nullptr;
+        Any result = none;
+        if (dest.type == TYPE_Symbol) {
+            nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            nextstate->append(param);
+            longdest = nextstate;
+            result = param;
+        } else if (is_parameter_or_label(dest)) {
+            if (dest.type == TYPE_Parameter) {
+                assert(dest.parameter->type != TYPE_Nothing);
+            }
+            if (!last_expression()) {
+                nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+                longdest = nextstate;
+            }
+        } else {
+            assert(false && "illegal dest type");
+        }
+
+        int lastidx = (int)branches.size() - 1;
+        for (int idx = 0; idx < lastidx; ++idx) {
+            it = branches[idx];
+            it = it->next;
+
+            Expander subexp(state, env);
+            subexp.next = it->next;
+            Any cond = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
+            it = subexp.next;
+
+            Label *thenstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+            Label *elsestate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+
+            set_active_anchor(_anchor);
+            state = subexp.state;
+            br(Builtin(FN_Branch), { none, cond, thenstate, elsestate });
+
+            subexp.env = Scope::from(env);
+            subexp.state = thenstate;
+            subexp.expand_function_body(it, longdest);
+
+            state = elsestate;
+        }
+
+        it = branches[lastidx];
+        it = it->next;
+        Expander subexp(state, Scope::from(env));
+        subexp.expand_function_body(it, longdest);
+
+        state = nextstate;
+        return result;
+    }
+
     Any expand_call(const List *it, const Any &dest, Any longdest) {
         if (it == EOL)
             return write_dest(it, dest);
         auto _anchor = get_active_anchor();
         Expander subexp(state, env, it->next);
-        Any enter = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
-        it = subexp.next;
+
         std::vector<Any> args;
-        args.reserve(((it == EOL)?0:(it->count)) + 1);
+        args.reserve(it->count);
+
         Label *nextstate = nullptr;
         Any result = none;
         if (dest.type == TYPE_Symbol) {
-            if (is_goto_label(enter)) {
-                location_error(
-                    String::from("jumping to label while evaluating an argument"));
-            }
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
             Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
             nextstate->append(param);
@@ -8787,31 +8927,29 @@ struct Expander {
             if (dest.type == TYPE_Parameter) {
                 assert(dest.parameter->type != TYPE_Nothing);
             }
-            if (is_return_parameter(enter)) {
-                assert(enter.parameter->type != TYPE_Nothing);
-                args.push_back(none);
-                if (!last_expression()) {
-                    location_error(
-                        String::from("return call must be last in statement list"));
-                }
-            } else if (is_goto_label(enter)) {
-                args.push_back(none);
-                if (!last_expression()) {
-                    location_error(
-                        String::from("jump to label must be last in statement list"));
-                }
+            if (last_expression()) {
+                args.push_back(dest);
             } else {
-                if (last_expression()) {
-                    args.push_back(dest);
-                } else {
-                    nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-                    args.push_back(nextstate);
-                    longdest = nextstate;
-                }
+                nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+                args.push_back(nextstate);
+                longdest = nextstate;
             }
         } else {
             assert(false && "illegal dest type");
         }
+
+        Any enter = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
+        if (is_return_parameter(enter)) {
+            assert(enter.parameter->type != TYPE_Nothing);
+            args[0] = none;
+            if (!last_expression()) {
+                location_error(
+                    String::from("return call must be last in statement list"));
+            }
+        } else if (is_goto_label(enter)) {
+            args[0] = none;
+        }
+        it = subexp.next;
         while (it) {
             subexp.next = it->next;
             args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed), longdest));
@@ -8891,6 +9029,12 @@ struct Expander {
                 } break;
                 case KW_SyntaxApplyBlock: {
                     return expand_syntax_apply_block(list, dest, longdest);
+                } break;
+                case KW_Let: {
+                    return expand_let(list, dest, longdest);
+                } break;
+                case KW_If: {
+                    return expand_if(list, dest, longdest);
                 } break;
                 case KW_Call: {
                     verify_list_parameter_count(list, 1, -1);
