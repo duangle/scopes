@@ -21,7 +21,8 @@
     DEALINGS IN THE SOFTWARE.
 
     This is the bangra boot script. It implements the remaining standard
-    functions and macros, parses the command-line and then enters the REPL.
+    functions and macros, parses the command-line and optionally enters
+    the REPL.
 
 fn/cc type? (_ T)
     icmp== (ptrtoint type size_t) (ptrtoint (typeof T) size_t)
@@ -168,6 +169,26 @@ fn/cc real? (_ val)
 fn/cc pointer? (_ val)
     pointer-type? (typeof val)
 
+fn/cc powi (_ base exponent)
+    assert-typeof base i32
+    assert-typeof exponent i32
+    fn/cc loop (_ result cur exponent)
+        branch (icmp== exponent 0)
+            fn/cc (_) result
+            fn/cc (_)
+                loop
+                    branch (icmp== (band exponent 1) 0)
+                        fn/cc (_) result
+                        fn/cc (_)
+                            mul result cur
+                    mul cur cur
+                    lshr exponent 1
+    branch (constant? exponent)
+        fn/cc (_)
+            loop 1 base exponent
+        fn/cc (_)
+            loop (unconst 1) (unconst base) exponent
+
 fn/cc Any-new (_ val)
     fn/cc construct (_ outval)
         insertvalue (insertvalue (undef Any) (typeof val) 0) outval 1
@@ -220,16 +241,6 @@ fn/cc list-new (_ ...)
     loop (va-countof ...) eol
 
 #compile (typify Any-new string) 'dump-module
-
-io-write
-    Any-repr
-        Any-new (unconst true)
-
-#io-write
-    Any-repr
-        Any-new (Any-wrap 303:u64)
-list-new 1 (unconst 2)
-    list 4 5 6
 
 # calling polymorphic function
     Any-dispatch (Any-wrap 10)
@@ -327,10 +338,6 @@ fn/cc print-spaces (_ depth)
         fn/cc (_)
             io-write "    "
             print-spaces (sub depth 1)
-
-compile
-    typify print-spaces i32
-    \ 'dump-module 'skip-opts
 
 fn/cc walk-list (_ on-leaf l depth)
     call
