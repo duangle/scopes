@@ -143,10 +143,6 @@ fn/cc Any-dispatch (return val)
                 \ try1
         Any-typeof val
 
-#io-write "\n"
-
-#dump-label (typify cons Any list)
-
 fn/cc list-reverse (_ l)
     assert-typeof l list
     fn/cc loop (_ l next)
@@ -587,7 +583,8 @@ fn/cc test-polymorphic-return-type (_)
         print-value
             print-value 3
 
-\ none
+\ true
+
 
 
 

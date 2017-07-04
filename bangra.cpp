@@ -4367,6 +4367,7 @@ public:
     }
 
     static Label *from(const Anchor *_anchor, Symbol _name) {
+        assert(_anchor);
         return new Label(_anchor, _name);
     }
     // only inherits name and anchor
@@ -8560,287 +8561,9 @@ static Label *normalize(Label *entry) {
 }
 
 //------------------------------------------------------------------------------
-// IL TRANSLATOR
-//------------------------------------------------------------------------------
-
-// arguments must include continuation
-// enter and args must be passed with syntax object removed
-static void br(Label *state, Any enter,
-    const std::vector<Any> &args, const Anchor *anchor) {
-    assert(!args.empty());
-    assert(anchor);
-    if (!state) {
-        set_active_anchor(anchor);
-        location_error(String::from("can not define body: continuation already exited."));
-        return;
-    }
-    assert(state->body.enter.type == TYPE_Nothing);
-    assert(state->body.args.empty());
-    state->body.enter = enter;
-    size_t count = args.size();
-    state->body.args.reserve(count);
-    for (size_t i = 0; i < count; ++i) {
-        state->body.args.push_back(args[i]);
-    }
-    state->body.anchor = anchor;
-    state->link_backrefs();
-}
-
-static bool is_return_callable(Any callable, const std::vector<Any> &args) {
-    if (!args.empty()) {
-        Any contarg = maybe_unsyntax(args[0]);
-        if (contarg.type == TYPE_Nothing) {
-            return true;
-        }
-    }
-    Any ncallable = maybe_unsyntax(callable);
-    if (ncallable.type == TYPE_Parameter) {
-        if (ncallable.parameter->index == 0) {
-            // return continuation is being called
-            return true;
-        }
-    }
-    return false;
-}
-
-//------------------------------------------------------------------------------
-
-struct TranslateResult {
-    Label *state;
-    const Anchor *anchor;
-    Any enter;
-    std::vector<Any> args;
-
-    TranslateResult(Label *_state, const Anchor *_anchor) :
-        state(_state), anchor(_anchor), enter(none) {}
-
-    TranslateResult(Label *_state, const Anchor *_anchor,
-        const Any &_enter, const std::vector<Any> &_args) :
-        state(_state), anchor(_anchor),
-        enter(_enter), args(_args) {}
-};
-
-static TranslateResult translate(Label *state, const Any &sxexpr);
-
-static TranslateResult translate_argument_list(
-    Label *state, const List *it, const Anchor *anchor, bool explicit_ret) {
-    std::vector<Any> args;
-    int idx = 0;
-    Any enter = none;
-    if (!explicit_ret) {
-        args.push_back(Any(false));
-    }
-loop:
-    if (it == EOL) {
-        return TranslateResult(state, anchor, enter, args);
-    } else {
-        Any sxvalue = it->at;
-        // complex expression
-        TranslateResult result = translate(state, sxvalue);
-        state = result.state;
-        const Anchor *anchor = sxvalue.syntax->anchor;
-        assert(anchor);
-        Any _enter = result.enter;
-        Any arg = none;
-        if (_enter.type != TYPE_Nothing) {
-            auto &&_args = result.args;
-            if (is_return_callable(_enter, _args)) {
-                set_active_anchor(anchor);
-                location_error(String::from("unexpected return in argument list"));
-            }
-            Label *next = Label::continuation_from(anchor, Symbol(SYM_Unnamed));
-            next->append(Parameter::vararg_from(anchor, Symbol(SYM_Unnamed), TYPE_Void));
-            assert(!result.args.empty());
-            _args[0] = next;
-            br(state, _enter, _args, anchor);
-            state = next;
-            arg = next->params[PARAM_Arg0];
-        } else {
-            assert(!result.args.empty());
-            // a known value is returned - no need to generate code
-            arg = result.args[0];
-        }
-        if (idx == 0) {
-            enter = arg;
-        } else {
-            args.push_back(arg);
-        }
-        idx++;
-        it = it->next;
-        goto loop;
-    }
-}
-
-static TranslateResult translate_implicit_call(Label *state, const List *it, const Anchor *anchor) {
-    assert(it);
-    size_t count = it->count;
-    if (count < 1) {
-        location_error(String::from("callable expected"));
-    }
-    return translate_argument_list(state, it, anchor, false);
-}
-
-static TranslateResult translate_call(Label *state, Any _it) {
-    const Syntax *sx = _it;
-    const Anchor *anchor = sx->anchor;
-    const List *it = sx->datum;
-    it = it->next;
-    return translate_implicit_call(state, it, anchor);
-}
-
-static TranslateResult translate_contcall(Label *state, Any _it) {
-    const Syntax *sx = _it;
-    const Anchor *anchor = sx->anchor;
-    const List *it = sx->datum;
-    it = it->next;
-
-    set_active_anchor(anchor);
-
-    size_t count = it->count;
-    if (count < 1) {
-        location_error(String::from("callable expected"));
-    } else if (count < 2) {
-        location_error(String::from("continuation expected"));
-    }
-    return translate_argument_list(state, it, anchor, true);
-}
-
-static TranslateResult translate_quote(Label *state, Any _it) {
-    const Syntax *sx = _it;
-    const Anchor *anchor = sx->anchor;
-    const List *it = sx->datum;
-    it = it->next;
-    assert(it);
-
-    return TranslateResult(state, anchor, none, { unsyntax(it->at) });
-}
-
-static TranslateResult translate_expr_list(Label *state, const List *it, const Anchor *anchor) {
-    assert(anchor);
-loop:
-    if (it == EOL) {
-        return TranslateResult(state, anchor);
-    } else if (it->next == EOL) { // last element goes to cont
-        return translate(state, it->at);
-    } else {
-        Any sxvalue = it->at;
-        const Syntax *sx = sxvalue;
-        anchor = sx->anchor;
-        TranslateResult result = translate(state, sxvalue);
-        state = result.state;
-        const Anchor *_anchor = result.anchor;
-        assert(anchor);
-        Any enter = result.enter;
-        if (enter.type != TYPE_Nothing) {
-            auto &&_args = result.args;
-            // complex expression
-            // continuation and results are ignored
-            Label *next = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            if (is_return_callable(enter, _args)) {
-                set_active_anchor(anchor);
-                location_error(String::from("return call is not last expression"));
-            } else {
-                _args[0] = next;
-            }
-            br(state, enter, _args, _anchor);
-            state = next;
-        }
-        it = it->next;
-        goto loop;
-    }
-}
-
-static void translate_function_expr_list(
-    Label *func, const List *it, const Anchor *anchor) {
-    Parameter *dest = func->params[0];
-    TranslateResult result = translate_expr_list(func, it, anchor);
-    Label *_state = result.state;
-    const Anchor *_anchor = result.anchor;
-    auto &&enter = result.enter;
-    auto &&args = result.args;
-    assert(_anchor);
-    if (enter.type != TYPE_Nothing) {
-        assert(!args.empty());
-        if ((args[0].type == TYPE_Bool)
-            && !args[0].i1) {
-            if (is_return_callable(enter, args)) {
-                args[0] = none;
-            } else {
-                args[0] = dest;
-            }
-        }
-        br(_state, enter, args, _anchor);
-    } else if (args.empty()) {
-        br(_state, dest, {none}, _anchor);
-    } else {
-        Any value = args[0];
-        if (value.type == TYPE_Syntax) {
-            _anchor = value.syntax->anchor;
-            value = value.syntax->datum;
-        }
-        br(_state, dest, {none, value}, _anchor);
-    }
-    assert(!func->body.args.empty());
-}
-
-static TranslateResult translate(Label *state, const Any &sxexpr) {
-    try {
-        const Syntax *sx = sxexpr;
-        const Anchor *anchor = sx->anchor;
-        Any expr = sx->datum;
-
-        set_active_anchor(anchor);
-
-        if (expr.type == TYPE_List) {
-            const List *slist = expr.list;
-            if (slist == EOL) {
-                location_error(String::from("empty expression"));
-            }
-            Any head = unsyntax(slist->at);
-            if (head.type == TYPE_Builtin) {
-                switch(head.builtin.value()) {
-                case KW_Call: return translate_call(state, sxexpr);
-                case KW_CCCall: return translate_contcall(state, sxexpr);
-                case SYM_QuoteForm: return translate_quote(state, sxexpr);
-                default: break;
-                }
-            }
-            return translate_implicit_call(state, slist, anchor);
-        } else {
-            return TranslateResult(state, anchor, none, { expr });
-        }
-    } catch (Exception &exc) {
-        if (!exc.translate) {
-            const Syntax *sx = sxexpr;
-            const Anchor *anchor = sx->anchor;
-            StyledString ss;
-            ss.out << anchor << " while translating expression" << std::endl;
-            anchor->stream_source_line(ss.out);
-            stream_expr(ss.out, sxexpr, StreamExprFormat::digest());
-            exc.translate = ss.str();
-        }
-        throw exc;
-    }
-}
-
-static Label *translate_root(const List *it, const Anchor *anchor) {
-    Label *mainfunc = Label::function_from(anchor, anchor->path());
-    translate_function_expr_list(mainfunc, it, anchor);
-    return mainfunc;
-}
-
-// path must be resident
-static Label *translate_root(Any _expr) {
-    const Syntax *sx = _expr;
-    const Anchor *anchor = sx->anchor;
-    const List *expr = sx->datum;
-    return translate_root(expr, anchor);
-}
-
-//------------------------------------------------------------------------------
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
-// a basic macro expander that is replaced by the boot script
+// expands macros and generates the IL
 
 static bool verify_list_parameter_count(const List *expr, int mincount, int maxcount) {
     assert(expr != EOL);
@@ -8869,212 +8592,315 @@ static void verify_at_parameter_count(const List *topit, int mincount, int maxco
 
 //------------------------------------------------------------------------------
 
-static const List *expand(Scope *env, const List *topit);
+struct Expander {
+    Label *state;
+    Scope *env;
+    const List *next;
+    Any voidval;
 
-static const List *expand_expr_list(Scope *env, const List *it) {
-    const List *l = EOL;
-process:
-    if (it == EOL) {
-        return reverse_list_inplace(l);
+    Expander(Label *_state, Scope *_env, const List *_next = EOL) :
+        state(_state),
+        env(_env),
+        next(_next),
+        voidval(none) {
+        voidval.type = TYPE_Void;
     }
-    const List *result = expand(env, it);
-    //env = result.env;
-    //assert(env);
-    if (result == EOL) {
-        return reverse_list_inplace(l);
-    }
-    it = result->next;
-    l = List::from(result->at, l);
-    goto process;
-}
 
-static Parameter *expand_parameter(Scope *env, Any value) {
-    const Syntax *sxvalue = value;
-    const Anchor *anchor = sxvalue->anchor;
-    Any _value = sxvalue->datum;
-    if (_value.type == TYPE_Parameter) {
-        return _value.parameter;
-    } else if (_value.type == TYPE_List && _value.list == EOL) {
-        return Parameter::from(anchor, Symbol(SYM_Unnamed), TYPE_Nothing);
-    } else {
-        _value.verify(TYPE_Symbol);
-        Parameter *param = nullptr;
-        if (_value.symbol == KW_Parenthesis) {
-            param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
+    ~Expander() {
+        //assert(!state);
+    }
+
+    // arguments must include continuation
+    // enter and args must be passed with syntax object removed
+    void br(Any enter, const std::vector<Any> &args) {
+        assert(!args.empty());
+        const Anchor *anchor = get_active_anchor();
+        assert(anchor);
+        if (!state) {
+            set_active_anchor(anchor);
+            location_error(String::from("can not define body: continuation already exited."));
+            return;
+        }
+        assert(state->body.enter.type == TYPE_Nothing);
+        assert(state->body.args.empty());
+        state->body.enter = enter;
+        size_t count = args.size();
+        state->body.args.reserve(count);
+        for (size_t i = 0; i < count; ++i) {
+            state->body.args.push_back(args[i]);
+        }
+        state->body.anchor = anchor;
+        state->link_backrefs();
+        state = nullptr;
+    }
+
+    Any write_dest(const Any &value, const Any &dest) {
+        if (dest.type == TYPE_Symbol) {
+            return value;
+        } else if (dest.type == TYPE_Parameter) {
+            if (next == EOL) {
+                br(dest, { none, value });
+            }
+            return value;
         } else {
-            param = Parameter::from(anchor, _value.symbol, TYPE_Void);
+            assert(false && "illegal dest type");
         }
-        env->bind(_value.symbol, param);
-        return param;
     }
-}
 
-static const List *expand_fn_cc(Scope *env, const List *topit) {
-    verify_at_parameter_count(topit, 1, -1);
+    void expand_function_body(const List *it, const Any &dest) {
+        if (it == EOL) {
+            br(dest, { none });
+        } else {
+            while (it) {
+                next = it->next;
+                expand(it->at, dest);
+                it = next;
+            }
+        }
+    }
 
-    const Syntax *sxit = topit->at;
-    //const Anchor *anchor = sxit->anchor;
-    const List *it = sxit->datum;
+    Parameter *expand_parameter(Any value) {
+        const Syntax *sxvalue = value;
+        const Anchor *anchor = sxvalue->anchor;
+        Any _value = sxvalue->datum;
+        if (_value.type == TYPE_Parameter) {
+            return _value.parameter;
+        } else if (_value.type == TYPE_List && _value.list == EOL) {
+            return Parameter::from(anchor, Symbol(SYM_Unnamed), TYPE_Nothing);
+        } else {
+            _value.verify(TYPE_Symbol);
+            Parameter *param = nullptr;
+            if (_value.symbol == KW_Parenthesis) {
+                param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
+            } else {
+                param = Parameter::from(anchor, _value.symbol, TYPE_Void);
+            }
+            env->bind(_value.symbol, param);
+            return param;
+        }
+    }
 
-    const Anchor *anchor_kw = ((const Syntax *)it->at)->anchor;
+    Any expand_fn_cc(const List *it, const Any &dest) {
+        auto _anchor = get_active_anchor();
 
-    it = it->next;
+        verify_list_parameter_count(it, 1, -1);
 
-    assert(it != EOL);
-
-    Label *func = nullptr;
-    Any tryfunc_name = unsyntax(it->at);
-    if (tryfunc_name.type == TYPE_Symbol) {
-        // named self-binding
-        func = Label::from(anchor_kw, tryfunc_name.symbol);
-        env->bind(tryfunc_name.symbol, func);
+        // skip head
         it = it->next;
-    } else if (tryfunc_name.type == TYPE_String) {
-        // named lambda
-        func = Label::from(anchor_kw, Symbol(tryfunc_name.string));
+
+        assert(it != EOL);
+
+        Label *func = nullptr;
+        Any tryfunc_name = unsyntax(it->at);
+        if (tryfunc_name.type == TYPE_Symbol) {
+            // named self-binding
+            func = Label::from(_anchor, tryfunc_name.symbol);
+            env->bind(tryfunc_name.symbol, func);
+            it = it->next;
+        } else if (tryfunc_name.type == TYPE_String) {
+            // named lambda
+            func = Label::from(_anchor, Symbol(tryfunc_name.string));
+            it = it->next;
+        } else {
+            // unnamed lambda
+            func = Label::from(_anchor, Symbol(SYM_Unnamed));
+        }
+
+        const Syntax *sxplist = it->at;
+        const Anchor *params_anchor = sxplist->anchor;
+        const List *params = sxplist->datum;
+
         it = it->next;
-    } else {
-        // unnamed lambda
-        func = Label::from(anchor_kw, Symbol(SYM_Unnamed));
-    }
 
-    const Syntax *sxplist = it->at;
-    const Anchor *params_anchor = sxplist->anchor;
-    const List *params = sxplist->datum;
+        Scope *subenv = Scope::from(env);
+        // hidden self-binding for subsequent macros
+        subenv->bind(SYM_ThisFnCC, func);
 
-    it = it->next;
-
-    Scope *subenv = Scope::from(env);
-    // hidden self-binding for subsequent macros
-    subenv->bind(SYM_ThisFnCC, func);
-
-    if (params == EOL) {
-        func->append(Parameter::from(params_anchor, Symbol(SYM_Unnamed), TYPE_Nothing));
-    } else {
-        while (params != EOL) {
-            func->append(expand_parameter(subenv, params->at));
-            params = params->next;
-        }
-    }
-
-    const List *result = expand_expr_list(subenv, it);
-    translate_function_expr_list(func, result, anchor_kw);
-    return List::from(Syntax::from_quoted(anchor_kw, func), topit->next);
-}
-
-static const List *expand_syntax_apply_block(Scope *env, const List *topit) {
-    verify_at_parameter_count(topit, 1, 1);
-
-    const Syntax *sxit = topit->at;
-    //const Anchor *anchor = sxit->anchor;
-    const List *it = sxit->datum;
-
-    const Anchor *anchor_kw = ((const Syntax *)it->at)->anchor;
-
-    it = it->next;
-
-    return List::from(
-        Syntax::from(anchor_kw,
-            List::from({
-                it->at,
-                Syntax::from_quoted(anchor_kw, anchor_kw),
-                Syntax::from(anchor_kw, List::from({
-                    Syntax::from(anchor_kw, Builtin(SYM_QuoteForm)),
-                    Syntax::from_quoted(anchor_kw, topit->next)})),
-                Syntax::from_quoted(anchor_kw, env)})),
-        EOL);
-}
-
-static const List *expand(Scope *env, const List *topit) {
-process:
-    assert(env);
-    assert(topit != EOL);
-    Any expr = topit->at;
-    const Syntax *sx = expr;
-    if (sx->quoted) {
-        // return as-is
-        return topit;
-    }
-    const Anchor *anchor = sx->anchor;
-    set_active_anchor(anchor);
-    expr = sx->datum;
-    if (expr.type == TYPE_List) {
-        const List *list = expr.list;
-        if (list == EOL) {
-            location_error(String::from("expression is empty"));
-        }
-
-        Any head = unsyntax(list->at);
-
-        // resolve symbol
-        if (head.type == TYPE_Symbol) {
-            env->lookup(head.symbol, head);
-        }
-
-        if (head.type == TYPE_Builtin) {
-            Builtin func = head.builtin;
-            switch(func.value()) {
-            case KW_FnCC: {
-                topit = expand_fn_cc(env, topit);
-                return topit;
-            } break;
-            case KW_SyntaxApplyBlock: {
-                topit = expand_syntax_apply_block(env, topit);
-                goto process;
-            } break;
-            default: break;
+        Expander subexpr(func, subenv);
+        if (params == EOL) {
+            func->append(Parameter::from(params_anchor, Symbol(SYM_Unnamed), TYPE_Nothing));
+        } else {
+            while (params != EOL) {
+                func->append(subexpr.expand_parameter(params->at));
+                params = params->next;
             }
         }
 
-        list = expand_expr_list(env, list);
-        return List::from(Syntax::from_quoted(anchor, list), topit->next);
-    } else if (expr.type == TYPE_Symbol) {
-        Symbol name = expr.symbol;
+        subexpr.expand_function_body(it, func->params[0]);
 
+        set_active_anchor(_anchor);
+        return write_dest(func, dest);
+    }
+
+    bool is_return_enter(Any val) {
+        return (val.type == TYPE_Parameter) && (val.parameter->index == 0);
+    }
+
+    Any expand_indirect_call(const List *it, const Any &dest) {
+        if (it == EOL)
+            return write_dest(it, dest);
+        auto _anchor = get_active_anchor();
+        Expander subexp(state, env, it->next);
+        Any enter = subexp.expand(it->at, Symbol(SYM_Unnamed));
+        it = subexp.next;
+        std::vector<Any> args;
+        args.reserve(((it == EOL)?0:(it->count)) + 1);
+        Label *nextstate = nullptr;
         Any result = none;
-        if (!env->lookup(name, result)) {
-            StyledString ss;
-            ss.out << "no value bound to name " << name.name()->data << " in scope.";
-            auto syms = env->find_closest_match(name);
-            if (!syms.empty()) {
-                ss.out << " Did you mean " << syms[0].name()->data;
-                for (size_t i = 1; i < syms.size(); ++i) {
-                    if ((i + 1) == syms.size()) {
-                        ss.out << " or ";
-                    } else {
-                        ss.out << ", ";
-                    }
-                    ss.out << syms[i].name()->data;
+        if (dest.type == TYPE_Symbol) {
+            nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            nextstate->append(param);
+            args.push_back(nextstate);
+            result = param;
+        } else if (dest.type == TYPE_Parameter) {
+            if (is_return_enter(enter)) {
+                args.push_back(none);
+                if (next != EOL) {
+                    location_error(
+                        String::from("return call must be last in statement list"));
                 }
-                ss.out << "?";
+            } else {
+                if (next == EOL) {
+                    args.push_back(dest);
+                } else {
+                    nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+                    args.push_back(nextstate);
+                }
             }
-            location_error(ss.str());
+        } else {
+            assert(false && "illegal dest type");
         }
-        if (result.type == TYPE_List) {
-            const List *list = result.list;
-            // quote lists
-            list = List::from(Syntax::from_quoted(anchor, result), EOL);
-            result = List::from(Syntax::from_quoted(anchor, Builtin(SYM_QuoteForm)), list);
+        while (it) {
+            subexp.next = it->next;
+            args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed)));
+            it = subexp.next;
         }
-        result = Syntax::from_quoted(anchor, result);
-        return List::from(result, topit->next);
-    } else {
-        return List::from(Syntax::from_quoted(anchor, expr), topit->next);
-    }
-}
-
-static Any expand_root(Any expr, Scope *scope = nullptr) {
-    const Anchor *anchor = nullptr;
-    if (expr.type == TYPE_Syntax) {
-        anchor = expr.syntax->anchor;
-        expr = expr.syntax->datum;
-    }
-    const List *result = expand_expr_list(scope?scope:globals, expr);
-    if (anchor) {
-        return Syntax::from(anchor, result);
-    } else {
+        state = subexp.state;
+        set_active_anchor(_anchor);
+        br(enter, args);
+        state = nextstate;
         return result;
     }
+
+    Any expand_syntax_apply_block(const List *it, const Any &dest) {
+        auto _anchor = get_active_anchor();
+        verify_list_parameter_count(it, 1, 1);
+
+        it = it->next;
+
+        Expander subexp(state, env, it->next);
+        Label *func = subexp.expand(it->at, Symbol(SYM_Unnamed));
+        it = subexp.next;
+
+        std::vector<Any> args;
+        args.reserve(((it == EOL)?0:(it->count)) + 1);
+        Label *nextstate = nullptr;
+        Any result = none;
+        if (dest.type == TYPE_Symbol) {
+            nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            nextstate->append(param);
+            args.push_back(nextstate);
+            result = param;
+        } else if (dest.type == TYPE_Parameter) {
+            args.push_back(dest);
+        } else {
+            assert(false && "illegal dest type");
+        }
+        args.push_back(_anchor);
+        args.push_back(next);
+        args.push_back(env);
+        state = subexp.state;
+        set_active_anchor(_anchor);
+        br(func, args);
+        state = nextstate;
+        next = EOL;
+        return result;
+    }
+
+    Any expand(const Syntax *sx, const Any &dest) {
+        set_active_anchor(sx->anchor);
+        if (sx->quoted) {
+            // return as-is
+            return write_dest(sx->datum, dest);
+        }
+        Any expr = sx->datum;
+        if (expr.type == TYPE_List) {
+            const List *list = expr.list;
+            if (list == EOL) {
+                location_error(String::from("expression is empty"));
+            }
+
+            Any head = unsyntax(list->at);
+
+            // resolve symbol
+            if (head.type == TYPE_Symbol) {
+                env->lookup(head.symbol, head);
+            }
+
+            if (head.type == TYPE_Builtin) {
+                Builtin func = head.builtin;
+                switch(func.value()) {
+                case KW_FnCC: {
+                    return expand_fn_cc(list, dest);
+                } break;
+                case KW_SyntaxApplyBlock: {
+                    return expand_syntax_apply_block(list, dest);
+                } break;
+                case KW_Call: {
+                    verify_list_parameter_count(list, 1, -1);
+                    list = list->next;
+                    assert(list != EOL);
+                } break;
+                default: break;
+                }
+            }
+
+            return expand_indirect_call(list, dest);
+        } else if (expr.type == TYPE_Symbol) {
+            Symbol name = expr.symbol;
+
+            Any result = none;
+            if (!env->lookup(name, result)) {
+                StyledString ss;
+                ss.out << "no value bound to name " << name.name()->data << " in scope.";
+                auto syms = env->find_closest_match(name);
+                if (!syms.empty()) {
+                    ss.out << " Did you mean " << syms[0].name()->data;
+                    for (size_t i = 1; i < syms.size(); ++i) {
+                        if ((i + 1) == syms.size()) {
+                            ss.out << " or ";
+                        } else {
+                            ss.out << ", ";
+                        }
+                        ss.out << syms[i].name()->data;
+                    }
+                    ss.out << "?";
+                }
+                location_error(ss.str());
+            }
+            return write_dest(result, dest);
+        } else {
+            return write_dest(expr, dest);
+        }
+    }
+
+};
+
+static Label *expand_module(Any expr, Scope *scope = nullptr) {
+    const Anchor *anchor = get_active_anchor();
+    if (expr.type == TYPE_Syntax) {
+        anchor = expr.syntax->anchor;
+        set_active_anchor(anchor);
+        expr = expr.syntax->datum;
+    }
+    Label *mainfunc = Label::function_from(anchor, anchor->path());
+
+    Expander subexpr(mainfunc, scope?scope:globals);
+    subexpr.expand_function_body(expr, mainfunc->params[0]);
+
+    return mainfunc;
 }
 
 //------------------------------------------------------------------------------
@@ -9462,8 +9288,7 @@ int main(int argc, char *argv[]) {
         LexerParser parser(sf);
         auto expr = parser.parse();
 
-        expr = expand_root(expr);
-        Label *fn = translate_root(expr);
+        Label *fn = expand_module(expr);
 
 #if BANGRA_DEBUG_CODEGEN
         StyledStream ss(std::cout);
