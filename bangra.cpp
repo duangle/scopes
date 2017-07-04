@@ -677,6 +677,10 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_ApplyType, "apply-type") \
     T(SYM_Styler, "styler") \
     \
+    /* list styles */ \
+    T(SYM_SquareList, "square-list") \
+    T(SYM_CurlyList, "curly-list") \
+    \
     /* compile flags */ \
     T(SYM_DumpDisassembly, "dump-disassembly") \
     T(SYM_DumpModule, "dump-module") \
@@ -3528,11 +3532,11 @@ struct LexerParser {
             return Syntax::from(anchor, parse_list(tok_close));
         } else if (this->token == tok_square_open) {
             return Syntax::from(anchor,
-                List::from(Symbol("square-list"),
+                List::from(Symbol(SYM_SquareList),
                     parse_list(tok_square_close)));
         } else if (this->token == tok_curly_open) {
             return Syntax::from(anchor,
-                List::from(Symbol("curly-list"),
+                List::from(Symbol(SYM_CurlyList),
                     parse_list(tok_curly_close)));
         } else if ((this->token == tok_close)
             || (this->token == tok_square_close)
@@ -8775,8 +8779,34 @@ struct Expander {
 
         auto _anchor = get_active_anchor();
 
-        Label *nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+        Symbol labelname = Symbol(SYM_Unnamed);
 
+        if (it) {
+            auto name = unsyntax(it->at);
+            if (name.type == TYPE_List) {
+                const List *val = name.list;
+                if (val != EOL) {
+                    auto head = val->at;
+                    if (head == Symbol(SYM_SquareList)) {
+                        val = val->next;
+                        if (val != EOL) {
+                            auto name = unsyntax(val->at);
+                            name.verify(TYPE_Symbol);
+                            labelname = name.symbol;
+                            it = it->next;
+                        }
+                    }
+                }
+            }
+        }
+
+        Label *nextstate = Label::continuation_from(_anchor, labelname);
+        if (labelname != SYM_Unnamed) {
+            env->bind(labelname, nextstate);
+        }
+
+        Scope *orig_env = env;
+        env = Scope::from(env);
         // read parameter names
         while (it) {
             auto name = unsyntax(it->at);
@@ -8798,7 +8828,7 @@ struct Expander {
         it = it->next;
 
         // read init values
-        Expander subexp(state, env);
+        Expander subexp(state, orig_env);
         while (it) {
             subexp.next = it->next;
             args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed), longdest));

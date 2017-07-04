@@ -148,22 +148,25 @@ fn real? (val)
 fn pointer? (val)
     pointer-type? (typeof val)
 
+fn tie-const (a b)
+    if (constant? a) b
+    else (unconst b)
+
 fn powi (base exponent)
     assert-typeof base i32
     assert-typeof exponent i32
-    label loop (result cur exponent)
-        if (icmp== exponent 0) result
-        else
-            loop
-                if (icmp== (band exponent 1) 0) result
-                else
-                    mul result cur
-                mul cur cur
-                lshr exponent 1
-    if (constant? exponent)
-        loop 1 base exponent
+    let [loop] result cur exponent =
+        tie-const exponent 1
+        tie-const exponent base
+        \ exponent
+    if (icmp== exponent 0) result
     else
-        loop (unconst 1) (unconst base) exponent
+        loop
+            if (icmp== (band exponent 1) 0) result
+            else
+                mul result cur
+            mul cur cur
+            lshr exponent 1
 
 fn Any-new (val)
     fn construct (outval)
@@ -260,17 +263,18 @@ fn print (...)
             io-write "<value of type "
             io-write (Any-repr (Any-wrap (typeof val)))
             io-write ">"
-    call
-        label loop (i)
-            if (icmp<s i (va-countof ...))
-                if (icmp>s i 0)
-                    io-write " "
-                else # do nothing
-                print-element (unconst (va@ i ...))
-                loop (add i 1)
-            else
-                io-write "\n"
-        \ 0
+
+    let [loop] i = 0
+    if (icmp<s i (va-countof ...))
+        if (icmp>s i 0)
+            io-write " "
+        else # do nothing
+        print-element (unconst (va@ i ...))
+        loop (add i 1)
+    else
+        io-write "\n"
+
+print "yes" "this" "is" "dog"
 
 fn print-spaces (depth)
     assert-typeof depth i32
@@ -280,28 +284,26 @@ fn print-spaces (depth)
         print-spaces (sub depth 1)
 
 fn walk-list (on-leaf l depth)
-    call
-        label loop (l)
-            if (list-empty? l) true
-            else
-                let at next =
-                    list-at-next l
-                let value =
-                    maybe-unsyntax at
-                if (Any-list? value)
-                    print-spaces depth
-                    io-write ";\n"
-                    walk-list on-leaf
-                        Any-extract-list value
-                        add depth 1
-                else
-                    on-leaf value depth
-                    \ true
-                loop next
-        \ l
+    let [loop] l = l
+    if (list-empty? l) true
+    else
+        let at next =
+            list-at-next l
+        let value =
+            maybe-unsyntax at
+        if (Any-list? value)
+            print-spaces depth
+            io-write ";\n"
+            walk-list on-leaf
+                Any-extract-list value
+                add depth 1
+        else
+            on-leaf value depth
+            \ true
+        loop next
 
 # deferring remaining expressions to bootstrap parser
-syntax-apply-block
+#syntax-apply-block
     fn (anchor exprs env)
         walk-list
             fn on-leaf (value depth)
@@ -443,8 +445,8 @@ syntax-apply-block
     puts "hello world" (unconst 8)
 
 # explicit instantiation
-fn/cc test-explicit-instantiation (_)
-    fn/cc test-add (return x1 y1 z1 w1 x2 y2 z2 w2)
+fn test-explicit-instantiation ()
+    fn test-add (x1 y1 z1 w1 x2 y2 z2 w2)
         return
             fadd x1 x2
             fadd y1 y2
@@ -454,26 +456,24 @@ fn/cc test-explicit-instantiation (_)
     dump-label test-add
     dump-label
         typify test-add f32 f32 f32 f32 f32 f32 f32 f32
-    call
-        fn/cc (_ f)
-            dump f
-            print
-                f 1. 2. 3. 4. 5. 6. 7. 8.
+    let f =
         compile
             typify test-add f32 f32 f32 f32 f32 f32 f32 f32
             \ 'dump-disassembly 'dump-module
+    dump f
+    print
+        f 1. 2. 3. 4. 5. 6. 7. 8.
 
 #test-explicit-instantiation
 
-fn/cc test-select-optimization (_)
-    fn/cc conditional-select (return opt i)
-        branch opt
-            fn/cc (_)
-                return
-                    add i 5
-            fn/cc (_)
-                return
-                    mul i 5
+fn test-select-optimization ()
+    fn conditional-select (opt i)
+        if opt
+            return
+                add i 5
+        else
+            return
+                mul i 5
 
     dump-label
         typify conditional-select bool i32
@@ -482,17 +482,18 @@ fn/cc test-select-optimization (_)
         typify conditional-select bool i32
         \ 'dump-module 'dump-disassembly #'skip-opts
 
+#test-select-optimization
+
 # return function dynamically
-fn/cc test-dynamic-function-return (_)
-    fn/cc square-brackets (_ s)
+fn test-dynamic-function-return ()
+    fn square-brackets (s)
         io-write "["; io-write s; io-write "]"
-    fn/cc round-brackets (_ s)
+    fn round-brackets (s)
         io-write "("; io-write s; io-write ")"
-    fn/cc bracket (_ use-square?)
-        branch (unconst use-square?)
-            fn/cc (_) square-brackets
-            fn/cc (_) round-brackets
-    fn/cc apply-brackets (_ f s)
+    fn bracket (use-square?)
+        if (unconst use-square?) square-brackets
+        else round-brackets
+    fn apply-brackets (f s)
         f s
         io-write "\n"
 
@@ -501,27 +502,26 @@ fn/cc test-dynamic-function-return (_)
     apply-brackets (bracket false) "hello"
     apply-brackets (bracket false) "world"
 
+#test-dynamic-function-return
+
 # polymorphic return type and inlined type checking
-fn/cc print-value (_ value)
-    call
-        fn/cc (_ value-type)
-            branch (type== value-type i32)
-                fn/cc (_)
-                    io-write "<number>\n"
-                    \ "hello"
-                fn/cc (_)
-                    branch (type== value-type string)
-                        fn/cc (_)
-                            io-write value
-                            io-write "\n"
-                            \ false
-                        fn/cc (_)
-                            io-write "???\n"
-        typeof value
-fn/cc test-polymorphic-return-type (_)
+fn test-polymorphic-return-type ()
+    fn print-value (value)
+        let value-type = (typeof value)
+        if (type== value-type i32)
+            io-write "<number>\n"
+            \ "hello"
+        elseif (type== value-type string)
+            io-write value
+            io-write "\n"
+            \ false
+        else
+            io-write "???\n"
     print-value
         print-value
-            print-value 3
+            print-value (unconst 3)
+
+#test-polymorphic-return-type
 
 \ true
 
