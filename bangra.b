@@ -204,39 +204,117 @@ fn list-new (...)
                 list-cons (Any-new (va@ (sub i 1) ...)) tail
     loop (va-countof ...) eol
 
-#compile (typify Any-new string) 'dump-module
+set-type-symbol! list 'apply-type list-new
 
-# calling polymorphic function
-    Any-dispatch (Any-wrap 10)
+fn gen-type-op2 (op)
+    fn (a b flipped)
+        if (type== (typeof a) (typeof b))
+            op a b
+        else
 
-# importing C code
-#call
-    fn/cc (_ lib)
-        call
-            fn/cc (_ sinf printf)
-                printf
-                    string->rawstring "test: %f\n"
-                    sinf 0.5235987755982989
-                #printf
-                    string->rawstring "fac: %i\n"
-                    fac
-                        unconst 5
-            purify
-                Any-extract
-                    Scope@ lib 'sinf
-            Any-extract
-                Scope@ lib 'printf
+set-type-symbol! type '== (gen-type-op2 type==)
 
-    import-c "testdata.c" "
-        float sinf(float);
-        int printf( const char* format, ... );
-        "
-        \ eol
+fn setup-int-type (T)
+    set-type-symbol! T '== (gen-type-op2 icmp==)
+    set-type-symbol! T '!= (gen-type-op2 icmp!=)
+    set-type-symbol! T '+ (gen-type-op2 add)
+    set-type-symbol! T '- (gen-type-op2 sub)
+    set-type-symbol! T '* (gen-type-op2 mul)
+    set-type-symbol! T '<< (gen-type-op2 shl)
+    set-type-symbol! T '& (gen-type-op2 band)
+    set-type-symbol! T '| (gen-type-op2 bor)
+    set-type-symbol! T '^ (gen-type-op2 bxor)
+    if (signed? T)
+        set-type-symbol! T '> (gen-type-op2 icmp>s)
+        set-type-symbol! T '>= (gen-type-op2 icmp>=s)
+        set-type-symbol! T '< (gen-type-op2 icmp<s)
+        set-type-symbol! T '<= (gen-type-op2 icmp<=s)
+        set-type-symbol! T '/ (gen-type-op2 sdiv)
+        set-type-symbol! T '% (gen-type-op2 srem)
+        set-type-symbol! T '>> (gen-type-op2 ashr)
+    else
+        set-type-symbol! T '> (gen-type-op2 icmp>u)
+        set-type-symbol! T '>= (gen-type-op2 icmp>=u)
+        set-type-symbol! T '< (gen-type-op2 icmp<u)
+        set-type-symbol! T '<= (gen-type-op2 icmp<=u)
+        set-type-symbol! T '/ (gen-type-op2 udiv)
+        set-type-symbol! T '% (gen-type-op2 urem)
+        set-type-symbol! T '>> (gen-type-op2 lshr)
+
+fn setup-real-type (T)
+    set-type-symbol! T '== (gen-type-op2 fcmp==o)
+    set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
+    set-type-symbol! T '> (gen-type-op2 fcmp>o)
+    set-type-symbol! T '>= (gen-type-op2 fcmp>=o)
+    set-type-symbol! T '< (gen-type-op2 fcmp<o)
+    set-type-symbol! T '<= (gen-type-op2 fcmp<=o)
+    set-type-symbol! T '+ (gen-type-op2 fadd)
+    set-type-symbol! T '- (gen-type-op2 fsub)
+    set-type-symbol! T '* (gen-type-op2 fmul)
+    set-type-symbol! T '/ (gen-type-op2 fdiv)
+    set-type-symbol! T '% (gen-type-op2 frem)
+
+setup-int-type bool
+setup-int-type i8
+setup-int-type i16
+setup-int-type i32
+setup-int-type i64
+setup-int-type u8
+setup-int-type u16
+setup-int-type u32
+setup-int-type u64
+
+setup-real-type f32
+setup-real-type f64
+
+fn op2-dispatch (symbol)
+    fn (a b)
+        let Ta Tb = (typeof a) (typeof b)
+        let op success = (type@ Ta symbol)
+        if success
+            let result... = (op a b false)
+            if (icmp== (va-countof result...) 0)
+            else
+                return result...
+        else
+        let op success = (type@ Tb symbol)
+        if success
+            let result... = (op a b true)
+            if (icmp== (va-countof result...) 0)
+            else
+                return result...
+        else
+        compiler-error
+            string-join "operation does not apply to types "
+                string-join
+                    Any-repr (Any-wrap Ta)
+                    string-join " and "
+                        Any-repr (Any-wrap Tb)
+
+fn == (a b) ((op2-dispatch '==) a b)
+fn != (a b) ((op2-dispatch '!=) a b)
+fn > (a b) ((op2-dispatch '>) a b)
+fn >= (a b) ((op2-dispatch '>=) a b)
+fn < (a b) ((op2-dispatch '<) a b)
+fn <= (a b) ((op2-dispatch '<=) a b)
+fn + (a b) ((op2-dispatch '+) a b)
+fn - (a b) ((op2-dispatch '-) a b)
+fn * (a b) ((op2-dispatch '*) a b)
+fn / (a b) ((op2-dispatch '/) a b)
+fn % (a b) ((op2-dispatch '%) a b)
+fn & (a b) ((op2-dispatch '&) a b)
+fn | (a b) ((op2-dispatch '|) a b)
+fn ^ (a b) ((op2-dispatch '^) a b)
+fn << (a b) ((op2-dispatch '<<) a b)
+fn >> (a b) ((op2-dispatch '>>) a b)
+
+fn repr (val)
+    Any-repr
+        Any-new val
 
 # print function
 fn print (...)
     fn load-printf ()
-        #compiler-message "loading printf..."
         let lib =
             import-c "printf.c" "
                 int stb_printf(const char *fmt, ...);
@@ -253,28 +331,30 @@ fn print (...)
 
     fn print-element (val)
         let T = (typeof val)
-        if (type== T string)
+        if (== T string)
             io-write val
-        elseif (type== T i32)
+        elseif (== T i32)
             printf "%i" val
-        elseif (type== T f32)
+        elseif (== T f32)
             printf "%g" val
         else
             io-write "<value of type "
-            io-write (Any-repr (Any-wrap (typeof val)))
+            io-write (repr (typeof val))
             io-write ">"
 
     let [loop] i = 0
-    if (icmp<s i (va-countof ...))
-        if (icmp>s i 0)
+    if (< i (va-countof ...))
+        if (> i 0)
             io-write " "
         else # do nothing
         print-element (unconst (va@ i ...))
-        loop (add i 1)
+        loop (+ i 1)
     else
         io-write "\n"
 
-print "yes" "this" "is" "dog"
+compile
+    typify print i32 f32
+    \ 'dump-module
 
 fn print-spaces (depth)
     assert-typeof depth i32

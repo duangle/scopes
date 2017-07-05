@@ -457,12 +457,16 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
+    T(OP_FCmpOEQ) T(OP_FCmpONE) T(OP_FCmpORD) \
+    T(OP_FCmpOGT) T(OP_FCmpOGE) T(OP_FCmpOLT) T(OP_FCmpOLE) \
+    T(OP_FCmpUEQ) T(OP_FCmpUNE) T(OP_FCmpUNO) \
+    T(OP_FCmpUGT) T(OP_FCmpUGE) T(OP_FCmpULT) T(OP_FCmpULE) \
     T(FN_Purify) T(FN_Unconst) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
-    T(KW_If) \
+    T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_TypeAt) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
@@ -536,6 +540,10 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_ICmpEQ, "icmp==") T(OP_ICmpNE, "icmp!=") \
     T(OP_ICmpUGT, "icmp>u") T(OP_ICmpUGE, "icmp>=u") T(OP_ICmpULT, "icmp<u") T(OP_ICmpULE, "icmp<=u") \
     T(OP_ICmpSGT, "icmp>s") T(OP_ICmpSGE, "icmp>=s") T(OP_ICmpSLT, "icmp<s") T(OP_ICmpSLE, "icmp<=s") \
+    T(OP_FCmpOEQ, "fcmp==o") T(OP_FCmpONE, "fcmp!=o") T(OP_FCmpORD, "fcmp-ord") \
+    T(OP_FCmpOGT, "fcmp>o") T(OP_FCmpOGE, "fcmp>=o") T(OP_FCmpOLT, "fcmp<o") T(OP_FCmpOLE, "fcmp<=o") \
+    T(OP_FCmpUEQ, "fcmp==u") T(OP_FCmpUNE, "fcmp!=u") T(OP_FCmpUNO, "fcmp-uno") \
+    T(OP_FCmpUGT, "fcmp>u") T(OP_FCmpUGE, "fcmp>=u") T(OP_FCmpULT, "fcmp<u") T(OP_FCmpULE, "fcmp<=u") \
     T(OP_Add, "add") T(OP_AddNUW, "add-nuw") T(OP_AddNSW, "add-nsw") \
     T(OP_Sub, "sub") T(OP_SubNUW, "sub-nuw") T(OP_SubNSW, "sub-nsw") \
     T(OP_Mul, "mul") T(OP_MulNUW, "mul-nuw") T(OP_MulNSW, "mul-nsw") \
@@ -599,6 +607,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Typify, "typify") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") \
     T(FN_TypeKind, "type-kind") \
+    T(FN_TypeAt, "type@") \
     T(FN_Undef, "undef") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -1492,38 +1501,12 @@ enum TypeKind {
 #undef T
 };
 
-struct Type {
-private:
-    const TypeKind _kind;
-
-protected:
-    const String *_name;
-
-public:
-    TypeKind kind() const { return _kind; } // for this codebase
-
-    Type(TypeKind kind) : _kind(kind), _name(Symbol(SYM_Unnamed).name()) {}
-    Type(const Type &other) = delete;
-
-    const String *name() const {
-        return _name;
-    }
-
-    StyledStream& stream(StyledStream& ost) const {
-        ost << Style_Type;
-        ost << name()->data;
-        ost << Style_None;
-        return ost;
-    }
-};
+struct Type;
 
 static bool is_opaque(const Type *T);
 static size_t size_of(const Type *T);
 static size_t align_of(const Type *T);
-
-static StyledStream& operator<<(StyledStream& ost, const Type *type) {
-    return type->stream(ost);
-}
+static StyledStream& operator<<(StyledStream& ost, const Type *type);
 
 #define B_TYPES() \
     /* types */ \
@@ -1570,43 +1553,6 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type) {
     static const Type *TYPE = nullptr;
 B_TYPES()
 #undef T
-
-//------------------------------------------------------------------------------
-// TYPE CHECK PREDICATES
-//------------------------------------------------------------------------------
-
-static void verify(const Type *typea, const Type *typeb) {
-    if (typea != typeb) {
-        StyledString ss;
-        ss.out << "type " << typea << " expected, got " << typeb;
-        location_error(ss.str());
-    }
-}
-
-static void verify_integer(const Type *type) {
-    if (type->kind() != TK_Integer) {
-        StyledString ss;
-        ss.out << "integer or bool type expected, got " << type;
-        location_error(ss.str());
-    }
-}
-
-static void verify_real(const Type *type) {
-    if (type->kind() != TK_Real) {
-        StyledString ss;
-        ss.out << "real type expected, got " << type;
-        location_error(ss.str());
-    }
-}
-
-static void verify_range(size_t idx, size_t count) {
-    if (idx >= count) {
-        StyledString ss;
-        ss.out << "index out of range (" << idx
-            << " >= " << count << ")";
-        location_error(ss.str());
-    }
-}
 
 //------------------------------------------------------------------------------
 // BUILTIN
@@ -1731,10 +1677,7 @@ struct Any {
         return val;
     }
 
-    void verify(const Type *T) const {
-        bangra::verify(T, type);
-    }
-
+    void verify(const Type *T) const;
     void verify_indirect(const Type *T) const;
     const Type *indirect_type() const;
 
@@ -1819,7 +1762,101 @@ static StyledStream& operator<<(StyledStream& ost, Any value) {
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
+struct Type {
+    TypeKind kind() const { return _kind; } // for this codebase
+
+    Type(TypeKind kind) : _kind(kind), _name(Symbol(SYM_Unnamed).name()) {}
+    Type(const Type &other) = delete;
+
+    const String *name() const {
+        return _name;
+    }
+
+    StyledStream& stream(StyledStream& ost) const {
+        ost << Style_Type;
+        ost << name()->data;
+        ost << Style_None;
+        return ost;
+    }
+
+    void bind(Symbol name, const Any &value) {
+        auto ret = symbols.insert({ name, value });
+        if (!ret.second) {
+            ret.first->second = value;
+        }
+    }
+
+    void del(Symbol name) {
+        auto it = symbols.find(name);
+        if (it != symbols.end()) {
+            symbols.erase(it);
+        }
+    }
+
+    bool lookup(Symbol name, Any &dest) const {
+        auto it = symbols.find(name);
+        if (it != symbols.end()) {
+            dest = it->second;
+            return true;
+        }
+        return false;
+    }
+
+private:
+    const TypeKind _kind;
+
+protected:
+    const String *_name;
+
+    std::unordered_map<Symbol, Any, Symbol::Hash> symbols;
+};
+
+static StyledStream& operator<<(StyledStream& ost, const Type *type) {
+    return type->stream(ost);
+}
+
 static Any wrap_pointer(const Type *type, void *ptr);
+
+//------------------------------------------------------------------------------
+// TYPE CHECK PREDICATES
+//------------------------------------------------------------------------------
+
+static void verify(const Type *typea, const Type *typeb) {
+    if (typea != typeb) {
+        StyledString ss;
+        ss.out << "type " << typea << " expected, got " << typeb;
+        location_error(ss.str());
+    }
+}
+
+static void verify_integer(const Type *type) {
+    if (type->kind() != TK_Integer) {
+        StyledString ss;
+        ss.out << "integer or bool type expected, got " << type;
+        location_error(ss.str());
+    }
+}
+
+static void verify_real(const Type *type) {
+    if (type->kind() != TK_Real) {
+        StyledString ss;
+        ss.out << "real type expected, got " << type;
+        location_error(ss.str());
+    }
+}
+
+static void verify_range(size_t idx, size_t count) {
+    if (idx >= count) {
+        StyledString ss;
+        ss.out << "index out of range (" << idx
+            << " >= " << count << ")";
+        location_error(ss.str());
+    }
+}
+
+void Any::verify(const Type *T) const {
+    bangra::verify(T, type);
+}
 
 //------------------------------------------------------------------------------
 // TYPE FACTORIES
@@ -2331,32 +2368,8 @@ struct TypenameType : Type {
 
     bool finalized() const { return storage_type != nullptr; }
 
-    void bind(Symbol name, const Any &value) {
-        auto ret = symbols.insert({ name, value });
-        if (!ret.second) {
-            ret.first->second = value;
-        }
-    }
-
-    void del(Symbol name) {
-        auto it = symbols.find(name);
-        if (it != symbols.end()) {
-            symbols.erase(it);
-        }
-    }
-
-    bool lookup(Symbol name, Any &dest) const {
-        auto it = symbols.find(name);
-        if (it != symbols.end()) {
-            dest = it->second;
-            return true;
-        }
-        return false;
-    }
-
     const Type *storage_type;
     std::vector<Symbol> field_names;
-    std::unordered_map<Symbol, Any, Symbol::Hash> symbols;
 };
 
 std::unordered_set<Symbol, Symbol::Hash> TypenameType::used_names;
@@ -5953,6 +5966,41 @@ struct GenerateCtx {
                 }
                 retvalue = LLVMBuildICmp(builder, pred, a, b, "");
             } break;
+            case OP_FCmpOEQ:
+            case OP_FCmpONE:
+            case OP_FCmpORD:
+            case OP_FCmpOGT:
+            case OP_FCmpOGE:
+            case OP_FCmpOLT:
+            case OP_FCmpOLE:
+            case OP_FCmpUEQ:
+            case OP_FCmpUNE:
+            case OP_FCmpUNO:
+            case OP_FCmpUGT:
+            case OP_FCmpUGE:
+            case OP_FCmpULT:
+            case OP_FCmpULE: {
+                READ_VALUE(a); READ_VALUE(b);
+                LLVMRealPredicate pred;
+                switch(enter.builtin.value()) {
+                    case OP_FCmpOEQ: pred = LLVMRealOEQ; break;
+                    case OP_FCmpONE: pred = LLVMRealONE; break;
+                    case OP_FCmpORD: pred = LLVMRealORD; break;
+                    case OP_FCmpOGT: pred = LLVMRealOGT; break;
+                    case OP_FCmpOGE: pred = LLVMRealOGE; break;
+                    case OP_FCmpOLT: pred = LLVMRealOLT; break;
+                    case OP_FCmpOLE: pred = LLVMRealOLE; break;
+                    case OP_FCmpUEQ: pred = LLVMRealUEQ; break;
+                    case OP_FCmpUNE: pred = LLVMRealUNE; break;
+                    case OP_FCmpUNO: pred = LLVMRealUNO; break;
+                    case OP_FCmpUGT: pred = LLVMRealUGT; break;
+                    case OP_FCmpUGE: pred = LLVMRealUGE; break;
+                    case OP_FCmpULT: pred = LLVMRealULT; break;
+                    case OP_FCmpULE: pred = LLVMRealULE; break;
+                    default: assert(false); break;
+                }
+                retvalue = LLVMBuildFCmp(builder, pred, a, b, "");
+            } break;
             case OP_Add: { READ_VALUE(a); READ_VALUE(b);
                 retvalue = LLVMBuildAdd(builder, a, b, ""); } break;
             case OP_AddNUW: { READ_VALUE(a); READ_VALUE(b);
@@ -6808,6 +6856,11 @@ struct NormalizeCtx {
         return enter.type == TYPE_Builtin;
     }
 
+    static bool is_calling_type(Label *l) {
+        auto &&enter = l->body.enter;
+        return enter.type == TYPE_Type;
+    }
+
     static bool is_calling_function(Label *l) {
         auto &&enter = l->body.enter;
         return is_function_pointer(enter.type);
@@ -7315,6 +7368,24 @@ struct NormalizeCtx {
             verify_integer_ops(args[1], args[2]);
             RETARGTYPES(TYPE_Bool);
         } break;
+        case OP_FCmpOEQ:
+        case OP_FCmpONE:
+        case OP_FCmpORD:
+        case OP_FCmpOGT:
+        case OP_FCmpOGE:
+        case OP_FCmpOLT:
+        case OP_FCmpOLE:
+        case OP_FCmpUEQ:
+        case OP_FCmpUNE:
+        case OP_FCmpUNO:
+        case OP_FCmpUGT:
+        case OP_FCmpUGE:
+        case OP_FCmpULT:
+        case OP_FCmpULE: {
+            CHECKARGS(2, 2);
+            verify_real_ops(args[1], args[2]);
+            RETARGTYPES(TYPE_Bool);
+        } break;
 #define IARITH_NUW_NSW_OPS(NAME, OP) \
     case OP_ ## NAME: \
     case OP_ ## NAME ## NUW: \
@@ -7387,6 +7458,32 @@ struct NormalizeCtx {
         return destptr;
     }
 
+    void fold_type_call(Label *l) {
+        ss_cout << "folding type call in " << l << std::endl;
+
+        auto &&enter = l->body.enter;
+        assert(enter.type == TYPE_Type);
+        const Type *T = enter.typeref;
+
+        Any value = none;
+        if (!T->lookup(SYM_ApplyType, value)) {
+            StyledString ss;
+            ss.out << "type " << T << " has no apply-type attribute";
+            location_error(ss.str());
+        }
+        l->unlink_backrefs();
+        enter = value;
+        l->link_backrefs();
+
+    }
+
+    bool isnan(float f) {
+        return f != f;
+    }
+    bool isnan(double f) {
+        return f != f;
+    }
+
     bool fold_builtin_call(Label *l) {
         ss_cout << "folding builtin call in " << l << std::endl;
 
@@ -7394,6 +7491,24 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case SFXFN_SetTypeSymbol: {
+            CHECKARGS(3, 3);
+            const Type *T = args[1];
+            args[2].verify(TYPE_Symbol);
+            const_cast<Type *>(T)->bind(args[2].symbol, args[3]);
+            RETARGS();
+        } break;
+        case FN_TypeAt: {
+            CHECKARGS(2, 2);
+            const Type *T = args[1];
+            args[2].verify(TYPE_Symbol);
+            Any result = none;
+            if (!T->lookup(args[2].symbol, result)) {
+                RETARGS(none, false);
+            } else {
+                RETARGS(result, true);
+            }
+        } break;
         case FN_IsConstant: {
             CHECKARGS(1, 1);
             RETARGS(is_const(args[1]));
@@ -7827,18 +7942,6 @@ struct NormalizeCtx {
     case 64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
     }
-#define B_FLOAT_OP2(OP) \
-    switch(cast<RealType>(args[1].type)->width) { \
-    case 32: result = (args[1].f32 OP args[2].f32); break; \
-    case 64: result = (args[1].f64 OP args[2].f64); break; \
-    default: assert(false); break; \
-    }
-#define B_FLOAT_OPF2(OP) \
-    switch(cast<RealType>(args[1].type)->width) { \
-    case 32: result = OP(args[1].f32, args[2].f32); break; \
-    case 64: result = OP(args[1].f64, args[2].f64); break; \
-    default: assert(false); break; \
-    }
             bool result;
             switch(enter.builtin.value()) {
             case OP_ICmpEQ: B_INT_OP2(==, u); break;
@@ -7852,6 +7955,89 @@ struct NormalizeCtx {
             case OP_ICmpSLT: B_INT_OP2(<, i); break;
             case OP_ICmpSLE: B_INT_OP2(<=, i); break;
             default: assert(false); break;
+            }
+            RETARGS(result);
+        } break;
+        case OP_FCmpOEQ:
+        case OP_FCmpONE:
+        case OP_FCmpORD:
+        case OP_FCmpOGT:
+        case OP_FCmpOGE:
+        case OP_FCmpOLT:
+        case OP_FCmpOLE:
+        case OP_FCmpUEQ:
+        case OP_FCmpUNE:
+        case OP_FCmpUNO:
+        case OP_FCmpUGT:
+        case OP_FCmpUGE:
+        case OP_FCmpULT:
+        case OP_FCmpULE: {
+#define B_FLOAT_OP2(OP) \
+    switch(cast<RealType>(args[1].type)->width) { \
+    case 32: result = (args[1].f32 OP args[2].f32); break; \
+    case 64: result = (args[1].f64 OP args[2].f64); break; \
+    default: assert(false); break; \
+    }
+#define B_FLOAT_OPF2(OP) \
+    switch(cast<RealType>(args[1].type)->width) { \
+    case 32: result = OP(args[1].f32, args[2].f32); break; \
+    case 64: result = OP(args[1].f64, args[2].f64); break; \
+    default: assert(false); break; \
+    }
+            CHECKARGS(2, 2);
+            verify_real_ops(args[1], args[2]);
+            bool result;
+            bool failed = false;
+            bool nan;
+            switch(cast<RealType>(args[1].type)->width) {
+            case 32: nan = isnan(args[1].f32) || isnan(args[2].f32); break;
+            case 64: nan = isnan(args[1].f64) || isnan(args[2].f64); break;
+            default: assert(false); break;
+            }
+            switch(enter.builtin.value()) {
+            case OP_FCmpOEQ:
+            case OP_FCmpONE:
+            case OP_FCmpORD:
+            case OP_FCmpOGT:
+            case OP_FCmpOGE:
+            case OP_FCmpOLT:
+            case OP_FCmpOLE:
+                if (nan) {
+                    result = false;
+                    failed = true;
+                } break;
+            case OP_FCmpUEQ:
+            case OP_FCmpUNE:
+            case OP_FCmpUNO:
+            case OP_FCmpUGT:
+            case OP_FCmpUGE:
+            case OP_FCmpULT:
+            case OP_FCmpULE:
+                if (nan) {
+                    result = true;
+                    failed = true;
+                } break;
+            default: assert(false); break;
+            }
+
+            if (!failed) {
+                switch(enter.builtin.value()) {
+                case OP_FCmpOEQ: B_FLOAT_OP2(==); break;
+                case OP_FCmpONE: B_FLOAT_OP2(!=); break;
+                case OP_FCmpORD: break;
+                case OP_FCmpOGT: B_FLOAT_OP2(>); break;
+                case OP_FCmpOGE: B_FLOAT_OP2(>=); break;
+                case OP_FCmpOLT: B_FLOAT_OP2(<); break;
+                case OP_FCmpOLE: B_FLOAT_OP2(<=); break;
+                case OP_FCmpUEQ: B_FLOAT_OP2(==); break;
+                case OP_FCmpUNE: B_FLOAT_OP2(!=); break;
+                case OP_FCmpUNO: break;
+                case OP_FCmpUGT: B_FLOAT_OP2(>); break;
+                case OP_FCmpUGE: B_FLOAT_OP2(>=); break;
+                case OP_FCmpULT: B_FLOAT_OP2(<); break;
+                case OP_FCmpULE: B_FLOAT_OP2(<=); break;
+                default: assert(false); break;
+                }
             }
             RETARGS(result);
         } break;
@@ -8257,6 +8443,9 @@ struct NormalizeCtx {
                 }
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
+            } else if (is_calling_type(l)) {
+                fold_type_call(l);
+                goto process_body;
             } else {
                 StyledString ss;
                 auto &&enter = l->body.enter;
