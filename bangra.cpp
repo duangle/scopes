@@ -9504,8 +9504,19 @@ static int32_t f_type_kind(const Type *T) {
 }
 
 static int32_t f_bitcountof(const Type *T) {
-    verify_kind<TK_Integer>(T);
-    return cast<IntegerType>(T)->width;
+    T = storage_type(T);
+    switch(T->kind()) {
+    case TK_Integer:
+        return cast<IntegerType>(T)->width;
+    case TK_Real:
+        return cast<RealType>(T)->width;
+    default: {
+        StyledString ss;
+        ss.out << "type " << T << " has no bitcount" << std::endl;
+        location_error(ss.str());
+    } break;
+    }
+    return 0;
 }
 
 static bool f_issigned(const Type *T) {

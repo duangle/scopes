@@ -46,6 +46,10 @@ fn assert-typeof (a T)
                     string-join " expected, not "
                         Any-repr (Any-wrap (typeof a))
 
+fn not (x)
+    assert-typeof x bool
+    bxor x true
+
 fn string->rawstring (s)
     assert-typeof s string
     getelementptr s 0 1 0
@@ -214,16 +218,51 @@ fn gen-type-op2 (op)
 
 set-type-symbol! type '== (gen-type-op2 type==)
 
+set-type-symbol! Nothing '==
+    fn (a b flipped)
+        type== (typeof a) (typeof b)
+set-type-symbol! Nothing '!=
+    fn (a b flipped)
+        not (type== (typeof a) (typeof b))
+
 fn setup-int-type (T)
     set-type-symbol! T '== (gen-type-op2 icmp==)
     set-type-symbol! T '!= (gen-type-op2 icmp!=)
     set-type-symbol! T '+ (gen-type-op2 add)
-    set-type-symbol! T '- (gen-type-op2 sub)
+    set-type-symbol! T '-
+        fn (a b flipped)
+            let Ta Tb = (typeof a) (typeof b)
+            if (type== Ta Tb)
+                sub a b
+            elseif (type== Tb Nothing)
+                sub (Ta 0) a
+            else
     set-type-symbol! T '* (gen-type-op2 mul)
     set-type-symbol! T '<< (gen-type-op2 shl)
     set-type-symbol! T '& (gen-type-op2 band)
     set-type-symbol! T '| (gen-type-op2 bor)
     set-type-symbol! T '^ (gen-type-op2 bxor)
+    set-type-symbol! T 'apply-type
+        fn (val)
+            let vT = (typeof val)
+            if (type== T vT) val
+            elseif (integer-type? vT)
+                let Tw vTw = (bitcountof T) (bitcountof vT)
+                if (icmp== Tw vTw)
+                    bitcast val T
+                elseif (icmp>s vTw Tw)
+                    trunc val T
+                elseif (signed? vT)
+                    sext val T
+                else
+                    zext val T
+            elseif (real-type? vT)
+                if (signed? T)
+                    fptosi val T
+                else
+                    fptoui val T
+            else
+                compiler-error "integer or float expected"
     if (signed? T)
         set-type-symbol! T '> (gen-type-op2 icmp>s)
         set-type-symbol! T '>= (gen-type-op2 icmp>=s)
@@ -242,6 +281,23 @@ fn setup-int-type (T)
         set-type-symbol! T '>> (gen-type-op2 lshr)
 
 fn setup-real-type (T)
+    set-type-symbol! T 'apply-type
+        fn (val)
+            let vT = (typeof val)
+            if (type== T vT) val
+            elseif (integer-type? vT)
+                if (signed? vT)
+                    sitofp val T
+                else
+                    uitofp val T
+            elseif (real-type? vT)
+                let Tw vTw = (bitcountof T) (bitcountof vT)
+                if (icmp>s vTw Tw)
+                    fptrunc val T
+                else
+                    fpext val T
+            else
+                compiler-error "integer or float expected"
     set-type-symbol! T '== (gen-type-op2 fcmp==o)
     set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
     set-type-symbol! T '> (gen-type-op2 fcmp>o)
@@ -249,9 +305,23 @@ fn setup-real-type (T)
     set-type-symbol! T '< (gen-type-op2 fcmp<o)
     set-type-symbol! T '<= (gen-type-op2 fcmp<=o)
     set-type-symbol! T '+ (gen-type-op2 fadd)
-    set-type-symbol! T '- (gen-type-op2 fsub)
+    set-type-symbol! T '-
+        fn (a b flipped)
+            let Ta Tb = (typeof a) (typeof b)
+            if (type== Ta Tb)
+                fsub a b
+            elseif (type== Tb Nothing)
+                fsub (Ta 0) a
+            else
     set-type-symbol! T '* (gen-type-op2 fmul)
-    set-type-symbol! T '/ (gen-type-op2 fdiv)
+    set-type-symbol! T '/
+        fn (a b flipped)
+            let Ta Tb = (typeof a) (typeof b)
+            if (type== Ta Tb)
+                fdiv a b
+            elseif (type== Tb Nothing)
+                fdiv (Ta 1) a
+            else
     set-type-symbol! T '% (gen-type-op2 frem)
 
 setup-int-type bool
@@ -291,19 +361,27 @@ fn op2-dispatch (symbol)
                     string-join " and "
                         Any-repr (Any-wrap Tb)
 
+fn op2-ltr-multiop (f)
+    fn (a b ...)
+        let [loop] i result = 0 (f a b)
+        if (icmp<s i (va-countof ...))
+            let x = (va@ i ...)
+            loop (add i 1) (f result x)
+        else result
+
 fn == (a b) ((op2-dispatch '==) a b)
 fn != (a b) ((op2-dispatch '!=) a b)
 fn > (a b) ((op2-dispatch '>) a b)
 fn >= (a b) ((op2-dispatch '>=) a b)
 fn < (a b) ((op2-dispatch '<) a b)
 fn <= (a b) ((op2-dispatch '<=) a b)
-fn + (a b) ((op2-dispatch '+) a b)
+fn + (...) ((op2-ltr-multiop (op2-dispatch '+)) ...)
 fn - (a b) ((op2-dispatch '-) a b)
-fn * (a b) ((op2-dispatch '*) a b)
+fn * (...) ((op2-ltr-multiop (op2-dispatch '*)) ...)
 fn / (a b) ((op2-dispatch '/) a b)
 fn % (a b) ((op2-dispatch '%) a b)
 fn & (a b) ((op2-dispatch '&) a b)
-fn | (a b) ((op2-dispatch '|) a b)
+fn | (...) ((op2-ltr-multiop (op2-dispatch '|)) ...)
 fn ^ (a b) ((op2-dispatch '^) a b)
 fn << (a b) ((op2-dispatch '<<) a b)
 fn >> (a b) ((op2-dispatch '>>) a b)
@@ -318,8 +396,7 @@ fn print (...)
         let lib =
             import-c "printf.c" "
                 int stb_printf(const char *fmt, ...);
-                "
-                \ eol
+                " eol
         let printf =
             Any-extract
                 Scope@ lib 'stb_printf
@@ -351,10 +428,6 @@ fn print (...)
         loop (+ i 1)
     else
         io-write "\n"
-
-compile
-    typify print i32 f32
-    \ 'dump-module
 
 fn print-spaces (depth)
     assert-typeof depth i32
