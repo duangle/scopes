@@ -466,7 +466,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
-    T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_TypeAt) \
+    T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_TypeAt) T(KW_SyntaxExtend) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
@@ -1669,6 +1669,12 @@ struct Any {
     Any toref() {
         Any *pvalue = new Any(*this);
         return pvalue;
+    }
+
+    static Any from_opaque(const Type *type) {
+        Any val = none;
+        val.type = type;
+        return val;
     }
 
     static Any from_pointer(const Type *type, void *ptr) {
@@ -6363,6 +6369,7 @@ struct GenerateCtx {
     LLVMValueRef label_to_function(Label *label) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
+
             const Anchor *old_anchor = get_active_anchor();
             set_active_anchor(label->anchor);
             Label *last_function = active_function;
@@ -6399,6 +6406,7 @@ struct GenerateCtx {
             write_label_body(label);
 
             LLVMPositionBuilderAtEnd(builder, old_bb);
+
             active_function = last_function;
             set_active_anchor(old_anchor);
             return func;
@@ -8762,6 +8770,50 @@ struct Expander {
         }
     }
 
+    Any expand_syntax_extend(const List *it, const Any &dest, const Any &longdest) {
+        auto _anchor = get_active_anchor();
+
+        verify_list_parameter_count(it, 1, -1);
+
+        // skip head
+        it = it->next;
+
+        Label *func = Label::from(_anchor, Symbol(KW_SyntaxExtend));
+
+        auto retparam = Parameter::from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+        auto scopeparam = Parameter::from(_anchor, Symbol(SYM_SyntaxScope), TYPE_Void);
+
+        func->append(retparam);
+        func->append(scopeparam);
+
+        Scope *subenv = Scope::from(env);
+        subenv->bind(Symbol(SYM_SyntaxScope), scopeparam);
+
+        Expander subexpr(func, subenv);
+
+        subexpr.expand_function_body(it, retparam);
+
+        set_active_anchor(_anchor);
+
+        func = fold_type_label(func, { Any::from_opaque(TYPE_Void), env });
+        func = normalize(func);
+
+        // expected type
+        const Type *expected_functype = Function( TYPE_Scope, {} );
+        const Type *functype = func->get_function_type();
+        if (functype != expected_functype) {
+            set_active_anchor(_anchor);
+            location_error(String::from("syntax-extend must return a scope"));
+        }
+
+        typedef Scope *(*FuncType)();
+
+        FuncType fptr = (FuncType)compile(func, 0).pointer;
+        env = fptr();
+
+        return write_dest(none, dest);
+    }
+
     void expand_function_body(const List *it, const Any &longdest) {
         if (it == EOL) {
             br(longdest, { none });
@@ -9089,11 +9141,6 @@ struct Expander {
         return result;
     }
 
-    /*
-    Any expand_syntax_extend(const List *list, const Any &dest, const Any &longdest) {
-
-    }*/
-
     Any expand_syntax_apply_block(const List *it, const Any &dest, const Any &longdest) {
         auto _anchor = get_active_anchor();
         verify_list_parameter_count(it, 1, 1);
@@ -9162,10 +9209,9 @@ struct Expander {
                 case KW_SyntaxApplyBlock: {
                     return expand_syntax_apply_block(list, dest, longdest);
                 } break;
-                /*
                 case KW_SyntaxExtend: {
                     return expand_syntax_extend(list, dest, longdest);
-                } break;*/
+                } break;
                 case KW_Let: {
                     return expand_let(list, dest, longdest);
                 } break;

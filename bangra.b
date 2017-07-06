@@ -208,134 +208,138 @@ fn list-new (...)
                 list-cons (Any-new (va@ (sub i 1) ...)) tail
     loop (va-countof ...) eol
 
-set-type-symbol! list 'apply-type list-new
+syntax-extend
 
-fn gen-type-op2 (op)
-    fn (a b flipped)
-        if (type== (typeof a) (typeof b))
-            op a b
+    set-type-symbol! list 'apply-type list-new
+
+    fn gen-type-op2 (op)
+        fn (a b flipped)
+            if (type== (typeof a) (typeof b))
+                op a b
+            else
+
+    set-type-symbol! type '== (gen-type-op2 type==)
+
+    set-type-symbol! Nothing '==
+        fn (a b flipped)
+            type== (typeof a) (typeof b)
+    set-type-symbol! Nothing '!=
+        fn (a b flipped)
+            not (type== (typeof a) (typeof b))
+
+    fn setup-int-type (T)
+        set-type-symbol! T '== (gen-type-op2 icmp==)
+        set-type-symbol! T '!= (gen-type-op2 icmp!=)
+        set-type-symbol! T '+ (gen-type-op2 add)
+        set-type-symbol! T '-
+            fn (a b flipped)
+                let Ta Tb = (typeof a) (typeof b)
+                if (type== Ta Tb)
+                    sub a b
+                elseif (type== Tb Nothing)
+                    sub (Ta 0) a
+                else
+        set-type-symbol! T '* (gen-type-op2 mul)
+        set-type-symbol! T '<< (gen-type-op2 shl)
+        set-type-symbol! T '& (gen-type-op2 band)
+        set-type-symbol! T '| (gen-type-op2 bor)
+        set-type-symbol! T '^ (gen-type-op2 bxor)
+        set-type-symbol! T 'apply-type
+            fn (val)
+                let vT = (typeof val)
+                if (type== T vT) val
+                elseif (integer-type? vT)
+                    let Tw vTw = (bitcountof T) (bitcountof vT)
+                    if (icmp== Tw vTw)
+                        bitcast val T
+                    elseif (icmp>s vTw Tw)
+                        trunc val T
+                    elseif (signed? vT)
+                        sext val T
+                    else
+                        zext val T
+                elseif (real-type? vT)
+                    if (signed? T)
+                        fptosi val T
+                    else
+                        fptoui val T
+                else
+                    compiler-error "integer or float expected"
+        if (signed? T)
+            set-type-symbol! T '> (gen-type-op2 icmp>s)
+            set-type-symbol! T '>= (gen-type-op2 icmp>=s)
+            set-type-symbol! T '< (gen-type-op2 icmp<s)
+            set-type-symbol! T '<= (gen-type-op2 icmp<=s)
+            set-type-symbol! T '/ (gen-type-op2 sdiv)
+            set-type-symbol! T '% (gen-type-op2 srem)
+            set-type-symbol! T '>> (gen-type-op2 ashr)
         else
+            set-type-symbol! T '> (gen-type-op2 icmp>u)
+            set-type-symbol! T '>= (gen-type-op2 icmp>=u)
+            set-type-symbol! T '< (gen-type-op2 icmp<u)
+            set-type-symbol! T '<= (gen-type-op2 icmp<=u)
+            set-type-symbol! T '/ (gen-type-op2 udiv)
+            set-type-symbol! T '% (gen-type-op2 urem)
+            set-type-symbol! T '>> (gen-type-op2 lshr)
 
-set-type-symbol! type '== (gen-type-op2 type==)
-
-set-type-symbol! Nothing '==
-    fn (a b flipped)
-        type== (typeof a) (typeof b)
-set-type-symbol! Nothing '!=
-    fn (a b flipped)
-        not (type== (typeof a) (typeof b))
-
-fn setup-int-type (T)
-    set-type-symbol! T '== (gen-type-op2 icmp==)
-    set-type-symbol! T '!= (gen-type-op2 icmp!=)
-    set-type-symbol! T '+ (gen-type-op2 add)
-    set-type-symbol! T '-
-        fn (a b flipped)
-            let Ta Tb = (typeof a) (typeof b)
-            if (type== Ta Tb)
-                sub a b
-            elseif (type== Tb Nothing)
-                sub (Ta 0) a
-            else
-    set-type-symbol! T '* (gen-type-op2 mul)
-    set-type-symbol! T '<< (gen-type-op2 shl)
-    set-type-symbol! T '& (gen-type-op2 band)
-    set-type-symbol! T '| (gen-type-op2 bor)
-    set-type-symbol! T '^ (gen-type-op2 bxor)
-    set-type-symbol! T 'apply-type
-        fn (val)
-            let vT = (typeof val)
-            if (type== T vT) val
-            elseif (integer-type? vT)
-                let Tw vTw = (bitcountof T) (bitcountof vT)
-                if (icmp== Tw vTw)
-                    bitcast val T
-                elseif (icmp>s vTw Tw)
-                    trunc val T
-                elseif (signed? vT)
-                    sext val T
+    fn setup-real-type (T)
+        set-type-symbol! T 'apply-type
+            fn (val)
+                let vT = (typeof val)
+                if (type== T vT) val
+                elseif (integer-type? vT)
+                    if (signed? vT)
+                        sitofp val T
+                    else
+                        uitofp val T
+                elseif (real-type? vT)
+                    let Tw vTw = (bitcountof T) (bitcountof vT)
+                    if (icmp>s vTw Tw)
+                        fptrunc val T
+                    else
+                        fpext val T
                 else
-                    zext val T
-            elseif (real-type? vT)
-                if (signed? T)
-                    fptosi val T
+                    compiler-error "integer or float expected"
+        set-type-symbol! T '== (gen-type-op2 fcmp==o)
+        set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
+        set-type-symbol! T '> (gen-type-op2 fcmp>o)
+        set-type-symbol! T '>= (gen-type-op2 fcmp>=o)
+        set-type-symbol! T '< (gen-type-op2 fcmp<o)
+        set-type-symbol! T '<= (gen-type-op2 fcmp<=o)
+        set-type-symbol! T '+ (gen-type-op2 fadd)
+        set-type-symbol! T '-
+            fn (a b flipped)
+                let Ta Tb = (typeof a) (typeof b)
+                if (type== Ta Tb)
+                    fsub a b
+                elseif (type== Tb Nothing)
+                    fsub (Ta 0) a
                 else
-                    fptoui val T
-            else
-                compiler-error "integer or float expected"
-    if (signed? T)
-        set-type-symbol! T '> (gen-type-op2 icmp>s)
-        set-type-symbol! T '>= (gen-type-op2 icmp>=s)
-        set-type-symbol! T '< (gen-type-op2 icmp<s)
-        set-type-symbol! T '<= (gen-type-op2 icmp<=s)
-        set-type-symbol! T '/ (gen-type-op2 sdiv)
-        set-type-symbol! T '% (gen-type-op2 srem)
-        set-type-symbol! T '>> (gen-type-op2 ashr)
-    else
-        set-type-symbol! T '> (gen-type-op2 icmp>u)
-        set-type-symbol! T '>= (gen-type-op2 icmp>=u)
-        set-type-symbol! T '< (gen-type-op2 icmp<u)
-        set-type-symbol! T '<= (gen-type-op2 icmp<=u)
-        set-type-symbol! T '/ (gen-type-op2 udiv)
-        set-type-symbol! T '% (gen-type-op2 urem)
-        set-type-symbol! T '>> (gen-type-op2 lshr)
-
-fn setup-real-type (T)
-    set-type-symbol! T 'apply-type
-        fn (val)
-            let vT = (typeof val)
-            if (type== T vT) val
-            elseif (integer-type? vT)
-                if (signed? vT)
-                    sitofp val T
+        set-type-symbol! T '* (gen-type-op2 fmul)
+        set-type-symbol! T '/
+            fn (a b flipped)
+                let Ta Tb = (typeof a) (typeof b)
+                if (type== Ta Tb)
+                    fdiv a b
+                elseif (type== Tb Nothing)
+                    fdiv (Ta 1) a
                 else
-                    uitofp val T
-            elseif (real-type? vT)
-                let Tw vTw = (bitcountof T) (bitcountof vT)
-                if (icmp>s vTw Tw)
-                    fptrunc val T
-                else
-                    fpext val T
-            else
-                compiler-error "integer or float expected"
-    set-type-symbol! T '== (gen-type-op2 fcmp==o)
-    set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
-    set-type-symbol! T '> (gen-type-op2 fcmp>o)
-    set-type-symbol! T '>= (gen-type-op2 fcmp>=o)
-    set-type-symbol! T '< (gen-type-op2 fcmp<o)
-    set-type-symbol! T '<= (gen-type-op2 fcmp<=o)
-    set-type-symbol! T '+ (gen-type-op2 fadd)
-    set-type-symbol! T '-
-        fn (a b flipped)
-            let Ta Tb = (typeof a) (typeof b)
-            if (type== Ta Tb)
-                fsub a b
-            elseif (type== Tb Nothing)
-                fsub (Ta 0) a
-            else
-    set-type-symbol! T '* (gen-type-op2 fmul)
-    set-type-symbol! T '/
-        fn (a b flipped)
-            let Ta Tb = (typeof a) (typeof b)
-            if (type== Ta Tb)
-                fdiv a b
-            elseif (type== Tb Nothing)
-                fdiv (Ta 1) a
-            else
-    set-type-symbol! T '% (gen-type-op2 frem)
+        set-type-symbol! T '% (gen-type-op2 frem)
 
-setup-int-type bool
-setup-int-type i8
-setup-int-type i16
-setup-int-type i32
-setup-int-type i64
-setup-int-type u8
-setup-int-type u16
-setup-int-type u32
-setup-int-type u64
+    setup-int-type bool
+    setup-int-type i8
+    setup-int-type i16
+    setup-int-type i32
+    setup-int-type i64
+    setup-int-type u8
+    setup-int-type u16
+    setup-int-type u32
+    setup-int-type u64
 
-setup-real-type f32
-setup-real-type f64
+    setup-real-type f32
+    setup-real-type f64
+
+    \ syntax-scope
 
 fn op2-dispatch (symbol)
     fn (a b)
@@ -456,6 +460,10 @@ fn walk-list (on-leaf l depth)
         loop next
 
 #print "yes" "this" "is" "dog"
+
+syntax-extend
+    print "hello"
+    \ syntax-scope
 
 # deferring remaining expressions to bootstrap parser
 syntax-apply-block
