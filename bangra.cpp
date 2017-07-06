@@ -1515,6 +1515,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Any, "Any") \
     \
     T(TYPE_Type, "type") \
+    T(TYPE_Unknown, "unknown") \
     T(TYPE_Symbol, "Symbol") \
     T(TYPE_Builtin, "Builtin") \
     \
@@ -4131,6 +4132,36 @@ public:
     // with these arguments
     std::vector<Any> return_constants;
 
+    struct Args {
+        std::vector<Any> args;
+
+        bool operator==(const Args &other) const {
+            if (args.size() != other.args.size()) return false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                auto &&a = args[i];
+                auto &&b = other.args[i];
+                if (a != b)
+                    return false;
+            }
+            return true;
+        }
+
+        struct Hash {
+            std::size_t operator()(const Args& s) const {
+                std::size_t h = 0;
+                for (auto &&arg : s.args) {
+                    h = HashLen16(h, arg.hash());
+                }
+                return h;
+            }
+        };
+
+    };
+
+    // inlined instances of this label
+    std::unordered_map<Args, Label *, Args::Hash> instances;
+
+
     Label *get_label_enter() const {
         assert(body.enter.type == TYPE_Label);
         return body.enter.label;
@@ -4851,6 +4882,134 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     }
 
     return le;
+}
+
+static void verify_instance_count(Label *label) {
+    if (label->num_instances < 32)
+        return;
+    if (label->name == SYM_Unnamed)
+        return;
+    SCCBuilder scc(label);
+    if (!scc.is_recursive(label))
+        return;
+    set_active_anchor(label->anchor);
+    StyledString ss;
+    ss.out << "instance limit reached while unrolling named recursive function. "
+        "Use less constant arguments.";
+    location_error(ss.str());
+}
+
+static Any unknown_of(const Type *T) {
+    Any result(T);
+    result.type = TYPE_Unknown;
+    return result;
+}
+
+// inlining the arguments of an untyped scope (including continuation)
+// folds arguments and types parameters
+static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
+#if 0
+    ss_cout << "inline-arguments " << label << ":";
+    for (size_t i = 0; i < args.size(); ++i) {
+        ss_cout << " " << args[i];
+    }
+    ss_cout << std::endl;
+#endif
+
+    Label::Args la;
+    la.args = args;
+    auto &&instances = label->instances;
+    auto it = instances.find(la);
+    if (it != instances.end())
+        return it->second;
+    assert(!label->params.empty());
+
+    verify_instance_count(label);
+
+    MangleMap map;
+    std::vector<Parameter *> newparams;
+    size_t lasti = label->params.size() - 1;
+    size_t srci = 0;
+    for (size_t i = 0; i < label->params.size(); ++i) {
+        Parameter *param = label->params[i];
+        if (param->vararg) {
+            assert(i == lasti);
+            size_t ncount = args.size();
+            if (srci < ncount) {
+                ncount -= srci;
+                std::vector<Any> vargs;
+                for (size_t k = 0; k < ncount; ++k) {
+                    Any value = args[srci + k];
+                    if ((value.type == TYPE_Void)
+                        || (value.type == TYPE_Unknown)) {
+                        Parameter *newparam = Parameter::from(param);
+                        newparam->vararg = false;
+                        newparam->type =
+                            (value.type == TYPE_Unknown)?value.typeref:TYPE_Void;
+                        newparam->name = Symbol(SYM_Unnamed);
+                        newparams.push_back(newparam);
+                        vargs.push_back(newparam);
+                    } else {
+                        vargs.push_back(value);
+                    }
+                }
+                map[param] = vargs;
+                srci = ncount;
+            } else {
+                map[param] = {};
+            }
+        } else if (srci < args.size()) {
+            Any value = args[srci];
+            if ((value.type == TYPE_Void)
+                || (value.type == TYPE_Unknown)) {
+                Parameter *newparam = Parameter::from(param);
+                if (value.type == TYPE_Unknown) {
+                    if (newparam->is_typed()
+                        && (newparam->type != value.typeref)) {
+                        StyledString ss;
+                        ss.out << "attempting to retype parameter of type "
+                            << newparam->type << " as " << value.typeref;
+                        location_error(ss.str());
+                    } else {
+                        newparam->type = value.typeref;
+                    }
+                }
+                newparams.push_back(newparam);
+                map[param] = {newparam};
+            } else {
+                if (!srci) {
+                    Parameter *newparam = Parameter::from(param);
+                    newparam->type = TYPE_Nothing;
+                    newparams.push_back(newparam);
+                }
+                map[param] = {value};
+            }
+            srci++;
+        } else {
+            map[param] = {none};
+            srci++;
+        }
+    }
+    Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
+    instances.insert({la, newlabel});
+    return newlabel;
+}
+
+static Label *typify(Label *label, const std::vector<const Type *> &argtypes) {
+    assert(!argtypes.empty());
+    assert(!label->params.empty());
+
+    Any voidval = none;
+    voidval.type = TYPE_Void;
+
+    std::vector<Any> args;
+    args.reserve(argtypes.size());
+    args = { voidval };
+    for (size_t i = 1; i < argtypes.size(); ++i) {
+        args.push_back(unknown_of(argtypes[i]));
+    }
+
+    return fold_type_label(label, args);
 }
 
 //------------------------------------------------------------------------------
@@ -6464,50 +6623,6 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
 struct NormalizeCtx {
     StyledStream ss_cout;
 
-    struct LabelInstances {
-        std::unordered_map<const Type *, Label *> instances;
-    };
-    std::unordered_map<Label *, LabelInstances> label2instance;
-
-    struct HashLabelNodePair {
-        std::size_t operator()(const std::pair<Label *, ILNode *> & s) const {
-            std::size_t h1 = std::hash<Label *>{}(s.first);
-            std::size_t h2 = std::hash<ILNode *>{}(s.second);
-            return HashLen16(h1, h2);
-        }
-    };
-
-    std::unordered_map<std::pair<Label *, ILNode *>, Label *, HashLabelNodePair> labels2ic;
-
-
-    struct LabelArgs {
-        Label *label;
-        std::vector<Any> args;
-
-        bool operator==(const LabelArgs &other) const {
-            if (label != other.label) return false;
-            if (args.size() != other.args.size()) return false;
-            for (size_t i = 0; i < args.size(); ++i) {
-                auto &&a = args[i];
-                auto &&b = other.args[i];
-                if (a != b)
-                    return false;
-            }
-            return true;
-        }
-    };
-    struct HashLabelArgs {
-        std::size_t operator()(const LabelArgs& s) const {
-            std::size_t h = std::hash<Label *>{}(s.label);
-            for (auto &&arg : s.args) {
-                h = HashLen16(h, arg.hash());
-            }
-            return h;
-        }
-    };
-
-    std::unordered_map<LabelArgs, Label *, HashLabelArgs> label2ia;
-
     Label *start_entry;
 
     NormalizeCtx() :
@@ -6536,249 +6651,12 @@ struct NormalizeCtx {
 
     // inlining the continuation of a branch label without arguments
     Label *inline_branch_continuation(Label *label, Any cont) {
-        //ss_cout << "inline_branch_continuation: " << label << std::endl;
-
-        ILNode *node = node_from_continuation(cont);
-
-        auto it = labels2ic.find({label, node });
-        if (it == labels2ic.end()) {
-            if (is_basic_block_like(label)) {
-                labels2ic.insert({{label, node}, label});
-                return label;
-            } else {
-                assert(label->params.size() == 1);
-
-                MangleMap map;
-                std::vector<Parameter *> newparams;
-                Parameter *param = label->params[0];
-                Parameter *newparam = Parameter::from(param);
-                newparam->type = TYPE_Nothing;
-                newparams.push_back(newparam);
-                map[param] = {cont};
-                Label *newlabel = mangle(label, newparams, map);
-                labels2ic.insert({{label, node}, newlabel});
-                return newlabel;
-            }
-        } else {
-            return it->second;
+        if (!is_basic_block_like(label)) {
+            StyledString ss;
+            ss.out << "branch destination must be label, not function" << std::endl;
+            location_error(ss.str());
         }
-    }
-
-    void verify_instance_count(Label *label) {
-        if (label->num_instances < 32)
-            return;
-        if (label->name == SYM_Unnamed)
-            return;
-        SCCBuilder scc(label);
-        if (!scc.is_recursive(label))
-            return;
-        set_active_anchor(label->anchor);
-        StyledString ss;
-        ss.out << "instance limit reached while unrolling named recursive function. "
-            "Use less constant arguments.";
-        location_error(ss.str());
-    }
-
-    // inlining the arguments of an untyped scope (including continuation)
-    Label *inline_arguments(Label *label, const std::vector<Any> &args) {
-#if 0
-        ss_cout << "inline-arguments " << label << ":";
-        for (size_t i = 0; i < args.size(); ++i) {
-            ss_cout << " " << args[i];
-        }
-        ss_cout << std::endl;
-#endif
-
-        struct LabelArgs la;
-        la.label = label;
-        la.args = args;
-        auto it = label2ia.find(la);
-        if (it == label2ia.end()) {
-            assert(!label->params.empty());
-
-            verify_instance_count(label);
-
-            MangleMap map;
-            std::vector<Parameter *> newparams;
-            size_t lasti = label->params.size() - 1;
-            size_t srci = 0;
-            for (size_t i = 0; i < label->params.size(); ++i) {
-                Parameter *param = label->params[i];
-                if (param->vararg) {
-                    assert(i == lasti);
-                    size_t ncount = args.size();
-                    if (srci < ncount) {
-                        ncount -= srci;
-                        std::vector<Any> vargs;
-                        for (size_t k = 0; k < ncount; ++k) {
-                            Any value = args[srci + k];
-                            if (value.type == TYPE_Void) {
-                                Parameter *newparam = Parameter::from(param);
-                                newparam->vararg = false;
-                                newparam->type = TYPE_Void;
-                                newparam->name = Symbol(SYM_Unnamed);
-                                newparams.push_back(newparam);
-                                vargs.push_back(newparam);
-                            } else {
-                                vargs.push_back(value);
-                            }
-                        }
-                        map[param] = vargs;
-                        srci = ncount;
-                    } else {
-                        map[param] = {};
-                    }
-                } else if (srci < args.size()) {
-                    Any value = args[srci];
-                    if (value.type == TYPE_Void) {
-                        Parameter *newparam = Parameter::from(param);
-                        newparams.push_back(newparam);
-                        map[param] = {newparam};
-                    } else {
-                        if (!srci) {
-                            Parameter *newparam = Parameter::from(param);
-                            newparam->type = TYPE_Nothing;
-                            newparams.push_back(newparam);
-                        }
-                        map[param] = {value};
-                    }
-                    srci++;
-                } else {
-                    map[param] = {none};
-                    srci++;
-                }
-            }
-            Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
-            label2ia.insert({la, newlabel});
-            return newlabel;
-        } else {
-            return it->second;
-        }
-    }
-
-    Label *typify(Label *label, const std::vector<const Type *> &argtypes) {
-#if 0
-        ss_cout << "typify " << label << ":";
-        for (size_t i = 0; i < argtypes.size(); ++i) {
-            ss_cout << " " << argtypes[i];
-        }
-        ss_cout << std::endl;
-#endif
-
-        assert(!argtypes.empty());
-        assert(!label->params.empty());
-
-        std::vector<const Type *> hashargs = { TYPE_Nothing };
-        for (size_t i = 1; i < argtypes.size(); ++i) {
-            hashargs.push_back(argtypes[i]);
-        }
-        auto labeltype = TypedLabel(hashargs);
-
-        auto it = label2instance.find(label);
-        if (it != label2instance.end()) {
-            auto it2 = it->second.instances.find(labeltype);
-            if (it2 != it->second.instances.end()) {
-                return it2->second;
-            }
-        }
-
-        bool needs_typing = false;
-        {
-            // check if function needs typing
-            size_t srci = 1;
-            for (size_t i = 1; i < label->params.size(); ++i) {
-                Parameter *param = label->params[i];
-                if (param->vararg) {
-                    // vararg parameters must be expanded
-                    assert(!param->is_typed());
-                    needs_typing = true;
-                    break;
-                } else if (srci < argtypes.size()) {
-                    const Type *argtype = argtypes[srci];
-                    if (param->type != argtype) {
-                        needs_typing = true;
-                        break;
-                    } else {
-                        srci++;
-                    }
-                } else {
-                    needs_typing = true;
-                    break;
-                }
-            }
-        }
-
-        Label *newlabel = nullptr;
-        if (needs_typing) {
-            verify_instance_count(label);
-
-            MangleMap map;
-            std::vector<Parameter *> newparams;
-            size_t lasti = label->params.size() - 1;
-            size_t srci = 0;
-            for (size_t i = 0; i < label->params.size(); ++i) {
-                Parameter *param = label->params[i];
-                if (srci > 0) {
-                    if (param->is_typed()) {
-                        StyledString ss;
-                        ss.out << "parameter is already typed as " << param->type;
-                        location_error(ss.str());
-                    }
-                }
-                if (param->vararg) {
-                    assert(i == lasti);
-                    size_t ncount = argtypes.size();
-                    if (srci < ncount) {
-                        ncount -= srci;
-                        std::vector<Any> vargs;
-                        for (size_t k = 0; k < ncount; ++k) {
-                            Parameter *newparam = Parameter::from(param);
-                            newparam->type = argtypes[srci + k];
-                            newparam->vararg = false;
-                            newparam->name = Symbol(SYM_Unnamed);
-                            newparams.push_back(newparam);
-                            vargs.push_back(newparam);
-                        }
-                        map[param] = vargs;
-                        srci = ncount;
-                    } else {
-                        map[param] = {};
-                    }
-                } else if (srci < argtypes.size()) {
-                    const Type *argtype = argtypes[srci];
-                    Parameter *newparam = Parameter::from(param);
-                    if (srci == 0) {
-                        // don't touch type of continuation
-                    } else {
-                        newparam->type = argtype;
-                    }
-                    newparams.push_back(newparam);
-                    map[param] = {newparam};
-                    srci++;
-                } else {
-                    map[param] = {none};
-                    srci++;
-                }
-            }
-            newlabel = mangle(label, newparams, map);
-        } else {
-            newlabel = label;
-        }
-        if (it == label2instance.end()) {
-            it = label2instance.insert({label, LabelInstances()}).first;
-        }
-        it->second.instances.insert({labeltype, newlabel});
-
-#if 0
-        StyledStream ss(std::cout);
-        ss << "before:" << std::endl;
-        stream_label(ss, label, StreamLabelFormat::debug_scope());
-        ss << "after:" << std::endl;
-        stream_label(ss, newlabel, StreamLabelFormat::debug_scope());
-        ss << std::endl;
-#endif
-
-        return newlabel;
+        return label;
     }
 
     Any type_continuation(Any dest, const std::vector<const Type *> &argtypes) {
@@ -7064,7 +6942,7 @@ struct NormalizeCtx {
             }
         }
 
-        Label *newl = inline_arguments(enter.label, keys);
+        Label *newl = fold_type_label(enter.label, keys);
         l->unlink_backrefs();
         enter = newl;
         args = callargs;
@@ -8207,7 +8085,7 @@ struct NormalizeCtx {
         for (size_t i = 1; i < enter_label->params.size(); ++i) {
             newargs.push_back(voidarg);
         }
-        Label *newl = inline_arguments(enter_label, newargs);
+        Label *newl = fold_type_label(enter_label, newargs);
         l->unlink_backrefs();
         args[0] = none;
         enter = newl;
@@ -8549,7 +8427,7 @@ struct NormalizeCtx {
                             for (size_t i = 1; i < l->params.size(); ++i) {
                                 newargs.push_back(voidarg);
                             }
-                            Label *newl = inline_arguments(l, newargs);
+                            Label *newl = fold_type_label(l, newargs);
 
                             ss_cout << l << "(" << cont << ") -> " << newl << std::endl;
 
@@ -9181,6 +9059,11 @@ struct Expander {
         return result;
     }
 
+    /*
+    Any expand_syntax_extend(const List *list, const Any &dest, const Any &longdest) {
+
+    }*/
+
     Any expand_syntax_apply_block(const List *it, const Any &dest, const Any &longdest) {
         auto _anchor = get_active_anchor();
         verify_list_parameter_count(it, 1, 1);
@@ -9249,6 +9132,10 @@ struct Expander {
                 case KW_SyntaxApplyBlock: {
                     return expand_syntax_apply_block(list, dest, longdest);
                 } break;
+                /*
+                case KW_SyntaxExtend: {
+                    return expand_syntax_extend(list, dest, longdest);
+                } break;*/
                 case KW_Let: {
                     return expand_let(list, dest, longdest);
                 } break;
@@ -9371,7 +9258,12 @@ static void init_types() {
         TYPE_SizeT = TYPE_U32;
     }
 
-    DEFINE_OPAQUE_HANDLE_TYPE("type", Type, TYPE_Type);
+    TYPE_Type = Typename(String::from("type"));
+    TYPE_Unknown = Typename(String::from("Unknown"));
+    const Type *_TypePtr = Pointer(Typename(String::from("_type")));
+    cast<TypenameType>(const_cast<Type *>(TYPE_Type))->finalize(_TypePtr);
+    cast<TypenameType>(const_cast<Type *>(TYPE_Unknown))->finalize(_TypePtr);
+
     DEFINE_BASIC_TYPE("Symbol", Symbol, TYPE_Symbol, TYPE_U64);
     DEFINE_BASIC_TYPE("Builtin", Builtin, TYPE_Builtin, TYPE_U64);
 

@@ -455,8 +455,10 @@ fn walk-list (on-leaf l depth)
             \ true
         loop next
 
+#print "yes" "this" "is" "dog"
+
 # deferring remaining expressions to bootstrap parser
-#syntax-apply-block
+syntax-apply-block
     fn (anchor exprs env)
         walk-list
             fn on-leaf (value depth)
