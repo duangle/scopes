@@ -77,6 +77,16 @@ fn Any-extract-i32 (val)
     assert-typeof val Any
     trunc (Any-payload val) i32
 
+fn syntax->anchor (sx)
+    assert-typeof sx Syntax
+    extractvalue (load sx) 0
+fn syntax->datum (sx)
+    assert-typeof sx Syntax
+    extractvalue (load sx) 1
+fn syntax-quoted? (sx)
+    assert-typeof sx Syntax
+    extractvalue (load sx) 2
+
 fn list-empty? (l)
     assert-typeof l list
     icmp== (ptrtoint l size_t) 0:usize
@@ -176,14 +186,15 @@ fn Any-new (val)
     fn construct (outval)
         insertvalue (insertvalue (undef Any) (typeof val) 0) outval 1
 
-    if (constant? val)
+    if (type== (typeof val) Any) val
+    elseif (constant? val)
         Any-wrap val
     else
         let val =
             bitcast val
                 type-storage (typeof val)
         if (pointer? val)
-            compiler-message "wrapping pointer"
+            #compiler-message "wrapping pointer"
             construct
                 ptrtoint val u64
         elseif (integer? val)
@@ -419,9 +430,10 @@ fn print (...)
         elseif (== T f32)
             printf "%g" val
         else
-            io-write "<value of type "
-            io-write (repr (typeof val))
-            io-write ">"
+            io-write (repr val)
+            #io-write "<value of type "
+            #io-write (repr (typeof val))
+            #io-write ">"
 
     let [loop] i = 0
     if (< i (va-countof ...))
@@ -462,8 +474,30 @@ fn walk-list (on-leaf l depth)
 #print "yes" "this" "is" "dog"
 
 syntax-extend
-    print "hello"
+    # install general list hook for this scope
+    # is called for every list the expander sees
+    fn list-handler (topexpr env)
+        let expr =
+            Any-dispatch (list-at topexpr)
+        if (== (typeof expr) Syntax)
+            print expr
+        else
+        #walk-list
+            fn on-leaf (value depth)
+                print-spaces depth
+                #Any-dispatch value
+                io-write
+                    Any-repr value
+                io-write "\n"
+            unconst (Any-extract-list expr)
+            unconst 0
+        #print (i32 (list-countof topexpr))
+        return topexpr env
+    set-scope-symbol! syntax-scope (string->Symbol "#list")
+        compile (typify list-handler list Scope) #'dump-module
     \ syntax-scope
+
+#test
 
 # deferring remaining expressions to bootstrap parser
 syntax-apply-block

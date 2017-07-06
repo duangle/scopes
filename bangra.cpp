@@ -466,7 +466,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
-    T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_TypeAt) T(KW_SyntaxExtend) \
+    T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_SetScopeSymbol) \
+    T(FN_TypeAt) T(KW_SyntaxExtend) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
@@ -6544,29 +6545,32 @@ enum {
     CF_SkipOpts         = (1 << 2),
 };
 
-Any compile(Label *fn, uint64_t flags) {
+static DisassemblyListener *disassembly_listener = nullptr;
+static Any compile(Label *fn, uint64_t flags) {
     GenerateCtx ctx;
     auto result = ctx.generate(fn);
 
     auto module = result.first;
     auto func = result.second;
 
-    LLVMExecutionEngineRef ee = nullptr;
-    char *errormsg = nullptr;
+    if (!ee) {
+        char *errormsg = nullptr;
 
-    LLVMMCJITCompilerOptions opts;
-    LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
-    opts.OptLevel = 0;
+        LLVMMCJITCompilerOptions opts;
+        LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
+        opts.OptLevel = 0;
 
-    if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
-        sizeof(opts), &errormsg)) {
-        location_error(String::from_cstr(errormsg));
+        if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
+            sizeof(opts), &errormsg)) {
+            location_error(String::from_cstr(errormsg));
+        }
+
+        llvm::ExecutionEngine *pEE = reinterpret_cast<llvm::ExecutionEngine*>(ee);
+        disassembly_listener = new DisassemblyListener(pEE);
+        pEE->RegisterJITEventListener(disassembly_listener);
+    } else {
+        LLVMAddModule(ee, module);
     }
-    bangra::ee = ee;
-
-    llvm::ExecutionEngine *pEE = reinterpret_cast<llvm::ExecutionEngine*>(ee);
-    auto listener = new DisassemblyListener(pEE);
-    pEE->RegisterJITEventListener(listener);
 
 #if BANGRA_OPTIMIZE_ASSEMBLY
     if (!(flags & CF_SkipOpts)) {
@@ -6581,8 +6585,8 @@ Any compile(Label *fn, uint64_t flags) {
     if (flags & CF_DumpDisassembly) {
         //auto td = LLVMGetExecutionEngineTargetData(ee);
         auto tm = LLVMGetExecutionEngineTargetMachine(ee);
-        auto it = listener->sizes.find(pfunc);
-        if (it != listener->sizes.end()) {
+        auto it = disassembly_listener->sizes.find(pfunc);
+        if (it != disassembly_listener->sizes.end()) {
             do_disassemble(tm, pfunc, it->second);
         } else {
             std::cout << "no disassembly available\n";
@@ -7381,6 +7385,13 @@ struct NormalizeCtx {
             const Type *T = args[1];
             args[2].verify(TYPE_Symbol);
             const_cast<Type *>(T)->bind(args[2].symbol, args[3]);
+            RETARGS();
+        } break;
+        case SFXFN_SetScopeSymbol: {
+            CHECKARGS(3, 3);
+            Scope *scope = args[1];
+            args[2].verify(TYPE_Symbol);
+            scope->bind(args[2].symbol, args[3]);
             RETARGS();
         } break;
         case FN_TypeAt: {
@@ -8713,12 +8724,18 @@ struct Expander {
     const List *next;
     Any voidval;
 
+    const Type *list_expander_func_type;
+
     Expander(Label *_state, Scope *_env, const List *_next = EOL) :
         state(_state),
         env(_env),
         next(_next),
-        voidval(none) {
+        voidval(none),
+        list_expander_func_type(nullptr) {
         voidval.type = TYPE_Void;
+        list_expander_func_type = Pointer(Function(
+            Tuple({TYPE_List, TYPE_Scope}),
+            {TYPE_List, TYPE_Scope}));
     }
 
     ~Expander() {}
@@ -9192,6 +9209,29 @@ struct Expander {
 
             Any head = unsyntax(list->at);
 
+            Any list_handler = none;
+            if (env->lookup(Symbol(SYM_ListWildcard), list_handler)) {
+                if (list_handler.type != list_expander_func_type) {
+                    StyledString ss;
+                    ss.out << "custom list expander has wrong type "
+                        << list_handler.type << ", must be "
+                        << list_expander_func_type;
+                    location_error(ss.str());
+                }
+                struct ListScopePair { const List *topit; Scope *env; };
+                typedef ListScopePair (*HandlerFuncType)(const List *, Scope *);
+                HandlerFuncType f = (HandlerFuncType)list_handler.pointer;
+                auto result = f(List::from(sx, next), env);
+                const Syntax *newsx = result.topit->at;
+                if (newsx != sx) {
+                    sx = newsx;
+                    set_active_anchor(sx->anchor);
+                    expr = sx->datum;
+                }
+                next = result.topit->next;
+                env = result.env;
+            }
+
             // resolve symbol
             if (head.type == TYPE_Symbol) {
                 env->lookup(head.symbol, head);
@@ -9222,6 +9262,7 @@ struct Expander {
                     verify_list_parameter_count(list, 1, -1);
                     list = list->next;
                     assert(list != EOL);
+                    return expand_call(list, dest, longdest);
                 } break;
                 default: break;
                 }
