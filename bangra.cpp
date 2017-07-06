@@ -4907,6 +4907,10 @@ static Any unknown_of(const Type *T) {
 
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
+// arguments are treated as follows:
+// TYPE_Void = leave the parameter as-is
+// TYPE_Unknown = type the parameter
+// any other = inline the argument and remove the parameter
 static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
 #if 0
     ss_cout << "inline-arguments " << label << ":";
@@ -6621,15 +6625,15 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
         FARITH_OPF(FRem, std::fmod)
 
 struct NormalizeCtx {
+#if BANGRA_DEBUG_CODEGEN
     StyledStream ss_cout;
+#endif
 
     Label *start_entry;
 
     NormalizeCtx() :
 #if BANGRA_DEBUG_CODEGEN
         ss_cout(std::cout),
-#else
-        ss_cout(nullout),
 #endif
         start_entry(nullptr)
     {}
@@ -6861,7 +6865,9 @@ struct NormalizeCtx {
     }
 
     void fold_pure_function_call(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "folding pure function call in " << l << std::endl;
+#endif
 
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
@@ -6912,20 +6918,25 @@ struct NormalizeCtx {
         l->link_backrefs();
     }
 
-    bool fold_constant_label_arguments(Label *l) {
-        if (!has_foldable_args(l)) {
+    bool fold_type_label_arguments(Label *l) {
+        if (!has_foldable_args(l)
+            && all_params_typed(l->get_label_enter())) {
             return false;
         }
 
-        ss_cout << "folding constant arguments in " << l << std::endl;
+#if BANGRA_DEBUG_CODEGEN
+        ss_cout << "folding & typing arguments in " << l << std::endl;
+#endif
 
         auto &&enter = l->body.enter;
         assert(enter.type == TYPE_Label);
 
         // inline constant arguments
         std::vector<Any> callargs;
+
         Any anyval = none;
         anyval.type = TYPE_Void;
+
         std::vector<Any> keys;
         auto &&args = l->body.args;
         callargs.push_back(args[0]);
@@ -6937,7 +6948,7 @@ struct NormalizeCtx {
             } else if (is_return_parameter(arg)) {
                 keys.push_back(arg);
             } else {
-                keys.push_back(anyval);
+                keys.push_back(unknown_of(arg.indirect_type()));
                 callargs.push_back(arg);
             }
         }
@@ -6949,22 +6960,6 @@ struct NormalizeCtx {
         l->link_backrefs();
 
         return true;
-    }
-
-    void type_label_call(Label *l) {
-        ss_cout << "typing label in " << l << std::endl;
-
-        auto &&enter = l->body.enter;
-        assert(enter.type == TYPE_Label);
-        auto &&args = l->body.args;
-        std::vector<const Type *> argtypes = {};
-        for (auto &&arg : args) {
-            argtypes.push_back(arg.indirect_type());
-        }
-        Label *newenter = typify(enter.label, argtypes);
-        l->unlink_backrefs();
-        enter = newenter;
-        l->link_backrefs();
     }
 
     // returns true if the builtin folds regardless of whether the arguments are
@@ -7337,7 +7332,9 @@ struct NormalizeCtx {
     }
 
     void fold_type_call(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "folding type call in " << l << std::endl;
+#endif
 
         auto &&enter = l->body.enter;
         assert(enter.type == TYPE_Type);
@@ -7363,7 +7360,9 @@ struct NormalizeCtx {
     }
 
     bool fold_builtin_call(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "folding builtin call in " << l << std::endl;
+#endif
 
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
@@ -7972,7 +7971,9 @@ struct NormalizeCtx {
     }
 
     void inline_branch_continuations(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "inlining branch continuations in " << l << std::endl;
+#endif
 
         auto &&args = l->body.args;
         CHECKARGS(3, 3);
@@ -8029,7 +8030,9 @@ struct NormalizeCtx {
 
     // clear continuation argument and clear it for labels that use it
     void delete_continuation(Label *owner) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "deleting continuation of " << owner << std::endl;
+#endif
 
         assert(!owner->params.empty());
         Parameter *param = owner->params[0];
@@ -8076,7 +8079,9 @@ struct NormalizeCtx {
         assert(enter.type == TYPE_Label);
         Label *enter_label = enter.label;
         assert(!args.empty());
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "inlining label call to " << enter_label << " in " << l << std::endl;
+#endif
 
         Any voidarg = none;
         voidarg.type = TYPE_Void;
@@ -8093,7 +8098,9 @@ struct NormalizeCtx {
     }
 
     void type_continuation_from_label_return_type(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "typing continuation from label return type in " << l << std::endl;
+#endif
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Label);
@@ -8110,16 +8117,17 @@ struct NormalizeCtx {
             args[0] = newarg;
             l->link_backrefs();
         } else {
-
-
-
+#if BANGRA_DEBUG_CODEGEN
             ss_cout << "unexpected return type: " << cont_type << std::endl;
+#endif
             assert(false && "todo: unexpected return type");
         }
     }
 
     void type_continuation_from_builtin_call(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "typing continuation from builtin call in " << l << std::endl;
+#endif
         std::vector<const Type *> argtypes;
         argtypes_from_builtin_call(l, argtypes);
         auto &&args = l->body.args;
@@ -8130,7 +8138,9 @@ struct NormalizeCtx {
     }
 
     void type_continuation_from_function_call(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "typing continuation from function call in " << l << std::endl;
+#endif
         std::vector<const Type *> argtypes;
         argtypes_from_function_call(l, argtypes);
         auto &&args = l->body.args;
@@ -8141,7 +8151,9 @@ struct NormalizeCtx {
     }
 
     void type_continuation_call(Label *l) {
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "typing continuation call in " << l << std::endl;
+#endif
         auto &&args = l->body.args;
         if (args[0].type != TYPE_Nothing) {
             args[0].type = TYPE_Nothing;
@@ -8216,10 +8228,14 @@ struct NormalizeCtx {
 
         while (!todo.empty()) {
             Label *l = pop_label();
+#if BANGRA_DEBUG_CODEGEN
             ss_cout << "processing " << l << std::endl;
+#endif
 
         process_body:
+#if BANGRA_DEBUG_CODEGEN
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
+#endif
             assert(all_params_typed(l));
             //assert(is_basic_block_like(l) || !is_return_param_typed(l));
             assert(all_args_typed(l));
@@ -8254,6 +8270,7 @@ struct NormalizeCtx {
                     type_continuation_from_builtin_call(l);
                 }
             } else if (is_calling_label(l)) {
+                #if BANGRA_DEBUG_CODEGEN
                 if (!is_done(l->get_label_enter())) {
                     Label *dest = l->get_label_enter();
                     SCCBuilder scc(dest);
@@ -8263,17 +8280,16 @@ struct NormalizeCtx {
                         ss_cout << std::endl;
                     }
                 }
+                #endif
 
-                fold_constant_label_arguments(l);
-
-                if (!all_params_typed(l->get_label_enter())) {
-                    type_label_call(l);
-                }
+                fold_type_label_arguments(l);
 
                 Label *enter_label = l->get_label_enter();
                 if (is_basic_block_like(enter_label)) {
                     if (!has_args(enter_label)) {
+#if BANGRA_DEBUG_CODEGEN
                         ss_cout << "folding jump to label in " << l << std::endl;
+#endif
                         copy_body(l, enter_label);
                         goto process_body;
                     } else {
@@ -8335,8 +8351,10 @@ struct NormalizeCtx {
                 location_error(ss.str());
             }
 
+#if BANGRA_DEBUG_CODEGEN
             ss_cout << "done: ";
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
+#endif
 
             set_done(l);
 
@@ -8397,14 +8415,18 @@ struct NormalizeCtx {
                 // always process deepest illegal labels
                 if (has_illegals.count(l))
                     continue;
+#if BANGRA_DEBUG_CODEGEN
                 ss_cout << "invalid: ";
                 stream_label(ss_cout, l, StreamLabelFormat::debug_single());
+#endif
                 auto users_copy = l->users;
                 // continuation must be eliminated
                 for (auto kv = users_copy.begin(); kv != users_copy.end(); ++kv) {
                     Label *user = kv->first;
                     if (!visited.count(user)) {
+#if BANGRA_DEBUG_CODEGEN
                         ss_cout << "warning: unreachable user encountered" << std::endl;
+#endif
                         continue;
                     }
                     auto &&enter = user->body.enter;
@@ -8421,7 +8443,9 @@ struct NormalizeCtx {
                         auto &&cont = args[0];
                         if ((cont.type == TYPE_Parameter)
                             && (cont.parameter->label == l)) {
+#if BANGRA_DEBUG_CODEGEN
                             ss_cout << "skipping recursive call" << std::endl;
+#endif
                         } else {
                             std::vector<Any> newargs = { cont };
                             for (size_t i = 1; i < l->params.size(); ++i) {
@@ -8429,7 +8453,9 @@ struct NormalizeCtx {
                             }
                             Label *newl = fold_type_label(l, newargs);
 
+#if BANGRA_DEBUG_CODEGEN
                             ss_cout << l << "(" << cont << ") -> " << newl << std::endl;
+#endif
 
                             user->unlink_backrefs();
                             cont = none;
@@ -8438,13 +8464,17 @@ struct NormalizeCtx {
                             numchanges++;
                         }
                     } else {
+#if BANGRA_DEBUG_CODEGEN
                         ss_cout << "warning: invalidated user encountered" << std::endl;
+#endif
                     }
                 }
             }
         } while (numchanges);
 
+#if BANGRA_DEBUG_CODEGEN
         ss_cout << "lowered to CFF in " << iterations << " steps" << std::endl;
+#endif
 
         return entry;
     }

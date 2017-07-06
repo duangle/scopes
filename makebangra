@@ -22,16 +22,24 @@ else
     OPT_O=-O0
     OPT_MODE=-DBANGRA_DEBUG
 fi
+echo "bangra.h"
 clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
+&& echo "bangra.bin.h" \
 && xxd -i bangra.h $DIR/bangra.bin.h \
+&& echo "bangra.b.bin.h" \
 && xxd -i bangra.b $DIR/bangra.b.bin.h \
+&& echo "coro.o" \
 && clang -c -o $DIR/coro.o $DIR/external/coro/coro.c $OPT_G $OPT_O \
+&& echo "linenoise.o" \
 && clang -c -o $DIR/linenoise.o $DIR/external/linenoise-ng/src/linenoise.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
+&& echo "ConvertUTF.o" \
 && clang -c -o $DIR/ConvertUTF.o $DIR/external/linenoise-ng/src/ConvertUTF.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
+&& echo "wcwidth.o" \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
+&& echo "bangra" \
 && clang++ \
     -o $DIR/bangra \
     $DIR/bangra.cpp \
