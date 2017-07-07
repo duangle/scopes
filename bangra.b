@@ -510,7 +510,7 @@ syntax-extend
         #print (i32 (list-countof topexpr))
         return topexpr env
     set-scope-symbol! syntax-scope (string->Symbol "#list")
-        compile (typify list-handler list Scope) 'dump-module #'skip-opts
+        compile (typify list-handler list Scope) 'skip-opts #'dump-module
     \ syntax-scope
 
 #test

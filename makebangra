@@ -41,15 +41,15 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && echo "bangra" \
 && clang++ \
+    -rdynamic \
     -o $DIR/bangra \
     $DIR/bangra.cpp \
     -pedantic -Wall \
-    $OPT_G -rdynamic \
+    $OPT_G \
     -ferror-limit=1 \
     $OPT_MODE -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
     -D_GLIBCXX_USE_CXX11_ABI=0 \
     -lpthread -lm -ldl -ltinfo -lz \
-    -I$DIR/luajit/include/luajit-2.1 $DIR/luajit/lib/libluajit-5.1.a \
     -I$DIR/libffi/include \
     -I$DIR \
     -lclangFrontend -lclangDriver \

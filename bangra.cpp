@@ -167,9 +167,6 @@ const char *bangra_compile_time_date();
 #include "clang/Frontend/MultiplexConsumer.h"
 
 extern "C" {
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
 
 #include "bangra.bin.h"
 #include "bangra.b.bin.h"
@@ -5742,8 +5739,8 @@ static LLVMValueRef LLVMDIBuilderCreateCompileUnit(LLVMDIBuilderRef Builder,
         Builder->createCompileUnit(Lang, File, Dir,
                       Producer, isOptimized, Flags,
                       RV, SplitName,
-                      //llvm::DICompileUnit::DebugEmissionKind::FullDebug,
-                      llvm::DICompileUnit::DebugEmissionKind::LineTablesOnly,
+                      llvm::DICompileUnit::DebugEmissionKind::FullDebug,
+                      //llvm::DICompileUnit::DebugEmissionKind::LineTablesOnly,
                       DWOId));
 }
 
@@ -9907,6 +9904,19 @@ static void setup_stdio() {
 
 } // namespace bangra
 
+static void crash_handler(int sig) {
+  void *array[20];
+  size_t size;
+
+  // get void*'s for all entries on the stack
+  size = backtrace(array, 20);
+
+  // print out all the frames to stderr
+  fprintf(stderr, "Error: signal %d:\n", sig);
+  backtrace_symbols_fd(array, size, STDERR_FILENO);
+  exit(1);
+}
+
 int main(int argc, char *argv[]) {
     using namespace bangra;
     Symbol::_init_symbols();
@@ -9931,6 +9941,9 @@ int main(int argc, char *argv[]) {
 
         bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
     }
+
+    signal(SIGSEGV, crash_handler);
+    signal(SIGABRT, crash_handler);
 
 #define CATCH_EXCEPTION 1
 #if CATCH_EXCEPTION
