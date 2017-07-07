@@ -464,10 +464,10 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Purify) T(FN_Unconst) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
-    T(FN_GetElementPtr) T(FN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
+    T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_SetScopeSymbol) \
-    T(FN_TypeAt) T(KW_SyntaxExtend) \
+    T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
@@ -508,7 +508,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
-    T(FN_AnyExtract, "Any-extract") T(FN_AnyWrap, "Any-wrap") \
+    T(FN_AnyExtract, "Any-extract-constant") T(FN_AnyWrap, "Any-wrap") \
     T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
     T(FN_BitCountOf, "bitcountof") T(FN_IsSigned, "signed?") \
     T(FN_Bitcast, "bitcast") T(FN_IntToPtr, "inttoptr") T(FN_PtrToInt, "ptrtoint") \
@@ -520,7 +520,6 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Countof, "countof") \
     T(FN_Compile, "compile") \
     T(FN_CompilerMessage, "compiler-message") \
-    T(FN_CompilerError, "compiler-error") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
     T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
@@ -557,6 +556,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FPToUI, "fptoui") T(FN_FPToSI, "fptosi") \
     T(FN_UIToFP, "uitofp") T(FN_SIToFP, "sitofp") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
+    T(FN_IntegerType, "integer-type") \
     T(FN_InterpreterVersion, "interpreter-version") \
     T(FN_Iter, "iter") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
@@ -610,12 +610,17 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_TypeKind, "type-kind") \
     T(FN_TypeAt, "type@") \
     T(FN_Undef, "undef") \
+    T(FN_Location, "compiler-anchor") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
     T(FN_ZipFill, "zip-fill") \
     \
     /* builtin and global functions with side effects */ \
     T(SFXFN_CopyMemory, "copy-memory!") \
+    T(SFXFN_Unreachable, "unreachable!") \
+    T(SFXFN_Error, "error!") \
+    T(SFXFN_CompilerError, "compiler-error!") \
+    T(SFXFN_SetAnchor, "set-anchor!") \
     T(SFXFN_LabelAppendParameter, "label-append-parameter!") \
     T(SFXFN_RefSet, "ref-set!") \
     T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
@@ -5685,8 +5690,17 @@ static void build_and_run_opt_passes(LLVMModuleRef module) {
 }
 
 struct GenerateCtx {
+    struct HashFuncLabelPair {
+        size_t operator ()(const std::pair<LLVMValueRef, Label *> &value) const {
+            return
+                HashLen16(std::hash<LLVMValueRef>()(value.first),
+                    std::hash<Label *>()(value.second));
+        }
+    };
+
     std::unordered_map<Label *, LLVMValueRef> label2func;
-    std::unordered_map<Label *, LLVMBasicBlockRef> label2bb;
+    std::unordered_map<std::pair<LLVMValueRef, Label *>,
+        LLVMBasicBlockRef, HashFuncLabelPair> label2bb;
     std::unordered_map<Parameter *, LLVMValueRef> param2value;
     std::unordered_map<const Type *, LLVMTypeRef> type_cache;
     std::vector<const Type *> type_todo;
@@ -6219,6 +6233,8 @@ struct GenerateCtx {
                 retvalue = LLVMBuildFDiv(builder, a, b, ""); } break;
             case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
                 retvalue = LLVMBuildFRem(builder, a, b, ""); } break;
+            case SFXFN_Unreachable:
+                retvalue = LLVMBuildUnreachable(builder); break;
             default: {
                 StyledString ss;
                 ss.out << "IL->IR: unsupported builtin " << enter.builtin << " encountered";
@@ -6337,13 +6353,13 @@ struct GenerateCtx {
 #undef READ_TYPE
 
     LLVMBasicBlockRef label_to_basic_block(Label *label) {
-        auto it = label2bb.find(label);
+        auto old_bb = LLVMGetInsertBlock(builder);
+        LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
+        auto it = label2bb.find({func, label});
         if (it == label2bb.end()) {
-            auto old_bb = LLVMGetInsertBlock(builder);
-            LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
             const char *name = label->name.name()->data;
             auto bb = LLVMAppendBasicBlock(func, name);
-            label2bb[label] = bb;
+            label2bb.insert({{func, label}, bb});
             LLVMPositionBuilderAtEnd(builder, bb);
 
             auto &&params = label->params;
@@ -6430,6 +6446,8 @@ struct GenerateCtx {
         LLVMSetLinkage(func, LLVMExternalLinkage);
 
         finalize_types();
+
+        LLVMDisposeBuilder(builder);
 
 #if BANGRA_DEBUG_CODEGEN
         LLVMDumpModule(module);
@@ -6982,6 +7000,7 @@ struct NormalizeCtx {
         case FN_IsConstant:
         case FN_VaCountOf:
         case FN_VaAt:
+        case FN_Location:
             return true;
         default: return false;
         }
@@ -6991,6 +7010,7 @@ struct NormalizeCtx {
         switch(builtin.value()) {
         case FN_Unconst:
         case FN_Undef:
+        case SFXFN_Unreachable:
             return true;
         default: return false;
         }
@@ -7380,6 +7400,10 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case FN_Location: {
+            CHECKARGS(0, 0);
+            RETARGS(l->body.anchor);
+        } break;
         case SFXFN_SetTypeSymbol: {
             CHECKARGS(3, 3);
             const Type *T = args[1];
@@ -7792,7 +7816,7 @@ struct NormalizeCtx {
             RETARGS(srcl);
             return false;
         } break;
-        case FN_CompilerError: {
+        case SFXFN_CompilerError: {
             CHECKARGS(1, 1);
             location_error(args[1]);
             RETARGS();
@@ -8147,13 +8171,21 @@ struct NormalizeCtx {
 #if BANGRA_DEBUG_CODEGEN
         ss_cout << "typing continuation from builtin call in " << l << std::endl;
 #endif
-        std::vector<const Type *> argtypes;
-        argtypes_from_builtin_call(l, argtypes);
+        auto &&enter = l->body.enter;
+        assert(enter.type == TYPE_Builtin);
         auto &&args = l->body.args;
-        Any newarg = type_continuation(args[0], argtypes);
-        l->unlink_backrefs();
-        args[0] = newarg;
-        l->link_backrefs();
+        if (enter.builtin == SFXFN_Unreachable) {
+            l->unlink_backrefs();
+            args[0] = none;
+            l->link_backrefs();
+        } else {
+            std::vector<const Type *> argtypes;
+            argtypes_from_builtin_call(l, argtypes);
+            Any newarg = type_continuation(args[0], argtypes);
+            l->unlink_backrefs();
+            args[0] = newarg;
+            l->link_backrefs();
+        }
     }
 
     void type_continuation_from_function_call(Label *l) {
@@ -8312,7 +8344,9 @@ struct NormalizeCtx {
                         copy_body(l, enter_label);
                         goto process_body;
                     } else {
-                        assert(is_jumping(l));
+                        if (!is_jumping(l)) {
+                            clear_continuation_arg(l);
+                        }
                         push_label(enter_label);
                     }
                 } else if (is_return_param_typed(enter_label)) {
@@ -9026,11 +9060,10 @@ struct Expander {
         branches.push_back(it);
 
         it = next;
-        next = it->next;
-
         if (it == EOL) {
             location_error(String::from("elseif or else expected"));
         }
+        next = it->next;
 
         const Syntax *sx = it->at;
         it = sx->datum;
@@ -9537,6 +9570,18 @@ static const Type *f_type_storage(const Type *T) {
     return storage_type(T);
 }
 
+static void f_error(const String *msg) {
+    location_error(msg);
+}
+
+static void f_set_anchor(const Anchor *anchor) {
+    set_active_anchor(anchor);
+}
+
+static const Type *f_integer_type(int width, bool issigned) {
+    return Integer(width, issigned);
+}
+
 static void init_globals() {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -9563,9 +9608,14 @@ static void init_globals() {
     DEFINE_PURE_C_FUNCTION(FN_BitCountOf, f_bitcountof, TYPE_I32, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_IsSigned, f_issigned, TYPE_Bool, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_TypeStorage, f_type_storage, TYPE_Type, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_IntegerType, f_integer_type, TYPE_Type, TYPE_I32, TYPE_Bool);
+
 
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
-    DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String)
+    DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
+    //DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
+    //DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
+    DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
 
     globals->bind(Symbol("print-number"),

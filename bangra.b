@@ -31,123 +31,22 @@ fn type== (a b)
     fn assert-type (T)
         if (type? T)
         else
-            compiler-error
+            compiler-error!
                 string-join "type expected, not " (Any-repr (Any-wrap T))
     assert-type a
     assert-type b
     icmp== (ptrtoint a size_t) (ptrtoint b size_t)
 
-fn assert-typeof (a T)
-    if (type== T (typeof a))
-    else
-        compiler-error
-            string-join "type "
-                string-join (Any-repr (Any-wrap T))
-                    string-join " expected, not "
-                        Any-repr (Any-wrap (typeof a))
+fn todo! (msg)
+    compiler-error!
+        string-join "TODO: " msg
 
-fn not (x)
-    assert-typeof x bool
-    bxor x true
-
-fn string->rawstring (s)
-    assert-typeof s string
-    getelementptr s 0 1 0
-
-fn Any-typeof (val)
-    assert-typeof val Any
-    extractvalue val 0
-fn Any-payload (val)
-    assert-typeof val Any
-    extractvalue val 1
-
-fn Any-extract-list (val)
-    assert-typeof val Any
-    inttoptr (Any-payload val) list
-
-fn Any-extract-Syntax (val)
-    assert-typeof val Any
-    inttoptr (Any-payload val) Syntax
-
-fn Any-extract-Symbol (val)
-    assert-typeof val Any
-    bitcast (Any-payload val) Symbol
-
-fn Any-extract-i32 (val)
-    assert-typeof val Any
-    trunc (Any-payload val) i32
-
-fn syntax->anchor (sx)
-    assert-typeof sx Syntax
-    extractvalue (load sx) 0
-fn syntax->datum (sx)
-    assert-typeof sx Syntax
-    extractvalue (load sx) 1
-fn syntax-quoted? (sx)
-    assert-typeof sx Syntax
-    extractvalue (load sx) 2
-
-fn list-empty? (l)
-    assert-typeof l list
-    icmp== (ptrtoint l size_t) 0:usize
-
-fn list-at (l)
-    assert-typeof l list
-    if (list-empty? l)
-        Any-wrap none
-    else
-        extractvalue (load l) 0
-
-fn list-next (l)
-    assert-typeof l list
-    if (list-empty? l) eol
-    else
-        bitcast (extractvalue (load l) 1) list
-
-fn list-at-next (l)
-    assert-typeof l list
-    if (list-empty? l)
-        return (Any-wrap none) eol
-    else
-        return
-            extractvalue (load l) 0
-            bitcast (extractvalue (load l) 1) list
-
-fn list-countof (l)
-    assert-typeof l list
-    if (list-empty? l) 0:u64
-    else
-        extractvalue (load l) 2
-
-fn Any-list? (val)
-    assert-typeof val Any
-    type== (Any-typeof val) list
-
-fn maybe-unsyntax (val)
-    if (type== (Any-typeof val) Syntax)
-        extractvalue (load (Any-extract-Syntax val)) 1
-    else val
-
-fn Any-dispatch (val)
-    assert-typeof val Any
-    let T = (Any-typeof val)
-    if (type== T list)
-        Any-extract-list val
-    elseif (type== T Syntax)
-        Any-extract-Syntax val
-    elseif (type== T Symbol)
-        Any-extract-Symbol val
-    elseif (type== T i32)
-        Any-extract-i32 val
-    else none
-
-fn list-reverse (l)
-    assert-typeof l list
-    fn loop (l next)
-        if (list-empty? l) next
-        else
-            loop (list-next l) (list-cons (list-at l) next)
-    loop l eol
+fn error! (msg)
+    io-write "runtime error: "
+    io-write msg
+    io-write "\n"
+    exit 1
+    unreachable!
 
 fn integer-type? (T)
     icmp== (type-kind T) type-kind-integer
@@ -161,26 +60,6 @@ fn real? (val)
     real-type? (typeof val)
 fn pointer? (val)
     pointer-type? (typeof val)
-
-fn tie-const (a b)
-    if (constant? a) b
-    else (unconst b)
-
-fn powi (base exponent)
-    assert-typeof base i32
-    assert-typeof exponent i32
-    let [loop] result cur exponent =
-        tie-const exponent 1
-        tie-const exponent base
-        \ exponent
-    if (icmp== exponent 0) result
-    else
-        loop
-            if (icmp== (band exponent 1) 0) result
-            else
-                mul result cur
-            mul cur cur
-            lshr exponent 1
 
 fn Any-new (val)
     fn construct (outval)
@@ -204,12 +83,21 @@ fn Any-new (val)
                 else
                     zext val u64
         elseif (real? val)
-            construct
-                bitcast (fpext val f64) u64
+            let T = (typeof val)
+            if (type== T f32)
+                construct
+                    zext (bitcast val u32) u64
+            else
+                construct
+                    bitcast val u64
         else
-            compiler-error
+            compiler-error!
                 string-join "unable to wrap value of storage type "
                     Any-repr (Any-wrap (typeof val))
+
+fn repr (val)
+    Any-repr
+        Any-new val
 
 fn list-new (...)
     fn loop (i tail)
@@ -220,8 +108,8 @@ fn list-new (...)
     loop (va-countof ...) eol
 
 syntax-extend
-
     set-type-symbol! list 'apply-type list-new
+    set-type-symbol! Any 'apply-type Any-new
 
     fn gen-type-op2 (op)
         fn (a b flipped)
@@ -230,13 +118,14 @@ syntax-extend
             else
 
     set-type-symbol! type '== (gen-type-op2 type==)
+    set-type-symbol! string '.. (gen-type-op2 string-join)
 
     set-type-symbol! Nothing '==
         fn (a b flipped)
             type== (typeof a) (typeof b)
     set-type-symbol! Nothing '!=
         fn (a b flipped)
-            not (type== (typeof a) (typeof b))
+            bxor (type== (typeof a) (typeof b)) true
 
     fn setup-int-type (T)
         set-type-symbol! T '== (gen-type-op2 icmp==)
@@ -275,7 +164,7 @@ syntax-extend
                     else
                         fptoui val T
                 else
-                    compiler-error "integer or float expected"
+                    compiler-error! "integer or float expected"
         if (signed? T)
             set-type-symbol! T '> (gen-type-op2 icmp>s)
             set-type-symbol! T '>= (gen-type-op2 icmp>=s)
@@ -310,7 +199,7 @@ syntax-extend
                     else
                         fpext val T
                 else
-                    compiler-error "integer or float expected"
+                    compiler-error! "integer or float expected"
         set-type-symbol! T '== (gen-type-op2 fcmp==o)
         set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
         set-type-symbol! T '> (gen-type-op2 fcmp>o)
@@ -369,7 +258,7 @@ fn op2-dispatch (symbol)
             else
                 return result...
         else
-        compiler-error
+        compiler-error!
             string-join "operation does not apply to types "
                 string-join
                     Any-repr (Any-wrap Ta)
@@ -400,10 +289,138 @@ fn | (...) ((op2-ltr-multiop (op2-dispatch '|)) ...)
 fn ^ (a b) ((op2-dispatch '^) a b)
 fn << (a b) ((op2-dispatch '<<) a b)
 fn >> (a b) ((op2-dispatch '>>) a b)
+fn .. (...) ((op2-ltr-multiop (op2-dispatch '..)) ...)
 
-fn repr (val)
-    Any-repr
-        Any-new val
+fn type-mismatch-string (want-T have-T)
+    .. "type " (repr want-T) " expected, not " (repr have-T)
+
+fn assert-typeof (a T)
+    if (type== T (typeof a))
+    else
+        compiler-error!
+            type-mismatch-string T (typeof a)
+
+fn not (x)
+    assert-typeof x bool
+    bxor x true
+
+fn Any-typeof (val)
+    assert-typeof val Any
+    extractvalue val 0
+
+fn Any-payload (val)
+    assert-typeof val Any
+    extractvalue val 1
+
+fn Any-extract (val T)
+    assert-typeof val Any
+    let valT = (Any-typeof val)
+    if (== valT T)
+        if (constant? val)
+            Any-extract-constant val
+        else
+            let payload = (Any-payload val)
+            let storageT = (type-storage T)
+            if (pointer-type? storageT)
+                inttoptr payload T
+            elseif (integer-type? storageT)
+                trunc payload T
+            elseif (real-type? storageT)
+                bitcast
+                    trunc payload (integer-type (bitcountof storageT) false)
+                    \ T
+            else
+                compiler-error!
+                    .. "unable to extract value of type " T
+    elseif (constant? val)
+        compiler-error!
+            type-mismatch-string T valT
+    else
+        error!
+            type-mismatch-string T valT
+
+fn string->rawstring (s)
+    assert-typeof s string
+    getelementptr s 0 1 0
+
+fn syntax->anchor (sx)
+    assert-typeof sx Syntax
+    extractvalue (load sx) 0
+fn syntax->datum (sx)
+    assert-typeof sx Syntax
+    extractvalue (load sx) 1
+fn syntax-quoted? (sx)
+    assert-typeof sx Syntax
+    extractvalue (load sx) 2
+
+fn list-empty? (l)
+    assert-typeof l list
+    icmp== (ptrtoint l size_t) 0:usize
+
+fn list-at (l)
+    assert-typeof l list
+    if (list-empty? l)
+        Any-wrap none
+    else
+        extractvalue (load l) 0
+
+fn list-next (l)
+    assert-typeof l list
+    if (list-empty? l) eol
+    else
+        bitcast (extractvalue (load l) 1) list
+
+fn list-at-next (l)
+    assert-typeof l list
+    if (list-empty? l)
+        return (Any-wrap none) eol
+    else
+        return
+            extractvalue (load l) 0
+            bitcast (extractvalue (load l) 1) list
+
+fn list-countof (l)
+    assert-typeof l list
+    if (list-empty? l) 0:u64
+    else
+        extractvalue (load l) 2
+
+fn Any-list? (val)
+    assert-typeof val Any
+    type== (Any-typeof val) list
+
+fn maybe-unsyntax (val)
+    if (type== (Any-typeof val) Syntax)
+        extractvalue (load (Any-extract val Syntax)) 1
+    else val
+
+fn list-reverse (l)
+    assert-typeof l list
+    fn loop (l next)
+        if (list-empty? l) next
+        else
+            loop (list-next l) (list-cons (list-at l) next)
+    loop l eol
+
+fn tie-const (a b)
+    if (constant? a) b
+    else (unconst b)
+
+fn powi (base exponent)
+    assert-typeof base i32
+    assert-typeof exponent i32
+    let [loop] result cur exponent =
+        tie-const exponent 1
+        tie-const exponent base
+        \ exponent
+    if (icmp== exponent 0) result
+    else
+        loop
+            if (icmp== (band exponent 1) 0) result
+            else
+                mul result cur
+            mul cur cur
+            lshr exponent 1
 
 # print function
 fn print (...)
@@ -413,7 +430,7 @@ fn print (...)
                 int stb_printf(const char *fmt, ...);
                 " eol
         let printf =
-            Any-extract
+            Any-extract-constant
                 Scope@ lib 'stb_printf
         fn (fmt ...)
             printf (string->rawstring fmt) ...
@@ -464,7 +481,7 @@ fn walk-list (on-leaf l depth)
             print-spaces depth
             io-write ";\n"
             walk-list on-leaf
-                Any-extract-list value
+                Any-extract value list
                 add depth 1
         else
             on-leaf value depth
@@ -478,10 +495,8 @@ syntax-extend
     # is called for every list the expander sees
     fn list-handler (topexpr env)
         let expr =
-            Any-dispatch (list-at topexpr)
-        if (== (typeof expr) Syntax)
-            print expr
-        else
+            syntax->datum (Any-extract (list-at topexpr) Syntax)
+        print expr
         #walk-list
             fn on-leaf (value depth)
                 print-spaces depth
@@ -516,11 +531,11 @@ syntax-apply-block
     branch (type== (typeof 1) i32)
         fn/cc (_)
         fn/cc (_)
-            compiler-error "static assertion failed: argument not i32"
+            compiler-error! "static assertion failed: argument not i32"
     branch (constant? (add 1 2))
         fn/cc (_)
         fn/cc (_)
-            compiler-error "static assertion failed: argument not constant"
+            compiler-error! "static assertion failed: argument not constant"
 
 # naive factorial
     fn/cc fac (_ n)
