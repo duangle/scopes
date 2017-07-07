@@ -143,6 +143,7 @@ const char *bangra_compile_time_date();
 #include <iostream>
 #include <unordered_set>
 #include <deque>
+#include <csignal>
 
 #include <llvm-c/Core.h>
 #include <llvm-c/ExecutionEngine.h>
@@ -152,6 +153,8 @@ const char *bangra_compile_time_date();
 #include <llvm-c/Support.h>
 
 #include "llvm/IR/Module.h"
+#include "llvm/IR/DebugInfoMetadata.h"
+#include "llvm/IR/DIBuilder.h"
 #include "llvm/ExecutionEngine/SectionMemoryManager.h"
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/JITEventListener.h"
@@ -188,7 +191,7 @@ namespace blobs {
 
 #pragma GCC diagnostic ignored "-Wvla-extension"
 // #pragma GCC diagnostic ignored "-Wzero-length-array"
-// #pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
+#pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 // #pragma GCC diagnostic ignored "-Wembedded-directive"
 // #pragma GCC diagnostic ignored "-Wgnu-statement-expression"
 #pragma GCC diagnostic ignored "-Wc99-extensions"
@@ -619,6 +622,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_CopyMemory, "copy-memory!") \
     T(SFXFN_Unreachable, "unreachable!") \
     T(SFXFN_Error, "error!") \
+    T(SFXFN_Abort, "abort!") \
     T(SFXFN_CompilerError, "compiler-error!") \
     T(SFXFN_SetAnchor, "set-anchor!") \
     T(SFXFN_LabelAppendParameter, "label-append-parameter!") \
@@ -5689,6 +5693,105 @@ static void build_and_run_opt_passes(LLVMModuleRef module) {
     LLVMDisposePassManager(modulePasses);
 }
 
+typedef llvm::DIBuilder *LLVMDIBuilderRef;
+
+static LLVMDIBuilderRef LLVMCreateDIBuilder(LLVMModuleRef M) {
+  return new llvm::DIBuilder(*llvm::unwrap(M));
+}
+
+static void LLVMDisposeDIBuilder(LLVMDIBuilderRef Builder) {
+  Builder->finalize();
+  delete Builder;
+}
+
+static llvm::MDNode *value_to_mdnode(LLVMValueRef value) {
+    return value ? cast<llvm::MDNode>(
+        llvm::unwrap<llvm::MetadataAsValue>(value)->getMetadata()) : nullptr;
+}
+
+template<typename T>
+static T *value_to_DI(LLVMValueRef value) {
+    return value ? cast<T>(
+        llvm::unwrap<llvm::MetadataAsValue>(value)->getMetadata()) : nullptr;
+}
+
+static LLVMValueRef mdnode_to_value(llvm::MDNode *node) {
+  return llvm::wrap(
+    llvm::MetadataAsValue::get(*llvm::unwrap(LLVMGetGlobalContext()), node));
+}
+
+typedef llvm::DINode::DIFlags LLVMDIFlags;
+
+static LLVMValueRef LLVMDIBuilderCreateSubroutineType(
+    LLVMDIBuilderRef Builder, LLVMValueRef ParameterTypes,
+    unsigned Flags, unsigned CC) {
+    return mdnode_to_value(
+        Builder->createSubroutineType(value_to_DI<llvm::MDTuple>(ParameterTypes),
+            Flags, CC));
+}
+
+
+
+static LLVMValueRef LLVMDIBuilderCreateCompileUnit(LLVMDIBuilderRef Builder,
+    unsigned Lang,
+    const char *File, const char *Dir, const char *Producer, bool isOptimized,
+    const char *Flags, unsigned RV, const char *SplitName,
+    //DICompileUnit::DebugEmissionKind Kind,
+    uint64_t DWOId) {
+    return mdnode_to_value(
+        Builder->createCompileUnit(Lang, File, Dir,
+                      Producer, isOptimized, Flags,
+                      RV, SplitName,
+                      //llvm::DICompileUnit::DebugEmissionKind::FullDebug,
+                      llvm::DICompileUnit::DebugEmissionKind::LineTablesOnly,
+                      DWOId));
+}
+
+static LLVMValueRef LLVMDIBuilderCreateFunction(
+    LLVMDIBuilderRef Builder, LLVMValueRef Scope, const char *Name,
+    const char *LinkageName, LLVMValueRef File, unsigned LineNo,
+    LLVMValueRef Ty, bool IsLocalToUnit, bool IsDefinition,
+    unsigned ScopeLine, unsigned Flags, bool IsOptimized, LLVMValueRef Decl) {
+  return mdnode_to_value(Builder->createFunction(
+        cast<llvm::DIScope>(value_to_mdnode(Scope)), Name, LinkageName,
+        cast<llvm::DIFile>(value_to_mdnode(File)),
+        LineNo, cast<llvm::DISubroutineType>(value_to_mdnode(Ty)),
+        IsLocalToUnit, IsDefinition, ScopeLine, Flags, IsOptimized,
+        nullptr, value_to_DI<llvm::DISubprogram>(Decl)));
+}
+
+static LLVMValueRef LLVMGetFunctionSubprogram(LLVMValueRef func) {
+    return mdnode_to_value(
+        llvm::cast<llvm::Function>(llvm::unwrap(func))->getSubprogram());
+}
+
+static void LLVMSetFunctionSubprogram(LLVMValueRef func, LLVMValueRef subprogram) {
+    llvm::cast<llvm::Function>(llvm::unwrap(func))->setSubprogram(
+        value_to_DI<llvm::DISubprogram>(subprogram));
+}
+
+static LLVMValueRef LLVMDIBuilderCreateLexicalBlock(LLVMDIBuilderRef Builder,
+    LLVMValueRef Scope, LLVMValueRef File, unsigned Line, unsigned Col) {
+    return mdnode_to_value(Builder->createLexicalBlock(
+        value_to_DI<llvm::DIScope>(Scope),
+        value_to_DI<llvm::DIFile>(File), Line, Col));
+}
+
+static LLVMValueRef LLVMCreateDebugLocation(unsigned Line,
+                                     unsigned Col, const LLVMValueRef Scope,
+                                     const LLVMValueRef InlinedAt) {
+  llvm::MDNode *SNode = value_to_mdnode(Scope);
+  llvm::MDNode *INode = value_to_mdnode(InlinedAt);
+  return mdnode_to_value(llvm::DebugLoc::get(Line, Col, SNode, INode).get());
+}
+
+static LLVMValueRef LLVMDIBuilderCreateFile(
+    LLVMDIBuilderRef Builder, const char *Filename,
+                            const char *Directory) {
+  return mdnode_to_value(Builder->createFile(Filename, Directory));
+}
+
+
 struct GenerateCtx {
     struct HashFuncLabelPair {
         size_t operator ()(const std::pair<LLVMValueRef, Label *> &value) const {
@@ -5701,12 +5804,16 @@ struct GenerateCtx {
     std::unordered_map<Label *, LLVMValueRef> label2func;
     std::unordered_map<std::pair<LLVMValueRef, Label *>,
         LLVMBasicBlockRef, HashFuncLabelPair> label2bb;
+
+    std::unordered_map<Label *, LLVMValueRef> label2md;
+    std::unordered_map<SourceFile *, LLVMValueRef> file2value;
     std::unordered_map<Parameter *, LLVMValueRef> param2value;
     std::unordered_map<const Type *, LLVMTypeRef> type_cache;
     std::vector<const Type *> type_todo;
 
     LLVMModuleRef module;
     LLVMBuilderRef builder;
+    LLVMDIBuilderRef di_builder;
 
     LLVMTypeRef voidT;
     LLVMTypeRef i1T;
@@ -5725,6 +5832,61 @@ struct GenerateCtx {
 
     GenerateCtx() :
         active_function(nullptr) {
+    }
+
+    LLVMValueRef source_file_to_scope(SourceFile *sf) {
+        auto it = file2value.find(sf);
+        if (it != file2value.end())
+            return it->second;
+
+        char *dn = strdup(sf->path.name()->data);
+        char *bn = strdup(dn);
+
+        LLVMValueRef result = LLVMDIBuilderCreateFile(di_builder,
+            basename(bn), dirname(dn));
+        free(dn);
+        free(bn);
+
+        file2value.insert({ sf, result });
+
+        return result;
+    }
+
+    LLVMValueRef label_to_subprogram(Label *l) {
+        auto it = label2md.find(l);
+        if (it != label2md.end())
+            return it->second;
+
+        const Anchor *anchor = l->anchor;
+
+        LLVMValueRef difile = source_file_to_scope(anchor->file);
+
+        LLVMValueRef subroutinevalues[] = {
+            nullptr
+        };
+        LLVMValueRef disrt = LLVMDIBuilderCreateSubroutineType(di_builder,
+            LLVMMDNode(subroutinevalues, 1), 0, 0);
+
+        LLVMValueRef difunc = LLVMDIBuilderCreateFunction(
+            di_builder, difile, l->name.name()->data, l->name.name()->data,
+            difile, anchor->lineno, disrt, false, true,
+            anchor->lineno, 0, false, nullptr);
+
+        label2md.insert({ l, difunc });
+        return difunc;
+    }
+
+
+    LLVMValueRef anchor_to_location(const Anchor *anchor) {
+
+        auto old_bb = LLVMGetInsertBlock(builder);
+        LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
+        LLVMValueRef disp = LLVMGetFunctionSubprogram(func);
+
+        LLVMValueRef result = LLVMCreateDebugLocation(
+            anchor->lineno, anchor->column, disp, nullptr);
+
+        return result;
     }
 
     void define_builtin_functions() {
@@ -6047,6 +6209,9 @@ struct GenerateCtx {
 
         set_active_anchor(label->body.anchor);
 
+        LLVMValueRef diloc = anchor_to_location(label->body.anchor);
+        LLVMSetCurrentDebugLocation(builder, diloc);
+
         assert(!args.empty());
         size_t argcount = args.size() - 1;
         size_t argn = 1;
@@ -6260,6 +6425,7 @@ struct GenerateCtx {
                 }
                 LLVMBuildBr(builder, LLVMValueAsBasicBlock(value));
             } else {
+                LLVMSetCurrentDebugLocation(builder, diloc);
                 retvalue = LLVMBuildCall(builder, value, values, argcount, "");
                 if (LLVMGetReturnType(LLVMGetElementType(LLVMTypeOf(value))) == voidT)
                     retvalue = nullptr;
@@ -6347,6 +6513,9 @@ struct GenerateCtx {
         } else {
             assert(false && "todo: continuing with unexpected value");
         }
+
+        LLVMSetCurrentDebugLocation(builder, nullptr);
+
     }
 #undef READ_ANY
 #undef READ_VALUE
@@ -6393,6 +6562,7 @@ struct GenerateCtx {
             active_function = label;
 
             auto old_bb = LLVMGetInsertBlock(builder);
+
             const char *name = label->name.name()->data;
 
             auto &&params = label->params;
@@ -6405,9 +6575,14 @@ struct GenerateCtx {
             for (size_t i = 0; i < paramcount; ++i) {
                 arg_types[i] = type_to_llvm_type(params[i + 1]->type);
             }
+
+            //LLVMSetCurrentDebugLocation(builder, anchor_to_location(label->anchor));
+
             auto functype = LLVMFunctionType(return_type, arg_types, paramcount, false);
             auto func = LLVMAddFunction(module, name, functype);
             LLVMSetLinkage(func, LLVMPrivateLinkage);
+
+            LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
 
             for (size_t i = 0; i < paramcount; ++i) {
                 Parameter *param = params[i + 1];
@@ -6440,7 +6615,21 @@ struct GenerateCtx {
         const char *name = entry->name.name()->data;
         module = LLVMModuleCreateWithName(name);
         builder = LLVMCreateBuilder();
+        di_builder = LLVMCreateDIBuilder(module);
         define_builtin_functions();
+
+        const char *DebugStr = "Debug Info Version";
+        LLVMValueRef DbgVer[3];
+        DbgVer[0] = LLVMConstInt(i32T, 1, 0);
+        DbgVer[1] = LLVMMDString(DebugStr, strlen(DebugStr));
+        DbgVer[2] = LLVMConstInt(i32T, 3, 0);
+        LLVMAddNamedMetadataOperand(module, "llvm.module.flags",
+            LLVMMDNode(DbgVer, 3));
+
+        LLVMDIBuilderCreateCompileUnit(di_builder,
+            llvm::dwarf::DW_LANG_C99, "file", "directory", "bangra",
+            false, "", 0, "", 0);
+        //LLVMAddNamedMetadataOperand(module, "llvm.dbg.cu", dicu);
 
         auto func = label_to_function(entry);
         LLVMSetLinkage(func, LLVMExternalLinkage);
@@ -6448,6 +6637,7 @@ struct GenerateCtx {
         finalize_types();
 
         LLVMDisposeBuilder(builder);
+        LLVMDisposeDIBuilder(di_builder);
 
 #if BANGRA_DEBUG_CODEGEN
         LLVMDumpModule(module);
@@ -6457,7 +6647,7 @@ struct GenerateCtx {
             LLVMDumpModule(module);
             location_error(
                 String::join(
-                    String::from("IL->IR: "),
+                    String::from("LLVM: "),
                     String::from_cstr(errmsg)));
         }
         LLVMDisposeMessage(errmsg);
@@ -9615,6 +9805,7 @@ static void init_globals() {
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
     //DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
     //DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
+    DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
 

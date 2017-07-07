@@ -45,7 +45,7 @@ fn error! (msg)
     io-write "runtime error: "
     io-write msg
     io-write "\n"
-    exit 1
+    abort!
     unreachable!
 
 fn integer-type? (T)
@@ -494,6 +494,7 @@ syntax-extend
     # install general list hook for this scope
     # is called for every list the expander sees
     fn list-handler (topexpr env)
+        Any-extract (list-at topexpr) list
         let expr =
             syntax->datum (Any-extract (list-at topexpr) Syntax)
         print expr
@@ -509,7 +510,7 @@ syntax-extend
         #print (i32 (list-countof topexpr))
         return topexpr env
     set-scope-symbol! syntax-scope (string->Symbol "#list")
-        compile (typify list-handler list Scope) #'dump-module
+        compile (typify list-handler list Scope) 'dump-module #'skip-opts
     \ syntax-scope
 
 #test
