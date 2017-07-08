@@ -1,0 +1,26 @@
+{
+    "name": "bangra",
+    "displayName": "bangra",
+    "description": "Language support for Bangra",
+    "version": "0.0.1",
+    "publisher": "duangle",
+    "engines": {
+        "vscode": "^1.13.0"
+    },
+    "categories": [
+        "Languages"
+    ],
+    "contributes": {
+        "languages": [{
+            "id": "bangra",
+            "aliases": ["Bangra", "bangra"],
+            "extensions": [".b"],
+            "configuration": "./language-configuration.json"
+        }],
+        "grammars": [{
+            "language": "bangra",
+            "scopeName": "source.bangra",
+            "path": "./syntaxes/bangra.tmLanguage.json"
+        }]
+    }
+}
