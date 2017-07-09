@@ -1,8 +1,8 @@
 {
     "name": "bangra",
-    "displayName": "bangra",
+    "displayName": "Bangra",
     "description": "Language support for Bangra",
-    "version": "0.0.1",
+    "version": "0.1.1",
     "publisher": "duangle",
     "engines": {
         "vscode": "^1.13.0"

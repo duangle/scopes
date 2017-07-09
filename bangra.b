@@ -1,5 +1,5 @@
 #
-    Bangra Interpreter
+    Bangra Compiler
     Copyright (c) 2017 Leonard Ritter
 
     Permission is hereby granted, free of charge, to any person obtaining a copy

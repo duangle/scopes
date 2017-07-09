@@ -1,71 +1,45 @@
 About Bangra
 ============
 
-Bangra is a minimalist, interpreted, mixed functional/imperative general purpose
-programming language inspired by Scheme, Python and C.
+Bangra is a general purpose programming language and compiler infrastructure 
+specifically suited for short turnaround prototyping and development of high 
+performance applications in need of multi-stage compilation at runtime.
 
-The core interpreter is written in under 6k lines of C++ code, and exports the
-fewest features necessary to allow the language to expand itself to a
-comfortable level. These features are:
+The project was started as an alternative to C++ for programming computer games
+and related tools, specifically for solutions that depend heavily on live
+procedural generation or aim to provide good modding support.
 
-* A polymorphic value of type ``Any`` implemented as a 16-byte sized fat pointer.
-* A ``Symbol`` type that maps strings to cached identifiers.
-* An **annotation system** that permits to attach a file name, line number and
-  column index in the form of an ``Anchor`` to any value.
-* A flat, C-compatible **type system** that implements overloadable operations for
-  booleans, all signed and unsigned integer types, floats, doubles, arrays,
-  vectors, tuples, pointers, structs, unions, enums, function pointers, slices,
-  tables, lists and strings.
-* A **lexer and parser** for Bangra-style symbolic expressions, which use whitespace
-  indentation to delimit code blocks, but also support a restricted form of
-  traditional Lisp/Scheme syntax. The parser outputs a tree of cons cells
-  annotated with file, line number and column.
-* A **foreign function interface** (FFI) based on libffi that permits calling into
-  C libraries without requiring any conversions, thanks to the C-compatible
-  type system.
-* A **clang-based C importer** that generates type libraries from include files on
-  the fly.
-* A **fully embedded** build of **LLVM** that can be accessed via FFI.
-* A **programmable macro preprocessor** that expands symbolic expressions and
-  requires only two builtin macros: ``fn/cc`` and ``syntax-extend``.
-  These are sufficient to bootstrap the rest of the language.
+The compiler is written in about 10k lines of C++ code on top of a LLVM 
+back-end, and exports a minimal runtime environment. The remaining features are
+bootstrapped from within the language.
 
-  The macro preprocessor supports hooks to preprocessing arbitrary lists and
-  symbols. This feature is used to support special syntax without having to
-  expand the parser.
-* A **translator** that generates flow nodes from fully expanded symbolic expressions.
+The language is expression based, but primarily imperative. The syntactical
+style marries concepts from Scheme and Python, describing source code with
+S-expressions but delimiting blocks by indentation rather than braces. Closures
+are supported as a zero-cost abstraction. The type system is strongly statically
+typed but fully inferred, supporting both nominal and structural typing.
+Therefore, every function is a template. Type primitives roughly match C level,
+but are aimed to be expandable without limitations. The memory model is
+compatible to C/C++ and utilizes simple unmanaged stack and heap memory.
 
-  Flow nodes are functions stored in **control flow form** (CFF), a novel intermediate
-  format which requires continuations as its only primitive and eases
-  specialization and optimization considerably.
-  For more information see
-  `A Graph-Based Higher-Order Intermediate Representation <http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf>`_
-  by Leissa et al.
-* A small ``eval-apply`` style **interpreter loop** that executes flow nodes.
-* A small set of built-in functions exported as globals.
-* A loader that permits attaching a payload script to the main executable.
-* Initialization routines for the root environment.
+Bangra provides many metaprogramming facilities such as programmable macros,
+deterministic/guided folding of constant expressions, metadata necessary for
+basic step-by-step debugging as well as inspection of types, constants, 
+intermediate code, optimized output and disassembly. The environment is suitable
+for development of domain specific languages to describe configuration files, 
+user interfaces, state machines or processing graphs.
 
-With these features, the runtime environment is loaded which bootstraps the
-remaining elements of the language in several stages:
+Bangra embeds the clang compiler infrastructure and is therefore fully C 
+compatible. C libraries can be imported and executed at compile- and runtime
+without overhead and without requiring special bindings.
 
-* Various utility functions, types and macros.
-* A global hook to recognize and translate **infix notation**, **dot notation**
-  and **symbol prefixes**.
-* A read-eval-print (REPL) **console** for casual use.
+The Bangra IL (intermediate language) is suitable for painless translation to 
+SSA forms such as LLVM IR and SPIR-V, of which the former is already supported.
+A future version of Bangra will target Vulkan-enabled GPUs as well.
 
-As Bangra is in alpha stage, some essential features are still missing. These
-features will be added in future releases:
-
-* Better error reporting.
-* An on-demand **specializer** that translates flow nodes to fast machine code
-  using LLVM. The specializer will feature closure elimination and memory tracking.
-* A **garbage collection** mechanism for the interpreter. Right now Bangra
-  doesn't free any memory at all.
-* Debugging support for gdb.
-
-As designer of Bangra, I hope that, over time, you will find Bangra use- and
-delightful, instructive, sometimes even entertaining, as you experiment with,
-toy around with, learn about, and engineer new programs, utilities, languages,
-infrastructures, games and toys written with and for Bangra.
-
+The Bangra compiler fundamentally differs from C++ and other traditional AOT 
+(ahead of time) compilers, in that the compiler is designed to remain on-line 
+at runtime so that functions can be recompiled when the need arises, and
+generated machine code can adapt to the instruction set present on the target 
+machine. This also diminishes the need for a build system. Still, Bangra is
+**not** a JIT compiler. Compilation is always explicitly initiated by the user.
