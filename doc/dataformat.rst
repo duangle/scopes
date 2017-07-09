@@ -1,10 +1,6 @@
 Notation Format
 ===============
 
-*Please excuse the at times misleading syntax highlighting, there isn't
-a working syntax highlighter available yet, so I had to pick the next best
-one available.*
-
 Bangra source code is written in a notation that introduces syntactic rules
 even before the first function is even written: Bangra Expressions As Text,
 abbreviated **BEAT**.
