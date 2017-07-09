@@ -1,73 +1,86 @@
-The Interchange Format
-======================
+Notation Format
+===============
 
 *Please excuse the at times misleading syntax highlighting, there isn't
 a working syntax highlighter available yet, so I had to pick the next best
 one available.*
 
-This chapter outlines the syntax of Bangra source code at the data interchange
-format level from the perspective of nesting arbitrary lists. No programming
-happens at this stage, it's just data formatting, which means that the format
-can also act as a replacement for other interchange formats like XML and JSON.
+Bangra source code is written in a notation that introduces syntactic rules
+even before the first function is even written: Bangra Expressions As Text,
+abbreviated **BEAT**.
+
+Closely related to `S-Expressions <https://en.wikipedia.org/wiki/S-expression>`_,
+BEAT can be seen as a human-readable serialization format comparable to
+YAML, XML or JSON. It has been optimized for simplicity and terseness.
+
+Formatting Rules
+----------------
+
+BEAT files are always assumed to be encoded as UTF-8.
+
+Whitespace controls scoping in the BEAT format. Therefore, to avoid possible 
+ambiguities, BEAT files must always use spaces, and one indentation level equals
+four spaces.
 
 Element Types
 -------------
 
-The Bangra parser has been designed for minimalism and recognizes only five element
-types:
+BEAT recognizes only five kinds of elements:
 
-* Symbols
-* Strings
-* Integers
-* Reals
-* Lists
+* **Numbers**
+* **Strings**
+* **Symbols**
+* **Lists**
 
-All further understanding of types is done with additional parsing at later stages
-that depend on language context and evaluation scope.
+In addition, users can specify comments which are not part of the data structure.
 
 Comments
 ^^^^^^^^
 
-Line comments are skipped by the lexer. A comment token is recognized by its
-``#`` prefix and scanned until the first non-whitespace character with a lower
-indentation. Some examples for valid comments::
+Both line and block comments are initiated with a single token, ``#``. A comment
+lasts from its beginning token to the first non-whitespace character with equal
+or lower indentation. Some examples for valid comments::
 
-    #comment that is effectively on a single line
-    # this comment continues
-     in the next line because it has a higher indentation,
-     and so also doubles as block comment
-            # comments don't need to respect indentation rules
+    # a line comment
+    not a comment
+    # a block comment that continues
+      in the next line because the line has 
+      a higher indentation level. Note, that
+            comments do not need to respect
+        indentation rules
     but this line is not a comment
 
 Strings
 ^^^^^^^
 
-Strings describe sequences of unsigned 8-bit characters in the range of 0-255 and
-are stored as zero-terminated string arrays. A string begins and ends with
-``"`` (double quotes).  The ``\`` escape character can be used to include quotes
-in a string and describe unprintable control characters such as `\\n` (return)
-and `\\t` (tab). The parser parses strings as-is, so UTF-8 encoded strings will
-be copied over verbatim, and return characters will be preserved, allowing
-strings to span multiple lines.
+Strings describe sequences of unsigned 8-bit characters in the range of 0-255. 
+A string begins and ends with ``"`` (double quotes).  The ``\`` escape character
+can be used to include quotes in a string and describe unprintable control 
+characters such as ``\\n`` (return) and ``\\t`` (tab). Other unprintable 
+characters can be encoded via ``\\xNN``, where ``NN`` is the character's 
+hexadecimal code. Strings are parsed as-is, so UTF-8 encoded strings will be 
+copied over verbatim, and return characters will be preserved, allowing strings
+to span multiple lines.
 
 Here are some examples for valid strings::
 
-    "single-line string, 'double' quotations"
-    "multi-
+    "a single-line string in double quotations"
+    "a multi-
     line
     string"
-    "return: \n, tab: \t, backslash: \\, double quote: \"."
+    "return: \n, tab: \t, backslash: \\, double quote: \", nbsp: \xFF."
 
 Symbols
 ^^^^^^^
 
-Like strings, a symbol describes a sequence of 8-bit characters, but uses
-whitespace as delimiter and is often understood on a language level as a label
-or bindable name. Symbols may contain any character from the UTF-8 character set
-except whitespace and any character from the set ``#;()[]{},``. A symbol always
-terminates when one of these characters is encountered. Any symbol that parses
-as a number is also excluded. Two symbols sharing the same sequence of
-characters always map to the same value.
+Like strings, a symbol describes a sequence of 8-bit characters, but acts as a
+label or bindable name. Symbols may contain any character from the UTF-8 
+character set and terminate when encountering any character from the set 
+``#;()[]{},``. A symbol always terminates when one of these characters is 
+encountered. Any symbol that parses as a number is also excluded. Two symbols
+sharing the same sequence of characters always map to the same value.
+
+As a special case, ``,`` is always parsed as a single character.
 
 Here are some examples for valid symbols::
 
@@ -91,44 +104,55 @@ the value is too big, in which case it will be extended to 64-bit signed, then
 64-bit unsigned. Reals are floating point numbers parsed and stored as
 IEEE 754 binary32 values.
 
+Numbers can be explicitly specified to be of a certain type by appending a ``:``
+to the number as well as a numerical typename that is either ``i8``, ``i16``,
+``i32``, ``i64``, ``u8``, ``u16``, ``u32``, ``u64``, ``f32`` and ``f64``.
+
 Here are some examples for valid numbers::
 
-    # positive and negative integers
-    0 +23 42 -303 12 -1 -0x20
+    # positive and negative integers in decimal and hexadecimal notation
+    0 +23 42 -303 12 -1 -0x20 0xAFFE
     # positive and negative reals
     0.0 1.0 3.14159 -2.0 0.000003 0xa400.a400
     # reals in scientific notation
     1.234e+24 -1e-12
     # special reals
     +inf -inf nan
-
+    # zero as unsigned 64-bit integer and as signed 8-bit integer 
+    0:u64 0:i8
+    # a floating-point number with double precision
+    1.0:f64
 
 Lists
 ^^^^^
 
-Lists are the only nesting type, scoped by the bracket pairs ``()``, ``[]``
-and ``{}``. A list is stored as a pointer to its first element, and elements
-are chained in a single link that terminates with a null pointer. Empty lists
-are stored as null pointers.
+Lists are the only nesting type, and can be either scoped by braces or 
+indentation. For braces, ``()``, ``[]`` and ``{}`` are accepted.
 
-Lists can be empty or contain an unlimited number of elements, separated by
-whitespace. They typically describe expressions in Bangra.
+Lists can be empty or contain a virtually unlimited number of elements, 
+only separated by whitespace. They typically describe expressions in Bangra.
 
 Here are some examples for valid lists::
 
-    # empty list
-    ()
-    # list containing a symbol, a string, an integer, a real, and an empty list
-    (print "hello world" 303 3.14 ())
-    # three nesting lists
+    # a list of numbers in naked format
+    1 2 3 4 5
+    # three empty braced lists within a naked list
+    () () ()
+    # a list containing a symbol, a string, an integer, a real, and an empty list
+    \ (print (.. "hello world") 303 606 909)
+    # four (not three) nesting lists
     ((()))
 
-Naked & Coated Lists
+There's a weird stray escape character that may be a little surprising. 
+Also, four lists? What is going on here? These questions are answered in the
+following section.
+
+Naked & Braced Lists
 --------------------
 
 Every Bangra source file is parsed as a tree of expresion lists.
 
-The classic notation (what we will call *coated notation*) uses a syntax close
+The classic notation (what we will call *braced notation*) uses a syntax close
 to what `Lisp <http://en.wikipedia.org/wiki/Lisp_(programming_language)>`_ and
 `Scheme <http://en.wikipedia.org/wiki/Scheme_(programming_language)>`_ users
 know as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>`_::
@@ -137,7 +161,8 @@ know as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>
       top level list.
 
     # nested lists as nested expressions:
-      note the mandatory preceeding escape token to prevent autowrapping
+      note the mandatory preceeding escape token to prevent autowrapping,
+      we'll get to that in a moment.
     \ (print (.. "Hello" "World") 303 606 909)
 
 As a modern alternative, Bangra offers a *naked notation* where the scope of
@@ -148,14 +173,11 @@ lists is implicitly balanced by indentation, an approach used by
 `Sass <http://en.wikipedia.org/wiki/Sass_(stylesheet_language)>`_ and many
 other languages.
 
-This source parses as the same list in the coated example::
+This source parses as the same list in the previous, braced example::
 
-    # nesting is implied by indentation.
-       a sub paragraph continues the list.
+    # The same list as above, but in naked format. 
+        A sub-paragraph continues the list.
     print
-        # nested arguments must be indendent by four spaces.
-          tabs are not permitted.
-
         # elements on a single line with or without sub-paragraph are wrapped
           in a list.
         .. "Hello" "World"
@@ -167,7 +189,7 @@ This source parses as the same list in the coated example::
 Mixing Modes
 ^^^^^^^^^^^^
 
-Naked lists can contain coated lists, and coated lists can
+Naked lists can contain braced lists, and braced lists can
 contain naked lists::
 
     # compute the value of (1 + 2 + (3 * 4)) and print the result
@@ -181,11 +203,11 @@ contain naked lists::
         + 1 2
             3 * 4
 
-    # any part of a naked list can be coated
+    # any part of a naked list can be braced
     print
         + 1 2 (3 * 4)
 
-    # and a coated list can contain naked parts.
+    # and a braced list can contain naked parts.
       the escape character \ enters naked mode at its indentation level.
     print
         (+ 1 2
@@ -193,17 +215,17 @@ contain naked lists::
 
 Because it is more convenient for users without specialized editors to write
 in naked notation, and balancing parentheses can be challenging for beginners,
-the author suggests to use coated notation sparingly and in good taste.
-Purists and Scheme enthusiasts may however prefer to work with coated lists
-exclusively.
+the author suggests to use braced notation sparingly and in good taste.
+Purists and Scheme enthusiasts may however prefer to work with braced lists
+almost exclusively.
 
 Therefore Bangra's reference documentation describes all available symbols in
-coated notation, while code examples make ample use of naked notation.
+braced notation, while code examples make ample use of naked notation.
 
 List Separators
 ---------------
 
-Both naked and coated lists support a special control character, the list
+Both naked and braced lists support a special control character, the list
 separator `;` (semicolon). Known as statement separator in other languages,
 it groups atoms into separate lists, and permits to reduce the amount of
 required parentheses or lines in complex trees.
@@ -213,7 +235,7 @@ mode by starting the head of the block with `;`.
 
 Here are some examples::
 
-    # in coated notation
+    # in braced notation
     \ (print a; print (a;b;); print c;)
     # parses as
     \ ((print a) (print ((a) (b))) (print c))
@@ -226,10 +248,10 @@ Here are some examples::
     # parses as
     \ ((print a) (print b) ((print c) (print d)))
 
-There's a caveat with semicolons in coated mode tho though: if trailing elements
+There's a caveat with semicolons in braced mode tho though: if trailing elements
 aren't terminated with `;`, they're not going to be wrapped::
 
-    # in coated notation
+    # in braced notation
     \ (print a; print (a;b;); print c)
     # parses as
     \ ((print a) (print ((a) (b))) print c)
@@ -247,7 +269,7 @@ Single Elements
 Special care must be taken when single elements are defined, which are not to
 be wrapped in lists.
 
-Here is a coated list describing an expression printing the number 42::
+Here is a braced list describing an expression printing the number 42::
 
     (print 42)
 
@@ -276,7 +298,7 @@ There are often situations when a high number of elements in a list
 interferes with best practices of formatting source code and exceeds the line
 column limit (typically 80 or 100).
 
-In coated lists, the problem is easily corrected::
+In braced lists, the problem is easily corrected::
 
     # import many symbols from an external module into the active namespace
     \ (import-from "OpenGL"
@@ -292,34 +314,14 @@ The naked approach interprets each new line as a nested list::
         GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram
         glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP
 
-    # coated equivalent of the term above; each line is interpreted
+    # braced equivalent of the term above; each line is interpreted
     # as a function call and fails.
     \ (import-from "OpenGL"
         (glBindBuffer GL_UNIFORM_BUFFER glClear GL_COLOR_BUFFER_BIT)
         (GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram)
         (glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP))
 
-It comes easy to just fix this issue by putting each element on a separate line,
-which is not the worst solution::
-
-    # correct solution using single element lines
-    import-from "OpenGL"
-        glBindBuffer
-        GL_UNIFORM_BUFFER
-        glClear
-        GL_COLOR_BUFFER_BIT
-        GL_STENCIL_BUFFER_BIT
-        GL_DEPTH_BUFFER_BIT
-        glViewport
-        glUseProgram
-        glDrawArrays
-        # comments should go on a separate line
-        glEnable
-        glDisable
-        GL_TRIANGLE_STRIP
-
-A terse approach would be to make use of the splice-line control character
-once more::
+This can be fixed by using the splice-line control character once more::
 
     # correct solution using splice-line, postfix style
     import-from "OpenGL" \
@@ -343,7 +345,7 @@ Tail Splicing
 While naked notation is ideal for writing nested lists that accumulate
 at the tail::
 
-    # coated
+    # braced
     \ (a b c
         (d e f
             (g h i))
@@ -396,7 +398,7 @@ splice-line characters to describe the same tree::
 A more complex tree which also requires splicing elements back into the parent
 list can be realized with the same combo of list separator and splice-line::
 
-    # coated
+    # braced
     \ (a
         ((b
             (c d)) e)
@@ -413,7 +415,7 @@ list can be realized with the same combo of list separator and splice-line::
         h i
 
 While this example demonstrates the versatile usefulness of splice-line and
-list separator, expressing similar trees in partially coated notation might
+list separator, expressing similar trees in partially braced notation might
 often be easier on the eyes.
 
 As so often, the best format is the one that fits the context.
