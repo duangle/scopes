@@ -30,7 +30,7 @@ primary_domain = 'bangra'
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['bangradomain']
+extensions = ['bangradomain', 'bangralexer']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -96,7 +96,7 @@ pygments_style = 'sphinx'
 # If true, keep warnings as "system message" paragraphs in the built documents.
 #keep_warnings = False
 
-highlight_language = "python3"
+highlight_language = "bangra"
 
 # -- Options for HTML output ----------------------------------------------
 
