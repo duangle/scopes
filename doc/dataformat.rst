@@ -218,6 +218,22 @@ almost exclusively.
 Therefore Bangra's reference documentation describes all available symbols in
 braced notation, while code examples make ample use of naked notation.
 
+Brace Styles
+------------
+
+In addition to regular curvy braces ``()``, BEAT parses curly ``{}`` and 
+square ``[]`` brace styles. They are merely meant for providing variety for
+writing BEAT based formats, and are expanded to simple lists during parsing.
+Some examples::
+
+    [a b c d]
+    # expands to
+    (\[\] a b c d)
+
+    {1 2 3 4}
+    # expands to
+    (\{\} 1 2 3 4)
+
 List Separators
 ---------------
 

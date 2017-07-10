@@ -2,8 +2,21 @@
     // See https://go.microsoft.com/fwlink/?LinkId=733558
     // for the documentation about the tasks.json format
     "version": "0.1.0",
-    "command": "${workspaceRoot}/makebangra",
-    "isShellCommand": true,
-    "args": [],
-    "showOutput": "always"
+    "tasks": [
+        {
+            "taskName": "makebangra",
+            "command": "${workspaceRoot}/makebangra",
+            "isShellCommand": true,
+            "isBuildCommand": true,
+            "args": [],
+            "showOutput": "always"
+        },
+        {
+            "taskName": "makedocs",
+            "command": "cd ${workspaceRoot}/doc && make html",
+            "isShellCommand": true,
+            "args": [],
+            "showOutput": "always"        
+        }
+    ]    
 }
