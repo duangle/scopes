@@ -1,13 +1,88 @@
-Notation Format
-===============
+Notation
+========
 
 Bangra source code is written in a notation that introduces syntactic rules
-even before the first function is even written: Bangra Expressions As Text,
+even before the first function is even written: *Bangra Expressions As Text*,
 abbreviated **BEAT**.
 
 Closely related to `S-Expressions <https://en.wikipedia.org/wiki/S-expression>`_,
 BEAT can be seen as a human-readable serialization format comparable to
 YAML, XML or JSON. It has been optimized for simplicity and terseness.
+
+At a Glance
+-----------
+
+In case you don't have time to read the full documentation, here's an
+example that gives you an overview of all notation aspects::
+
+    # a naked list of five 32-bit signed integers
+    1 2 3 4 5
+    
+    # a list that begins with a symbol and contains a braced sublist of floats
+    float-values: (1.0 2.0 3.1 4.2 5.5:f64 inf nan)
+
+    # we can also nest the sublist using indentation
+    ==string-values==
+        "A" "B" "NCC-1701\n" "\xFFD\xFF" "\"E\""
+
+    # a list with one element, a multi-line string
+    "Ma'am is acceptable in a crunch, but I prefer Captain.
+                                        -- Kathryn Janeway"
+
+    # appending values to the parent list in the next line
+    symbol-values one two three four five \
+        six seven-of-nine ten
+    
+    # line continuation can also begin at the start of the next line
+    ::typed-integers:: 0:u8 1:i8 2:i16 3:u16
+        \ 4:u32 5:i32 6:u64 7:i64
+    
+    # which comes in handy when we want to continue the parent list
+    people like
+        jim kirk
+        commander spock
+        hikari sulu
+        \ and many more
+    
+    # a list with a symbol header and two entries
+    address-list
+        # a list with a header and three more lists of two values each
+        entry
+            name: "Jean-Luc Picard"
+            age: 59
+            address: picard@enterprise.org
+        entry
+            # the semicolon acts as list separator
+            name: "Worf, Son of Mogh"; age: 24; address: worf@house-of-mogh.co.klingon
+        # line comments double as block comments
+        #entry
+            name: "Natasha Yar"
+            age: 27
+            address: natasha.yar@enterprise.org
+        
+    # the same list with braced notation; within braced lists, 
+      indentation is meaningless.
+    \ (address-list
+        # a list with a header and three more lists of two values each
+        (entry
+            (name: "Jean-Luc Picard")
+            (age: 59)
+            (address: picard@enterprise.org))
+        (entry (name: "Worf, Son of Mogh") (age: 24) 
+            (address: worf@house-of-mogh.co.klingon)))
+    
+    # a list of comma separated values - a comma is always recorded as
+      a separate symbol, so the list has nine entries
+    1, 2, 3,4, 5
+
+    # a list of options beginning with a symbol in a list with 
+      square brace style 
+    [task]
+        cmd = "bash"
+        # the last element is a symbol in a list with curly brace style
+        working-dir = {project-base}
+
+
 
 Formatting Rules
 ----------------

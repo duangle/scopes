@@ -83,10 +83,17 @@ class BangraLexer(Lexer):
             state.value = text[state.cursor:state.next_cursor]
         def reset_cursor():
             state.next_cursor = state.cursor
+        def try_fmt_split(s):
+            l = s.split(':')
+            if len(l) == 2:
+                return l
+            else:
+                return s,None
+
         def is_integer(s):
             tail = None
             if ':' in s:
-                s,tail = s.split(':')
+                s,tail = try_fmt_split(s)
             if tail and not (tail in integer_literal_suffixes):
                 return False
             if not s:
@@ -108,7 +115,7 @@ class BangraLexer(Lexer):
         def is_real(s):
             tail = None
             if ':' in s:
-                s,tail = s.split(':')
+                s,tail = try_fmt_split(s)
             if tail and not (tail in real_literal_suffixes):
                 return False
             if not s: return False
