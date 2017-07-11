@@ -490,33 +490,39 @@ fn walk-list (on-leaf l depth)
 
 #print "yes" "this" "is" "dog"
 
+# install general list hook for this scope
+# is called for every list the expander sees
+fn list-handler (topexpr env)
+    fn Any-Syntax-extract (val T)
+        Any-extract (syntax->datum (Any-extract val Syntax)) T
+
+    let expr = (Any-Syntax-extract (list-at topexpr) list)
+    let head = (syntax->datum (Any-extract (list-at expr) Syntax))
+    if (== (Any-typeof head) Symbol)
+        #print head env
+        let head success = (Scope@ env (Any-extract head Symbol))
+        #print head success
+        \ none
+    else
+    #walk-list
+        fn on-leaf (value depth)
+            print-spaces depth
+            #Any-dispatch value
+            io-write
+                Any-repr value
+            io-write "\n"
+        unconst (Any-extract-list expr)
+        unconst 0
+    #print (i32 (list-countof topexpr))
+    return topexpr env
+
 syntax-extend
-    # install general list hook for this scope
-    # is called for every list the expander sees
-    fn list-handler (topexpr env)
-        Any-extract (list-at topexpr) list
-        let expr =
-            syntax->datum (Any-extract (list-at topexpr) Syntax)
-        print expr
-        #walk-list
-            fn on-leaf (value depth)
-                print-spaces depth
-                #Any-dispatch value
-                io-write
-                    Any-repr value
-                io-write "\n"
-            unconst (Any-extract-list expr)
-            unconst 0
-        #print (i32 (list-countof topexpr))
-        return topexpr env
     set-scope-symbol! syntax-scope (string->Symbol "#list")
-        compile (typify list-handler list Scope) 'skip-opts #'dump-module
+        compile (typify list-handler list Scope) #'dump-disassembly # 'skip-opts 
     \ syntax-scope
 
-#test
-
 # deferring remaining expressions to bootstrap parser
-syntax-apply-block
+#syntax-apply-block
     fn (anchor exprs env)
         walk-list
             fn on-leaf (value depth)
@@ -736,9 +742,78 @@ fn test-polymorphic-return-type ()
 
 #test-polymorphic-return-type
 
+#-------------------------------------------------------------------------------
+# main
+#-------------------------------------------------------------------------------
+
+fn print-help (exename)
+    print "usage:" exename "[option [...]] [filename]
+Options:
+   -h, --help                  print this text and exit.
+   -v, --version               print program version and exit.
+   --                          terminate option list."
+    exit 0
+    unreachable!
+
+fn print-version ()
+    let vmin vmaj vpatch = (compiler-version)
+    print "Bangra"
+        .. (Any-string (Any-wrap vmin)) "." (Any-string (Any-wrap vmaj))
+            if (== vpatch 0) ""
+            else
+                .. "." (Any-string (Any-wrap vpatch))
+            \ " ("
+            if debug-build? "debug build, " 
+            else ""
+            \ compiler-timestamp ")"
+    print "Executable path:" compiler-path
+    exit 0
+    unreachable!
+
+#fn run-main (args...)
+    # running in interpreter mode
+    let [loop] i sourcepath parse-options = 1 none true
+    let k = i + 1
+    let arg = (va@ i args...)
+    if (not (arg == none))
+        if (parse-options and ((@ arg 0) == "-"))
+            if (arg == "--help" or arg == "-h")
+                print-help (va@ 0 args...)
+            elseif (arg == "--version" or arg == "-v")
+                print-version
+            elseif (arg == "--")
+                loop k sourcepath false
+            else
+                print
+                    .. "unrecognized option: " arg
+                        \ ". Try --help for help."
+                exit 1
+                unreachable!
+        elseif (none? sourcepath)
+            loop k arg parse-options
+        else
+            print
+                .. "unrecognized argument: " arg
+                    \ ". Try --help for help."
+            exit 1
+            unreachable!
+    else
+
+    io-write "\n"
+    if (sourcepath == none)
+        read-eval-print-loop
+    else
+        let expr =
+            syntax->datum
+                list-load sourcepath
+        let eval-scope =
+            Scope (globals)
+        set-scope-symbol! eval-scope 'module-path sourcepath
+        call
+            eval expr eval-scope sourcepath
+        exit 0
+        unreachable!
+
+#run-main (args)
 \ true
-
-
-
-
 

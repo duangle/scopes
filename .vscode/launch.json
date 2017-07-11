@@ -10,8 +10,9 @@
             "stopAtEntry": false,
             "cwd": "${workspaceRoot}",
             "environment": [],
-            "externalConsole": false,
             "MIMode": "gdb",
+            "externalConsole": false,
+            "internalConsoleOptions": "openOnSessionStart",
             "setupCommands": [
                 {
                     "description": "Enable pretty-printing for gdb",

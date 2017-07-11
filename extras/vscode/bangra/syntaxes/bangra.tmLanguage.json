@@ -32,6 +32,10 @@
 				    "match": "(true|false)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\#])"
 			    },
                 {
+				    "name": "constant.language.nothing.bangra",
+				    "match": "(none)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\#])"
+			    },
+                {
                     "match": "(\\'[^\\s\\(\\)\\[\\]\\{\\}\\,\\#]+)",
                     "name": "constant.character.symbol.bangra"
                 },

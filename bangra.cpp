@@ -92,8 +92,8 @@ EXPORT_DEFINES
 #undef EXPORT_DEFINES
 };
 
-const char *bangra_interpreter_path;
-const char *bangra_interpreter_dir;
+const char *bangra_compiler_path;
+const char *bangra_compiler_dir;
 size_t bangra_argc;
 char **bangra_argv;
 
@@ -557,7 +557,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_UIToFP, "uitofp") T(FN_SIToFP, "sitofp") \
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_IntegerType, "integer-type") \
-    T(FN_InterpreterVersion, "interpreter-version") \
+    T(FN_CompilerVersion, "compiler-version") \
     T(FN_Iter, "iter") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
@@ -583,7 +583,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Flush, "io-flush") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
-    T(FN_Repeat, "repeat") T(FN_Repr, "Any-repr") \
+    T(FN_Repeat, "repeat") T(FN_Repr, "Any-repr") T(FN_AnyString, "Any-string") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeEq, "Scope==") \
     T(FN_ScopeNew, "Scope-new") T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
@@ -645,9 +645,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     \
     /* globals */ \
     T(SYM_DebugBuild, "debug-build?") \
-    T(SYM_InterpreterDir, "interpreter-dir") \
-    T(SYM_InterpreterPath, "interpreter-path") \
-    T(SYM_InterpreterTimestamp, "interpreter-timestamp") \
+    T(SYM_CompilerDir, "compiler-dir") \
+    T(SYM_CompilerPath, "compiler-path") \
+    T(SYM_CompilerTimestamp, "compiler-timestamp") \
     \
     /* parse-c keywords */ \
     T(SYM_Struct, "struct") \
@@ -1513,6 +1513,7 @@ struct Type;
 static bool is_opaque(const Type *T);
 static size_t size_of(const Type *T);
 static size_t align_of(const Type *T);
+static const Type *storage_type(const Type *T);
 static StyledStream& operator<<(StyledStream& ost, const Type *type);
 
 #define B_TYPES() \
@@ -1646,16 +1647,16 @@ struct Any {
 
     Any(Nothing x) : type(TYPE_Nothing), u64(0) {}
     Any(const Type *x) : type(TYPE_Type), typeref(x) {}
-    Any(bool x) : type(TYPE_Bool), i1(x) {}
-    Any(int8_t x) : type(TYPE_I8), i8(x) {}
-    Any(int16_t x) : type(TYPE_I16), i16(x) {}
-    Any(int32_t x) : type(TYPE_I32), i32(x) {}
+    Any(bool x) : type(TYPE_Bool), u64(0) { i1 = x; }
+    Any(int8_t x) : type(TYPE_I8), u64(0) { i8 = x; }
+    Any(int16_t x) : type(TYPE_I16), u64(0) { i16 = x; }
+    Any(int32_t x) : type(TYPE_I32), u64(0) { i32 = x; }
     Any(int64_t x) : type(TYPE_I64), i64(x) {}
-    Any(uint8_t x) : type(TYPE_U8), u8(x) {}
-    Any(uint16_t x) : type(TYPE_U16), u16(x) {}
-    Any(uint32_t x) : type(TYPE_U32), u32(x) {}
+    Any(uint8_t x) : type(TYPE_U8), u64(0) { u8 = x; }
+    Any(uint16_t x) : type(TYPE_U16), u64(0) { u16 = x; }
+    Any(uint32_t x) : type(TYPE_U32), u64(0) { u32 = x; }
     Any(uint64_t x) : type(TYPE_U64), u64(x) {}
-    Any(float x) : type(TYPE_F32), f32(x) {}
+    Any(float x) : type(TYPE_F32), u64(0) { f32 = x; }
     Any(double x) : type(TYPE_F64), f64(x) {}
     Any(const String *x) : type(TYPE_String), string(x) {}
     Any(Symbol x) : type(TYPE_Symbol), symbol(x) {}
@@ -5481,13 +5482,6 @@ static void init_llvm() {
     LLVMInitializeNativeAsmParser();
     LLVMInitializeNativeAsmPrinter();
     LLVMInitializeNativeDisassembler();
-
-    char *errormsg = nullptr;
-    if (LLVMCreateJITCompilerForModule(&ee,
-        LLVMModuleCreateWithName("main"), 0, &errormsg)) {
-        stb_fprintf(stderr, "error: %s\n", errormsg);
-        exit(1);
-    }
 }
 
 static Scope *import_c_module (
@@ -5628,6 +5622,257 @@ static T cast_number(const Any &value) {
 }
 
 //------------------------------------------------------------------------------
+// PLATFORM ABI
+//------------------------------------------------------------------------------
+
+// life is unfair, which is why we need to implement the remaining platform ABI
+// support in the front-end, particularly whether an argument is passed by
+// value or not.
+
+// x86-64 PS ABI based on https://www.uclibc.org/docs/psABI-x86_64.pdf
+
+enum ABIClass {
+    // This class consists of integral types that fit into one of the general
+    // purpose registers.
+    ABI_CLASS_INTEGER,
+    ABI_CLASS_INTEGERSI,
+    // The class consists of types that fit into a vector register.
+    ABI_CLASS_SSE,
+    ABI_CLASS_SSESF,
+    ABI_CLASS_SSEDF,
+    // The class consists of types that fit into a vector register and can be 
+    // passed and returned in the upper bytes of it.
+    ABI_CLASS_SSEUP,
+    // These classes consists of types that will be returned via the x87 FPU
+    ABI_CLASS_X87,
+    ABI_CLASS_X87UP,
+    // This class consists of types that will be returned via the x87 FPU
+    ABI_CLASS_COMPLEX_X87,
+    // This class is used as initializer in the algorithms. It will be used for
+    // padding and empty structures and unions.
+    ABI_CLASS_NO_CLASS,
+    // This class consists of types that will be passed and returned in memory
+    // via the stack.
+    ABI_CLASS_MEMORY,
+};
+
+/*
+    T(TK_Integer, "type-kind-integer") \
+    T(TK_Real, "type-kind-real") \
+    T(TK_Pointer, "type-kind-pointer") \
+    T(TK_Array, "type-kind-array") \
+    T(TK_Vector, "type-kind-vector") \
+    T(TK_Tuple, "type-kind-tuple") \
+    T(TK_Union, "type-kind-union") \
+    T(TK_Typename, "type-kind-typename") \
+    T(TK_TypedLabel, "type-kind-label") \
+    T(TK_TypeSet, "type-kind-typeset") \
+    T(TK_Function, "type-kind-function") \
+    T(TK_Constant, "type-kind-constant")
+*/
+
+static ABIClass merge_abi_classes(ABIClass class1, ABIClass class2) {
+    if (class1 == class2)
+        return class1;
+
+    if (class1 == ABI_CLASS_NO_CLASS)
+        return class2;
+    if (class2 == ABI_CLASS_NO_CLASS)
+        return class1;
+
+    if (class1 == ABI_CLASS_MEMORY || class2 == ABI_CLASS_MEMORY)
+        return ABI_CLASS_MEMORY;
+
+    if ((class1 == ABI_CLASS_INTEGERSI && class2 == ABI_CLASS_SSESF)
+        || (class2 == ABI_CLASS_INTEGERSI && class1 == ABI_CLASS_SSESF))
+        return ABI_CLASS_INTEGERSI;
+    if (class1 == ABI_CLASS_INTEGER || class1 == ABI_CLASS_INTEGERSI
+        || class2 == ABI_CLASS_INTEGER || class2 == ABI_CLASS_INTEGERSI)
+        return ABI_CLASS_INTEGER;
+
+    if (class1 == ABI_CLASS_X87
+        || class1 == ABI_CLASS_X87UP
+        || class1 == ABI_CLASS_COMPLEX_X87
+        || class2 == ABI_CLASS_X87
+        || class2 == ABI_CLASS_X87UP
+        || class2 == ABI_CLASS_COMPLEX_X87)
+        return ABI_CLASS_MEMORY;
+
+    return ABI_CLASS_SSE;
+}
+
+const size_t MAX_ABI_CLASSES = 4;
+static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
+    switch(T->kind()) {
+    case TK_Integer: 
+    case TK_Pointer: {
+        size_t size = size_of(T) + offset;
+        if (size <= 4) {
+            classes[0] = ABI_CLASS_INTEGERSI;
+            return 1;
+        } else if (size <= 8) {
+            classes[0] = ABI_CLASS_INTEGER;
+            return 1;
+        } else if (size <= 12) {
+            classes[0] = ABI_CLASS_INTEGER;
+            classes[1] = ABI_CLASS_INTEGERSI;
+            return 2;
+        } else if (size <= 16) {
+            classes[0] = ABI_CLASS_INTEGER;
+            classes[1] = ABI_CLASS_INTEGER;
+            return 2;
+        } else {
+            assert(false && "illegal type");
+        }
+    } break;
+    case TK_Real: {
+        size_t size = size_of(T);
+        if (size == 4) {
+            if (!(offset % 8))
+                classes[0] = ABI_CLASS_SSESF;
+            else
+                classes[0] = ABI_CLASS_SSE;
+            return 1;
+        } else if (size == 8) {
+            classes[0] = ABI_CLASS_SSEDF;
+            return 1;
+        } else {
+            assert(false && "illegal type");
+        }
+    } break;
+    case TK_Typename: {
+        if (is_opaque(T)) {
+            classes[0] = ABI_CLASS_NO_CLASS;
+            return 1;
+        } else {
+            return classify(storage_type(T), classes, offset);
+        }
+    } break;
+    case TK_Array: {
+        const size_t UNITS_PER_WORD = 8;
+        size_t size = size_of(T);
+	    size_t words = (size + UNITS_PER_WORD - 1) / UNITS_PER_WORD;
+        if (size > 32)
+            return 0;
+        for (size_t i = 0; i < MAX_ABI_CLASSES; i++)
+	        classes[i] = ABI_CLASS_NO_CLASS;
+        if (!words) {
+            classes[0] = ABI_CLASS_NO_CLASS;
+            return 1;
+        }
+        auto tt = cast<ArrayType>(T);
+        auto ET = tt->element_type;
+        ABIClass subclasses[MAX_ABI_CLASSES];
+        size_t alignment = align_of(ET);
+        size_t esize = size_of(ET);
+        for (size_t i = 0; i < tt->count; ++i) {
+            offset = align(offset, alignment);
+            size_t num = classify(ET, subclasses, offset % 8);
+            if (!num) return 0;
+            for (size_t k = 0; k < num; ++k) {
+                size_t pos = offset / 8;
+		        classes[k + pos] =
+		            merge_abi_classes (subclasses[k], classes[k + pos]);
+            }
+            offset += esize;
+        }
+        if (words > 2) {
+            if (classes[0] != ABI_CLASS_SSE)
+                return 0;
+            for (size_t i = 1; i < words; ++i) {
+                if (classes[i] != ABI_CLASS_SSEUP)
+                    return 0;
+            }
+        }
+        for (size_t i = 0; i < words; i++) {
+            if (classes[i] == ABI_CLASS_MEMORY)
+                return 0;
+
+            if (classes[i] == ABI_CLASS_SSEUP) {
+                assert(i > 0);
+                if (classes[i - 1] != ABI_CLASS_SSE
+                    && classes[i - 1] != ABI_CLASS_SSEUP) {
+                    classes[i] = ABI_CLASS_SSE;
+                }
+            }
+
+            if (classes[i] == ABI_CLASS_X87UP) {
+                assert(i > 0);
+                if(classes[i - 1] != ABI_CLASS_X87) {
+                    return 0;
+                }
+            }
+        }
+        return words;        
+    } break;
+    case TK_Tuple: {
+        const size_t UNITS_PER_WORD = 8;
+        size_t size = size_of(T);
+	    size_t words = (size + UNITS_PER_WORD - 1) / UNITS_PER_WORD;
+        if (size > 32)
+            return 0;
+        for (size_t i = 0; i < MAX_ABI_CLASSES; i++)
+	        classes[i] = ABI_CLASS_NO_CLASS;
+        if (!words) {
+            classes[0] = ABI_CLASS_NO_CLASS;
+            return 1;
+        }
+        auto tt = cast<TupleType>(T);
+        ABIClass subclasses[MAX_ABI_CLASSES];
+        for (size_t i = 0; i < tt->types.size(); ++i) {
+            auto ET = tt->types[i];
+            offset = align(offset, align_of(ET));
+            size_t num = classify (ET, subclasses, offset % 8);
+            if (!num) return 0;
+            for (size_t k = 0; k < num; ++k) {
+                size_t pos = offset / 8;
+		        classes[k + pos] =
+		            merge_abi_classes (subclasses[k], classes[k + pos]);
+            }
+            offset += size_of(ET);
+        }
+        if (words > 2) {
+            if (classes[0] != ABI_CLASS_SSE)
+                return 0;
+            for (size_t i = 1; i < words; ++i) {
+                if (classes[i] != ABI_CLASS_SSEUP)
+                    return 0;
+            }
+        }
+        for (size_t i = 0; i < words; i++) {
+            if (classes[i] == ABI_CLASS_MEMORY)
+                return 0;
+
+            if (classes[i] == ABI_CLASS_SSEUP) {
+                assert(i > 0);
+                if (classes[i - 1] != ABI_CLASS_SSE
+                    && classes[i - 1] != ABI_CLASS_SSEUP) {
+                    classes[i] = ABI_CLASS_SSE;
+                }
+            }
+
+            if (classes[i] == ABI_CLASS_X87UP) {
+                assert(i > 0);
+                if(classes[i - 1] != ABI_CLASS_X87) {
+                    return 0;
+                }
+            }
+        }
+        return words;
+    } break;
+    default: {
+        assert(false && "not supported in ABI");
+        return 0;
+    } break;
+    }
+}
+
+static bool is_memory_class(const Type *T) {
+    ABIClass subclasses[MAX_ABI_CLASSES];
+    return !classify(T, subclasses, 0);
+}
+
+//------------------------------------------------------------------------------
 // IL->IR LOWERING
 //------------------------------------------------------------------------------
 
@@ -5671,6 +5916,7 @@ static void build_and_run_opt_passes(LLVMModuleRef module) {
       LLVMCreateFunctionPassManagerForModule(module);
     LLVMPassManagerRef modulePasses =
       LLVMCreatePassManager();
+    //LLVMAddAnalysisPasses(LLVMGetExecutionEngineTargetMachine(ee), functionPasses);
 
     LLVMPassManagerBuilderPopulateFunctionPassManager(passBuilder,
                                                       functionPasses);
@@ -5873,7 +6119,6 @@ struct GenerateCtx {
         return difunc;
     }
 
-
     LLVMValueRef anchor_to_location(const Anchor *anchor) {
 
         auto old_bb = LLVMGetInsertBlock(builder);
@@ -5991,13 +6236,28 @@ struct GenerateCtx {
         case TK_Function: {
             auto fi = cast<FunctionType>(type);
             size_t count = fi->argument_types.size();
-            LLVMTypeRef elements[count];
-            for (size_t i = 0; i < count; ++i) {
-                elements[i] = _type_to_llvm_type(fi->argument_types[i]);
+            size_t offset = 0;
+            bool use_sret = is_memory_class(fi->return_type);
+            if (use_sret) {
+                offset = 1;
             }
-            return LLVMFunctionType(
-                _type_to_llvm_type(fi->return_type),
-                elements, count, fi->vararg());
+            LLVMTypeRef elements[count + offset];
+            LLVMTypeRef rettype;
+            if (use_sret) {
+                elements[0] = _type_to_llvm_type(Pointer(fi->return_type));
+                rettype = voidT;
+            } else {
+                rettype = _type_to_llvm_type(fi->return_type);
+            }
+            for (size_t i = 0; i < count; ++i) {
+                auto AT = fi->argument_types[i];
+                if (is_memory_class(AT)) {
+                    AT = Pointer(AT);
+                }
+                elements[i + offset] = _type_to_llvm_type(AT);
+            }
+            return LLVMFunctionType(rettype,
+                elements, count + offset, fi->vararg());
         } break;
         default: break;
         };
@@ -6444,13 +6704,37 @@ struct GenerateCtx {
                 LLVMBuildRetVoid(builder);
             }
         } else {
-            LLVMValueRef values[argcount];
-            for (size_t i = 0; i < argcount; ++i) {
-                values[i] = argument_to_value(args[i + 1]);
-            }
             if (is_function_pointer(enter.type)) {
                 auto pi = cast<PointerType>(enter.type);
                 auto fi = cast<FunctionType>(pi->element_type);
+
+                bool use_sret = is_memory_class(fi->return_type);
+
+                size_t valuecount = argcount;
+                size_t offset = 0;
+                if (use_sret) {
+                    valuecount++;
+                    offset = 1;
+                }
+                LLVMValueRef values[valuecount];
+                if (use_sret) {
+                    values[0] = LLVMBuildAlloca(builder, 
+                        _type_to_llvm_type(fi->return_type), "");
+                }
+                std::vector<size_t> memptrs;
+                for (size_t i = 0; i < argcount; ++i) {
+                    auto &&arg = args[i + 1];
+                    LLVMValueRef val = argument_to_value(arg);
+                    auto AT = arg.indirect_type();
+                    if (is_memory_class(AT)) {
+                        LLVMValueRef ptrval = LLVMBuildAlloca(builder, 
+                            _type_to_llvm_type(AT), "");
+                        LLVMBuildStore(builder, val, ptrval);
+                        val = ptrval;
+                        memptrs.push_back(i + offset + 1);
+                    }
+                    values[i + offset] = val;
+                }
 
                 size_t fargcount = fi->argument_types.size();
                 assert(argcount >= fargcount);
@@ -6466,8 +6750,16 @@ struct GenerateCtx {
                 }
 
                 auto ret = LLVMBuildCall(builder,
-                    argument_to_value(enter), values, argcount, "");
-                if (fi->return_type != TYPE_Void) {
+                    argument_to_value(enter), values, valuecount, "");
+                const LLVMAttribute LLVMNonNullAttribute = (LLVMAttribute)(1ULL << 44);
+                for (auto idx : memptrs) {
+                    LLVMAddInstrAttribute(ret, idx, LLVMByValAttribute);
+                    LLVMAddInstrAttribute(ret, idx, LLVMNonNullAttribute);                    
+                }
+                if (use_sret) {
+                    LLVMAddInstrAttribute(ret, 1, LLVMStructRetAttribute);                    
+                    retvalue = LLVMBuildLoad(builder, values[0], "");
+                } else if (fi->return_type != TYPE_Void) {
                     retvalue = ret;
                 }
             } else {
@@ -6788,10 +7080,12 @@ static Any compile(Label *fn, uint64_t flags) {
 
     void *pfunc = LLVMGetPointerToGlobal(ee, func);
     if (flags & CF_DumpDisassembly) {
+        assert(disassembly_listener);
         //auto td = LLVMGetExecutionEngineTargetData(ee);
         auto tm = LLVMGetExecutionEngineTargetMachine(ee);
         auto it = disassembly_listener->sizes.find(pfunc);
         if (it != disassembly_listener->sizes.end()) {
+            std::cout << "disassembly:\n";
             do_disassemble(tm, pfunc, it->second);
         } else {
             std::cout << "no disassembly available\n";
@@ -7246,10 +7540,10 @@ struct NormalizeCtx {
         case FN_Trunc: {
             CHECKARGS(2, 2);
             const Type *T = args[1].indirect_type();
-            verify_integer(T);
+            verify_integer(storage_type(T));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_FPTrunc: {
@@ -9495,17 +9789,17 @@ struct Expander {
             Any result = none;
             if (!env->lookup(name, result)) {
                 StyledString ss;
-                ss.out << "no value bound to name " << name.name()->data << " in scope.";
+                ss.out << "use of undeclared identifier '" << name.name()->data << "'.";
                 auto syms = env->find_closest_match(name);
                 if (!syms.empty()) {
-                    ss.out << " Did you mean " << syms[0].name()->data;
+                    ss.out << " Did you mean '" << syms[0].name()->data << "'";
                     for (size_t i = 1; i < syms.size(); ++i) {
                         if ((i + 1) == syms.size()) {
                             ss.out << " or ";
                         } else {
                             ss.out << ", ";
                         }
-                        ss.out << syms[i].name()->data;
+                        ss.out << "'" << syms[i].name()->data << "'";
                     }
                     ss.out << "?";
                 }
@@ -9652,8 +9946,17 @@ static void init_types() {
 
 #undef DEFINE_STRUCT_TYPE
 
+typedef struct { int x,y; } I2;
+typedef struct { int x,y,z; } I3;
+
 static const String *f_repr(Any value) {
     StyledString ss;
+    ss.out << value;
+    return ss.str();
+}
+
+static const String *f_any_string(Any value) {
+    auto ss = StyledString::plain();
     ss.out << value;
     return ss.str();
 }
@@ -9661,7 +9964,7 @@ static const String *f_repr(Any value) {
 static void f_write(const String *value) {
     fputs(value->data, stdout);
 }
-typedef struct { int x,y; } I2;
+
 static I2 bangra_print_number(int a, int b, int c) {
     std::cout << a << " " << b << " " << c << std::endl;
     return { c , b };
@@ -9769,6 +10072,13 @@ static const Type *f_integer_type(int width, bool issigned) {
     return Integer(width, issigned);
 }
 
+static I3 f_compiler_version() {
+    return { 
+        BANGRA_VERSION_MAJOR,
+        BANGRA_VERSION_MINOR,
+        BANGRA_VERSION_PATCH };
+}
+
 static void init_globals() {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -9786,6 +10096,7 @@ static void init_globals() {
     DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any);
+    DEFINE_PURE_C_FUNCTION(FN_AnyString, f_any_string, TYPE_String, TYPE_Any);    
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
     DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_SizeT, TYPE_Type);
@@ -9796,7 +10107,7 @@ static void init_globals() {
     DEFINE_PURE_C_FUNCTION(FN_IsSigned, f_issigned, TYPE_Bool, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_TypeStorage, f_type_storage, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_IntegerType, f_integer_type, TYPE_Type, TYPE_I32, TYPE_Bool);
-
+    DEFINE_PURE_C_FUNCTION(FN_CompilerVersion, f_compiler_version, Tuple({TYPE_I32, TYPE_I32, TYPE_I32}));
 
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
@@ -9806,24 +10117,18 @@ static void init_globals() {
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
 
-    globals->bind(Symbol("print-number"),
-        Any::from_pointer(Pointer(Function(
-            Tuple({TYPE_I32,TYPE_I32}),
-            {TYPE_I32, TYPE_I32, TYPE_I32},
-            FF_Pure)),
-            (void *)bangra_print_number));
 #undef DEFINE_C_FUNCTION
 
     globals->bind(KW_True, true);
     globals->bind(KW_False, false);
     globals->bind(KW_ListEmpty, EOL);
     globals->bind(KW_None, none);
-    globals->bind(SYM_InterpreterDir,
-        String::from(bangra_interpreter_dir, strlen(bangra_interpreter_dir)));
-    globals->bind(SYM_InterpreterPath,
-        String::from(bangra_interpreter_path, strlen(bangra_interpreter_path)));
+    globals->bind(SYM_CompilerDir,
+        String::from(bangra_compiler_dir, strlen(bangra_compiler_dir)));
+    globals->bind(SYM_CompilerPath,
+        String::from(bangra_compiler_path, strlen(bangra_compiler_path)));
     globals->bind(SYM_DebugBuild, bangra_is_debug());
-    globals->bind(SYM_InterpreterTimestamp,
+    globals->bind(SYM_CompilerTimestamp,
         String::from_cstr(bangra_compile_time_date()));
 
     for (uint64_t i = STYLE_FIRST; i <= STYLE_LAST; ++i) {
@@ -9928,18 +10233,18 @@ int main(int argc, char *argv[]) {
 
     bangra::global_c_namespace = dlopen(NULL, RTLD_LAZY);
 
-    bangra_interpreter_path = nullptr;
-    bangra_interpreter_dir = nullptr;
+    bangra_compiler_path = nullptr;
+    bangra_compiler_dir = nullptr;
     if (argv) {
         if (argv[0]) {
             std::string loader = GetExecutablePath(argv[0]);
             // string must be kept resident
-            bangra_interpreter_path = strdup(loader.c_str());
+            bangra_compiler_path = strdup(loader.c_str());
         } else {
-            bangra_interpreter_path = strdup("");
+            bangra_compiler_path = strdup("");
         }
 
-        bangra_interpreter_dir = dirname(strdup(bangra_interpreter_path));
+        bangra_compiler_dir = dirname(strdup(bangra_compiler_path));
     }
 
     signal(SIGSEGV, crash_handler);
@@ -9955,7 +10260,7 @@ int main(int argc, char *argv[]) {
         SourceFile *sf = nullptr;
 #ifdef BANGRA_DEBUG
         char sourcepath[1024];
-        strncpy(sourcepath, bangra_interpreter_dir, 1024);
+        strncpy(sourcepath, bangra_compiler_dir, 1024);
         strncat(sourcepath, "/bangra.b", 1024);
         Symbol name = String::from_cstr(sourcepath);
         sf = SourceFile::from_file(name);

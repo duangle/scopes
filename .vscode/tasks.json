@@ -9,7 +9,38 @@
             "isShellCommand": true,
             "isBuildCommand": true,
             "args": [],
-            "showOutput": "always"
+            "showOutput": "always",
+            "problemMatcher": {
+                "owner": "cpp",
+                "fileLocation": "absolute",
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
+        },
+        {
+            "taskName": "bangra",
+            "command": "${workspaceRoot}/bangra",
+            "isShellCommand": true,
+            "args": [],
+            "showOutput": "always",
+            "problemMatcher": {
+                "owner": "bangra",
+                "fileLocation": "absolute",
+                "pattern": {
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error):\\s+(.*)$",
+                    "file": 1,
+                    "line": 2,
+                    "column": 3,
+                    "severity": 4,
+                    "message": 5
+                }
+            }
         },
         {
             "taskName": "makedocs",
