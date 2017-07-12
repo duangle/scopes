@@ -8,6 +8,10 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ## Release Notes
 
+### 0.3.0
+
+* Added `do` keyword.
+
 ### 0.2.0
 
 * Fixed highlighting failing when trailed by semicolon.

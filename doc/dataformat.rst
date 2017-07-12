@@ -9,19 +9,28 @@ Closely related to `S-Expressions <https://en.wikipedia.org/wiki/S-expression>`_
 BEAT can be seen as a human-readable serialization format comparable to
 YAML, XML or JSON. It has been optimized for simplicity and terseness.
 
+BEAT files do not have to contain code on their own. They're more likely to
+store configuration or metadata. Therefore, the examples in this document are
+schema free and do only contain arbitrary data. They're not necessarily valid 
+Bangra source code.
+
 At a Glance
 -----------
 
 In case you don't have time to read the full documentation, here's an
 example that gives you an overview of all notation aspects::
 
+    # below is some random data without any schema
+
     # a naked list of five 32-bit signed integers
     1 2 3 4 5
 
-    # a list that begins with a symbol and contains a braced sublist of floats
+    # a list that begins with a symbol 'float-values:' and contains a braced 
+    # sublist of floats.
     float-values: (1.0 2.0 3.1 4.2 5.5:f64 inf nan)
 
     # we can also nest the sublist using indentation
+    # note the extravagant heading, another context-free symbol.
     ==string-values==
         "A" "B" "NCC-1701\n" "\xFFD\xFF" "\"E\""
 
