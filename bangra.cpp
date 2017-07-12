@@ -452,7 +452,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
-    T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) \
+    T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) \
     T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
@@ -2985,51 +2985,6 @@ static StyledStream& operator<<(StyledStream& ost, Scope *scope) {
 }
 
 //------------------------------------------------------------------------------
-// SYNTAX OBJECTS
-//------------------------------------------------------------------------------
-
-struct Syntax {
-protected:
-    Syntax(const Anchor *_anchor, const Any &_datum, bool _quoted) :
-        anchor(_anchor),
-        datum(_datum),
-        quoted(_quoted) {}
-
-public:
-    const Anchor *anchor;
-    Any datum;
-    bool quoted;
-
-    static const Syntax *from(const Anchor *_anchor, const Any &_datum) {
-        assert(_anchor);
-        return new Syntax(_anchor, _datum, false);
-    }
-
-    static const Syntax *from_quoted(const Anchor *_anchor, const Any &_datum) {
-        assert(_anchor);
-        return new Syntax(_anchor, _datum, true);
-    }
-};
-
-static Any unsyntax(const Any &e) {
-    e.verify(TYPE_Syntax);
-    return e.syntax->datum;
-}
-
-static Any maybe_unsyntax(const Any &e) {
-    if (e.type == TYPE_Syntax) {
-        return e.syntax->datum;
-    } else {
-        return e;
-    }
-}
-
-static StyledStream& operator<<(StyledStream& ost, const Syntax *value) {
-    ost << value->anchor << value->datum;
-    return ost;
-}
-
-//------------------------------------------------------------------------------
 // LIST
 //------------------------------------------------------------------------------
 
@@ -3107,6 +3062,77 @@ const List *List::join(const List *la, const List *lb) {
 }
 
 static StyledStream& operator<<(StyledStream& ost, const List *list);
+
+//------------------------------------------------------------------------------
+// SYNTAX OBJECTS
+//------------------------------------------------------------------------------
+
+struct Syntax {
+protected:
+    Syntax(const Anchor *_anchor, const Any &_datum, bool _quoted) :
+        anchor(_anchor),
+        datum(_datum),
+        quoted(_quoted) {}
+
+public:
+    const Anchor *anchor;
+    Any datum;
+    bool quoted;
+
+    static const Syntax *from(const Anchor *_anchor, const Any &_datum) {
+        assert(_anchor);
+        return new Syntax(_anchor, _datum, false);
+    }
+
+    static const Syntax *from_quoted(const Anchor *_anchor, const Any &_datum) {
+        assert(_anchor);
+        return new Syntax(_anchor, _datum, true);
+    }
+};
+
+static Any unsyntax(const Any &e) {
+    e.verify(TYPE_Syntax);
+    return e.syntax->datum;
+}
+
+static Any maybe_unsyntax(const Any &e) {
+    if (e.type == TYPE_Syntax) {
+        return e.syntax->datum;
+    } else {
+        return e;
+    }
+}
+
+static Any strip_syntax(Any e) {
+    e = maybe_unsyntax(e);
+    if (e.type == TYPE_List) {
+        auto src = e.list;
+        auto l = src;
+        bool needs_unwrap = false;
+        while (l != EOL) {
+            if (l->at.type == TYPE_Syntax) {
+                needs_unwrap = true;
+                break;
+            }
+            l = l->next;
+        }
+        if (needs_unwrap) {
+            l = src;
+            const List *dst = EOL;
+            while (l != EOL) {
+                dst = List::from(strip_syntax(l->at), dst);
+                l = l->next;
+            }
+            return reverse_list_inplace(dst);
+        }
+    }
+    return e;
+}
+
+static StyledStream& operator<<(StyledStream& ost, const Syntax *value) {
+    ost << value->anchor << value->datum;
+    return ost;
+}
 
 //------------------------------------------------------------------------------
 // S-EXPR LEXER & PARSER
@@ -3553,7 +3579,7 @@ struct LexerParser {
 
     // parses the next sequence and returns it wrapped in a cell that points
     // to prev
-    Any parse_any(bool quoted = false) {
+    Any parse_any() {
         assert(this->token != tok_eof);
         const Anchor *anchor = this->anchor();
         if (this->token == tok_open) {
@@ -3576,12 +3602,12 @@ struct LexerParser {
             return Syntax::from(anchor, get_symbol());
         } else if (this->token == tok_number) {
             return Syntax::from(anchor, get_number());
-        } else if (!quoted && (this->token == tok_quote)) {
+        } else if (this->token == tok_quote) {
             this->read_token();
-            const Syntax *sx = parse_any(true);
-            const_cast<Syntax *>(sx)->anchor = anchor;
-            const_cast<Syntax *>(sx)->quoted = true;
-            return sx;
+            return Syntax::from(anchor,
+                List::from({ 
+                    Syntax::from(anchor, Symbol(KW_Quote)), 
+                    parse_any() }));
         } else {
             location_error(format("unexpected token: %c (%i)",
                 this->cursor[0], (int)this->cursor[0]));
@@ -9535,6 +9561,22 @@ struct Expander {
         }
     }
 
+    // quote <value> ...
+    Any expand_quote(const List *it, const Any &dest, Any longdest) {
+        //auto _anchor = get_active_anchor();
+
+        verify_list_parameter_count(it, 1, -1);
+        it = it->next;
+        
+        Any result = none;
+        if (it->count == 1) {
+            result = it->at;
+        } else {
+            result = it;
+        }
+        return write_dest(strip_syntax(result), dest);
+    }
+
     // (if cond body ...)
     // [(elseif cond body ...)]
     // [(else body ...)]
@@ -9761,24 +9803,13 @@ struct Expander {
             if (head.type == TYPE_Builtin) {
                 Builtin func = head.builtin;
                 switch(func.value()) {
-                case KW_Fn: {
-                    return expand_fn(list, dest, longdest, false);
-                } break;
-                case KW_Label: {
-                    return expand_fn(list, dest, longdest, true);
-                } break;
-                case KW_SyntaxApplyBlock: {
-                    return expand_syntax_apply_block(list, dest, longdest);
-                } break;
-                case KW_SyntaxExtend: {
-                    return expand_syntax_extend(list, dest, longdest);
-                } break;
-                case KW_Let: {
-                    return expand_let(list, dest, longdest);
-                } break;
-                case KW_If: {
-                    return expand_if(list, dest, longdest);
-                } break;
+                case KW_Fn: return expand_fn(list, dest, longdest, false);
+                case KW_Label: return expand_fn(list, dest, longdest, true);
+                case KW_SyntaxApplyBlock: return expand_syntax_apply_block(list, dest, longdest);
+                case KW_SyntaxExtend: return expand_syntax_extend(list, dest, longdest);
+                case KW_Let: return expand_let(list, dest, longdest);
+                case KW_If: return expand_if(list, dest, longdest);
+                case KW_Quote: return expand_quote(list, dest, longdest);
                 case KW_Call: {
                     verify_list_parameter_count(list, 1, -1);
                     list = list->next;
