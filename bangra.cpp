@@ -3598,6 +3598,7 @@ struct LexerParser {
         const Anchor *anchor = this->anchor();
         ListBuilder builder(*this);
 
+        bool unwrap_single = true;
         while (this->token != tok_eof) {
             if (this->token == end_token) {
                 break;
@@ -3632,6 +3633,7 @@ struct LexerParser {
                 }
             } else if (this->token == tok_statement) {
                 this->read_token();
+                unwrap_single = false;
                 if (!builder.is_empty()) {
                     break;
                 }
@@ -3646,7 +3648,12 @@ struct LexerParser {
             }
         }
 
-        return Syntax::from(anchor, builder.get_result());
+        auto result = builder.get_result();
+        if (unwrap_single && result && result->count == 1) {
+            return result->at;
+        } else {
+            return Syntax::from(anchor, result);
+        }
     }
 
     Any parse() {

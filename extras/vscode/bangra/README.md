@@ -8,6 +8,11 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ## Release Notes
 
+### 0.2.0
+
+* Fixed highlighting failing when trailed by semicolon.
+* Added `none` keyword.
+
 ### 0.1.1
 
 Initial release of Bangra

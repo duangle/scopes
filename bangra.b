@@ -45,8 +45,8 @@ fn error! (msg)
     io-write "runtime error: "
     io-write msg
     io-write "\n"
-    abort!
-    unreachable!
+    abort!;
+    unreachable!;
 
 fn integer-type? (T)
     icmp== (type-kind T) type-kind-integer
@@ -115,7 +115,7 @@ syntax-extend
         fn (a b flipped)
             if (type== (typeof a) (typeof b))
                 op a b
-            else
+            else;
 
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! string '.. (gen-type-op2 string-join)
@@ -138,7 +138,7 @@ syntax-extend
                     sub a b
                 elseif (type== Tb Nothing)
                     sub (Ta 0) a
-                else
+                else;
         set-type-symbol! T '* (gen-type-op2 mul)
         set-type-symbol! T '<< (gen-type-op2 shl)
         set-type-symbol! T '& (gen-type-op2 band)
@@ -214,7 +214,7 @@ syntax-extend
                     fsub a b
                 elseif (type== Tb Nothing)
                     fsub (Ta 0) a
-                else
+                else;
         set-type-symbol! T '* (gen-type-op2 fmul)
         set-type-symbol! T '/
             fn (a b flipped)
@@ -223,7 +223,7 @@ syntax-extend
                     fdiv a b
                 elseif (type== Tb Nothing)
                     fdiv (Ta 1) a
-                else
+                else;
         set-type-symbol! T '% (gen-type-op2 frem)
 
     setup-int-type bool
@@ -239,7 +239,7 @@ syntax-extend
     setup-real-type f32
     setup-real-type f64
 
-    \ syntax-scope
+    syntax-scope
 
 fn op2-dispatch (symbol)
     fn (a b)
@@ -250,14 +250,14 @@ fn op2-dispatch (symbol)
             if (icmp== (va-countof result...) 0)
             else
                 return result...
-        else
+        else;
         let op success = (type@ Tb symbol)
         if success
             let result... = (op a b true)
             if (icmp== (va-countof result...) 0)
             else
                 return result...
-        else
+        else;
         compiler-error!
             string-join "operation does not apply to types "
                 string-join
@@ -328,7 +328,7 @@ fn Any-extract (val T)
             elseif (real-type? storageT)
                 bitcast
                     trunc payload (integer-type (bitcountof storageT) false)
-                    \ T
+                    T
             else
                 compiler-error!
                     .. "unable to extract value of type " T
@@ -412,7 +412,7 @@ fn powi (base exponent)
     let [loop] result cur exponent =
         tie-const exponent 1
         tie-const exponent base
-        \ exponent
+        exponent
     if (icmp== exponent 0) result
     else
         loop
@@ -436,7 +436,7 @@ fn print (...)
             printf (string->rawstring fmt) ...
 
     let printf =
-        load-printf
+        load-printf;
 
     fn print-element (val)
         let T = (typeof val)
@@ -456,7 +456,7 @@ fn print (...)
     if (< i (va-countof ...))
         if (> i 0)
             io-write " "
-        else # do nothing
+        else; # do nothing
         print-element (unconst (va@ i ...))
         loop (+ i 1)
     else
@@ -485,7 +485,7 @@ fn walk-list (on-leaf l depth)
                 add depth 1
         else
             on-leaf value depth
-            \ true
+            true
         loop next
 
 #print "yes" "this" "is" "dog"
@@ -502,8 +502,8 @@ fn list-handler (topexpr env)
         #print head env
         let head success = (Scope@ env (Any-extract head Symbol))
         #print head success
-        \ none
-    else
+        none
+    else;
     #walk-list
         fn on-leaf (value depth)
             print-spaces depth
@@ -519,7 +519,7 @@ fn list-handler (topexpr env)
 syntax-extend
     set-scope-symbol! syntax-scope (string->Symbol "#list")
         compile (typify list-handler list Scope) #'dump-disassembly # 'skip-opts 
-    \ syntax-scope
+    syntax-scope
 
 # deferring remaining expressions to bootstrap parser
 #syntax-apply-block
@@ -580,7 +580,7 @@ syntax-extend
             float sinf(float);
             int printf( const char* format, ... );
             "
-            \ eol
+            eol
 
 # continuation skip
     fn/cc mainf (return x)
@@ -592,9 +592,9 @@ syntax-extend
                     fn/cc (_)
                         io-write "terminated early!\n"
                         return false
-            \ x
+            x
         io-write "done stuff.\n"
-        \ true
+        true
 
     mainf
         unconst 0
@@ -640,7 +640,7 @@ syntax-extend
             branch (constant? n)
                 fn/cc (_) 0
                 fn/cc (_) (unconst 0)
-            \ n
+            n
 
     puts "hello world"
         unconst 8
@@ -729,11 +729,11 @@ fn test-polymorphic-return-type ()
         let value-type = (typeof value)
         if (type== value-type i32)
             io-write "<number>\n"
-            \ "hello"
+            "hello"
         elseif (type== value-type string)
             io-write value
             io-write "\n"
-            \ false
+            false
         else
             io-write "???\n"
     print-value
@@ -753,7 +753,7 @@ Options:
    -v, --version               print program version and exit.
    --                          terminate option list."
     exit 0
-    unreachable!
+    unreachable!;
 
 fn print-version ()
     let vmin vmaj vpatch = (compiler-version)
@@ -762,13 +762,13 @@ fn print-version ()
             if (== vpatch 0) ""
             else
                 .. "." (Any-string (Any-wrap vpatch))
-            \ " ("
+            " ("
             if debug-build? "debug build, " 
             else ""
             \ compiler-timestamp ")"
     print "Executable path:" compiler-path
     exit 0
-    unreachable!
+    unreachable!;
 
 #fn run-main (args...)
     # running in interpreter mode
@@ -815,5 +815,5 @@ fn print-version ()
         unreachable!
 
 #run-main (args)
-\ true
+true
 

@@ -17,7 +17,7 @@ example that gives you an overview of all notation aspects::
 
     # a naked list of five 32-bit signed integers
     1 2 3 4 5
-    
+
     # a list that begins with a symbol and contains a braced sublist of floats
     float-values: (1.0 2.0 3.1 4.2 5.5:f64 inf nan)
 
@@ -25,9 +25,26 @@ example that gives you an overview of all notation aspects::
     ==string-values==
         "A" "B" "NCC-1701\n" "\xFFD\xFF" "\"E\""
 
-    # a list with one element, a multi-line string
+    # a single top-level element, a multi-line string
     "Ma'am is acceptable in a crunch, but I prefer Captain.
                                         -- Kathryn Janeway"
+
+    # a list of pairs (also lists), arranged horizontally
+    (1 x) (2 y) (3 z)
+    # same list, with last two entries arranged vertically
+    (1 x)
+        (2 y)
+        (3 z)
+    # we can line up all entries by using a semicolon to indicate an empty head
+    ;
+        (1 x)
+        (2 y)
+        (3 z)
+    # parentheses can also be removed for each line entry
+    ;
+        1 x
+        2 y
+        3 z
 
     # appending values to the parent list in the next line
     symbol-values one two three four five \
@@ -62,7 +79,7 @@ example that gives you an overview of all notation aspects::
         
     # the same list with braced notation; within braced lists, 
       indentation is meaningless.
-    \ (address-list
+    (address-list
         # a list with a header and three more lists of two values each
         (entry
             (name: "Jean-Luc Picard")
@@ -210,13 +227,9 @@ Here are some examples for valid lists::
     # three empty braced lists within a naked list
     () () ()
     # a list containing a symbol, a string, an integer, a real, and an empty list
-    \ (print (.. "hello world") 303 606 909)
-    # four (not three) nesting lists
+    (print (.. "hello world") 303 606 909)
+    # three nesting lists
     ((()))
-
-There's a weird stray escape character that may be a little surprising. 
-Also, four lists? What is going on here? These questions are answered in the
-following section.
 
 Naked & Braced Lists
 --------------------
@@ -228,13 +241,9 @@ to what `Lisp <http://en.wikipedia.org/wiki/Lisp_(programming_language)>`_ and
 `Scheme <http://en.wikipedia.org/wiki/Scheme_(programming_language)>`_ users
 know as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>`_::
 
-    # there must not be any tokens outside the parentheses guarding the
-      top level list.
-
-    # nested lists as nested expressions:
-      note the mandatory preceeding escape token to prevent autowrapping,
-      we'll get to that in a moment.
-    \ (print (.. "Hello" "World") 303 606 909)
+    (print 
+        (.. "Hello" "World") 
+        303 606 909)
 
 As a modern alternative, Bangra offers a *naked notation* where the scope of
 lists is implicitly balanced by indentation, an approach used by
@@ -264,7 +273,7 @@ Naked lists can contain braced lists, and braced lists can
 contain naked lists::
 
     # compute the value of (1 + 2 + (3 * 4)) and print the result
-    \ (print
+    (print
         (+ 1 2
             (3 * 4)))
 
@@ -323,9 +332,9 @@ mode by starting the head of the block with `;`.
 Here are some examples::
 
     # in braced notation
-    \ (print a; print (a;b;); print c;)
+    (print a; print (a;b;); print c;)
     # parses as
-    \ ((print a) (print ((a) (b))) (print c))
+    ((print a) (print ((a) (b))) (print c))
 
     # in naked notation
     ;
@@ -333,15 +342,15 @@ Here are some examples::
         ;
             print c; print d
     # parses as
-    \ ((print a) (print b) ((print c) (print d)))
+    ((print a) (print b) ((print c) (print d)))
 
 There's a caveat with semicolons in braced mode tho though: if trailing elements
 aren't terminated with `;`, they're not going to be wrapped::
 
     # in braced notation
-    \ (print a; print (a;b;); print c)
+    (print a; print (a;b;); print c)
     # parses as
-    \ ((print a) (print ((a) (b))) print c)
+    ((print a) (print ((a) (b))) print c)
 
 Pitfalls of Naked Notation
 --------------------------
@@ -353,8 +362,8 @@ small difficulties that can arise and how to solve them efficiently.
 Single Elements
 ^^^^^^^^^^^^^^^
 
-Special care must be taken when single elements are defined, which are not to
-be wrapped in lists.
+Special care must be taken when single elements are defined which the user
+wishes to wrap in a list.
 
 Here is a braced list describing an expression printing the number 42::
 
@@ -365,18 +374,20 @@ wrapped in a single list::
 
     print 42
 
-A single element on its own line is also wrapped::
+A single element on its own line is not wrapped::
 
     print           # (print
-        (42)        #       (42))
+        42          #        42)
 
-The statement above will translate into an error at runtime because numbers
-can not be called. One can make use of the ``\`` (splice-line) control
-character, which is only available in naked notation and splices the line
-starting at the next token into the active list::
+What if we want to just print a newline, passing no arguments?::
 
-    print           # (print
-        \ 42        #       42)
+    print           # print
+
+The statement above will be ignored because a symbol is resolved but not called.
+One can make use of the ``;`` (split-statement) control
+character, which ends the current list::
+
+    print;          # (print)
 
 Wrap-Around Lines
 ^^^^^^^^^^^^^^^^^
@@ -388,7 +399,7 @@ column limit (typically 80 or 100).
 In braced lists, the problem is easily corrected::
 
     # import many symbols from an external module into the active namespace
-    \ (import-from "OpenGL"
+    (import-from "OpenGL"
         glBindBuffer GL_UNIFORM_BUFFER glClear GL_COLOR_BUFFER_BIT
         GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram
         glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP)
@@ -403,12 +414,12 @@ The naked approach interprets each new line as a nested list::
 
     # braced equivalent of the term above; each line is interpreted
     # as a function call and fails.
-    \ (import-from "OpenGL"
+    (import-from "OpenGL"
         (glBindBuffer GL_UNIFORM_BUFFER glClear GL_COLOR_BUFFER_BIT)
         (GL_STENCIL_BUFFER_BIT GL_DEPTH_BUFFER_BIT glViewport glUseProgram)
         (glDrawArrays glEnable glDisable GL_TRIANGLE_STRIP))
 
-This can be fixed by using the splice-line control character once more::
+This can be fixed by using the ``splice-line`` control character, ``\``::
 
     # correct solution using splice-line, postfix style
     import-from "OpenGL" \
@@ -433,7 +444,7 @@ While naked notation is ideal for writing nested lists that accumulate
 at the tail::
 
     # braced
-    \ (a b c
+    (a b c
         (d e f
             (g h i))
         (j k l))
@@ -447,7 +458,7 @@ at the tail::
 ...there are complications when additional elements need to be spliced back into
 the parent list::
 
-    \ (a b c
+    (a b c
         (d e f
             (g h i))
         j k l)
@@ -465,7 +476,7 @@ Left-Hand Nesting
 When using infix notation, conditional blocks or functions producing functions,
 lists occur that nest at the head level rather than the tail::
 
-    \ ((((a b)
+    ((((a b)
         c d)
             e f)
                 g h)
@@ -486,7 +497,7 @@ A more complex tree which also requires splicing elements back into the parent
 list can be realized with the same combo of list separator and splice-line::
 
     # braced
-    \ (a
+    (a
         ((b
             (c d)) e)
         f g
