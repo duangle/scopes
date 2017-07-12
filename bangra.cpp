@@ -9590,25 +9590,26 @@ struct Expander {
         branches.push_back(it);
 
         it = next;
-        if (it == EOL) {
-            location_error(String::from("elseif or else expected"));
-        }
-        next = it->next;
-
-        const Syntax *sx = it->at;
-        it = sx->datum;
-        if (it == EOL) {
-            location_error(String::from("elseif or else expected"));
-        }
-        auto head = unsyntax(it->at);
-        if (head == Symbol(KW_ElseIf)) {
-            goto collect_branch;
-        } else if (head == Symbol(KW_Else)) {
-            branches.push_back(it);
+        if (it != EOL) {
+            auto itnext = it->next;
+            const Syntax *sx = it->at;
+            it = sx->datum;
+            if (it != EOL) {
+                auto head = unsyntax(it->at);
+                if (head == Symbol(KW_ElseIf)) {
+                    next = itnext;
+                    goto collect_branch;
+                } else if (head == Symbol(KW_Else)) {
+                    next = itnext;
+                    branches.push_back(it);
+                } else {
+                    branches.push_back(EOL);
+                }
+            } else {
+                branches.push_back(EOL);
+            }
         } else {
-            const Syntax *sxhead = it->at;
-            set_active_anchor(sxhead->anchor);
-            location_error(String::from("elseif or else expected"));
+            branches.push_back(EOL);
         }
 
         Label *nextstate = nullptr;
@@ -9656,9 +9657,13 @@ struct Expander {
         }
 
         it = branches[lastidx];
-        it = it->next;
-        Expander subexp(state, Scope::from(env));
-        subexp.expand_function_body(it, longdest);
+        if (it != EOL) {
+            it = it->next;
+            Expander subexp(state, Scope::from(env));
+            subexp.expand_function_body(it, longdest);
+        } else {
+            br(longdest, { none });
+        }
 
         state = nextstate;
         return result;

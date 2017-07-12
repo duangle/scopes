@@ -115,7 +115,6 @@ syntax-extend
         fn (a b flipped)
             if (type== (typeof a) (typeof b))
                 op a b
-            else;
 
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! string '.. (gen-type-op2 string-join)
@@ -138,7 +137,6 @@ syntax-extend
                     sub a b
                 elseif (type== Tb Nothing)
                     sub (Ta 0) a
-                else;
         set-type-symbol! T '* (gen-type-op2 mul)
         set-type-symbol! T '<< (gen-type-op2 shl)
         set-type-symbol! T '& (gen-type-op2 band)
@@ -214,7 +212,6 @@ syntax-extend
                     fsub a b
                 elseif (type== Tb Nothing)
                     fsub (Ta 0) a
-                else;
         set-type-symbol! T '* (gen-type-op2 fmul)
         set-type-symbol! T '/
             fn (a b flipped)
@@ -223,7 +220,6 @@ syntax-extend
                     fdiv a b
                 elseif (type== Tb Nothing)
                     fdiv (Ta 1) a
-                else;
         set-type-symbol! T '% (gen-type-op2 frem)
 
     setup-int-type bool
@@ -250,14 +246,12 @@ fn op2-dispatch (symbol)
             if (icmp== (va-countof result...) 0)
             else
                 return result...
-        else;
         let op success = (type@ Tb symbol)
         if success
             let result... = (op a b true)
             if (icmp== (va-countof result...) 0)
             else
                 return result...
-        else;
         compiler-error!
             string-join "operation does not apply to types "
                 string-join
@@ -456,7 +450,6 @@ fn print (...)
     if (< i (va-countof ...))
         if (> i 0)
             io-write " "
-        else; # do nothing
         print-element (unconst (va@ i ...))
         loop (+ i 1)
     else
@@ -503,7 +496,6 @@ fn list-handler (topexpr env)
         let head success = (Scope@ env (Any-extract head Symbol))
         #print head success
         none
-    else;
     #walk-list
         fn on-leaf (value depth)
             print-spaces depth
@@ -664,7 +656,7 @@ syntax-extend
     puts "hello world" (unconst 8)
 
 # explicit instantiation
-fn test-explicit-instantiation ()
+#fn test-explicit-instantiation ()
     fn test-add (x1 y1 z1 w1 x2 y2 z2 w2)
         return
             fadd x1 x2
@@ -685,7 +677,7 @@ fn test-explicit-instantiation ()
 
 #test-explicit-instantiation
 
-fn test-select-optimization ()
+#fn test-select-optimization ()
     fn conditional-select (opt i)
         if opt
             return
@@ -704,7 +696,7 @@ fn test-select-optimization ()
 #test-select-optimization
 
 # return function dynamically
-fn test-dynamic-function-return ()
+#fn test-dynamic-function-return ()
     fn square-brackets (s)
         io-write "["; io-write s; io-write "]"
     fn round-brackets (s)
@@ -724,7 +716,7 @@ fn test-dynamic-function-return ()
 #test-dynamic-function-return
 
 # polymorphic return type and inlined type checking
-fn test-polymorphic-return-type ()
+#fn test-polymorphic-return-type ()
     fn print-value (value)
         let value-type = (typeof value)
         if (type== value-type i32)
@@ -746,16 +738,16 @@ fn test-polymorphic-return-type ()
 # main
 #-------------------------------------------------------------------------------
 
-fn print-help (exename)
+#fn print-help (exename)
     print "usage:" exename "[option [...]] [filename]
-Options:
+#Options:
    -h, --help                  print this text and exit.
    -v, --version               print program version and exit.
    --                          terminate option list."
     exit 0
     unreachable!;
 
-fn print-version ()
+#fn print-version ()
     let vmin vmaj vpatch = (compiler-version)
     print "Bangra"
         .. (Any-string (Any-wrap vmin)) "." (Any-string (Any-wrap vmaj))
