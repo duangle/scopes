@@ -454,7 +454,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
+    T(FN_FunctionType) T(FN_TupleType) \
+    T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
     T(OP_FCmpOEQ) T(OP_FCmpONE) T(OP_FCmpORD) \
@@ -467,6 +469,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_SetScopeSymbol) \
+    T(SFXFN_SetTypenameStorage) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
@@ -578,6 +581,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ParameterAnchor, "Parameter-anchor") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
     T(FN_PointerType, "pointer-type") \
+    T(FN_FunctionType, "function-type") \
+    T(FN_TupleType, "tuple-type") \
+    T(FN_TypenameType, "typename-type") \
     T(FN_Purify, "purify") \
     T(FN_Write, "io-write") \
     T(FN_Flush, "io-flush") \
@@ -601,6 +607,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
+    T(FN_SyntaxNew, "Syntax-new") \
+    T(FN_SyntaxWrap, "Syntax-wrap") \
+    T(FN_SyntaxStrip, "Syntax-strip") \
     T(FN_Translate, "translate") T(FN_Trunc, "trunc") \
     T(FN_ZExt, "zext") T(FN_SExt, "sext") \
     T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
@@ -629,6 +638,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
     T(SFXFN_SetScopeSymbol, "set-scope-symbol!") \
     T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
+    T(SFXFN_SetTypenameStorage, "set-typename-storage!") \
     T(SFXFN_TranslateLabelBody, "translate-label-body!") \
     \
     /* builtin operator functions that can also be used as infix */ \
@@ -701,6 +711,10 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_DumpDisassembly, "dump-disassembly") \
     T(SYM_DumpModule, "dump-module") \
     T(SYM_SkipOpts, "skip-opts") \
+    \
+    /* function flags */ \
+    T(SYM_Variadic, "variadic") \
+    T(SYM_Pure, "pure") \
     \
     /* ad-hoc builtin names */ \
     T(SYM_ExecuteReturn, "execute-return") \
@@ -3079,9 +3093,9 @@ public:
     Any datum;
     bool quoted;
 
-    static const Syntax *from(const Anchor *_anchor, const Any &_datum) {
+    static const Syntax *from(const Anchor *_anchor, const Any &_datum, bool quoted = false) {
         assert(_anchor);
-        return new Syntax(_anchor, _datum, false);
+        return new Syntax(_anchor, _datum, quoted);
     }
 
     static const Syntax *from_quoted(const Anchor *_anchor, const Any &_datum) {
@@ -3125,6 +3139,34 @@ static Any strip_syntax(Any e) {
             }
             return reverse_list_inplace(dst);
         }
+    }
+    return e;
+}
+
+static Any wrap_syntax(const Anchor *anchor, Any e, bool quoted = false) {
+    if (e.type == TYPE_List) {
+        auto src = e.list;
+        auto l = src;
+        bool needs_wrap = false;
+        while (l != EOL) {
+            if (l->at.type != TYPE_Syntax) {
+                needs_wrap = true;
+                break;
+            }
+            l = l->next;
+        }
+        if (needs_wrap) {
+            l = src;
+            const List *dst = EOL;
+            while (l != EOL) {
+                dst = List::from(wrap_syntax(anchor, l->at, quoted), dst);
+                l = l->next;
+            }
+            l = reverse_list_inplace(dst);
+        }
+        return Syntax::from(anchor, l, quoted);
+    } else if (e.type != TYPE_Syntax) {
+        return Syntax::from(anchor, e, quoted);
     }
     return e;
 }
@@ -4225,14 +4267,11 @@ public:
         return body.args[0].label;
     }
 
-    const Type *get_function_type() const {
+    const Type *get_return_type() const {
+        if (params[0]->type == TYPE_Void)
+            return TYPE_Void;
 
         std::vector<const Type *> rettypes;
-        std::vector<const Type *> argtypes;
-
-        for (size_t i = 1; i < params.size(); ++i) {
-            argtypes.push_back(params[i]->type);
-        }
         auto tl = cast<TypedLabelType>(params[0]->type);
         for (size_t i = 1; i < tl->types.size(); ++i) {
             rettypes.push_back(tl->types[i]);
@@ -4241,11 +4280,52 @@ public:
         const Type *rtype = TYPE_Void;
         if (rettypes.size() == 1) {
             rtype = rettypes[0];
-        } else {
+        } else if (!rettypes.empty()) {
             rtype = Tuple(rettypes);
         }
+        return rtype;
+    }
 
-        return Function(rtype, argtypes);
+    void verify_compilable() const {
+        if (params[0]->type != TYPE_Void) {
+            auto tl = dyn_cast<TypedLabelType>(params[0]->type);
+            if (!tl) {
+                StyledString ss;
+                ss.out << "cannot compile function with complex continuation type " 
+                    << params[0]->type;
+                location_error(ss.str());
+            }
+            for (size_t i = 1; i < tl->types.size(); ++i) {
+                auto T = tl->types[i];
+                if (is_opaque(T)) {
+                    StyledString ss;
+                    ss.out << "cannot compile function with opaque return argument of type " 
+                        << T;
+                    location_error(ss.str());
+                }
+            }
+        }
+
+        std::vector<const Type *> argtypes;
+        for (size_t i = 1; i < params.size(); ++i) {
+            auto T = params[i]->type;
+            if (is_opaque(T)) {
+                StyledString ss;
+                ss.out << "cannot compile function with opaque argument of type " 
+                    << T;
+                location_error(ss.str());
+            }
+        }
+    }
+
+    const Type *get_function_type() const {
+
+        std::vector<const Type *> argtypes;
+        for (size_t i = 1; i < params.size(); ++i) {
+            argtypes.push_back(params[i]->type);
+        }
+
+        return Function(get_return_type(), argtypes);
     }
 
     void use(const Any &arg, int i) {
@@ -6078,8 +6158,9 @@ struct GenerateCtx {
     };
 
     std::unordered_map<Label *, LLVMValueRef> label2func;
-    std::unordered_map<std::pair<LLVMValueRef, Label *>,
+    std::unordered_map< std::pair<LLVMValueRef, Label *>,
         LLVMBasicBlockRef, HashFuncLabelPair> label2bb;
+    std::vector< std::pair<Label *, Label *> > bb_label_todo;
 
     std::unordered_map<Label *, LLVMValueRef> label2md;
     std::unordered_map<SourceFile *, LLVMValueRef> file2value;
@@ -6251,6 +6332,8 @@ struct GenerateCtx {
             assert(false);
         } break;
         case TK_Typename: {
+            if (type == TYPE_Void)
+                return LLVMVoidType();
             auto tn = cast<TypenameType>(type);
             if (tn->finalized()) {
                 switch(tn->storage_type->kind()) {
@@ -6492,6 +6575,68 @@ struct GenerateCtx {
         return nullptr;
     }
 
+    LLVMValueRef build_call(const Type *functype, LLVMValueRef func, std::vector<Any> &args) {
+        size_t argcount = args.size() - 1;
+
+        auto fi = cast<FunctionType>(functype);
+
+        bool use_sret = is_memory_class(fi->return_type);
+
+        size_t valuecount = argcount;
+        size_t offset = 0;
+        if (use_sret) {
+            valuecount++;
+            offset = 1;
+        }
+        LLVMValueRef values[valuecount];
+        if (use_sret) {
+            values[0] = LLVMBuildAlloca(builder, 
+                _type_to_llvm_type(fi->return_type), "");
+        }
+        std::vector<size_t> memptrs;
+        for (size_t i = 0; i < argcount; ++i) {
+            auto &&arg = args[i + 1];
+            LLVMValueRef val = argument_to_value(arg);
+            auto AT = arg.indirect_type();
+            if (is_memory_class(AT)) {
+                LLVMValueRef ptrval = LLVMBuildAlloca(builder, 
+                    _type_to_llvm_type(AT), "");
+                LLVMBuildStore(builder, val, ptrval);
+                val = ptrval;
+                memptrs.push_back(i + offset + 1);
+            }
+            values[i + offset] = val;
+        }
+
+        size_t fargcount = fi->argument_types.size();
+        assert(argcount >= fargcount);
+        // make variadic calls C compatible
+        if (fi->flags & FF_Variadic) {
+            for (size_t i = fargcount; i < argcount; ++i) {
+                auto value = values[i];
+                // floats need to be widened to doubles
+                if (LLVMTypeOf(value) == f32T) {
+                    values[i] = LLVMBuildFPExt(builder, value, f64T, "");
+                }
+            }
+        }
+
+        auto ret = LLVMBuildCall(builder, func, values, valuecount, "");
+        const LLVMAttribute LLVMNonNullAttribute = (LLVMAttribute)(1ULL << 44);
+        for (auto idx : memptrs) {
+            LLVMAddInstrAttribute(ret, idx, LLVMByValAttribute);
+            LLVMAddInstrAttribute(ret, idx, LLVMNonNullAttribute);                    
+        }
+        if (use_sret) {
+            LLVMAddInstrAttribute(ret, 1, LLVMStructRetAttribute);                    
+            return LLVMBuildLoad(builder, values[0], "");
+        } else if (fi->return_type != TYPE_Void) {
+            return ret;
+        } else {
+            return nullptr;
+        }
+    }
+
     void write_label_body(Label *label) {
         auto &&body = label->body;
         auto &&enter = body.enter;
@@ -6697,12 +6842,12 @@ struct GenerateCtx {
             } break;
             }
         } else if (enter.type == TYPE_Label) {
-            LLVMValueRef values[argcount];
-            for (size_t i = 0; i < argcount; ++i) {
-                values[i] = argument_to_value(args[i + 1]);
-            }
             LLVMValueRef value = argument_to_value(enter);
             if (LLVMValueIsBasicBlock(value)) {
+                LLVMValueRef values[argcount];
+                for (size_t i = 0; i < argcount; ++i) {
+                    values[i] = argument_to_value(args[i + 1]);
+                }
                 auto bbfrom = LLVMGetInsertBlock(builder);
                 // assign phi nodes
                 auto &&params = enter.label->params;
@@ -6716,10 +6861,14 @@ struct GenerateCtx {
                 LLVMBuildBr(builder, LLVMValueAsBasicBlock(value));
             } else {
                 LLVMSetCurrentDebugLocation(builder, diloc);
-                retvalue = LLVMBuildCall(builder, value, values, argcount, "");
-                if (LLVMGetReturnType(LLVMGetElementType(LLVMTypeOf(value))) == voidT)
-                    retvalue = nullptr;
+                retvalue = build_call(
+                    enter.label->get_function_type(), 
+                    value, args);
             }
+        } else if (is_function_pointer(enter.indirect_type())) {
+            auto pi = cast<PointerType>(enter.indirect_type());
+            retvalue = build_call(pi->element_type, 
+                argument_to_value(enter), args);
         } else if (enter.type == TYPE_Parameter) {
             LLVMValueRef values[argcount];
             for (size_t i = 0; i < argcount; ++i) {
@@ -6729,85 +6878,59 @@ struct GenerateCtx {
             assert(enter.parameter->index == 0);
             // must be returning from this function
             assert(enter.parameter->label == active_function);
-            if (argcount > 1) {
-                LLVMBuildAggregateRet(builder, values, argcount);
-            } else if (argcount == 1) {
-                LLVMBuildRet(builder, values[0]);
-            } else {
+
+            Label *label = enter.parameter->label;
+            bool use_sret = is_memory_class(label->get_return_type());
+            if (use_sret) {
+                auto it = param2value.find(enter.parameter);
+                assert (it != param2value.end());                   
+                if (argcount > 1) {
+                    LLVMTypeRef types[argcount];
+                    for (size_t i = 0; i < argcount; ++i) {
+                        types[i] = LLVMTypeOf(values[i]);
+                    }
+
+                    LLVMValueRef val = LLVMGetUndef(LLVMStructType(types, argcount, false));
+                    for (size_t i = 0; i < argcount; ++i) {
+                        val = LLVMBuildInsertValue(builder, val, values[i], i, "");
+                    }
+                    LLVMBuildStore(builder, val, it->second);
+                } else if (argcount == 1) {
+                    LLVMBuildStore(builder, values[0], it->second);
+                }
                 LLVMBuildRetVoid(builder);
+            } else {
+                if (argcount > 1) {
+                    LLVMBuildAggregateRet(builder, values, argcount);
+                } else if (argcount == 1) {
+                    LLVMBuildRet(builder, values[0]);
+                } else {
+                    LLVMBuildRetVoid(builder);
+                }
             }
         } else {
-            if (is_function_pointer(enter.type)) {
-                auto pi = cast<PointerType>(enter.type);
-                auto fi = cast<FunctionType>(pi->element_type);
-
-                bool use_sret = is_memory_class(fi->return_type);
-
-                size_t valuecount = argcount;
-                size_t offset = 0;
-                if (use_sret) {
-                    valuecount++;
-                    offset = 1;
-                }
-                LLVMValueRef values[valuecount];
-                if (use_sret) {
-                    values[0] = LLVMBuildAlloca(builder, 
-                        _type_to_llvm_type(fi->return_type), "");
-                }
-                std::vector<size_t> memptrs;
-                for (size_t i = 0; i < argcount; ++i) {
-                    auto &&arg = args[i + 1];
-                    LLVMValueRef val = argument_to_value(arg);
-                    auto AT = arg.indirect_type();
-                    if (is_memory_class(AT)) {
-                        LLVMValueRef ptrval = LLVMBuildAlloca(builder, 
-                            _type_to_llvm_type(AT), "");
-                        LLVMBuildStore(builder, val, ptrval);
-                        val = ptrval;
-                        memptrs.push_back(i + offset + 1);
-                    }
-                    values[i + offset] = val;
-                }
-
-                size_t fargcount = fi->argument_types.size();
-                assert(argcount >= fargcount);
-                // make variadic calls C compatible
-                if (fi->flags & FF_Variadic) {
-                    for (size_t i = fargcount; i < argcount; ++i) {
-                        auto value = values[i];
-                        // floats need to be widened to doubles
-                        if (LLVMTypeOf(value) == f32T) {
-                            values[i] = LLVMBuildFPExt(builder, value, f64T, "");
-                        }
-                    }
-                }
-
-                auto ret = LLVMBuildCall(builder,
-                    argument_to_value(enter), values, valuecount, "");
-                const LLVMAttribute LLVMNonNullAttribute = (LLVMAttribute)(1ULL << 44);
-                for (auto idx : memptrs) {
-                    LLVMAddInstrAttribute(ret, idx, LLVMByValAttribute);
-                    LLVMAddInstrAttribute(ret, idx, LLVMNonNullAttribute);                    
-                }
-                if (use_sret) {
-                    LLVMAddInstrAttribute(ret, 1, LLVMStructRetAttribute);                    
-                    retvalue = LLVMBuildLoad(builder, values[0], "");
-                } else if (fi->return_type != TYPE_Void) {
-                    retvalue = ret;
-                }
-            } else {
-                assert(false && "todo: translate non-builtin call");
-            }
+            assert(false && "todo: translate non-builtin call");
         }
 
         Any contarg = args[0];
         if (contarg.type == TYPE_Parameter) {
             assert(contarg.parameter->index == 0);
             assert(contarg.parameter->label == active_function);
-            if (retvalue) {
-                LLVMBuildRet(builder, retvalue);
-            } else {
+            Label *label = contarg.parameter->label;
+            bool use_sret = is_memory_class(label->get_return_type());
+            if (use_sret) {
+                auto it = param2value.find(enter.parameter);
+                assert (it != param2value.end());
+                if (retvalue) {
+                    LLVMBuildStore(builder, retvalue, it->second);
+                }
                 LLVMBuildRetVoid(builder);
+            } else {
+                if (retvalue) {
+                    LLVMBuildRet(builder, retvalue);
+                } else {
+                    LLVMBuildRetVoid(builder);
+                }
             }
         } else if (contarg.type == TYPE_Label) {
             auto bb = label_to_basic_block(contarg.label);
@@ -6843,6 +6966,26 @@ struct GenerateCtx {
 #undef READ_VALUE
 #undef READ_TYPE
 
+    void process_labels() {
+        while (!bb_label_todo.empty()) {
+            auto it = bb_label_todo.back();
+            active_function = it.first;
+            Label *label = it.second;
+            bb_label_todo.pop_back();
+
+            auto it3 = label2func.find(active_function);
+            assert(it3 != label2func.end());
+            LLVMValueRef func = it3->second;
+
+            auto it2 = label2bb.find({func, label});
+            assert(it2 != label2bb.end());
+            LLVMBasicBlockRef bb = it2->second;
+            LLVMPositionBuilderAtEnd(builder, bb);
+
+            write_label_body(label);
+        }
+    }
+
     LLVMBasicBlockRef label_to_basic_block(Label *label) {
         auto old_bb = LLVMGetInsertBlock(builder);
         LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
@@ -6851,6 +6994,7 @@ struct GenerateCtx {
             const char *name = label->name.name()->data;
             auto bb = LLVMAppendBasicBlock(func, name);
             label2bb.insert({{func, label}, bb});
+            bb_label_todo.push_back({active_function, label});
             LLVMPositionBuilderAtEnd(builder, bb);
 
             auto &&params = label->params;
@@ -6864,9 +7008,7 @@ struct GenerateCtx {
                     param2value[param] = pvalue;
                 }
             }
-
-            write_label_body(label);
-
+            
             LLVMPositionBuilderAtEnd(builder, old_bb);
             return bb;
         } else {
@@ -6874,7 +7016,7 @@ struct GenerateCtx {
         }
     }
 
-    LLVMValueRef label_to_function(Label *label) {
+    LLVMValueRef label_to_function(Label *label, bool root_function = false) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
 
@@ -6884,38 +7026,50 @@ struct GenerateCtx {
             active_function = label;
 
             auto old_bb = LLVMGetInsertBlock(builder);
-
-            const char *name = label->name.name()->data;
-
-            auto &&params = label->params;
-            auto &&contparam = params[0];
-
-            LLVMTypeRef return_type = return_type_to_llvm_type(contparam->type);
-
-            size_t paramcount = label->params.size() - 1;
-            LLVMTypeRef arg_types[paramcount];
-            for (size_t i = 0; i < paramcount; ++i) {
-                arg_types[i] = type_to_llvm_type(params[i + 1]->type);
+            
+            const char *name;
+            if (root_function && (label->name == SYM_Unnamed)) {
+                name = "unnamed";
+            } else {
+                name = label->name.name()->data;
             }
 
-            //LLVMSetCurrentDebugLocation(builder, anchor_to_location(label->anchor));
+            auto &&params = label->params;
+            //auto &&contparam = params[0];
 
-            auto functype = LLVMFunctionType(return_type, arg_types, paramcount, false);
+            auto ilfunctype = label->get_function_type();
+            auto fi = cast<FunctionType>(ilfunctype);
+            bool use_sret = is_memory_class(fi->return_type);
+
+            auto functype = type_to_llvm_type(ilfunctype);
+
+            size_t paramcount = label->params.size() - 1;
+
             auto func = LLVMAddFunction(module, name, functype);
             LLVMSetLinkage(func, LLVMPrivateLinkage);
 
             LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
 
+            auto bb = LLVMAppendBasicBlock(func, "");
+            LLVMPositionBuilderAtEnd(builder, bb);
+
+            size_t offset = 0;
+            if (use_sret) {
+                offset++;         
+                Parameter *param = params[0];
+                param2value[param] = LLVMGetParam(func, 0);
+            }
+
             for (size_t i = 0; i < paramcount; ++i) {
                 Parameter *param = params[i + 1];
-                auto pvalue = LLVMGetParam(func, i);
-                param2value[param] = pvalue;
+                LLVMValueRef val = LLVMGetParam(func, i + offset);
+                if (is_memory_class(param->type)) {
+                    val = LLVMBuildLoad(builder, val, "");
+                }
+                param2value[param] = val;
             }
 
             label2func[label] = func;
-
-            auto bb = LLVMAppendBasicBlock(func, "");
-            LLVMPositionBuilderAtEnd(builder, bb);
 
             write_label_body(label);
 
@@ -6953,8 +7107,9 @@ struct GenerateCtx {
             false, "", 0, "", 0);
         //LLVMAddNamedMetadataOperand(module, "llvm.dbg.cu", dicu);
 
-        auto func = label_to_function(entry);
+        auto func = label_to_function(entry, true);
         LLVMSetLinkage(func, LLVMExternalLinkage);
+        process_labels();
 
         finalize_types();
 
@@ -7077,11 +7232,16 @@ enum {
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
+
+    fn->verify_compilable();
+    const Type *functype = Pointer(fn->get_function_type());
+
     GenerateCtx ctx;
     auto result = ctx.generate(fn);
 
     auto module = result.first;
     auto func = result.second;
+    assert(func);
 
     if (!ee) {
         char *errormsg = nullptr;
@@ -7125,9 +7285,7 @@ static Any compile(Label *fn, uint64_t flags) {
         }
     }
 
-    return Any::from_pointer(
-        Pointer(fn->get_function_type()),
-        pfunc);
+    return Any::from_pointer(functype, pfunc);
 }
 
 //------------------------------------------------------------------------------
@@ -7289,7 +7447,7 @@ struct NormalizeCtx {
 
     static bool is_calling_function(Label *l) {
         auto &&enter = l->body.enter;
-        return is_function_pointer(enter.type);
+        return is_function_pointer(enter.indirect_type());
     }
 
     static bool is_calling_pure_function(Label *l) {
@@ -7390,7 +7548,7 @@ struct NormalizeCtx {
         auto &&enter = l->body.enter;
         //auto &&args = l->body.args;
 
-        auto pi = cast<PointerType>(enter.type);
+        auto pi = cast<PointerType>(enter.indirect_type());
         auto fi = cast<FunctionType>(pi->element_type);
 
         verify_function_argument_signature(fi, l);
@@ -7914,9 +8072,55 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case FN_FunctionType: {
+            CHECKARGS(1, -1);
+            std::vector<const Type *> types;
+            size_t k = 2;
+            while (k < args.size()) {
+                if (args[k].type != TYPE_Type)
+                    break;
+                types.push_back(args[k]);
+                k++;
+            }
+            uint32_t flags = 0;
+            
+            while (k < args.size()) {
+                args[k].verify(TYPE_Symbol);
+                Symbol sym = args[k].symbol;
+                uint64_t flag = 0;
+                switch(sym.value()) {
+                case SYM_Variadic: flag = FF_Variadic; break;
+                case SYM_Pure: flag = FF_Pure; break;
+                default: {
+                    StyledString ss;
+                    ss.out << "illegal option: " << sym;
+                    location_error(ss.str());
+                } break;
+                }
+                flags |= flag;
+                k++;
+            }
+            RETARGS(Function(args[1], types, flags));
+        } break;
+        case FN_TupleType: {
+            CHECKARGS(0, -1);
+            std::vector<const Type *> types;
+            for (size_t i = 1; i < args.size(); ++i) {
+                types.push_back(args[i]);
+            }
+            RETARGS(Tuple(types));
+        } break;
         case FN_Location: {
             CHECKARGS(0, 0);
             RETARGS(l->body.anchor);
+        } break;
+        case SFXFN_SetTypenameStorage: {
+            CHECKARGS(2, 2);
+            const Type *T = args[1];
+            const Type *T2 = args[2];
+            verify_kind<TK_Typename>(T);
+            cast<TypenameType>(const_cast<Type *>(T))->finalize(T2);
+            RETARGS();
         } break;
         case SFXFN_SetTypeSymbol: {
             CHECKARGS(3, 3);
@@ -8618,10 +8822,11 @@ struct NormalizeCtx {
             for (auto kv = users.begin(); kv != users.end(); ++kv) {
                 Label *user = kv->first;
                 if (is_calling_label(user) && (user->get_label_enter() == owner)) {
+                    /*
                     if (is_continuing_to_label(user)) {
                         set_active_anchor(user->body.anchor);
                         location_error(String::from("return call must be last expression in function"));
-                    }
+                    }*/
                     //assert(!is_continuing_to_label(user));
                     clear_continuation_arg(user);
                 }
@@ -9493,7 +9698,8 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            Parameter *param = Parameter::vararg_from(_anchor, 
+                Symbol(SYM_Unnamed), TYPE_Void);
             nextstate->append(param);
             longdest = nextstate;
             result = param;
@@ -9629,15 +9835,19 @@ struct Expander {
         if (it != EOL) {
             auto itnext = it->next;
             const Syntax *sx = it->at;
-            it = sx->datum;
-            if (it != EOL) {
-                auto head = unsyntax(it->at);
-                if (head == Symbol(KW_ElseIf)) {
-                    next = itnext;
-                    goto collect_branch;
-                } else if (head == Symbol(KW_Else)) {
-                    next = itnext;
-                    branches.push_back(it);
+            if (sx->datum.type == TYPE_List) {
+                it = sx->datum;
+                if (it != EOL) {
+                    auto head = unsyntax(it->at);
+                    if (head == Symbol(KW_ElseIf)) {
+                        next = itnext;
+                        goto collect_branch;
+                    } else if (head == Symbol(KW_Else)) {
+                        next = itnext;
+                        branches.push_back(it);
+                    } else {
+                        branches.push_back(EOL);
+                    }
                 } else {
                     branches.push_back(EOL);
                 }
@@ -9831,6 +10041,8 @@ struct Expander {
                     sx = newsx;
                     set_active_anchor(sx->anchor);
                     expr = sx->datum;
+                    list = expr.list;
+                    head = unsyntax(list->at);
                 }
                 next = result.topit->next;
                 env = result.env;
@@ -9974,6 +10186,8 @@ static void init_types() {
     const Type *_TypePtr = Pointer(Typename(String::from("_type")));
     cast<TypenameType>(const_cast<Type *>(TYPE_Type))->finalize(_TypePtr);
     cast<TypenameType>(const_cast<Type *>(TYPE_Unknown))->finalize(_TypePtr);
+
+    cast<TypenameType>(const_cast<Type *>(TYPE_Nothing))->finalize(Tuple({}));
 
     DEFINE_BASIC_TYPE("Symbol", Symbol, TYPE_Symbol, TYPE_U64);
     DEFINE_BASIC_TYPE("Builtin", Builtin, TYPE_Builtin, TYPE_U64);
@@ -10152,6 +10366,10 @@ static const Type *f_integer_type(int width, bool issigned) {
     return Integer(width, issigned);
 }
 
+static const Type *f_typename_type(const String *str) {
+    return Typename(str);
+}
+
 static I3 f_compiler_version() {
     return { 
         BANGRA_VERSION_MAJOR,
@@ -10159,7 +10377,19 @@ static I3 f_compiler_version() {
         BANGRA_VERSION_PATCH };
 }
 
-static void init_globals() {
+static const Syntax *f_syntax_new(const Anchor *anchor, Any value, bool quoted) {
+    return Syntax::from(anchor, value, quoted);
+}
+
+static Parameter *f_parameter_new(const Anchor *anchor, Symbol symbol, const Type *type) {
+    return Parameter::from(anchor, symbol, type);
+}
+
+const String *f_string_new(const char *ptr, size_t count) {
+    return String::from(ptr, count);
+}
+
+static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
     globals->bind(SYMBOL, \
@@ -10188,6 +10418,12 @@ static void init_globals() {
     DEFINE_PURE_C_FUNCTION(FN_TypeStorage, f_type_storage, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_IntegerType, f_integer_type, TYPE_Type, TYPE_I32, TYPE_Bool);
     DEFINE_PURE_C_FUNCTION(FN_CompilerVersion, f_compiler_version, Tuple({TYPE_I32, TYPE_I32, TYPE_I32}));
+    DEFINE_PURE_C_FUNCTION(FN_TypenameType, f_typename_type, TYPE_Type, TYPE_String);
+    DEFINE_PURE_C_FUNCTION(FN_SyntaxNew, f_syntax_new, TYPE_Syntax, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
+    DEFINE_PURE_C_FUNCTION(FN_SyntaxWrap, wrap_syntax, TYPE_Any, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
+    DEFINE_PURE_C_FUNCTION(FN_SyntaxStrip, strip_syntax, TYPE_Any, TYPE_Any);
+    DEFINE_PURE_C_FUNCTION(FN_ParameterNew, f_parameter_new, TYPE_Parameter, TYPE_Anchor, TYPE_Symbol, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_SizeT);
 
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
@@ -10198,6 +10434,28 @@ static void init_globals() {
     DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
 
 #undef DEFINE_C_FUNCTION
+
+    auto stub_file = SourceFile::from_string(Symbol("<internal>"), String::from_cstr(""));
+    auto stub_anchor = Anchor::from(stub_file, 1, 1);
+
+    {
+        // launch arguments
+        // this is a function returning vararg constants
+        Label *fn = Label::function_from(stub_anchor, FN_Args);
+        fn->body.anchor = stub_anchor;
+        fn->body.enter = fn->params[0];
+        globals->bind(FN_Args, fn);
+        if (argv && argc) {
+            auto &&args = fn->body.args;
+            args.push_back(none);
+            for (int i = 0; i < argc; ++i) {
+                char *s = argv[i];
+                if (!s)
+                    break;
+                args.push_back(String::from_cstr(s));
+            }
+        }
+    }
 
     globals->bind(KW_True, true);
     globals->bind(KW_False, false);
@@ -10241,6 +10499,7 @@ static void init_globals() {
     globals->bind(Symbol("Parameter"), TYPE_Parameter);
     globals->bind(Symbol("Scope"), TYPE_Scope);
     globals->bind(Symbol("Anchor"), TYPE_Anchor);
+    globals->bind(Symbol("void"), TYPE_Void);
 
 #define T(NAME, BNAME) \
     globals->bind(Symbol(BNAME), (int32_t)NAME);
@@ -10335,7 +10594,7 @@ int main(int argc, char *argv[]) {
     try {
 #endif
         init_types();
-        init_globals();
+        init_globals(argc, argv);
 
         SourceFile *sf = nullptr;
 #ifdef BANGRA_DEBUG

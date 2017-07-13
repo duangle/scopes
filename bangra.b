@@ -24,6 +24,10 @@
     functions and macros, parses the command-line and optionally enters
     the REPL.
 
+fn tie-const (a b)
+    if (constant? a) b
+    else (unconst b)
+
 fn type? (T)
     icmp== (ptrtoint type size_t) (ptrtoint (typeof T) size_t)
 
@@ -103,8 +107,9 @@ fn list-new (...)
     fn loop (i tail)
         if (icmp== i 0) tail
         else
+            let val = (va@ (sub i 1) ...)
             loop (sub i 1)
-                list-cons (Any-new (va@ (sub i 1) ...)) tail
+                list-cons (Any-new val) tail
     loop (va-countof ...) eol
 
 syntax-extend
@@ -242,6 +247,22 @@ fn op2-dispatch (symbol)
         let Ta Tb = (typeof a) (typeof b)
         let op success = (type@ Ta symbol)
         if success
+            let result... = (op a b)
+            if (icmp== (va-countof result...) 0)
+            else
+                return result...
+        compiler-error!
+            string-join "operation does not apply to types "
+                string-join
+                    Any-repr (Any-wrap Ta)
+                    string-join " and "
+                        Any-repr (Any-wrap Tb)
+
+fn op2-dispatch-bidi (symbol fallback)
+    fn (a b)
+        let Ta Tb = (typeof a) (typeof b)
+        let op success = (type@ Ta symbol)
+        if success
             let result... = (op a b false)
             if (icmp== (va-countof result...) 0)
             else
@@ -252,6 +273,9 @@ fn op2-dispatch (symbol)
             if (icmp== (va-countof result...) 0)
             else
                 return result...
+        if (type== (typeof fallback) Nothing)
+        else
+            return (fallback a b)
         compiler-error!
             string-join "operation does not apply to types "
                 string-join
@@ -267,23 +291,29 @@ fn op2-ltr-multiop (f)
             loop (add i 1) (f result x)
         else result
 
-fn == (a b) ((op2-dispatch '==) a b)
-fn != (a b) ((op2-dispatch '!=) a b)
-fn > (a b) ((op2-dispatch '>) a b)
-fn >= (a b) ((op2-dispatch '>=) a b)
-fn < (a b) ((op2-dispatch '<) a b)
-fn <= (a b) ((op2-dispatch '<=) a b)
-fn + (...) ((op2-ltr-multiop (op2-dispatch '+)) ...)
-fn - (a b) ((op2-dispatch '-) a b)
-fn * (...) ((op2-ltr-multiop (op2-dispatch '*)) ...)
-fn / (a b) ((op2-dispatch '/) a b)
-fn % (a b) ((op2-dispatch '%) a b)
-fn & (a b) ((op2-dispatch '&) a b)
-fn | (...) ((op2-ltr-multiop (op2-dispatch '|)) ...)
-fn ^ (a b) ((op2-dispatch '^) a b)
-fn << (a b) ((op2-dispatch '<<) a b)
-fn >> (a b) ((op2-dispatch '>>) a b)
-fn .. (...) ((op2-ltr-multiop (op2-dispatch '..)) ...)
+fn == (a b) ((op2-dispatch-bidi '==) a b)
+fn != (a b) 
+    call
+        op2-dispatch-bidi '!=
+            fn (a b)
+                bxor true (== a b)
+        \ a b
+fn > (a b) ((op2-dispatch-bidi '>) a b)
+fn >= (a b) ((op2-dispatch-bidi '>=) a b)
+fn < (a b) ((op2-dispatch-bidi '<) a b)
+fn <= (a b) ((op2-dispatch-bidi '<=) a b)
+fn + (...) ((op2-ltr-multiop (op2-dispatch-bidi '+)) ...)
+fn - (a b) ((op2-dispatch-bidi '-) a b)
+fn * (...) ((op2-ltr-multiop (op2-dispatch-bidi '*)) ...)
+fn / (a b) ((op2-dispatch-bidi '/) a b)
+fn % (a b) ((op2-dispatch-bidi '%) a b)
+fn & (a b) ((op2-dispatch-bidi '&) a b)
+fn | (...) ((op2-ltr-multiop (op2-dispatch-bidi '|)) ...)
+fn ^ (a b) ((op2-dispatch-bidi '^) a b)
+fn << (a b) ((op2-dispatch-bidi '<<) a b)
+fn >> (a b) ((op2-dispatch-bidi '>>) a b)
+fn .. (...) ((op2-ltr-multiop (op2-dispatch-bidi '..)) ...)
+fn @ (...) ((op2-ltr-multiop (op2-dispatch '@)) ...)
 
 fn type-mismatch-string (want-T have-T)
     .. "type " (repr want-T) " expected, not " (repr have-T)
@@ -337,13 +367,13 @@ fn string->rawstring (s)
     assert-typeof s string
     getelementptr s 0 1 0
 
-fn syntax->anchor (sx)
+fn Syntax-anchor (sx)
     assert-typeof sx Syntax
     extractvalue (load sx) 0
-fn syntax->datum (sx)
+fn Syntax->datum (sx)
     assert-typeof sx Syntax
     extractvalue (load sx) 1
-fn syntax-quoted? (sx)
+fn Syntax-quoted? (sx)
     assert-typeof sx Syntax
     extractvalue (load sx) 2
 
@@ -375,9 +405,88 @@ fn list-at-next (l)
 
 fn list-countof (l)
     assert-typeof l list
-    if (list-empty? l) 0:u64
+    if (list-empty? l) 0:usize
     else
         extractvalue (load l) 2
+
+fn string-countof (s)
+    assert-typeof s string
+    extractvalue (load s) 0
+
+fn min (a b)
+    if (< a b) a
+    else b
+
+fn max (a b)
+    if (> a b) a
+    else b
+
+fn clamp (x mn mx)
+    if (> x mx) mx
+    elseif (< x mn) mn
+    else x
+
+fn string-compare (a b)
+    assert-typeof a string
+    assert-typeof b string
+    let ca = (string-countof a)
+    let cb = (string-countof b)
+    if (< ca cb)
+        return -1
+    elseif (> ca cb)
+        return 1
+    let pa pb = 
+        bitcast (getelementptr a 0 1 0) (pointer-type i8)
+        bitcast (getelementptr b 0 1 0) (pointer-type i8)
+    let cc =
+        if (constant? ca) ca
+        else cb
+    let [loop] i = 
+        tie-const cc 0:usize
+    if (== i cc)
+        return 0
+    let x y =
+        load (getelementptr pa i)
+        load (getelementptr pb i)
+    if (< x y)
+        return -1
+    elseif (> x y)
+        return 1
+    else
+        loop (+ i 1:usize)
+
+syntax-extend
+    fn gen-string-cmp (op)
+        fn (a b flipped)
+            if (type== (typeof a) (typeof b))
+                op (string-compare a b) 0
+
+    set-type-symbol! string '== (gen-string-cmp ==)
+    set-type-symbol! string '!= (gen-string-cmp !=)
+    set-type-symbol! string '< (gen-string-cmp <)
+    set-type-symbol! string '<= (gen-string-cmp <=)
+    set-type-symbol! string '> (gen-string-cmp >)
+    set-type-symbol! string '>= (gen-string-cmp >=)
+
+    set-type-symbol! string '@ 
+        fn string-at (s i)
+            assert-typeof s string
+            let i = (i64 i)
+            let len = (i64 (string-countof s))
+            let i = 
+                if (< i 0:i64)
+                    if (>= i (- len))
+                        + len i
+                    else
+                        return ""
+                elseif (>= i len)
+                    return ""
+                else i
+            let data = 
+                bitcast (getelementptr s 0 1 0) (pointer-type i8)
+            string-new data 1:usize
+
+    syntax-scope
 
 fn Any-list? (val)
     assert-typeof val Any
@@ -395,10 +504,6 @@ fn list-reverse (l)
         else
             loop (list-next l) (list-cons (list-at l) next)
     loop l eol
-
-fn tie-const (a b)
-    if (constant? a) b
-    else (unconst b)
 
 fn powi (base exponent)
     assert-typeof base i32
@@ -483,34 +588,96 @@ fn walk-list (on-leaf l depth)
 
 #print "yes" "this" "is" "dog"
 
-# install general list hook for this scope
-# is called for every list the expander sees
-fn list-handler (topexpr env)
-    fn Any-Syntax-extract (val T)
-        Any-extract (syntax->datum (Any-extract val Syntax)) T
-
-    let expr = (Any-Syntax-extract (list-at topexpr) list)
-    let head = (syntax->datum (Any-extract (list-at expr) Syntax))
-    if (== (Any-typeof head) Symbol)
-        #print head env
-        let head success = (Scope@ env (Any-extract head Symbol))
-        #print head success
-        none
-    #walk-list
-        fn on-leaf (value depth)
-            print-spaces depth
-            #Any-dispatch value
-            io-write
-                Any-repr value
-            io-write "\n"
-        unconst (Any-extract-list expr)
-        unconst 0
-    #print (i32 (list-countof topexpr))
-    return topexpr env
-
 syntax-extend
+    let Macro = (typename-type "Macro")
+    let BlockScopeFunction =
+        pointer-type
+            function-type (tuple-type Any list Scope) list list Scope
+    set-typename-storage! Macro BlockScopeFunction
+    fn fn->macro (f)
+        assert-typeof f BlockScopeFunction
+        bitcast f Macro
+    fn macro->fn (f)
+        assert-typeof f Macro
+        bitcast f BlockScopeFunction
+
+    fn block-scope-macro (f)
+        fn->macro
+            compile (typify f list list Scope) #'dump-module #'skip-opts
+    fn macro (f)
+        block-scope-macro
+            fn (at next scope)
+                return (f (list-next at)) next scope
+    
+    # install general list hook for this scope
+    # is called for every list the expander sees
+    fn list-handler (topexpr env)
+        label failed ()
+            return topexpr env
+        fn Any-Syntax-extract (val T)
+            let sx =
+                (Any-extract val Syntax)
+            return
+                Any-extract (Syntax->datum sx) T
+                Syntax-anchor sx
+
+        let expr expr-anchor = (Any-Syntax-extract (list-at topexpr) list)
+        let head-key = (Syntax->datum (Any-extract (list-at expr) Syntax))
+        let head =
+            if (== (Any-typeof head-key) Symbol)
+                #print head env
+                let head success = (Scope@ env (Any-extract head-key Symbol))
+                if success head
+                else
+                    print "failed."
+                    failed;
+            else head-key
+        if (== (Any-typeof head) Macro)
+            let head = 
+                macro->fn (Any-extract head Macro)
+            let next = (list-next topexpr)
+            let expr next env = (head expr next env)
+            let expr = (Syntax-wrap expr-anchor expr false)
+            return (list-cons expr next) env
+        else
+            return topexpr env
+
+    set-scope-symbol! syntax-scope 'Macro Macro
+    set-scope-symbol! syntax-scope 'fn->macro fn->macro
+    set-scope-symbol! syntax-scope 'macro->fn macro->fn
+    set-scope-symbol! syntax-scope 'block-scope-macro block-scope-macro
+    set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (string->Symbol "#list")
         compile (typify list-handler list Scope) #'dump-disassembly # 'skip-opts 
+
+    fn make-expand-and-or (flip)
+        fn (expr)
+            if (list-empty? expr)
+                error! "at least one argument expected"
+            elseif (== (list-countof expr) 1:u64)
+                return (list-at expr)
+            let expr = (list-reverse expr)
+            let [loop] head result = (list-next expr) (list-at expr)
+            if (list-empty? head)
+                return result
+            let tmp = 
+                Parameter-new 
+                    Syntax-anchor (Any-extract (list-at head) Syntax)
+                    \ 'tmp void
+            loop
+                list-next head
+                Any-new
+                    list do
+                        list let tmp '= (list-at head)
+                        list if tmp 
+                            if flip tmp
+                            else result
+                        list 'else 
+                            if flip result
+                            else tmp
+
+    set-scope-symbol! syntax-scope 'and (macro (make-expand-and-or false))
+    set-scope-symbol! syntax-scope 'or (macro (make-expand-and-or true))
     syntax-scope
 
 # deferring remaining expressions to bootstrap parser
@@ -696,7 +863,7 @@ syntax-extend
 #test-select-optimization
 
 # return function dynamically
-#fn test-dynamic-function-return ()
+fn test-dynamic-function-return ()
     fn square-brackets (s)
         io-write "["; io-write s; io-write "]"
     fn round-brackets (s)
@@ -716,7 +883,7 @@ syntax-extend
 #test-dynamic-function-return
 
 # polymorphic return type and inlined type checking
-#fn test-polymorphic-return-type ()
+fn test-polymorphic-return-type ()
     fn print-value (value)
         let value-type = (typeof value)
         if (type== value-type i32)
@@ -738,16 +905,16 @@ syntax-extend
 # main
 #-------------------------------------------------------------------------------
 
-#fn print-help (exename)
+fn print-help (exename)
     print "usage:" exename "[option [...]] [filename]
-#Options:
+Options:
    -h, --help                  print this text and exit.
    -v, --version               print program version and exit.
    --                          terminate option list."
     exit 0
     unreachable!;
 
-#fn print-version ()
+fn print-version ()
     let vmin vmaj vpatch = (compiler-version)
     print "Bangra"
         .. (Any-string (Any-wrap vmin)) "." (Any-string (Any-wrap vmaj))
@@ -762,41 +929,42 @@ syntax-extend
     exit 0
     unreachable!;
 
-#fn run-main (args...)
-    # running in interpreter mode
+fn run-main (args...)
+    let argcount = (va-countof args...)
     let [loop] i sourcepath parse-options = 1 none true
-    let k = i + 1
-    let arg = (va@ i args...)
-    if (not (arg == none))
-        if (parse-options and ((@ arg 0) == "-"))
-            if (arg == "--help" or arg == "-h")
-                print-help (va@ 0 args...)
-            elseif (arg == "--version" or arg == "-v")
-                print-version
-            elseif (arg == "--")
+    if (< i argcount)
+        let k = (+ i 1)
+        let arg = (va@ i args...)
+        if (and parse-options (== (@ arg 0) "-"))
+            if (or (== arg "--help") (== arg "-h"))
+                print-help args...
+            elseif (or (== arg "--version") (== arg "-v"))
+                print-version;
+            elseif (or (== arg "--"))
                 loop k sourcepath false
             else
                 print
                     .. "unrecognized option: " arg
                         \ ". Try --help for help."
                 exit 1
-                unreachable!
-        elseif (none? sourcepath)
+                unreachable!;
+        elseif (== sourcepath none)
             loop k arg parse-options
         else
             print
                 .. "unrecognized argument: " arg
                     \ ". Try --help for help."
             exit 1
-            unreachable!
-    else
+            unreachable!;
 
-    io-write "\n"
-    if (sourcepath == none)
-        read-eval-print-loop
+    if (== sourcepath none)
+        #read-eval-print-loop;
+        print "todo: REPL"
     else
+        print "todo: load file"
+    #
         let expr =
-            syntax->datum
+            Syntax->datum
                 list-load sourcepath
         let eval-scope =
             Scope (globals)
@@ -806,6 +974,6 @@ syntax-extend
         exit 0
         unreachable!
 
-#run-main (args)
+run-main (args)
 true
 

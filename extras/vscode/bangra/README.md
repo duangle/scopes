@@ -8,9 +8,13 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ## Release Notes
 
+### 0.4.0
+
+* Added more keywords.
+
 ### 0.3.0
 
-* Added `do` keyword.
+* Added `do` keywords.
 
 ### 0.2.0
 

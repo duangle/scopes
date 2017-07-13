@@ -25,6 +25,17 @@
         "type_traits": "cpp",
         "*.inc": "cpp",
         "lib_io.c": "cpp",
-        "lj_cparse.c": "cpp"
+        "lj_cparse.c": "cpp",
+        "lj_asm.c": "cpp",
+        "__hash_table": "cpp",
+        "__split_buffer": "cpp",
+        "deque": "cpp",
+        "unordered_set": "cpp",
+        "typeinfo": "cpp",
+        "buildvm_lib.c": "cpp",
+        "atomic": "cpp",
+        "locale": "cpp",
+        "system_error": "cpp",
+        "__functional_03": "cpp"
     }
 }

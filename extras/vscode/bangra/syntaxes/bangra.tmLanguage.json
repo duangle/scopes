@@ -77,27 +77,33 @@
             ]
 		},
 		"types": {
-            "patterns":[{
-                "name": "support.type.builtin.bangra",
-                "match": "(bool|size_t|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
-            }]
+            "patterns":[
+                {
+                    "name": "support.type.builtin.bangra",
+                    "match": "(void|bool|size_t|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "support.type.library.bangra",
+                    "match": "(Macro)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                }
+            ]
 		},
 		"builtin_functions": {
 			"patterns": [
                 {
                     "name": "support.function.builtin.bangra",
-				    "match": "(dump(-label)|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|load|store|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(integer|real|function|tuple|typename)-type|(dump(-label)|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|load|store|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.bangra",
-				    "match": "((compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
 		"operators": {
             "patterns":[{
                 "name": "keyword.operator.bangra",
-                "match": "(and|or|not|[\\=\\!\\<\\>]\\=?|[\\+\\-\\*\\/\\%\\&\\|\\^\\~]|\\<\\<|\\>\\>|\\.\\.)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                "match": "(and|or|not|\\@|[\\=\\!\\<\\>]\\=?|[\\+\\-\\*\\/\\%\\&\\|\\^\\~]|\\<\\<|\\>\\>|\\.\\.)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
             }]
 		},
 		"symbol": {
