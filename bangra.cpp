@@ -10456,7 +10456,7 @@ static void f_set_globals(Scope *s) {
 }
 
 static Label *f_eval(const Syntax *expr, Scope *scope) {
-    return expand_module(expr, scope);
+    return normalize(expand_module(expr, scope));
 }
 
 static void f_set_scope_symbol(Scope *scope, Symbol sym, Any value) {
@@ -10469,11 +10469,10 @@ static Label *f_typify(Label *srcl, int numtypes, const Type **typeargs) {
         types.push_back(typeargs[i]);
 
     }
-    return typify(srcl, types);
+    return normalize(typify(srcl, types)); 
 }
 
 static Any f_compile(Label *srcl, uint64_t flags) {
-    srcl = normalize(srcl);    
     return compile(srcl, flags);
 }
 
