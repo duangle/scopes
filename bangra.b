@@ -60,6 +60,10 @@ fn pointer-type? (T)
     icmp== (type-kind T) type-kind-pointer
 fn function-type? (T)
     icmp== (type-kind T) type-kind-function
+fn tuple-type? (T)
+    icmp== (type-kind T) type-kind-tuple
+fn array-type? (T)
+    icmp== (type-kind T) type-kind-array
 fn function-pointer-type? (T)
     if (pointer-type? T)
         function-type? (element-type T 0)
@@ -70,6 +74,10 @@ fn real? (val)
     real-type? (typeof val)
 fn pointer? (val)
     pointer-type? (typeof val)
+fn array? (val)
+    array-type? (typeof val)
+fn tuple? (val)
+    tuple-type? (typeof val)
 fn function-pointer? (val)
     function-pointer-type? (typeof val)
 
@@ -81,21 +89,31 @@ fn Any-new (val)
     elseif (constant? val)
         Any-wrap val
     else
+        let T = (type-storage (typeof val))
         let val =
-            bitcast val
-                type-storage (typeof val)
-        if (pointer? val)
+            if (tuple-type? T) val
+            else
+                bitcast val T
+        fn wrap-error ()
+            compiler-error!
+                string-join "unable to wrap value of storage type "
+                    Any-repr (Any-wrap T)        
+        if (pointer-type? T)
             #compiler-message "wrapping pointer"
             construct
                 ptrtoint val u64
-        elseif (integer? val)
+        elseif (tuple-type? T)
+            if (icmp== (type-countof T) 0:usize)
+                construct 0:u64
+            else
+                wrap-error;
+        elseif (integer-type? T)
             construct
                 if (signed? (typeof val))
                     sext val u64
                 else
                     zext val u64
-        elseif (real? val)
-            let T = (typeof val)
+        elseif (real-type? T)
             if (type== T f32)
                 construct
                     zext (bitcast val u32) u64
@@ -103,9 +121,7 @@ fn Any-new (val)
                 construct
                     bitcast val u64
         else
-            compiler-error!
-                string-join "unable to wrap value of storage type "
-                    Any-repr (Any-wrap (typeof val))
+            wrap-error;
 
 fn repr (val)
     Any-repr
@@ -1065,7 +1081,8 @@ fn read-eval-print-loop ()
     print
         compiler-version-string;
 
-    let eval-scope = (Scope (globals))
+    let global-scope = (globals)
+    let eval-scope = (Scope global-scope)
     let [loop] preload cmdlist counter =
         unconst ""
         unconst ""
@@ -1101,18 +1118,22 @@ fn read-eval-print-loop ()
         loop (unconst "") (unconst "") counter
     let expr = (list-parse cmdlist)
     let expr-anchor = (Syntax-anchor expr)
-    # convert result of expression to Any
-    let expr = 
-        list
-            list Any-new
-                list-cons (Any do)
-                    Any-extract (Syntax->datum expr) list
-    let expr = (Any-extract (Syntax-wrap expr-anchor (Any expr) false) Syntax)
     let f = (compile (eval expr eval-scope))
     let rettype =
         element-type (element-type (Any-typeof f) 0) 0
     let ModuleFunctionType = (pointer-type (function-type Any))
-    let fptr = (Any-extract f ModuleFunctionType)
+    let fptr =
+        if (== rettype Any)
+            Any-extract f ModuleFunctionType
+        else
+            # build a wrapper
+            let expr = 
+                list 
+                    list let 'tmp '= (list f)
+                    list Any-new 'tmp
+            let expr = (Any-extract (Syntax-wrap expr-anchor (Any expr) false) Syntax)
+            let f = (compile (eval expr global-scope))
+            Any-extract f ModuleFunctionType
     let result = (fptr)
     if (!= (Any-typeof result) Nothing)
         set-scope-symbol! eval-scope (Symbol idstr) result

@@ -96,7 +96,7 @@
                 },
                 {
                     "name": "support.function.library.bangra",
-				    "match": "((block-scope-)?macro|print|min|max|clamp|tie-const|repr|(empty|type|integer|real|pointer|function-pointer)\\?|(integer|real|pointer|function|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((block-scope-)?macro|print|min|max|clamp|tie-const|repr|(empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.bangra",

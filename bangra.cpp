@@ -533,6 +533,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_DumpLabel, "dump-label") \
     T(FN_FormatFrame, "Frame-format") \
     T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
+    T(FN_TypeCountOf, "type-countof") \
     T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
     T(FN_ExternLibrary, "extern-library") \
@@ -6742,7 +6743,8 @@ struct GenerateCtx {
                 retvalue = LLVMBuildGEP(builder, pointer, indices, count, "");
             } break;
             case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildBitCast(builder, val, ty, ""); } break;
+                retvalue = LLVMBuildBitCast(builder, val, ty, ""); 
+            } break;
             case FN_IntToPtr: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildIntToPtr(builder, val, ty, ""); } break;
             case FN_PtrToInt: { READ_VALUE(val); READ_TYPE(ty);
@@ -10341,11 +10343,29 @@ static size_t f_sizeof(const Type *T) {
     return size_of(T);
 }
 
+size_t f_type_countof(const Type *T) {
+    T = storage_type(T);
+    switch(T->kind()) {
+    case TK_Array: return cast<ArrayType>(T)->count;
+    case TK_Vector: return cast<VectorType>(T)->count;
+    case TK_Tuple: return cast<TupleType>(T)->types.size();
+    case TK_Union: return cast<UnionType>(T)->types.size();
+    case TK_Function:  return cast<FunctionType>(T)->argument_types.size() + 1;
+    default: {
+        StyledString ss;
+        ss.out << "type " << T << " has no count" << std::endl;
+        location_error(ss.str());
+    } break;
+    }
+    return 0;
+}
+
 static const Type *f_elementtype(const Type *T, int i) {
     T = storage_type(T);
     switch(T->kind()) {
     case TK_Pointer: return cast<PointerType>(T)->element_type;
     case TK_Array: return cast<ArrayType>(T)->element_type;
+    case TK_Vector: return cast<VectorType>(T)->element_type;
     case TK_Tuple: return cast<TupleType>(T)->type_at_index(i);
     case TK_Union: return cast<UnionType>(T)->type_at_index(i);
     case TK_Function:  return cast<FunctionType>(T)->type_at_index(i);
@@ -10560,6 +10580,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Label, TYPE_I32, Pointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_SizeT);
+    DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_SizeT, TYPE_Type);
     
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
