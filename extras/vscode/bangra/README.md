@@ -8,6 +8,10 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ## Release Notes
 
+### 0.5.0
+
+* Added more keywords.
+
 ### 0.4.0
 
 * Added more keywords.

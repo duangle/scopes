@@ -58,12 +58,20 @@ fn real-type? (T)
     icmp== (type-kind T) type-kind-real
 fn pointer-type? (T)
     icmp== (type-kind T) type-kind-pointer
+fn function-type? (T)
+    icmp== (type-kind T) type-kind-function
+fn function-pointer-type? (T)
+    if (pointer-type? T)
+        function-type? (element-type T 0)
+    else false
 fn integer? (val)
     integer-type? (typeof val)
 fn real? (val)
     real-type? (typeof val)
 fn pointer? (val)
     pointer-type? (typeof val)
+fn function-pointer? (val)
+    function-pointer-type? (typeof val)
 
 fn Any-new (val)
     fn construct (outval)
@@ -115,6 +123,13 @@ fn list-new (...)
 syntax-extend
     set-type-symbol! list 'apply-type list-new
     set-type-symbol! Any 'apply-type Any-new
+    set-type-symbol! Symbol 'apply-type string->Symbol
+    set-type-symbol! Scope 'apply-type
+        fn (parent)
+            if (type== (typeof parent) Nothing)
+                Scope-new;
+            else
+                Scope-new-subscope parent
 
     fn gen-type-op2 (op)
         fn (a b flipped)
@@ -123,6 +138,11 @@ syntax-extend
 
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! string '.. (gen-type-op2 string-join)
+
+    set-type-symbol! Symbol '==
+        gen-type-op2
+            fn (a b)
+                icmp== (bitcast a u64) (bitcast b u64)
 
     set-type-symbol! Nothing '==
         fn (a b flipped)
@@ -242,6 +262,16 @@ syntax-extend
 
     syntax-scope
 
+fn op1-dispatch (symbol)
+    fn (x)
+        let T = (typeof x)
+        let op success = (type@ T symbol)
+        if success
+            return (op x)
+        compiler-error!
+            string-join "operation does not apply to type "
+                Any-repr (Any-wrap T)
+
 fn op2-dispatch (symbol)
     fn (a b)
         let Ta Tb = (typeof a) (typeof b)
@@ -314,6 +344,10 @@ fn << (a b) ((op2-dispatch-bidi '<<) a b)
 fn >> (a b) ((op2-dispatch-bidi '>>) a b)
 fn .. (...) ((op2-ltr-multiop (op2-dispatch-bidi '..)) ...)
 fn @ (...) ((op2-ltr-multiop (op2-dispatch '@)) ...)
+fn countof (x) ((op1-dispatch 'countof) x)
+
+fn empty? (x)
+    == (countof x) 0:u64
 
 fn type-mismatch-string (want-T have-T)
     .. "type " (repr want-T) " expected, not " (repr have-T)
@@ -468,6 +502,7 @@ syntax-extend
     set-type-symbol! string '> (gen-string-cmp >)
     set-type-symbol! string '>= (gen-string-cmp >=)
 
+    set-type-symbol! string 'countof string-countof
     set-type-symbol! string '@ 
         fn string-at (s i)
             assert-typeof s string
@@ -484,7 +519,7 @@ syntax-extend
                 else i
             let data = 
                 bitcast (getelementptr s 0 1 0) (pointer-type i8)
-            string-new data 1:usize
+            string-new (getelementptr data i) 1:usize
 
     syntax-scope
 
@@ -588,6 +623,40 @@ fn walk-list (on-leaf l depth)
 
 #print "yes" "this" "is" "dog"
 
+fn set-scope-symbol! (scope sym value)
+    __set-scope-symbol! scope sym (Any value)
+
+fn typify(f types...)
+    let vacount = (va-countof types...)
+    let atype = (array-type type (size_t vacount))
+    let types = (getelementptr (alloca atype) 0 0)
+    let [loop] i = 0
+    if (== i vacount)
+        return 
+            __typify f vacount types
+    let T = (va@ i types...)
+    store T (getelementptr types i)
+    loop (+ i 1)        
+
+fn compile (f opts...)
+    let vacount = (va-countof opts...)
+    let [loop] i flags = 0 0:u64
+    if (== i vacount)
+        return
+            __compile f flags
+    let flag = (va@ i opts...)
+    if (not (constant? flag))
+        compiler-error! "symbolic flags must be constant"
+    assert-typeof flag Symbol
+    loop (+ i 1)
+        | flags
+            if (== flag 'dump-disassembly) compile-flag-dump-disassembly
+            elseif (== flag 'dump-module) compile-flag-dump-module
+            elseif (== flag 'skip-opts) compile-flag-skip-opts
+            else
+                compiler-error!
+                    .. "illegal flag: " (repr flag)
+
 syntax-extend
     let Macro = (typename-type "Macro")
     let BlockScopeFunction =
@@ -603,7 +672,9 @@ syntax-extend
 
     fn block-scope-macro (f)
         fn->macro
-            compile (typify f list list Scope) #'dump-module #'skip-opts
+            Any-extract
+                compile (typify f list list Scope) #'dump-module #'skip-opts
+                BlockScopeFunction
     fn macro (f)
         block-scope-macro
             fn (at next scope)
@@ -647,8 +718,8 @@ syntax-extend
     set-scope-symbol! syntax-scope 'macro->fn macro->fn
     set-scope-symbol! syntax-scope 'block-scope-macro block-scope-macro
     set-scope-symbol! syntax-scope 'macro macro
-    set-scope-symbol! syntax-scope (string->Symbol "#list")
-        compile (typify list-handler list Scope) #'dump-disassembly # 'skip-opts 
+    set-scope-symbol! syntax-scope (Symbol "#list")
+        compile (typify list-handler list Scope) #'dump-disassembly 'skip-opts 
 
     fn make-expand-and-or (flip)
         fn (expr)
@@ -666,7 +737,7 @@ syntax-extend
                     \ 'tmp void
             loop
                 list-next head
-                Any-new
+                Any
                     list do
                         list let tmp '= (list-at head)
                         list if tmp 
@@ -902,6 +973,128 @@ fn test-polymorphic-return-type ()
 #test-polymorphic-return-type
 
 #-------------------------------------------------------------------------------
+# REPL
+#-------------------------------------------------------------------------------
+
+fn compiler-version-string ()
+    let vmin vmaj vpatch = (compiler-version)
+    .. "Bangra " (Any-string (Any-wrap vmin)) "." (Any-string (Any-wrap vmaj))
+        if (== vpatch 0) ""
+        else
+            .. "." (Any-string (Any-wrap vpatch))
+        " ("
+        if debug-build? "debug build, "
+        else ""
+        \ compiler-timestamp ")"
+
+fn read-eval-print-loop ()
+    fn repeat-string (n c)
+        let [loop] i s = 
+            tie-const n (size_t 0)
+            tie-const n ""
+        if (== i n)
+            return s
+        loop (+ i (size_t 1))
+            .. s c
+
+    fn leading-spaces (s)
+        let len = (i32 (countof s))
+        let [loop] i out = 
+            tie-const len 0 
+            tie-const len ""
+        if (== i len)
+            return out
+        let c = (@ s i)
+        if (!= c " ")
+            return out
+        loop (+ i 1)
+            .. out c
+
+    fn blank? (s)
+        let len = (i32 (countof s))
+        let [loop] i =
+            tie-const len 0
+        if (== i len)
+            return true
+        if (!= (@ s i) " ")
+            return false
+        loop (+ i 1)
+
+    print
+        compiler-version-string;
+
+    let [loop] preload cmdlist counter =
+        unconst ""
+        unconst ""
+        unconst 0
+    fn make-idstr (counter)
+        .. "$" (Any-string (Any counter))
+
+    let idstr = (make-idstr counter)
+    #let id = (Symbol idstr)
+    #let styler = default-styler
+    let promptstr =
+        .. idstr " "
+            default-styler style-comment "▶"
+    let promptlen = (+ (countof idstr) (size_t 2))
+    let cmd success =
+        prompt
+            ..
+                if (empty? cmdlist) promptstr
+                else
+                    repeat-string promptlen "."
+                " "
+            preload
+    if (not success)
+        return
+    let terminated? =
+        or (blank? cmd)
+            and (empty? cmdlist) (== (@ cmd 0) "\\")
+    let cmdlist = (.. cmdlist cmd "\n")
+    let preload =
+        if terminated? ""
+        else (leading-spaces cmd)
+    if (not terminated?)
+        loop preload cmdlist counter
+    let expr = (list-parse cmdlist)
+    let eval-scope = (Scope (globals))
+    let f = (compile (eval expr eval-scope))
+    let ModuleFunctionType = (pointer-type (function-type void))
+    if (function-pointer-type? (Any-typeof f))
+        call (inttoptr (Any-payload f) ModuleFunctionType)
+    else
+        error! "function pointer expected"
+    #loop preload cmdlist counter
+    #
+            let expr = (list-parse cmdlist)
+            if (none? expr)
+                error "parsing failed"
+            let eval-env = (@ state (quote env))
+            let code =
+                .. expr
+                    syntax-list expression-suffix
+            let f =
+                eval code eval-env
+            let result... = (f)
+            if (not (none? result...))
+                loop-for i in (range (va-countof result...))
+                    let idstr = (make-idstr)
+                    let value = (va@ i result...)
+                    print
+                        .. idstr "= "
+                            repr value
+                    set-scope-symbol! eval-env id value
+                    set-scope-symbol! state (quote counter)
+                        (@ state (quote counter)) + 1
+                    continue
+        except (msg anchor frame)
+            print "Traceback:"
+            print
+                Frame-format frame
+            print "error:" msg
+        \ ""
+
+#-------------------------------------------------------------------------------
 # main
 #-------------------------------------------------------------------------------
 
@@ -915,16 +1108,8 @@ Options:
     unreachable!;
 
 fn print-version ()
-    let vmin vmaj vpatch = (compiler-version)
-    print "Bangra"
-        .. (Any-string (Any-wrap vmin)) "." (Any-string (Any-wrap vmaj))
-            if (== vpatch 0) ""
-            else
-                .. "." (Any-string (Any-wrap vpatch))
-            " ("
-            if debug-build? "debug build, " 
-            else ""
-            \ compiler-timestamp ")"
+    print
+        compiler-version-string;
     print "Executable path:" compiler-path
     exit 0
     unreachable!;
@@ -958,19 +1143,17 @@ fn run-main (args...)
             unreachable!;
 
     if (== sourcepath none)
-        #read-eval-print-loop;
-        print "todo: REPL"
+        read-eval-print-loop;
     else
-        print "todo: load file"
-    #
-        let expr =
-            Syntax->datum
-                list-load sourcepath
-        let eval-scope =
-            Scope (globals)
+        let expr = (list-load sourcepath)
+        let eval-scope = (Scope (globals))
         set-scope-symbol! eval-scope 'module-path sourcepath
-        call
-            eval expr eval-scope sourcepath
+        let f = (compile (eval expr eval-scope))
+        let ModuleFunctionType = (pointer-type (function-type void))
+        if (function-pointer-type? (Any-typeof f))
+            call (inttoptr (Any-payload f) ModuleFunctionType)
+        else
+            error! "function pointer expected"
         exit 0
         unreachable!
 

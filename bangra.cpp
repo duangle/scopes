@@ -32,6 +32,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 #define BANGRA_DEBUG_CODEGEN 0
 #define BANGRA_OPTIMIZE_ASSEMBLY 1
+#define BANGRA_CATCH_EXCEPTION 1
 
 #ifndef BANGRA_CPP
 #define BANGRA_CPP
@@ -454,7 +455,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
-    T(FN_FunctionType) T(FN_TupleType) \
+    T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
@@ -467,8 +468,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_CompilerMessage) T(FN_Typify) T(FN_Compile) T(FN_Undef) T(KW_Let) \
-    T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_SetScopeSymbol) \
+    T(FN_CompilerMessage) T(FN_Undef) T(KW_Let) \
+    T(KW_If) T(SFXFN_SetTypeSymbol) \
     T(SFXFN_SetTypenameStorage) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
@@ -521,7 +522,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_IsConstant, "constant?") \
     T(FN_Countof, "countof") \
-    T(FN_Compile, "compile") \
+    T(FN_Compile, "__compile") \
     T(FN_CompilerMessage, "compiler-message") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
@@ -583,6 +584,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_PointerType, "pointer-type") \
     T(FN_FunctionType, "function-type") \
     T(FN_TupleType, "tuple-type") \
+    T(FN_ArrayType, "array-type") \
     T(FN_TypenameType, "typename-type") \
     T(FN_Purify, "purify") \
     T(FN_Write, "io-write") \
@@ -592,7 +594,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Repeat, "repeat") T(FN_Repr, "Any-repr") T(FN_AnyString, "Any-string") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeEq, "Scope==") \
-    T(FN_ScopeNew, "Scope-new") T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
+    T(FN_ScopeNew, "Scope-new") \
+    T(FN_ScopeNewSubscope, "Scope-new-subscope") \
+    T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
     T(FN_Slice, "slice") T(FN_Store, "store") \
     T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
@@ -614,11 +618,11 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ZExt, "zext") T(FN_SExt, "sext") \
     T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
     T(FN_TypeSizeOf, "type-sizeof") \
-    T(FN_Typify, "typify") \
+    T(FN_Typify, "__typify") \
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") \
     T(FN_TypeKind, "type-kind") \
     T(FN_TypeAt, "type@") \
-    T(FN_Undef, "undef") \
+    T(FN_Undef, "undef") T(FN_Alloca, "alloca") \
     T(FN_Location, "compiler-anchor") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -636,7 +640,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
     T(SFXFN_SetGlobals, "set-globals!") \
     T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
-    T(SFXFN_SetScopeSymbol, "set-scope-symbol!") \
+    T(SFXFN_SetScopeSymbol, "__set-scope-symbol!") \
     T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
     T(SFXFN_SetTypenameStorage, "set-typename-storage!") \
     T(SFXFN_TranslateLabelBody, "translate-label-body!") \
@@ -708,9 +712,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_CurlyList, "curly-list") \
     \
     /* compile flags */ \
-    T(SYM_DumpDisassembly, "dump-disassembly") \
-    T(SYM_DumpModule, "dump-module") \
-    T(SYM_SkipOpts, "skip-opts") \
+    T(SYM_DumpDisassembly, "compile-flag-dump-disassembly") \
+    T(SYM_DumpModule, "compile-flag-dump-module") \
+    T(SYM_SkipOpts, "compile-flag-skip-opts") \
     \
     /* function flags */ \
     T(SYM_Variadic, "variadic") \
@@ -898,6 +902,11 @@ struct StyledStream {
     StyledStream(std::ostream &ost) :
         _ssf(stream_default_style),
         _ost(ost)
+    {}
+
+    StyledStream() :
+        _ssf(stream_default_style),
+        _ost(std::cerr)
     {}
 
     static StyledStream plain(std::ostream &ost) {
@@ -2303,6 +2312,14 @@ struct FunctionType : Type {
     }
     bool pure() const {
         return flags & FF_Pure;
+    }
+
+    const Type *type_at_index(size_t i) const {
+        verify_range(i, argument_types.size() + 1);
+        if (i == 0)
+            return return_type;
+        else
+            return argument_types[i - 1];
     }
 
     const Type *return_type;
@@ -4287,9 +4304,11 @@ public:
     }
 
     void verify_compilable() const {
-        if (params[0]->type != TYPE_Void) {
+        if ((params[0]->type != TYPE_Void)
+            && (params[0]->type != TYPE_Nothing)) {
             auto tl = dyn_cast<TypedLabelType>(params[0]->type);
             if (!tl) {
+                set_active_anchor(anchor);
                 StyledString ss;
                 ss.out << "cannot compile function with complex continuation type " 
                     << params[0]->type;
@@ -4298,6 +4317,7 @@ public:
             for (size_t i = 1; i < tl->types.size(); ++i) {
                 auto T = tl->types[i];
                 if (is_opaque(T)) {
+                    set_active_anchor(anchor);
                     StyledString ss;
                     ss.out << "cannot compile function with opaque return argument of type " 
                         << T;
@@ -4309,7 +4329,11 @@ public:
         std::vector<const Type *> argtypes;
         for (size_t i = 1; i < params.size(); ++i) {
             auto T = params[i]->type;
-            if (is_opaque(T)) {
+            if (T == TYPE_Void) {
+                set_active_anchor(anchor);
+                location_error(String::from("cannot compile function with untyped argument"));
+            } else if (is_opaque(T)) {
+                set_active_anchor(anchor);
                 StyledString ss;
                 ss.out << "cannot compile function with opaque argument of type " 
                     << T;
@@ -6477,10 +6501,16 @@ struct GenerateCtx {
         }
     }
 
+    LLVMValueRef label_to_value(Label *label) {
+        if (is_basic_block_like(label)) {
+            return LLVMBasicBlockAsValue(label_to_basic_block(label));
+        } else {
+            return label_to_function(label);
+        }
+    }
+
     LLVMValueRef argument_to_value(Any value) {
-        if (value.type == TYPE_Nothing) {
-            return noneV;
-        } else if (value.type == TYPE_Parameter) {
+        if (value.type == TYPE_Parameter) {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
                 StyledString ss;
@@ -6488,12 +6518,6 @@ struct GenerateCtx {
                 location_error(ss.str());
             }
             return it->second;
-        } else if (value.type == TYPE_Label) {
-            if (is_basic_block_like(value.label)) {
-                return LLVMBasicBlockAsValue(label_to_basic_block(value.label));
-            } else {
-                return label_to_function(value.label);
-            }
         }
 
         switch(value.type->kind()) {
@@ -6656,6 +6680,9 @@ struct GenerateCtx {
 #define READ_VALUE(NAME) \
         assert(argn <= argcount); \
         LLVMValueRef NAME = argument_to_value(args[argn++]);
+#define READ_LABEL_VALUE(NAME) \
+        assert(argn <= argcount); \
+        LLVMValueRef NAME = label_to_value(args[argn++]);
 #define READ_TYPE(NAME) \
         assert(argn <= argcount); \
         assert(args[argn].type == TYPE_Type); \
@@ -6666,8 +6693,8 @@ struct GenerateCtx {
             switch(enter.builtin.value()) {
             case FN_Branch: {
                 READ_VALUE(cond);
-                READ_VALUE(then_block);
-                READ_VALUE(else_block);
+                READ_LABEL_VALUE(then_block);
+                READ_LABEL_VALUE(else_block);
                 assert(LLVMValueIsBasicBlock(then_block));
                 assert(LLVMValueIsBasicBlock(else_block));
                 LLVMBuildCondBr(builder, cond,
@@ -6693,6 +6720,8 @@ struct GenerateCtx {
             } break;
             case FN_Undef: { READ_TYPE(ty);
                 retvalue = LLVMGetUndef(ty); } break;
+            case FN_Alloca: { READ_TYPE(ty);
+                retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
             case FN_GetElementPtr: {
                 READ_VALUE(pointer);
                 assert(argcount > 1);
@@ -6842,7 +6871,7 @@ struct GenerateCtx {
             } break;
             }
         } else if (enter.type == TYPE_Label) {
-            LLVMValueRef value = argument_to_value(enter);
+            LLVMValueRef value = label_to_value(enter);
             if (LLVMValueIsBasicBlock(value)) {
                 LLVMValueRef values[argcount];
                 for (size_t i = 0; i < argcount; ++i) {
@@ -6965,6 +6994,7 @@ struct GenerateCtx {
 #undef READ_ANY
 #undef READ_VALUE
 #undef READ_TYPE
+#undef READ_LABEL_VALUE
 
     void process_labels() {
         while (!bb_label_todo.empty()) {
@@ -7037,6 +7067,7 @@ struct GenerateCtx {
             auto &&params = label->params;
             //auto &&contparam = params[0];
 
+            label->verify_compilable();
             auto ilfunctype = label->get_function_type();
             auto fi = cast<FunctionType>(ilfunctype);
             bool use_sret = is_memory_class(fi->return_type);
@@ -7682,6 +7713,7 @@ struct NormalizeCtx {
         switch(builtin.value()) {
         case FN_Unconst:
         case FN_Undef:
+        case FN_Alloca:
         case SFXFN_Unreachable:
             return true;
         default: return false;
@@ -7883,6 +7915,11 @@ struct NormalizeCtx {
             CHECKARGS(1, 1);
             args[1].verify(TYPE_Type);
             RETARGTYPES(args[1].typeref);
+        } break;
+        case FN_Alloca: {
+            CHECKARGS(1, 1);
+            args[1].verify(TYPE_Type);
+            RETARGTYPES(Pointer(args[1].typeref));
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
@@ -8127,13 +8164,6 @@ struct NormalizeCtx {
             const Type *T = args[1];
             args[2].verify(TYPE_Symbol);
             const_cast<Type *>(T)->bind(args[2].symbol, args[3]);
-            RETARGS();
-        } break;
-        case SFXFN_SetScopeSymbol: {
-            CHECKARGS(3, 3);
-            Scope *scope = args[1];
-            args[2].verify(TYPE_Symbol);
-            scope->bind(args[2].symbol, args[3]);
             RETARGS();
         } break;
         case FN_TypeAt: {
@@ -8494,45 +8524,6 @@ struct NormalizeCtx {
                     fi->return_type, fi->argument_types, fi->flags | FF_Pure));
                 RETARGS(arg);
             }
-        } break;
-        case FN_Compile: {
-            CHECKARGS(1, -1);
-            Label *srcl = args[1];
-            uint64_t flags = 0;
-            for (size_t i = 2; i < args.size(); ++i) {
-                args[i].verify(TYPE_Symbol);
-                Symbol sym = args[i].symbol;
-                uint64_t flag = 0;
-                switch(sym.value()) {
-                case SYM_DumpDisassembly: flag = CF_DumpDisassembly; break;
-                case SYM_DumpModule: flag = CF_DumpModule; break;
-                case SYM_SkipOpts: flag = CF_SkipOpts; break;
-                default: {
-                    StyledString ss;
-                    ss.out << "illegal option: " << sym;
-                    location_error(ss.str());
-                } break;
-                }
-                flags |= flag;
-            }
-            lower2cff(srcl);
-            RETARGS(compile(srcl, flags));
-        } break;
-        case FN_Typify: {
-            CHECKARGS(1, -1);
-            Label *srcl = args[1];
-            std::vector<const Type *> types = { TYPE_Void };
-            for (size_t i = 2; i < args.size(); ++i) {
-                Any val = args[i];
-                val.verify(TYPE_Type);
-                types.push_back(val.typeref);
-            }
-            srcl = typify(srcl, types);
-            StyledStream ss(std::cerr);
-            push_label(l);
-            push_label(srcl);
-            RETARGS(srcl);
-            return false;
         } break;
         case SFXFN_CompilerError: {
             CHECKARGS(1, 1);
@@ -9203,12 +9194,15 @@ struct NormalizeCtx {
                     }
                     auto &&enter = user->body.enter;
                     auto &&args = user->body.args;
+                    #if 0
+                    // labels can be passed to API functions, so this is legal
                     for (size_t i = 0; i < args.size(); ++i) {
                         auto &&arg = args[i];
-                        if ((arg.type == TYPE_Label) && (arg.label == l)) {
+                        if ((arg.type == TYPE_Label) && (arg.label == l)) {                            
                             assert(false && "unexpected use of label as argument");
                         }
                     }
+                    #endif
                     if ((enter.type == TYPE_Label) && (enter.label == l)) {
                         assert(!args.empty());
 
@@ -10282,8 +10276,8 @@ static void f_dump_label(Label *label) {
     stream_label(ss, label, StreamLabelFormat());
 }
 
-typedef struct { Any result; bool ok; } f_scope_at_result;
-static f_scope_at_result f_scope_at(Scope *scope, Symbol key) {
+typedef struct { Any result; bool ok; } AnyBoolPair;
+static AnyBoolPair f_scope_at(Scope *scope, Symbol key) {
     Any result = none;
     bool ok = scope->lookup(key, result);
     return { result, ok };
@@ -10308,6 +10302,7 @@ static const Type *f_elementtype(const Type *T, int i) {
     case TK_Array: return cast<ArrayType>(T)->element_type;
     case TK_Tuple: return cast<TupleType>(T)->type_at_index(i);
     case TK_Union: return cast<UnionType>(T)->type_at_index(i);
+    case TK_Function:  return cast<FunctionType>(T)->type_at_index(i);
     default: {
         StyledString ss;
         ss.out << "type " << T << " has no elements" << std::endl;
@@ -10385,8 +10380,89 @@ static Parameter *f_parameter_new(const Anchor *anchor, Symbol symbol, const Typ
     return Parameter::from(anchor, symbol, type);
 }
 
-const String *f_string_new(const char *ptr, size_t count) {
+static const String *f_string_new(const char *ptr, size_t count) {
     return String::from(ptr, count);
+}
+
+static const Syntax *f_list_load(const String *path) {
+    auto sf = SourceFile::from_file(path);
+    if (!sf) {
+        StyledString ss;
+        ss.out << "no such file: " << path;
+        location_error(ss.str());
+    }
+    LexerParser parser(sf);
+    return parser.parse();    
+}
+
+static const Syntax *f_list_parse(const String *str) {
+    auto sf = SourceFile::from_string(Symbol("<string>"), str);
+    assert(sf);
+    LexerParser parser(sf);
+    return parser.parse();   
+}
+
+static Scope *f_scope_new() {
+    return Scope::from();
+}
+static Scope *f_scope_new_subscope(Scope *scope) {
+    return Scope::from(scope);
+}
+
+static Scope *f_globals() {
+    return globals;
+}
+
+static void f_set_globals(Scope *s) {
+    globals = s;
+}
+
+static Label *f_eval(const Syntax *expr, Scope *scope) {
+    return expand_module(expr, scope);
+}
+
+static void f_set_scope_symbol(Scope *scope, Symbol sym, Any value) {
+    scope->bind(sym, value);
+}
+
+static Label *f_typify(Label *srcl, int numtypes, const Type **typeargs) {
+    std::vector<const Type *> types = { TYPE_Void };
+    for (int i = 0; i < numtypes; ++i) {
+        types.push_back(typeargs[i]);
+
+    }
+    return typify(srcl, types);
+}
+
+static Any f_compile(Label *srcl, uint64_t flags) {
+    srcl = normalize(srcl);    
+    return compile(srcl, flags);
+}
+
+static const Type *f_array_type(const Type *element_type, size_t count) {
+    return Array(element_type, count);
+}
+
+static const String *f_default_styler(Symbol style, const String *str) {
+    StyledString ss;
+    if (!style.is_known()) {
+        location_error(String::from("illegal style"));
+    }
+    ss.out << Style(style.known_value()) << str->data << Style_None;
+    return ss.str();
+}
+
+typedef struct { const String *_0; bool _1; } StringBoolPair;
+static StringBoolPair f_prompt(const String *s, const String *pre) {
+    if (pre->count) {
+        linenoisePreloadBuffer(pre->data);
+    }
+    char *r = linenoise(s->data);
+    if (!r) {
+        return { Symbol(SYM_Unnamed).name(), false };
+    }
+    linenoiseHistoryAdd(r);
+    return { String::from_cstr(r), true };
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -10424,14 +10500,30 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_SyntaxStrip, strip_syntax, TYPE_Any, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_ParameterNew, f_parameter_new, TYPE_Parameter, TYPE_Anchor, TYPE_Symbol, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_SizeT);
-
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
+    DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
+    DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Label, TYPE_I32, Pointer(TYPE_Type));
+    DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_SizeT);
+    
+    DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
+
+    DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
+    DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
+
+    DEFINE_C_FUNCTION(FN_ListLoad, f_list_load, TYPE_Syntax, TYPE_String);
+    DEFINE_C_FUNCTION(FN_ListParse, f_list_parse, TYPE_Syntax, TYPE_String);
+    DEFINE_C_FUNCTION(FN_ScopeNew, f_scope_new, TYPE_Scope);
+    DEFINE_C_FUNCTION(FN_ScopeNewSubscope, f_scope_new_subscope, TYPE_Scope, TYPE_Scope);
+    DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);    
+    DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
+    DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);
+
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
     //DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
     //DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
-    DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
+    //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
 
 #undef DEFINE_C_FUNCTION
 
@@ -10505,6 +10597,10 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(Symbol(BNAME), (int32_t)NAME);
     B_TYPE_KIND()
 #undef T
+
+    globals->bind(Symbol(SYM_DumpDisassembly), (uint64_t)CF_DumpDisassembly);
+    globals->bind(Symbol(SYM_DumpModule), (uint64_t)CF_DumpModule);
+    globals->bind(Symbol(SYM_SkipOpts), (uint64_t)CF_SkipOpts);
 
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
@@ -10589,8 +10685,7 @@ int main(int argc, char *argv[]) {
     signal(SIGSEGV, crash_handler);
     signal(SIGABRT, crash_handler);
 
-#define CATCH_EXCEPTION 1
-#if CATCH_EXCEPTION
+#if BANGRA_CATCH_EXCEPTION
     try {
 #endif
         init_types();
@@ -10634,7 +10729,7 @@ int main(int argc, char *argv[]) {
         fptr();
 
         //interpreter_loop(cmd);
-#if CATCH_EXCEPTION
+#if BANGRA_CATCH_EXCEPTION
     } catch (const Exception &exc) {
         default_exception_handler(exc);
         throw exc;

@@ -36,6 +36,10 @@
         "atomic": "cpp",
         "locale": "cpp",
         "system_error": "cpp",
-        "__functional_03": "cpp"
+        "__functional_03": "cpp",
+        "lj_parse.c": "cpp",
+        "ios": "cpp",
+        "__locale": "cpp",
+        "*.tcc": "cpp"
     }
 }

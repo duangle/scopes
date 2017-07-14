@@ -22,7 +22,7 @@
 		"variables": {
 			"patterns": [{
 				"name": "constant.language.builtins.bangra",
-				"match": "(syntax-scope|type-kind-(integer|real|pointer|vector|array|tuple|union|typename))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				"match": "(debug-build\\?|compiler-(path|timestamp)|syntax-scope|type-kind-(function|integer|real|pointer|vector|array|tuple|union|typename))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
 			}]
 		},
 		"constants": {
@@ -80,7 +80,7 @@
             "patterns":[
                 {
                     "name": "support.type.builtin.bangra",
-                    "match": "(void|bool|size_t|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(void|bool|size_t|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.type.library.bangra",
@@ -92,11 +92,19 @@
 			"patterns": [
                 {
                     "name": "support.function.builtin.bangra",
-				    "match": "(integer|real|function|tuple|typename)-type|(dump(-label)|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|load|store|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(exit|compiler-version|prompt|countof|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|load|store|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "support.function.library.bangra",
+				    "match": "((block-scope-)?macro|print|min|max|clamp|tie-const|repr|(empty|type|integer|real|pointer|function-pointer)\\?|(integer|real|pointer|function|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.bangra",
-				    "match": "((set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((set-globals|set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "support.function.sfx.library.bangra",
+				    "match": "((error|todo)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
