@@ -137,6 +137,7 @@ const char *bangra_compile_time_date();
 #include <stdarg.h>
 #include <stdlib.h>
 #include <libgen.h>
+#include <setjmp.h>
 
 #include <cstdlib>
 //#include <string>
@@ -455,8 +456,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
-    T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) \
-    T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) \
+    T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_Malloc) \
+    T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
@@ -466,6 +467,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_FCmpUGT) T(OP_FCmpUGE) T(OP_FCmpULT) T(OP_FCmpULE) \
     T(FN_Purify) T(FN_Unconst) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
+    T(FN_VolatileLoad) T(FN_VolatileStore) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Undef) T(KW_Let) \
@@ -570,6 +572,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
+    T(FN_VolatileLoad, "volatile-load") \
+    T(FN_VolatileStore, "volatile-store") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
     T(FN_Malloc, "malloc") T(FN_Unconst, "unconst") \
@@ -1508,7 +1512,8 @@ static StyledStream& operator<<(StyledStream& ost, const Anchor *anchor) {
 // TYPE
 //------------------------------------------------------------------------------
 
-static void location_error(const String *msg);
+typedef void (*ErrorHandler)(const String *msg);
+static ErrorHandler location_error = nullptr;
 
 #define B_TYPE_KIND() \
     T(TK_Integer, "type-kind-integer") \
@@ -2905,7 +2910,7 @@ struct Exception {
         translate(nullptr) {}
 };
 
-static void location_error(const String *msg) {
+static void default_location_error(const String *msg) {
     throw Exception(_active_anchor, msg);
 }
 
@@ -6722,6 +6727,10 @@ struct GenerateCtx {
                 retvalue = LLVMGetUndef(ty); } break;
             case FN_Alloca: { READ_TYPE(ty);
                 retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
+            case FN_Malloc: { READ_TYPE(ty);
+                retvalue = LLVMBuildMalloc(builder, ty, ""); } break;
+            case FN_Free: { READ_VALUE(val);
+                retvalue = LLVMBuildFree(builder, val); } break;
             case FN_GetElementPtr: {
                 READ_VALUE(pointer);
                 assert(argcount > 1);
@@ -6748,10 +6757,16 @@ struct GenerateCtx {
                 retvalue = LLVMBuildFPTrunc(builder, val, ty, ""); } break;
             case FN_FPExt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildFPExt(builder, val, ty, ""); } break;
+            case FN_VolatileLoad:
             case FN_Load: { READ_VALUE(ptr);
-                retvalue = LLVMBuildLoad(builder, ptr, ""); } break;
+                retvalue = LLVMBuildLoad(builder, ptr, ""); 
+                if (enter.builtin.value() == FN_VolatileLoad) { LLVMSetVolatile(retvalue, true); }
+            } break;
+            case FN_VolatileStore:
             case FN_Store: { READ_VALUE(val); READ_VALUE(ptr);
-                retvalue = LLVMBuildStore(builder, val, ptr); } break;
+                retvalue = LLVMBuildStore(builder, val, ptr); 
+                if (enter.builtin.value() == FN_VolatileStore) { LLVMSetVolatile(retvalue, true); }
+            } break;
             case OP_ICmpEQ:
             case OP_ICmpNE:
             case OP_ICmpUGT:
@@ -7714,6 +7729,7 @@ struct NormalizeCtx {
         case FN_Unconst:
         case FN_Undef:
         case FN_Alloca:
+        case FN_Malloc:
         case SFXFN_Unreachable:
             return true;
         default: return false;
@@ -7916,10 +7932,16 @@ struct NormalizeCtx {
             args[1].verify(TYPE_Type);
             RETARGTYPES(args[1].typeref);
         } break;
+        case FN_Malloc:
         case FN_Alloca: {
             CHECKARGS(1, 1);
             args[1].verify(TYPE_Type);
             RETARGTYPES(Pointer(args[1].typeref));
+        } break;
+        case FN_Free: {
+            CHECKARGS(1, 1);
+            verify_kind<TK_Pointer>(args[1].indirect_type());
+            RETARGTYPES();
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
@@ -7952,6 +7974,7 @@ struct NormalizeCtx {
             T = Pointer(T);
             RETARGTYPES(T);
         } break;
+        case FN_VolatileLoad:
         case FN_Load: {
             CHECKARGS(1, 1);
             const Type *T = storage_type(args[1].indirect_type());
@@ -7959,6 +7982,7 @@ struct NormalizeCtx {
             auto pi = cast<PointerType>(T);
             RETARGTYPES(pi->element_type);
         } break;
+        case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
             const Type *T = storage_type(args[2].indirect_type());
@@ -8444,6 +8468,7 @@ struct NormalizeCtx {
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].type, destptr));
         } break;
+        case FN_VolatileLoad:
         case FN_Load: {
             CHECKARGS(1, 1);
             const Type *T = storage_type(args[1].type);
@@ -8451,6 +8476,7 @@ struct NormalizeCtx {
             auto pi = cast<PointerType>(T);
             RETARGS(pi->unpack(args[1].pointer));
         } break;
+        case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
             const Type *T = storage_type(args[2].type);
@@ -8800,7 +8826,19 @@ struct NormalizeCtx {
             auto users = param->users; // make copy
             for (auto kv = users.begin(); kv != users.end(); ++kv) {
                 Label *user = kv->first;
-                assert(!is_called_by(param, user));
+                if (is_called_by(param, user)) {
+                    set_active_anchor(user->body.anchor);
+                    {
+                        StyledStream ss;
+                        stream_label(ss, user, StreamLabelFormat());
+                        ss << owner->anchor 
+                            << " while lowering function to label" << std::endl;
+                        owner->anchor->stream_source_line(ss);
+                    }
+                    StyledString ss;
+                    ss.out << "attempting to return from lowered function";
+                    location_error(ss.str());
+                }
                 if (is_continuing_from(param, user)) {
                     clear_continuation_arg(user);
                 }
@@ -10465,6 +10503,10 @@ static StringBoolPair f_prompt(const String *s, const String *pre) {
     return { String::from_cstr(r), true };
 }
 
+static void f_set_exception_handler(ErrorHandler handler) {
+    location_error = handler;
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -10517,6 +10559,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);    
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);
+    DEFINE_C_FUNCTION(SFXFN_SetExceptionHandler, f_set_exception_handler, TYPE_Void, 
+        Pointer(Function(TYPE_Void, {TYPE_String})));    
 
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
     //DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
@@ -10659,6 +10703,7 @@ static void crash_handler(int sig) {
 
 int main(int argc, char *argv[]) {
     using namespace bangra;
+    location_error = default_location_error;
     Symbol::_init_symbols();
     init_llvm();
 

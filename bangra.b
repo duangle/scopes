@@ -988,6 +988,34 @@ fn compiler-version-string ()
         \ compiler-timestamp ")"
 
 fn read-eval-print-loop ()
+    syntax-extend
+        let lib =
+            import-c "setjmp.h" "
+                #include <setjmp.h>
+                " eol
+        let setjmp longjmp jmp_buf =
+            Any-extract-constant (Scope@ lib 'setjmp)
+            Any-extract-constant (Scope@ lib 'longjmp)
+            Any-extract-constant (Scope@ lib 'jmp_buf)
+
+        set-scope-symbol! syntax-scope 'jmpbuf
+            getelementptr (malloc jmp_buf) 0 0
+        set-scope-symbol! syntax-scope 'setjmp setjmp
+        set-scope-symbol! syntax-scope 'longjmp longjmp
+
+        syntax-scope
+
+    fn exception-handler (str)
+        print str
+        longjmp jmpbuf 1
+
+    fn install-exception-handler ()
+        set-exception-handler!
+            Any-extract
+                compile (typify exception-handler string)
+                pointer-type
+                    function-type void string
+
     fn repeat-string (n c)
         let [loop] i s = 
             tie-const n (size_t 0)
@@ -1020,9 +1048,11 @@ fn read-eval-print-loop ()
             return false
         loop (+ i 1)
 
+    install-exception-handler;
     print
         compiler-version-string;
 
+    let eval-scope = (Scope (globals))
     let [loop] preload cmdlist counter =
         unconst ""
         unconst ""
@@ -1031,8 +1061,6 @@ fn read-eval-print-loop ()
         .. "$" (Any-string (Any counter))
 
     let idstr = (make-idstr counter)
-    #let id = (Symbol idstr)
-    #let styler = default-styler
     let promptstr =
         .. idstr " "
             default-styler style-comment "▶"
@@ -1046,7 +1074,7 @@ fn read-eval-print-loop ()
                 " "
             preload
     if (not success)
-        return
+        return;
     let terminated? =
         or (blank? cmd)
             and (empty? cmdlist) (== (@ cmd 0) "\\")
@@ -1055,44 +1083,30 @@ fn read-eval-print-loop ()
         if terminated? ""
         else (leading-spaces cmd)
     if (not terminated?)
-        loop preload cmdlist counter
+        loop (unconst preload) cmdlist counter
+    if (== (setjmp jmpbuf) 1)
+        loop (unconst "") (unconst "") counter
     let expr = (list-parse cmdlist)
-    let eval-scope = (Scope (globals))
+    let expr-anchor = (Syntax-anchor expr)
+    # convert result of expression to Any
+    let expr = 
+        list
+            list Any-new
+                list-cons (Any do)
+                    Any-extract (Syntax->datum expr) list
+    let expr = (Any-extract (Syntax-wrap expr-anchor (Any expr) false) Syntax)
     let f = (compile (eval expr eval-scope))
-    let ModuleFunctionType = (pointer-type (function-type void))
-    if (function-pointer-type? (Any-typeof f))
-        call (inttoptr (Any-payload f) ModuleFunctionType)
+    let rettype =
+        element-type (element-type (Any-typeof f) 0) 0
+    let ModuleFunctionType = (pointer-type (function-type Any))
+    let fptr = (Any-extract f ModuleFunctionType)
+    let result = (fptr)
+    if (!= (Any-typeof result) Nothing)
+        set-scope-symbol! eval-scope (Symbol idstr) result
+        print idstr "=" result
+        loop (unconst "") (unconst "") (+ counter 1)
     else
-        error! "function pointer expected"
-    #loop preload cmdlist counter
-    #
-            let expr = (list-parse cmdlist)
-            if (none? expr)
-                error "parsing failed"
-            let eval-env = (@ state (quote env))
-            let code =
-                .. expr
-                    syntax-list expression-suffix
-            let f =
-                eval code eval-env
-            let result... = (f)
-            if (not (none? result...))
-                loop-for i in (range (va-countof result...))
-                    let idstr = (make-idstr)
-                    let value = (va@ i result...)
-                    print
-                        .. idstr "= "
-                            repr value
-                    set-scope-symbol! eval-env id value
-                    set-scope-symbol! state (quote counter)
-                        (@ state (quote counter)) + 1
-                    continue
-        except (msg anchor frame)
-            print "Traceback:"
-            print
-                Frame-format frame
-            print "error:" msg
-        \ ""
+        loop (unconst "") (unconst "") counter
 
 #-------------------------------------------------------------------------------
 # main
@@ -1155,7 +1169,7 @@ fn run-main (args...)
         else
             error! "function pointer expected"
         exit 0
-        unreachable!
+        unreachable!;
 
 run-main (args)
 true

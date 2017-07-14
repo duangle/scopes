@@ -92,7 +92,7 @@
 			"patterns": [
                 {
                     "name": "support.function.builtin.bangra",
-				    "match": "(exit|compiler-version|prompt|countof|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|load|store|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(exit|compiler-version|prompt|countof|malloc|free|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.library.bangra",
