@@ -564,7 +564,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ImportC, "import-c") T(FN_IsInteger, "integer?") \
     T(FN_IntegerType, "integer-type") \
     T(FN_CompilerVersion, "compiler-version") \
-    T(FN_Iter, "iter") \
+    T(FN_Iter, "iter") T(FN_FormatMessage, "format-message") \
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
     T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
@@ -9021,6 +9021,8 @@ struct NormalizeCtx {
     }
 
     void normalize(Label *entry) {
+        auto _old_location_error = location_error;
+        location_error = default_location_error;
         try {
         done.clear();
         todo = { entry };
@@ -9164,9 +9166,15 @@ struct NormalizeCtx {
             }
         }
 
+        location_error = _old_location_error;
         } catch (const Exception &exc) {
             print_traceback();
-            throw exc;
+            location_error = _old_location_error;
+            if (location_error == default_location_error) {
+                throw exc;
+            } else {
+                location_error(exc.msg);
+            }
         }
     }
 
@@ -10506,6 +10514,13 @@ static void f_set_exception_handler(ErrorHandler handler) {
     location_error = handler;
 }
 
+static const String *f_format_message(const Anchor *anchor, const String *message) {
+    StyledString ss;
+    ss.out << anchor << " " << message->data << std::endl;
+    anchor->stream_source_line(ss.out);
+    return ss.str();
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -10561,6 +10576,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_SetExceptionHandler, f_set_exception_handler, TYPE_Void, 
         Pointer(Function(TYPE_Void, {TYPE_String})));    
 
+    DEFINE_C_FUNCTION(FN_FormatMessage, f_format_message, TYPE_String, TYPE_Anchor, TYPE_String);
+    DEFINE_C_FUNCTION(FN_ActiveAnchor, get_active_anchor, TYPE_Anchor);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
     //DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
     //DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);

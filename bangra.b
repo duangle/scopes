@@ -411,6 +411,16 @@ fn Syntax-quoted? (sx)
     assert-typeof sx Syntax
     extractvalue (load sx) 2
 
+fn Anchor-file (x)
+    assert-typeof x Anchor
+    extractvalue (load x) 0
+fn Anchor-lineno (x)
+    assert-typeof x Anchor
+    extractvalue (load x) 1
+fn Anchor-column (x)
+    assert-typeof x Anchor
+    extractvalue (load x) 2
+
 fn list-empty? (l)
     assert-typeof l list
     icmp== (ptrtoint l size_t) 0:usize
@@ -1006,7 +1016,10 @@ fn read-eval-print-loop ()
         syntax-scope
 
     fn exception-handler (str)
-        print str
+        io-write
+            format-message (active-anchor) 
+                .. (default-styler style-error "error:")
+                    \ " " str
         longjmp jmpbuf 1
 
     fn install-exception-handler ()

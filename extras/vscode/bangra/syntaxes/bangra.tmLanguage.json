@@ -80,7 +80,7 @@
             "patterns":[
                 {
                     "name": "support.type.builtin.bangra",
-                    "match": "(void|bool|size_t|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(void|bool|size_t|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope|Anchor)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.type.library.bangra",
