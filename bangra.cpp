@@ -6965,7 +6965,7 @@ struct GenerateCtx {
             Label *label = contarg.parameter->label;
             bool use_sret = is_memory_class(label->get_return_type());
             if (use_sret) {
-                auto it = param2value.find(enter.parameter);
+                auto it = param2value.find(contarg.parameter);
                 assert (it != param2value.end());
                 if (retvalue) {
                     LLVMBuildStore(builder, retvalue, it->second);
@@ -7488,9 +7488,11 @@ struct NormalizeCtx {
         return enter.type == TYPE_Builtin;
     }
 
-    static bool is_calling_type(Label *l) {
+    static bool is_calling_callable(Label *l) {
         auto &&enter = l->body.enter;
-        return enter.type == TYPE_Type;
+        const Type *T = enter.indirect_type();
+        Any value = none;
+        return T->lookup(KW_Call, value);
     }
 
     static bool is_calling_function(Label *l) {
@@ -7721,6 +7723,7 @@ struct NormalizeCtx {
         case FN_VaCountOf:
         case FN_VaAt:
         case FN_Location:
+        case FN_Dump:
             return true;
         default: return false;
         }
@@ -8098,25 +8101,22 @@ struct NormalizeCtx {
         return destptr;
     }
 
-    void fold_type_call(Label *l) {
+    void fold_callable_call(Label *l) {
 #if BANGRA_DEBUG_CODEGEN
-        ss_cout << "folding type call in " << l << std::endl;
+        ss_cout << "folding callable call in " << l << std::endl;
 #endif
 
         auto &&enter = l->body.enter;
-        assert(enter.type == TYPE_Type);
-        const Type *T = enter.typeref;
+        auto &&args = l->body.args;
+        const Type *T = enter.indirect_type();
 
         Any value = none;
-        if (!T->lookup(SYM_ApplyType, value)) {
-            StyledString ss;
-            ss.out << "type " << T << " has no apply-type attribute";
-            location_error(ss.str());
-        }
+        auto result = T->lookup(KW_Call, value);
+        assert(result);
         l->unlink_backrefs();
+        args.insert(args.begin() + 1, enter);
         enter = value;
         l->link_backrefs();
-
     }
 
     bool isnan(float f) {
@@ -8571,7 +8571,13 @@ struct NormalizeCtx {
             StyledStream ss(std::cerr);
             ss << l->body.anchor << " dump: ";
             for (size_t i = 1; i < args.size(); ++i) {
-                stream_expr(ss, args[i], StreamExprFormat());
+                if (is_const(args[i])) {
+                    stream_expr(ss, args[i], StreamExprFormat());
+                } else {
+                    ss << "<unknown>" 
+                        << Style_Operator << ":" << Style_None
+                        << args[i].indirect_type() << std::endl;
+                }
             }
             l->unlink_backrefs();
             enter = args[0];
@@ -9142,8 +9148,8 @@ struct NormalizeCtx {
                 }
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
-            } else if (is_calling_type(l)) {
-                fold_type_call(l);
+            } else if (is_calling_callable(l)) {
+                fold_callable_call(l);
                 goto process_body;
             } else {
                 StyledString ss;

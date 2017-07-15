@@ -40,7 +40,7 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
 && echo "bangra" \
-&& clang++ \
+&& time clang++ \
     -rdynamic \
     -o $DIR/bangra \
     $DIR/bangra.cpp \
@@ -66,5 +66,6 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -Wl,--no-whole-archive \
     $OPT_O \
     -fexceptions \
+&& echo "executing test_all.b..." \
 && $DIR/bangra $DIR/testing/test_all.b
 # && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b

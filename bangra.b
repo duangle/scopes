@@ -123,10 +123,6 @@ fn Any-new (val)
         else
             wrap-error;
 
-fn repr (val)
-    Any-repr
-        Any-new val
-
 fn list-new (...)
     fn loop (i tail)
         if (icmp== i 0) tail
@@ -137,6 +133,18 @@ fn list-new (...)
     loop (va-countof ...) eol
 
 syntax-extend
+    set-type-symbol! type 'call
+        fn (cls ...)
+            let val ok = (type@ cls 'apply-type)
+            if ok
+                call val ...
+            else
+                compiler-error!
+                    string-join "type "
+                        string-join
+                            Any-repr (Any-wrap cls)
+                            " has no apply-type attribute"
+
     set-type-symbol! list 'apply-type list-new
     set-type-symbol! Any 'apply-type Any-new
     set-type-symbol! Symbol 'apply-type string->Symbol
@@ -278,6 +286,12 @@ syntax-extend
 
     syntax-scope
 
+fn repr (val)
+    Any-repr (Any val)
+
+fn string-repr (val)
+    Any-string (Any val)
+
 fn op1-dispatch (symbol)
     fn (x)
         let T = (typeof x)
@@ -295,7 +309,7 @@ fn op2-dispatch (symbol)
         if success
             let result... = (op a b)
             if (icmp== (va-countof result...) 0)
-            else
+            else                
                 return result...
         compiler-error!
             string-join "operation does not apply to types "
@@ -331,11 +345,11 @@ fn op2-dispatch-bidi (symbol fallback)
 
 fn op2-ltr-multiop (f)
     fn (a b ...)
-        let [loop] i result = 0 (f a b)
+        let [loop] i result... = 0 (f a b)
         if (icmp<s i (va-countof ...))
             let x = (va@ i ...)
-            loop (add i 1) (f result x)
-        else result
+            loop (add i 1) (f result... x)
+        else result...
 
 fn == (a b) ((op2-dispatch-bidi '==) a b)
 fn != (a b) 
@@ -516,6 +530,15 @@ fn string-compare (a b)
         loop (+ i 1:usize)
 
 syntax-extend
+    set-type-symbol! Scope '@
+        fn (self key)
+            let value success = (Scope@ self key)
+            return
+                if (constant? self)
+                    Any-extract-constant value
+                else value
+                success
+
     fn gen-string-cmp (op)
         fn (a b flipped)
             if (type== (typeof a) (typeof b))
@@ -584,33 +607,12 @@ fn powi (base exponent)
 
 # print function
 fn print (...)
-    fn load-printf ()
-        let lib =
-            import-c "printf.c" "
-                int stb_printf(const char *fmt, ...);
-                " eol
-        let printf =
-            Any-extract-constant
-                Scope@ lib 'stb_printf
-        fn (fmt ...)
-            printf (string->rawstring fmt) ...
-
-    let printf =
-        load-printf;
-
     fn print-element (val)
         let T = (typeof val)
         if (== T string)
             io-write val
-        elseif (== T i32)
-            printf "%i" val
-        elseif (== T f32)
-            printf "%g" val
         else
             io-write (repr val)
-            #io-write "<value of type "
-            #io-write (repr (typeof val))
-            #io-write ">"
 
     let [loop] i = 0
     if (< i (va-countof ...))
@@ -723,7 +725,7 @@ syntax-extend
         let head =
             if (== (Any-typeof head-key) Symbol)
                 #print head env
-                let head success = (Scope@ env (Any-extract head-key Symbol))
+                let head success = (@ env (Any-extract head-key Symbol))
                 if success head
                 else
                     print "failed."
@@ -1004,10 +1006,10 @@ fn test-polymorphic-return-type ()
 
 fn compiler-version-string ()
     let vmin vmaj vpatch = (compiler-version)
-    .. "Bangra " (Any-string (Any-wrap vmin)) "." (Any-string (Any-wrap vmaj))
+    .. "Bangra " (string-repr vmin) "." (string-repr vmaj)
         if (== vpatch 0) ""
         else
-            .. "." (Any-string (Any-wrap vpatch))
+            .. "." (string-repr vpatch)
         " ("
         if debug-build? "debug build, "
         else ""
@@ -1020,9 +1022,9 @@ fn read-eval-print-loop ()
                 #include <setjmp.h>
                 " eol
         let setjmp longjmp jmp_buf =
-            Any-extract-constant (Scope@ lib 'setjmp)
-            Any-extract-constant (Scope@ lib 'longjmp)
-            Any-extract-constant (Scope@ lib 'jmp_buf)
+            @ lib 'setjmp
+            @ lib 'longjmp
+            @ lib 'jmp_buf
 
         set-scope-symbol! syntax-scope 'jmpbuf
             getelementptr (malloc jmp_buf) 0 0
