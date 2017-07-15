@@ -8,6 +8,8 @@ set DIR=%~dp0
 set MSYSPATH=C:\msys64
 set MINGWPATH=%MSYSPATH%\mingw64
 set PATH=%MINGWPATH%\bin;%PATH%
+rem set DEBUGOPTS=-O2 -DNDEBUG
+set DEBUGOPTS=-O0 -g -DBANGRA_DEBUG
 echo bangra0.h
 clang -x c -o %DIR%bangra0.h -P -E %DIR%bangra.cpp -I%DIR%win32 -I%MINGWPATH%/lib/libffi-3.2.1/include
 if errorlevel 1 goto :fail
@@ -41,42 +43,34 @@ echo wcwidth.o
 clang -c -o wcwidth.o %DIR%external\linenoise-ng\src\wcwidth.cpp -O2 ^
     -I%DIR%external\linenoise-ng\include -std=gnu++11 -fno-rtti
 if errorlevel 1 goto :fail
-echo bangra_luasrc.bin.h
-%DIR%luajit/bin/mingw64/luajit -b %DIR%bangra.lua %DIR%bangra_luasrc.bin.h -g
-if errorlevel 1 goto :fail
 echo bangra.exe
 clang++ -o bangra.exe %DIR%bangra.cpp ^
     -I%DIR%win32 ^
     -I%MINGWPATH%/lib/libffi-3.2.1/include -I%MINGWPATH%/include ^
-    -I%DIR%luajit/csrc/luajit/src/src ^
     -Wno-vla -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL ^
     -D_GNU_SOURCE -pedantic -DBANGRA_DEBUG -ferror-limit=1 ^
     -D_LIBCPP_HAS_NO_CONSTEXPR ^
-    -std=gnu++11 -O2 -DNDEBUG -fno-exceptions -fno-rtti ^
+    -std=gnu++11 %DEBUGOPTS% ^
+    -fno-exceptions -fno-rtti ^
+    -Wl,--allow-multiple-definition ^
     -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS ^
     -L%MINGWPATH%/lib -lclangFrontend -lclangDriver -lclangSerialization ^
     -lclangCodeGen -lclangParse -lclangSema -lclangAnalysis -lclangEdit ^
     -lclangAST -lclangLex -lclangBasic ^
     -Wl,--whole-archive ^
     -Wl,--export-all-symbols ^
-    %DIR%luajit/bin/mingw64/luajit.a ^
-    mman.o realpath.o dlfcn.o linenoise.o ConvertUTF.o wcwidth.o ^
-    -lLLVMLTO -lLLVMObjCARCOpts ^
-    -lLLVMMIRParser -lLLVMSymbolize -lLLVMDebugInfoPDB -lLLVMDebugInfoDWARF ^
-    -lLLVMTableGen -lLLVMLineEditor -lLLVMOrcJIT ^
-    -lLLVMARMDisassembler -lLLVMARMCodeGen ^
-    -lLLVMARMAsmParser -lLLVMARMDesc -lLLVMARMInfo -lLLVMARMAsmPrinter ^
-    -lLLVMLibDriver -lLLVMOption -lLLVMX86Disassembler -lLLVMX86AsmParser ^
-    -lLLVMX86CodeGen -lLLVMSelectionDAG -lLLVMAsmPrinter -lLLVMX86Desc ^
-    -lLLVMMCDisassembler -lLLVMX86Info -lLLVMX86AsmPrinter -lLLVMX86Utils ^
-    -lLLVMMCJIT -lLLVMPasses -lLLVMipo -lLLVMVectorize -lLLVMLinker ^
-    -lLLVMIRReader -lLLVMAsmParser -lLLVMDebugInfoCodeView -lLLVMCoverage ^
-    -lLLVMExecutionEngine -lLLVMRuntimeDyld -lLLVMCodeGen -lLLVMTarget ^
-    -lLLVMScalarOpts -lLLVMInstCombine -lLLVMInstrumentation -lLLVMProfileData ^
-    -lLLVMObject -lLLVMMCParser -lLLVMTransformUtils -lLLVMMC -lLLVMBitWriter ^
-    -lLLVMBitReader -lLLVMAnalysis -lLLVMCore -lLLVMSupport ^
     -Wl,--no-whole-archive ^
-    -lLLVMInterpreter ^
+    mman.o realpath.o dlfcn.o linenoise.o ConvertUTF.o wcwidth.o ^
+    -lLLVMCoverage -lLLVMObjCARCOpts -lLLVMOption -lLLVMPasses -lLLVMipo ^
+    -lLLVMVectorize -lLLVMLinker -lLLVMIRReader -lLLVMAsmParser ^
+    -lLLVMX86Disassembler -lLLVMX86AsmParser -lLLVMX86CodeGen ^
+    -lLLVMSelectionDAG -lLLVMAsmPrinter -lLLVMDebugInfoCodeView -lLLVMCodeGen ^
+    -lLLVMScalarOpts -lLLVMInstCombine -lLLVMInstrumentation ^
+    -lLLVMTransformUtils -lLLVMBitWriter -lLLVMX86Desc -lLLVMMCDisassembler ^
+    -lLLVMX86Info -lLLVMX86AsmPrinter -lLLVMX86Utils -lLLVMMCJIT ^
+    -lLLVMExecutionEngine -lLLVMTarget -lLLVMAnalysis -lLLVMProfileData ^
+    -lLLVMRuntimeDyld -lLLVMObject -lLLVMMCParser -lLLVMBitReader -lLLVMMC ^
+    -lLLVMCore -lLLVMSupport ^
     -lffi -lole32 -luuid -lversion -lpsapi ^
     -fexceptions
 if errorlevel 1 goto :fail
