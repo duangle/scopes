@@ -97,7 +97,7 @@ fn Any-new (val)
         fn wrap-error ()
             compiler-error!
                 string-join "unable to wrap value of storage type "
-                    Any-repr (Any-wrap T)        
+                    Any-repr (Any-wrap T)
         if (pointer-type? T)
             #compiler-message "wrapping pointer"
             construct
@@ -352,7 +352,7 @@ fn op2-ltr-multiop (f)
         else result...
 
 fn == (a b) ((op2-dispatch-bidi '==) a b)
-fn != (a b) 
+fn != (a b)
     call
         op2-dispatch-bidi '!=
             fn (a b)
@@ -509,13 +509,13 @@ fn string-compare (a b)
         return -1
     elseif (> ca cb)
         return 1
-    let pa pb = 
+    let pa pb =
         bitcast (getelementptr a 0 1 0) (pointer-type i8)
         bitcast (getelementptr b 0 1 0) (pointer-type i8)
     let cc =
         if (constant? ca) ca
         else cb
-    let [loop] i = 
+    let [loop] i =
         tie-const cc 0:usize
     if (== i cc)
         return 0
@@ -552,12 +552,12 @@ syntax-extend
     set-type-symbol! string '>= (gen-string-cmp >=)
 
     set-type-symbol! string 'countof string-countof
-    set-type-symbol! string '@ 
+    set-type-symbol! string '@
         fn string-at (s i)
             assert-typeof s string
             let i = (i64 i)
             let len = (i64 (string-countof s))
-            let i = 
+            let i =
                 if (< i 0:i64)
                     if (>= i (- len))
                         + len i
@@ -566,7 +566,7 @@ syntax-extend
                 elseif (>= i len)
                     return ""
                 else i
-            let data = 
+            let data =
                 bitcast (getelementptr s 0 1 0) (pointer-type i8)
             string-new (getelementptr data i) 1:usize
 
@@ -660,11 +660,11 @@ fn typify(f types...)
     let types = (getelementptr (alloca atype) 0 0)
     let [loop] i = 0
     if (== i vacount)
-        return 
+        return
             __typify f vacount types
     let T = (va@ i types...)
     store T (getelementptr types i)
-    loop (+ i 1)        
+    loop (+ i 1)
 
 fn compile (f opts...)
     let vacount = (va-countof opts...)
@@ -707,7 +707,7 @@ syntax-extend
         block-scope-macro
             fn (at next scope)
                 return (f (list-next at)) next scope
-    
+
     # install general list hook for this scope
     # is called for every list the expander sees
     fn list-handler (topexpr env)
@@ -732,7 +732,7 @@ syntax-extend
                     failed;
             else head-key
         if (== (Any-typeof head) Macro)
-            let head = 
+            let head =
                 macro->fn (Any-extract head Macro)
             let next = (list-next topexpr)
             let expr next env = (head expr next env)
@@ -747,7 +747,7 @@ syntax-extend
     set-scope-symbol! syntax-scope 'block-scope-macro block-scope-macro
     set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (Symbol "#list")
-        compile (typify list-handler list Scope) #'dump-disassembly 'skip-opts 
+        compile (typify list-handler list Scope) #'dump-disassembly 'skip-opts
 
     fn make-expand-and-or (flip)
         fn (expr)
@@ -759,8 +759,8 @@ syntax-extend
             let [loop] head result = (list-next expr) (list-at expr)
             if (list-empty? head)
                 return result
-            let tmp = 
-                Parameter-new 
+            let tmp =
+                Parameter-new
                     Syntax-anchor (Any-extract (list-at head) Syntax)
                     \ 'tmp void
             loop
@@ -768,10 +768,10 @@ syntax-extend
                 Any
                     list do
                         list let tmp '= (list-at head)
-                        list if tmp 
+                        list if tmp
                             if flip tmp
                             else result
-                        list 'else 
+                        list 'else
                             if flip result
                             else tmp
 
@@ -1035,7 +1035,7 @@ fn read-eval-print-loop ()
 
     fn exception-handler (str)
         io-write
-            format-message (active-anchor) 
+            format-message (active-anchor)
                 .. (default-styler style-error "error:")
                     \ " " str
         longjmp jmpbuf 1
@@ -1048,7 +1048,7 @@ fn read-eval-print-loop ()
                     function-type void string
 
     fn repeat-string (n c)
-        let [loop] i s = 
+        let [loop] i s =
             tie-const n (size_t 0)
             tie-const n ""
         if (== i n)
@@ -1058,8 +1058,8 @@ fn read-eval-print-loop ()
 
     fn leading-spaces (s)
         let len = (i32 (countof s))
-        let [loop] i out = 
-            tie-const len 0 
+        let [loop] i out =
+            tie-const len 0
             tie-const len ""
         if (== i len)
             return out
@@ -1129,8 +1129,8 @@ fn read-eval-print-loop ()
             Any-extract f ModuleFunctionType
         else
             # build a wrapper
-            let expr = 
-                list 
+            let expr =
+                list
                     list let 'tmp '= (list f)
                     list Any-new 'tmp
             let expr = (Any-extract (Syntax-wrap expr-anchor (Any expr) false) Syntax)

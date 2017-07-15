@@ -6008,6 +6008,7 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
         return 0;
     } break;
     }
+    return 0;
 }
 
 static bool is_memory_class(const Type *T) {
@@ -9586,6 +9587,7 @@ struct Expander {
         } else {
             assert(false && "illegal dest type");
         }
+        return none;
     }
 
     Any expand_syntax_extend(const List *it, const Any &dest, const Any &longdest) {
@@ -10731,6 +10733,7 @@ static void setup_stdio() {
 
 } // namespace bangra
 
+#ifndef _WIN32
 static void crash_handler(int sig) {
   void *array[20];
   size_t size;
@@ -10743,6 +10746,7 @@ static void crash_handler(int sig) {
   backtrace_symbols_fd(array, size, STDERR_FILENO);
   exit(1);
 }
+#endif
 
 int main(int argc, char *argv[]) {
     using namespace bangra;
@@ -10770,8 +10774,10 @@ int main(int argc, char *argv[]) {
         bangra_compiler_dir = dirname(strdup(bangra_compiler_path));
     }
 
+#ifndef _WIN32
     signal(SIGSEGV, crash_handler);
     signal(SIGABRT, crash_handler);
+#endif
 
 #if BANGRA_CATCH_EXCEPTION
     try {
