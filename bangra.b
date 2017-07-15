@@ -530,6 +530,17 @@ fn string-compare (a b)
         loop (+ i 1:usize)
 
 syntax-extend
+    set-type-symbol! type '@
+        fn (self key)
+            let keyT = (typeof key)
+            if (type== keyT Symbol)
+                type@ self key
+            elseif (type== keyT i32)
+                element-type self key
+    set-type-symbol! type 'countof
+        fn (self)
+            type-countof self
+
     set-type-symbol! Scope '@
         fn (self key)
             let value success = (Scope@ self key)
