@@ -29,7 +29,7 @@ fn tie-const (a b)
     else (unconst b)
 
 fn type? (T)
-    icmp== (ptrtoint type size_t) (ptrtoint (typeof T) size_t)
+    icmp== (ptrtoint type usize) (ptrtoint (typeof T) usize)
 
 fn type== (a b)
     fn assert-type (T)
@@ -39,7 +39,7 @@ fn type== (a b)
                 string-join "type expected, not " (Any-repr (Any-wrap T))
     assert-type a
     assert-type b
-    icmp== (ptrtoint a size_t) (ptrtoint b size_t)
+    icmp== (ptrtoint a usize) (ptrtoint b usize)
 
 fn todo! (msg)
     compiler-error!
@@ -195,24 +195,26 @@ syntax-extend
             fn (val)
                 let vT = (typeof val)
                 if (type== T vT) val
-                elseif (integer-type? vT)
-                    let Tw vTw = (bitcountof T) (bitcountof vT)
-                    if (icmp== Tw vTw)
-                        bitcast val T
-                    elseif (icmp>s vTw Tw)
-                        trunc val T
-                    elseif (signed? vT)
-                        sext val T
-                    else
-                        zext val T
-                elseif (real-type? vT)
-                    if (signed? T)
-                        fptosi val T
-                    else
-                        fptoui val T
                 else
-                    compiler-error! "integer or float expected"
-        if (signed? T)
+                    let sT = (type-storage vT)
+                    if (integer-type? sT)
+                        let Tw vTw = (bitcountof T) (bitcountof sT)
+                        if (icmp== Tw vTw)
+                            bitcast val T
+                        elseif (icmp>s vTw Tw)
+                            trunc val T
+                        elseif (signed? sT)
+                            sext val T
+                        else
+                            zext val T
+                    elseif (real-type? vT)
+                        if (signed? T)
+                            fptosi val T
+                        else
+                            fptoui val T
+                    else
+                        compiler-error! "integer or float expected"
+        if (signed? (type-storage T))
             set-type-symbol! T '> (gen-type-op2 icmp>s)
             set-type-symbol! T '>= (gen-type-op2 icmp>=s)
             set-type-symbol! T '< (gen-type-op2 icmp<s)
@@ -280,6 +282,8 @@ syntax-extend
     setup-int-type u16
     setup-int-type u32
     setup-int-type u64
+
+    setup-int-type usize
 
     setup-real-type f32
     setup-real-type f64
@@ -377,7 +381,7 @@ fn @ (...) ((op2-ltr-multiop (op2-dispatch '@)) ...)
 fn countof (x) ((op1-dispatch 'countof) x)
 
 fn empty? (x)
-    == (countof x) 0:u64
+    == (countof x) 0:usize
 
 fn type-mismatch-string (want-T have-T)
     .. "type " (repr want-T) " expected, not " (repr have-T)
@@ -453,7 +457,7 @@ fn Anchor-column (x)
 
 fn list-empty? (l)
     assert-typeof l list
-    icmp== (ptrtoint l size_t) 0:usize
+    icmp== (ptrtoint l usize) 0:usize
 
 fn list-at (l)
     assert-typeof l list
@@ -667,7 +671,7 @@ fn set-scope-symbol! (scope sym value)
 
 fn typify(f types...)
     let vacount = (va-countof types...)
-    let atype = (array-type type (size_t vacount))
+    let atype = (array-type type (usize vacount))
     let types = (getelementptr (alloca atype) 0 0)
     let [loop] i = 0
     if (== i vacount)
@@ -764,7 +768,7 @@ syntax-extend
         fn (expr)
             if (list-empty? expr)
                 error! "at least one argument expected"
-            elseif (== (list-countof expr) 1:u64)
+            elseif (== (list-countof expr) 1:usize)
                 return (list-at expr)
             let expr = (list-reverse expr)
             let [loop] head result = (list-next expr) (list-at expr)
@@ -1060,11 +1064,11 @@ fn read-eval-print-loop ()
 
     fn repeat-string (n c)
         let [loop] i s =
-            tie-const n (size_t 0)
+            tie-const n (usize 0)
             tie-const n ""
         if (== i n)
             return s
-        loop (+ i (size_t 1))
+        loop (+ i (usize 1))
             .. s c
 
     fn leading-spaces (s)
@@ -1107,7 +1111,7 @@ fn read-eval-print-loop ()
     let promptstr =
         .. idstr " "
             default-styler style-comment "▶"
-    let promptlen = (+ (countof idstr) (size_t 2))
+    let promptlen = (+ (countof idstr) (usize 2))
     let cmd success =
         prompt
             ..

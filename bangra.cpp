@@ -1585,7 +1585,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
     \
-    T(TYPE_SizeT, "size_t")
+    T(TYPE_USize, "usize")
 
 #define T(TYPE, TYPENAME) \
     static const Type *TYPE = nullptr;
@@ -1770,6 +1770,7 @@ struct Any {
         else if (type == TYPE_U16) { as.typed(u16); }
         else if (type == TYPE_U32) { as.typed(u32); }
         else if (type == TYPE_U64) { as.typed(u64); }
+        else if (type == TYPE_USize) { as.typed(u64); }
         else if (type == TYPE_F32) { as.naked(f32); }
         else if (type == TYPE_F64) { as.typed(f64); }
         else if (type == TYPE_String) { as.naked(string); }
@@ -3408,8 +3409,10 @@ struct LexerParser {
             && (!strchr(TOKEN_TERMINATORS, *cend))) {
             if (strchr(".e", *cend)) return false;
             // suffix
+            auto _lineno = lineno; auto _line = line; auto _cursor = cursor;
             next_token();
             read_symbol();
+            lineno = _lineno; line = _line; cursor = _cursor;
             return RN_Typed;
         } else {
             return RN_Untyped;
@@ -3433,8 +3436,10 @@ struct LexerParser {
             && (!isspace(*cend))
             && (!strchr(TOKEN_TERMINATORS, *cend))) {
             // suffix
+            auto _lineno = lineno; auto _line = line; auto _cursor = cursor;
             next_token();
             read_symbol();
+            lineno = _lineno; line = _line; cursor = _cursor;
             return RN_Typed;
         } else {
             return RN_Untyped;
@@ -3450,8 +3455,8 @@ struct LexerParser {
         else if (is_suffix(":u16")) { value = Any(value.u16); return true; }
         else if (is_suffix(":u32")) { value = Any(value.u32); return true; }
         else if (is_suffix(":u64")) { value = Any(value.u64); return true; }
-        else if (is_suffix(":isize")) { value = Any(value.i64); return true; }
-        else if (is_suffix(":usize")) { value = Any(value.u64); return true; }
+        //else if (is_suffix(":isize")) { value = Any(value.i64); return true; }
+        else if (is_suffix(":usize")) { value = Any(value.u64); value.type = TYPE_USize; return true; }
         else {
             StyledString ss;
             ss.out << "invalid suffix for integer literal: "
@@ -5729,7 +5734,8 @@ static int integer_type_bit_size(const Type *T) {
 
 template<typename T>
 static T cast_number(const Any &value) {
-    auto it = dyn_cast<IntegerType>(value.type);
+    auto ST = storage_type(value.type);
+    auto it = dyn_cast<IntegerType>(ST);
     if (it) {
         if (it->issigned) {
             switch(it->width) {
@@ -5750,7 +5756,7 @@ static T cast_number(const Any &value) {
             }
         }
     }
-    auto ft = dyn_cast<RealType>(value.type);
+    auto ft = dyn_cast<RealType>(ST);
     if (ft) {
         switch(ft->width) {
         case 32: return (T)value.f32;
@@ -7435,12 +7441,12 @@ struct NormalizeCtx {
     }
 
     static void verify_integer_ops(Any a, Any b) {
-        verify_integer(a.indirect_type());
+        verify_integer(storage_type(a.indirect_type()));
         verify(a.indirect_type(), b.indirect_type());
     }
 
     static void verify_real_ops(Any a, Any b) {
-        verify_real(a.indirect_type());
+        verify_real(storage_type(a.indirect_type()));
         verify(a.indirect_type(), b.indirect_type());
     }
 
@@ -7767,7 +7773,7 @@ struct NormalizeCtx {
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
-            verify_integer(args[1].indirect_type());
+            verify_integer(storage_type(args[1].indirect_type()));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
             verify_kind<TK_Pointer>(storage_type(DestT));
@@ -7779,7 +7785,7 @@ struct NormalizeCtx {
                 storage_type(args[1].indirect_type()));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_Trunc: {
@@ -7868,19 +7874,19 @@ struct NormalizeCtx {
         case FN_ZExt: {
             CHECKARGS(2, 2);
             const Type *T = args[1].indirect_type();
-            verify_integer(T);
+            verify_integer(storage_type(T));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_SExt: {
             CHECKARGS(2, 2);
             const Type *T = args[1].indirect_type();
-            verify_integer(T);
+            verify_integer(storage_type(T));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_ExtractValue: {
@@ -7955,7 +7961,7 @@ struct NormalizeCtx {
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             T = pi->element_type;
-            verify_integer(args[2].indirect_type());
+            verify_integer(storage_type(args[2].indirect_type()));
             for (size_t i = 3; i < args.size(); ++i) {
                 T = storage_type(T);
                 auto &&arg = args[i];
@@ -7963,7 +7969,7 @@ struct NormalizeCtx {
                 case TK_Array: {
                     auto ai = cast<ArrayType>(T);
                     T = ai->element_type;
-                    verify_integer(arg.indirect_type());
+                    verify_integer(storage_type(arg.indirect_type()));
                 } break;
                 case TK_Tuple: {
                     size_t idx = cast_number<size_t>(arg);
@@ -8247,7 +8253,7 @@ struct NormalizeCtx {
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
-            verify_integer(args[1].type);
+            verify_integer(storage_type(args[1].type));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
             verify_kind<TK_Pointer>(storage_type(DestT));
@@ -8260,7 +8266,7 @@ struct NormalizeCtx {
             verify_kind<TK_Pointer>(storage_type(args[1].type));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            verify_integer(storage_type(DestT));
             Any result = args[1];
             result.type = DestT;
             RETARGS(result);
@@ -8268,10 +8274,10 @@ struct NormalizeCtx {
         case FN_Trunc: {
             CHECKARGS(2, 2);
             const Type *T = args[1].type;
-            verify_integer(T);
+            verify_integer(storage_type(T));
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            verify_integer(storage_type(DestT));
             Any result = args[1];
             result.type = DestT;
             RETARGS(result);
@@ -8375,14 +8381,16 @@ struct NormalizeCtx {
         case FN_ZExt: {
             CHECKARGS(2, 2);
             const Type *T = args[1].type;
-            verify_integer(T);
+            auto ST = storage_type(T);
+            verify_integer(ST);
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            auto DestST = storage_type(DestT);
+            verify_integer(DestST);
             Any result = args[1];
             result.type = DestT;
-            int oldbitnum = integer_type_bit_size(T);
-            int newbitnum = integer_type_bit_size(DestT);
+            int oldbitnum = integer_type_bit_size(ST);
+            int newbitnum = integer_type_bit_size(DestST);
             for (int i = oldbitnum; i < newbitnum; ++i) {
                 result.u64 &= ~(1ull << i);
             }
@@ -8391,14 +8399,16 @@ struct NormalizeCtx {
         case FN_SExt: {
             CHECKARGS(2, 2);
             const Type *T = args[1].type;
-            verify_integer(T);
+            auto ST = storage_type(T);
+            verify_integer(ST);
             args[2].verify(TYPE_Type);
             const Type *DestT = args[2].typeref;
-            verify_integer(DestT);
+            auto DestST = storage_type(DestT);
+            verify_integer(DestST);
             Any result = args[1];
             result.type = DestT;
-            int oldbitnum = integer_type_bit_size(T);
-            int newbitnum = integer_type_bit_size(DestT);
+            int oldbitnum = integer_type_bit_size(ST);
+            int newbitnum = integer_type_bit_size(DestST);
             uint64_t bit = (result.u64 >> (oldbitnum - 1)) & 1ull;
             for (int i = oldbitnum; i < newbitnum; ++i) {
                 result.u64 &= ~(1ull << i);
@@ -8598,7 +8608,7 @@ struct NormalizeCtx {
             CHECKARGS(2, 2);
             verify_integer_ops(args[1], args[2]);
 #define B_INT_OP2(OP, N) \
-    switch(cast<IntegerType>(args[1].type)->width) { \
+    switch(cast<IntegerType>(storage_type(args[1].type))->width) { \
     case 1: result = (args[1].i1 OP args[2].i1); break; \
     case 8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
     case 16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
@@ -8637,13 +8647,13 @@ struct NormalizeCtx {
         case OP_FCmpULT:
         case OP_FCmpULE: {
 #define B_FLOAT_OP2(OP) \
-    switch(cast<RealType>(args[1].type)->width) { \
+    switch(cast<RealType>(storage_type(args[1].type))->width) { \
     case 32: result = (args[1].f32 OP args[2].f32); break; \
     case 64: result = (args[1].f64 OP args[2].f64); break; \
     default: assert(false); break; \
     }
 #define B_FLOAT_OPF2(OP) \
-    switch(cast<RealType>(args[1].type)->width) { \
+    switch(cast<RealType>(storage_type(args[1].type))->width) { \
     case 32: result = OP(args[1].f32, args[2].f32); break; \
     case 64: result = OP(args[1].f64, args[2].f64); break; \
     default: assert(false); break; \
@@ -8653,7 +8663,7 @@ struct NormalizeCtx {
             bool result;
             bool failed = false;
             bool nan;
-            switch(cast<RealType>(args[1].type)->width) {
+            switch(cast<RealType>(storage_type(args[1].type))->width) {
             case 32: nan = isnan(args[1].f32) || isnan(args[2].f32); break;
             case 64: nan = isnan(args[1].f64) || isnan(args[2].f64); break;
             default: assert(false); break;
@@ -10225,11 +10235,7 @@ static void init_types() {
 
     TYPE_Ref = Typename(String::from("ref"));
 
-    if (sizeof(size_t) == sizeof(uint64_t)) {
-        TYPE_SizeT = TYPE_U64;
-    } else {
-        TYPE_SizeT = TYPE_U32;
-    }
+    DEFINE_BASIC_TYPE("usize", size_t, TYPE_USize, TYPE_U64);
 
     TYPE_Type = Typename(String::from("type"));
     TYPE_Unknown = Typename(String::from("Unknown"));
@@ -10264,7 +10270,7 @@ static void init_types() {
 
         const Type *cellT = Typename(String::from("_list"));
         auto tn = cast<TypenameType>(const_cast<Type *>(cellT));
-        auto ET = Tuple({ TYPE_Any, Pointer(cellT), TYPE_SizeT });
+        auto ET = Tuple({ TYPE_Any, Pointer(cellT), TYPE_USize });
         assert(sizeof(List) == size_of(ET));
         tn->finalize(ET);
 
@@ -10278,7 +10284,7 @@ static void init_types() {
         TYPE_Bool);
 
     DEFINE_STRUCT_HANDLE_TYPE("string", String, TYPE_String,
-        TYPE_SizeT,
+        TYPE_USize,
         Array(TYPE_I8, 1)
     );
 
@@ -10569,7 +10575,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_AnyString, f_any_string, TYPE_String, TYPE_Any);    
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
-    DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_SizeT, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_PointerType, f_pointertype, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_ListCons, f_list_cons, TYPE_List, TYPE_Any, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_TypeKind, f_type_kind, TYPE_I32, TYPE_Type);
@@ -10583,12 +10589,12 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_SyntaxWrap, wrap_syntax, TYPE_Any, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
     DEFINE_PURE_C_FUNCTION(FN_SyntaxStrip, strip_syntax, TYPE_Any, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_ParameterNew, f_parameter_new, TYPE_Parameter, TYPE_Anchor, TYPE_Symbol, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_SizeT);
+    DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Label, TYPE_I32, Pointer(TYPE_Type));
-    DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_SizeT);
-    DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_SizeT, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
+    DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
@@ -10612,7 +10618,7 @@ static void init_globals(int argc, char *argv[]) {
     //DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
-    //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_SizeT);
+    //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
 
 #undef DEFINE_C_FUNCTION
 
@@ -10666,7 +10672,7 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(Symbol("u64"), TYPE_U64);
     globals->bind(Symbol("f32"), TYPE_F32);
     globals->bind(Symbol("f64"), TYPE_F64);
-    globals->bind(Symbol("size_t"), TYPE_SizeT);
+    globals->bind(Symbol("usize"), TYPE_USize);
     globals->bind(Symbol("Symbol"), TYPE_Symbol);
     globals->bind(Symbol("list"), TYPE_List);
     globals->bind(Symbol("Any"), TYPE_Any);
