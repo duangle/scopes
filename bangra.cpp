@@ -180,7 +180,6 @@ namespace blobs {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wkeyword-macro"
 #define char unsigned char
-#include "bangra_luasrc.bin.h"
 #undef char
 #pragma GCC diagnostic pop
 }
@@ -719,6 +718,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     /* compile flags */ \
     T(SYM_DumpDisassembly, "compile-flag-dump-disassembly") \
     T(SYM_DumpModule, "compile-flag-dump-module") \
+    T(SYM_DumpFunction, "compile-flag-dump-function") \
     T(SYM_SkipOpts, "compile-flag-skip-opts") \
     \
     /* function flags */ \
@@ -7283,6 +7283,7 @@ enum {
     CF_DumpDisassembly  = (1 << 0),
     CF_DumpModule       = (1 << 1),
     CF_SkipOpts         = (1 << 2),
+    CF_DumpFunction     = (1 << 3),
 };
 
 static DisassemblyListener *disassembly_listener = nullptr;
@@ -7324,6 +7325,8 @@ static Any compile(Label *fn, uint64_t flags) {
 #endif
     if (flags & CF_DumpModule) {
         LLVMDumpModule(module);
+    } else if (flags & CF_DumpFunction) {
+        LLVMDumpValue(func);
     }
 
     void *pfunc = LLVMGetPointerToGlobal(ee, func);
@@ -10695,6 +10698,7 @@ static void init_globals(int argc, char *argv[]) {
 
     globals->bind(Symbol(SYM_DumpDisassembly), (uint64_t)CF_DumpDisassembly);
     globals->bind(Symbol(SYM_DumpModule), (uint64_t)CF_DumpModule);
+    globals->bind(Symbol(SYM_DumpFunction), (uint64_t)CF_DumpFunction);
     globals->bind(Symbol(SYM_SkipOpts), (uint64_t)CF_SkipOpts);
 
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
