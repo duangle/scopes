@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.bangra",
-                    "match": "(define(-macro)?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -102,15 +102,15 @@
                 },
                 {
                     "name": "support.function.library.bangra",
-				    "match": "(getattr|(de)?cons|slice|(block-scope-)?macro|print|min|max|clamp|tie-const|repr|(empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.bangra",
-				    "match": "((set-globals|set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((set-anchor|set-globals|set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.library.bangra",
-				    "match": "((error|todo)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(((syntax-)?error|todo)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},

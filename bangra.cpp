@@ -616,6 +616,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_SyntaxList, "syntax-list") T(FN_SyntaxQuote, "syntax-quote") \
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
+    T(FN_SymbolToString, "Symbol->string") \
     T(FN_SyntaxNew, "Syntax-new") \
     T(FN_SyntaxWrap, "Syntax-wrap") \
     T(FN_SyntaxStrip, "Syntax-strip") \
@@ -636,7 +637,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     /* builtin and global functions with side effects */ \
     T(SFXFN_CopyMemory, "copy-memory!") \
     T(SFXFN_Unreachable, "unreachable!") \
-    T(SFXFN_Error, "error!") \
+    T(SFXFN_Error, "__error!") \
     T(SFXFN_Abort, "abort!") \
     T(SFXFN_CompilerError, "compiler-error!") \
     T(SFXFN_SetAnchor, "set-anchor!") \
@@ -3447,7 +3448,13 @@ struct LexerParser {
         }
     }
 
+    bool has_suffix() const {
+        return (string_len >= 1) && (string[0] == ':');
+    }
+
     bool select_integer_suffix() {
+        if (!has_suffix())
+            return false;
         if (is_suffix(":i8")) { value = Any(value.i8); return true; }
         else if (is_suffix(":i16")) { value = Any(value.i16); return true; }
         else if (is_suffix(":i32")) { value = Any(value.i32); return true; }
@@ -3468,6 +3475,8 @@ struct LexerParser {
     }
 
     bool select_real_suffix() {
+        if (!has_suffix())
+            return false;
         if (is_suffix(":f32")) { value = Any((float)value.f64); return true; }
         else if (is_suffix(":f64")) { value = Any(value.f64); return true; }
         else {
@@ -10584,6 +10593,10 @@ static const String *f_format_message(const Anchor *anchor, const String *messag
     return ss.str();
 }
 
+static const String *f_symbol_to_string(Symbol sym) {
+    return sym.name();
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -10624,6 +10637,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Label, TYPE_I32, Pointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);
     
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
@@ -10643,8 +10657,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_FormatMessage, f_format_message, TYPE_String, TYPE_Anchor, TYPE_String);
     DEFINE_C_FUNCTION(FN_ActiveAnchor, get_active_anchor, TYPE_Anchor);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
-    //DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
-    //DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
+    DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
+    DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
@@ -10855,7 +10869,7 @@ int main(int argc, char *argv[]) {
 #endif
 
         typedef void (*MainFuncType)();
-        MainFuncType fptr = (MainFuncType)compile(fn, 0).pointer;
+        MainFuncType fptr = (MainFuncType)compile(fn, CF_SkipOpts).pointer;
         fptr();
 
         //interpreter_loop(cmd);

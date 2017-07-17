@@ -41,6 +41,7 @@
         "ios": "cpp",
         "__locale": "cpp",
         "*.tcc": "cpp",
-        "algorithm": "cpp"
+        "algorithm": "cpp",
+        "cmath": "cpp"
     }
 }

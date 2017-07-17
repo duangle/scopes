@@ -80,6 +80,12 @@ fn tuple? (val)
     tuple-type? (typeof val)
 fn function-pointer? (val)
     function-pointer-type? (typeof val)
+fn Symbol? (val)
+    type== (typeof val) Symbol
+fn list? (val)
+    type== (typeof val) list
+fn none? (val)
+    type== (typeof val) Nothing
 
 fn Any-new (val)
     fn construct (outval)
@@ -619,6 +625,14 @@ syntax-extend
         fn (name self ...)
             (getattr self name) self ...
 
+    set-type-symbol! Scope 'getattr
+        fn (self key)
+            let value success = (Scope@ self key)
+            if success
+                if (constant? self)
+                    Any-extract-constant value
+                else value
+            
     set-type-symbol! Scope '@
         fn (self key)
             let value success = (Scope@ self key)
@@ -804,6 +818,25 @@ fn compile (f opts...)
                 compiler-error!
                     .. "illegal flag: " (repr flag)
 
+fn syntax-error! (anchor msg)
+    let T = (typeof anchor)
+    if (== T string)
+        if (none? msg)
+            __error! anchor
+            unreachable!;
+    set-anchor!
+        if (== T Any)
+            let T = (Any-typeof anchor)
+            if (== T Syntax)
+                Syntax-anchor (Any-extract anchor Syntax)
+            else
+                Any-extract anchor Anchor
+        elseif (== T Syntax)
+            Syntax-anchor anchor
+        else anchor
+    __error! msg
+    unreachable!;
+
 syntax-extend
     let Macro = (typename-type "Macro")
     let BlockScopeFunction =
@@ -826,17 +859,160 @@ syntax-extend
             Any-extract
                 compile (typify f list list Scope) #'dump-module #'skip-opts
                 BlockScopeFunction
+    fn scope-macro (f)
+        block-scope-macro
+            fn (at next scope)
+                let at scope = (f (list-next at) scope)
+                return (Any at) next scope
     fn macro (f)
         block-scope-macro
             fn (at next scope)
                 return (Any (f (list-next at))) next scope
 
-    fn Any-Syntax-extract (val T)
-        let sx =
-            (Any-extract val Syntax)
+    # infix notation support
+      --------------------------------------------------------------------------
+
+    fn get-ifx-symbol (name)
+        Symbol (.. "#ifx:" (Symbol->string name))
+
+    fn make-expand-define-infix (order)
+        fn expand-define-infix (args scope)
+            let prec token func = (decons args 3)
+            let prec = 
+                Any-extract (Syntax->datum (Any-extract prec Syntax)) i32
+            let token = 
+                Any-extract (Syntax->datum (Any-extract token Syntax)) Symbol
+            let func = 
+                if (== (Any-typeof func) Nothing) token
+                else
+                    Any-extract (Syntax->datum (Any-extract func Syntax)) Symbol
+            set-scope-symbol! scope (get-ifx-symbol token)
+                list prec order func
+            return none scope
+
+    fn get-ifx-op (env op)
+        let sym = (Syntax->datum (Any-extract op Syntax))
+        if (== (Any-typeof sym) Symbol)
+            @ env (get-ifx-symbol (Any-extract sym Symbol))
+        else
+            return (Any none) false
+
+    fn has-infix-ops? (infix-table expr)
+        # any expression of which one odd argument matches an infix operator
+          has infix operations.
+        let [loop] expr = expr
+        if (< (countof expr) 3:usize)
+            return false
+        let expr = (list-next expr)
+        let at next = (decons expr)
+        let result ok = (get-ifx-op infix-table at)
+        if ok
+            return true
+        loop expr
+
+    fn unpack-infix-op (op)
+        let op-prec op-order op-func = (decons (Any-extract op list) 3)
         return
-            Any-extract (Syntax->datum sx) T
-            Syntax-anchor sx
+            Any-extract op-prec i32
+            Any-extract op-order Symbol
+            Any-extract op-func Symbol
+
+    fn infix-op (infix-table token prec pred)
+        let op ok =
+            get-ifx-op infix-table token
+        if ok
+            let op-prec = (unpack-infix-op op)
+            ? (pred op-prec prec) op (Any none)
+        else
+            syntax-error! token
+                "unexpected token in infix expression"
+
+    fn rtl-infix-op (infix-table token prec pred)
+        let op ok =
+            get-ifx-op infix-table token
+        if ok
+            let op-prec op-order = (unpack-infix-op op)
+            if (== op-order '<)
+                ? (pred op-prec prec) op (Any none)
+            else
+                Any none
+        else
+            syntax-error! token
+                "unexpected token in infix expression"
+
+    fn parse-infix-expr (infix-table lhs state mprec)
+        assert-typeof infix-table Scope
+        assert-typeof lhs Any
+        assert-typeof state list
+        assert-typeof mprec i32
+        let [loop] lhs state = lhs state
+        if (empty? state)
+            return lhs state
+        let la next-state = (decons state)
+        let op = (infix-op infix-table la mprec >=)
+        if (== (Any-typeof op) Nothing)
+            return lhs state
+        let op-prec op-order op-name = (unpack-infix-op op)
+        let [rhs-loop] rhs state = (decons next-state)
+        if (empty? state)
+            loop (Any (list op-name lhs rhs)) state
+        let ra = (list-at state)
+        let lop = (infix-op infix-table ra op-prec >)
+        let nextop =
+            if (== (Any-typeof lop) Nothing)
+                rtl-infix-op infix-table ra op-prec ==
+            else lop
+        if (== (Any-typeof nextop) Nothing)
+            loop (Any (list op-name lhs rhs)) state
+        let nextop-prec = (unpack-infix-op nextop)
+        let next-rhs next-state = 
+            parse-infix-expr infix-table rhs state nextop-prec
+        rhs-loop next-rhs next-state
+
+    # expand infix operators in impure list of arguments
+    fn parse-partial-infix-expr (infix-table expr)
+        assert-typeof infix-table Scope
+        assert-typeof expr list
+        # Collect tokens in a sequence as long as every second token is
+          an infix operator.
+          When a sequence is complete and longer than 1, expand that sequence
+          as an infix expression list.
+          Lastly, expand the last ongoing sequence if it's longer than 1,
+          and only wrap in list if any previous sequences have been expanded.
+        call
+            fn loop (infix-table k expr)
+                if (< (countof expr) 3:usize)
+                    return expr
+                let infix-expr rest =
+                    call
+                        fn rhs-loop (infix-table expr)
+                            let lhs expr1 = (decons expr)
+                            let op expr2 = (decons expr1)
+                            if (empty? expr2)
+                                return (list lhs) expr1
+                            let _ ok = (get-ifx-op infix-table op)
+                            if (not ok)
+                                return (list lhs) expr1
+                            elseif (> (countof expr2) 1:usize)
+                                let result rest = (rhs-loop infix-table expr2)
+                                return (cons lhs op result) rest
+                            else
+                                let at next = (decons expr2)
+                                return (list lhs op at) next
+                        \ infix-table expr
+                if (>= (countof infix-expr) 3:usize)
+                    let ifx-at ifx-next = (decons infix-expr)
+                    let expanded-expr =
+                        parse-infix-expr infix-table ifx-at ifx-next (unconst 0)
+                    if (empty? rest)
+                        if (== k 0)
+                            return (Any-extract expanded-expr list)
+                    cons expanded-expr (loop infix-table (+ k 1) rest)
+                else
+                    cons (list-at infix-expr) (loop infix-table (+ k 1) rest)
+            \ infix-table (unconst 0) expr
+
+    #---------------------------------------------------------------------------
 
     # install general list hook for this scope
     # is called for every list the expander sees
@@ -862,6 +1038,14 @@ syntax-extend
             let expr next env = (head expr next env)
             let expr = (Syntax-wrap expr-anchor expr false)
             loop (list-cons expr next) env
+        elseif (has-infix-ops? env expr)
+            #let expr = (parse-partial-infix-expr env expr)
+            let at next = (decons expr)
+            let expr =
+                parse-infix-expr env at next (unconst 0)
+            let next = (list-next topexpr)
+            let expr = (Syntax-wrap expr-anchor expr false)
+            loop (list-cons expr next) env
         else
             return topexpr env
 
@@ -869,6 +1053,7 @@ syntax-extend
     set-scope-symbol! syntax-scope 'fn->macro fn->macro
     set-scope-symbol! syntax-scope 'macro->fn macro->fn
     set-scope-symbol! syntax-scope 'block-scope-macro block-scope-macro
+    set-scope-symbol! syntax-scope 'scope-macro scope-macro
     set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (Symbol "#list")
         compile (typify list-handler list Scope) #'dump-disassembly 'skip-opts
@@ -886,7 +1071,7 @@ syntax-extend
     fn make-expand-and-or (flip)
         fn (expr)
             if (list-empty? expr)
-                error! "at least one argument expected"
+                syntax-error! "at least one argument expected"
             elseif (== (list-countof expr) 1:usize)
                 return (list-at expr)
             let expr = (list-reverse expr)
@@ -912,6 +1097,10 @@ syntax-extend
     set-scope-symbol! syntax-scope 'define (macro expand-define)
     set-scope-symbol! syntax-scope 'and (macro (make-expand-and-or false))
     set-scope-symbol! syntax-scope 'or (macro (make-expand-and-or true))
+    set-scope-symbol! syntax-scope 'define-infix> 
+        scope-macro (make-expand-define-infix '>)
+    set-scope-symbol! syntax-scope 'define-infix< 
+        scope-macro (make-expand-define-infix '<)
     syntax-scope
 
 # (define-macro name expr ...)
@@ -925,6 +1114,16 @@ define define-macro
                 list macro
                     cons fn '(args) body
 
+# (define-scope-macro name expr ...)
+# implies builtin names:
+    args : list
+    scope : Scope
+define-macro define-scope-macro
+    let name body = (decons args)
+    list define name
+        list scope-macro
+            cons fn '(args syntax-scope) body
+
 # (define-block-scope-macro name expr ...)
 # implies builtin names:
     expr : list
@@ -933,9 +1132,27 @@ define define-macro
 define-macro define-block-scope-macro
     let name body = (decons args)
     list define name
-        list macro
+        list block-scope-macro
             cons fn '(expr next-expr syntax-scope) body
 
+define-macro assert
+    fn assertion-error! (anchor msg)
+        syntax-error! anchor
+            .. "assertion failed: " 
+                if (== (typeof msg) string) msg
+                else (repr msg)
+    let cond body = (decons args)
+    let sxcond = (Any-extract cond Syntax)
+    let anchor = (Syntax-anchor sxcond)
+    list do
+        list if cond
+        list 'else 
+            cons assertion-error! (active-anchor)
+                if (empty? body)
+                    list (repr (Syntax->datum sxcond))
+                else body
+
+# (. value symbol ...)
 define-macro .
     fn op (a b)
         let sym = (Any-extract (Syntax->datum (Any-extract b Syntax)) Symbol)
@@ -947,6 +1164,40 @@ define-macro .
         let c rest = (decons rest)
         loop rest (op result c)
 
+#define-infix> 70 :
+define-infix> 100 or
+define-infix> 200 and
+define-infix> 240 |
+define-infix> 250 ^
+define-infix> 260 &
+
+define-infix> 300 <
+define-infix> 300 >
+define-infix> 300 <=
+define-infix> 300 >=
+define-infix> 300 !=
+define-infix> 300 ==
+
+#define-infix> 300 <:
+#define-infix> 300 <>
+#define-infix> 300 is
+
+define-infix< 400 ..
+define-infix> 450 <<
+define-infix> 450 >>
+define-infix> 500 -
+define-infix> 500 +
+define-infix> 600 %
+define-infix> 600 /
+#define-infix> 600 //
+define-infix> 600 *
+#define-infix< 700 **
+define-infix> 800 .
+define-infix> 800 @
+#define-infix> 800 .=
+#define-infix> 800 @=
+#define-infix> 800 =@
+
 #-------------------------------------------------------------------------------
 # REPL
 #-------------------------------------------------------------------------------
@@ -954,7 +1205,7 @@ define-macro .
 fn compiler-version-string ()
     let vmin vmaj vpatch = (compiler-version)
     .. "Bangra " (string-repr vmin) "." (string-repr vmaj)
-        if (== vpatch 0) ""
+        if (vpatch == 0) ""
         else
             .. "." (string-repr vpatch)
         " ("
@@ -969,9 +1220,9 @@ fn read-eval-print-loop ()
                 #include <setjmp.h>
                 " eol
         let setjmp longjmp jmp_buf =
-            @ lib 'setjmp
-            @ lib 'longjmp
-            @ lib 'jmp_buf
+            . lib setjmp
+            . lib longjmp
+            . lib jmp_buf
 
         set-scope-symbol! syntax-scope 'jmpbuf
             getelementptr (malloc jmp_buf) 0 0
@@ -998,9 +1249,9 @@ fn read-eval-print-loop ()
         let [loop] i s =
             tie-const n (usize 0)
             tie-const n ""
-        if (== i n)
+        if (i == n)
             return s
-        loop (+ i (usize 1))
+        loop (i + (usize 1))
             .. s c
 
     fn leading-spaces (s)
@@ -1008,23 +1259,23 @@ fn read-eval-print-loop ()
         let [loop] i out =
             tie-const len 0
             tie-const len ""
-        if (== i len)
+        if (i == len)
             return out
         let c = (@ s i)
-        if (!= c " ")
+        if (c != " ")
             return out
-        loop (+ i 1)
+        loop (i + 1)
             .. out c
 
     fn blank? (s)
         let len = (i32 (countof s))
         let [loop] i =
             tie-const len 0
-        if (== i len)
+        if (i == len)
             return true
-        if (!= (@ s i) " ")
+        if ((@ s i) != " ")
             return false
-        loop (+ i 1)
+        loop (i + 1)
 
     install-exception-handler;
     print
@@ -1043,7 +1294,7 @@ fn read-eval-print-loop ()
     let promptstr =
         .. idstr " "
             default-styler style-comment "▶"
-    let promptlen = (+ (countof idstr) (usize 2))
+    let promptlen = ((countof idstr) + (usize 2))
     let cmd success =
         prompt
             ..
@@ -1055,15 +1306,15 @@ fn read-eval-print-loop ()
     if (not success)
         return;
     let terminated? =
-        or (blank? cmd)
-            and (empty? cmdlist) (== (@ cmd 0) "\\")
+        (blank? cmd) or
+            (empty? cmdlist) and ((@ cmd 0) == "\\")
     let cmdlist = (.. cmdlist cmd "\n")
     let preload =
         if terminated? ""
         else (leading-spaces cmd)
     if (not terminated?)
         loop (unconst preload) cmdlist counter
-    if (== (setjmp jmpbuf) 1)
+    if ((setjmp jmpbuf) == 1)
         loop (unconst "") (unconst "") counter
     let expr = (list-parse cmdlist)
     let expr-anchor = (Syntax-anchor expr)
@@ -1072,7 +1323,7 @@ fn read-eval-print-loop ()
         element-type (element-type (Any-typeof f) 0) 0
     let ModuleFunctionType = (pointer-type (function-type Any))
     let fptr =
-        if (== rettype Any)
+        if (rettype == Any)
             Any-extract f ModuleFunctionType
         else
             # build a wrapper
@@ -1084,10 +1335,10 @@ fn read-eval-print-loop ()
             let f = (compile (eval expr global-scope))
             Any-extract f ModuleFunctionType
     let result = (fptr)
-    if (!= (Any-typeof result) Nothing)
+    if ((Any-typeof result) != Nothing)
         set-scope-symbol! eval-scope (Symbol idstr) result
         print idstr "=" result
-        loop (unconst "") (unconst "") (+ counter 1)
+        loop (unconst "") (unconst "") (counter + 1)
     else
         loop (unconst "") (unconst "") counter
 
@@ -1114,15 +1365,15 @@ fn print-version ()
 fn run-main (args...)
     let argcount = (va-countof args...)
     let [loop] i sourcepath parse-options = 1 none true
-    if (< i argcount)
-        let k = (+ i 1)
+    if (i < argcount)
+        let k = (i + 1)
         let arg = (va@ i args...)
-        if (and parse-options (== (@ arg 0) "-"))
-            if (or (== arg "--help") (== arg "-h"))
+        if (parse-options and ((@ arg 0) == "-"))
+            if ((arg == "--help") or (arg == "-h"))
                 print-help args...
-            elseif (or (== arg "--version") (== arg "-v"))
+            elseif ((== arg "--version") or (== arg "-v"))
                 print-version;
-            elseif (or (== arg "--"))
+            elseif (== arg "--")
                 loop k sourcepath false
             else
                 print
@@ -1130,7 +1381,7 @@ fn run-main (args...)
                         \ ". Try --help for help."
                 exit 1
                 unreachable!;
-        elseif (== sourcepath none)
+        elseif (sourcepath == none)
             loop k arg parse-options
         else
             print
@@ -1139,7 +1390,7 @@ fn run-main (args...)
             exit 1
             unreachable!;
 
-    if (== sourcepath none)
+    if (sourcepath == none)
         read-eval-print-loop;
     else
         let expr = (list-load sourcepath)
