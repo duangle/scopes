@@ -483,7 +483,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_SRem) T(OP_URem) \
     T(OP_Shl) T(OP_LShr) T(OP_AShr) \
     T(OP_BAnd) T(OP_BOr) T(OP_BXor) \
-    T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem)
+    T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
+    T(OP_Tertiary)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
@@ -6714,6 +6715,13 @@ struct GenerateCtx {
                     LLVMValueAsBasicBlock(then_block),
                     LLVMValueAsBasicBlock(else_block));
             } break;
+            case OP_Tertiary: {
+                READ_VALUE(cond);
+                READ_VALUE(then_value);
+                READ_VALUE(else_value);
+                retvalue = LLVMBuildSelect(
+                    builder, cond, then_value, else_value, "");
+            } break;
             case FN_Unconst: {
                 READ_VALUE(val);
                 retvalue = val;
@@ -7762,6 +7770,12 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case OP_Tertiary: {
+            CHECKARGS(3, 3);
+            verify(TYPE_Bool, args[1].indirect_type());
+            verify(args[2].indirect_type(), args[3].indirect_type());
+            RETARGTYPES(args[2].indirect_type());
+        } break;
         case FN_Unconst: {
             CHECKARGS(1, 1);
             RETARGTYPES(args[1].indirect_type());
@@ -8243,6 +8257,16 @@ struct NormalizeCtx {
                 newl = inline_branch_continuation(args[3], args[0]);
             }
             copy_body(l, newl);
+        } break;
+        case OP_Tertiary: {
+            CHECKARGS(3, 3);
+            args[1].verify(TYPE_Bool);
+            verify(args[2].type, args[3].type);
+            if (args[1].i1) {
+                RETARGS(args[2]);
+            } else {
+                RETARGS(args[3]);
+            }
         } break;
         case FN_Bitcast: {
             CHECKARGS(2, 2);

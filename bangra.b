@@ -318,7 +318,7 @@ fn opN-dispatch (symbol)
         compiler-error!
             string-join "operation " 
                 string-join (Any-repr (Any-wrap symbol))
-                    string-join " does not apply to type "
+                    string-join " does not apply to value of type "
                         Any-repr (Any-wrap T)
 
 fn op2-dispatch (symbol)
@@ -331,7 +331,7 @@ fn op2-dispatch (symbol)
             else                
                 return result...
         compiler-error!
-            string-join "operation does not apply to types "
+            string-join "operation does not apply to values of type "
                 string-join
                     Any-repr (Any-wrap Ta)
                     string-join " and "
@@ -356,7 +356,7 @@ fn op2-dispatch-bidi (symbol fallback)
         else
             return (fallback a b)
         compiler-error!
-            string-join "operation does not apply to types "
+            string-join "operation does not apply to values of type "
                 string-join
                     Any-repr (Any-wrap Ta)
                     string-join " and "
@@ -394,6 +394,19 @@ fn >> (a b) ((op2-dispatch-bidi '>>) a b)
 fn .. (...) ((op2-ltr-multiop (op2-dispatch-bidi '..)) ...)
 fn @ (...) ((op2-ltr-multiop (op2-dispatch '@)) ...)
 fn countof (x) ((opN-dispatch 'countof) x)
+fn getattr (self name)
+    let T = (typeof self)
+    let op success = (type@ T 'getattr)
+    if success
+        let result... = (op self name)
+        if (icmp== (va-countof result...) 0)
+        else                
+            return result...
+    compiler-error!
+        string-join "no such attribute " 
+            string-join (Any-repr (Any-wrap name))
+                string-join " in value of type "
+                    Any-repr (Any-wrap T)
 
 fn empty? (x)
     == (countof x) 0:usize
@@ -594,6 +607,10 @@ syntax-extend
                 element-type self key
     set-type-symbol! type 'countof type-countof
 
+    set-type-symbol! Symbol 'call
+        fn (name self ...)
+            (getattr self name) self ...
+
     set-type-symbol! Scope '@
         fn (self key)
             let value success = (Scope@ self key)
@@ -604,6 +621,14 @@ syntax-extend
                 success
 
     set-type-symbol! list 'countof list-countof
+    set-type-symbol! list 'getattr
+        fn (self name)
+            if (== name 'at)
+                list-at self
+            elseif (== name 'next)
+                list-next self
+            elseif (== name 'count)
+                list-countof self
     set-type-symbol! list '@
         fn (self i)
             let [loop] x i = (tie-const i self) (i32 i)
@@ -902,6 +927,17 @@ define-macro define-block-scope-macro
     list define name
         list macro
             cons fn '(expr next-expr syntax-scope) body
+
+define-macro .
+    fn op (a b)
+        let sym = (Any-extract (Syntax->datum (Any-extract b Syntax)) Symbol)
+        list getattr a (list quote sym)
+    let a b rest = (decons args 2)
+    let [loop] rest result = rest (op a b)
+    if (list-empty? rest) result
+    else
+        let c rest = (decons rest)
+        loop rest (op result c)
 
 #-------------------------------------------------------------------------------
 # REPL
