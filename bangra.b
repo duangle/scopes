@@ -123,6 +123,19 @@ fn Any-new (val)
         else
             wrap-error;
 
+fn cons (...)
+    let i = (va-countof ...)
+    if (icmp<s i 2)
+        compiler-error! "at least two parameters expected"
+    let i = (sub i 2)
+    let [loop] i at tail = i (va@ i ...)
+    if (icmp== i 0)
+        list-cons (Any at) tail
+    else
+        let i = (sub i 1)
+        loop i (va@ i ...)
+            list-cons (Any at) tail
+
 fn list-new (...)
     fn loop (i tail)
         if (icmp== i 0) tail
@@ -296,7 +309,7 @@ fn repr (val)
 fn string-repr (val)
     Any-string (Any val)
 
-fn op1-dispatch (symbol)
+fn opN-dispatch (symbol)
     fn (self ...)
         let T = (typeof self)
         let op success = (type@ T symbol)
@@ -380,7 +393,7 @@ fn << (a b) ((op2-dispatch-bidi '<<) a b)
 fn >> (a b) ((op2-dispatch-bidi '>>) a b)
 fn .. (...) ((op2-ltr-multiop (op2-dispatch-bidi '..)) ...)
 fn @ (...) ((op2-ltr-multiop (op2-dispatch '@)) ...)
-fn countof (x) ((op1-dispatch 'countof) x)
+fn countof (x) ((opN-dispatch 'countof) x)
 
 fn empty? (x)
     == (countof x) 0:usize
@@ -483,6 +496,16 @@ fn list-at-next (l)
             extractvalue (load l) 0
             bitcast (extractvalue (load l) 1) list
 
+fn decons (val count)
+    let at next = (list-at-next val)
+    if (type== (typeof count) Nothing)
+        return at next
+    elseif (icmp<=s count 1)
+        return at next
+    else
+        return at
+            decons next (sub count 1)
+
 fn list-countof (l)
     assert-typeof l list
     if (list-empty? l) 0:usize
@@ -519,7 +542,7 @@ fn slice (obj start-index end-index)
         max i0
             if (>= i1 zero) i1
             else (+ i1 count)
-    (op1-dispatch 'slice) obj (usize i0) (usize i1)
+    (opN-dispatch 'slice) obj (usize i0) (usize i1)
 
 fn string-compare (a b)
     assert-typeof a string
@@ -760,6 +783,10 @@ syntax-extend
     fn macro->fn (f)
         assert-typeof f Macro
         bitcast f BlockScopeFunction
+    # support for calling macro functions directly
+    set-type-symbol! Macro 'call
+        fn (self at next scope)
+            (macro->fn self) at next scope
 
     fn block-scope-macro (f)
         fn->macro
@@ -769,38 +796,39 @@ syntax-extend
     fn macro (f)
         block-scope-macro
             fn (at next scope)
-                return (f (list-next at)) next scope
+                return (Any (f (list-next at))) next scope
+
+    fn Any-Syntax-extract (val T)
+        let sx =
+            (Any-extract val Syntax)
+        return
+            Any-extract (Syntax->datum sx) T
+            Syntax-anchor sx
 
     # install general list hook for this scope
     # is called for every list the expander sees
     fn list-handler (topexpr env)
-        label failed ()
+        let [loop] topexpr env = topexpr env
+        let sxexpr = (Any-extract (list-at topexpr) Syntax)
+        let expr expr-anchor = (Syntax->datum sxexpr) (Syntax-anchor sxexpr)
+        if (!= (Any-typeof expr) list)
             return topexpr env
-        fn Any-Syntax-extract (val T)
-            let sx =
-                (Any-extract val Syntax)
-            return
-                Any-extract (Syntax->datum sx) T
-                Syntax-anchor sx
-
-        let expr expr-anchor = (Any-Syntax-extract (list-at topexpr) list)
+        let expr = (Any-extract expr list)
         let head-key = (Syntax->datum (Any-extract (list-at expr) Syntax))
         let head =
             if (== (Any-typeof head-key) Symbol)
-                #print head env
                 let head success = (@ env (Any-extract head-key Symbol))
                 if success head
                 else
-                    print "failed."
-                    failed;
+                    # failed, let underlying expander handle this
+                    return topexpr env
             else head-key
         if (== (Any-typeof head) Macro)
-            let head =
-                macro->fn (Any-extract head Macro)
+            let head = (Any-extract head Macro)
             let next = (list-next topexpr)
             let expr next env = (head expr next env)
             let expr = (Syntax-wrap expr-anchor expr false)
-            return (list-cons expr next) env
+            loop (list-cons expr next) env
         else
             return topexpr env
 
@@ -812,6 +840,16 @@ syntax-extend
     set-scope-symbol! syntax-scope (Symbol "#list")
         compile (typify list-handler list Scope) #'dump-disassembly 'skip-opts
 
+    # (define name expr ...)
+    fn expand-define (expr)
+        let defname = (list-at expr)
+        let content = (list-next expr)
+        list syntax-extend
+            list set-scope-symbol! 'syntax-scope 
+                list quote defname
+                list-cons (Any do) content
+            'syntax-scope
+
     fn make-expand-and-or (flip)
         fn (expr)
             if (list-empty? expr)
@@ -819,7 +857,7 @@ syntax-extend
             elseif (== (list-countof expr) 1:usize)
                 return (list-at expr)
             let expr = (list-reverse expr)
-            let [loop] head result = (list-next expr) (list-at expr)
+            let [loop] result head = (decons expr)
             if (list-empty? head)
                 return result
             let tmp =
@@ -827,7 +865,6 @@ syntax-extend
                     Syntax-anchor (Any-extract (list-at head) Syntax)
                     \ 'tmp void
             loop
-                list-next head
                 Any
                     list do
                         list let tmp '= (list-at head)
@@ -837,11 +874,34 @@ syntax-extend
                         list 'else
                             if flip result
                             else tmp
+                list-next head
 
-    #set-scope-symbol! syntax-scope 'define (macro expand-define)
+    set-scope-symbol! syntax-scope 'define (macro expand-define)
     set-scope-symbol! syntax-scope 'and (macro (make-expand-and-or false))
     set-scope-symbol! syntax-scope 'or (macro (make-expand-and-or true))
     syntax-scope
+
+# (define-macro name expr ...)
+# implies builtin names:
+    args : list
+define define-macro
+    macro
+        fn "expand-define-macro" (expr)
+            let name body = (decons expr)
+            list define name
+                list macro
+                    cons fn '(args) body
+
+# (define-block-scope-macro name expr ...)
+# implies builtin names:
+    expr : list
+    next-expr : list
+    scope : Scope
+define-macro define-block-scope-macro
+    let name body = (decons args)
+    list define name
+        list macro
+            cons fn '(expr next-expr syntax-scope) body
 
 #-------------------------------------------------------------------------------
 # REPL

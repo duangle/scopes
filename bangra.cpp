@@ -10104,6 +10104,8 @@ struct Expander {
                     sx = newsx;
                     set_active_anchor(sx->anchor);
                     expr = sx->datum;
+                    if (expr.type != TYPE_List)
+                        return write_dest(expr, dest);
                     list = expr.list;
                     head = unsyntax(list->at);
                 }

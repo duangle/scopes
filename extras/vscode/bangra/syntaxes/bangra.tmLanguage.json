@@ -14,10 +14,16 @@
 	],
 	"repository": {
 		"keywords": {
-			"patterns": [{
-				"name": "keyword.control.bangra",
-				"match": "(do|if|elseif|else|return|let|fn|label|call|syntax-extend)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
-			}]
+			"patterns": [
+                {
+                    "name": "keyword.control.builtin.bangra",
+                    "match": "(quote|do|if|elseif|else|return|let|fn|label|call|syntax-extend)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "keyword.control.library.bangra",
+                    "match": "(define(-macro)?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                }
+            ]
 		},
 		"variables": {
 			"patterns": [{
@@ -96,7 +102,7 @@
                 },
                 {
                     "name": "support.function.library.bangra",
-				    "match": "(slice|(block-scope-)?macro|print|min|max|clamp|tie-const|repr|(empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((de)?cons|slice|(block-scope-)?macro|print|min|max|clamp|tie-const|repr|(empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.bangra",
