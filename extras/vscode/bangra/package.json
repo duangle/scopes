@@ -2,7 +2,7 @@
     "name": "bangra",
     "displayName": "Bangra",
     "description": "Language support for Bangra",
-    "version": "0.6.0",
+    "version": "0.7.0",
     "publisher": "duangle",
     "engines": {
         "vscode": "^1.13.0"
