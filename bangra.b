@@ -176,6 +176,11 @@ syntax-extend
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! string '.. (gen-type-op2 string-join)
 
+    set-type-symbol! type 'getattr
+        fn (cls name)
+            let val ok = (type@ cls name)
+            if ok val
+
     set-type-symbol! Symbol '==
         gen-type-op2
             fn (a b)
@@ -402,6 +407,9 @@ fn getattr (self name)
         if (icmp== (va-countof result...) 0)
         else                
             return result...
+    let result success = (type@ T name)
+    if success
+        return result
     compiler-error!
         string-join "no such attribute " 
             string-join (Any-repr (Any-wrap name))
