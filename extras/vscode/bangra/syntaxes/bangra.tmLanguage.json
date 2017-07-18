@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.bangra",
-                    "match": "(assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -98,15 +98,15 @@
 			"patterns": [
                 {
                     "name": "support.function.builtin.bangra",
-				    "match": "(exit|compiler-version|prompt|countof|malloc|free|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|io-write|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(file\\?|exit|compiler-version|prompt|countof|malloc|free|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.library.bangra",
-				    "match": "(char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.bangra",
-				    "match": "((set-anchor|set-globals|set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((io-write|set-anchor|set-globals|set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.library.bangra",

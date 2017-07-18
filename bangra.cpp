@@ -34,6 +34,8 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define BANGRA_OPTIMIZE_ASSEMBLY 1
 #define BANGRA_CATCH_EXCEPTION 1
 
+#define BANGRA_MAX_LABEL_INSTANCES 256
+
 #ifndef BANGRA_CPP
 #define BANGRA_CPP
 
@@ -560,6 +562,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_SRem, "srem") T(OP_URem, "urem") \
     T(OP_Shl, "shl") T(OP_LShr, "lshr") T(OP_AShr, "ashr") \
     T(OP_BAnd, "band") T(OP_BOr, "bor") T(OP_BXor, "bxor") \
+    T(FN_IsFile, "file?") \
     T(OP_FAdd, "fadd") T(OP_FSub, "fsub") T(OP_FMul, "fmul") T(OP_FDiv, "fdiv") T(OP_FRem, "frem") \
     T(FN_FPTrunc, "fptrunc") T(FN_FPExt, "fpext") \
     T(FN_FPToUI, "fptoui") T(FN_FPToSI, "fptosi") \
@@ -594,7 +597,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ArrayType, "array-type") \
     T(FN_TypenameType, "typename-type") \
     T(FN_Purify, "purify") \
-    T(FN_Write, "io-write") \
+    T(FN_Write, "io-write!") \
     T(FN_Flush, "io-flush") \
     T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
@@ -5060,7 +5063,7 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
 }
 
 static void verify_instance_count(Label *label) {
-    if (label->num_instances < 32)
+    if (label->num_instances < BANGRA_MAX_LABEL_INSTANCES)
         return;
     if (label->name == SYM_Unnamed)
         return;
@@ -6540,7 +6543,7 @@ struct GenerateCtx {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
                 StyledString ss;
-                ss.out << "IL->IR: untranslated parameter: " << value.parameter;
+                ss.out << "can't translate free variable " << value.parameter;
                 location_error(ss.str());
             }
             return it->second;
@@ -7309,10 +7312,6 @@ enum {
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
-
-    llvm::Timer compile_timer("bangra.compilation");
-    compile_timer.startTimer();
-
     fn->verify_compilable();
     const Type *functype = Pointer(fn->get_function_type());
 
@@ -7367,15 +7366,12 @@ static Any compile(Label *fn, uint64_t flags) {
         }
     }
 
-    compile_timer.stopTimer();
-    {
+#if 0
         if (flags & CF_DumpTime) {
             auto tt = compile_timer.getTotalTime();
             std::cout << "compile time: " << (tt.getUserTime() * 1000.0) << "ms" << std::endl;
         }
-    }
-
-    compile_timer.clear();
+#endif
 
     return Any::from_pointer(functype, pfunc);
 }
@@ -9544,9 +9540,6 @@ struct NormalizeCtx {
 };
 
 static Label *normalize(Label *entry) {
-    llvm::Timer normalize_timer("bangra.normalization");
-    normalize_timer.startTimer();
-
 #if 0
     StyledStream ss;
     ss << entry << std::endl;
@@ -9557,15 +9550,12 @@ static Label *normalize(Label *entry) {
     ctx.normalize(entry);
     ctx.lower2cff(entry);
 
-    normalize_timer.stopTimer();
 #if 0
     {
         auto tt = normalize_timer.getTotalTime();
         std::cout << "normalize time: " << (tt.getUserTime() * 1000.0) << "ms" << std::endl;
     }
 #endif
-
-    normalize_timer.clear();
     
     return entry;
 }
@@ -10555,6 +10545,11 @@ static const String *f_string_new(const char *ptr, size_t count) {
     return String::from(ptr, count);
 }
 
+static bool f_is_file(const String *path) {
+    auto sf = SourceFile::from_file(path);
+    return sf != nullptr;
+}
+
 static const Syntax *f_list_load(const String *path) {
     auto sf = SourceFile::from_file(path);
     if (!sf) {
@@ -10697,6 +10692,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
     DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
 
+    DEFINE_C_FUNCTION(FN_IsFile, f_is_file, TYPE_Bool, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListLoad, f_list_load, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListParse, f_list_parse, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ScopeNew, f_scope_new, TYPE_Scope);

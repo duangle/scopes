@@ -46,9 +46,9 @@ fn todo! (msg)
         string-join "TODO: " msg
 
 fn error! (msg)
-    io-write "runtime error: "
-    io-write msg
-    io-write "\n"
+    io-write! "runtime error: "
+    io-write! msg
+    io-write! "\n"
     abort!;
     unreachable!;
 
@@ -185,7 +185,10 @@ syntax-extend
     set-type-symbol! type 'getattr
         fn (cls name)
             let val ok = (type@ cls name)
-            if ok val
+            if ok 
+                return val
+            else
+                return;
 
     set-type-symbol! Symbol '==
         gen-type-op2
@@ -633,11 +636,13 @@ syntax-extend
 
     set-type-symbol! Scope 'getattr
         fn (self key)
-            let value success = (Scope@ self key)
-            if success
-                if (constant? self)
+            if (constant? self)
+                let value success = (Scope@ self key)
+                if success
                     Any-extract-constant value
-                else value
+            else
+                let value = (Scope@ self key)
+                return value
             
     set-type-symbol! Scope '@
         fn (self key)
@@ -748,24 +753,24 @@ fn print (...)
     fn print-element (val)
         let T = (typeof val)
         if (== T string)
-            io-write val
+            io-write! val
         else
-            io-write (repr val)
+            io-write! (repr val)
 
     let [loop] i = 0
     if (< i (va-countof ...))
         if (> i 0)
-            io-write " "
+            io-write! " "
         print-element (unconst (va@ i ...))
         loop (+ i 1)
     else
-        io-write "\n"
+        io-write! "\n"
 
 fn print-spaces (depth)
     assert-typeof depth i32
     if (icmp== depth 0)
     else
-        io-write "    "
+        io-write! "    "
         print-spaces (sub depth 1)
 
 fn walk-list (on-leaf l depth)
@@ -778,7 +783,7 @@ fn walk-list (on-leaf l depth)
             maybe-unsyntax at
         if (Any-list? value)
             print-spaces depth
-            io-write ";\n"
+            io-write! ";\n"
             walk-list on-leaf
                 Any-extract value list
                 add depth 1
@@ -1215,6 +1220,107 @@ define-infix> 800 @
 #define-infix> 800 =@
 
 #-------------------------------------------------------------------------------
+# module loading
+#-------------------------------------------------------------------------------
+
+define package
+    let package = (Scope)
+    set-scope-symbol! package 'path
+        list "./?.b"
+            .. compiler-dir "/?.b"
+    set-scope-symbol! package 'modules (Scope)
+    package
+
+syntax-extend
+    fn make-module-path (pattern name)
+        let sz = (countof pattern)
+        let [loop] i start result = 
+            unconst 0:usize
+            unconst 0:usize
+            unconst ""
+        if (i == sz)
+            return (.. result (slice pattern start))
+        if ((@ pattern i) != (char "?"))
+            loop (i + 1:usize) start result
+        else
+            loop (i + 1:usize) (i + 1:usize)
+                .. result (slice pattern start i) name
+
+    fn exec-module (expr eval-scope)
+        let expr-anchor = (Syntax-anchor expr)
+        let f = (compile (eval expr eval-scope))
+        let rettype =
+            element-type (element-type (Any-typeof f) 0) 0
+        let ModuleFunctionType = (pointer-type (function-type Any))
+        let fptr =
+            if (rettype == Any)
+                Any-extract f ModuleFunctionType
+            else
+                # build a wrapper
+                let expr =
+                    list
+                        list let 'tmp '= (list f)
+                        list Any-new 'tmp
+                let expr = (Any-extract (Syntax-wrap expr-anchor (Any expr) false) Syntax)
+                let f = (compile (eval expr (globals)))
+                Any-extract f ModuleFunctionType
+        fptr;
+
+    fn require (name)
+        let package = (unconst package)
+        assert-typeof name Symbol
+        let namestr = (Symbol->string name)
+        fn load-module (name)
+            let modules = (Any-extract package.modules Scope)
+            let content ok = (@ modules name)
+            if ok
+                return content true
+            let [loop] patterns = (Any-extract package.path list)
+            if (empty? patterns)
+                return (Any none) false
+            let pattern patterns = (decons patterns)
+            let pattern = (Any-extract pattern string)
+            let module-path = (make-module-path pattern namestr)
+            if (not (file? module-path))
+                loop patterns
+            let expr = (list-load module-path)
+            let eval-scope = (Scope (globals))
+            set-scope-symbol! eval-scope 'module-path module-path
+            let content = (exec-module expr eval-scope)
+            set-scope-symbol! modules name content
+            return content true
+        let content ok = (load-module name)
+        if ok
+            return content
+        io-write! "no such module '"
+        io-write! (Symbol->string name)
+        io-write! "' in paths:\n"
+        let [loop] patterns = (Any-extract package.path list)
+        if (empty? patterns)
+            abort!;
+            unreachable!;
+        let pattern patterns = (decons patterns)
+        let pattern = (Any-extract pattern string)
+        let module-path = (make-module-path pattern namestr)
+        io-write! "    "
+        io-write! module-path
+        io-write! "\n"
+        loop patterns
+        
+    set-scope-symbol! syntax-scope 'require require
+    syntax-scope
+
+define-scope-macro locals
+    return syntax-scope syntax-scope
+
+define-macro import
+    let name = (decons args)
+    let name = (Any-extract (Syntax->datum (Any-extract name Syntax)) Symbol)
+    list define name
+        list require
+            list quote name
+
+#-------------------------------------------------------------------------------
 # REPL
 #-------------------------------------------------------------------------------
 
@@ -1245,7 +1351,7 @@ fn read-eval-print-loop ()
         syntax-scope
 
     fn exception-handler (str)
-        io-write
+        io-write!
             format-message (active-anchor)
                 .. (default-styler style-error "error:")
                     \ " " str
