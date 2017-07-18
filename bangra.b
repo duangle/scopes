@@ -817,6 +817,7 @@ fn compile (f opts...)
             if (== flag 'dump-disassembly) compile-flag-dump-disassembly
             elseif (== flag 'dump-module) compile-flag-dump-module
             elseif (== flag 'dump-function) compile-flag-dump-function
+            elseif (== flag 'dump-time) compile-flag-dump-time
             elseif (== flag 'skip-opts) compile-flag-skip-opts
             else
                 compiler-error!

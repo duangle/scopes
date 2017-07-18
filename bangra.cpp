@@ -161,6 +161,8 @@ const char *bangra_compile_time_date();
 #include "llvm/ExecutionEngine/ExecutionEngine.h"
 #include "llvm/ExecutionEngine/JITEventListener.h"
 #include "llvm/Object/SymbolSize.h"
+#include "llvm/Support/Timer.h"
+#include "llvm/Support/raw_os_ostream.h"
 
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/AST/RecursiveASTVisitor.h"
@@ -721,6 +723,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_DumpDisassembly, "compile-flag-dump-disassembly") \
     T(SYM_DumpModule, "compile-flag-dump-module") \
     T(SYM_DumpFunction, "compile-flag-dump-function") \
+    T(SYM_DumpTime, "compile-flag-dump-time") \
     T(SYM_SkipOpts, "compile-flag-skip-opts") \
     \
     /* function flags */ \
@@ -7301,10 +7304,14 @@ enum {
     CF_DumpModule       = (1 << 1),
     CF_SkipOpts         = (1 << 2),
     CF_DumpFunction     = (1 << 3),
+    CF_DumpTime         = (1 << 4),
 };
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
+
+    llvm::Timer compile_timer("bangra.compilation");
+    compile_timer.startTimer();
 
     fn->verify_compilable();
     const Type *functype = Pointer(fn->get_function_type());
@@ -7359,6 +7366,16 @@ static Any compile(Label *fn, uint64_t flags) {
             std::cout << "no disassembly available\n";
         }
     }
+
+    compile_timer.stopTimer();
+    {
+        if (flags & CF_DumpTime) {
+            auto tt = compile_timer.getTotalTime();
+            std::cout << "compile time: " << (tt.getUserTime() * 1000.0) << "ms" << std::endl;
+        }
+    }
+
+    compile_timer.clear();
 
     return Any::from_pointer(functype, pfunc);
 }
@@ -9527,10 +9544,29 @@ struct NormalizeCtx {
 };
 
 static Label *normalize(Label *entry) {
+    llvm::Timer normalize_timer("bangra.normalization");
+    normalize_timer.startTimer();
+
+#if 0
+    StyledStream ss;
+    ss << entry << std::endl;
+#endif
+
     NormalizeCtx ctx;
     ctx.start_entry = entry;
     ctx.normalize(entry);
     ctx.lower2cff(entry);
+
+    normalize_timer.stopTimer();
+#if 0
+    {
+        auto tt = normalize_timer.getTotalTime();
+        std::cout << "normalize time: " << (tt.getUserTime() * 1000.0) << "ms" << std::endl;
+    }
+#endif
+
+    normalize_timer.clear();
+    
     return entry;
 }
 
@@ -10756,6 +10792,7 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(Symbol(SYM_DumpDisassembly), (uint64_t)CF_DumpDisassembly);
     globals->bind(Symbol(SYM_DumpModule), (uint64_t)CF_DumpModule);
     globals->bind(Symbol(SYM_DumpFunction), (uint64_t)CF_DumpFunction);
+    globals->bind(Symbol(SYM_DumpTime), (uint64_t)CF_DumpTime);
     globals->bind(Symbol(SYM_SkipOpts), (uint64_t)CF_SkipOpts);
 
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
