@@ -191,6 +191,10 @@ syntax-extend
         gen-type-op2
             fn (a b)
                 icmp== (bitcast a u64) (bitcast b u64)
+    set-type-symbol! Builtin '==
+        gen-type-op2
+            fn (a b)
+                icmp== (bitcast a u64) (bitcast b u64)
 
     set-type-symbol! Nothing '==
         fn (a b flipped)
@@ -476,6 +480,8 @@ fn Any-extract (val T)
 fn string->rawstring (s)
     assert-typeof s string
     getelementptr s 0 1 0
+fn char (s)
+    load (string->rawstring s)
 
 fn Syntax-anchor (sx)
     assert-typeof sx Syntax
@@ -699,18 +705,16 @@ syntax-extend
             assert-typeof s string
             let i = (i64 i)
             let len = (i64 (string-countof s))
-            let i =
-                if (< i 0:i64)
-                    if (>= i (- len))
-                        + len i
-                    else
-                        return ""
-                elseif (>= i len)
-                    return ""
-                else i
-            let data =
-                bitcast (getelementptr s 0 1 0) (pointer-type i8)
-            string-new (getelementptr data i) 1:usize
+            if (< i 0:i64)
+                return 0:i8
+            elseif (>= i len)
+                return 0:i8
+            load (bitcast (getelementptr s 0 1 i) (pointer-type i8))
+    set-type-symbol! string 'slice
+        fn (self i0 i1)
+            string-new
+                getelementptr (string->rawstring self) i0
+                - i1 i0
 
     syntax-scope
 
@@ -869,6 +873,44 @@ syntax-extend
             fn (at next scope)
                 return (Any (f (list-next at))) next scope
 
+    # dotted symbol expander
+      --------------------------------------------------------------------------
+
+    fn dotted-symbol? (env head)
+        let s = (Symbol->string head)
+        let sz = (countof s)
+        let [loop] i = (unconst 0:usize)
+        if (== i sz)
+            return false
+        elseif (== (@ s i) (char "."))
+            return true
+        loop (+ i 1:usize)
+
+    fn split-dotted-symbol (head start end tail)
+        let s = (Symbol->string head)
+        let [loop] i = (unconst start)
+        if (== i end)
+            # did not find a dot
+            if (== start 0:usize)
+                return (cons head tail)
+            else
+                return (cons (Symbol (slice s start)) tail)
+        if (== (@ s i) (char "."))
+            let dot = '.
+            let tail =
+                # no remainder after dot
+                if (== i (- end 1:usize)) tail
+                else # remainder after dot, split the rest first
+                    split-dotted-symbol head (+ i 1:usize) end tail
+            if (== i 0:usize)
+                # no prefix before dot
+                return (cons dot tail)
+            else
+                # prefix before dot
+                return
+                    cons (Symbol (slice s start i)) dot tail
+        loop (+ i 1:usize)
+    
     # infix notation support
       --------------------------------------------------------------------------
 
@@ -969,55 +1011,11 @@ syntax-extend
             parse-infix-expr infix-table rhs state nextop-prec
         rhs-loop next-rhs next-state
 
-    # expand infix operators in impure list of arguments
-    fn parse-partial-infix-expr (infix-table expr)
-        assert-typeof infix-table Scope
-        assert-typeof expr list
-        # Collect tokens in a sequence as long as every second token is
-          an infix operator.
-          When a sequence is complete and longer than 1, expand that sequence
-          as an infix expression list.
-          Lastly, expand the last ongoing sequence if it's longer than 1,
-          and only wrap in list if any previous sequences have been expanded.
-        call
-            fn loop (infix-table k expr)
-                if (< (countof expr) 3:usize)
-                    return expr
-                let infix-expr rest =
-                    call
-                        fn rhs-loop (infix-table expr)
-                            let lhs expr1 = (decons expr)
-                            let op expr2 = (decons expr1)
-                            if (empty? expr2)
-                                return (list lhs) expr1
-                            let _ ok = (get-ifx-op infix-table op)
-                            if (not ok)
-                                return (list lhs) expr1
-                            elseif (> (countof expr2) 1:usize)
-                                let result rest = (rhs-loop infix-table expr2)
-                                return (cons lhs op result) rest
-                            else
-                                let at next = (decons expr2)
-                                return (list lhs op at) next
-                        \ infix-table expr
-                if (>= (countof infix-expr) 3:usize)
-                    let ifx-at ifx-next = (decons infix-expr)
-                    let expanded-expr =
-                        parse-infix-expr infix-table ifx-at ifx-next (unconst 0)
-                    if (empty? rest)
-                        if (== k 0)
-                            return (Any-extract expanded-expr list)
-                    cons expanded-expr (loop infix-table (+ k 1) rest)
-                else
-                    cons (list-at infix-expr) (loop infix-table (+ k 1) rest)
-            \ infix-table (unconst 0) expr
-
     #---------------------------------------------------------------------------
 
     # install general list hook for this scope
-    # is called for every list the expander sees
+    # is called for every list the expander would otherwise consider a call
     fn list-handler (topexpr env)
-        let [loop] topexpr env = topexpr env
         let sxexpr = (Any-extract (list-at topexpr) Syntax)
         let expr expr-anchor = (Syntax->datum sxexpr) (Syntax-anchor sxexpr)
         if (!= (Any-typeof expr) list)
@@ -1037,17 +1035,32 @@ syntax-extend
             let next = (list-next topexpr)
             let expr next env = (head expr next env)
             let expr = (Syntax-wrap expr-anchor expr false)
-            loop (list-cons expr next) env
+            return (list-cons expr next) env
         elseif (has-infix-ops? env expr)
-            #let expr = (parse-partial-infix-expr env expr)
             let at next = (decons expr)
             let expr =
                 parse-infix-expr env at next (unconst 0)
             let next = (list-next topexpr)
             let expr = (Syntax-wrap expr-anchor expr false)
-            loop (list-cons expr next) env
+            return (list-cons expr next) env
         else
             return topexpr env
+
+    # install general symbol hook for this scope
+    # is called for every symbol the expander could not resolve
+    fn symbol-handler (topexpr env)
+        let at next = (decons topexpr)
+        let sxname = (Any-extract at Syntax)
+        let name name-anchor = (Syntax->datum sxname) (Syntax-anchor sxname)
+        let name = (Any-extract name Symbol)
+        if (dotted-symbol? env name)
+            let s = (Symbol->string name)
+            let sz = (countof s)
+            let expr =
+                Any (split-dotted-symbol name (unconst 0:usize) sz eol)
+            let expr = (Syntax-wrap name-anchor expr false)
+            return (cons expr next) env
+        return topexpr env
 
     set-scope-symbol! syntax-scope 'Macro Macro
     set-scope-symbol! syntax-scope 'fn->macro fn->macro
@@ -1056,7 +1069,9 @@ syntax-extend
     set-scope-symbol! syntax-scope 'scope-macro scope-macro
     set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (Symbol "#list")
-        compile (typify list-handler list Scope) #'dump-disassembly 'skip-opts
+        compile (typify list-handler list Scope)
+    set-scope-symbol! syntax-scope (Symbol "#symbol")
+        compile (typify symbol-handler list Scope)
 
     # (define name expr ...)
     fn expand-define (expr)
@@ -1219,10 +1234,7 @@ fn read-eval-print-loop ()
             import-c "setjmp.h" "
                 #include <setjmp.h>
                 " eol
-        let setjmp longjmp jmp_buf =
-            . lib setjmp
-            . lib longjmp
-            . lib jmp_buf
+        let setjmp longjmp jmp_buf = lib.setjmp lib.longjmp lib.jmp_buf
 
         set-scope-symbol! syntax-scope 'jmpbuf
             getelementptr (malloc jmp_buf) 0 0
@@ -1256,16 +1268,13 @@ fn read-eval-print-loop ()
 
     fn leading-spaces (s)
         let len = (i32 (countof s))
-        let [loop] i out =
-            tie-const len 0
-            tie-const len ""
+        let [loop] i = (tie-const len 0)
         if (i == len)
-            return out
+            return s
         let c = (@ s i)
-        if (c != " ")
-            return out
+        if (c != (char " "))
+            return (string-new (string->rawstring s) (usize i))
         loop (i + 1)
-            .. out c
 
     fn blank? (s)
         let len = (i32 (countof s))
@@ -1273,7 +1282,7 @@ fn read-eval-print-loop ()
             tie-const len 0
         if (i == len)
             return true
-        if ((@ s i) != " ")
+        if ((@ s i) != (char " "))
             return false
         loop (i + 1)
 
@@ -1307,7 +1316,7 @@ fn read-eval-print-loop ()
         return;
     let terminated? =
         (blank? cmd) or
-            (empty? cmdlist) and ((@ cmd 0) == "\\")
+            (empty? cmdlist) and ((@ cmd 0) == (char "\\"))
     let cmdlist = (.. cmdlist cmd "\n")
     let preload =
         if terminated? ""
@@ -1368,7 +1377,7 @@ fn run-main (args...)
     if (i < argcount)
         let k = (i + 1)
         let arg = (va@ i args...)
-        if (parse-options and ((@ arg 0) == "-"))
+        if (parse-options and ((@ arg 0) == (char "-")))
             if ((arg == "--help") or (arg == "-h"))
                 print-help args...
             elseif ((== arg "--version") or (== arg "-v"))

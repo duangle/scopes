@@ -10105,6 +10105,7 @@ struct Expander {
     }
 
     Any expand(const Syntax *sx, const Any &dest, const Any &longdest) {
+    expand_again:
         set_active_anchor(sx->anchor);
         if (sx->quoted) {
             // return as-is
@@ -10118,33 +10119,6 @@ struct Expander {
             }
 
             Any head = unsyntax(list->at);
-
-            Any list_handler = none;
-            if (env->lookup(Symbol(SYM_ListWildcard), list_handler)) {
-                if (list_handler.type != list_expander_func_type) {
-                    StyledString ss;
-                    ss.out << "custom list expander has wrong type "
-                        << list_handler.type << ", must be "
-                        << list_expander_func_type;
-                    location_error(ss.str());
-                }
-                struct ListScopePair { const List *topit; Scope *env; };
-                typedef ListScopePair (*HandlerFuncType)(const List *, Scope *);
-                HandlerFuncType f = (HandlerFuncType)list_handler.pointer;
-                auto result = f(List::from(sx, next), env);
-                const Syntax *newsx = result.topit->at;
-                if (newsx != sx) {
-                    sx = newsx;
-                    set_active_anchor(sx->anchor);
-                    expr = sx->datum;
-                    if (expr.type != TYPE_List)
-                        return write_dest(expr, dest);
-                    list = expr.list;
-                    head = unsyntax(list->at);
-                }
-                next = result.topit->next;
-                env = result.env;
-            }
 
             // resolve symbol
             if (head.type == TYPE_Symbol) {
@@ -10172,12 +10146,55 @@ struct Expander {
                 }
             }
 
+            Any list_handler = none;
+            if (env->lookup(Symbol(SYM_ListWildcard), list_handler)) {
+                if (list_handler.type != list_expander_func_type) {
+                    StyledString ss;
+                    ss.out << "custom list expander has wrong type "
+                        << list_handler.type << ", must be "
+                        << list_expander_func_type;
+                    location_error(ss.str());
+                }
+                struct ListScopePair { const List *topit; Scope *env; };
+                typedef ListScopePair (*HandlerFuncType)(const List *, Scope *);
+                HandlerFuncType f = (HandlerFuncType)list_handler.pointer;
+                auto result = f(List::from(sx, next), env);
+                const Syntax *newsx = result.topit->at;
+                if (newsx != sx) {
+                    sx = newsx;
+                    next = result.topit->next;
+                    env = result.env;
+                    goto expand_again;
+                }
+            }
             return expand_call(list, dest, longdest);
         } else if (expr.type == TYPE_Symbol) {
             Symbol name = expr.symbol;
 
             Any result = none;
             if (!env->lookup(name, result)) {
+                Any symbol_handler = none;
+                if (env->lookup(Symbol(SYM_SymbolWildcard), symbol_handler)) {
+                    if (symbol_handler.type != list_expander_func_type) {
+                        StyledString ss;
+                        ss.out << "custom symbol expander has wrong type "
+                            << symbol_handler.type << ", must be "
+                            << list_expander_func_type;
+                        location_error(ss.str());
+                    }
+                    struct ListScopePair { const List *topit; Scope *env; };
+                    typedef ListScopePair (*HandlerFuncType)(const List *, Scope *);
+                    HandlerFuncType f = (HandlerFuncType)symbol_handler.pointer;
+                    auto result = f(List::from(sx, next), env);
+                    const Syntax *newsx = result.topit->at;
+                    if (newsx != sx) {
+                        sx = newsx;
+                        next = result.topit->next;
+                        env = result.env;
+                        goto expand_again;
+                    }
+                }
+                
                 StyledString ss;
                 ss.out << "use of undeclared identifier '" << name.name()->data << "'.";
                 auto syms = env->find_closest_match(name);
