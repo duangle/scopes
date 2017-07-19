@@ -4,10 +4,10 @@ Getting Started
 Installation
 ------------
 
-You can either download a binary distribution of Bangra from the
-`website <https://bitbucket.org/duangle/bangra>`_ or build Bangra from source.
+You can either download a binary distribution of Scopes from the
+`website <https://bitbucket.org/duangle/scopes>`_ or build Scopes from source.
 
-How to build Bangra on Linux:
+How to build Scopes on Linux:
 
 * You need build-essentials, clang 3.9, libclang 3.9 and LLVM 3.9 installed,
   as well as xxd.
@@ -18,9 +18,9 @@ How to build Bangra on Linux:
 * Build libffi using ``./configure --enable-shared=no --enable-static=yes && make`` and
   softlink or copy the generated build folder (e.g. ``x86_64-unknown-linux-gnu``)
   as ``libffi`` in the repo folder.
-* execute ``./makebangra``
+* execute ``./makescopes``
 
-How to build Bangra on Windows:
+How to build Scopes on Windows:
 
 * Install `MSYS2 <http://msys2.github.io>`_ and
   `install <https://github.com/valtron/llvm-stuff/wiki/Build-LLVM-3.8-with-MSYS2>`_
@@ -28,28 +28,29 @@ How to build Bangra on Windows:
   ``mingw64/mingw-w64-x86_64-llvm``, ``mingw64/mingw-w64-x86_64-clang``,
   ``mingw64/mingw-w64-x86_64-libffi`` and ``msys/vim`` (which contains xxd).
 * put ``clang++`` in your path **OR** make sure msys2 resides in ``C:\msys64`` OR edit
-  ``makebangra.bat`` and change the path accordingly.
+  ``makescopes.bat`` and change the path accordingly.
 * copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll``, ``libwinpthread-1.dll`` and
   ``libffi-6.dll`` from the msys2 installation into the repo folder.
-  ``bangra.exe`` will depend on them.
-* run ``makebangra.bat``
+  ``scopes.exe`` will depend on them.
+* run ``makescopes.bat``
 
-There should now be a ``bangra`` executable in your root folder.
+There should now be a ``scopes`` executable in your root folder.
 
 You can verify that everything works by running::
 
-    bangra testing/test_all.b
+    scopes testing/test_all.sc
 
 Running
 -------
 
-Bangra has a built-in console that can be launched from the command-line by
-passing no arguments to the ``bangra`` compiler::
+Scopes has a built-in console that can be launched from the command-line by
+passing no arguments to the ``scopes`` compiler::
 
-    bangra
+    scopes
 
-To execute a Bangra program, pass the source file as first argument to the
-``bangra`` compiler::
+To execute a Scopes program, pass the source file as first argument to the
+``scopes`` compiler::
 
-    bangra path/to/sourcefile.b
+    scopes path/to/sourcefile.sc
+
 

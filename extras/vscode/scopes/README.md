@@ -1,12 +1,18 @@
-# bangra README
+# Scopes README
 
-Official support for the Bangra programming language and infrastructure.
+Official support for the Scopes programming language and infrastructure.
 
 ## Features
 
 This is an early release. Right now, only basic syntax highlighting is available.
 
 ## Release Notes
+
+### 0.10.0
+
+* Formerly Bangra, renamed to Scopes.
+* File extension changed from ".b" to ".sc".
+* Added more keywords.
 
 ### 0.9.0
 
@@ -43,5 +49,5 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ### 0.1.1
 
-Initial release of Bangra
+Initial release of Scopes
 

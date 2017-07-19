@@ -1,13 +1,13 @@
-.. Bangra documentation master file, created by
+.. Scopes documentation master file, created by
    sphinx-quickstart on Tue Sep 22 07:49:51 2015.
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-The Bangra Programming Infrastructure
+The Scopes Programming Infrastructure
 =====================================
 
-This manual aims to provide an introduction to programming with Bangra, a
-description of Bangra's architecture and its two language modes, and a
+This manual aims to provide an introduction to programming with Scopes, a
+description of Scopes' architecture and its two language modes, and a
 reference of all special forms, macros, functions and modules provided in the
 language repository.
 
@@ -23,12 +23,12 @@ Contents:
 
 ..
    architecture
-   bangralang
+   Scopeslang
    debugging
    meta
    lang
    capi
-   bangra-ref
+   scopes-ref
 
 Indices and tables
 ==================

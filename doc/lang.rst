@@ -1,7 +1,7 @@
-Using Bangra
+Using Scopes
 ============
 
-This chapter will provide an overview and usage information for Bangra in a
+This chapter will provide an overview and usage information for Scopes in a
 future release.
 
 Functions

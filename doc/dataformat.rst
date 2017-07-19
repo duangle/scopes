@@ -1,18 +1,18 @@
 Notation
 ========
 
-Bangra source code is written in a notation that introduces syntactic rules
-even before the first function is even written: *Bangra Expressions As Text*,
-abbreviated **BEAT**.
+Scopes source code is written in a notation that introduces syntactic rules
+even before the first function is even written: *Scopes List Notation*,
+abbreviated **SLN**.
 
 Closely related to `S-Expressions <https://en.wikipedia.org/wiki/S-expression>`_,
-BEAT can be seen as a human-readable serialization format comparable to
+SLN can be seen as a human-readable serialization format comparable to
 YAML, XML or JSON. It has been optimized for simplicity and terseness.
 
-BEAT files do not have to contain code on their own. They're more likely to
+SLN files do not have to contain code on their own. They're more likely to
 store configuration or metadata. Therefore, the examples in this document are
 schema free and do only contain arbitrary data. They're not necessarily valid 
-Bangra source code.
+Scopes source code.
 
 At a Glance
 -----------
@@ -113,16 +113,16 @@ example that gives you an overview of all notation aspects::
 Formatting Rules
 ----------------
 
-BEAT files are always assumed to be encoded as UTF-8.
+SLN files are always assumed to be encoded as UTF-8.
 
-Whitespace controls scoping in the BEAT format. Therefore, to avoid possible 
-ambiguities, BEAT files must always use spaces, and one indentation level equals
+Whitespace controls scoping in the SLN format. Therefore, to avoid possible 
+ambiguities, SLN files must always use spaces, and one indentation level equals
 four spaces.
 
 Element Types
 -------------
 
-BEAT recognizes only five kinds of elements:
+SLN recognizes only five kinds of elements:
 
 * **Numbers**
 * **Strings**
@@ -227,7 +227,7 @@ Lists are the only nesting type, and can be either scoped by braces or
 indentation. For braces, ``()``, ``[]`` and ``{}`` are accepted.
 
 Lists can be empty or contain a virtually unlimited number of elements, 
-only separated by whitespace. They typically describe expressions in Bangra.
+only separated by whitespace. They typically describe expressions in Scopes.
 
 Here are some examples for valid lists::
 
@@ -243,7 +243,7 @@ Here are some examples for valid lists::
 Naked & Braced Lists
 --------------------
 
-Every Bangra source file is parsed as a tree of expresion lists.
+Every Scopes source file is parsed as a tree of expresion lists.
 
 The classic notation (what we will call *braced notation*) uses a syntax close
 to what `Lisp <http://en.wikipedia.org/wiki/Lisp_(programming_language)>`_ and
@@ -254,7 +254,7 @@ know as *restricted* `S-expressions <https://en.wikipedia.org/wiki/S-expression>
         (.. "Hello" "World") 
         303 606 909)
 
-As a modern alternative, Bangra offers a *naked notation* where the scope of
+As a modern alternative, Scopes offers a *naked notation* where the scope of
 lists is implicitly balanced by indentation, an approach used by
 `Python <http://en.wikipedia.org/wiki/Python_(programming_language)>`_,
 `Haskell <http://en.wikipedia.org/wiki/Haskell_(programming_language)>`_,
@@ -308,15 +308,15 @@ the author suggests to use braced notation sparingly and in good taste.
 Purists and Scheme enthusiasts may however prefer to work with braced lists
 almost exclusively.
 
-Therefore Bangra's reference documentation describes all available symbols in
+Therefore Scopes' reference documentation describes all available symbols in
 braced notation, while code examples make ample use of naked notation.
 
 Brace Styles
 ------------
 
-In addition to regular curvy braces ``()``, BEAT parses curly ``{}`` and 
+In addition to regular curvy braces ``()``, SLN parses curly ``{}`` and 
 square ``[]`` brace styles. They are merely meant for providing variety for
-writing BEAT based formats, and are expanded to simple lists during parsing.
+writing SLN based formats, and are expanded to simple lists during parsing.
 Some examples::
 
     [a b c d]

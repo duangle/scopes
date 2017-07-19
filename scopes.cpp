@@ -1,6 +1,6 @@
 /*
-Bangra Compiler
-Copyright (c) 2017 Leonard Ritter
+Scopes Compiler
+Copyright (c) 2016, 2017 Leonard Ritter
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -26,18 +26,18 @@ BEWARE: If you build this with anything else but a recent enough clang,
         you will have a bad time.
 */
 
-#define BANGRA_VERSION_MAJOR 0
-#define BANGRA_VERSION_MINOR 7
-#define BANGRA_VERSION_PATCH 0
+#define SCOPES_VERSION_MAJOR 0
+#define SCOPES_VERSION_MINOR 7
+#define SCOPES_VERSION_PATCH 0
 
-#define BANGRA_DEBUG_CODEGEN 0
-#define BANGRA_OPTIMIZE_ASSEMBLY 1
-#define BANGRA_CATCH_EXCEPTION 1
+#define SCOPES_DEBUG_CODEGEN 0
+#define SCOPES_OPTIMIZE_ASSEMBLY 1
+#define SCOPES_CATCH_EXCEPTION 1
 
-#define BANGRA_MAX_LABEL_INSTANCES 256
+#define SCOPES_MAX_LABEL_INSTANCES 256
 
-#ifndef BANGRA_CPP
-#define BANGRA_CPP
+#ifndef SCOPES_CPP
+#define SCOPES_CPP
 
 //------------------------------------------------------------------------------
 // C HEADER
@@ -89,37 +89,37 @@ extern "C" {
 // make sure ffi.cdef() can see C defines we care about
 enum {
 #define T(NAME) \
-    BANGRA_ ## NAME = NAME,
+    SCOPES_ ## NAME = NAME,
 EXPORT_DEFINES
 #undef T
 #undef EXPORT_DEFINES
 };
 
-const char *bangra_compiler_path;
-const char *bangra_compiler_dir;
-size_t bangra_argc;
-char **bangra_argv;
+const char *scopes_compiler_path;
+const char *scopes_compiler_dir;
+size_t scopes_argc;
+char **scopes_argv;
 
 // C namespace exports
 int unescape_string(char *buf);
 int escape_string(char *buf, const char *str, int strcount, const char *quote_chars);
 
-void bangra_strtod(double *v, const char *str, char **str_end, int base );
-void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base);
-void bangra_strtoull(uint64_t *v, const char* str, char** endptr, int base);
+void scopes_strtod(double *v, const char *str, char **str_end, int base );
+void scopes_strtoll(int64_t *v, const char* str, char** endptr, int base);
+void scopes_strtoull(uint64_t *v, const char* str, char** endptr, int base);
 
-bool bangra_is_debug();
+bool scopes_is_debug();
 
-const char *bangra_compile_time_date();
+const char *scopes_compile_time_date();
 
 #if defined __cplusplus
 }
 #endif
 
-#endif // BANGRA_CPP
-#ifdef BANGRA_CPP_IMPL
+#endif // SCOPES_CPP
+#ifdef SCOPES_CPP_IMPL
 
-//#define BANGRA_DEBUG_IL
+//#define SCOPES_DEBUG_IL
 
 #include "external/cityhash/city.cpp"
 
@@ -174,8 +174,8 @@ const char *bangra_compile_time_date();
 
 extern "C" {
 
-#include "bangra.bin.h"
-#include "bangra.b.bin.h"
+#include "scopes.bin.h"
+#include "core.sc.bin.h"
 
 } // extern "C"
 
@@ -207,13 +207,13 @@ namespace blobs {
 // UTILITIES
 //------------------------------------------------------------------------------
 
-void bangra_strtod(double *v, const char *str, char **str_end, int base ) {
+void scopes_strtod(double *v, const char *str, char **str_end, int base ) {
     *v = std::strtod(str, str_end);
 }
-void bangra_strtoll(int64_t *v, const char* str, char** endptr, int base) {
+void scopes_strtoll(int64_t *v, const char* str, char** endptr, int base) {
     *v = std::strtoll(str, endptr, base);
 }
-void bangra_strtoull(uint64_t *v, const char* str, char** endptr, int base) {
+void scopes_strtoull(uint64_t *v, const char* str, char** endptr, int base) {
     *v = std::strtoull(str, endptr, base);
 }
 
@@ -368,15 +368,15 @@ inline T powimpl(T base, T exponent) {
     return result;
 }
 
-bool bangra_is_debug() {
-#ifdef BANGRA_DEBUG
+bool scopes_is_debug() {
+#ifdef SCOPES_DEBUG
         return true;
 #else
         return false;
 #endif
 }
 
-const char *bangra_compile_time_date() {
+const char *scopes_compile_time_date() {
     return __DATE__ ", " __TIME__;
 }
 
@@ -429,7 +429,7 @@ static int stb_fprintf(FILE *out, const char *fmt, ...) {
     return c;
 }
 
-namespace bangra {
+namespace scopes {
 
 using llvm::isa;
 using llvm::cast;
@@ -1184,7 +1184,7 @@ struct Symbol {
     enum { end_value = SYM_Count };
 
     struct Hash {
-        std::size_t operator()(const bangra::Symbol & s) const {
+        std::size_t operator()(const scopes::Symbol & s) const {
             return s.hash();
         }
     };
@@ -1908,7 +1908,7 @@ static void verify_range(size_t idx, size_t count) {
 }
 
 void Any::verify(const Type *T) const {
-    bangra::verify(T, type);
+    scopes::verify(T, type);
 }
 
 //------------------------------------------------------------------------------
@@ -3495,7 +3495,7 @@ struct LexerParser {
     }
 
     bool read_int64() {
-        switch(read_integer(bangra_strtoll)) {
+        switch(read_integer(scopes_strtoll)) {
         case RN_Invalid: return false;
         case RN_Untyped:
             if ((value.i64 >= -0x80000000ll) && (value.i64 <= 0x7fffffffll)) {
@@ -3510,7 +3510,7 @@ struct LexerParser {
         }
     }
     bool read_uint64() {
-        switch(read_integer(bangra_strtoull)) {
+        switch(read_integer(scopes_strtoull)) {
         case RN_Invalid: return false;
         case RN_Untyped:
             return true;
@@ -3520,7 +3520,7 @@ struct LexerParser {
         }
     }
     bool read_real64() {
-        switch(read_real(bangra_strtod)) {
+        switch(read_real(scopes_strtod)) {
         case RN_Invalid: return false;
         case RN_Untyped:
             value = Any(float(value.f64));
@@ -4191,7 +4191,7 @@ public:
 };
 
 void Any::verify_indirect(const Type *T) const {
-    bangra::verify(T, indirect_type());
+    scopes::verify(T, indirect_type());
 }
 
 const Type *Any::indirect_type() const {
@@ -5063,7 +5063,7 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
 }
 
 static void verify_instance_count(Label *label) {
-    if (label->num_instances < BANGRA_MAX_LABEL_INSTANCES)
+    if (label->num_instances < SCOPES_MAX_LABEL_INSTANCES)
         return;
     if (label->name == SYM_Unnamed)
         return;
@@ -5679,7 +5679,7 @@ static Scope *import_c_module (
     //~ if (compiler.getHeaderSearchOpts().UseBuiltinIncludes &&
         //~ compiler.getHeaderSearchOpts().ResourceDir.empty())
         //~ compiler.getHeaderSearchOpts().ResourceDir =
-            //~ CompilerInvocation::GetResourcesPath(bangra_argv[0], MainAddr);
+            //~ CompilerInvocation::GetResourcesPath(scopes_argv[0], MainAddr);
 
     LLVMModuleRef M = NULL;
 
@@ -7181,7 +7181,7 @@ struct GenerateCtx {
             LLVMMDNode(DbgVer, 3));
 
         LLVMDIBuilderCreateCompileUnit(di_builder,
-            llvm::dwarf::DW_LANG_C99, "file", "directory", "bangra",
+            llvm::dwarf::DW_LANG_C99, "file", "directory", "scopes",
             false, "", 0, "", 0);
         //LLVMAddNamedMetadataOperand(module, "llvm.dbg.cu", dicu);
 
@@ -7194,7 +7194,7 @@ struct GenerateCtx {
         LLVMDisposeBuilder(builder);
         LLVMDisposeDIBuilder(di_builder);
 
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         LLVMDumpModule(module);
 #endif
         char *errmsg = NULL;
@@ -7341,7 +7341,7 @@ static Any compile(Label *fn, uint64_t flags) {
         LLVMAddModule(ee, module);
     }
 
-#if BANGRA_OPTIMIZE_ASSEMBLY
+#if SCOPES_OPTIMIZE_ASSEMBLY
     if (!(flags & CF_SkipOpts)) {
         build_and_run_opt_passes(module);
     }
@@ -7415,14 +7415,14 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
         FARITH_OPF(FRem, std::fmod)
 
 struct NormalizeCtx {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
 #endif
 
     Label *start_entry;
 
     NormalizeCtx() :
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout(std::cout),
 #endif
         start_entry(nullptr)
@@ -7657,7 +7657,7 @@ struct NormalizeCtx {
     }
 
     void fold_pure_function_call(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding pure function call in " << l << std::endl;
 #endif
 
@@ -7716,7 +7716,7 @@ struct NormalizeCtx {
             return false;
         }
 
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
 #endif
 
@@ -8148,7 +8148,7 @@ struct NormalizeCtx {
     }
 
     void fold_callable_call(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding callable call in " << l << std::endl;
 #endif
 
@@ -8173,7 +8173,7 @@ struct NormalizeCtx {
     }
 
     bool fold_builtin_call(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding builtin call in " << l << std::endl;
 #endif
 
@@ -8817,7 +8817,7 @@ struct NormalizeCtx {
     }
 
     void inline_branch_continuations(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "inlining branch continuations in " << l << std::endl;
 #endif
 
@@ -8876,7 +8876,7 @@ struct NormalizeCtx {
 
     // clear continuation argument and clear it for labels that use it
     void delete_continuation(Label *owner) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "deleting continuation of " << owner << std::endl;
 #endif
 
@@ -8938,7 +8938,7 @@ struct NormalizeCtx {
         assert(enter.type == TYPE_Label);
         Label *enter_label = enter.label;
         assert(!args.empty());
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "inlining label call to " << enter_label << " in " << l << std::endl;
 #endif
 
@@ -8957,7 +8957,7 @@ struct NormalizeCtx {
     }
 
     void type_continuation_from_label_return_type(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "typing continuation from label return type in " << l << std::endl;
 #endif
         auto &&enter = l->body.enter;
@@ -8976,7 +8976,7 @@ struct NormalizeCtx {
             args[0] = newarg;
             l->link_backrefs();
         } else {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
             ss_cout << "unexpected return type: " << cont_type << std::endl;
 #endif
             assert(false && "todo: unexpected return type");
@@ -8984,7 +8984,7 @@ struct NormalizeCtx {
     }
 
     void type_continuation_from_builtin_call(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "typing continuation from builtin call in " << l << std::endl;
 #endif
         auto &&enter = l->body.enter;
@@ -9005,7 +9005,7 @@ struct NormalizeCtx {
     }
 
     void type_continuation_from_function_call(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "typing continuation from function call in " << l << std::endl;
 #endif
         std::vector<const Type *> argtypes;
@@ -9018,7 +9018,7 @@ struct NormalizeCtx {
     }
 
     void type_continuation_call(Label *l) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "typing continuation call in " << l << std::endl;
 #endif
         auto &&args = l->body.args;
@@ -9097,12 +9097,12 @@ struct NormalizeCtx {
 
         while (!todo.empty()) {
             Label *l = pop_label();
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
             ss_cout << "processing " << l << std::endl;
 #endif
 
         process_body:
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
             assert(all_params_typed(l));
@@ -9139,7 +9139,7 @@ struct NormalizeCtx {
                     type_continuation_from_builtin_call(l);
                 }
             } else if (is_calling_label(l)) {
-                #if BANGRA_DEBUG_CODEGEN
+                #if SCOPES_DEBUG_CODEGEN
                 if (!is_done(l->get_label_enter())) {
                     Label *dest = l->get_label_enter();
                     SCCBuilder scc(dest);
@@ -9156,7 +9156,7 @@ struct NormalizeCtx {
                 Label *enter_label = l->get_label_enter();
                 if (is_basic_block_like(enter_label)) {
                     if (!has_args(enter_label)) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
                         ss_cout << "folding jump to label in " << l << std::endl;
 #endif
                         copy_body(l, enter_label);
@@ -9222,7 +9222,7 @@ struct NormalizeCtx {
                 location_error(ss.str());
             }
 
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
             ss_cout << "done: ";
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
@@ -9292,7 +9292,7 @@ struct NormalizeCtx {
                 // always process deepest illegal labels
                 if (has_illegals.count(l))
                     continue;
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
                 ss_cout << "invalid: ";
                 stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
@@ -9301,7 +9301,7 @@ struct NormalizeCtx {
                 for (auto kv = users_copy.begin(); kv != users_copy.end(); ++kv) {
                     Label *user = kv->first;
                     if (!visited.count(user)) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
                         ss_cout << "warning: unreachable user encountered" << std::endl;
 #endif
                         continue;
@@ -9323,7 +9323,7 @@ struct NormalizeCtx {
                         auto &&cont = args[0];
                         if ((cont.type == TYPE_Parameter)
                             && (cont.parameter->label == l)) {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
                             ss_cout << "skipping recursive call" << std::endl;
 #endif
                         } else {
@@ -9333,7 +9333,7 @@ struct NormalizeCtx {
                             }
                             Label *newl = fold_type_label(l, newargs);
 
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
                             ss_cout << l << "(" << cont << ") -> " << newl << std::endl;
 #endif
 
@@ -9344,7 +9344,7 @@ struct NormalizeCtx {
                             numchanges++;
                         }
                     } else {
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
                         ss_cout << "warning: invalidated user encountered" << std::endl;
 #endif
                     }
@@ -9352,7 +9352,7 @@ struct NormalizeCtx {
             }
         } while (numchanges);
 
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         ss_cout << "lowered to CFF in " << iterations << " steps" << std::endl;
 #endif
 
@@ -10396,7 +10396,7 @@ static void f_write(const String *value) {
     fputs(value->data, stdout);
 }
 
-static I2 bangra_print_number(int a, int b, int c) {
+static I2 scopes_print_number(int a, int b, int c) {
     std::cout << a << " " << b << " " << c << std::endl;
     return { c , b };
 }
@@ -10528,9 +10528,9 @@ static const Type *f_typename_type(const String *str) {
 
 static I3 f_compiler_version() {
     return { 
-        BANGRA_VERSION_MAJOR,
-        BANGRA_VERSION_MINOR,
-        BANGRA_VERSION_PATCH };
+        SCOPES_VERSION_MAJOR,
+        SCOPES_VERSION_MINOR,
+        SCOPES_VERSION_PATCH };
 }
 
 static const Syntax *f_syntax_new(const Anchor *anchor, Any value, bool quoted) {
@@ -10741,12 +10741,12 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(KW_ListEmpty, EOL);
     globals->bind(KW_None, none);
     globals->bind(SYM_CompilerDir,
-        String::from(bangra_compiler_dir, strlen(bangra_compiler_dir)));
+        String::from(scopes_compiler_dir, strlen(scopes_compiler_dir)));
     globals->bind(SYM_CompilerPath,
-        String::from(bangra_compiler_path, strlen(bangra_compiler_path)));
-    globals->bind(SYM_DebugBuild, bangra_is_debug());
+        String::from(scopes_compiler_path, strlen(scopes_compiler_path)));
+    globals->bind(SYM_DebugBuild, scopes_is_debug());
     globals->bind(SYM_CompilerTimestamp,
-        String::from_cstr(bangra_compile_time_date()));
+        String::from_cstr(scopes_compile_time_date()));
 
     for (uint64_t i = STYLE_FIRST; i <= STYLE_LAST; ++i) {
         Symbol sym = Symbol((KnownSymbol)i);
@@ -10831,7 +10831,7 @@ static void setup_stdio() {
     }
 }
 
-} // namespace bangra
+} // namespace scopes
 
 #ifndef _WIN32
 static void crash_handler(int sig) {
@@ -10849,29 +10849,29 @@ static void crash_handler(int sig) {
 #endif
 
 int main(int argc, char *argv[]) {
-    using namespace bangra;
+    using namespace scopes;
     location_error = default_location_error;
     Symbol::_init_symbols();
     init_llvm();
 
     setup_stdio();
-    bangra_argc = argc;
-    bangra_argv = argv;
+    scopes_argc = argc;
+    scopes_argv = argv;
 
-    bangra::global_c_namespace = dlopen(NULL, RTLD_LAZY);
+    scopes::global_c_namespace = dlopen(NULL, RTLD_LAZY);
 
-    bangra_compiler_path = nullptr;
-    bangra_compiler_dir = nullptr;
+    scopes_compiler_path = nullptr;
+    scopes_compiler_dir = nullptr;
     if (argv) {
         if (argv[0]) {
             std::string loader = GetExecutablePath(argv[0]);
             // string must be kept resident
-            bangra_compiler_path = strdup(loader.c_str());
+            scopes_compiler_path = strdup(loader.c_str());
         } else {
-            bangra_compiler_path = strdup("");
+            scopes_compiler_path = strdup("");
         }
 
-        bangra_compiler_dir = dirname(strdup(bangra_compiler_path));
+        scopes_compiler_dir = dirname(strdup(scopes_compiler_path));
     }
 
 #ifndef _WIN32
@@ -10879,22 +10879,22 @@ int main(int argc, char *argv[]) {
     signal(SIGABRT, crash_handler);
 #endif
 
-#if BANGRA_CATCH_EXCEPTION
+#if SCOPES_CATCH_EXCEPTION
     try {
 #endif
         init_types();
         init_globals(argc, argv);
 
         SourceFile *sf = nullptr;
-#ifdef BANGRA_DEBUG
+#ifdef SCOPES_DEBUG
         char sourcepath[1024];
-        strncpy(sourcepath, bangra_compiler_dir, 1024);
-        strncat(sourcepath, "/bangra.b", 1024);
+        strncpy(sourcepath, scopes_compiler_dir, 1024);
+        strncat(sourcepath, "/core.sc", 1024);
         Symbol name = String::from_cstr(sourcepath);
         sf = SourceFile::from_file(name);
 #else
         sf = SourceFile::from_string(Symbol("<boot>"),
-            String::from((const char *)bangra_b, bangra_b_len));
+            String::from((const char *)core_sc, core_sc_len));
 #endif
         if (!sf) {
             location_error(String::from("bootscript missing\n"));
@@ -10904,7 +10904,7 @@ int main(int argc, char *argv[]) {
 
         Label *fn = expand_module(expr);
 
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         StyledStream ss(std::cout);
         std::cout << "non-normalized:" << std::endl;
         stream_label(ss, fn, StreamLabelFormat::debug_all());
@@ -10912,7 +10912,7 @@ int main(int argc, char *argv[]) {
 #endif
 
         fn = normalize(fn);
-#if BANGRA_DEBUG_CODEGEN
+#if SCOPES_DEBUG_CODEGEN
         std::cout << "normalized:" << std::endl;
         stream_label(ss, fn, StreamLabelFormat::debug_all());
         std::cout << std::endl;
@@ -10923,7 +10923,7 @@ int main(int argc, char *argv[]) {
         fptr();
 
         //interpreter_loop(cmd);
-#if BANGRA_CATCH_EXCEPTION
+#if SCOPES_CATCH_EXCEPTION
     } catch (const Exception &exc) {
         default_exception_handler(exc);
         throw exc;
@@ -10933,4 +10933,4 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-#endif // BANGRA_CPP_IMPL
+#endif // SCOPES_CPP_IMPL

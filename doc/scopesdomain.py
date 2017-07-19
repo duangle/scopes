@@ -13,11 +13,11 @@ from sphinx.directives import ObjectDescription
 from sphinx.util.nodes import make_refnode
 from sphinx.util.docfields import Field, TypedField
 
-import bangraparser as parser
+import scopesparser as parser
 
-domain_name = 'bangra'
-ref_prefix = 'bangra.'
-xref_prefix = 'bangra:'
+domain_name = 'scopes'
+ref_prefix = 'scopes.'
+xref_prefix = 'scopes:'
 
 # RE to split at word boundaries
 wsplit_re = re.compile(r'(\W+)')
@@ -44,9 +44,9 @@ c_funcptr_arg_sig_re = re.compile(
     ''', re.VERBOSE)
 c_funcptr_name_re = re.compile(r'^\(\s*\*\s*(.*?)\s*\)$')
 
-class BangraObject(ObjectDescription):
+class ScopesObject(ObjectDescription):
     """
-    Description of a Bangra language object.
+    Description of a Scopes language object.
     """
 
     doc_field_types = [
@@ -63,7 +63,7 @@ class BangraObject(ObjectDescription):
               names=('assoc',)),
     ]
 
-    # These Bangra types aren't described anywhere, so don't try to create
+    # These Scopes types aren't described anywhere, so don't try to create
     # a cross-reference to them
     stopwords = set((
         # 'const', 'void', 'char', 'wchar_t', 'int', 'short',
@@ -73,7 +73,7 @@ class BangraObject(ObjectDescription):
     ))
 
     def handle_signature(self, sig, signode):
-        """Transform a Bangra declaration into RST nodes."""
+        """Transform a Scopes declaration into RST nodes."""
         # first try the function pointer signature regex, it's more specific
         expr = parser.compile(sig, "<signature>").strip()
 
@@ -144,7 +144,7 @@ class BangraObject(ObjectDescription):
 
     def add_target_and_index(self, name, sig, signode):
         #print("add_target_and_index",name,sig,signode)
-        # for Bangra items we add a prefix since names are usually not qualified
+        # for Scopes items we add a prefix since names are usually not qualified
         # by a module name and so easily clash with e.g. section titles
         #name, objtype = name
         keyname = name[1] + '.' + name[0]
@@ -157,7 +157,7 @@ class BangraObject(ObjectDescription):
             inv = self.env.domaindata[domain_name]['objects']
             if keyname in inv:
                 self.state_machine.reporter.warning(
-                    'duplicate Bangra object description of %s, ' % keyname +
+                    'duplicate Scopes object description of %s, ' % keyname +
                     'other instance in ' + self.env.doc2path(inv[keyname][0]),
                     line=self.lineno)
             inv[keyname] = (self.env.docname, self.objtype)
@@ -180,15 +180,15 @@ class BangraObject(ObjectDescription):
         if self.typename_set:
             self.env.ref_context.pop('c:type', None)
 
-class BangraXRefRole(XRefRole):
+class ScopesXRefRole(XRefRole):
     def process_link(self, env, refnode, has_explicit_title, title, target):
         #print("process_link",env,refnode,has_explicit_title,title,target)
         return title, target
 
-class BangraDomain(Domain):
-    """Bangra language domain."""
+class ScopesDomain(Domain):
+    """Scopes language domain."""
     name = domain_name
-    label = 'Bangra'
+    label = 'Scopes'
     object_types = {
         'special': ObjType(l_('special'), 'special'),
         'macro':    ObjType(l_('macro'),    'macro'),
@@ -201,25 +201,25 @@ class BangraDomain(Domain):
     }
 
     directives = {
-        'special': BangraObject,
-        'macro':    BangraObject,
-        'infix-macro':    BangraObject,
-        'symbol-prefix':    BangraObject,
-        'function': BangraObject,
-        'define': BangraObject,
-        'type': BangraObject,
-        'type-factory': BangraObject,
+        'special': ScopesObject,
+        'macro':    ScopesObject,
+        'infix-macro':    ScopesObject,
+        'symbol-prefix':    ScopesObject,
+        'function': ScopesObject,
+        'define': ScopesObject,
+        'type': ScopesObject,
+        'type-factory': ScopesObject,
     }
     roles = {
-        'func' :  BangraXRefRole(),
-        'special' :  BangraXRefRole(),
-        'macro' :  BangraXRefRole(),
-        'infix-macro' :  BangraXRefRole(),
-        'symbol-prefix':    BangraXRefRole(),
-        'define':    BangraXRefRole(),
-        'obj':    BangraXRefRole(),
-        'type':    BangraXRefRole(),
-        'type-factory':    BangraXRefRole(),
+        'func' :  ScopesXRefRole(),
+        'special' :  ScopesXRefRole(),
+        'macro' :  ScopesXRefRole(),
+        'infix-macro' :  ScopesXRefRole(),
+        'symbol-prefix':    ScopesXRefRole(),
+        'define':    ScopesXRefRole(),
+        'obj':    ScopesXRefRole(),
+        'type':    ScopesXRefRole(),
+        'type-factory':    ScopesXRefRole(),
     }
 
     role_map = {
@@ -285,4 +285,4 @@ class BangraDomain(Domain):
             yield (refname, refname, type, docname, ref_prefix + refname, 1)
 
 def setup(app):
-    app.add_domain(BangraDomain)
+    app.add_domain(ScopesDomain)

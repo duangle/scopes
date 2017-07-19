@@ -4,8 +4,8 @@
     "version": "0.1.0",
     "tasks": [
         {
-            "taskName": "makebangra",
-            "command": "${workspaceRoot}/makebangra",
+            "taskName": "makescopes",
+            "command": "${workspaceRoot}/makescopes",
             "isShellCommand": true,
             "isBuildCommand": true,
             "args": [],
@@ -24,13 +24,13 @@
             }
         },
         {
-            "taskName": "bangra",
-            "command": "${workspaceRoot}/bangra",
+            "taskName": "scopes",
+            "command": "${workspaceRoot}/scopes",
             "isShellCommand": true,
             "args": [],
             "showOutput": "always",
             "problemMatcher": {
-                "owner": "bangra",
+                "owner": "scopes",
                 "fileLocation": "absolute",
                 "pattern": {
                     "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error|fatal error):\\s+(.*)$",

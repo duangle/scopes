@@ -1,4 +1,4 @@
-Bangra Language Reference
+Scopes Language Reference
 =========================
 
 Built-in Constants

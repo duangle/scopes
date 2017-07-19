@@ -54,7 +54,7 @@ print(keywords)
 def isspace(c):
     return c in ' \t\n\r'
 
-class BangraLexer(Lexer):
+class ScopesLexer(Lexer):
     def __init__(self, **options):
         Lexer.__init__(self, **options)
 
@@ -274,4 +274,4 @@ class BangraLexer(Lexer):
             yield state.cursor, token, state.value
 
 def setup(app):
-    app.add_lexer("bangra", BangraLexer())
+    app.add_lexer("scopes", ScopesLexer())

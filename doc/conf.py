@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 #
-# Bangra documentation build configuration file, created by
+# Scopes documentation build configuration file, created by
 # sphinx-quickstart on Tue Sep 22 07:49:51 2015.
 #
 # This file is execfile()d with the current directory set to its
@@ -25,12 +25,12 @@ sys.path.insert(0, os.path.abspath('.'))
 # If your documentation needs a minimal Sphinx version, state it here.
 #needs_sphinx = '1.0'
 
-primary_domain = 'bangra'
+primary_domain = 'scopes'
 
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ['bangradomain', 'bangralexer']
+extensions = ['scopesdomain', 'scopeslexer']
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
@@ -45,7 +45,7 @@ source_suffix = '.rst'
 master_doc = 'index'
 
 # General information about the project.
-project = u'Bangra'
+project = u'Scopes'
 copyright = u'2016, 2017 Leonard Ritter'
 
 # The version info for the project you're documenting, acts as replacement for
@@ -96,7 +96,7 @@ pygments_style = 'sphinx'
 # If true, keep warnings as "system message" paragraphs in the built documents.
 #keep_warnings = False
 
-highlight_language = "bangra"
+highlight_language = "scopes"
 
 # -- Options for HTML output ----------------------------------------------
 
@@ -181,7 +181,7 @@ html_static_path = ['_static']
 #html_file_suffix = None
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = 'Bangradoc'
+htmlhelp_basename = 'scopesdoc'
 
 
 # -- Options for LaTeX output ---------------------------------------------
@@ -201,7 +201,7 @@ latex_elements = {
 # (source start file, target name, title,
 #  author, documentclass [howto, manual, or own class]).
 latex_documents = [
-  ('index', 'Bangra.tex', u'Bangra Documentation',
+  ('index', 'Scopes.tex', u'Scopes Documentation',
    u'Leonard Ritter', 'manual'),
 ]
 
@@ -231,7 +231,7 @@ latex_documents = [
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
 man_pages = [
-    ('index', 'bangra', u'Bangra Documentation',
+    ('index', 'scopes', u'Scopes Documentation',
      [u'Leonard Ritter'], 1)
 ]
 
@@ -245,8 +245,8 @@ man_pages = [
 # (source start file, target name, title, author,
 #  dir menu entry, description, category)
 texinfo_documents = [
-  ('index', 'Bangra', u'Bangra Documentation',
-   u'Leonard Ritter', 'Bangra', 'One line description of project.',
+  ('index', 'Scopes', u'Scopes Documentation',
+   u'Leonard Ritter', 'Scopes', 'One line description of project.',
    'Miscellaneous'),
 ]
 

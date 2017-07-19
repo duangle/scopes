@@ -1,6 +1,6 @@
 #
-    Bangra Compiler
-    Copyright (c) 2017 Leonard Ritter
+    Scopes Compiler
+    Copyright (c) 2016, 2017 Leonard Ritter
 
     Permission is hereby granted, free of charge, to any person obtaining a copy
     of this software and associated documentation files (the "Software"), to
@@ -20,7 +20,7 @@
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
 
-    This is the bangra boot script. It implements the remaining standard
+    This is the scopes boot script. It implements the remaining standard
     functions and macros, parses the command-line and optionally enters
     the REPL.
 
@@ -1226,8 +1226,8 @@ define-infix> 800 @
 define package
     let package = (Scope)
     set-scope-symbol! package 'path
-        list "./?.b"
-            .. compiler-dir "/?.b"
+        list "./?.sc"
+            .. compiler-dir "/?.sc"
     set-scope-symbol! package 'modules (Scope)
     package
 
@@ -1326,7 +1326,7 @@ define-macro import
 
 fn compiler-version-string ()
     let vmin vmaj vpatch = (compiler-version)
-    .. "Bangra " (string-repr vmin) "." (string-repr vmaj)
+    .. "Scopes " (string-repr vmin) "." (string-repr vmaj)
         if (vpatch == 0) ""
         else
             .. "." (string-repr vpatch)

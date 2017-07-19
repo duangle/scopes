@@ -9,18 +9,18 @@ set MSYSPATH=C:\msys64
 set MINGWPATH=%MSYSPATH%\mingw64
 set PATH=%MINGWPATH%\bin;%PATH%
 rem set DEBUGOPTS=-O2 -DNDEBUG
-set DEBUGOPTS=-O0 -g -DBANGRA_DEBUG
-echo bangra0.h
-clang -x c -o %DIR%bangra0.h -P -E %DIR%bangra.cpp -I%DIR%win32 -I%MINGWPATH%/lib/libffi-3.2.1/include
+set DEBUGOPTS=-O0 -g -DSCOPES_DEBUG
+echo scopes0.h
+clang -x c -o %DIR%scopes0.h -P -E %DIR%scopes.cpp -I%DIR%win32 -I%MINGWPATH%/lib/libffi-3.2.1/include
 if errorlevel 1 goto :fail
-echo bangra.h
-sed 's/_CRT_PACKING/8/g' %DIR%bangra0.h > %DIR%bangra.h
+echo scopes.h
+sed 's/_CRT_PACKING/8/g' %DIR%scopes0.h > %DIR%scopes.h
 if errorlevel 1 goto :fail
-echo bangra.bin.h
-xxd -i bangra.h %DIR%bangra.bin.h
+echo scopes.bin.h
+xxd -i scopes.h %DIR%scopes.bin.h
 if errorlevel 1 goto :fail
-echo bangra.b.bin.h
-xxd -i bangra.b %DIR%bangra.b.bin.h
+echo core.sc.bin.h
+xxd -i core.sc %DIR%core.sc.bin.h
 if errorlevel 1 goto :fail
 echo mman.o
 clang -c -o mman.o %DIR%win32\mman.c -O2 -Wno-shift-count-overflow
@@ -43,12 +43,12 @@ echo wcwidth.o
 clang -c -o wcwidth.o %DIR%external\linenoise-ng\src\wcwidth.cpp -O2 ^
     -I%DIR%external\linenoise-ng\include -std=gnu++11 -fno-rtti
 if errorlevel 1 goto :fail
-echo bangra.exe
-clang++ -o bangra.exe %DIR%bangra.cpp ^
+echo scopes.exe
+clang++ -o scopes.exe %DIR%scopes.cpp ^
     -I%DIR%win32 ^
     -I%MINGWPATH%/lib/libffi-3.2.1/include -I%MINGWPATH%/include ^
-    -Wno-vla -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL ^
-    -D_GNU_SOURCE -pedantic -DBANGRA_DEBUG -ferror-limit=1 ^
+    -Wno-vla -DSCOPES_CPP_IMPL -DSCOPES_MAIN_CPP_IMPL ^
+    -D_GNU_SOURCE -pedantic -DSCOPES_DEBUG -ferror-limit=1 ^
     -D_LIBCPP_HAS_NO_CONSTEXPR ^
     -std=gnu++11 %DEBUGOPTS% ^
     -fno-exceptions -fno-rtti ^
@@ -74,7 +74,7 @@ clang++ -o bangra.exe %DIR%bangra.cpp ^
     -lffi -lole32 -luuid -lversion -lpsapi ^
     -fexceptions
 if errorlevel 1 goto :fail
-%DIR%bangra.exe %DIR%testing\test_all.b
+%DIR%scopes.exe %DIR%testing\test_all.sc
 if errorlevel 1 goto :fail
 echo success.
 goto :done

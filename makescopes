@@ -20,14 +20,14 @@ else
     PATH=$DIR/clang/bin:/usr/lib/llvm-3.9/bin:$PATH
     OPT_G=-g
     OPT_O=-O0
-    OPT_MODE=-DBANGRA_DEBUG
+    OPT_MODE=-DSCOPES_DEBUG
 fi
-echo "bangra.h"
-clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
-&& echo "bangra.bin.h" \
-&& xxd -i bangra.h $DIR/bangra.bin.h \
-&& echo "bangra.b.bin.h" \
-&& xxd -i bangra.b $DIR/bangra.b.bin.h \
+echo "scopes.h"
+clang -x c -o $DIR/scopes.h -I$DIR -P -E $DIR/scopes.cpp \
+&& echo "scopes.bin.h" \
+&& xxd -i scopes.h $DIR/scopes.bin.h \
+&& echo "core.sc.bin.h" \
+&& xxd -i core.sc $DIR/core.sc.bin.h \
 && echo "coro.o" \
 && clang -c -o $DIR/coro.o $DIR/external/coro/coro.c $OPT_G $OPT_O \
 && echo "linenoise.o" \
@@ -39,15 +39,15 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
 && echo "wcwidth.o" \
 && clang -c -o $DIR/wcwidth.o $DIR/external/linenoise-ng/src/wcwidth.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
-&& echo "bangra" \
+&& echo "scopes" \
 && time clang++ \
     -rdynamic \
-    -o $DIR/bangra \
-    $DIR/bangra.cpp \
+    -o $DIR/scopes \
+    $DIR/scopes.cpp \
     -pedantic -Wall \
     $OPT_G \
     -ferror-limit=1 \
-    $OPT_MODE -DBANGRA_CPP_IMPL -DBANGRA_MAIN_CPP_IMPL \
+    $OPT_MODE -DSCOPES_CPP_IMPL -DSCOPES_MAIN_CPP_IMPL \
     -D_GLIBCXX_USE_CXX11_ABI=0 \
     -lpthread -lm -ldl -ltinfo -lz \
     -I$DIR/libffi/include \
@@ -66,6 +66,6 @@ clang -x c -o $DIR/bangra.h -I$DIR -P -E $DIR/bangra.cpp \
     -Wl,--no-whole-archive \
     $OPT_O \
     -fexceptions \
-&& echo "executing test_all.b..." \
-&& $DIR/bangra $DIR/testing/test_all.b
-# && gdb --ex r --silent --args $DIR/bangra $DIR/testing/test_bangra.b
+&& echo "executing test_all.sc..." \
+&& $DIR/scopes $DIR/testing/test_all.sc
+# && gdb --ex r --silent --args $DIR/scopes $DIR/testing/test_scopes.sc
