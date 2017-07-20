@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 SOURCE="${BASH_SOURCE[0]}"
 while [ -h "$SOURCE" ]; do # resolve $SOURCE until the file is no longer a symlink
   DIR="$( cd -P "$( dirname "$SOURCE" )" && pwd )"
@@ -23,7 +23,7 @@ else
     OPT_MODE=-DSCOPES_DEBUG
 fi
 echo "scopes.h"
-clang -x c -o $DIR/scopes.h -I$DIR -P -E $DIR/scopes.cpp \
+clang -x c -o $DIR/scopes.h -I$DIR/libffi/include -I$DIR -P -E $DIR/scopes.cpp \
 && echo "scopes.bin.h" \
 && xxd -i scopes.h $DIR/scopes.bin.h \
 && echo "core.sc.bin.h" \
@@ -49,7 +49,7 @@ clang -x c -o $DIR/scopes.h -I$DIR -P -E $DIR/scopes.cpp \
     -ferror-limit=1 \
     $OPT_MODE -DSCOPES_CPP_IMPL -DSCOPES_MAIN_CPP_IMPL \
     -D_GLIBCXX_USE_CXX11_ABI=0 \
-    -lpthread -lm -ldl -ltinfo -lz \
+    -lpthread -lm -ltinfo -lz -ldl \
     -I$DIR/libffi/include \
     -I$DIR \
     -lclangFrontend -lclangDriver \
