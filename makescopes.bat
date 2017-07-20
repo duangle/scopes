@@ -1,5 +1,5 @@
 @echo off
-rem you need msys2 and the llvm, clang 3.9, libffi and vim packages installed.
+rem you need msys2 and the llvm, clang 4.0, libffi and vim packages installed.
 rem see documentation for detailed installation instructions.
 rem additionally, the built executable depends on
 rem libstdc++-6.dll, libgcc_s_seh-1.dll, libffi-6.dll and libwinpthread-1.dll

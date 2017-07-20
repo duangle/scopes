@@ -167,10 +167,11 @@ const char *scopes_compile_time_date();
 #include "llvm/Support/raw_os_ostream.h"
 
 #include "clang/Frontend/CompilerInstance.h"
+#include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/RecordLayout.h"
 #include "clang/CodeGen/CodeGenAction.h"
-#include "clang/Frontend/MultiplexConsumer.h"
+#include "clang/Lex/PreprocessorOptions.h"
 
 extern "C" {
 
