@@ -853,10 +853,6 @@ fn syntax-error! (anchor msg)
     unreachable!;
 
 syntax-extend
-    print "hello"
-    syntax-scope
-
-syntax-extend
     let Macro = (typename-type "Macro")
     let BlockScopeFunction =
         pointer-type
