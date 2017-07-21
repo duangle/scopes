@@ -1338,20 +1338,6 @@ fn compiler-version-string ()
         \ compiler-timestamp ")"
 
 fn read-eval-print-loop ()
-    syntax-extend
-        let lib =
-            import-c "setjmp.h" "
-                #include <setjmp.h>
-                " eol
-        let setjmp longjmp jmp_buf = lib.setjmp lib.longjmp lib.jmp_buf
-
-        set-scope-symbol! syntax-scope 'jmpbuf
-            getelementptr (malloc jmp_buf) 0 0
-        set-scope-symbol! syntax-scope 'setjmp setjmp
-        set-scope-symbol! syntax-scope 'longjmp longjmp
-
-        syntax-scope
-
     fn exception-handler (pad)
         io-write!
             format-message (exception-anchor pad)
