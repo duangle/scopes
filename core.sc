@@ -51,10 +51,7 @@ fn todo! (msg)
         string-join "TODO: " msg
 
 fn error! (msg)
-    io-write! "runtime error: "
-    io-write! msg
-    io-write! "\n"
-    abort!;
+    __error! msg
     unreachable!;
 
 fn integer-type? (T)
@@ -1355,19 +1352,11 @@ fn read-eval-print-loop ()
 
         syntax-scope
 
-    fn exception-handler (str)
+    fn exception-handler (pad)
         io-write!
-            format-message (active-anchor)
+            format-message (exception-anchor pad)
                 .. (default-styler style-error "error:")
-                    \ " " str
-        longjmp jmpbuf 1
-
-    fn install-exception-handler ()
-        set-exception-handler!
-            Any-extract
-                compile (typify exception-handler string)
-                pointer-type
-                    function-type void string
+                    \ " " (exception-message pad)
 
     fn repeat-string (n c)
         let [loop] i s =
@@ -1398,7 +1387,6 @@ fn read-eval-print-loop ()
             return false
         loop (i + 1)
 
-    install-exception-handler;
     print
         compiler-version-string;
 
@@ -1435,8 +1423,12 @@ fn read-eval-print-loop ()
         else (leading-spaces cmd)
     if (not terminated?)
         loop (unconst preload) cmdlist counter
-    if ((setjmp jmpbuf) == 1)
+    let pad = (alloca exception-pad-type)
+    if ((catch-exception pad) != 0)
+        exception-handler pad
         loop (unconst "") (unconst "") counter
+    let old-pad =
+        set-exception-pad pad
     let expr = (list-parse cmdlist)
     let expr-anchor = (Syntax-anchor expr)
     let f = (compile (eval expr eval-scope))
@@ -1455,6 +1447,7 @@ fn read-eval-print-loop ()
             let expr = (Any-extract (Syntax-wrap expr-anchor (Any expr) false) Syntax)
             let f = (compile (eval expr global-scope))
             Any-extract f ModuleFunctionType
+    set-anchor! expr-anchor
     let result = (fptr)
     if ((Any-typeof result) != Nothing)
         set-scope-symbol! eval-scope (Symbol idstr) result

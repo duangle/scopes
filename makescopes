@@ -65,7 +65,6 @@ clang -x c -o $DIR/scopes.h -I$DIR/libffi/include -I$DIR -P -E $DIR/scopes.cpp \
     `llvm-config --libs engine passes option objcarcopts coverage support lto coroutines` \
     -Wl,--no-whole-archive \
     $OPT_O \
-    -fexceptions \
 && echo "executing test_all.sc..." \
 && $DIR/scopes $DIR/testing/test_all.sc
 # && gdb --ex r --silent --args $DIR/scopes $DIR/testing/test_scopes.sc

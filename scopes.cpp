@@ -32,7 +32,6 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 #define SCOPES_DEBUG_CODEGEN 0
 #define SCOPES_OPTIMIZE_ASSEMBLY 1
-#define SCOPES_CATCH_EXCEPTION 1
 
 #define SCOPES_MAX_LABEL_INSTANCES 256
 
@@ -1528,8 +1527,7 @@ static StyledStream& operator<<(StyledStream& ost, const Anchor *anchor) {
 // TYPE
 //------------------------------------------------------------------------------
 
-typedef void (*ErrorHandler)(const String *msg);
-static ErrorHandler location_error = nullptr;
+static void location_error(const String *msg);
 
 #define B_TYPE_KIND() \
     T(TK_Integer, "type-kind-integer") \
@@ -2919,23 +2917,55 @@ static const Anchor *get_active_anchor() {
 struct Exception {
     const Anchor *anchor;
     const String *msg;
-    const String *translate;
+
+    Exception() : 
+        anchor(nullptr),
+        msg(nullptr) {}
 
     Exception(const Anchor *_anchor, const String *_msg) :
         anchor(_anchor),
-        msg(_msg),
-        translate(nullptr) {}
+        msg(_msg) {}
 };
+
+struct ExceptionPad {
+    jmp_buf retaddr;
+    Exception exc;
+
+    void invoke(const Exception &exc) {
+        this->exc = exc;
+        longjmp(retaddr, 1);
+    }
+};
+
+#define SCOPES_TRY() \
+    ExceptionPad exc_pad; \
+    ExceptionPad *_last_exc_pad = _exc_pad; \
+    _exc_pad = &exc_pad; \
+    if (!setjmp(exc_pad.retaddr)) {
+
+#define SCOPES_CATCH(EXCNAME) \
+        _exc_pad = _last_exc_pad; \
+    } else { \
+        _exc_pad = _last_exc_pad; \
+        auto &&EXCNAME = exc_pad.exc;
+
+#define SCOPES_TRY_END() \
+    }
+
+static ExceptionPad *_exc_pad = nullptr;
 
 static void default_exception_handler(const Exception &exc);
 
-static void default_location_error(const String *msg) {
-    Exception exc(_active_anchor, msg);
-#ifdef SCOPES_WIN32
-    default_exception_handler(exc);
-#else
-    throw exc;
-#endif
+static void error(const Exception &exc) {
+    if (!_exc_pad) {
+        default_exception_handler(exc);
+    } else {
+        _exc_pad->invoke(exc);
+    }
+}
+
+static void location_error(const String *msg) {
+    error(Exception(_active_anchor, msg));
 }
 
 //------------------------------------------------------------------------------
@@ -5755,7 +5785,7 @@ static void default_exception_handler(const Exception &exc) {
     if (exc.anchor) {
         exc.anchor->stream_source_line(cerr);
     }
-    exit(1);
+    std::abort();
 }
 
 static int integer_type_bit_size(const Type *T) {
@@ -9151,9 +9181,9 @@ struct NormalizeCtx {
     }
 
     void normalize(Label *entry) {
-        auto _old_location_error = location_error;
-        location_error = default_location_error;
-        try {
+
+        SCOPES_TRY()
+
         done.clear();
         todo = { entry };
 
@@ -9296,16 +9326,11 @@ struct NormalizeCtx {
             }
         }
 
-        location_error = _old_location_error;
-        } catch (const Exception &exc) {
+        SCOPES_CATCH(exc)
+            printf("catch!\n");
             print_traceback();
-            location_error = _old_location_error;
-            if (location_error == default_location_error) {
-                throw exc;
-            } else {
-                location_error(exc.msg);
-            }
-        }
+            error(exc);
+        SCOPES_TRY_END()
     }
 
     Label *lower2cff(Label *entry) {
@@ -9553,14 +9578,14 @@ struct NormalizeCtx {
         if (fi->flags & FF_Variadic) {
             if (argcount < fargcount) {
                 StyledString ss;
-                ss.out << "FFI: argument count mismatch (need at least "
+                ss.out << "argument count mismatch (need at least "
                     << fargcount << ", got " << argcount << ")";
                 location_error(ss.str());
             }
         } else {
             if (argcount != fargcount) {
                 StyledString ss;
-                ss.out << "FFI: argument count mismatch (need "
+                ss.out << "argument count mismatch (need "
                     << fargcount << ", got " << argcount << ")";
                 location_error(ss.str());
             }
@@ -10692,10 +10717,6 @@ static StringBoolPair f_prompt(const String *s, const String *pre) {
     return { String::from_cstr(r), true };
 }
 
-static void f_set_exception_handler(ErrorHandler handler) {
-    location_error = handler;
-}
-
 static const String *f_format_message(const Anchor *anchor, const String *message) {
     StyledString ss;
     ss.out << anchor << " " << message->data << std::endl;
@@ -10705,6 +10726,25 @@ static const String *f_format_message(const Anchor *anchor, const String *messag
 
 static const String *f_symbol_to_string(Symbol sym) {
     return sym.name();
+}
+
+static int f_catch_exception(ExceptionPad *pad) {
+    assert(pad);
+    return setjmp(pad->retaddr);
+}
+
+ExceptionPad *f_set_exception_pad(ExceptionPad *pad) {
+    ExceptionPad *last_exc_pad = _exc_pad;
+    _exc_pad = pad;
+    return last_exc_pad;
+}
+
+const Anchor *f_exception_anchor(ExceptionPad *pad) {
+    return pad->exc.anchor;
+}
+
+const String *f_exception_message(ExceptionPad *pad) {
+    return pad->exc.msg;
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -10762,8 +10802,6 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);    
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);
-    DEFINE_C_FUNCTION(SFXFN_SetExceptionHandler, f_set_exception_handler, TYPE_Void, 
-        Pointer(Function(TYPE_Void, {TYPE_String})));    
 
     DEFINE_C_FUNCTION(FN_FormatMessage, f_format_message, TYPE_String, TYPE_Anchor, TYPE_String);
     DEFINE_C_FUNCTION(FN_ActiveAnchor, get_active_anchor, TYPE_Anchor);
@@ -10773,6 +10811,20 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
+
+    const Type *exception_pad_type = Array(TYPE_U8, sizeof(ExceptionPad));
+    const Type *p_exception_pad_type = Pointer(exception_pad_type);
+
+    DEFINE_C_FUNCTION(Symbol("set-exception-pad"), f_set_exception_pad, 
+        p_exception_pad_type, p_exception_pad_type);
+    DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32, 
+        Pointer(exception_pad_type));
+    DEFINE_C_FUNCTION(Symbol("exception-anchor"), f_exception_anchor,
+        TYPE_Anchor, p_exception_pad_type);
+    DEFINE_C_FUNCTION(Symbol("exception-message"), f_exception_message,
+        TYPE_String, p_exception_pad_type);
+    DEFINE_C_FUNCTION(Symbol("exception-message"), f_exception_message,
+        TYPE_String, p_exception_pad_type);
 
 #undef DEFINE_C_FUNCTION
 
@@ -10814,6 +10866,8 @@ static void init_globals(int argc, char *argv[]) {
         Symbol sym = Symbol((KnownSymbol)i);
         globals->bind(sym, sym);
     }
+
+    globals->bind(Symbol("exception-pad-type"), exception_pad_type);
 
     globals->bind(Symbol("bool"), TYPE_Bool);
     globals->bind(Symbol("i8"), TYPE_I8);
@@ -10912,7 +10966,6 @@ static void crash_handler(int sig) {
 
 int main(int argc, char *argv[]) {
     using namespace scopes;
-    location_error = default_location_error;
     Symbol::_init_symbols();
     init_llvm();
 
@@ -10936,61 +10989,52 @@ int main(int argc, char *argv[]) {
         scopes_compiler_dir = dirname(strdup(scopes_compiler_path));
     }
 
+#if 0
 #ifndef SCOPES_WIN32
     signal(SIGSEGV, crash_handler);
     signal(SIGABRT, crash_handler);
 #endif
-
-#if SCOPES_CATCH_EXCEPTION
-    try {
 #endif
-        init_types();
-        init_globals(argc, argv);
 
-        SourceFile *sf = nullptr;
+    init_types();
+    init_globals(argc, argv);
+
+    SourceFile *sf = nullptr;
 #ifdef SCOPES_DEBUG
-        char sourcepath[1024];
-        strncpy(sourcepath, scopes_compiler_dir, 1024);
-        strncat(sourcepath, "/core.sc", 1024);
-        Symbol name = String::from_cstr(sourcepath);
-        sf = SourceFile::from_file(name);
+    char sourcepath[1024];
+    strncpy(sourcepath, scopes_compiler_dir, 1024);
+    strncat(sourcepath, "/core.sc", 1024);
+    Symbol name = String::from_cstr(sourcepath);
+    sf = SourceFile::from_file(name);
 #else
-        sf = SourceFile::from_string(Symbol("<boot>"),
-            String::from((const char *)core_sc, core_sc_len));
+    sf = SourceFile::from_string(Symbol("<boot>"),
+        String::from((const char *)core_sc, core_sc_len));
 #endif
-        if (!sf) {
-            location_error(String::from("bootscript missing\n"));
-        }
-        LexerParser parser(sf);
-        auto expr = parser.parse();
-
-        Label *fn = expand_module(expr);
-
-#if SCOPES_DEBUG_CODEGEN
-        StyledStream ss(std::cout);
-        std::cout << "non-normalized:" << std::endl;
-        stream_label(ss, fn, StreamLabelFormat::debug_all());
-        std::cout << std::endl;
-#endif
-
-        fn = normalize(fn);
-#if SCOPES_DEBUG_CODEGEN
-        std::cout << "normalized:" << std::endl;
-        stream_label(ss, fn, StreamLabelFormat::debug_all());
-        std::cout << std::endl;
-#endif
-
-        typedef void (*MainFuncType)();
-        MainFuncType fptr = (MainFuncType)compile(fn, CF_NoOpts).pointer;
-        fptr();
-
-        //interpreter_loop(cmd);
-#if SCOPES_CATCH_EXCEPTION
-    } catch (const Exception &exc) {
-        default_exception_handler(exc);
-        throw exc;
+    if (!sf) {
+        location_error(String::from("bootscript missing\n"));
     }
+    LexerParser parser(sf);
+    auto expr = parser.parse();
+
+    Label *fn = expand_module(expr);
+
+#if SCOPES_DEBUG_CODEGEN
+    StyledStream ss(std::cout);
+    std::cout << "non-normalized:" << std::endl;
+    stream_label(ss, fn, StreamLabelFormat::debug_all());
+    std::cout << std::endl;
 #endif
+
+    fn = normalize(fn);
+#if SCOPES_DEBUG_CODEGEN
+    std::cout << "normalized:" << std::endl;
+    stream_label(ss, fn, StreamLabelFormat::debug_all());
+    std::cout << std::endl;
+#endif
+
+    typedef void (*MainFuncType)();
+    MainFuncType fptr = (MainFuncType)compile(fn, CF_NoOpts).pointer;
+    fptr();
 
     return 0;
 }
