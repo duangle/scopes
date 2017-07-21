@@ -6743,7 +6743,7 @@ struct GenerateCtx {
 
         LLVMValueRef diloc = nullptr;
         if (use_debug_info) {
-            LLVMValueRef diloc = anchor_to_location(label->body.anchor);
+            diloc = anchor_to_location(label->body.anchor);
             LLVMSetCurrentDebugLocation(builder, diloc);
         }
 
