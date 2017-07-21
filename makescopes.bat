@@ -10,11 +10,7 @@ set MINGWPATH=%MSYSPATH%\mingw64
 set PATH=%MINGWPATH%\bin;%PATH%
 rem set DEBUGOPTS=-O2 -DNDEBUG
 set DEBUGOPTS=-O0 -g -DSCOPES_DEBUG
-echo scopes0.h
-clang -x c -o %DIR%scopes0.h -P -E %DIR%scopes.cpp -I%DIR%win32 -I%MINGWPATH%/lib/libffi-3.2.1/include
-if errorlevel 1 goto :fail
-echo scopes.h
-sed 's/_CRT_PACKING/8/g' %DIR%scopes0.h > %DIR%scopes.h
+clang -x c -o %DIR%scopes.h -P -E %DIR%scopes.cpp -DSCOPES_WIN32 -I%DIR%win32 -I%MINGWPATH%/lib/libffi-3.2.1/include
 if errorlevel 1 goto :fail
 echo scopes.bin.h
 xxd -i scopes.h %DIR%scopes.bin.h
@@ -44,13 +40,14 @@ clang -c -o wcwidth.o %DIR%external\linenoise-ng\src\wcwidth.cpp -O2 ^
     -I%DIR%external\linenoise-ng\include -std=gnu++11 -fno-rtti
 if errorlevel 1 goto :fail
 echo scopes.exe
-clang++ -o scopes.exe %DIR%scopes.cpp ^
+clang++ -o scopes.exe ^
+    %DIR%scopes.cpp ^
     -I%DIR%win32 ^
     -I%MINGWPATH%/lib/libffi-3.2.1/include -I%MINGWPATH%/include ^
     -Wno-vla -DSCOPES_CPP_IMPL -DSCOPES_MAIN_CPP_IMPL ^
     -D_GNU_SOURCE -pedantic -DSCOPES_DEBUG -ferror-limit=1 ^
-    -D_LIBCPP_HAS_NO_CONSTEXPR ^
-    -std=gnu++11 %DEBUGOPTS% ^
+    -D_LIBCPP_HAS_NO_CONSTEXPR -DSCOPES_WIN32 ^
+    -std=c++11 %DEBUGOPTS% ^
     -fno-exceptions -fno-rtti ^
     -Wl,--allow-multiple-definition ^
     -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS ^
@@ -65,6 +62,7 @@ clang++ -o scopes.exe %DIR%scopes.cpp ^
     -lLLVMVectorize -lLLVMLinker -lLLVMIRReader -lLLVMAsmParser ^
     -lLLVMX86Disassembler -lLLVMX86AsmParser -lLLVMX86CodeGen ^
     -lLLVMSelectionDAG -lLLVMAsmPrinter -lLLVMDebugInfoCodeView -lLLVMCodeGen ^
+    -lLLVMDebugInfoMSF -lLLVMCoroutines -lLLVMGlobalISel -lLLVMLTO ^
     -lLLVMScalarOpts -lLLVMInstCombine -lLLVMInstrumentation ^
     -lLLVMTransformUtils -lLLVMBitWriter -lLLVMX86Desc -lLLVMMCDisassembler ^
     -lLLVMX86Info -lLLVMX86AsmPrinter -lLLVMX86Utils -lLLVMMCJIT ^

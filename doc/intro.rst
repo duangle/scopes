@@ -27,6 +27,7 @@ How to build Scopes on Windows:
   llvm, clang 3.9, libffi and xxd for ``x86_64``. The packages are named
   ``mingw64/mingw-w64-x86_64-llvm``, ``mingw64/mingw-w64-x86_64-clang``,
   ``mingw64/mingw-w64-x86_64-libffi`` and ``msys/vim`` (which contains xxd).
+* Nice to have: ``mingw-w64-x86_64-gdb``
 * put ``clang++`` in your path **OR** make sure msys2 resides in ``C:\msys64`` OR edit
   ``makescopes.bat`` and change the path accordingly.
 * copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll``, ``libwinpthread-1.dll`` and

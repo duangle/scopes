@@ -1,4 +1,9 @@
 #
+       \\\
+        \\\
+     /// \\\
+    ///   \\\
+         
     Scopes Compiler
     Copyright (c) 2016, 2017 Leonard Ritter
 
@@ -846,6 +851,10 @@ fn syntax-error! (anchor msg)
         else anchor
     __error! msg
     unreachable!;
+
+syntax-extend
+    print "hello"
+    syntax-scope
 
 syntax-extend
     let Macro = (typename-type "Macro")

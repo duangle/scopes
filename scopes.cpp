@@ -36,6 +36,12 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 #define SCOPES_MAX_LABEL_INSTANCES 256
 
+#ifndef SCOPES_WIN32
+#   ifdef _WIN32
+#   define SCOPES_WIN32
+#   endif
+#endif
+
 #ifndef SCOPES_CPP
 #define SCOPES_CPP
 
@@ -44,7 +50,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 //------------------------------------------------------------------------------
 
 #include <sys/types.h>
-#ifdef _WIN32
+#ifdef SCOPES_WIN32
 #include "mman.h"
 #include "stdlib_ex.h"
 #include "external/linenoise-ng/include/linenoise.h"
@@ -124,7 +130,7 @@ const char *scopes_compile_time_date();
 #include "external/cityhash/city.cpp"
 
 #undef NDEBUG
-#ifdef _WIN32
+#ifdef SCOPES_WIN32
 #include <windows.h>
 #include "stdlib_ex.h"
 #include "dlfcn.h"
@@ -2921,8 +2927,15 @@ struct Exception {
         translate(nullptr) {}
 };
 
+static void default_exception_handler(const Exception &exc);
+
 static void default_location_error(const String *msg) {
-    throw Exception(_active_anchor, msg);
+    Exception exc(_active_anchor, msg);
+#ifdef SCOPES_WIN32
+    default_exception_handler(exc);
+#else
+    throw exc;
+#endif
 }
 
 //------------------------------------------------------------------------------
@@ -5795,6 +5808,8 @@ static T cast_number(const Any &value) {
 // support in the front-end, particularly whether an argument is passed by
 // value or not.
 
+#ifdef SCOPES_WIN32
+#else
 // x86-64 PS ABI based on https://www.uclibc.org/docs/psABI-x86_64.pdf
 
 enum ABIClass {
@@ -6033,10 +6048,20 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
     }
     return 0;
 }
+#endif // SCOPES_WIN32
 
 static bool is_memory_class(const Type *T) {
+#ifdef SCOPES_WIN32
+    if (T == TYPE_Void)
+        return false;
+    if (size_of(T) > 8)
+        return true;
+    else
+        return false;
+#else
     ABIClass subclasses[MAX_ABI_CLASSES];
     return !classify(T, subclasses, 0);
+#endif
 }
 
 //------------------------------------------------------------------------------
@@ -6133,14 +6158,10 @@ static LLVMValueRef mdnode_to_value(llvm::MDNode *node) {
 typedef llvm::DINode::DIFlags LLVMDIFlags;
 
 static LLVMValueRef LLVMDIBuilderCreateSubroutineType(
-    LLVMDIBuilderRef Builder, LLVMValueRef ParameterTypes,
-    unsigned Flags, unsigned CC) {
+    LLVMDIBuilderRef Builder, LLVMValueRef ParameterTypes) {
     return mdnode_to_value(
-        Builder->createSubroutineType(value_to_DI<llvm::MDTuple>(ParameterTypes),
-            Flags, CC));
+        Builder->createSubroutineType(value_to_DI<llvm::MDTuple>(ParameterTypes)));
 }
-
-
 
 static LLVMValueRef LLVMDIBuilderCreateCompileUnit(LLVMDIBuilderRef Builder,
     unsigned Lang,
@@ -6148,8 +6169,10 @@ static LLVMValueRef LLVMDIBuilderCreateCompileUnit(LLVMDIBuilderRef Builder,
     const char *Flags, unsigned RV, const char *SplitName,
     //DICompileUnit::DebugEmissionKind Kind,
     uint64_t DWOId) {
+    auto ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();    
+    auto file = llvm::DIFile::get(*ctx, File, Dir);
     return mdnode_to_value(
-        Builder->createCompileUnit(Lang, File, Dir,
+        Builder->createCompileUnit(Lang, file,
                       Producer, isOptimized, Flags,
                       RV, SplitName,
                       llvm::DICompileUnit::DebugEmissionKind::FullDebug,
@@ -6161,13 +6184,12 @@ static LLVMValueRef LLVMDIBuilderCreateFunction(
     LLVMDIBuilderRef Builder, LLVMValueRef Scope, const char *Name,
     const char *LinkageName, LLVMValueRef File, unsigned LineNo,
     LLVMValueRef Ty, bool IsLocalToUnit, bool IsDefinition,
-    unsigned ScopeLine, unsigned Flags, bool IsOptimized, LLVMValueRef Decl) {
+    unsigned ScopeLine) {
   return mdnode_to_value(Builder->createFunction(
         cast<llvm::DIScope>(value_to_mdnode(Scope)), Name, LinkageName,
         cast<llvm::DIFile>(value_to_mdnode(File)),
         LineNo, cast<llvm::DISubroutineType>(value_to_mdnode(Ty)),
-        IsLocalToUnit, IsDefinition, ScopeLine, Flags, IsOptimized,
-        nullptr, value_to_DI<llvm::DISubprogram>(Decl)));
+        IsLocalToUnit, IsDefinition, ScopeLine));
 }
 
 static LLVMValueRef LLVMGetFunctionSubprogram(LLVMValueRef func) {
@@ -6241,8 +6263,22 @@ struct GenerateCtx {
 
     Label *active_function;
 
+    LLVMAttributeRef attr_byval;
+    LLVMAttributeRef attr_sret;
+    LLVMAttributeRef attr_nonnull;
+
+    template<unsigned N>
+    static LLVMAttributeRef get_attribute(const char (&s)[N]) {
+        unsigned kind = LLVMGetEnumAttributeKindForName(s, N - 1);
+        assert(kind);
+        return LLVMCreateEnumAttribute(LLVMGetGlobalContext(), kind, 0);
+    }
+
     GenerateCtx() :
         active_function(nullptr) {
+        attr_byval = get_attribute("byval");
+        attr_sret = get_attribute("sret");
+        attr_nonnull = get_attribute("nonnull");
     }
 
     LLVMValueRef source_file_to_scope(SourceFile *sf) {
@@ -6276,12 +6312,12 @@ struct GenerateCtx {
             nullptr
         };
         LLVMValueRef disrt = LLVMDIBuilderCreateSubroutineType(di_builder,
-            LLVMMDNode(subroutinevalues, 1), 0, 0);
+            LLVMMDNode(subroutinevalues, 1));
 
         LLVMValueRef difunc = LLVMDIBuilderCreateFunction(
             di_builder, difile, l->name.name()->data, l->name.name()->data,
             difile, anchor->lineno, disrt, false, true,
-            anchor->lineno, 0, false, nullptr);
+            anchor->lineno);
 
         label2md.insert({ l, difunc });
         return difunc;
@@ -6676,13 +6712,12 @@ struct GenerateCtx {
         }
 
         auto ret = LLVMBuildCall(builder, func, values, valuecount, "");
-        const LLVMAttribute LLVMNonNullAttribute = (LLVMAttribute)(1ULL << 44);
         for (auto idx : memptrs) {
-            LLVMAddInstrAttribute(ret, idx, LLVMByValAttribute);
-            LLVMAddInstrAttribute(ret, idx, LLVMNonNullAttribute);                    
+            LLVMAddCallSiteAttribute(ret, idx, attr_byval);
+            LLVMAddCallSiteAttribute(ret, idx, attr_nonnull);
         }
         if (use_sret) {
-            LLVMAddInstrAttribute(ret, 1, LLVMStructRetAttribute);                    
+            LLVMAddCallSiteAttribute(ret, 1, attr_sret);
             return LLVMBuildLoad(builder, values[0], "");
         } else if (fi->return_type != TYPE_Void) {
             return ret;
@@ -10811,7 +10846,7 @@ static void init_globals(int argc, char *argv[]) {
 //------------------------------------------------------------------------------
 
 static void setup_stdio() {
-#ifdef _WIN32
+#ifdef SCOPES_WIN32
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
@@ -10834,7 +10869,7 @@ static void setup_stdio() {
 
 } // namespace scopes
 
-#ifndef _WIN32
+#ifndef SCOPES_WIN32
 static void crash_handler(int sig) {
   void *array[20];
   size_t size;
@@ -10875,7 +10910,7 @@ int main(int argc, char *argv[]) {
         scopes_compiler_dir = dirname(strdup(scopes_compiler_path));
     }
 
-#ifndef _WIN32
+#ifndef SCOPES_WIN32
     signal(SIGSEGV, crash_handler);
     signal(SIGABRT, crash_handler);
 #endif

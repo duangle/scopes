@@ -16,5 +16,5 @@ syntax: regexp
 ^clang
 ^libffi
 ^scopes$
-^scopes0?[.]h$
+^scopes[.]h$
 ^doc/_build/

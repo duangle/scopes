@@ -1,0 +1,89 @@
+{
+    "configurations": [
+        {
+            "name": "Mac",
+            "includePath": [
+                "/usr/include",
+                "/usr/local/include",
+                "${workspaceRoot}"
+            ],
+            "defines": [],
+            "intelliSenseMode": "clang-x64",
+            "browse": {
+                "path": [
+                    "/usr/include",
+                    "/usr/local/include",
+                    "${workspaceRoot}"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        },
+        {
+            "name": "Linux",
+            "includePath": [
+                "/usr/include",
+                "/usr/local/include",
+                "${workspaceRoot}"
+            ],
+            "defines": [],
+            "intelliSenseMode": "clang-x64",
+            "browse": {
+                "path": [
+                    "/usr/include",
+                    "/usr/local/include",
+                    "${workspaceRoot}"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        },
+        {
+            "name": "Win32",
+            "includePath": [
+                "C:/msys64/mingw64/include/c++/7.1.0",
+                "C:/msys64/mingw64/include/c++/7.1.0/x86_64-w64-mingw32",
+                "C:/msys64/mingw64/include/c++/7.1.0/backward",
+                "C:/msys64/mingw64/bin/../lib/clang/4.0.0/include",
+                "C:/msys64/mingw64/x86_64-w64-mingw32/include",
+                "C:/msys64/mingw64/include",
+                "C:/msys64/mingw64/lib/libffi-3.2.1/include",
+                "${workspaceRoot}",
+                "${workspaceRoot}/win32"
+            ],
+            "defines": [
+                "_DEBUG",
+                "UNICODE",
+                "_WIN32",
+                "__GNUC__=5",
+                "__cdecl=__attribute__((__cdecl__))",
+                "SCOPES_CPP_IMPL",
+                "SCOPES_MAIN_CPP_IMPL",
+                "_GNU_SOURCE",
+                "SCOPES_DEBUG",
+                "_LIBCPP_HAS_NO_CONSTEXPR",
+                "SCOPES_WIN32",
+                "__STDC_CONSTANT_MACROS",
+                "__STDC_FORMAT_MACROS",
+                "__STDC_LIMIT_MACROS"
+            ],
+            "intelliSenseMode": "clang-x64",
+            "browse": {
+                "path": [
+                    "C:/msys64/mingw64/include/c++/7.1.0",
+                    "C:/msys64/mingw64/include/c++/7.1.0/x86_64-w64-mingw32",
+                    "C:/msys64/mingw64/include/c++/7.1.0/backward",
+                    "C:/msys64/mingw64/bin/../lib/clang/4.0.0/include",
+                    "C:/msys64/mingw64/x86_64-w64-mingw32/include",
+                    "C:/msys64/mingw64/include",
+                    "C:/msys64/mingw64/lib/libffi-3.2.1/include",
+                    "${workspaceRoot}",
+                    "${workspaceRoot}/win32"
+                ],
+                "limitSymbolsToIncludedHeaders": true,
+                "databaseFilename": ""
+            }
+        }
+    ],
+    "version": 2
+}
