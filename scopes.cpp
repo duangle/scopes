@@ -734,7 +734,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_DumpModule, "compile-flag-dump-module") \
     T(SYM_DumpFunction, "compile-flag-dump-function") \
     T(SYM_DumpTime, "compile-flag-dump-time") \
-    T(SYM_SkipOpts, "compile-flag-skip-opts") \
+    T(SYM_NoOpts, "compile-flag-no-opts") \
     \
     /* function flags */ \
     T(SYM_Variadic, "variadic") \
@@ -6267,6 +6267,8 @@ struct GenerateCtx {
     LLVMAttributeRef attr_sret;
     LLVMAttributeRef attr_nonnull;
 
+    bool use_debug_info;
+
     template<unsigned N>
     static LLVMAttributeRef get_attribute(const char (&s)[N]) {
         unsigned kind = LLVMGetEnumAttributeKindForName(s, N - 1);
@@ -6275,13 +6277,16 @@ struct GenerateCtx {
     }
 
     GenerateCtx() :
-        active_function(nullptr) {
+        active_function(nullptr),
+        use_debug_info(true) {
         attr_byval = get_attribute("byval");
         attr_sret = get_attribute("sret");
         attr_nonnull = get_attribute("nonnull");
     }
 
     LLVMValueRef source_file_to_scope(SourceFile *sf) {
+        assert(use_debug_info);
+
         auto it = file2value.find(sf);
         if (it != file2value.end())
             return it->second;
@@ -6300,6 +6305,8 @@ struct GenerateCtx {
     }
 
     LLVMValueRef label_to_subprogram(Label *l) {
+        assert(use_debug_info);
+
         auto it = label2md.find(l);
         if (it != label2md.end())
             return it->second;
@@ -6324,6 +6331,7 @@ struct GenerateCtx {
     }
 
     LLVMValueRef anchor_to_location(const Anchor *anchor) {
+        assert(use_debug_info);
 
         auto old_bb = LLVMGetInsertBlock(builder);
         LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
@@ -6733,8 +6741,11 @@ struct GenerateCtx {
 
         set_active_anchor(label->body.anchor);
 
-        LLVMValueRef diloc = anchor_to_location(label->body.anchor);
-        LLVMSetCurrentDebugLocation(builder, diloc);
+        LLVMValueRef diloc = nullptr;
+        if (use_debug_info) {
+            LLVMValueRef diloc = anchor_to_location(label->body.anchor);
+            LLVMSetCurrentDebugLocation(builder, diloc);
+        }
 
         assert(!args.empty());
         size_t argcount = args.size() - 1;
@@ -6972,7 +6983,9 @@ struct GenerateCtx {
                 }
                 LLVMBuildBr(builder, LLVMValueAsBasicBlock(value));
             } else {
-                LLVMSetCurrentDebugLocation(builder, diloc);
+                if (use_debug_info) {
+                    LLVMSetCurrentDebugLocation(builder, diloc);
+                }
                 retvalue = build_call(
                     enter.label->get_function_type(), 
                     value, args);
@@ -7162,7 +7175,9 @@ struct GenerateCtx {
             auto func = LLVMAddFunction(module, name, functype);
             LLVMSetLinkage(func, LLVMPrivateLinkage);
 
-            LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
+            if (use_debug_info) {
+                LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
+            }
 
             auto bb = LLVMAppendBasicBlock(func, "");
             LLVMPositionBuilderAtEnd(builder, bb);
@@ -7208,18 +7223,20 @@ struct GenerateCtx {
         di_builder = LLVMCreateDIBuilder(module);
         define_builtin_functions();
 
-        const char *DebugStr = "Debug Info Version";
-        LLVMValueRef DbgVer[3];
-        DbgVer[0] = LLVMConstInt(i32T, 1, 0);
-        DbgVer[1] = LLVMMDString(DebugStr, strlen(DebugStr));
-        DbgVer[2] = LLVMConstInt(i32T, 3, 0);
-        LLVMAddNamedMetadataOperand(module, "llvm.module.flags",
-            LLVMMDNode(DbgVer, 3));
+        if (use_debug_info) {
+            const char *DebugStr = "Debug Info Version";
+            LLVMValueRef DbgVer[3];
+            DbgVer[0] = LLVMConstInt(i32T, 1, 0);
+            DbgVer[1] = LLVMMDString(DebugStr, strlen(DebugStr));
+            DbgVer[2] = LLVMConstInt(i32T, 3, 0);
+            LLVMAddNamedMetadataOperand(module, "llvm.module.flags",
+                LLVMMDNode(DbgVer, 3));
 
-        LLVMDIBuilderCreateCompileUnit(di_builder,
-            llvm::dwarf::DW_LANG_C99, "file", "directory", "scopes",
-            false, "", 0, "", 0);
-        //LLVMAddNamedMetadataOperand(module, "llvm.dbg.cu", dicu);
+            LLVMDIBuilderCreateCompileUnit(di_builder,
+                llvm::dwarf::DW_LANG_C99, "file", "directory", "scopes",
+                false, "", 0, "", 0);
+            //LLVMAddNamedMetadataOperand(module, "llvm.dbg.cu", dicu);
+        }
 
         auto func = label_to_function(entry, true);
         LLVMSetLinkage(func, LLVMExternalLinkage);
@@ -7341,17 +7358,25 @@ public:
 enum {
     CF_DumpDisassembly  = (1 << 0),
     CF_DumpModule       = (1 << 1),
-    CF_SkipOpts         = (1 << 2),
+    CF_NoOpts           = (1 << 2),
     CF_DumpFunction     = (1 << 3),
     CF_DumpTime         = (1 << 4),
+    CF_NoDebugInfo      = (1 << 5),
 };
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
+#if SCOPES_WIN32
+    flags |= CF_NoDebugInfo;
+#endif
+
     fn->verify_compilable();
     const Type *functype = Pointer(fn->get_function_type());
 
     GenerateCtx ctx;
+    if (flags & CF_NoDebugInfo) {
+        ctx.use_debug_info = false;
+    }
     auto result = ctx.generate(fn);
 
     auto module = result.first;
@@ -7364,6 +7389,7 @@ static Any compile(Label *fn, uint64_t flags) {
         LLVMMCJITCompilerOptions opts;
         LLVMInitializeMCJITCompilerOptions(&opts, sizeof(opts));
         opts.OptLevel = 0;
+        opts.NoFramePointerElim = true;
 
         if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
             sizeof(opts), &errormsg)) {
@@ -7378,7 +7404,7 @@ static Any compile(Label *fn, uint64_t flags) {
     }
 
 #if SCOPES_OPTIMIZE_ASSEMBLY
-    if (!(flags & CF_SkipOpts)) {
+    if (!(flags & CF_NoOpts)) {
         build_and_run_opt_passes(module);
     }
 #endif
@@ -10825,7 +10851,7 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(Symbol(SYM_DumpModule), (uint64_t)CF_DumpModule);
     globals->bind(Symbol(SYM_DumpFunction), (uint64_t)CF_DumpFunction);
     globals->bind(Symbol(SYM_DumpTime), (uint64_t)CF_DumpTime);
-    globals->bind(Symbol(SYM_SkipOpts), (uint64_t)CF_SkipOpts);
+    globals->bind(Symbol(SYM_NoOpts), (uint64_t)CF_NoOpts);
 
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
@@ -10955,7 +10981,7 @@ int main(int argc, char *argv[]) {
 #endif
 
         typedef void (*MainFuncType)();
-        MainFuncType fptr = (MainFuncType)compile(fn, CF_SkipOpts).pointer;
+        MainFuncType fptr = (MainFuncType)compile(fn, CF_NoOpts).pointer;
         fptr();
 
         //interpreter_loop(cmd);

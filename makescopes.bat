@@ -47,7 +47,7 @@ clang++ -o scopes.exe ^
     -Wno-vla -DSCOPES_CPP_IMPL -DSCOPES_MAIN_CPP_IMPL ^
     -D_GNU_SOURCE -pedantic -DSCOPES_DEBUG -ferror-limit=1 ^
     -D_LIBCPP_HAS_NO_CONSTEXPR -DSCOPES_WIN32 ^
-    -std=c++11 %DEBUGOPTS% ^
+    -std=gnu++11 %DEBUGOPTS% ^
     -fno-exceptions -fno-rtti ^
     -Wl,--allow-multiple-definition ^
     -D__STDC_CONSTANT_MACROS -D__STDC_FORMAT_MACROS -D__STDC_LIMIT_MACROS ^

@@ -42,6 +42,19 @@
         "__locale": "cpp",
         "*.tcc": "cpp",
         "algorithm": "cpp",
-        "cmath": "cpp"
+        "cmath": "cpp",
+        "xiosbase": "cpp",
+        "*.def": "cpp",
+        "list": "cpp",
+        "map": "cpp",
+        "streambuf": "cpp",
+        "unordered_map": "cpp",
+        "vector": "cpp",
+        "xhash": "cpp",
+        "xmemory0": "cpp",
+        "xstring": "cpp",
+        "xtree": "cpp",
+        "xutility": "cpp",
+        "string_view": "cpp"
     }
 }

@@ -828,7 +828,7 @@ fn compile (f opts...)
             elseif (== flag 'dump-module) compile-flag-dump-module
             elseif (== flag 'dump-function) compile-flag-dump-function
             elseif (== flag 'dump-time) compile-flag-dump-time
-            elseif (== flag 'skip-opts) compile-flag-skip-opts
+            elseif (== flag 'no-opts) compile-flag-no-opts
             else
                 compiler-error!
                     .. "illegal flag: " (repr flag)
@@ -872,7 +872,7 @@ syntax-extend
     fn block-scope-macro (f)
         fn->macro
             Any-extract
-                compile (typify f list list Scope) #'dump-module #'skip-opts
+                compile (typify f list list Scope) #'dump-module #'no-opts
                 BlockScopeFunction
     fn scope-macro (f)
         block-scope-macro
