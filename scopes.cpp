@@ -9327,7 +9327,6 @@ struct NormalizeCtx {
         }
 
         SCOPES_CATCH(exc)
-            printf("catch!\n");
             print_traceback();
             error(exc);
         SCOPES_TRY_END()

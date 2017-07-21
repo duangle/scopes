@@ -1,8 +1,8 @@
 #
+      \\\
        \\\
-        \\\
-     /// \\\
-    ///   \\\
+     ///\\\
+    ///  \\\
          
     Scopes Compiler
     Copyright (c) 2016, 2017 Leonard Ritter
@@ -1159,18 +1159,27 @@ define-macro define-block-scope-macro
             cons fn '(expr next-expr syntax-scope) body
 
 define-macro assert
-    fn assertion-error! (anchor msg)
-        syntax-error! anchor
-            .. "assertion failed: " 
+    fn assertion-error! (constant anchor msg)
+        let assert-msg =
+            .. "assertion failed: "
                 if (== (typeof msg) string) msg
                 else (repr msg)
+        if constant
+            compiler-error! assert-msg
+        else
+            syntax-error! anchor assert-msg
     let cond body = (decons args)
     let sxcond = (Any-extract cond Syntax)
     let anchor = (Syntax-anchor sxcond)
+    let tmp =
+        Parameter-new anchor 'tmp void
     list do
-        list if cond
-        list 'else 
-            cons assertion-error! (active-anchor)
+        list let tmp '= cond
+        list if tmp
+        list 'else
+            cons assertion-error! 
+                list constant? tmp
+                active-anchor;
                 if (empty? body)
                     list (repr (Syntax->datum sxcond))
                 else body
@@ -1322,6 +1331,23 @@ define-macro import
         list require
             list quote name
 
+fn xpcall (f errorf)
+    let pad = (alloca exception-pad-type)
+    let old-pad =
+        set-exception-pad pad  
+    if ((catch-exception pad) != 0)
+        set-exception-pad old-pad
+        errorf pad
+    else
+        let result... = (f)
+        set-exception-pad old-pad
+        result...
+
+fn format-exception (exc)
+    format-message (exception-anchor exc)
+        .. (default-styler style-error "error:")
+            \ " " (exception-message exc)
+
 #-------------------------------------------------------------------------------
 # REPL
 #-------------------------------------------------------------------------------
@@ -1337,12 +1363,18 @@ fn compiler-version-string ()
         else ""
         \ compiler-timestamp ")"
 
+fn print-logo ()
+    io-write! "  "; io-write! (default-styler style-number "\\\\\\"); io-write! "\n"
+    io-write! "   "; io-write! (default-styler style-type "\\\\\\"); io-write! "\n"
+    io-write! " "; io-write! (default-styler style-comment "///")
+    io-write! (default-styler style-sfxfunction "\\\\\\"); io-write! "\n"
+    io-write! (default-styler style-comment "///"); io-write! "  "
+    io-write! (default-styler style-keyword "\\\\\\")
+
 fn read-eval-print-loop ()
     fn exception-handler (pad)
         io-write!
-            format-message (exception-anchor pad)
-                .. (default-styler style-error "error:")
-                    \ " " (exception-message pad)
+            format-exception pad
 
     fn repeat-string (n c)
         let [loop] i s =
@@ -1373,7 +1405,8 @@ fn read-eval-print-loop ()
             return false
         loop (i + 1)
 
-    print
+    print-logo;
+    print " "
         compiler-version-string;
 
     let global-scope = (globals)
