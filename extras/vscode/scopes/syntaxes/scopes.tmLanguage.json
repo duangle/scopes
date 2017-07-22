@@ -17,7 +17,7 @@
 			"patterns": [
                 {
                     "name": "keyword.control.builtin.scopes",
-                    "match": "(quote|do|if|elseif|else|return|let|fn|label|call|syntax-extend)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(external|quote|do|if|elseif|else|return|let|fn|label|call|syntax-extend)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "keyword.control.library.scopes",
@@ -28,7 +28,7 @@
 		"variables": {
 			"patterns": [{
 				"name": "constant.language.builtins.scopes",
-				"match": "(debug-build\\?|compiler-(path|timestamp)|syntax-scope|type-kind-(function|integer|real|pointer|vector|array|tuple|union|typename))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				"match": "(debug-build\\?|compiler-(path|timestamp)|syntax-scope|type-kind-(external|function|integer|real|pointer|vector|array|tuple|union|typename))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
 			}]
 		},
 		"constants": {
@@ -102,7 +102,7 @@
                 },
                 {
                     "name": "support.function.library.scopes",
-				    "match": "cast|xpcall|(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "cast|xpcall|(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer|external)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.scopes",

@@ -66,6 +66,8 @@ fn tuple-type? (T)
     icmp== (type-kind T) type-kind-tuple
 fn array-type? (T)
     icmp== (type-kind T) type-kind-array
+fn extern-type? (T)
+    icmp== (type-kind T) type-kind-extern
 fn function-pointer-type? (T)
     if (pointer-type? T)
         function-type? (element-type T 0)
@@ -80,6 +82,8 @@ fn array? (val)
     array-type? (typeof val)
 fn tuple? (val)
     tuple-type? (typeof val)
+fn extern? (val)
+    extern? (typeof val)
 fn function-pointer? (val)
     function-pointer-type? (typeof val)
 fn Symbol? (val)
@@ -110,6 +114,8 @@ fn Any-new (val)
             #compiler-message "wrapping pointer"
             construct
                 ptrtoint val u64
+        elseif (extern-type? T)
+            Any-new (unconst val)
         elseif (tuple-type? T)
             if (icmp== (type-countof T) 0:usize)
                 construct 0:u64
@@ -817,7 +823,8 @@ fn print (...)
     if (< i (va-countof ...))
         if (> i 0)
             io-write! " "
-        print-element (unconst (va@ i ...))
+        let arg = (va@ i ...)
+        print-element arg
         loop (+ i 1)
     else
         io-write! "\n"
@@ -1382,6 +1389,9 @@ define-macro import
     list define name
         list require
             list quote name
+
+#define llvm_eh_sjlj_setjmp
+    extern 'llvm.eh.sjlj.setjmp (function-type i32 (pointer-type i8))
 
 fn xpcall (f errorf)
     let pad = (alloca exception-pad-type)

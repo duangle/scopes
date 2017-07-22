@@ -480,8 +480,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Undef) T(KW_Let) \
-    T(KW_If) T(SFXFN_SetTypeSymbol) \
-    T(SFXFN_SetTypenameStorage) \
+    T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_ExternSymbol) \
+    T(SFXFN_SetTypenameStorage) T(SYM_Extern) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
@@ -547,6 +547,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Enumerate, "enumerate") T(FN_Eval, "eval") \
     T(FN_Exit, "exit") T(FN_Expand, "expand") \
     T(FN_ExternLibrary, "extern-library") \
+    T(FN_ExternSymbol, "extern-symbol") \
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_ExtractValue, "extractvalue") T(FN_InsertValue, "insertvalue") \
     T(FN_GetElementPtr, "getelementptr") \
@@ -689,7 +690,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Array, "array") \
     T(SYM_Vector, "vector") \
     T(SYM_FNType, "fntype") \
-    T(SYM_External, "external") \
+    T(SYM_Extern, "extern") \
     \
     /* styles */ \
     T(Style_None, "style-none") \
@@ -1542,7 +1543,8 @@ static void location_error(const String *msg);
     T(TK_TypedLabel, "type-kind-label") \
     T(TK_TypeSet, "type-kind-typeset") \
     T(TK_Function, "type-kind-function") \
-    T(TK_Constant, "type-kind-constant")
+    T(TK_Constant, "type-kind-constant") \
+    T(TK_Extern, "type-kind-extern")
 
 enum TypeKind {
 #define T(NAME, BNAME) \
@@ -1776,39 +1778,7 @@ struct Any {
         }
     };
 
-    StyledStream& stream(StyledStream& ost, bool annotate_type = true) const {
-        AnyStreamer as(ost, type, annotate_type);
-        if (type == TYPE_Nothing) { as.naked(none); }
-        else if (type == TYPE_Type) { as.naked(typeref); }
-        else if (type == TYPE_Bool) { as.naked(i1); }
-        else if (type == TYPE_I8) { as.typed(i8); }
-        else if (type == TYPE_I16) { as.typed(i16); }
-        else if (type == TYPE_I32) { as.naked(i32); }
-        else if (type == TYPE_I64) { as.typed(i64); }
-        else if (type == TYPE_U8) { as.typed(u8); }
-        else if (type == TYPE_U16) { as.typed(u16); }
-        else if (type == TYPE_U32) { as.typed(u32); }
-        else if (type == TYPE_U64) { as.typed(u64); }
-        else if (type == TYPE_USize) { as.typed(u64); }
-        else if (type == TYPE_F32) { as.naked(f32); }
-        else if (type == TYPE_F64) { as.typed(f64); }
-        else if (type == TYPE_String) { as.naked(string); }
-        else if (type == TYPE_Symbol) { as.naked(symbol); }
-        else if (type == TYPE_Syntax) { as.naked(syntax); }
-        else if (type == TYPE_Anchor) { as.typed(anchor); }
-        else if (type == TYPE_List) { as.naked(list); }
-        else if (type == TYPE_Builtin) { as.typed(builtin); }
-        else if (type == TYPE_Label) { as.typed(label); }
-        else if (type == TYPE_Parameter) { as.typed(parameter); }
-        else if (type == TYPE_Scope) { as.typed(scope); }
-        else if (type == TYPE_Ref) {
-            ost << Style_Operator << "[" << Style_None;
-            ref->stream(ost);
-            ost << Style_Operator << "]" << Style_None;
-            as.stream_type_suffix();
-        } else { as.typed(pointer); }
-        return ost;
-    }
+    StyledStream& stream(StyledStream& ost, bool annotate_type = true) const;
 
     bool operator ==(const Any &other) const;
 
@@ -2290,6 +2260,31 @@ static const Type *Union(const std::vector<const Type *> &types) {
 }
 
 //------------------------------------------------------------------------------
+// EXTERN TYPE
+//------------------------------------------------------------------------------
+
+struct ExternType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Extern;
+    }
+
+    ExternType(const Type *_type) :
+        Type(TK_Extern),
+        type(_type) {
+        std::stringstream ss;
+        ss << "<extern " <<  _type->name()->data << ">";
+        _name = String::from_stdstring(ss.str());
+    }
+
+    const Type *type;
+};
+
+static const Type *Extern(const Type *type) {
+    static TypeFactory<ExternType> externs;
+    return externs.insert(type);
+}
+
+//------------------------------------------------------------------------------
 // FUNCTION TYPE
 //------------------------------------------------------------------------------
 
@@ -2360,9 +2355,17 @@ static const Type *Function(const Type *return_type,
 }
 
 static bool is_function_pointer(const Type *type) {
-    const PointerType *ptype = dyn_cast<PointerType>(type);
-    if (!ptype) return false;
-    return isa<FunctionType>(ptype->element_type);
+    switch (type->kind()) {
+    case TK_Pointer: {
+        const PointerType *ptype = cast<PointerType>(type);
+        return isa<FunctionType>(ptype->element_type);
+    } break;
+    case TK_Extern: {
+        const ExternType *etype = cast<ExternType>(type);
+        return isa<FunctionType>(etype->type);
+    } break;
+    default: return false;
+    }
 }
 
 static bool is_pure_function_pointer(const Type *type) {
@@ -2371,6 +2374,21 @@ static bool is_pure_function_pointer(const Type *type) {
     const FunctionType *ftype = dyn_cast<FunctionType>(ptype->element_type);
     if (!ftype) return false;
     return ftype->flags & FF_Pure;
+}
+
+static const FunctionType *extract_function_type(const Type *T) {
+    switch(T->kind()) {
+    case TK_Extern: {
+        auto et = cast<ExternType>(T);
+        return cast<FunctionType>(et->type);
+    } break;
+    case TK_Pointer: {
+        auto pi = cast<PointerType>(T);
+        return cast<FunctionType>(pi->element_type);
+    } break;
+    default: assert(false && "unexpected function type");
+        return nullptr;
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -2619,6 +2637,7 @@ static void verify_kind(const Type *T) {
         case TK_TypeSet: ss.out << "typeset"; break;
         case TK_Function: ss.out << "function"; break;
         case TK_Constant: ss.out << "constant"; break;
+        case TK_Extern: ss.out << "extern"; break;
         }
         ss.out << " expected, got " << T;
         location_error(ss.str());
@@ -2662,6 +2681,7 @@ static size_t size_of(const Type *T) {
         const RealType *rt = cast<RealType>(T);
         return (rt->width + 7) / 8;
     }
+    case TK_Extern:
     case TK_Pointer: return PointerType::size();
     case TK_Array: return cast<ArrayType>(T)->size;
     case TK_Vector: return cast<VectorType>(T)->size;
@@ -2688,6 +2708,7 @@ static size_t align_of(const Type *T) {
         const RealType *rt = cast<RealType>(T);
         return (rt->width + 7) / 8;
     }
+    case TK_Extern:
     case TK_Pointer: return PointerType::size();
     case TK_Array: return cast<ArrayType>(T)->align;
     case TK_Vector: return cast<VectorType>(T)->align;
@@ -2777,8 +2798,45 @@ void *get_pointer(const Type *type, Any &value, bool create = false) {
 }
 
 //------------------------------------------------------------------------------
-// ANY HASH & COMPARISON
+// ANY METHODS
 //------------------------------------------------------------------------------
+
+StyledStream& Any::stream(StyledStream& ost, bool annotate_type) const {
+    AnyStreamer as(ost, type, annotate_type);
+    if (type == TYPE_Nothing) { as.naked(none); }
+    else if (type == TYPE_Type) { as.naked(typeref); }
+    else if (type == TYPE_Bool) { as.naked(i1); }
+    else if (type == TYPE_I8) { as.typed(i8); }
+    else if (type == TYPE_I16) { as.typed(i16); }
+    else if (type == TYPE_I32) { as.naked(i32); }
+    else if (type == TYPE_I64) { as.typed(i64); }
+    else if (type == TYPE_U8) { as.typed(u8); }
+    else if (type == TYPE_U16) { as.typed(u16); }
+    else if (type == TYPE_U32) { as.typed(u32); }
+    else if (type == TYPE_U64) { as.typed(u64); }
+    else if (type == TYPE_USize) { as.typed(u64); }
+    else if (type == TYPE_F32) { as.naked(f32); }
+    else if (type == TYPE_F64) { as.typed(f64); }
+    else if (type == TYPE_String) { as.naked(string); }
+    else if (type == TYPE_Symbol) { as.naked(symbol); }
+    else if (type == TYPE_Syntax) { as.naked(syntax); }
+    else if (type == TYPE_Anchor) { as.typed(anchor); }
+    else if (type == TYPE_List) { as.naked(list); }
+    else if (type == TYPE_Builtin) { as.typed(builtin); }
+    else if (type == TYPE_Label) { as.typed(label); }
+    else if (type == TYPE_Parameter) { as.typed(parameter); }
+    else if (type == TYPE_Scope) { as.typed(scope); }
+    else if (type == TYPE_Ref) {
+        ost << Style_Operator << "[" << Style_None;
+        ref->stream(ost);
+        ost << Style_Operator << "]" << Style_None;
+        as.stream_type_suffix();
+    } else if (type->kind() == TK_Extern) {
+        ost << symbol;
+        as.stream_type_suffix();                
+    } else { as.typed(pointer); }
+    return ost;
+}
 
 size_t Any::hash() const {
     if (type == TYPE_String) {
@@ -2804,6 +2862,9 @@ size_t Any::hash() const {
         case 64: return std::hash<double>{}(f64);
         default: break;
         }
+    } break;
+    case TK_Extern: {
+        return std::hash<uint64_t>{}(u64);
     } break;
     case TK_Pointer: return std::hash<void *>{}(pointer);
     case TK_Array: {
@@ -2869,6 +2930,7 @@ bool Any::operator ==(const Any &other) const {
         default: break;
         }
     } break;
+    case TK_Extern: return symbol == other.symbol;
     case TK_Pointer: return pointer == other.pointer;
     case TK_Array: {
         auto ai = cast<ArrayType>(T);
@@ -5568,12 +5630,11 @@ public:
         dest->bind(name, type);
     }
 
-    void exportExternal(Symbol name, const Type *type,
+    void exportExtern(Symbol name, const Type *type,
         const Anchor *anchor) {
-        auto ptr = LLVMSearchForAddressOfSymbol(name.name()->data);
-        assert(ptr);
-        dest->bind(name,
-            Any::from_pointer(type, ptr));
+        Any value(name);
+        value.type = Extern(type);
+        dest->bind(name, value);
     }
 
     bool TraverseRecordDecl(clang::RecordDecl *rd) {
@@ -5594,7 +5655,7 @@ public:
         if (vd->isExternC()) {
             const Anchor *anchor = anchorFromLocation(vd->getSourceRange().getBegin());
 
-            exportExternal(
+            exportExtern(
                 String::from_stdstring(vd->getName().data()),
                 TranslateType(vd->getType()),
                 anchor);
@@ -5642,8 +5703,8 @@ public:
         }
         const Anchor *anchor = anchorFromLocation(f->getSourceRange().getBegin());
 
-        exportExternal(Symbol(String::from_stdstring(FuncName)),
-            Pointer(functype), anchor);
+        exportExtern(Symbol(String::from_stdstring(FuncName)),
+            functype, anchor);
 
         return true;
     }
@@ -5702,6 +5763,8 @@ static void init_llvm() {
     LLVMInitializeNativeDisassembler();
 }
 
+static std::vector<LLVMModuleRef> llvm_c_modules;
+
 static Scope *import_c_module (
     const std::string &path, const std::vector<std::string> &args,
     const char *buffer = nullptr) {
@@ -5745,7 +5808,8 @@ static Scope *import_c_module (
     if (compiler.ExecuteAction(*Act)) {
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
-        //llvm_modules.push_back(M);
+        llvm_c_modules.push_back(M);
+        assert(ee);
         LLVMAddModule(ee, M);
         return result;
     } else {
@@ -5931,6 +5995,7 @@ const size_t MAX_ABI_CLASSES = 4;
 static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
     switch(T->kind()) {
     case TK_Integer: 
+    case TK_Extern:
     case TK_Pointer: {
         size_t size = size_of(T) + offset;
         if (size <= 4) {
@@ -6289,6 +6354,8 @@ struct GenerateCtx {
     std::unordered_map<const Type *, LLVMTypeRef> type_cache;
     std::vector<const Type *> type_todo;
 
+    std::unordered_map<Any, LLVMValueRef, Any::Hash> extern2global;
+
     LLVMModuleRef module;
     LLVMBuilderRef builder;
     LLVMDIBuilderRef di_builder;
@@ -6429,6 +6496,10 @@ struct GenerateCtx {
             default: break;
             }
             break;
+        case TK_Extern: {
+            return LLVMPointerType(
+                _type_to_llvm_type(cast<ExternType>(type)->type), 0);
+        } break;
         case TK_Pointer:
             return LLVMPointerType(
                 _type_to_llvm_type(cast<PointerType>(type)->element_type), 0);
@@ -6667,6 +6738,32 @@ struct GenerateCtx {
             case 32: return LLVMConstReal(f32T, value.f32);
             case 64: return LLVMConstReal(f64T, value.f64);
             default: break;
+            }
+        } break;
+        case TK_Extern: {
+            auto it = extern2global.find(value);
+            if (it == extern2global.end()) {
+                const String *namestr = value.symbol.name();
+                const char *name = namestr->data;
+                assert(name);
+                auto et = cast<ExternType>(value.type);
+                LLVMTypeRef LLT = type_to_llvm_type(et->type);
+                LLVMValueRef result = nullptr;
+                if ((namestr->count > 5) && !strncmp(name, "llvm.", 5)) {
+                    result = LLVMAddFunction(module, name, LLT);
+                } else {
+                    uint64_t ptr = LLVMGetGlobalValueAddress(ee, name);
+                    if (!ptr) {
+                        StyledString ss;
+                        ss.out << "could not resolve " << value;
+                        location_error(ss.str());
+                    }
+                    result = LLVMAddGlobal(module, LLT, name);
+                }
+                extern2global.insert({ value, result });
+                return result;
+            } else {
+                return it->second;
             }
         } break;
         case TK_Pointer: {
@@ -7036,8 +7133,7 @@ struct GenerateCtx {
                     value, args);
             }
         } else if (is_function_pointer(enter.indirect_type())) {
-            auto pi = cast<PointerType>(enter.indirect_type());
-            retvalue = build_call(pi->element_type, 
+            retvalue = build_call(extract_function_type(enter.indirect_type()), 
                 argument_to_value(enter), args);
         } else if (enter.type == TYPE_Parameter) {
             LLVMValueRef values[argcount];
@@ -7745,8 +7841,7 @@ struct NormalizeCtx {
         auto &&enter = l->body.enter;
         //auto &&args = l->body.args;
 
-        auto pi = cast<PointerType>(enter.indirect_type());
-        auto fi = cast<FunctionType>(pi->element_type);
+        const FunctionType *fi = extract_function_type(enter.indirect_type());
 
         verify_function_argument_signature(fi, l);
 
@@ -7871,6 +7966,8 @@ struct NormalizeCtx {
         case FN_VaAt:
         case FN_Location:
         case FN_Dump:
+        case SYM_Extern:
+        case FN_ExternSymbol:
             return true;
         default: return false;
         }
@@ -7907,7 +8004,13 @@ struct NormalizeCtx {
         } break;
         case FN_Unconst: {
             CHECKARGS(1, 1);
-            RETARGTYPES(args[1].indirect_type());
+            auto T = args[1].indirect_type();
+            auto et = dyn_cast<ExternType>(T);
+            if (et) {
+                RETARGTYPES(Pointer(et->type));
+            } else {
+                RETARGTYPES(T);
+            }
         } break;
         case FN_Bitcast: {
             CHECKARGS(2, 2);
@@ -8288,6 +8391,19 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case FN_ExternSymbol: {
+            CHECKARGS(1, 1);
+            verify_kind<TK_Extern>(args[1]);
+            RETARGS(args[1].symbol);
+        } break;
+        case SYM_Extern: {
+            CHECKARGS(2, 2);
+            args[1].verify(TYPE_Symbol);
+            const Type *T = args[2];
+            Any value(args[1].symbol);
+            value.type = Extern(T);
+            RETARGS(value);
+        } break;
         case FN_FunctionType: {
             CHECKARGS(1, -1);
             std::vector<const Type *> types;
