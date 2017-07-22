@@ -649,6 +649,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_CopyMemory, "copy-memory!") \
     T(SFXFN_Unreachable, "unreachable!") \
     T(SFXFN_Error, "__error!") \
+    T(SFXFN_Raise, "__raise!") \
     T(SFXFN_Abort, "abort!") \
     T(SFXFN_CompilerError, "compiler-error!") \
     T(SFXFN_SetAnchor, "set-anchor!") \
@@ -1594,6 +1595,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     \
     T(TYPE_Scope, "Scope") \
     T(TYPE_SourceFile, "SourceFile") \
+    T(TYPE_Exception, "Exception") \
     \
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
@@ -1650,6 +1652,7 @@ struct List;
 struct Label;
 struct Parameter;
 struct Scope;
+struct Exception;
 
 struct Any {
     struct Hash {
@@ -1685,6 +1688,7 @@ struct Any {
         Scope *scope;
         Any *ref;
         void *pointer;
+        const Exception *exception;
     };
 
     Any(Nothing x) : type(TYPE_Nothing), u64(0) {}
@@ -1705,6 +1709,7 @@ struct Any {
     Any(const Syntax *x) : type(TYPE_Syntax), syntax(x) {}
     Any(const Anchor *x) : type(TYPE_Anchor), anchor(x) {}
     Any(const List *x) : type(TYPE_List), list(x) {}
+    Any(const Exception *x) : type(TYPE_Exception), exception(x) {}
     Any(Label *x) : type(TYPE_Label), label(x) {}
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
@@ -1743,6 +1748,7 @@ struct Any {
     operator const Syntax *() const { verify(TYPE_Syntax); return syntax; }
     operator const Anchor *() const { verify(TYPE_Anchor); return anchor; }
     operator const String *() const { verify(TYPE_String); return string; }
+    operator const Exception *() const { verify(TYPE_Exception); return exception; }
     operator Label *() const { verify(TYPE_Label); return label; }
     operator Scope *() const { verify(TYPE_Scope); return scope; }
     operator Parameter *() const { verify(TYPE_Parameter); return parameter; }
@@ -2929,10 +2935,13 @@ struct Exception {
 
 struct ExceptionPad {
     jmp_buf retaddr;
-    Exception exc;
+    Any value;
 
-    void invoke(const Exception &exc) {
-        this->exc = exc;
+    ExceptionPad() : value(none) {
+    }
+
+    void invoke(const Any &value) {
+        this->value = value;
         longjmp(retaddr, 1);
     }
 };
@@ -2947,25 +2956,26 @@ struct ExceptionPad {
         _exc_pad = _last_exc_pad; \
     } else { \
         _exc_pad = _last_exc_pad; \
-        auto &&EXCNAME = exc_pad.exc;
+        auto &&EXCNAME = exc_pad.value;
 
 #define SCOPES_TRY_END() \
     }
 
 static ExceptionPad *_exc_pad = nullptr;
 
-static void default_exception_handler(const Exception &exc);
+static void default_exception_handler(const Any &value);
 
-static void error(const Exception &exc) {
+static void error(const Any &value) {
     if (!_exc_pad) {
-        default_exception_handler(exc);
+        default_exception_handler(value);
     } else {
-        _exc_pad->invoke(exc);
+        _exc_pad->invoke(value);
     }
 }
 
 static void location_error(const String *msg) {
-    error(Exception(_active_anchor, msg));
+    const Exception *exc = new Exception(_active_anchor, msg);
+    error(exc);
 }
 
 //------------------------------------------------------------------------------
@@ -5775,15 +5785,20 @@ inline int checkargs(size_t argsize) {
 
 static void *global_c_namespace = nullptr;
 
-static void default_exception_handler(const Exception &exc) {
+static void default_exception_handler(const Any &value) {
     auto cerr = StyledStream(std::cerr);
-    if (exc.anchor) {
-        cerr << exc.anchor << " ";
-    }
-    cerr << Style_Error << "error:" << Style_None << " "
-        << exc.msg->data << std::endl;
-    if (exc.anchor) {
-        exc.anchor->stream_source_line(cerr);
+    if (value.type == TYPE_Exception) {        
+        const Exception *exc = value;
+        if (exc->anchor) {
+            cerr << exc->anchor << " ";
+        }
+        cerr << Style_Error << "error:" << Style_None << " "
+            << exc->msg->data << std::endl;
+        if (exc->anchor) {
+            exc->anchor->stream_source_line(cerr);
+        }
+    } else {
+        cerr << "exception raised: " << value << std::endl;
     }
     std::abort();
 }
@@ -10455,6 +10470,10 @@ static void init_types() {
         Array(TYPE_I8, 1)
     );
 
+    DEFINE_STRUCT_HANDLE_TYPE("Exception", Exception, TYPE_Exception,
+        TYPE_Anchor,
+        TYPE_String);
+
 #define T(TYPE, TYPENAME) \
     assert(TYPE);
     B_TYPES()
@@ -10600,6 +10619,10 @@ static void f_error(const String *msg) {
     location_error(msg);
 }
 
+static void f_raise(Any value) {
+    error(value);
+}
+
 static void f_set_anchor(const Anchor *anchor) {
     set_active_anchor(anchor);
 }
@@ -10738,12 +10761,8 @@ ExceptionPad *f_set_exception_pad(ExceptionPad *pad) {
     return last_exc_pad;
 }
 
-const Anchor *f_exception_anchor(ExceptionPad *pad) {
-    return pad->exc.anchor;
-}
-
-const String *f_exception_message(ExceptionPad *pad) {
-    return pad->exc.msg;
+Any f_exception_value(ExceptionPad *pad) {
+    return pad->value;
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -10807,6 +10826,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
     DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
+    DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
@@ -10818,12 +10838,8 @@ static void init_globals(int argc, char *argv[]) {
         p_exception_pad_type, p_exception_pad_type);
     DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32, 
         Pointer(exception_pad_type));
-    DEFINE_C_FUNCTION(Symbol("exception-anchor"), f_exception_anchor,
-        TYPE_Anchor, p_exception_pad_type);
-    DEFINE_C_FUNCTION(Symbol("exception-message"), f_exception_message,
-        TYPE_String, p_exception_pad_type);
-    DEFINE_C_FUNCTION(Symbol("exception-message"), f_exception_message,
-        TYPE_String, p_exception_pad_type);
+    DEFINE_C_FUNCTION(Symbol("exception-value"), f_exception_value,
+        TYPE_Any, p_exception_pad_type);
 
 #undef DEFINE_C_FUNCTION
 
@@ -10894,6 +10910,7 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(Symbol("Scope"), TYPE_Scope);
     globals->bind(Symbol("Anchor"), TYPE_Anchor);
     globals->bind(Symbol("void"), TYPE_Void);
+    globals->bind(Symbol("Exception"), TYPE_Exception);
 
 #define T(NAME, BNAME) \
     globals->bind(Symbol(BNAME), (int32_t)NAME);

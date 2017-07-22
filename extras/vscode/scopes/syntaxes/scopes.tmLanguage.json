@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.scopes",
-                    "match": "(locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(as|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -86,7 +86,7 @@
             "patterns":[
                 {
                     "name": "support.type.builtin.scopes",
-                    "match": "(void|bool|usize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope|Anchor|Builtin)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(void|bool|usize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope|Anchor|Builtin|Exception)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.type.library.scopes",
@@ -102,7 +102,7 @@
                 },
                 {
                     "name": "support.function.library.scopes",
-				    "match": "xpcall|(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "cast|xpcall|(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.scopes",
@@ -110,7 +110,7 @@
                 },
                 {
                     "name": "support.function.sfx.library.scopes",
-				    "match": "(((syntax-)?error|todo)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(((syntax-)?error|todo|raise)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
