@@ -14,7 +14,7 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
 
 * Install `MSYS2 <http://msys2.github.io>`_ and
   `install <https://github.com/valtron/llvm-stuff/wiki/Build-LLVM-3.8-with-MSYS2>`_
-  clang, LLVM 4.0, libffi and xxd for ``x86_64``. The packages are named
+  clang, LLVM 4.0.x, libffi and xxd for ``x86_64``. The packages are named
   ``mingw64/mingw-w64-x86_64-llvm``, ``mingw64/mingw-w64-x86_64-clang``,
   ``mingw64/mingw-w64-x86_64-libffi`` and ``msys/vim`` (which contains xxd).
 * Nice to have: ``mingw-w64-x86_64-gdb``
@@ -29,7 +29,7 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
 Building Scopes on Linux
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-* You need build-essentials, clang, libclang and LLVM 4.0 installed,
+* You need build-essentials, clang, libclang and LLVM 4.0.x installed,
   as well as xxd.
 * Put ``clang++`` and ``llvm-config`` in your path **OR** extract the clang distro into
   the repo folder and rename it to ``clang``. 
@@ -40,18 +40,3 @@ Building Scopes on Linux
   as ``libffi`` in the repo folder.
 * run ``./makescopes``
 * There should now be a ``scopes`` executable in the repo root folder.
-
-Running
--------
-
-Scopes has a built-in console that can be launched from the command-line by
-passing no arguments to the ``scopes`` compiler::
-
-    scopes
-
-To execute a Scopes program, pass the source file as first argument to the
-``scopes`` compiler::
-
-    scopes path/to/sourcefile.sc
-
-

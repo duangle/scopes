@@ -33,9 +33,9 @@ Scopes embeds the clang compiler infrastructure and is therefore fully C
 compatible. C libraries can be imported and executed at compile- and runtime
 without overhead and without requiring special bindings.
 
-The Scopes IL (intermediate language) is suitable for painless translation to 
-SSA forms such as LLVM IR and SPIR-V, of which the former is already supported.
-A future version of Scopes will target Vulkan-enabled GPUs as well.
+The SCIL (Scopes Compiler Intermediate Language) is suitable for painless 
+translation to SSA forms such as LLVM IR and SPIR-V, of which the former is 
+already supported. A future version of Scopes will target Vulkan as well.
 
 The Scopes compiler fundamentally differs from C++ and other traditional AOT 
 (ahead of time) compilers, in that the compiler is designed to remain on-line 

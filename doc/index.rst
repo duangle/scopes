@@ -19,6 +19,7 @@ Contents:
 
    about
    intro
+   tutorial
    dataformat
 
 ..

@@ -257,12 +257,28 @@ syntax-extend
                             fptoui val T
                     else
                         compiler-error! "integer or float expected"
+
+        fn ufdiv(a b)
+            let Ta Tb = (typeof a) (typeof b)
+            if (type== Ta Tb)
+                fdiv (uitofp a f32) (uitofp b f32)
+            elseif (type== Tb Nothing)
+                fdiv 1.0 (uitofp a f32)
+
+        fn sfdiv(a b)
+            let Ta Tb = (typeof a) (typeof b)
+            if (type== Ta Tb)
+                fdiv (sitofp a f32) (sitofp b f32)
+            elseif (type== Tb Nothing)
+                fdiv 1.0 (sitofp a f32)
+
         if (signed? (type-storage T))
             set-type-symbol! T '> (gen-type-op2 icmp>s)
             set-type-symbol! T '>= (gen-type-op2 icmp>=s)
             set-type-symbol! T '< (gen-type-op2 icmp<s)
             set-type-symbol! T '<= (gen-type-op2 icmp<=s)
-            set-type-symbol! T '/ (gen-type-op2 sdiv)
+            set-type-symbol! T '// (gen-type-op2 sdiv)
+            set-type-symbol! T '/ sfdiv
             set-type-symbol! T '% (gen-type-op2 srem)
             set-type-symbol! T '>> (gen-type-op2 ashr)
         else
@@ -270,11 +286,15 @@ syntax-extend
             set-type-symbol! T '>= (gen-type-op2 icmp>=u)
             set-type-symbol! T '< (gen-type-op2 icmp<u)
             set-type-symbol! T '<= (gen-type-op2 icmp<=u)
-            set-type-symbol! T '/ (gen-type-op2 udiv)
+            set-type-symbol! T '// (gen-type-op2 udiv)
+            set-type-symbol! T '/ ufdiv
             set-type-symbol! T '% (gen-type-op2 urem)
             set-type-symbol! T '>> (gen-type-op2 lshr)
 
     fn setup-real-type (T)
+        fn floordiv (a b)
+            sdiv (fptosi a i32) (fptosi b i32)
+
         set-type-symbol! T 'apply-type
             fn (val)
                 let vT = (typeof val)
@@ -314,6 +334,7 @@ syntax-extend
                     fdiv a b
                 elseif (type== Tb Nothing)
                     fdiv (Ta 1) a
+        set-type-symbol! T '// (gen-type-op2 floordiv)
         set-type-symbol! T '% (gen-type-op2 frem)
 
     setup-int-type bool
@@ -415,6 +436,7 @@ fn + (...) ((op2-ltr-multiop (op2-dispatch-bidi '+)) ...)
 fn - (a b) ((op2-dispatch-bidi '-) a b)
 fn * (...) ((op2-ltr-multiop (op2-dispatch-bidi '*)) ...)
 fn / (a b) ((op2-dispatch-bidi '/) a b)
+fn // (a b) ((op2-dispatch-bidi '//) a b)
 fn % (a b) ((op2-dispatch-bidi '%) a b)
 fn & (a b) ((op2-dispatch-bidi '&) a b)
 fn | (...) ((op2-ltr-multiop (op2-dispatch-bidi '|)) ...)
@@ -422,8 +444,18 @@ fn ^ (a b) ((op2-dispatch-bidi '^) a b)
 fn << (a b) ((op2-dispatch-bidi '<<) a b)
 fn >> (a b) ((op2-dispatch-bidi '>>) a b)
 fn .. (...) ((op2-ltr-multiop (op2-dispatch-bidi '..)) ...)
-fn @ (...) ((op2-ltr-multiop (op2-dispatch '@)) ...)
 fn countof (x) ((opN-dispatch 'countof) x)
+fn @ (...)
+    fn at (obj key)
+        (op2-dispatch '@) obj
+            if (integer? key)
+                if (signed? (typeof key))
+                    if (icmp<s key 0)
+                        add (i64 (countof obj)) (i64 key)
+                    else key
+                else key
+            else key
+    (op2-ltr-multiop at) ...
 fn getattr (self name)
     let T = (typeof self)
     let op success = (type@ T 'getattr)
@@ -620,20 +652,21 @@ fn string-compare (a b)
     assert-typeof b string
     let ca = (string-countof a)
     let cb = (string-countof b)
-    if (< ca cb)
-        return -1
-    elseif (> ca cb)
-        return 1
+    let cc =
+        if (< ca cb) ca
+        else cb
     let pa pb =
         bitcast (getelementptr a 0 1 0) (pointer-type i8)
         bitcast (getelementptr b 0 1 0) (pointer-type i8)
-    let cc =
-        if (constant? ca) ca
-        else cb
     let [loop] i =
         tie-const cc 0:usize
     if (== i cc)
-        return 0
+        if (< ca cb)
+            return -1
+        elseif (> ca cb)
+            return 1
+        else
+            return 0
     let x y =
         load (getelementptr pa i)
         load (getelementptr pb i)
@@ -776,7 +809,8 @@ syntax-extend
                 return 0:i8
             elseif (>= i len)
                 return 0:i8
-            load (bitcast (getelementptr s 0 1 i) (pointer-type i8))
+            let s = (bitcast (getelementptr s 0 1 0) (pointer-type i8))
+            load (getelementptr s i)
     set-type-symbol! string 'slice
         fn (self i0 i1)
             string-new
@@ -1280,7 +1314,7 @@ define-infix> 500 -
 define-infix> 500 +
 define-infix> 600 %
 define-infix> 600 /
-#define-infix> 600 //
+define-infix> 600 //
 define-infix> 600 *
 #define-infix< 700 **
 define-infix> 800 .
@@ -1414,6 +1448,11 @@ fn format-exception (exc)
     else
         .. "exception raised: " (repr exc) "\n"
 
+fn prompt (prefix preload)
+    __prompt prefix
+        if (none? preload) "" 
+        else preload
+
 #-------------------------------------------------------------------------------
 # REPL
 #-------------------------------------------------------------------------------
@@ -1495,10 +1534,21 @@ fn read-eval-print-loop ()
             preload
     if (not success)
         return;
-    let terminated? =
-        (blank? cmd) or
-            (empty? cmdlist) and ((@ cmd 0) == (char "\\"))
-    let cmdlist = (.. cmdlist cmd "\n")
+    fn endswith-blank (s)
+        let slen = (countof s)
+        if (slen == 0:usize) false
+        else
+            (@ s (slen - 1:usize)) == (char " ")
+    let enter-multiline = (endswith-blank cmd)
+    let terminated? = 
+        (blank? cmd) or 
+            (empty? cmdlist) and (not enter-multiline)
+    let cmdlist = 
+        .. cmdlist 
+            if enter-multiline
+                slice cmd 0 -1
+            else cmd
+            "\n"
     let preload =
         if terminated? ""
         else (leading-spaces cmd)

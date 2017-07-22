@@ -7,6 +7,8 @@ future release.
 Functions
 ---------
 
+yes yes
+
 Variable Arguments
 ^^^^^^^^^^^^^^^^^^
 

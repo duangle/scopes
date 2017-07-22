@@ -606,7 +606,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Purify, "purify") \
     T(FN_Write, "io-write!") \
     T(FN_Flush, "io-flush") \
-    T(FN_Product, "product") T(FN_Prompt, "prompt") T(FN_Qualify, "qualify") \
+    T(FN_Product, "product") T(FN_Prompt, "__prompt") T(FN_Qualify, "qualify") \
     T(FN_Range, "range") T(FN_RefNew, "ref-new") T(FN_RefAt, "ref@") \
     T(FN_Repeat, "repeat") T(FN_Repr, "Any-repr") T(FN_AnyString, "Any-string") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
