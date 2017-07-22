@@ -2,7 +2,7 @@
     "name": "scopes",
     "displayName": "Scopes",
     "description": "Language support for Scopes",
-    "version": "0.10.0",
+    "version": "0.11.0",
     "publisher": "duangle",
     "engines": {
         "vscode": "^1.13.0"
