@@ -1017,26 +1017,30 @@ syntax-extend
                 if (type== a b) true
                 else (<: b a)
 
-    let Macro = (typename-type "Macro")
+    let Macro = (typename "Macro")
     let BlockScopeFunction =
         pointer
             function (tuple Any list Scope) list list Scope
     set-typename-storage! Macro BlockScopeFunction
-    fn fn->macro (f)
-        assert-typeof f BlockScopeFunction
-        bitcast f Macro
-    fn macro->fn (f)
-        assert-typeof f Macro
-        bitcast f BlockScopeFunction
+    set-type-symbol! Macro 'apply-type
+        fn (f)
+            assert-typeof f BlockScopeFunction
+            bitcast f Macro
+    set-type-symbol! Macro 'cast
+        fn (destT self)
+            if (type== destT function)
+                bitcast self BlockScopeFunction
+            elseif (type== destT BlockScopeFunction)
+                bitcast self BlockScopeFunction
     # support for calling macro functions directly
     set-type-symbol! Macro 'call
         fn (self at next scope)
-            (macro->fn self) at next scope
+            (bitcast self BlockScopeFunction) at next scope
 
     fn block-scope-macro (f)
-        fn->macro
+        Macro
             cast BlockScopeFunction
-                compile (typify f list list Scope) #'dump-module #'no-opts
+                compile (typify f list list Scope)
     fn scope-macro (f)
         block-scope-macro
             fn (at next scope)
@@ -1236,8 +1240,6 @@ syntax-extend
         return topexpr env
 
     set-scope-symbol! syntax-scope 'Macro Macro
-    set-scope-symbol! syntax-scope 'fn->macro fn->macro
-    set-scope-symbol! syntax-scope 'macro->fn macro->fn
     set-scope-symbol! syntax-scope 'block-scope-macro block-scope-macro
     set-scope-symbol! syntax-scope 'scope-macro scope-macro
     set-scope-symbol! syntax-scope 'macro macro
