@@ -86,7 +86,7 @@
             "patterns":[
                 {
                     "name": "support.type.builtin.scopes",
-                    "match": "(void|bool|usize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope|Anchor|Builtin|Exception)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(void|bool|usize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|integer|real|pointer|array|vector|tuple|union|typename|function|Symbol|Label|Any|Parameter|Syntax|Nothing|Scope|Anchor|Builtin|Exception)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.type.library.scopes",
@@ -98,11 +98,11 @@
 			"patterns": [
                 {
                     "name": "support.function.builtin.scopes",
-				    "match": "(file\\?|exit|compiler-version|prompt|countof|malloc|free|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|type-storage|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(file\\?|exit|compiler-version|prompt|countof|malloc|free|alloca|eval|list-load|globals|(pointer|integer|real|function|tuple|array|typename)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|storageof|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)value|unconst|compile|typify|purify|(constant|signed)\\?|va(-countof|\\@)|type-kind|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.library.scopes",
-				    "match": "cast|xpcall|(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer|extern)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "super|cast|xpcall|(require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|tie-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer|extern)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.scopes",
@@ -117,7 +117,7 @@
 		"operators": {
             "patterns":[{
                 "name": "keyword.operator.scopes",
-                "match": "(and|or|not|\\/\\/|\\@|[\\=\\!\\<\\>]\\=?|[\\.\\?\\+\\-\\*\\/\\%\\&\\|\\^\\~]|\\<\\<|\\>\\>|\\.\\.)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                "match": "(\\<\\:|and|or|not|\\/\\/|\\@|[\\=\\!\\<\\>]\\=?|[\\.\\?\\+\\-\\*\\/\\%\\&\\|\\^\\~]|\\<\\<|\\>\\>|\\.\\.)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
             }]
 		},
 		"symbol": {

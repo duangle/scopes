@@ -101,7 +101,7 @@ fn Any-new (val)
     elseif (constant? val)
         Any-wrap val
     else
-        let T = (type-storage (typeof val))
+        let T = (storageof (typeof val))
         let val =
             if (tuple-type? T) val
             else
@@ -239,7 +239,7 @@ syntax-extend
                 let vT = (typeof val)
                 if (type== T vT) val
                 else
-                    let sT = (type-storage vT)
+                    let sT = (storageof vT)
                     if (integer-type? sT)
                         let Tw vTw = (bitcountof T) (bitcountof sT)
                         if (icmp== Tw vTw)
@@ -272,7 +272,7 @@ syntax-extend
             elseif (type== Tb Nothing)
                 fdiv 1.0 (sitofp a f32)
 
-        if (signed? (type-storage T))
+        if (signed? (storageof T))
             set-type-symbol! T '> (gen-type-op2 icmp>s)
             set-type-symbol! T '>= (gen-type-op2 icmp>=s)
             set-type-symbol! T '< (gen-type-op2 icmp<s)
@@ -521,7 +521,7 @@ fn Any-extract (val T)
             Any-extract-constant val
         else
             let payload = (Any-payload val)
-            let storageT = (type-storage T)
+            let storageT = (storageof T)
             if (pointer-type? storageT)
                 inttoptr payload T
             elseif (integer-type? storageT)
@@ -620,17 +620,14 @@ fn string-countof (s)
     extractvalue (load s) 0
 
 fn min (a b)
-    if (< a b) a
-    else b
+    ? (<= a b) a b
 
 fn max (a b)
-    if (> a b) a
-    else b
+    ? (>= a b) a b
 
 fn clamp (x mn mx)
-    if (> x mx) mx
-    elseif (< x mn) mn
-    else x
+    ? (> x mx) mx
+        ? (< x mn) mn x
 
 fn slice (obj start-index end-index)
     # todo: this should be isize
@@ -688,7 +685,41 @@ fn list-reverse (l tail)
     else
         loop (list-next l) (list-cons (list-at l) next)
 
+fn set-scope-symbol! (scope sym value)
+    __set-scope-symbol! scope sym (Any value)
+
 syntax-extend
+    # supertypes    
+    let integer = (typename-type "integer")
+    let real = (typename-type "real")
+    let pointer = (typename-type "pointer")
+    let array = (typename-type "array")
+    let vector = (typename-type "vector")
+    let tuple = (typename-type "tuple")
+    let union = (typename-type "union")
+    let typename = (typename-type "typename")
+    let function = (typename-type "function")
+
+    set-type-symbol! integer 'apply-type integer-type
+    #set-type-symbol! real 'apply-type real-type
+    set-type-symbol! pointer 'apply-type pointer-type
+    set-type-symbol! array 'apply-type array-type
+    #set-type-symbol! vector 'apply-type vector-type
+    set-type-symbol! tuple 'apply-type tuple-type
+    #set-type-symbol! union 'apply-type union-type
+    set-type-symbol! typename 'apply-type typename-type
+    set-type-symbol! function 'apply-type function-type
+    
+    set-scope-symbol! syntax-scope 'integer integer
+    set-scope-symbol! syntax-scope 'real real
+    set-scope-symbol! syntax-scope 'pointer pointer
+    set-scope-symbol! syntax-scope 'array array
+    set-scope-symbol! syntax-scope 'vector vector
+    set-scope-symbol! syntax-scope 'tuple tuple
+    set-scope-symbol! syntax-scope 'union union
+    set-scope-symbol! syntax-scope 'typename typename
+    set-scope-symbol! syntax-scope 'function function
+
     set-type-symbol! Any 'typeof Any-typeof
 
     set-type-symbol! Any 'cast
@@ -713,14 +744,14 @@ syntax-extend
     set-type-symbol! Parameter 'apply-type
         fn (params...)
             let param1 param2 param3 = params...
-            let TT = (tuple-type (typeof param1) (typeof param2) (typeof param3))
-            if (type== TT (tuple-type Anchor Symbol type))
+            let TT = (tuple (typeof param1) (typeof param2) (typeof param3))
+            if (type== TT (tuple Anchor Symbol type))
                 Parameter-new param1 param2 param3
-            elseif (type== TT (tuple-type Anchor Symbol Nothing))
+            elseif (type== TT (tuple Anchor Symbol Nothing))
                 Parameter-new param1 param2 void
-            elseif (type== TT (tuple-type Symbol type Nothing))
+            elseif (type== TT (tuple Symbol type Nothing))
                 Parameter-new (active-anchor) param1 param2
-            elseif (type== TT (tuple-type Symbol Nothing Nothing))
+            elseif (type== TT (tuple Symbol Nothing Nothing))
                 Parameter-new (active-anchor) param1 void
             else
                 compiler-error! "usage: Parameter [anchor] symbol [type]"
@@ -809,7 +840,7 @@ syntax-extend
                 return 0:i8
             elseif (>= i len)
                 return 0:i8
-            let s = (bitcast (getelementptr s 0 1 0) (pointer-type i8))
+            let s = (bitcast (getelementptr s 0 1 0) (pointer i8))
             load (getelementptr s i)
     set-type-symbol! string 'slice
         fn (self i0 i1)
@@ -817,7 +848,34 @@ syntax-extend
                 getelementptr (string->rawstring self) i0
                 - i1 i0
 
+    set-scope-symbol! syntax-scope 'min (op2-ltr-multiop min)
+    set-scope-symbol! syntax-scope 'max (op2-ltr-multiop max)
+
     syntax-scope
+
+fn super (T)
+    let value ok = (type@ T 'super)
+    if ok value
+    else
+        let kind = (type-kind T)
+        if (icmp== kind type-kind-integer) integer
+        elseif (icmp== kind type-kind-real) real
+        elseif (icmp== kind type-kind-pointer) pointer
+        elseif (icmp== kind type-kind-array) array
+        elseif (icmp== kind type-kind-vector) vector
+        elseif (icmp== kind type-kind-tuple) tuple
+        elseif (icmp== kind type-kind-union) union
+        #elseif (icmp== kind type-kind-typename) typename
+        elseif (icmp== kind type-kind-function) function
+        else type
+
+fn <: (T superT)
+    let [loop] T = T
+    let value = (super T)
+    if (type== value superT) true
+    elseif (type== value type) false
+    else
+        loop value
 
 fn Any-list? (val)
     assert-typeof val Any
@@ -889,9 +947,6 @@ fn walk-list (on-leaf l depth)
             true
         loop next
 
-fn set-scope-symbol! (scope sym value)
-    __set-scope-symbol! scope sym (Any value)
-
 fn typify (f types...)
     let vacount = (va-countof types...)
     let atype = (array-type type (usize vacount))
@@ -945,10 +1000,27 @@ fn syntax-error! (anchor msg)
     unreachable!;
 
 syntax-extend
+    fn gen-type-op2 (op)
+        fn (a b flipped)
+            if (type== (typeof a) (typeof b))
+                op a b
+    set-type-symbol! type '< (gen-type-op2 <:)
+    set-type-symbol! type '<= 
+        gen-type-op2
+            fn (a b)
+                if (type== a b) true
+                else (<: a b)
+    set-type-symbol! type '> (gen-type-op2 (fn (a b) (<: b a)))
+    set-type-symbol! type '>= 
+        gen-type-op2
+            fn (a b)
+                if (type== a b) true
+                else (<: b a)
+
     let Macro = (typename-type "Macro")
     let BlockScopeFunction =
-        pointer-type
-            function-type (tuple-type Any list Scope) list list Scope
+        pointer
+            function (tuple Any list Scope) list list Scope
     set-typename-storage! Macro BlockScopeFunction
     fn fn->macro (f)
         assert-typeof f BlockScopeFunction
@@ -1303,7 +1375,7 @@ define-infix> 300 >=
 define-infix> 300 !=
 define-infix> 300 ==
 
-#define-infix> 300 <:
+define-infix> 300 <:
 #define-infix> 300 <>
 #define-infix> 300 is
 
@@ -1355,7 +1427,7 @@ syntax-extend
         let f = (compile (eval expr eval-scope))
         let rettype =
             element-type (element-type ('typeof f) 0) 0
-        let ModuleFunctionType = (pointer-type (function-type Any))
+        let ModuleFunctionType = (pointer (function Any))
         let fptr =
             if (rettype == Any)
                 cast ModuleFunctionType f
@@ -1425,7 +1497,7 @@ define-macro import
             list quote name
 
 #define llvm_eh_sjlj_setjmp
-    extern 'llvm.eh.sjlj.setjmp (function-type i32 (pointer-type i8))
+    extern 'llvm.eh.sjlj.setjmp (function i32 (pointer i8))
 
 fn xpcall (f errorf)
     let pad = (alloca exception-pad-type)
@@ -1561,7 +1633,7 @@ fn read-eval-print-loop ()
             let f = (compile (eval expr eval-scope))
             let rettype =
                 element-type (element-type ('typeof f) 0) 0
-            let ModuleFunctionType = (pointer-type (function-type Any))
+            let ModuleFunctionType = (pointer (function Any))
             let fptr =
                 if (rettype == Any)
                     cast ModuleFunctionType f
@@ -1642,7 +1714,7 @@ fn run-main (args...)
         let eval-scope = (Scope (globals))
         set-scope-symbol! eval-scope 'module-path sourcepath
         let f = (compile (eval expr eval-scope))
-        let ModuleFunctionType = (pointer-type (function-type void))
+        let ModuleFunctionType = (pointer (function void))
         if (function-pointer-type? ('typeof f))
             call (inttoptr (Any-payload f) ModuleFunctionType)
         else

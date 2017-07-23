@@ -1,13 +1,11 @@
 
 assert
     ==
-        require
-            quote test_module2
-        require
-            quote test_module2
+        require 'test_module2
+        require 'test_module2
 
 print
-    min Integer i8
+    min integer i8
     max 3 4 5
 
 do
@@ -34,7 +32,7 @@ do
     let m =
         eval
             list-load
-                .. interpreter-dir "/testing/test_module.b"
+                .. compiler-dir "/testing/test_module.sc"
             \ sc
     let t = (m)
     assert

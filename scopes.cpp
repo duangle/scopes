@@ -618,7 +618,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
     T(FN_StringJoin, "string-join") T(FN_StringSlice, "string-slice") \
-    T(FN_StructOf, "structof") T(FN_TypeStorage, "type-storage") \
+    T(FN_StructOf, "structof") T(FN_TypeStorage, "storageof") \
     T(FN_SymbolEq, "Symbol==") T(FN_SymbolNew, "string->Symbol") \
     T(FN_StringToRawstring, "string->rawstring") \
     T(FN_IsSymbol, "symbol?") \
@@ -5945,21 +5945,6 @@ enum ABIClass {
     // via the stack.
     ABI_CLASS_MEMORY,
 };
-
-/*
-    T(TK_Integer, "type-kind-integer") \
-    T(TK_Real, "type-kind-real") \
-    T(TK_Pointer, "type-kind-pointer") \
-    T(TK_Array, "type-kind-array") \
-    T(TK_Vector, "type-kind-vector") \
-    T(TK_Tuple, "type-kind-tuple") \
-    T(TK_Union, "type-kind-union") \
-    T(TK_Typename, "type-kind-typename") \
-    T(TK_TypedLabel, "type-kind-label") \
-    T(TK_TypeSet, "type-kind-typeset") \
-    T(TK_Function, "type-kind-function") \
-    T(TK_Constant, "type-kind-constant")
-*/
 
 static ABIClass merge_abi_classes(ABIClass class1, ABIClass class2) {
     if (class1 == class2)
