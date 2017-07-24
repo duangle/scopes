@@ -144,7 +144,6 @@ const char *scopes_compile_time_date();
 #include <stdarg.h>
 #include <stdlib.h>
 #include <libgen.h>
-#include <setjmp.h>
 
 #include <cstdlib>
 //#include <string>
@@ -208,6 +207,12 @@ namespace blobs {
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-const-variable"
 #pragma GCC diagnostic ignored "-Wdate-time"
+
+#ifdef SCOPES_WIN32
+#include <setjmpex.h>
+#else
+#include <setjmp.h>
+#endif
 
 //------------------------------------------------------------------------------
 // UTILITIES
@@ -3008,11 +3013,19 @@ struct ExceptionPad {
     }
 };
 
+#ifdef SCOPES_WIN32
+#define SCOPES_TRY() \
+    ExceptionPad exc_pad; \
+    ExceptionPad *_last_exc_pad = _exc_pad; \
+    _exc_pad = &exc_pad; \
+    if (!_setjmpex(exc_pad.retaddr, nullptr)) {
+#else
 #define SCOPES_TRY() \
     ExceptionPad exc_pad; \
     ExceptionPad *_last_exc_pad = _exc_pad; \
     _exc_pad = &exc_pad; \
     if (!setjmp(exc_pad.retaddr)) {
+#endif
 
 #define SCOPES_CATCH(EXCNAME) \
         _exc_pad = _last_exc_pad; \
@@ -10851,11 +10864,6 @@ static const String *f_symbol_to_string(Symbol sym) {
     return sym.name();
 }
 
-static int f_catch_exception(ExceptionPad *pad) {
-    assert(pad);
-    return setjmp(pad->retaddr);
-}
-
 ExceptionPad *f_set_exception_pad(ExceptionPad *pad) {
     ExceptionPad *last_exc_pad = _exc_pad;
     _exc_pad = pad;
@@ -10871,6 +10879,10 @@ static void init_globals(int argc, char *argv[]) {
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
     globals->bind(SYMBOL, \
         Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ })), \
+            (void *)FUNC));
+#define DEFINE_C_VARARG_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
+    globals->bind(SYMBOL, \
+        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Variadic)), \
             (void *)FUNC));
 #define DEFINE_PURE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
     globals->bind(SYMBOL, \
@@ -10937,8 +10949,13 @@ static void init_globals(int argc, char *argv[]) {
 
     DEFINE_C_FUNCTION(Symbol("set-exception-pad"), f_set_exception_pad, 
         p_exception_pad_type, p_exception_pad_type);
+    #if SCOPES_WIN32
+    DEFINE_C_FUNCTION(Symbol("catch-exception"), _setjmpex, TYPE_I32, 
+        Pointer(exception_pad_type), Pointer(TYPE_I8));
+    #else
     DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32, 
         Pointer(exception_pad_type));
+    #endif
     DEFINE_C_FUNCTION(Symbol("exception-value"), f_exception_value,
         TYPE_Any, p_exception_pad_type);
 
@@ -10965,6 +10982,12 @@ static void init_globals(int argc, char *argv[]) {
             }
         }
     }
+
+#if SCOPES_WIN32
+    globals->bind(Symbol("operating-system"), Symbol("windows"));
+#else
+    globals->bind(Symbol("operating-system"), Symbol("unix"));
+#endif
 
     globals->bind(KW_True, true);
     globals->bind(KW_False, false);
@@ -11056,7 +11079,7 @@ static void setup_stdio() {
     GetConsoleMode(hStdErr, &mode);
     SetConsoleMode(hStdErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
     // change codepage to UTF-8
-    SetConsoleOutputCP(65001);
+    //SetConsoleOutputCP(65001);
 #endif
 
     if (isatty(fileno(stdout))) {

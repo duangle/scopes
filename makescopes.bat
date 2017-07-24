@@ -69,8 +69,7 @@ clang++ -o scopes.exe ^
     -lLLVMExecutionEngine -lLLVMTarget -lLLVMAnalysis -lLLVMProfileData ^
     -lLLVMRuntimeDyld -lLLVMObject -lLLVMMCParser -lLLVMBitReader -lLLVMMC ^
     -lLLVMCore -lLLVMSupport ^
-    -lffi -lole32 -luuid -lversion -lpsapi ^
-    -fexceptions
+    -lffi -lole32 -luuid -lversion -lpsapi
 if errorlevel 1 goto :fail
 %DIR%scopes.exe %DIR%testing\test_all.sc
 if errorlevel 1 goto :fail

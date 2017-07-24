@@ -1505,13 +1505,22 @@ fn xpcall (f errorf)
     let pad = (alloca exception-pad-type)
     let old-pad =
         set-exception-pad pad  
-    if ((catch-exception pad) != 0)
-        set-exception-pad old-pad
-        errorf (exception-value pad)
+    if (== operating-system 'windows)
+        if ((catch-exception pad (inttoptr 0 (pointer i8))) != 0)
+            set-exception-pad old-pad
+            errorf (exception-value pad)
+        else
+            let result... = (f)
+            set-exception-pad old-pad
+            result...
     else
-        let result... = (f)
-        set-exception-pad old-pad
-        result...
+        if ((catch-exception pad) != 0)
+            set-exception-pad old-pad
+            errorf (exception-value pad)
+        else
+            let result... = (f)
+            set-exception-pad old-pad
+            result...
 
 fn format-exception (exc)
     if (('typeof exc) == Exception)
