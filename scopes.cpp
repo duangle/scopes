@@ -11092,6 +11092,7 @@ static void setup_stdio() {
         SetConsoleMode(hStdErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
         setbuf(stdout, 0);
         setbuf(stderr, 0);
+        SetConsoleOutputCP(65001);
         #endif
     }
 }
