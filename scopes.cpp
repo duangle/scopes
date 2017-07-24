@@ -52,12 +52,11 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #ifdef SCOPES_WIN32
 #include "mman.h"
 #include "stdlib_ex.h"
-#include "external/linenoise-ng/include/linenoise.h"
 #else
 #include <sys/mman.h>
 #include <unistd.h>
-#include "external/linenoise-ng/include/linenoise.h"
 #endif
+#include "external/linenoise-ng/include/linenoise.h"
 #include <ctype.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -137,7 +136,6 @@ const char *scopes_compile_time_date();
 // for backtrace
 #include <execinfo.h>
 #include <dlfcn.h>
-//#include "external/linenoise/linenoise.h"
 #endif
 #include <assert.h>
 #include <sys/stat.h>
@@ -11065,25 +11063,36 @@ static void init_globals(int argc, char *argv[]) {
 // MAIN
 //------------------------------------------------------------------------------
 
-static void setup_stdio() {
+static bool terminal_supports_ansi() {
 #ifdef SCOPES_WIN32
-#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
-#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+    if (isatty(STDOUT_FILENO))
+        return true;
+    return getenv("TERM") != nullptr;
+#else
+    //return isatty(fileno(stdout));
+    return isatty(STDOUT_FILENO);
 #endif
-    // turn on ANSI processing
-    auto hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
-    auto hStdErr = GetStdHandle(STD_ERROR_HANDLE);
-    DWORD mode;
-    GetConsoleMode(hStdOut, &mode);
-    SetConsoleMode(hStdOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    GetConsoleMode(hStdErr, &mode);
-    SetConsoleMode(hStdErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
-    // change codepage to UTF-8
-    //SetConsoleOutputCP(65001);
-#endif
+}
 
-    if (isatty(fileno(stdout))) {
+static void setup_stdio() {
+    if (terminal_supports_ansi()) {
         stream_default_style = stream_ansi_style;
+        #ifdef SCOPES_WIN32
+        #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+        #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+        #endif
+
+        // turn on ANSI code processing
+        auto hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+        auto hStdErr = GetStdHandle(STD_ERROR_HANDLE);
+        DWORD mode;
+        GetConsoleMode(hStdOut, &mode);
+        SetConsoleMode(hStdOut, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        GetConsoleMode(hStdErr, &mode);
+        SetConsoleMode(hStdErr, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        setbuf(stdout, 0);
+        setbuf(stderr, 0);
+        #endif
     }
 }
 
