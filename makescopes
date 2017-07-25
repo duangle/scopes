@@ -28,8 +28,6 @@ clang -x c -o $DIR/scopes.h -I$DIR/libffi/include -I$DIR -P -E $DIR/scopes.cpp \
 && xxd -i scopes.h $DIR/scopes.bin.h \
 && echo "core.sc.bin.h" \
 && xxd -i core.sc $DIR/core.sc.bin.h \
-&& echo "coro.o" \
-&& clang -c -o $DIR/coro.o $DIR/external/coro/coro.c $OPT_G $OPT_O \
 && echo "linenoise.o" \
 && clang -c -o $DIR/linenoise.o $DIR/external/linenoise-ng/src/linenoise.cpp -O2 \
     -I $DIR/external/linenoise-ng/include -std=gnu++11 -fno-rtti \
@@ -61,7 +59,7 @@ clang -x c -o $DIR/scopes.h -I$DIR/libffi/include -I$DIR -P -E $DIR/scopes.cpp \
     `llvm-config --ldflags` \
     -Wl,--whole-archive \
     $DIR/libffi/.libs/libffi.a \
-    $DIR/coro.o $DIR/linenoise.o $DIR/ConvertUTF.o $DIR/wcwidth.o \
+    $DIR/linenoise.o $DIR/ConvertUTF.o $DIR/wcwidth.o \
     `llvm-config --libs engine passes option objcarcopts coverage support lto coroutines` \
     -Wl,--no-whole-archive \
     $OPT_O \
