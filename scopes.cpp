@@ -3134,6 +3134,15 @@ public:
         return false;
     }
 
+    bool lookup_local(const Any &name, Any &dest) const {
+        auto it = map.find(name);
+        if (it != map.end()) {
+            dest = it->second;
+            return true;
+        }
+        return false;
+    }
+
     StyledStream &stream(StyledStream &ss) {
         size_t totalcount = this->totalcount();
         size_t count = this->count();
@@ -4400,6 +4409,17 @@ public:
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
+
+    bool is_complete() {
+        return !params.empty() && body.anchor && !body.args.empty();
+    }
+
+    void verify_complete () {
+        if (!is_complete()) {
+            set_active_anchor(anchor);
+            location_error(String::from("incomplete function/label"));
+        }
+    }
 
     struct Args {
         std::vector<Any> args;
@@ -9341,6 +9361,7 @@ struct NormalizeCtx {
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "processing " << l << std::endl;
 #endif
+            l->verify_complete();
 
         process_body:
 #if SCOPES_DEBUG_CODEGEN
@@ -9850,7 +9871,7 @@ struct Expander {
     ~Expander() {}
 
     bool is_goto_label(Any enter) {
-        return (enter.type == TYPE_Label)
+        return (enter.type == TYPE_Label)            
             && (enter.label->params[0]->type == TYPE_Nothing);
     }
 
@@ -9994,12 +10015,22 @@ struct Expander {
 
         assert(it != EOL);
 
+        bool continuing = false;
         Label *func = nullptr;
         Any tryfunc_name = unsyntax(it->at);
         if (tryfunc_name.type == TYPE_Symbol) {
             // named self-binding
-            func = Label::from(_anchor, tryfunc_name.symbol);
-            env->bind(tryfunc_name.symbol, func);
+            // see if we can find a forward declaration in the local scope
+            Any result = none;
+            if (env->lookup_local(tryfunc_name.symbol, result)
+                && (result.type == TYPE_Label)
+                && !result.label->is_complete()) {
+                func = result.label;
+                continuing = true;
+            } else {
+                func = Label::from(_anchor, tryfunc_name.symbol);
+                env->bind(tryfunc_name.symbol, func);
+            }
             it = it->next;
         } else if (tryfunc_name.type == TYPE_String) {
             // named lambda
@@ -10010,8 +10041,27 @@ struct Expander {
             func = Label::from(_anchor, Symbol(SYM_Unnamed));
         }
 
+        Parameter *retparam = nullptr;
+        if (continuing) {
+            assert(!func->params.empty());
+            retparam = func->params[0];
+        } else {
+            retparam = Parameter::from(_anchor, Symbol(SYM_Unnamed), label?TYPE_Nothing:TYPE_Void);
+            func->append(retparam);
+        }
+
+        if (it == EOL) {
+            // forward declaration
+            if (tryfunc_name.type != TYPE_Symbol) {
+                location_error(label?
+                    String::from("forward declared label must be named")
+                    :String::from("forward declared function must be named"));
+            }
+
+            return write_dest(none, dest);
+        }
+
         const Syntax *sxplist = it->at;
-        const Anchor *params_anchor = sxplist->anchor;
         const List *params = sxplist->datum;
 
         it = it->next;
@@ -10019,13 +10069,12 @@ struct Expander {
         Scope *subenv = Scope::from(env);
         // hidden self-binding for subsequent macros
         subenv->bind(SYM_ThisFnCC, func);
-
-        Expander subexpr(func, subenv);
-        Parameter *retparam = Parameter::from(params_anchor, Symbol(SYM_Unnamed), label?TYPE_Nothing:TYPE_Void);
         if (!label) {
+            subenv->bind(KW_Recur, func);
             subenv->bind(KW_Return, retparam);
         }
-        func->append(retparam);
+
+        Expander subexpr(func, subenv);
 
         while (params != EOL) {
             func->append(subexpr.expand_parameter(params->at));
