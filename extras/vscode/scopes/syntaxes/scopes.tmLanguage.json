@@ -106,7 +106,7 @@
                 },
                 {
                     "name": "support.function.sfx.builtin.scopes",
-				    "match": "((io-write|set-anchor|set-globals|set-typename-storage|compiler-error|abort|unreachable|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((io-write|set-anchor|set-globals|set-typename-storage|compiler-error|abort|unreachable|set-quiet-abort|set-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.library.scopes",

@@ -347,6 +347,11 @@ int escape_string(char *buf, const char *str, int strcount, const char *quote_ch
     }
 }
 
+extern "C" {
+// used in test_assorted.sc
+extern int scopes_test_add(int a, int b) { return a + b; }
+}
+
 float powimpl(float a, float b) { return std::pow(a, b); }
 double powimpl(double a, double b) { return std::pow(a, b); }
 // thx to fabian for this one
@@ -5864,6 +5869,15 @@ inline int checkargs(size_t argsize) {
 
 static void *global_c_namespace = nullptr;
 
+static bool signal_abort = false;
+void f_abort() {
+    if (signal_abort) {
+        std::abort();
+    } else {
+        exit(1);
+    }
+}
+
 static void default_exception_handler(const Any &value) {
     auto cerr = StyledStream(std::cerr);
     if (value.type == TYPE_Exception) {        
@@ -5879,7 +5893,7 @@ static void default_exception_handler(const Any &value) {
     } else {
         cerr << "exception raised: " << value << std::endl;
     }
-    std::abort();
+    f_abort();
 }
 
 static int integer_type_bit_size(const Type *T) {
@@ -6753,6 +6767,10 @@ struct GenerateCtx {
                     result = LLVMAddFunction(module, name, LLT);
                 } else {
                     uint64_t ptr = LLVMGetGlobalValueAddress(ee, name);
+                    if (!ptr) {
+                        void *pptr = dlsym(global_c_namespace, name);
+                        ptr = *(uint64_t*)&pptr;
+                    }
                     if (!ptr) {
                         StyledString ss;
                         ss.out << "could not resolve " << value;
@@ -10619,11 +10637,6 @@ static void f_write(const String *value) {
     fputs(value->data, stdout);
 }
 
-static I2 scopes_print_number(int a, int b, int c) {
-    std::cout << a << " " << b << " " << c << std::endl;
-    return { c , b };
-}
-
 static Scope *f_import_c(const String *path,
     const String *content, const List *arglist) {
     std::vector<std::string> args;
@@ -10868,6 +10881,10 @@ static const String *f_symbol_to_string(Symbol sym) {
     return sym.name();
 }
 
+static void f_set_signal_abort(bool value) {
+    signal_abort = value;
+}
+
 ExceptionPad *f_set_exception_pad(ExceptionPad *pad) {
     ExceptionPad *last_exc_pad = _exc_pad;
     _exc_pad = pad;
@@ -10876,6 +10893,14 @@ ExceptionPad *f_set_exception_pad(ExceptionPad *pad) {
 
 Any f_exception_value(ExceptionPad *pad) {
     return pad->value;
+}
+
+static bool f_any_eq(Any a, Any b) {
+    return a == b;
+}
+
+static const List *f_list_join(List *a, List *b) {
+    return List::join(a, b);
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -10923,7 +10948,9 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);
-    
+    DEFINE_PURE_C_FUNCTION(Symbol("Any=="), f_any_eq, TYPE_Bool, TYPE_Any, TYPE_Any);
+    DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);
+
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
@@ -10944,7 +10971,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
     DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
-    DEFINE_C_FUNCTION(SFXFN_Abort, std::abort, TYPE_Void);
+    DEFINE_C_FUNCTION(SFXFN_Abort, f_abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
 
@@ -10962,6 +10989,8 @@ static void init_globals(int argc, char *argv[]) {
     #endif
     DEFINE_C_FUNCTION(Symbol("exception-value"), f_exception_value,
         TYPE_Any, p_exception_pad_type);
+    DEFINE_C_FUNCTION(Symbol("set-signal-abort!"), f_set_signal_abort, 
+        TYPE_Void, TYPE_Bool);
 
 #undef DEFINE_C_FUNCTION
 

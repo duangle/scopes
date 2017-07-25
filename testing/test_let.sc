@@ -1,9 +1,8 @@
 
 
 do
-    let
-        x = 1 2 3
-        y = 4 5 6
+    let x = 1 2 3
+    let y = 4 5 6
     let z = 7 8 9
 
     assert (x == 1)

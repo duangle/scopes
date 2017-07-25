@@ -1,10 +1,9 @@
 
-define isvar?
-    macro
-        fn isvar? (expr scope)
-            datum->syntax
-                not (none? (@ scope (@ expr 1)))
-                syntax->anchor expr
+define-scope-macro isvar?
+    let key = (decons args)
+    let key = (cast Symbol (cast Syntax key))
+    let _ ok = (@ syntax-scope key)
+    return ok syntax-scope
 
 do
     let x = 5

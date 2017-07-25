@@ -7,14 +7,12 @@ assert
             list 4 5 6
         list 1 2 3 4 5 6
 
-assert
-    == bangra.test_module2 none
-    \ "module loaded twice"
-set-scope-symbol! bangra (quote test_module2) true
+assert (not (va@ 1 (@ (unconst package) 'test_module2))) "module loaded twice"
+set-scope-symbol! package 'test_module2 true
 
-scopeof
-    compute =
-        fn (x y)
-            x + y
+let env = (Scope)
+set-scope-symbol! env 'compute
+    fn (x y)
+        x + y
 
-
+env

@@ -1,7 +1,10 @@
 
 # test if dots expand correctly in expression list
-let k = (Scope)
-set-scope-symbol! k (quote x) true
+syntax-extend
+    let k = (Scope)
+    set-scope-symbol! k 'x true
+    set-scope-symbol! syntax-scope 'k k
+    syntax-scope
 
 fn X ()
     if k.x true

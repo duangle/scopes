@@ -192,7 +192,9 @@ syntax-extend
                 op a b
 
     set-type-symbol! type '== (gen-type-op2 type==)
+    set-type-symbol! Any '== (gen-type-op2 Any==)
     set-type-symbol! string '.. (gen-type-op2 string-join)
+    set-type-symbol! list '.. (gen-type-op2 list-join)
 
     set-type-symbol! type 'getattr
         fn (cls name)
@@ -817,6 +819,32 @@ syntax-extend
                 list-reverse next
             else
                 build-slice (list-next l) (list-cons (list-at l) next) (+ i 1:i64)
+
+    fn list== (a b)
+        if (icmp!= (list-countof a) (list-countof b))
+            return false
+        let [loop] a b = (tie-const b a) (tie-const a b)
+        if (list-empty? a)
+            return true
+        let u v = (list-at a) (list-at b)
+        let uT vT = ('typeof u) ('typeof v)
+        if (not (type== uT vT))
+            return false
+        let un vn = (list-next a) (list-next b)
+        if (type== uT list)
+            if (list== (cast list u) (cast list v))
+                loop un vn
+            else
+                return false
+        elseif (Any== u v)
+            loop un vn
+        else
+            return false
+                
+    set-type-symbol! list '==
+        fn (a b flipped)
+            if (type== (typeof a) (typeof b))
+                list== a b
 
     fn gen-string-cmp (op)
         fn (a b flipped)
@@ -1679,6 +1707,7 @@ fn print-help (exename)
 Options:
    -h, --help                  print this text and exit.
    -v, --version               print program version and exit.
+   -s, --signal-abort          raise SIGABRT when calling `abort!`.
    --                          terminate option list."
     exit 0
     unreachable!;
@@ -1701,6 +1730,8 @@ fn run-main (args...)
                 print-help args...
             elseif ((== arg "--version") or (== arg "-v"))
                 print-version;
+            elseif ((== arg "--signal-abort") or (== arg "-s"))
+                set-signal-abort! true
             elseif (== arg "--")
                 loop k sourcepath false
             else
