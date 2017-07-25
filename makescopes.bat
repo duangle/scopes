@@ -12,12 +12,6 @@ rem set DEBUGOPTS=-O2 -DNDEBUG
 set DEBUGOPTS=-O0 -g -DSCOPES_DEBUG
 clang -x c -o %DIR%scopes.h -P -E %DIR%scopes.cpp -DSCOPES_WIN32 -I%DIR%win32 -I%MINGWPATH%/lib/libffi-3.2.1/include
 if errorlevel 1 goto :fail
-echo scopes.bin.h
-xxd -i scopes.h %DIR%scopes.bin.h
-if errorlevel 1 goto :fail
-echo core.sc.bin.h
-xxd -i core.sc %DIR%core.sc.bin.h
-if errorlevel 1 goto :fail
 echo mman.o
 clang -c -o mman.o %DIR%win32\mman.c -O2 -Wno-shift-count-overflow
 if errorlevel 1 goto :fail

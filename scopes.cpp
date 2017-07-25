@@ -175,22 +175,6 @@ const char *scopes_compile_time_date();
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Lex/PreprocessorOptions.h"
 
-extern "C" {
-
-#include "scopes.bin.h"
-#include "core.sc.bin.h"
-
-} // extern "C"
-
-namespace blobs {
-// fix C++11 complaining about > 127 char literals
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wkeyword-macro"
-#define char unsigned char
-#undef char
-#pragma GCC diagnostic pop
-}
-
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
 
@@ -1386,6 +1370,10 @@ public:
 
     void close() {
         assert(!_str);
+        auto it = file_cache.find(path);
+        if (it != file_cache.end()) {
+            file_cache.erase(it);
+        }
         if (ptr != MAP_FAILED) {
             munmap(ptr, length);
             ptr = MAP_FAILED;
@@ -1437,11 +1425,16 @@ public:
         return file;
     }
 
+    size_t size() const {
+        return length;
+    }
+
     StyledStream &stream(StyledStream &ost, int offset,
         const char *indent = "    ") {
         auto str = strptr();
         if (offset >= length) {
-            ost << "<cannot display location in source file>" << std::endl;
+            ost << "<cannot display location in source file (offset " 
+                << offset << " is beyond length " << length << ")>" << std::endl;
             return ost;
         }
         auto start = offset;
@@ -3398,13 +3391,17 @@ struct LexerParser {
 
     Any value;
 
-    LexerParser(SourceFile *_file, int offset = 0) :
+    LexerParser(SourceFile *_file, size_t offset = 0, size_t length = 0) :
             value(none) {
         file = _file;
-        input_stream = file->strptr();
+        input_stream = file->strptr() + offset;
         token = tok_eof;
-        base_offset = offset;
-        eof = file->strptr() + file->length;
+        base_offset = (int)offset;
+        if (length) {
+            eof = input_stream + length;
+        } else {
+            eof = file->strptr() + file->length;
+        }
         cursor = next_cursor = input_stream;
         lineno = next_lineno = 1;
         line = next_line = input_stream;
@@ -3989,6 +3986,13 @@ struct StreamExprFormat {
         symbol_styler(default_symbol_styler),
         depth(0)
     {}
+
+    static StreamExprFormat debug_singleline() {
+        auto fmt = StreamExprFormat();
+        fmt.naked = false;
+        fmt.anchors = All;
+        return fmt;
+    }
 
     static StreamExprFormat singleline() {
         auto fmt = StreamExprFormat();
@@ -10466,6 +10470,8 @@ static Label *expand_module(Any expr, Scope *scope = nullptr) {
         set_active_anchor(anchor);
         expr = expr.syntax->datum;
     }
+    expr.verify(TYPE_List);
+    assert(anchor);
     Label *mainfunc = Label::function_from(anchor, anchor->path());
 
     Expander subexpr(mainfunc, scope?scope:globals);
@@ -11060,6 +11066,106 @@ static void init_globals(int argc, char *argv[]) {
 }
 
 //------------------------------------------------------------------------------
+// SCOPES CORE
+//------------------------------------------------------------------------------
+
+/* this function looks for a header at the end of the compiler executable
+   that indicates a scopes core.
+   
+   the header has the format (core-size <size>), where size is a i32 value
+   holding the size of the core source file in bytes.
+
+   the compiler uses this function to override the default scopes core 'core.sc'
+   located in the compiler's directory. 
+
+   to later override the default core file and load your own, cat the new core
+   file behind the executable and append the header, like this:
+
+   $ cp scopes myscopes
+   $ cat mycore.sc >> myscopes
+   $ echo "(core-size " >> myscopes
+   $ wc -c < mycore.sc >> myscopes
+   $ echo ")" >> myscopes
+
+   */
+
+static Any load_custom_core(const char *executable_path) {
+    // attempt to read bootstrap expression from end of binary
+    auto file = SourceFile::from_file(
+        Symbol(String::from_cstr(executable_path)));
+    if (!file) {
+        stb_fprintf(stderr, "could not open binary\n");
+        return none;
+    }
+    auto ptr = file->strptr();
+    auto size = file->size();
+    auto cursor = ptr + size - 1;
+    while ((*cursor == '\n')
+        || (*cursor == '\r')
+        || (*cursor == ' ')) {
+        // skip the trailing text formatting garbage
+        // that win32 echo produces
+        cursor--;
+        if (cursor < ptr) return none;
+    }
+    if (*cursor != ')') return none;
+    cursor--;
+    // seek backwards to find beginning of expression
+    while ((cursor >= ptr) && (*cursor != '('))
+        cursor--;
+
+    LexerParser footerParser(file, cursor - ptr);
+    auto expr = footerParser.parse();
+    if (expr.type == TYPE_Nothing) {
+        stb_fprintf(stderr, "could not parse footer expression\n");
+        return none;
+    }
+    expr = strip_syntax(expr);
+    if ((expr.type != TYPE_List) || (expr.list == EOL)) {
+        stb_fprintf(stderr, "footer parser returned illegal structure\n");
+        return none;
+    }
+    expr = ((const List *)expr)->at;
+    if (expr.type != TYPE_List)  {
+        stb_fprintf(stderr, "footer expression is not a symbolic list\n");
+        return none;
+    }
+    auto symlist = expr.list;
+    auto it = symlist;
+    if (it == EOL) {
+        stb_fprintf(stderr, "footer expression is empty\n");
+        return none;
+    }
+    auto head = it->at;
+    it = it->next;
+    if (head.type != TYPE_Symbol)  {
+        stb_fprintf(stderr, "footer expression does not begin with symbol\n");
+        return none;
+    }
+    if (head != Any(Symbol("core-size")))  {
+        stb_fprintf(stderr, "footer expression does not begin with 'core-size'\n");
+        return none;
+    }
+    if (it == EOL) {
+        stb_fprintf(stderr, "footer expression needs two arguments\n");
+        return none;
+    }
+    auto arg = it->at;
+    it = it->next;
+    if (arg.type != TYPE_I32)  {
+        stb_fprintf(stderr, "script-size argument is not of type i32\n");
+        return none;
+    }
+    auto script_size = arg.i32;
+    if (script_size <= 0) {
+        stb_fprintf(stderr, "script-size must be larger than zero\n");
+        return none;
+    }
+    LexerParser parser(file, cursor - script_size - ptr, script_size);
+    return parser.parse();
+}
+
+//------------------------------------------------------------------------------
 // MAIN
 //------------------------------------------------------------------------------
 
@@ -11149,23 +11255,26 @@ int main(int argc, char *argv[]) {
     init_types();
     init_globals(argc, argv);
 
-    SourceFile *sf = nullptr;
-#ifdef SCOPES_DEBUG
-    char sourcepath[1024];
-    strncpy(sourcepath, scopes_compiler_dir, 1024);
-    strncat(sourcepath, "/core.sc", 1024);
-    Symbol name = String::from_cstr(sourcepath);
-    sf = SourceFile::from_file(name);
-#else
-    sf = SourceFile::from_string(Symbol("<boot>"),
-        String::from((const char *)core_sc, core_sc_len));
-#endif
-    if (!sf) {
-        location_error(String::from("bootscript missing\n"));
+    Any expr = load_custom_core(scopes_compiler_path);
+    if (expr != none) {
+        goto skip_regular_load;
     }
-    LexerParser parser(sf);
-    auto expr = parser.parse();
 
+    {
+        SourceFile *sf = nullptr;
+        char sourcepath[1024];
+        strncpy(sourcepath, scopes_compiler_dir, 1024);
+        strncat(sourcepath, "/core.sc", 1024);
+        Symbol name = String::from_cstr(sourcepath);
+        sf = SourceFile::from_file(name);
+        if (!sf) {
+            location_error(String::from("core missing\n"));
+        }
+        LexerParser parser(sf);
+        expr = parser.parse();
+    }
+
+skip_regular_load:
     Label *fn = expand_module(expr);
 
 #if SCOPES_DEBUG_CODEGEN
