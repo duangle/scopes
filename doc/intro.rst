@@ -29,13 +29,19 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
 Building Scopes on Linux
 ^^^^^^^^^^^^^^^^^^^^^^^^
 
-* You need build-essentials, clang, libclang and LLVM 4.0.x installed.
+* You need build-essentials, clang, libclang and LLVM 4.0.x installed - preferably
+  locally:
 * Put ``clang++`` and ``llvm-config`` in your path **OR** extract the clang distro into
   the repo folder and rename it to ``clang``. 
 * You also need the latest source distribution of
   `libffi <https://sourceware.org/libffi/>`_.
+* Lastly, you need a build of `GENie <https://github.com/bkaradzic/GENie>`_ (binaries
+  available on the page).
 * Build libffi using ``./configure --enable-shared=no --enable-static=yes && make`` and
   softlink or copy the generated build folder (e.g. ``x86_64-unknown-linux-gnu``)
   as ``libffi`` in the repo folder.
-* run ``./makescopes``
+* In the base directory, run ``genie gmake`` once to generate the project Makefiles.
+* To build in debug mode, run ``make -C build``. For release mode, use 
+  ``make -C build config=release``. 
 * There should now be a ``scopes`` executable in the repo root folder.
+* For a fresh rebuild, just remove the ``build`` directory before running make.

@@ -19,3 +19,8 @@ syntax: regexp
 ^testing/myscopes$
 ^scopes[.]h$
 ^doc/_build/
+^bin/
+^Makefile$
+^scopes[.]make$
+^build/
+
