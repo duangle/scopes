@@ -26,10 +26,16 @@
             ]
 		},
 		"variables": {
-			"patterns": [{
-				"name": "constant.language.builtins.scopes",
-				"match": "(debug-build\\?|compiler-(path|timestamp)|syntax-scope|type-kind-(extern|function|integer|real|pointer|vector|array|tuple|union|typename))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
-			}]
+			"patterns": [
+                {
+                    "name": "constant.language.builtins.scopes",
+                    "match": "(debug-build\\?|compiler-(path|timestamp|dir)|syntax-scope|type-kind-(extern|function|integer|real|pointer|vector|array|tuple|union|typename))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "constant.language.library.scopes",
+                    "match": "(package)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                }
+            ]
 		},
 		"constants": {
 			"patterns": [

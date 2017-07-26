@@ -2,7 +2,7 @@
     "name": "scopes",
     "displayName": "Scopes",
     "description": "Language support for Scopes",
-    "version": "0.12.0",
+    "version": "0.13.0",
     "publisher": "duangle",
     "engines": {
         "vscode": "^1.13.0"
@@ -15,13 +15,18 @@
         "languages": [{
             "id": "scopes",
             "aliases": ["Scopes", "scopes"],
-            "extensions": [".sc"],
+            "extensions": ["sc"],
             "configuration": "./language-configuration.json"
         }],
         "grammars": [{
             "language": "scopes",
             "scopeName": "source.scopes",
             "path": "./syntaxes/scopes.tmLanguage.json"
+        }],
+        "iconThemes": [{
+            "id" : "scopes-icons",
+            "label" : "Scopes",
+            "path": "./fileicons/scopes-icons.json"
         }]
     }
 }

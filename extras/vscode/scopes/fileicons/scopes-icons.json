@@ -1,0 +1,13 @@
+{
+    "iconDefinitions": {
+        "_scopes_file": {
+            "iconPath": "./scopes_file_icon.png"
+        }
+    },
+    "fileExtensions": {
+        "sc": "_scopes_file"
+    },
+    "languageIds": {
+        "scopes": "_scopes_file"
+    }
+}
