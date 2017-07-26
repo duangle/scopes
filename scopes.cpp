@@ -125,8 +125,6 @@ const char *scopes_compile_time_date();
 
 //#define SCOPES_DEBUG_IL
 
-#include "external/cityhash/city.cpp"
-
 #undef NDEBUG
 #ifdef SCOPES_WIN32
 #include <windows.h>
@@ -195,6 +193,8 @@ const char *scopes_compile_time_date();
 #else
 #include <setjmp.h>
 #endif
+
+#include "external/cityhash/city.cpp"
 
 //------------------------------------------------------------------------------
 // UTILITIES
@@ -7037,7 +7037,7 @@ struct GenerateCtx {
             case OP_ICmpSLT:
             case OP_ICmpSLE: {
                 READ_VALUE(a); READ_VALUE(b);
-                LLVMIntPredicate pred;
+                LLVMIntPredicate pred = LLVMIntEQ;
                 switch(enter.builtin.value()) {
                     case OP_ICmpEQ: pred = LLVMIntEQ; break;
                     case OP_ICmpNE: pred = LLVMIntNE; break;
@@ -7068,7 +7068,7 @@ struct GenerateCtx {
             case OP_FCmpULT:
             case OP_FCmpULE: {
                 READ_VALUE(a); READ_VALUE(b);
-                LLVMRealPredicate pred;
+                LLVMRealPredicate pred = LLVMRealOEQ;
                 switch(enter.builtin.value()) {
                     case OP_FCmpOEQ: pred = LLVMRealOEQ; break;
                     case OP_FCmpONE: pred = LLVMRealONE; break;
@@ -8926,7 +8926,7 @@ struct NormalizeCtx {
     case 64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
     default: assert(false); break; \
     }
-            bool result;
+            bool result = false;
             switch(enter.builtin.value()) {
             case OP_ICmpEQ: B_INT_OP2(==, u); break;
             case OP_ICmpNE: B_INT_OP2(!=, u); break;

@@ -12,19 +12,20 @@ Building Scopes on Windows
 
 Scopes only supports the mingw64 toolchain for the foreseeable future.
 
+* Beware: Make sure your MSYS2 installation resides in ``C:\msys64``.
 * Install `MSYS2 <http://msys2.github.io>`_ and
   `install <https://github.com/valtron/llvm-stuff/wiki/Build-LLVM-3.8-with-MSYS2>`_
-  clang, LLVM 4.0.x, libffi and xxd for ``x86_64``. The packages are named
-  ``mingw64/mingw-w64-x86_64-llvm``, ``mingw64/mingw-w64-x86_64-clang``
-  and ``mingw64/mingw-w64-x86_64-libffi``.
+  clang, LLVM 4.0.x, libffi and make for ``x86_64``. The packages are named
+  ``mingw64/mingw-w64-x86_64-llvm``, ``mingw64/mingw-w64-x86_64-clang``,
+  ``mingw64/mingw-w64-x86_64-libffi`` and ``make``.
 * Nice to have: ``mingw-w64-x86_64-gdb``
-* put ``clang++`` in your path **OR** make sure msys2 resides in ``C:\msys64`` OR edit
-  ``makescopes.bat`` and change the path accordingly.
-* copy ``libstdc++-6.dll``, ``libgcc_s_seh-1.dll``, ``libwinpthread-1.dll`` and
-  ``libffi-6.dll`` from the msys2 installation into the repo folder.
-  ``scopes.exe`` will depend on them.
-* run ``makescopes.bat``
+* Lastly, you need a build of `GENie <https://github.com/bkaradzic/GENie>`_ (binaries
+  available on the page).
+* In the base directory, run ``genie gmake`` once to generate the project Makefiles.
+* To build in debug mode, run ``make -C build``. For release mode, use 
+  ``make -C build config=release``. 
 * There should now be a ``scopes.exe`` executable in the repo root folder.
+* For a fresh rebuild, just remove the ``build`` directory before running make.
 
 Building Scopes on Linux
 ^^^^^^^^^^^^^^^^^^^^^^^^
