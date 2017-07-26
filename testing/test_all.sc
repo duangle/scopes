@@ -16,6 +16,7 @@ let modules =
         #test_tuple_array
         #test_xlet
         test_fwdecl
+        test_extraparams
 
 fn run-tests ()
     let total =
