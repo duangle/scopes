@@ -199,16 +199,18 @@ project "scopes"
         linkoptions(LLVM_LIBS)
         linkoptions { "-Wl,--no-whole-archive" }
         
-        local CP = toolpath("cp", MSYS_BIN_PATH)
+        if os.is("windows") then
+            local CP = toolpath("cp", MSYS_BIN_PATH)
 
-        postbuildcommands {
-            CP .. " -v " .. THISDIR .. "/bin/scopes " .. THISDIR,
-            CP .. " -v " .. dllpath("libffi-6") .. " " .. THISDIR,
-            CP .. " -v " .. dllpath("libgcc_s_seh-1") .. " " .. THISDIR,
-            CP .. " -v " .. dllpath("libstdc++-6") .. " " .. THISDIR,
-            CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. THISDIR,
-            CP .. " -v " .. dllpath("LLVM") .. " " .. THISDIR,
-        }
+            postbuildcommands {
+                CP .. " -v " .. THISDIR .. "/bin/scopes " .. THISDIR,
+                CP .. " -v " .. dllpath("libffi-6") .. " " .. THISDIR,
+                CP .. " -v " .. dllpath("libgcc_s_seh-1") .. " " .. THISDIR,
+                CP .. " -v " .. dllpath("libstdc++-6") .. " " .. THISDIR,
+                CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. THISDIR,
+                CP .. " -v " .. dllpath("LLVM") .. " " .. THISDIR,
+            }
+        end
     
     configuration "debug"
         defines { "SCOPES_DEBUG" }
