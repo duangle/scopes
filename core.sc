@@ -204,6 +204,11 @@ syntax-extend
             else
                 return;
 
+    set-type-symbol! Symbol 'cast
+        fn (destT self)
+            if (type== destT string)
+                Symbol->string self
+
     set-type-symbol! Symbol '==
         gen-type-op2
             fn (a b)
