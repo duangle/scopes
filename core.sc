@@ -700,17 +700,6 @@ fn set-scope-symbol! (scope sym value)
     __set-scope-symbol! scope sym (Any value)
 
 syntax-extend
-    # supertypes    
-    let integer = (typename-type "integer")
-    let real = (typename-type "real")
-    let pointer = (typename-type "pointer")
-    let array = (typename-type "array")
-    let vector = (typename-type "vector")
-    let tuple = (typename-type "tuple")
-    let union = (typename-type "union")
-    let typename = (typename-type "typename")
-    let function = (typename-type "function")
-
     set-type-symbol! integer 'apply-type integer-type
     #set-type-symbol! real 'apply-type real-type
     set-type-symbol! pointer 'apply-type pointer-type
@@ -720,16 +709,6 @@ syntax-extend
     #set-type-symbol! union 'apply-type union-type
     set-type-symbol! typename 'apply-type typename-type
     set-type-symbol! function 'apply-type function-type
-    
-    set-scope-symbol! syntax-scope 'integer integer
-    set-scope-symbol! syntax-scope 'real real
-    set-scope-symbol! syntax-scope 'pointer pointer
-    set-scope-symbol! syntax-scope 'array array
-    set-scope-symbol! syntax-scope 'vector vector
-    set-scope-symbol! syntax-scope 'tuple tuple
-    set-scope-symbol! syntax-scope 'union union
-    set-scope-symbol! syntax-scope 'typename typename
-    set-scope-symbol! syntax-scope 'function function
 
     set-type-symbol! Any 'typeof Any-typeof
 
@@ -897,27 +876,11 @@ syntax-extend
 
     syntax-scope
 
-fn super (T)
-    let value ok = (type@ T 'super)
-    if ok value
-    else
-        let kind = (type-kind T)
-        if (icmp== kind type-kind-integer) integer
-        elseif (icmp== kind type-kind-real) real
-        elseif (icmp== kind type-kind-pointer) pointer
-        elseif (icmp== kind type-kind-array) array
-        elseif (icmp== kind type-kind-vector) vector
-        elseif (icmp== kind type-kind-tuple) tuple
-        elseif (icmp== kind type-kind-union) union
-        #elseif (icmp== kind type-kind-typename) typename
-        elseif (icmp== kind type-kind-function) function
-        else type
-
 fn <: (T superT)
     let [loop] T = T
-    let value = (super T)
+    let value = (superof T)
     if (type== value superT) true
-    elseif (type== value type) false
+    elseif (type== value typename) false
     else
         loop value
 

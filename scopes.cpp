@@ -463,6 +463,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
     T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_Malloc) \
+    T(FN_AllocaArray) T(FN_MallocArray) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
@@ -588,7 +589,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_VolatileStore, "volatile-store") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
-    T(FN_Malloc, "malloc") T(FN_Unconst, "unconst") \
+    T(FN_Malloc, "malloc") T(FN_MallocArray, "malloc-array") T(FN_Unconst, "unconst") \
     T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") \
     T(FN_MemCpy, "memcpy") \
     T(FN_IsNone, "none?") \
@@ -629,6 +630,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_SyntaxUnquote, "syntax-unquote") \
     T(FN_SymbolToString, "Symbol->string") \
     T(FN_StringMatch, "string-match?") \
+    T(FN_SuperOf, "superof") \
     T(FN_SyntaxNew, "Syntax-new") \
     T(FN_SyntaxWrap, "Syntax-wrap") \
     T(FN_SyntaxStrip, "Syntax-strip") \
@@ -641,6 +643,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_TypeKind, "type-kind") \
     T(FN_TypeAt, "type@") \
     T(FN_Undef, "undef") T(FN_NullOf, "nullof") T(FN_Alloca, "alloca") \
+    T(FN_AllocaArray, "alloca-array") \
     T(FN_Location, "compiler-anchor") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -658,6 +661,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_RefSet, "ref-set!") \
     T(SFXFN_SetExceptionHandler, "set-exception-handler!") \
     T(SFXFN_SetGlobals, "set-globals!") \
+    T(SFXFN_SetTypenameSuper, "set-typename-super!") \
     T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
     T(SFXFN_SetScopeSymbol, "__set-scope-symbol!") \
     T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
@@ -1611,7 +1615,22 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
     \
-    T(TYPE_USize, "usize")
+    T(TYPE_USize, "usize") \
+    \
+    /* super types */ \
+    T(TYPE_Integer, "integer") \
+    T(TYPE_Real, "real") \
+    T(TYPE_Pointer, "pointer") \
+    T(TYPE_Array, "array") \
+    T(TYPE_Vector, "vector") \
+    T(TYPE_Tuple, "tuple") \
+    T(TYPE_Union, "union") \
+    T(TYPE_Typename, "typename") \
+    T(TYPE_TypedLabel, "typed-label") \
+    T(TYPE_TypeSet, "typeset") \
+    T(TYPE_Function, "function") \
+    T(TYPE_Constant, "constant") \
+    T(TYPE_Extern, "extern")
 
 #define T(TYPE, TYPENAME) \
     static const Type *TYPE = nullptr;
@@ -1805,6 +1824,8 @@ static StyledStream& operator<<(StyledStream& ost, Any value) {
 //------------------------------------------------------------------------------
 //------------------------------------------------------------------------------
 
+static const Type *superof(const Type *T);
+
 struct Type {
     TypeKind kind() const { return _kind; } // for this codebase
 
@@ -1841,6 +1862,18 @@ struct Type {
         if (it != symbols.end()) {
             dest = it->second;
             return true;
+        }
+        return false;
+    }
+
+    bool lookup_call_handler(Any &dest) const {
+        const Type *T = this;
+        while (T) {
+            if (T->lookup(KW_Call, dest))
+                return true;
+            if (T == TYPE_Typename)
+                break;
+            T = superof(T);
         }
         return false;
     }
@@ -2444,7 +2477,7 @@ struct TypenameType : Type {
     }
 
     TypenameType(const String *name)
-        : Type(TK_Typename), storage_type(nullptr) {
+        : Type(TK_Typename), storage_type(nullptr), super_type(nullptr) {
         auto ss = StyledString::plain();
         name->stream(ss.out, " *");
         const String *newstr = ss.str();
@@ -2475,7 +2508,13 @@ struct TypenameType : Type {
 
     bool finalized() const { return storage_type != nullptr; }
 
+    const Type *super() const {
+        if (!super_type) return TYPE_Typename;
+        return super_type;
+    }
+
     const Type *storage_type;
+    const Type *super_type;
     std::vector<Symbol> field_names;
 };
 
@@ -2811,6 +2850,26 @@ void *get_pointer(const Type *type, Any &value, bool create = false) {
     StyledString ss;
     ss.out << "cannot extract pointer from type " << type;
     location_error(ss.str());
+    return nullptr;
+}
+
+static const Type *superof(const Type *T) {
+    switch(T->kind()) {
+    case TK_Integer: return TYPE_Integer;
+    case TK_Real: return TYPE_Real;
+    case TK_Pointer: return TYPE_Pointer;
+    case TK_Array: return TYPE_Array;
+    case TK_Vector: return TYPE_Vector;
+    case TK_Tuple: return TYPE_Tuple;
+    case TK_Union: return TYPE_Union;
+    case TK_Typename: return cast<TypenameType>(T)->super();
+    case TK_TypedLabel: return TYPE_TypedLabel;
+    case TK_TypeSet: return TYPE_TypeSet;
+    case TK_Function: return TYPE_Function;
+    case TK_Constant: return TYPE_Constant;
+    case TK_Extern: return TYPE_Extern;
+    }
+    assert(false && "unhandled type kind");    
     return nullptr;
 }
 
@@ -7015,8 +7074,12 @@ struct GenerateCtx {
                 retvalue = LLVMConstNull(ty); } break;
             case FN_Alloca: { READ_TYPE(ty);
                 retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
+            case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
+                retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
             case FN_Malloc: { READ_TYPE(ty);
                 retvalue = LLVMBuildMalloc(builder, ty, ""); } break;
+            case FN_MallocArray: { READ_TYPE(ty); READ_VALUE(val);
+                retvalue = LLVMBuildArrayMalloc(builder, ty, val, ""); } break;
             case FN_Free: { READ_VALUE(val);
                 retvalue = LLVMBuildFree(builder, val); } break;
             case FN_GetElementPtr: {
@@ -7803,7 +7866,7 @@ struct NormalizeCtx {
         auto &&enter = l->body.enter;
         const Type *T = enter.indirect_type();
         Any value = none;
-        return T->lookup(KW_Call, value);
+        return T->lookup_call_handler(value);
     }
 
     static bool is_calling_function(Label *l) {
@@ -8047,7 +8110,9 @@ struct NormalizeCtx {
         case FN_Undef:
         case FN_NullOf:
         case FN_Alloca:
+        case FN_AllocaArray:
         case FN_Malloc:
+        case FN_MallocArray:
         case SFXFN_Unreachable:
             return true;
         default: return false;
@@ -8273,6 +8338,13 @@ struct NormalizeCtx {
             args[1].verify(TYPE_Type);
             RETARGTYPES(Pointer(args[1].typeref));
         } break;
+        case FN_MallocArray:
+        case FN_AllocaArray: {
+            CHECKARGS(2, 2);
+            args[1].verify(TYPE_Type);
+            verify_integer(storage_type(args[2].indirect_type()));
+            RETARGTYPES(Pointer(args[1].typeref));
+        } break;
         case FN_Free: {
             CHECKARGS(1, 1);
             verify_kind<TK_Pointer>(args[1].indirect_type());
@@ -8454,7 +8526,7 @@ struct NormalizeCtx {
         const Type *T = enter.indirect_type();
 
         Any value = none;
-        auto result = T->lookup(KW_Call, value);
+        auto result = T->lookup_call_handler(value);
         assert(result);
         l->unlink_backrefs();
         args.insert(args.begin() + 1, enter);
@@ -10612,6 +10684,9 @@ static Label *expand_module(Any expr, Scope *scope = nullptr) {
 // GLOBALS
 //------------------------------------------------------------------------------
 
+#define DEFINE_TYPENAME(NAME, T) \
+    T = Typename(String::from(NAME));
+
 #define DEFINE_BASIC_TYPE(NAME, CT, T, BODY) { \
         T = Typename(String::from(NAME)); \
         auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
@@ -10641,8 +10716,23 @@ static Label *expand_module(Any expr, Scope *scope = nullptr) {
     }
 
 static void init_types() {
-    TYPE_Void = Typename(String::from("void"));
-    TYPE_Nothing = Typename(String::from("Nothing"));
+    DEFINE_TYPENAME("typename", TYPE_Typename);
+
+    DEFINE_TYPENAME("void", TYPE_Void);
+    DEFINE_TYPENAME("Nothing", TYPE_Nothing);
+
+    DEFINE_TYPENAME("integer", TYPE_Integer);
+    DEFINE_TYPENAME("real", TYPE_Real);
+    DEFINE_TYPENAME("pointer", TYPE_Pointer);
+    DEFINE_TYPENAME("array", TYPE_Array);
+    DEFINE_TYPENAME("vector", TYPE_Vector);
+    DEFINE_TYPENAME("tuple", TYPE_Tuple);
+    DEFINE_TYPENAME("union", TYPE_Union);
+    DEFINE_TYPENAME("typed-label", TYPE_TypedLabel);
+    DEFINE_TYPENAME("typeset", TYPE_TypeSet);
+    DEFINE_TYPENAME("constant", TYPE_Constant);
+    DEFINE_TYPENAME("function", TYPE_Function);
+    DEFINE_TYPENAME("extern", TYPE_Extern);
 
     TYPE_Bool = Integer(1, false);
 
@@ -10726,6 +10816,11 @@ static void init_types() {
 #undef T
 }
 
+#undef DEFINE_TYPENAME
+#undef DEFINE_BASIC_TYPE
+#undef DEFINE_STRUCT_TYPE
+#undef DEFINE_STRUCT_HANDLE_TYPE
+#undef DEFINE_OPAQUE_HANDLE_TYPE
 #undef DEFINE_STRUCT_TYPE
 
 typedef struct { int x,y; } I2;
@@ -11066,6 +11161,25 @@ static void f_load_library(const String *name) {
     loaded_libs.push_back(handle);
 }
 
+static void f_set_typename_super(const Type *T, const Type *ST) {
+    verify_kind<TK_Typename>(T);
+    verify_kind<TK_Typename>(ST);
+    // if T <=: ST, the operation is illegal
+    const Type *S = ST;
+    while (S) {
+        if (S == T) {
+            StyledString ss;
+            ss.out << "typename " << ST << " can not be a supertype of " << T;
+            location_error(ss.str());
+        }
+        if (S == TYPE_Typename)
+            break;
+        S = superof(S);
+    }
+    auto tn = cast<TypenameType>(T);
+    const_cast<TypenameType *>(tn)->super_type = ST;
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -11116,6 +11230,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ScopeNext, f_scope_next, Tuple({TYPE_Any, TYPE_Any}), TYPE_Scope, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_TypenameFieldIndex, f_typename_field_index, TYPE_I32, TYPE_Type, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_StringMatch, f_string_match, TYPE_Bool, TYPE_String, TYPE_String);
+    DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
 
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
@@ -11210,33 +11326,10 @@ static void init_globals(int argc, char *argv[]) {
 
     globals->bind(Symbol("exception-pad-type"), exception_pad_type);
 
-    globals->bind(Symbol("bool"), TYPE_Bool);
-    globals->bind(Symbol("i8"), TYPE_I8);
-    globals->bind(Symbol("i16"), TYPE_I16);
-    globals->bind(Symbol("i32"), TYPE_I32);
-    globals->bind(Symbol("i64"), TYPE_I64);
-    globals->bind(Symbol("u8"), TYPE_U8);
-    globals->bind(Symbol("u16"), TYPE_U16);
-    globals->bind(Symbol("u32"), TYPE_U32);
-    globals->bind(Symbol("u64"), TYPE_U64);
-    globals->bind(Symbol("f32"), TYPE_F32);
-    globals->bind(Symbol("f64"), TYPE_F64);
-    globals->bind(Symbol("usize"), TYPE_USize);
-    globals->bind(Symbol("Symbol"), TYPE_Symbol);
-    globals->bind(Symbol("list"), TYPE_List);
-    globals->bind(Symbol("Any"), TYPE_Any);
-    globals->bind(Symbol("string"), TYPE_String);
-    globals->bind(Symbol("Builtin"), TYPE_Builtin);
-    globals->bind(Symbol("Nothing"), TYPE_Nothing);
-    globals->bind(Symbol("type"), TYPE_Type);
-    globals->bind(Symbol("Syntax"), TYPE_Syntax);
-    globals->bind(Symbol("Label"), TYPE_Label);
-    globals->bind(Symbol("ref"), TYPE_Ref);
-    globals->bind(Symbol("Parameter"), TYPE_Parameter);
-    globals->bind(Symbol("Scope"), TYPE_Scope);
-    globals->bind(Symbol("Anchor"), TYPE_Anchor);
-    globals->bind(Symbol("void"), TYPE_Void);
-    globals->bind(Symbol("Exception"), TYPE_Exception);
+#define T(TYPE, NAME) \
+    globals->bind(Symbol(NAME), TYPE);
+B_TYPES()
+#undef T
 
 #define T(NAME, BNAME) \
     globals->bind(Symbol(BNAME), (int32_t)NAME);
