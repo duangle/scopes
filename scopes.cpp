@@ -175,6 +175,9 @@ const char *scopes_compile_time_date();
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
+extern "C" {
+#include "external/minilibs/regexp.h"
+}
 
 #pragma GCC diagnostic ignored "-Wvla-extension"
 // #pragma GCC diagnostic ignored "-Wzero-length-array"
@@ -349,7 +352,9 @@ int escape_string(char *buf, const char *str, int strcount, const char *quote_ch
 
 extern "C" {
 // used in test_assorted.sc
+#pragma GCC visibility push(default)
 extern int scopes_test_add(int a, int b) { return a + b; }
+#pragma GCC visibility pop
 }
 
 float powimpl(float a, float b) { return std::pow(a, b); }
@@ -471,7 +476,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_VolatileLoad) T(FN_VolatileStore) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_CompilerMessage) T(FN_Undef) T(KW_Let) \
+    T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_ExternSymbol) \
     T(SFXFN_SetTypenameStorage) T(SYM_Extern) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
@@ -527,6 +532,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_IsConstant, "constant?") \
     T(FN_Countof, "countof") \
     T(FN_Compile, "__compile") \
+    T(FN_TypenameFieldIndex, "typename-field-index") \
     T(FN_CompilerMessage, "compiler-message") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
@@ -577,6 +583,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
     T(FN_ListParse, "list-parse") T(FN_IsList, "list?") T(FN_Load, "load") \
+    T(FN_LoadLibrary, "load-library") \
     T(FN_VolatileLoad, "volatile-load") \
     T(FN_VolatileStore, "volatile-store") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
@@ -621,6 +628,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IsSyntaxQuoted, "syntax-quoted?") \
     T(FN_SyntaxUnquote, "syntax-unquote") \
     T(FN_SymbolToString, "Symbol->string") \
+    T(FN_StringMatch, "string-match?") \
     T(FN_SyntaxNew, "Syntax-new") \
     T(FN_SyntaxWrap, "Syntax-wrap") \
     T(FN_SyntaxStrip, "Syntax-strip") \
@@ -632,7 +640,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_TypeEq, "type==") T(FN_IsType, "type?") T(FN_TypeOf, "typeof") \
     T(FN_TypeKind, "type-kind") \
     T(FN_TypeAt, "type@") \
-    T(FN_Undef, "undef") T(FN_Alloca, "alloca") \
+    T(FN_Undef, "undef") T(FN_NullOf, "nullof") T(FN_Alloca, "alloca") \
     T(FN_Location, "compiler-anchor") \
     T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
@@ -2425,6 +2433,14 @@ struct TypenameType : Type {
 
     static bool classof(const Type *T) {
         return T->kind() == TK_Typename;
+    }
+
+    size_t field_index(Symbol name) const {
+        for (size_t i = 0; i < field_names.size(); ++i) {
+            if (name == field_names[i])
+                return i;
+        }
+        return (size_t)-1;
     }
 
     TypenameType(const String *name)
@@ -6367,6 +6383,18 @@ static LLVMValueRef LLVMDIBuilderCreateFile(
   return mdnode_to_value(Builder->createFile(Filename, Directory));
 }
 
+static std::vector<void *> loaded_libs;
+static void *local_aware_dlsym(const char *name) {
+    size_t i = loaded_libs.size();
+    while (i--) {
+        void *ptr = dlsym(loaded_libs[i], name);
+        if (ptr) {
+            LLVMAddSymbol(name, ptr);
+            return ptr;
+        }
+    }
+    return dlsym(global_c_namespace, name);
+}
 
 struct GenerateCtx {
     struct HashFuncLabelPair {
@@ -6788,7 +6816,7 @@ struct GenerateCtx {
                 } else {
                     uint64_t ptr = LLVMGetGlobalValueAddress(ee, name);
                     if (!ptr) {
-                        void *pptr = dlsym(global_c_namespace, name);
+                        void *pptr = local_aware_dlsym(name);
                         ptr = *(uint64_t*)&pptr;
                     }
                     if (!ptr) {
@@ -6983,6 +7011,8 @@ struct GenerateCtx {
             } break;
             case FN_Undef: { READ_TYPE(ty);
                 retvalue = LLVMGetUndef(ty); } break;
+            case FN_NullOf: { READ_TYPE(ty);
+                retvalue = LLVMConstNull(ty); } break;
             case FN_Alloca: { READ_TYPE(ty);
                 retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
             case FN_Malloc: { READ_TYPE(ty);
@@ -8015,6 +8045,7 @@ struct NormalizeCtx {
         switch(builtin.value()) {
         case FN_Unconst:
         case FN_Undef:
+        case FN_NullOf:
         case FN_Alloca:
         case FN_Malloc:
         case SFXFN_Unreachable:
@@ -8231,6 +8262,11 @@ struct NormalizeCtx {
             args[1].verify(TYPE_Type);
             RETARGTYPES(args[1].typeref);
         } break;
+        case FN_NullOf: {
+            CHECKARGS(1, 1);
+            args[1].verify(TYPE_Type);
+            RETARGTYPES(args[1].typeref);
+        } break;
         case FN_Malloc:
         case FN_Alloca: {
             CHECKARGS(1, 1);
@@ -8250,17 +8286,30 @@ struct NormalizeCtx {
             T = pi->element_type;
             verify_integer(storage_type(args[2].indirect_type()));
             for (size_t i = 3; i < args.size(); ++i) {
-                T = storage_type(T);
+                
+                const Type *ST = storage_type(T);
                 auto &&arg = args[i];
-                switch(T->kind()) {
+                switch(ST->kind()) {
                 case TK_Array: {
-                    auto ai = cast<ArrayType>(T);
+                    auto ai = cast<ArrayType>(ST);
                     T = ai->element_type;
                     verify_integer(storage_type(arg.indirect_type()));
                 } break;
                 case TK_Tuple: {
-                    size_t idx = cast_number<size_t>(arg);
-                    auto ti = cast<TupleType>(T);
+                    auto ti = cast<TupleType>(ST);
+                    size_t idx = 0;
+                    if ((T->kind() == TK_Typename) && (arg.type == TYPE_Symbol)) {
+                        idx = cast<TypenameType>(T)->field_index(arg.symbol);
+                        if (idx == (size_t)-1) {
+                            StyledString ss;
+                            ss.out << "no such field " << arg.symbol << " in typename " << T;
+                            location_error(ss.str());
+                        }
+                        // rewrite field
+                        arg = (int)idx;
+                    } else {
+                        idx = cast_number<size_t>(arg);
+                    }
                     T = ti->type_at_index(idx);
                 } break;
                 default: {
@@ -8823,18 +8872,30 @@ struct NormalizeCtx {
             ptr = pi->getelementptr(ptr, idx);
 
             for (size_t i = 3; i < args.size(); ++i) {
-                T = storage_type(T);
+                const Type *ST = storage_type(T);
                 auto &&arg = args[i];
-                switch(T->kind()) {
+                switch(ST->kind()) {
                 case TK_Array: {
-                    auto ai = cast<ArrayType>(T);
+                    auto ai = cast<ArrayType>(ST);
                     T = ai->element_type;
                     size_t idx = cast_number<size_t>(arg);
                     ptr = ai->getelementptr(ptr, idx);
                 } break;
                 case TK_Tuple: {
-                    size_t idx = cast_number<size_t>(arg);
-                    auto ti = cast<TupleType>(T);
+                    auto ti = cast<TupleType>(ST);
+                    size_t idx = 0;
+                    if ((T->kind() == TK_Typename) && (arg.type == TYPE_Symbol)) {
+                        idx = cast<TypenameType>(T)->field_index(arg.symbol);
+                        if (idx == (size_t)-1) {
+                            StyledString ss;
+                            ss.out << "no such field " << arg.symbol << " in typename " << T;
+                            location_error(ss.str());
+                        }
+                        // rewrite field
+                        arg = (int)idx;
+                    } else {
+                        idx = cast_number<size_t>(arg);
+                    }
                     T = ti->type_at_index(idx);
                     ptr = ti->getelementptr(ptr, idx);
                 } break;
@@ -10952,6 +11013,12 @@ static const List *f_list_join(List *a, List *b) {
     return List::join(a, b);
 }
 
+static int f_typename_field_index(const Type *type, Symbol name) {
+    verify_kind<TK_Typename>(type);
+    auto tn = cast<TypenameType>(type);
+    return tn->field_index(name);
+}
+
 typedef struct { Any _0; Any _1; } AnyAnyPair;
 static AnyAnyPair f_scope_next(Scope *scope, Any key) {
     auto &&map = scope->map;
@@ -10975,6 +11042,28 @@ static AnyAnyPair f_scope_next(Scope *scope, Any key) {
             }
         }
     }
+}
+
+static bool f_string_match(const String *pattern, const String *text) {
+    const char *error = nullptr;
+    Reprog *m = regcomp(pattern->data, 0, &error);
+    if (error) {
+        const String *err = String::from_cstr(error);
+        regfree(m);
+        location_error(err);
+    }
+    bool matches = (regexec(m, text->data, nullptr, 0) == 0);
+    regfree(m);
+    return matches;
+}
+
+static void f_load_library(const String *name) {
+    dlerror();
+    void *handle = dlopen(name->data, RTLD_LAZY|RTLD_DEEPBIND);
+    if (!handle) {
+        location_error(String::from_cstr(dlerror()));
+    }
+    loaded_libs.push_back(handle);
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -11025,11 +11114,14 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(Symbol("Any=="), f_any_eq, TYPE_Bool, TYPE_Any, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);    
     DEFINE_PURE_C_FUNCTION(FN_ScopeNext, f_scope_next, Tuple({TYPE_Any, TYPE_Any}), TYPE_Scope, TYPE_Any);
+    DEFINE_PURE_C_FUNCTION(FN_TypenameFieldIndex, f_typename_field_index, TYPE_I32, TYPE_Type, TYPE_Symbol);
+    DEFINE_PURE_C_FUNCTION(FN_StringMatch, f_string_match, TYPE_Bool, TYPE_String, TYPE_String);
 
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
     DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
+    DEFINE_C_FUNCTION(FN_LoadLibrary, f_load_library, TYPE_Void, TYPE_String);
 
     DEFINE_C_FUNCTION(FN_IsFile, f_is_file, TYPE_Bool, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListLoad, f_list_load, TYPE_Syntax, TYPE_String);
@@ -11066,6 +11158,8 @@ static void init_globals(int argc, char *argv[]) {
         TYPE_Any, p_exception_pad_type);
     DEFINE_C_FUNCTION(Symbol("set-signal-abort!"), f_set_signal_abort, 
         TYPE_Void, TYPE_Bool);
+
+    
 
 #undef DEFINE_C_FUNCTION
 

@@ -54,6 +54,8 @@ fn error! (msg)
     __error! msg
     unreachable!;
 
+fn typename-type? (T)
+    icmp== (type-kind T) type-kind-typename
 fn integer-type? (T)
     icmp== (type-kind T) type-kind-integer
 fn real-type? (T)
@@ -72,6 +74,8 @@ fn function-pointer-type? (T)
     if (pointer-type? T)
         function-type? (element-type T 0)
     else false
+fn typename? (val)
+    typename-type? (typeof val)
 fn integer? (val)
     integer-type? (typeof val)
 fn real? (val)
@@ -862,6 +866,13 @@ syntax-extend
     set-type-symbol! string '<= (gen-string-cmp <=)
     set-type-symbol! string '> (gen-string-cmp >)
     set-type-symbol! string '>= (gen-string-cmp >=)
+
+    let rawstring = (pointer i8)
+    set-scope-symbol! syntax-scope 'rawstring (pointer i8)
+    set-type-symbol! string 'cast
+        fn (destT self)
+            if (type== destT rawstring)
+                getelementptr self 0 1 0
 
     set-type-symbol! string 'countof string-countof
     set-type-symbol! string '@

@@ -66,6 +66,7 @@ local function print_list(l)
 end
 
 local CLANG_CXX = toolpath("clang++", CLANG_PATH)
+local CLANG_CC = toolpath("clang", CLANG_PATH)
 local LLVM_CONFIG = toolpath("llvm-config", CLANG_PATH)
 
 local LLVM_LDFLAGS = pkg_config(LLVM_CONFIG .. " --ldflags")
@@ -73,10 +74,7 @@ local LLVM_CXXFLAGS = pkg_config(LLVM_CONFIG .. " --cxxflags")
 local LLVM_LIBS = pkg_config(LLVM_CONFIG .. " --libs engine passes option objcarcopts coverage support lto coroutines")
 
 premake.gcc.cxx = CLANG_CXX
-if os.is("windows") then
-    local CLANG_CC = toolpath("clang", CLANG_PATH)
-    premake.gcc.cc = CLANG_CC
-end
+premake.gcc.cc = CLANG_CC
 premake.gcc.llvm = true
 
 solution "scopes"
@@ -137,6 +135,10 @@ project "scopes"
     }
 
     configuration { "linux" }
+        files {
+            "external/minilibs/regexp.c"
+        }
+
         defines {
             "_GLIBCXX_USE_CXX11_ABI=0",
         }
@@ -150,8 +152,10 @@ project "scopes"
             --"-l...",
             --"-Wl,--no-whole-archive",
             
-            "-Wl,--export-dynamic",            
-            "-rdynamic",
+            -- can't use this or our LLVM will collide with LLVM in other libs
+            --"-Wl,--export-dynamic",
+            --"-rdynamic",
+            
             THISDIR .. "/libffi/.libs/libffi.a",
         }
         linkoptions(LLVM_LDFLAGS)
@@ -177,6 +181,7 @@ project "scopes"
         }
     
         files {
+            "external/minilibs/regexp.c",
             "win32/mman.c",            
             "win32/realpath.c",
             "win32/dlfcn.c",
@@ -217,7 +222,7 @@ project "scopes"
         defines { "SCOPES_DEBUG" }
         flags { "Symbols" }
 
-        buildoptions {
+        buildoptions_cpp {
             "-O0"
         }
     

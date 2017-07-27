@@ -7,7 +7,8 @@ assert
 assert ((min integer i8) == i8)
 assert ((max 3 4 5) == 5)
 
-do
+# since -rdynamic is disabled on linux, we can't do this anymore, for now
+#do
     # make sure we can load symbols from the global C namespace
     let C =
         extern 'scopes_test_add

@@ -89,6 +89,7 @@
         "__bit_reference": "cpp",
         "__string": "cpp",
         "__tree": "cpp",
-        "optional": "cpp"
+        "optional": "cpp",
+        "regexp.c": "cpp"
     }
 }
