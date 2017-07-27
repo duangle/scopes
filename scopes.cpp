@@ -605,7 +605,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ScopeEq, "Scope==") \
     T(FN_ScopeNew, "Scope-new") \
     T(FN_ScopeNewSubscope, "Scope-new-subscope") \
-    T(FN_ScopeNextSymbol, "Scope-next-symbol") T(FN_SizeOf, "sizeof") \
+    T(FN_ScopeNext, "Scope-next") T(FN_SizeOf, "sizeof") \
     T(FN_Slice, "slice") T(FN_Store, "store") \
     T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
     T(FN_StringCountOf, "string-countof") T(FN_StringNew, "string-new") \
@@ -10952,6 +10952,31 @@ static const List *f_list_join(List *a, List *b) {
     return List::join(a, b);
 }
 
+typedef struct { Any _0; Any _1; } AnyAnyPair;
+static AnyAnyPair f_scope_next(Scope *scope, Any key) {
+    auto &&map = scope->map;
+    if (key.type == TYPE_Nothing) {
+        if (map.empty()) {
+            return { none, none };
+        } else {
+            auto it = map.begin();
+            return { it->first, it->second };
+        }
+    } else {
+        auto it = map.find(key);
+        if (it == map.end()) {
+            return { none, none };
+        } else {
+            it++;
+            if (it == map.end()) {
+                return { none, none };
+            } else {
+                return { it->first, it->second };
+            }
+        }
+    }
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -10998,7 +11023,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(Symbol("Any=="), f_any_eq, TYPE_Bool, TYPE_Any, TYPE_Any);
-    DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);    
+    DEFINE_PURE_C_FUNCTION(FN_ScopeNext, f_scope_next, Tuple({TYPE_Any, TYPE_Any}), TYPE_Scope, TYPE_Any);
 
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
@@ -11021,7 +11047,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_Abort, f_abort, TYPE_Void);
-    DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);
+    DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);    
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
 
     const Type *exception_pad_type = Array(TYPE_U8, sizeof(ExceptionPad));

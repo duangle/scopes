@@ -6,17 +6,18 @@ let modules =
     quote
         test_assorted
         test_dots
+        test_extraparams
+        test_fwdecl
         #test_iterator
         test_let
         test_loop
         test_scope
+        test_scope_iter
         test_semicolon
         #test_structof
         #test_tableof
         #test_tuple_array
         #test_xlet
-        test_fwdecl
-        test_extraparams
 
 fn run-tests ()
     let total =

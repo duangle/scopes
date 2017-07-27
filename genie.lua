@@ -150,8 +150,8 @@ project "scopes"
             --"-l...",
             --"-Wl,--no-whole-archive",
             
-            --"-Wl,--export-dynamic",            
-            --"-rdynamic",
+            "-Wl,--export-dynamic",            
+            "-rdynamic",
             THISDIR .. "/libffi/.libs/libffi.a",
         }
         linkoptions(LLVM_LDFLAGS)
@@ -160,7 +160,8 @@ project "scopes"
         linkoptions { "-Wl,--no-whole-archive" }
 
         postbuildcommands {
-            "cp -v " .. THISDIR .. "/bin/scopes " .. THISDIR
+            "cp -v " .. THISDIR .. "/bin/scopes " .. THISDIR,
+            THISDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
         }
     
     configuration { "windows" }
