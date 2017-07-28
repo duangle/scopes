@@ -34,17 +34,17 @@ fn tie-const (a b)
     else (unconst b)
 
 fn type? (T)
-    icmp== (ptrtoint type usize) (ptrtoint (typeof T) usize)
+    rawcall icmp== (rawcall ptrtoint type usize) (rawcall ptrtoint (rawcall typeof T) usize)
 
 fn type== (a b)
     fn assert-type (T)
         if (type? T)
         else
-            compiler-error!
-                string-join "type expected, not " (Any-repr (Any-wrap T))
+            rawcall compiler-error!
+                rawcall string-join "type expected, not " (rawcall Any-repr (rawcall Any-wrap T))
     assert-type a
     assert-type b
-    icmp== (ptrtoint a usize) (ptrtoint b usize)
+    rawcall icmp== (rawcall ptrtoint a usize) (rawcall ptrtoint b usize)
 
 fn todo! (msg)
     compiler-error!
@@ -365,9 +365,6 @@ syntax-extend
 
     syntax-scope
 
-fn repr (val)
-    Any-repr (Any val)
-
 fn string-repr (val)
     Any-string (Any val)
 
@@ -467,6 +464,54 @@ fn @ (...)
                 else key
             else key
     (op2-ltr-multiop at) ...
+
+fn repr
+
+fn type-mismatch-string (want-T have-T)
+    .. "type " (repr want-T) " expected, not " (repr have-T)
+
+fn assert-typeof (a T)
+    if (type== T (typeof a))
+    else
+        compiler-error!
+            type-mismatch-string T (typeof a)
+
+fn Any-typeof (val)
+    assert-typeof val Any
+    extractvalue val 0
+
+fn Any-payload (val)
+    assert-typeof val Any
+    extractvalue val 1
+
+fn repr (value)
+    let T = (typeof value)
+    let CT = 
+        if (type== T Any)
+            Any-typeof value
+        else T
+    fn append-type? ()
+        if (type== CT i32) false
+        elseif (type== CT bool) false
+        elseif (type== CT Nothing) false
+        elseif (type== CT f32) false
+        elseif (type== CT string) false
+        elseif (type== CT list) false
+        elseif (type== CT Symbol) false
+        elseif (type== CT type) false
+        else true
+    let op success = (type@ T 'repr)
+    let text =
+        if success
+            op value
+        else
+            Any-repr (Any value)
+    if (append-type?)
+        .. text
+            default-styler style-operator ":"
+            default-styler style-type (type-name CT)
+    else text
+
 fn getattr (self name)
     let T = (typeof self)
     let op success = (type@ T 'getattr)
@@ -487,15 +532,6 @@ fn getattr (self name)
 fn empty? (x)
     == (countof x) 0:usize
 
-fn type-mismatch-string (want-T have-T)
-    .. "type " (repr want-T) " expected, not " (repr have-T)
-
-fn assert-typeof (a T)
-    if (type== T (typeof a))
-    else
-        compiler-error!
-            type-mismatch-string T (typeof a)
-
 fn cast (dest-type value)
     assert-typeof dest-type type
     let T = (typeof value)
@@ -515,14 +551,6 @@ fn cast (dest-type value)
 fn not (x)
     assert-typeof x bool
     bxor x true
-
-fn Any-typeof (val)
-    assert-typeof val Any
-    extractvalue val 0
-
-fn Any-payload (val)
-    assert-typeof val Any
-    extractvalue val 1
 
 fn Any-extract (val T)
     assert-typeof val Any
@@ -1542,6 +1570,27 @@ fn prompt (prefix preload)
     __prompt prefix
         if (none? preload) "" 
         else preload
+
+#-------------------------------------------------------------------------------
+# implicit casts
+#-------------------------------------------------------------------------------
+
+#set-type-symbol! pointer 'call
+    fn (self ...)
+        let ET = (rawcall element-type (typeof self) 0)
+        let ST = (rawcall superof ET)
+        if (type== ST function)
+            let sz = (va-countof ...)
+            let [loop] i args... = sz
+            if (icmp== i 0)
+                rawcall self args...
+            else
+                let i-1 = (sub i 1)
+                let arg = (va@ i-1 ...)
+                let argtype = (rawcall element-type ET i)
+                loop i-1 (cast argtype arg) args...
+        else
+            rawcall self ...
 
 #-------------------------------------------------------------------------------
 # REPL

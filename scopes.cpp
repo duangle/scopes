@@ -10861,7 +10861,7 @@ typedef struct { int x,y,z; } I3;
 
 static const String *f_repr(Any value) {
     StyledString ss;
-    ss.out << value;
+    value.stream(ss.out, false);
     return ss.str();
 }
 
@@ -11198,6 +11198,10 @@ static void f_load_library(const String *name) {
     loaded_libs.push_back(handle);
 }
 
+static const String *f_type_name(const Type *T) {
+    return T->name();
+}
+
 static void f_set_typename_super(const Type *T, const Type *ST) {
     verify_kind<TK_Typename>(T);
     verify_kind<TK_Typename>(ST);
@@ -11250,6 +11254,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_TypeStorage, f_type_storage, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_IntegerType, f_integer_type, TYPE_Type, TYPE_I32, TYPE_Bool);
     DEFINE_PURE_C_FUNCTION(FN_CompilerVersion, f_compiler_version, Tuple({TYPE_I32, TYPE_I32, TYPE_I32}));
+    DEFINE_PURE_C_FUNCTION(FN_TypeName, f_type_name, TYPE_String, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_TypenameType, f_typename_type, TYPE_Type, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_SyntaxNew, f_syntax_new, TYPE_Syntax, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
     DEFINE_PURE_C_FUNCTION(FN_SyntaxWrap, wrap_syntax, TYPE_Any, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
