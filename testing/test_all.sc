@@ -5,6 +5,7 @@ set-scope-symbol! package 'path
 let modules =
     quote
         test_assorted
+        test_call_override
         test_dots
         test_extraparams
         test_fwdecl

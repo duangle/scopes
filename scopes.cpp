@@ -4427,12 +4427,29 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
     return ss;
 }
 
+enum LabelBodyFlags {
+    LBF_RawCall = (1 << 0)
+};
+
 struct Body {
     const Anchor *anchor;
     Any enter;
     std::vector<Any> args;
+    uint64_t flags;    
 
-    Body() : anchor(nullptr), enter(none) {}
+    Body() : anchor(nullptr), enter(none), flags(0) {}
+
+    bool is_rawcall() {
+        return (flags & LBF_RawCall) == LBF_RawCall;
+    }
+    
+    void set_rawcall(bool enable = true) {
+        if (enable) {
+            flags |= LBF_RawCall;
+        } else {
+            flags &= ~LBF_RawCall;
+        }
+    }
 };
 
 static const char CONT_SEP[] = "▶";
@@ -4461,18 +4478,13 @@ uint64_t Tag<T>::active_gen = 0;
 
 typedef Tag<Label> LabelTag;
 
-enum LabelFlags {
-    // 
-    LF_RawCall = (1 << 0)
-};
-
 struct Label : ILNode {
 protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
         uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
-        paired(nullptr), flags(0), num_instances(0)
+        paired(nullptr), num_instances(0)
         {}
 
 public:
@@ -4484,15 +4496,10 @@ public:
     Body body;
     LabelTag tag;
     Label *paired;
-    uint64_t flags; // LF_*
     uint64_t num_instances;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
-
-    bool is_rawcall() {
-        return (flags & LF_RawCall) == LF_RawCall;
-    }
 
     bool is_complete() {
         return !params.empty() && body.anchor && !body.args.empty();
@@ -5037,6 +5044,9 @@ struct StreamLabel : StreamAnchors {
             stream_anchor(alabel->body.anchor);
             ss << " ";
         }
+        if (alabel->body.is_rawcall()) {
+            ss << Style_Keyword << "rawcall " << Style_None;
+        }
         stream_argument(alabel->body.enter, alabel);
         for (size_t i=1; i < alabel->body.args.size(); ++i) {
             ss << " ";
@@ -5214,6 +5224,7 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
             enter = first(it->second);
         }
     }
+    ll->body.flags = entry->body.flags;
     ll->body.anchor = entry->body.anchor;
     ll->body.enter = enter;
 
@@ -7872,7 +7883,7 @@ struct NormalizeCtx {
     }
 
     static bool is_calling_callable(Label *l) {
-        if (l->is_rawcall())
+        if (l->body.is_rawcall())
             return false;
         auto &&enter = l->body.enter;
         const Type *T = enter.indirect_type();
@@ -10033,7 +10044,7 @@ struct Expander {
         assert(!is_goto_label(enter) || (args[0].type == TYPE_Nothing));
         assert(state->body.enter.type == TYPE_Nothing);
         assert(state->body.args.empty());
-        state->flags |= flags;
+        state->body.flags = flags;
         state->body.enter = enter;
         size_t count = args.size();
         state->body.args.reserve(count);
@@ -10518,7 +10529,7 @@ struct Expander {
         }
         state = subexp.state;
         set_active_anchor(_anchor);
-        br(enter, args, rawcall?LF_RawCall:0);
+        br(enter, args, rawcall?LBF_RawCall:0);
         state = nextstate;
         return result;
     }
