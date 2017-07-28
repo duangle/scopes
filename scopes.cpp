@@ -461,7 +461,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 // list of symbols to be exposed as builtins to the default global namespace
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
-    T(KW_Call) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
+    T(KW_Call) T(KW_RawCall) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
     T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_Malloc) \
     T(FN_AllocaArray) T(FN_MallocArray) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
@@ -501,7 +501,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
     T(KW_Parenthesis, "...") \
     T(KW_Assert, "assert") T(KW_Break, "break") T(KW_Label, "label") \
-    T(KW_Call, "call") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
+    T(KW_Call, "call") T(KW_RawCall, "rawcall") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
     T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
     T(KW_Else, "else") T(KW_ElseIf, "elseif") T(KW_EmptyList, "empty-list") \
     T(KW_EmptyTuple, "empty-tuple") T(KW_Escape, "escape") \
@@ -4461,13 +4461,18 @@ uint64_t Tag<T>::active_gen = 0;
 
 typedef Tag<Label> LabelTag;
 
+enum LabelFlags {
+    // 
+    LF_RawCall = (1 << 0)
+};
+
 struct Label : ILNode {
 protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name) :
         uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
-        paired(nullptr), num_instances(0)
+        paired(nullptr), flags(0), num_instances(0)
         {}
 
 public:
@@ -4479,11 +4484,15 @@ public:
     Body body;
     LabelTag tag;
     Label *paired;
-    uint64_t flags;
+    uint64_t flags; // LF_*
     uint64_t num_instances;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
+
+    bool is_rawcall() {
+        return (flags & LF_RawCall) == LF_RawCall;
+    }
 
     bool is_complete() {
         return !params.empty() && body.anchor && !body.args.empty();
@@ -7863,6 +7872,8 @@ struct NormalizeCtx {
     }
 
     static bool is_calling_callable(Label *l) {
+        if (l->is_rawcall())
+            return false;
         auto &&enter = l->body.enter;
         const Type *T = enter.indirect_type();
         Any value = none;
@@ -9506,7 +9517,10 @@ struct NormalizeCtx {
 
             set_active_anchor(l->body.anchor);
 
-            if (is_calling_function(l)) {
+            if (is_calling_callable(l)) {
+                fold_callable_call(l);
+                goto process_body;
+            } else if (is_calling_function(l)) {
                 if (is_calling_pure_function(l)
                     && all_args_constant(l)) {
                     fold_pure_function_call(l);
@@ -9603,9 +9617,6 @@ struct NormalizeCtx {
                 }
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
-            } else if (is_calling_callable(l)) {
-                fold_callable_call(l);
-                goto process_body;
             } else {
                 StyledString ss;
                 auto &&enter = l->body.enter;
@@ -10010,7 +10021,7 @@ struct Expander {
 
     // arguments must include continuation
     // enter and args must be passed with syntax object removed
-    void br(Any enter, const std::vector<Any> &args) {
+    void br(Any enter, const std::vector<Any> &args, uint64_t flags = 0) {
         assert(!args.empty());
         const Anchor *anchor = get_active_anchor();
         assert(anchor);
@@ -10022,6 +10033,7 @@ struct Expander {
         assert(!is_goto_label(enter) || (args[0].type == TYPE_Nothing));
         assert(state->body.enter.type == TYPE_Nothing);
         assert(state->body.args.empty());
+        state->flags |= flags;
         state->body.enter = enter;
         size_t count = args.size();
         state->body.args.reserve(count);
@@ -10454,7 +10466,7 @@ struct Expander {
         return result;
     }
 
-    Any expand_call(const List *it, const Any &dest, Any longdest) {
+    Any expand_call(const List *it, const Any &dest, Any longdest, bool rawcall = false) {
         if (it == EOL)
             return write_dest(it, dest);
         auto _anchor = get_active_anchor();
@@ -10506,7 +10518,7 @@ struct Expander {
         }
         state = subexp.state;
         set_active_anchor(_anchor);
-        br(enter, args);
+        br(enter, args, rawcall?LF_RawCall:0);
         state = nextstate;
         return result;
     }
@@ -10579,11 +10591,12 @@ struct Expander {
                 case KW_If: return expand_if(list, dest, longdest);
                 case KW_Quote: return expand_quote(list, dest, longdest);
                 case KW_Do: return expand_do(list, dest, longdest);
+                case KW_RawCall:
                 case KW_Call: {
                     verify_list_parameter_count(list, 1, -1);
                     list = list->next;
                     assert(list != EOL);
-                    return expand_call(list, dest, longdest);
+                    return expand_call(list, dest, longdest, func.value() == KW_RawCall);
                 } break;
                 default: break;
                 }
