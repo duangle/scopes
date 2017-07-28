@@ -478,7 +478,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
-    T(KW_If) T(SFXFN_SetTypeSymbol) T(FN_ExternSymbol) \
+    T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
     T(SFXFN_SetTypenameStorage) T(SYM_Extern) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
@@ -664,7 +664,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_SetTypenameSuper, "set-typename-super!") \
     T(SFXFN_SetGlobalApplyFallback, "set-global-apply-fallback!") \
     T(SFXFN_SetScopeSymbol, "__set-scope-symbol!") \
+    T(SFXFN_DelScopeSymbol, "delete-scope-symbol!") \
     T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
+    T(SFXFN_DelTypeSymbol, "delete-type-symbol!") \
     T(SFXFN_SetTypenameStorage, "set-typename-storage!") \
     T(SFXFN_TranslateLabelBody, "translate-label-body!") \
     \
@@ -8642,6 +8644,13 @@ struct NormalizeCtx {
             const_cast<Type *>(T)->bind(args[2].symbol, args[3]);
             RETARGS();
         } break;
+        case SFXFN_DelTypeSymbol: {
+            CHECKARGS(2, 2);
+            const Type *T = args[1];
+            args[2].verify(TYPE_Symbol);
+            const_cast<Type *>(T)->del(args[2].symbol);
+            RETARGS();
+        } break;
         case FN_TypeAt: {
             CHECKARGS(2, 2);
             const Type *T = args[1];
@@ -11060,6 +11069,10 @@ static void f_set_scope_symbol(Scope *scope, Symbol sym, Any value) {
     scope->bind(sym, value);
 }
 
+static void f_del_scope_symbol(Scope *scope, Symbol sym) {
+    scope->del(sym);
+}
+
 static Label *f_typify(Label *srcl, int numtypes, const Type **typeargs) {
     std::vector<const Type *> types = { TYPE_Void };
     for (int i = 0; i < numtypes; ++i) {
@@ -11271,6 +11284,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);    
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);
+    DEFINE_C_FUNCTION(SFXFN_DelScopeSymbol, f_del_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol);
 
     DEFINE_C_FUNCTION(FN_FormatMessage, f_format_message, TYPE_String, TYPE_Anchor, TYPE_String);
     DEFINE_C_FUNCTION(FN_ActiveAnchor, get_active_anchor, TYPE_Anchor);
