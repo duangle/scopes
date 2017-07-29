@@ -1860,6 +1860,21 @@ struct Type {
     }
 
     bool lookup(Symbol name, Any &dest) const {
+        const Type *self = this;
+        do {
+            auto it = self->symbols.find(name);
+            if (it != self->symbols.end()) {
+                dest = it->second;
+                return true;
+            }
+            if (self == TYPE_Typename)
+                break;
+            self = superof(self);
+        } while (self);
+        return false;
+    }
+
+    bool lookup_local(Symbol name, Any &dest) const {
         auto it = symbols.find(name);
         if (it != symbols.end()) {
             dest = it->second;
@@ -1867,17 +1882,9 @@ struct Type {
         }
         return false;
     }
-
+    
     bool lookup_call_handler(Any &dest) const {
-        const Type *T = this;
-        while (T) {
-            if (T->lookup(KW_Call, dest))
-                return true;
-            if (T == TYPE_Typename)
-                break;
-            T = superof(T);
-        }
-        return false;
+        return lookup(KW_Call, dest);
     }
 
 private:
@@ -7660,9 +7667,9 @@ enum {
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
-#if SCOPES_WIN32
+//#ifdef SCOPES_WIN32
     flags |= CF_NoDebugInfo;
-#endif
+//#endif
 
     fn->verify_compilable();
     const Type *functype = Pointer(fn->get_function_type());
@@ -7982,7 +7989,7 @@ struct NormalizeCtx {
             const Type *argT = arg.indirect_type();
             if (k < fargcount) {
                 const Type *ft = fi->argument_types[k];
-                if (ft != argT) {
+                if (storage_type(ft) != storage_type(argT)) {
                     StyledString ss;
                     ss.out << "argument of type " << ft << " expected, got " << argT;
                     location_error(ss.str());

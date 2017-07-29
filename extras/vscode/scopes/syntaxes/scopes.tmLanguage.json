@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.scopes",
-                    "match": "(as|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(var|as|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -96,7 +96,7 @@
                 },
                 {
                     "name": "support.type.library.scopes",
-                    "match": "(Macro|rawstring)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(Macro|rawstring|reference)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},

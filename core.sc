@@ -1055,7 +1055,7 @@ syntax-extend
     let Macro = (typename "Macro")
     let BlockScopeFunction =
         pointer
-            function (tuple Any list Scope) list list Scope
+            function (tuple list Scope) list list Scope
     set-typename-storage! Macro BlockScopeFunction
     set-type-symbol! Macro 'apply-type
         fn (f)
@@ -1080,11 +1080,11 @@ syntax-extend
         block-scope-macro
             fn (at next scope)
                 let at scope = (f (list-next at) scope)
-                return (Any at) next scope
+                return (cons at next) scope
     fn macro (f)
         block-scope-macro
             fn (at next scope)
-                return (Any (f (list-next at))) next scope
+                return (cons (f (list-next at)) next) scope
 
     # dotted symbol expander
       --------------------------------------------------------------------------
@@ -1246,9 +1246,9 @@ syntax-extend
         if (== ('typeof head) Macro)
             let head = (cast Macro head)
             let next = (list-next topexpr)
-            let expr next env = (head expr next env)
-            let expr = (Syntax-wrap expr-anchor expr false)
-            return (list-cons expr next) env
+            let expr env = (head expr next env)
+            let expr = (Syntax-wrap expr-anchor (Any expr) false)
+            return (cast list (cast Syntax expr)) env
         elseif (has-infix-ops? env expr)
             let at next = (decons expr)
             let expr =
@@ -1433,6 +1433,71 @@ define-infix> 800 @
 #define-infix> 800 =@
 
 #-------------------------------------------------------------------------------
+# references
+#-------------------------------------------------------------------------------
+
+define reference 
+    typename "reference"
+set-type-symbol! reference 'apply-type
+    fn (element)
+        # due to auto-memoization, we'll always get the same type back
+            provided the element type is a constant
+        assert (constant? element)
+        assert-typeof element type
+        let T = (typename (.. "&" (type-name element)))
+        let ptrtype = (pointer element)
+        set-typename-super! T reference
+        set-typename-storage! T ptrtype
+        set-type-symbol! T 'apply-type
+            fn (value)
+                assert-typeof value ptrtype
+                bitcast value T
+        set-type-symbol! T 'repr
+            fn (self)
+                repr (load (bitcast self ptrtype))
+        set-type-symbol! T 'deref
+            fn (self)
+                load (bitcast self ptrtype)
+        set-type-symbol! T 'ref
+            fn (self)
+                bitcast self ptrtype
+        set-type-symbol! T 'cast
+            fn (destT self)
+                if (type== destT ptrtype)
+                    bitcast self ptrtype
+                elseif (type== destT element)
+                    load (bitcast self ptrtype)
+        set-type-symbol! T '=
+            fn (self value)
+                store value (bitcast self ptrtype)
+                true
+        T
+
+fn = (obj value)
+    (op2-dispatch '=) obj value
+    return;
+
+define-infix< 800 =
+
+define-block-scope-macro var
+    let args = (list-next expr)
+    let name token rest = (decons args 2)
+    let token = (cast Symbol (cast Syntax token))
+    if (token != '=)
+        syntax-error! (active-anchor) "= token expected"
+    let value rest = (decons rest)
+    let tmp = (Parameter 'tmp)
+    let T = (Parameter 'T)
+    return 
+        cons
+            list let tmp '= value
+            list let T '= (list typeof tmp)
+            list let name '= (list (list reference T) (list alloca T))
+            list (do =) name tmp
+            next-expr
+        syntax-scope
+
+#-------------------------------------------------------------------------------
 # module loading
 #-------------------------------------------------------------------------------
 
@@ -1572,8 +1637,14 @@ fn prompt (prefix preload)
         else preload
 
 #-------------------------------------------------------------------------------
-# implicit casts
+# pointer features
 #-------------------------------------------------------------------------------
+
+# support assignment syntax
+set-type-symbol! pointer '=
+    fn (self value)
+        store value self
+        true
 
 #set-type-symbol! pointer 'call
     fn (self ...)
@@ -1760,6 +1831,7 @@ fn run-main (args...)
                 print-version;
             elseif ((== arg "--signal-abort") or (== arg "-s"))
                 set-signal-abort! true
+                loop k sourcepath parse-options
             elseif (== arg "--")
                 loop k sourcepath false
             else

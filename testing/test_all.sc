@@ -12,6 +12,7 @@ let modules =
         #test_iterator
         test_let
         test_loop
+        test_reference
         test_regexp
         test_scope
         test_scope_iter
