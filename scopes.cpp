@@ -492,14 +492,14 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_Shl) T(OP_LShr) T(OP_AShr) \
     T(OP_BAnd) T(OP_BOr) T(OP_BXor) \
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
-    T(OP_Tertiary)
+    T(OP_Tertiary) T(KW_SyntaxLog)
 
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
     \
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
-    T(KW_Parenthesis, "...") \
+    T(KW_Parenthesis, "...") T(KW_SyntaxLog, "syntax-log") \
     T(KW_Assert, "assert") T(KW_Break, "break") T(KW_Label, "label") \
     T(KW_Call, "call") T(KW_RawCall, "rawcall") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
     T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
@@ -4084,6 +4084,22 @@ struct StreamExprFormat {
         symbol_styler(default_symbol_styler),
         depth(0)
     {}
+
+    static StreamExprFormat debug() {
+        auto fmt = StreamExprFormat();
+        fmt.naked = true;
+        fmt.anchors = All;
+        return fmt;
+    }
+
+    static StreamExprFormat debug_digest() {
+        auto fmt = StreamExprFormat();
+        fmt.naked = true;
+        fmt.anchors = Line;
+        fmt.maxdepth = 5;
+        fmt.maxlength = 5;
+        return fmt;
+    }
 
     static StreamExprFormat debug_singleline() {
         auto fmt = StreamExprFormat();
@@ -10024,6 +10040,7 @@ struct Expander {
     Scope *env;
     const List *next;
     Any voidval;
+    static bool verbose;
 
     const Type *list_expander_func_type;
 
@@ -10397,6 +10414,27 @@ struct Expander {
         return write_dest(strip_syntax(result), dest);
     }
 
+    Any expand_syntax_log(const List *it, const Any &dest, Any longdest) {
+        //auto _anchor = get_active_anchor();
+
+        verify_list_parameter_count(it, 1, 1);
+        it = it->next;
+
+        Any val = unsyntax(it->at);
+        val.verify(TYPE_Symbol);
+
+        auto sym = val.symbol;
+        if (sym == KW_True) {
+            this->verbose = true;
+        } else if (sym == KW_False) {
+            this->verbose = false;
+        } else {
+            // ignore
+        }
+
+        return write_dest(none, dest);
+    }
+
     // (if cond body ...)
     // [(elseif cond body ...)]
     // [(else body ...)]
@@ -10590,11 +10628,22 @@ struct Expander {
     expand_again:
         set_active_anchor(sx->anchor);
         if (sx->quoted) {
+            if (verbose) {
+                StyledStream ss(std::cerr);
+                ss << "quoting ";
+                stream_expr(ss, sx, StreamExprFormat::debug_digest());
+            }
             // return as-is
             return write_dest(sx->datum, dest);
         }
         Any expr = sx->datum;
         if (expr.type == TYPE_List) {
+            if (verbose) {
+                StyledStream ss(std::cerr);
+                ss << "expanding list ";
+                stream_expr(ss, sx, StreamExprFormat::debug_digest());
+            }
+            
             const List *list = expr.list;
             if (list == EOL) {
                 location_error(String::from("expression is empty"));
@@ -10603,13 +10652,14 @@ struct Expander {
             Any head = unsyntax(list->at);
 
             // resolve symbol
-            if (head.type == TYPE_Symbol) {
+            if (head.type == TYPE_Symbol) {               
                 env->lookup(head.symbol, head);
             }
 
             if (head.type == TYPE_Builtin) {
                 Builtin func = head.builtin;
                 switch(func.value()) {
+                case KW_SyntaxLog: return expand_syntax_log(list, dest, longdest);
                 case KW_Fn: return expand_fn(list, dest, longdest, false);
                 case KW_Label: return expand_fn(list, dest, longdest, true);
                 case KW_SyntaxApplyBlock: return expand_syntax_apply_block(list, dest, longdest);
@@ -10648,10 +10698,19 @@ struct Expander {
                     next = result.topit->next;
                     env = result.env;
                     goto expand_again;
+                } else if (verbose) {
+                    StyledStream ss(std::cerr);
+                    ss << "ignored by list handler" << std::endl;
                 }
             }
             return expand_call(list, dest, longdest);
         } else if (expr.type == TYPE_Symbol) {
+            if (verbose) {
+                StyledStream ss(std::cerr);
+                ss << "expanding symbol ";
+                stream_expr(ss, sx, StreamExprFormat::debug_digest());
+            }
+            
             Symbol name = expr.symbol;
 
             Any result = none;
@@ -10697,11 +10756,18 @@ struct Expander {
             }
             return write_dest(result, dest);
         } else {
+            if (verbose) {
+                StyledStream ss(std::cerr);
+                ss << "ignoring ";
+                stream_expr(ss, sx, StreamExprFormat::debug_digest());
+            }            
             return write_dest(expr, dest);
         }
     }
 
 };
+
+bool Expander::verbose = false;
 
 static Label *expand_module(Any expr, Scope *scope = nullptr) {
     const Anchor *anchor = get_active_anchor();

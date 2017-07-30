@@ -1,13 +1,7 @@
 
 
-var x = 0
-assert ((load x) == 0)
-print ('deref x)
+var x = 5
+assert ((load x) == 5)
 x = 10
 assert ((load x) == 10)
-
-let px = ('ref x)
-px = 20
-assert ((load px) == 20)
-#dump (typeof px)
 

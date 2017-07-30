@@ -537,6 +537,9 @@ fn cast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
         return value
+    if (type== T (storageof dest-type))
+        # possibly not a good rule; dest-type should perform the cast
+        return (bitcast value dest-type)
     let f ok = (type@ T 'cast)
     if ok
         let result... = (f dest-type value)
@@ -1239,9 +1242,7 @@ syntax-extend
             if (== ('typeof head-key) Symbol)
                 let head success = (@ env (cast Symbol head-key))
                 if success head
-                else
-                    # failed, let underlying expander handle this
-                    return topexpr env
+                else head-key
             else head-key
         if (== ('typeof head) Macro)
             let head = (cast Macro head)
@@ -1398,6 +1399,11 @@ define-macro .
         let c rest = (decons rest)
         loop rest (op result c)
 
+fn = (obj value)
+    (op2-dispatch '=) obj value
+    return;
+
+define-infix< 50 =
 #define-infix> 70 :
 define-infix> 100 or
 define-infix> 200 and
@@ -1473,12 +1479,6 @@ set-type-symbol! reference 'apply-type
                 true
         T
 
-fn = (obj value)
-    (op2-dispatch '=) obj value
-    return;
-
-define-infix< 800 =
-
 define-block-scope-macro var
     let args = (list-next expr)
     let name token rest = (decons args 2)
@@ -1492,7 +1492,8 @@ define-block-scope-macro var
         cons
             list let tmp '= value
             list let T '= (list typeof tmp)
-            list let name '= (list (list reference T) (list alloca T))
+            #list let name '= (list (list reference T) (list alloca T))
+            list let name '= (list alloca T)
             list (do =) name tmp
             next-expr
         syntax-scope
@@ -1643,8 +1644,24 @@ fn prompt (prefix preload)
 # support assignment syntax
 set-type-symbol! pointer '=
     fn (self value)
-        store value self
+        store
+            cast (element-type (typeof self) 0) value
+            self
         true
+
+set-type-symbol! pointer 'cast
+    fn (destT self)
+        if (type== destT (element-type (typeof self) 0))
+            load self
+
+# support getattr syntax
+set-type-symbol! pointer 'getattr
+    fn (self name)
+        let ET = (element-type (typeof self) 0)
+        if (ET <: typename)
+            let idx = (typename-field-index ET name)
+            if (icmp>=s idx 0)
+                getelementptr self 0 idx
 
 #set-type-symbol! pointer 'call
     fn (self ...)
