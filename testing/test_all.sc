@@ -21,6 +21,7 @@ let modules =
         #test_tableof
         #test_tuple_array
         #test_xlet
+        test_varargs
 
 fn run-tests ()
     let total =

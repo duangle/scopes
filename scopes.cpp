@@ -499,7 +499,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     \
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
-    T(KW_Parenthesis, "...") T(KW_SyntaxLog, "syntax-log") \
+    T(KW_SyntaxLog, "syntax-log") \
     T(KW_Assert, "assert") T(KW_Break, "break") T(KW_Label, "label") \
     T(KW_Call, "call") T(KW_RawCall, "rawcall") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
     T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
@@ -718,6 +718,10 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_QuoteForm, "form-quote") \
     T(SYM_DoForm, "form-do") \
     T(SYM_SyntaxScope, "syntax-scope") \
+    \
+    /* varargs */ \
+    T(SYM_Parenthesis, "...") \
+    T(SYM_AssignParenthesis, "=...") \
     \
     T(SYM_ListWildcard, "#list") \
     T(SYM_SymbolWildcard, "#symbol") \
@@ -4385,11 +4389,17 @@ struct ILNode {
     void stream_users(StyledStream &ss) const;
 };
 
+enum ParameterKind {
+    PK_Regular = 0,
+    PK_Variadic = 1,
+    PK_KeywordVariadic = 2,
+};
+
 struct Parameter : ILNode {
 protected:
-    Parameter(const Anchor *_anchor, Symbol _name, const Type *_type, bool _vararg) :
+    Parameter(const Anchor *_anchor, Symbol _name, const Type *_type, ParameterKind _kind) :
         anchor(_anchor), name(_name), type(_type), label(nullptr), index(-1),
-        vararg(_vararg) {}
+        kind(_kind) {}
 
 public:
     const Anchor *anchor;
@@ -4397,7 +4407,15 @@ public:
     const Type *type;
     Label *label;
     int index;
-    bool vararg;
+    ParameterKind kind;
+
+    bool is_vararg() const {
+        return (kind == PK_Variadic) || (kind == PK_KeywordVariadic);
+    }
+
+    bool is_varkwarg() const {
+        return kind == PK_KeywordVariadic;
+    }
 
     bool is_typed() const {
         return type != TYPE_Void;
@@ -4411,8 +4429,10 @@ public:
         } else {
             ss << Style_Operator << "@" << Style_None << index;
         }
-        if (vararg) {
+        if (is_vararg()) {
             ss << Style_Keyword << "…" << Style_None;
+        } else if (is_varkwarg()) {
+            ss << Style_Keyword << "=…" << Style_None;
         }
         if (is_typed()) {
             ss << Style_Operator << ":" << Style_None << type;
@@ -4423,15 +4443,19 @@ public:
 
     static Parameter *from(const Parameter *_param) {
         return new Parameter(
-            _param->anchor, _param->name, _param->type, _param->vararg);
+            _param->anchor, _param->name, _param->type, _param->kind);
     }
 
     static Parameter *from(const Anchor *_anchor, Symbol _name, const Type *_type) {
-        return new Parameter(_anchor, _name, _type, false);
+        return new Parameter(_anchor, _name, _type, PK_Regular);
     }
 
     static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
-        return new Parameter(_anchor, _name, _type, true);
+        return new Parameter(_anchor, _name, _type, PK_Variadic);
+    }
+
+    static Parameter *varkwarg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
+        return new Parameter(_anchor, _name, _type, PK_KeywordVariadic);
     }
 };
 
@@ -4525,6 +4549,23 @@ public:
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
+
+    Parameter *get_varkwargs_param() {
+        if (!params.empty() && params.back()->is_varkwarg()) {
+            return params.back();
+        }
+        return nullptr;
+    }
+
+    Parameter *get_param_by_name(Symbol name) {
+        size_t count = params.size();
+        for (size_t i = 1; i < count; ++i) {
+            if (params[i]->name == name) {
+                return params[i];
+            }
+        }
+        return nullptr;
+    }
 
     bool is_complete() {
         return !params.empty() && body.anchor && !body.args.empty();
@@ -5390,7 +5431,7 @@ static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
     size_t srci = 0;
     for (size_t i = 0; i < label->params.size(); ++i) {
         Parameter *param = label->params[i];
-        if (param->vararg) {
+        if (param->is_vararg()) {
             assert(i == lasti);
             size_t ncount = args.size();
             if (srci < ncount) {
@@ -5401,7 +5442,7 @@ static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
                     if ((value.type == TYPE_Void)
                         || (value.type == TYPE_Unknown)) {
                         Parameter *newparam = Parameter::from(param);
-                        newparam->vararg = false;
+                        newparam->kind = PK_Regular;
                         newparam->type =
                             (value.type == TYPE_Unknown)?value.typeref:TYPE_Void;
                         newparam->name = Symbol(SYM_Unnamed);
@@ -6639,7 +6680,7 @@ struct GenerateCtx {
 
     static bool all_parameters_lowered(Label *label) {
         for (auto &&param : label->params) {
-            if (param->vararg)
+            if (param->kind != PK_Regular)
                 return false;
             if ((param->type == TYPE_Type) || (param->type == TYPE_Label))
                 return false;
@@ -8693,10 +8734,22 @@ struct NormalizeCtx {
             RETARGS((int)(args.size()-1));
         } break;
         case FN_VaAt: {
-            size_t idx = cast_number<size_t>(args[1]);
+            CHECKARGS(1, -1);
             std::vector<Any> result = { none };
-            for (size_t i = (idx + 2); i < args.size(); ++i) {
-                result.push_back(args[i]);
+            if (args[1].type == TYPE_Symbol) {
+                auto key = args[1].symbol;
+                for (size_t i = 2; i < args.size(); i += 2) {
+                    if ((args[i].type == TYPE_Symbol) 
+                        && (args[i].symbol == key)
+                        && ((i + 1) < args.size())) {
+                        result.push_back(args[i + 1]);
+                    }
+                }
+            } else {
+                size_t idx = cast_number<size_t>(args[1]);
+                for (size_t i = (idx + 2); i < args.size(); ++i) {
+                    result.push_back(args[i]);
+                }
             }
             l->unlink_backrefs();
             enter = args[0];
@@ -10163,8 +10216,18 @@ struct Expander {
         }
     }
 
+    bool ends_with_assign_parenthesis(Symbol sym) {
+        if (sym == SYM_AssignParenthesis)
+            return true;
+        const String *str = sym.name();
+        if (str->count < 4)
+            return false;
+        const char *dot = str->data + str->count - 4;
+        return !strcmp(dot, "=...");
+    }
+
     bool ends_with_parenthesis(Symbol sym) {
-        if (sym == KW_Parenthesis)
+        if (sym == SYM_Parenthesis)
             return true;
         const String *str = sym.name();
         if (str->count < 3)
@@ -10184,7 +10247,9 @@ struct Expander {
         } else {
             _value.verify(TYPE_Symbol);
             Parameter *param = nullptr;
-            if (ends_with_parenthesis(_value.symbol)) {
+            if (ends_with_assign_parenthesis(_value.symbol)) {
+                param = Parameter::varkwarg_from(anchor, _value.symbol, TYPE_Void);
+            } else if (ends_with_parenthesis(_value.symbol)) {
                 param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
             } else {
                 param = Parameter::from(anchor, _value.symbol, TYPE_Void);
@@ -10530,6 +10595,24 @@ struct Expander {
         state = nextstate;
         return result;
     }
+    
+    static bool get_kwargs(Any it, Symbol &key, Any &value) {
+        it = unsyntax(it);
+        if (it.type != TYPE_List) return false;
+        auto l = it.list;
+        if (l == EOL) return false;
+        if (l->count != 3) return false;
+        it = unsyntax(l->at);
+        if (it.type != TYPE_Symbol) return false;
+        key = it.symbol;
+        l = l->next;
+        it = unsyntax(l->at);
+        if (it.type != TYPE_Symbol) return false;
+        if (it.symbol != OP_Set) return false;
+        l = l->next;
+        value = l->at;
+        return true;
+    }
 
     Any expand_call(const List *it, const Any &dest, Any longdest, bool rawcall = false) {
         if (it == EOL)
@@ -10575,10 +10658,76 @@ struct Expander {
         } else if (is_goto_label(enter)) {
             args[0] = none;
         }
+
+        std::vector<bool> mapped = { true };
         it = subexp.next;
+        size_t next_index = 0;
+        Parameter *kwparam = nullptr;
+        if (enter.type == TYPE_Label) {
+            kwparam = enter.label->get_varkwargs_param();
+        }
         while (it) {
             subexp.next = it->next;
-            args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed), longdest));
+            Symbol key; Any value = none;
+            set_active_anchor(((const Syntax *)it->at)->anchor);
+            if (get_kwargs(it->at, key, value)) {
+                if (enter.type != TYPE_Label) {
+                    StyledString ss;
+                    ss.out << "can't pass keyword arguments to " << enter.type;
+                    location_error(ss.str());
+                }                    
+                // find index for key
+                auto label = enter.label;
+                auto param = label->get_param_by_name(key);
+                size_t index = -1;
+                if (param) {
+                    while (mapped.size() <= (size_t)param->index) {
+                        mapped.push_back(false);
+                        args.push_back(none);
+                    }
+                    if (mapped[param->index]) {
+                        StyledString ss;
+                        ss.out << "duplicate binding to parameter " << key;
+                        location_error(ss.str());
+                    }
+                    mapped[param->index] = true;
+                    index = param->index;
+                } else if (kwparam) {
+                    while (mapped.size() < (size_t)kwparam->index) {
+                        mapped.push_back(false);
+                        args.push_back(none);
+                    }
+                    mapped.push_back(true);
+                    args.push_back(key);
+                    index = args.size();
+                    mapped.push_back(true);
+                    args.push_back(none);
+                } else {
+                    StyledString ss;
+                    ss.out << "no parameter named " << key;
+                    location_error(ss.str());
+                }
+                args[index] = subexp.expand(value, Symbol(SYM_Unnamed), longdest);
+            } else {
+                while ((next_index < mapped.size()) && mapped[next_index])
+                    next_index++;
+                while (mapped.size() <= next_index) {
+                    mapped.push_back(false);
+                    args.push_back(none);
+                }
+                if (kwparam && (next_index >= (size_t)kwparam->index)) {
+                    mapped[next_index] = true;
+                    args[next_index] = Symbol(SYM_Unnamed);
+                    next_index++;
+                    if (mapped.size() <= next_index) {
+                        mapped.push_back(false);
+                        args.push_back(none);
+                    }
+                }
+                mapped[next_index] = true;
+                args[next_index] = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
+                next_index++;
+            }
             it = subexp.next;
         }
         state = subexp.state;
@@ -11427,6 +11576,7 @@ static void init_globals(int argc, char *argv[]) {
     globals->bind(KW_False, false);
     globals->bind(KW_ListEmpty, EOL);
     globals->bind(KW_None, none);
+    globals->bind(Symbol("unnamed"), Symbol(SYM_Unnamed));
     globals->bind(SYM_CompilerDir,
         String::from(scopes_compiler_dir, strlen(scopes_compiler_dir)));
     globals->bind(SYM_CompilerPath,
