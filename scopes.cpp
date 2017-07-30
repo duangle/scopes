@@ -5319,7 +5319,7 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
         } else if (arg.value.type == TYPE_Parameter) {
             auto it = map.find(arg.value.parameter);
             if (it != map.end()) {
-                if (i == lasti) {
+                if ((i == lasti) && arg.value.parameter->is_vararg()) {
                     for (auto subit = it->second.begin(); subit != it->second.end(); ++subit) {
                         body.push_back(*subit);
                     }
@@ -8221,8 +8221,16 @@ struct NormalizeCtx {
                     newargs.push_back(none);
                     newargs[index].key = arg.key;
                 } else {
-                    // no such parameter, ignore
-                    continue;
+                    // no such parameter, map like regular parameter
+                    while ((next_index < mapped.size()) && mapped[next_index])
+                        next_index++;
+                    while (mapped.size() <= next_index) {
+                        mapped.push_back(false);
+                        newargs.push_back(none);
+                    }
+                    index = next_index;
+                    newargs[index].key = SYM_Unnamed;
+                    next_index++;
                 }
                 mapped[index] = true;
                 newargs[index].value = arg.value;
@@ -8263,7 +8271,7 @@ struct NormalizeCtx {
             } else if (is_return_parameter(arg.value)) {
                 keys.push_back(arg);
             } else {
-                keys.push_back(KeyAny(unknown_of(arg.value.indirect_type())));
+                keys.push_back(KeyAny(arg.key, unknown_of(arg.value.indirect_type())));
                 callargs.push_back(arg);
             }
         }

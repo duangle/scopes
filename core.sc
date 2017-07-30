@@ -1665,7 +1665,7 @@ fn prompt (prefix preload)
         else preload
 
 #-------------------------------------------------------------------------------
-# pointer features
+# various sugar
 #-------------------------------------------------------------------------------
 
 # support assignment syntax
@@ -1676,6 +1676,7 @@ set-type-symbol! pointer '=
             self
         true
 
+# pointer cast to element type executes load
 set-type-symbol! pointer 'cast
     fn (destT self)
         if (type== destT (element-type (typeof self) 0))
@@ -1689,6 +1690,38 @@ set-type-symbol! pointer 'getattr
             let idx = (typename-field-index ET name)
             if (icmp>=s idx 0)
                 getelementptr self 0 idx
+
+# extern cast to element type/pointer executes load/unconst
+set-type-symbol! extern 'cast
+    fn (destT self)
+        let ET = (element-type (typeof self) 0)
+        if (type== destT ET)
+            load (unconst self)
+        elseif (type== destT (pointer ET))
+            unconst self
+
+# support for C struct initializers
+set-type-symbol! CStruct 'apply-type
+    fn (cls args...)
+        let sz = (va-countof args...)
+        if (icmp== sz 0)
+            nullof cls
+        else
+            let T = (storageof cls)
+            let keys... = (va-keys args...)
+            let [loop] i instance = 0 (nullof cls)
+            if (icmp<s i sz)
+                let key = (va@ i keys...) 
+                let arg = (va@ i args...)
+                let k =
+                    if (key == unnamed) i
+                    else
+                        typename-field-index cls key
+                let ET = (element-type T k)
+                loop (add i 1)
+                    insertvalue instance (cast ET arg) k
+            else
+                instance
 
 #set-type-symbol! pointer 'call
     fn (self ...)
