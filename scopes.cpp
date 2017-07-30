@@ -477,9 +477,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_VolatileLoad) T(FN_VolatileStore) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
+    T(FN_VaKeys) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
-    T(SFXFN_SetTypenameStorage) T(SYM_Extern) \
+    T(SFXFN_SetTypenameStorage) T(FN_ExternNew) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
@@ -645,7 +645,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Undef, "undef") T(FN_NullOf, "nullof") T(FN_Alloca, "alloca") \
     T(FN_AllocaArray, "alloca-array") \
     T(FN_Location, "compiler-anchor") \
-    T(FN_VaCountOf, "va-countof") T(FN_VaAter, "va-iter") T(FN_VaAt, "va@") \
+    T(FN_ExternNew, "extern-new") \
+    T(FN_VaCountOf, "va-countof") T(FN_VaKeys, "va-keys") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
     T(FN_ZipFill, "zip-fill") \
     \
@@ -721,7 +722,6 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     \
     /* varargs */ \
     T(SYM_Parenthesis, "...") \
-    T(SYM_AssignParenthesis, "=...") \
     \
     T(SYM_ListWildcard, "#list") \
     T(SYM_SymbolWildcard, "#symbol") \
@@ -1623,7 +1623,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     \
     T(TYPE_USize, "usize") \
     \
-    /* super types */ \
+    /* supertypes */ \
     T(TYPE_Integer, "integer") \
     T(TYPE_Real, "real") \
     T(TYPE_Pointer, "pointer") \
@@ -1636,7 +1636,10 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_TypeSet, "typeset") \
     T(TYPE_Function, "function") \
     T(TYPE_Constant, "constant") \
-    T(TYPE_Extern, "extern")
+    T(TYPE_Extern, "extern") \
+    T(TYPE_CStruct, "CStruct") \
+    T(TYPE_CUnion, "CUnion") \
+    T(TYPE_CEnum, "CEnum")
 
 #define T(TYPE, TYPENAME) \
     static const Type *TYPE = nullptr;
@@ -4392,7 +4395,6 @@ struct ILNode {
 enum ParameterKind {
     PK_Regular = 0,
     PK_Variadic = 1,
-    PK_KeywordVariadic = 2,
 };
 
 struct Parameter : ILNode {
@@ -4410,11 +4412,7 @@ public:
     ParameterKind kind;
 
     bool is_vararg() const {
-        return (kind == PK_Variadic) || (kind == PK_KeywordVariadic);
-    }
-
-    bool is_varkwarg() const {
-        return kind == PK_KeywordVariadic;
+        return (kind == PK_Variadic);
     }
 
     bool is_typed() const {
@@ -4431,8 +4429,6 @@ public:
         }
         if (is_vararg()) {
             ss << Style_Keyword << "…" << Style_None;
-        } else if (is_varkwarg()) {
-            ss << Style_Keyword << "=…" << Style_None;
         }
         if (is_typed()) {
             ss << Style_Operator << ":" << Style_None << type;
@@ -4452,10 +4448,6 @@ public:
 
     static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
         return new Parameter(_anchor, _name, _type, PK_Variadic);
-    }
-
-    static Parameter *varkwarg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
-        return new Parameter(_anchor, _name, _type, PK_KeywordVariadic);
     }
 };
 
@@ -4480,10 +4472,35 @@ enum LabelBodyFlags {
     LBF_RawCall = (1 << 0)
 };
 
+struct KeyAny {
+    Symbol key;
+    Any value;
+
+    KeyAny() : key(SYM_Unnamed), value(none) {}
+    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
+    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
+    template<typename T>
+    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
+
+    bool operator ==(const KeyAny &other) const {
+        return (key == other.key) && (value == other.value);
+    }
+
+    bool operator !=(const KeyAny &other) const {
+        return (key != other.key) || (value != other.value);
+    }
+
+    uint64_t hash() const {
+        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
+    }
+};
+
+typedef std::vector<KeyAny> Args;
+
 struct Body {
     const Anchor *anchor;
     Any enter;
-    std::vector<Any> args;
+    Args args;
     uint64_t flags;    
 
     Body() : anchor(nullptr), enter(none), flags(0) {}
@@ -4550,13 +4567,6 @@ public:
     // with these arguments
     std::vector<Any> return_constants;
 
-    Parameter *get_varkwargs_param() {
-        if (!params.empty() && params.back()->is_varkwarg()) {
-            return params.back();
-        }
-        return nullptr;
-    }
-
     Parameter *get_param_by_name(Symbol name) {
         size_t count = params.size();
         for (size_t i = 1; i < count; ++i) {
@@ -4579,7 +4589,7 @@ public:
     }
 
     struct Args {
-        std::vector<Any> args;
+        scopes::Args args;
 
         bool operator==(const Args &other) const {
             if (args.size() != other.args.size()) return false;
@@ -4620,8 +4630,8 @@ public:
 
     Label *get_label_cont() const {
         assert(!body.args.empty());
-        assert(body.args[0].type == TYPE_Label);
-        return body.args[0].label;
+        assert(body.args[0].value.type == TYPE_Label);
+        return body.args[0].value.label;
     }
 
     const Type *get_return_type() const {
@@ -4712,7 +4722,7 @@ public:
         use(body.enter, -1);
         size_t count = body.args.size();
         for (size_t i = 0; i < count; ++i) {
-            use(body.args[i], i);
+            use(body.args[i].value, i);
         }
     }
 
@@ -4720,7 +4730,7 @@ public:
         unuse(body.enter, -1);
         size_t count = body.args.size();
         for (size_t i = 0; i < count; ++i) {
-            unuse(body.args[i], i);
+            unuse(body.args[i].value, i);
         }
     }
 
@@ -4759,7 +4769,7 @@ public:
                 if (i == -1) {
                     arg = parent->body.enter;
                 } else {
-                    arg = parent->body.args[i];
+                    arg = parent->body.args[i].value;
                 }
 
                 if (arg.type == TYPE_Label) {
@@ -4788,7 +4798,7 @@ public:
                 if (i == -1) {
                     arg = parent->body.enter;
                 } else {
-                    arg = parent->body.args[i];
+                    arg = parent->body.args[i].value;
                 }
 
                 if (arg.type == TYPE_Label) {
@@ -5063,15 +5073,18 @@ struct StreamLabel : StreamAnchors {
         }
     }
 
-    void stream_argument(Any arg, Label *alabel) {
-        if (arg.type == TYPE_Parameter) {
-            stream_param_label(arg.parameter, alabel);
-        } else if (arg.type == TYPE_Label) {
-            stream_label_label(arg.label);
-        } else if (arg.type == TYPE_List) {
-            stream_expr(ss, arg, StreamExprFormat::singleline_digest());
+    void stream_argument(KeyAny arg, Label *alabel) {
+        if (arg.key != SYM_Unnamed) {
+            ss << arg.key << Style_Operator << "=" << Style_None;
+        }
+        if (arg.value.type == TYPE_Parameter) {
+            stream_param_label(arg.value.parameter, alabel);
+        } else if (arg.value.type == TYPE_Label) {
+            stream_label_label(arg.value.label);
+        } else if (arg.value.type == TYPE_List) {
+            stream_expr(ss, arg.value, StreamExprFormat::singleline_digest());
         } else {
-            ss << arg;
+            ss << arg.value;
         }
     }
 
@@ -5120,16 +5133,16 @@ struct StreamLabel : StreamAnchors {
         }
         if (!alabel->body.args.empty()) {
             auto &&cont = alabel->body.args[0];
-            if (cont.type != TYPE_Nothing) {
+            if (cont.value.type != TYPE_Nothing) {
                 ss << Style_Comment << CONT_SEP << Style_None;
-                stream_argument(cont, alabel);
+                stream_argument(cont.value, alabel);
             }
         }
         ss << std::endl;
 
         if (follow_labels) {
             for (size_t i=0; i < alabel->body.args.size(); ++i) {
-                stream_any(alabel->body.args[i]);
+                stream_any(alabel->body.args[i].value);
             }
             stream_any(alabel->body.enter);
         }
@@ -5223,7 +5236,7 @@ struct SCCBuilder {
             if (i == -1) {
                 arg = obj->body.enter;
             } else {
-                arg = obj->body.args[i];
+                arg = obj->body.args[i].value;
             }
 
             if (arg.type == TYPE_Label) {
@@ -5269,25 +5282,25 @@ struct SCCBuilder {
 // IL MANGLING
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<ILNode *, std::vector<Any> > MangleMap;
+typedef std::unordered_map<ILNode *, Args > MangleMap;
 
-static Any first(const std::vector<Any> &values) {
-    return values.empty()?none:values.front();
+static KeyAny first(const Args &values) {
+    return values.empty()?KeyAny():values.front();
 }
 
 static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
     Any enter = entry->body.enter;
-    std::vector<Any> &args = entry->body.args;
-    std::vector<Any> &body = ll->body.args;
+    Args &args = entry->body.args;
+    Args &body = ll->body.args;
     if (enter.type == TYPE_Label) {
         auto it = map.find(enter.label);
         if (it != map.end()) {
-            enter = first(it->second);
+            enter = first(it->second).value;
         }
     } else if (enter.type == TYPE_Parameter) {
         auto it = map.find(enter.parameter);
         if (it != map.end()) {
-            enter = first(it->second);
+            enter = first(it->second).value;
         }
     }
     ll->body.flags = entry->body.flags;
@@ -5297,29 +5310,26 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
     StyledStream ss(std::cout);
     size_t lasti = (args.size() - 1);
     for (size_t i = 0; i < args.size(); ++i) {
-        Any arg = args[i];
-        if (arg.type == TYPE_Label) {
-            auto it = map.find(arg.label);
+        KeyAny arg = args[i];
+        if (arg.value.type == TYPE_Label) {
+            auto it = map.find(arg.value.label);
             if (it != map.end()) {
-                body.push_back(first(it->second));
-            } else {
-                body.push_back(arg);
+                arg.value = first(it->second).value;
             }
-        } else if (arg.type == TYPE_Parameter) {
-            auto it = map.find(arg.parameter);
+        } else if (arg.value.type == TYPE_Parameter) {
+            auto it = map.find(arg.value.parameter);
             if (it != map.end()) {
                 if (i == lasti) {
-                    body.insert(body.end(),
-                        it->second.begin(), it->second.end());
+                    for (auto subit = it->second.begin(); subit != it->second.end(); ++subit) {
+                        body.push_back(*subit);
+                    }
+                    continue;
                 } else {
-                    body.push_back(first(it->second));
+                    arg.value = first(it->second).value;
                 }
-            } else {
-                body.push_back(arg);
             }
-        } else {
-            body.push_back(arg);
         }
+        body.push_back(arg);
     }
 
     ll->link_backrefs();
@@ -5342,11 +5352,11 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     for (auto &&l : entry_scope) {
         Label *ll = Label::from(l);
         l->paired = ll;
-        map.insert(MangleMap::value_type(l, {Any(ll)}));
+        map.insert(MangleMap::value_type(l, {KeyAny(Any(ll))}));
         ll->params.reserve(l->params.size());
         for (auto &&param : l->params) {
             Parameter *pparam = Parameter::from(param);
-            map.insert(MangleMap::value_type(param, {Any(pparam)}));
+            map.insert(MangleMap::value_type(param, {KeyAny(Any(pparam))}));
             ll->append(pparam);
         }
     }
@@ -5371,7 +5381,7 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     stream_label(ss, le, StreamLabelFormat::debug_single());
     for (auto && l : entry_scope) {
         auto it = map.find(l);
-        stream_label(ss, it->second.front(), StreamLabelFormat::debug_single());
+        stream_label(ss, it->second.front().value, StreamLabelFormat::debug_single());
     }
     ss << "]OUT\n";
     }
@@ -5406,7 +5416,7 @@ static Any unknown_of(const Type *T) {
 // TYPE_Void = leave the parameter as-is
 // TYPE_Unknown = type the parameter
 // any other = inline the argument and remove the parameter
-static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
+static Label *fold_type_label(Label *label, const Args &args) {
 #if 0
     ss_cout << "inline-arguments " << label << ":";
     for (size_t i = 0; i < args.size(); ++i) {
@@ -5436,18 +5446,18 @@ static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
             size_t ncount = args.size();
             if (srci < ncount) {
                 ncount -= srci;
-                std::vector<Any> vargs;
+                Args vargs;
                 for (size_t k = 0; k < ncount; ++k) {
-                    Any value = args[srci + k];
-                    if ((value.type == TYPE_Void)
-                        || (value.type == TYPE_Unknown)) {
+                    KeyAny value = args[srci + k];
+                    if ((value.value.type == TYPE_Void)
+                        || (value.value.type == TYPE_Unknown)) {
                         Parameter *newparam = Parameter::from(param);
                         newparam->kind = PK_Regular;
                         newparam->type =
-                            (value.type == TYPE_Unknown)?value.typeref:TYPE_Void;
+                            (value.value.type == TYPE_Unknown)?value.value.typeref:TYPE_Void;
                         newparam->name = Symbol(SYM_Unnamed);
                         newparams.push_back(newparam);
-                        vargs.push_back(newparam);
+                        vargs.push_back(KeyAny(value.key, newparam));
                     } else {
                         vargs.push_back(value);
                     }
@@ -5458,23 +5468,23 @@ static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
                 map[param] = {};
             }
         } else if (srci < args.size()) {
-            Any value = args[srci];
-            if ((value.type == TYPE_Void)
-                || (value.type == TYPE_Unknown)) {
+            KeyAny value = args[srci];
+            if ((value.value.type == TYPE_Void)
+                || (value.value.type == TYPE_Unknown)) {
                 Parameter *newparam = Parameter::from(param);
-                if (value.type == TYPE_Unknown) {
+                if (value.value.type == TYPE_Unknown) {
                     if (newparam->is_typed()
-                        && (newparam->type != value.typeref)) {
+                        && (newparam->type != value.value.typeref)) {
                         StyledString ss;
                         ss.out << "attempting to retype parameter of type "
-                            << newparam->type << " as " << value.typeref;
+                            << newparam->type << " as " << value.value.typeref;
                         location_error(ss.str());
                     } else {
-                        newparam->type = value.typeref;
+                        newparam->type = value.value.typeref;
                     }
                 }
                 newparams.push_back(newparam);
-                map[param] = {newparam};
+                map[param] = {KeyAny(value.key, newparam)};
             } else {
                 if (!srci) {
                     Parameter *newparam = Parameter::from(param);
@@ -5485,7 +5495,7 @@ static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
             }
             srci++;
         } else {
-            map[param] = {none};
+            map[param] = {KeyAny()};
             srci++;
         }
     }
@@ -5494,18 +5504,20 @@ static Label *fold_type_label(Label *label, const std::vector<Any> &args) {
     return newlabel;
 }
 
-static Label *typify(Label *label, const std::vector<const Type *> &argtypes) {
+typedef std::vector<const Type *> ArgTypes;
+
+static Label *typify(Label *label, const ArgTypes &argtypes) {
     assert(!argtypes.empty());
     assert(!label->params.empty());
 
     Any voidval = none;
     voidval.type = TYPE_Void;
 
-    std::vector<Any> args;
+    Args args;
     args.reserve(argtypes.size());
-    args = { voidval };
+    args = { KeyAny(voidval) };
     for (size_t i = 1; i < argtypes.size(); ++i) {
-        args.push_back(unknown_of(argtypes[i]));
+        args.push_back(KeyAny(unknown_of(argtypes[i])));
     }
 
     return fold_type_label(label, args);
@@ -5557,6 +5569,12 @@ public:
 
     void GetFields(TypenameType *tni, clang::RecordDecl * rd) {
         //auto &rl = Context->getASTRecordLayout(rd);
+
+        if (rd->isStruct()) {
+            tni->super_type = TYPE_CStruct;
+        } else if (rd->isUnion()) {
+            tni->super_type = TYPE_CUnion;
+        }
 
         std::vector<Symbol> names;
         std::vector<const Type *> types;
@@ -5666,6 +5684,7 @@ public:
             const Type *tag_type = TranslateType(ed->getIntegerType());
 
             auto tni = cast<TypenameType>(const_cast<Type *>(enum_type));
+            tni->super_type = TYPE_CEnum;
             tni->finalize(tag_type);
 
             for (auto it : ed->enumerators()) {
@@ -6394,7 +6413,7 @@ static bool has_free_parameters(Label *label) {
         if (enter.type == TYPE_Parameter && !labels.count(enter.parameter->label))
             return true;
         for (auto &&arg : label->body.args) {
-            if (arg.type == TYPE_Parameter && !labels.count(arg.parameter->label))
+            if (arg.value.type == TYPE_Parameter && !labels.count(arg.value.parameter->label))
                 return true;
         }
     }
@@ -7026,7 +7045,7 @@ struct GenerateCtx {
         return nullptr;
     }
 
-    LLVMValueRef build_call(const Type *functype, LLVMValueRef func, std::vector<Any> &args) {
+    LLVMValueRef build_call(const Type *functype, LLVMValueRef func, Args &args) {
         size_t argcount = args.size() - 1;
 
         auto fi = cast<FunctionType>(functype);
@@ -7047,8 +7066,8 @@ struct GenerateCtx {
         std::vector<size_t> memptrs;
         for (size_t i = 0; i < argcount; ++i) {
             auto &&arg = args[i + 1];
-            LLVMValueRef val = argument_to_value(arg);
-            auto AT = arg.indirect_type();
+            LLVMValueRef val = argument_to_value(arg.value);
+            auto AT = arg.value.indirect_type();
             if (is_memory_class(AT)) {
                 LLVMValueRef ptrval = LLVMBuildAlloca(builder, 
                     _type_to_llvm_type(AT), "");
@@ -7105,17 +7124,17 @@ struct GenerateCtx {
         size_t argn = 1;
 #define READ_ANY(NAME) \
         assert(argn <= argcount); \
-        Any &NAME = args[argn++];
+        Any &NAME = args[argn++].value;
 #define READ_VALUE(NAME) \
         assert(argn <= argcount); \
-        LLVMValueRef NAME = argument_to_value(args[argn++]);
+        LLVMValueRef NAME = argument_to_value(args[argn++].value);
 #define READ_LABEL_VALUE(NAME) \
         assert(argn <= argcount); \
-        LLVMValueRef NAME = label_to_value(args[argn++]);
+        LLVMValueRef NAME = label_to_value(args[argn++].value);
 #define READ_TYPE(NAME) \
         assert(argn <= argcount); \
-        assert(args[argn].type == TYPE_Type); \
-        LLVMTypeRef NAME = type_to_llvm_type(args[argn++].typeref);
+        assert(args[argn].value.type == TYPE_Type); \
+        LLVMTypeRef NAME = type_to_llvm_type(args[argn++].value.typeref);
 
         LLVMValueRef retvalue = nullptr;
         if (enter.type == TYPE_Builtin) {
@@ -7174,7 +7193,7 @@ struct GenerateCtx {
                 size_t count = argcount - 1;
                 LLVMValueRef indices[count];
                 for (size_t i = 0; i < count; ++i) {
-                    indices[i] = argument_to_value(args[argn + i]);
+                    indices[i] = argument_to_value(args[argn + i].value);
                 }
                 retvalue = LLVMBuildGEP(builder, pointer, indices, count, "");
             } break;
@@ -7328,7 +7347,7 @@ struct GenerateCtx {
             if (LLVMValueIsBasicBlock(value)) {
                 LLVMValueRef values[argcount];
                 for (size_t i = 0; i < argcount; ++i) {
-                    values[i] = argument_to_value(args[i + 1]);
+                    values[i] = argument_to_value(args[i + 1].value);
                 }
                 auto bbfrom = LLVMGetInsertBlock(builder);
                 // assign phi nodes
@@ -7355,7 +7374,7 @@ struct GenerateCtx {
         } else if (enter.type == TYPE_Parameter) {
             LLVMValueRef values[argcount];
             for (size_t i = 0; i < argcount; ++i) {
-                values[i] = argument_to_value(args[i + 1]);
+                values[i] = argument_to_value(args[i + 1].value);
             }
             // must be a return
             assert(enter.parameter->index == 0);
@@ -7395,7 +7414,7 @@ struct GenerateCtx {
             assert(false && "todo: translate non-builtin call");
         }
 
-        Any contarg = args[0];
+        Any contarg = args[0].value;
         if (contarg.type == TYPE_Parameter) {
             assert(contarg.parameter->index == 0);
             assert(contarg.parameter->label == active_function);
@@ -7873,7 +7892,7 @@ struct NormalizeCtx {
         return label;
     }
 
-    Any type_continuation(Any dest, const std::vector<const Type *> &argtypes) {
+    Any type_continuation(Any dest, const ArgTypes &argtypes) {
         //ss_cout << "type_continuation: " << dest << std::endl;
 
         if (dest.type == TYPE_Parameter) {
@@ -7913,20 +7932,39 @@ struct NormalizeCtx {
         dest->link_backrefs();
     }
 
-    static bool has_args(Label *l) {
+    static bool has_params(Label *l) {
         return l->params.size() > 1;
+    }
+
+    static bool has_keyed_args(Label *l) {
+        auto &&args = l->body.args;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i].key != SYM_Unnamed)
+                return true;
+        }
+        return false;
+    }
+
+    static void verify_no_keyed_args(Label *l) {
+        auto &&args = l->body.args;
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (args[i].key != SYM_Unnamed) {
+                location_error(String::from("unexpected keyed argument"));
+            }
+        }
+
     }
 
     static bool is_jumping(Label *l) {
         auto &&args = l->body.args;
         assert(!args.empty());
-        return args[0].type == TYPE_Nothing;
+        return args[0].value.type == TYPE_Nothing;
     }
 
     static bool is_continuing_to_label(Label *l) {
         auto &&args = l->body.args;
         assert(!args.empty());
-        return args[0].type == TYPE_Label;
+        return args[0].value.type == TYPE_Label;
     }
 
     static bool is_calling_label(Label *l) {
@@ -7985,9 +8023,9 @@ struct NormalizeCtx {
     static bool all_args_typed(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
-            if ((args[i].type == TYPE_Parameter)
-                && (args[i].parameter->index != 0)
-                && (!args[i].parameter->is_typed()))
+            if ((args[i].value.type == TYPE_Parameter)
+                && (args[i].value.parameter->index != 0)
+                && (!args[i].value.parameter->is_typed()))
                 return false;
         }
         return true;
@@ -7996,7 +8034,7 @@ struct NormalizeCtx {
     static bool all_args_constant(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
-            if (!is_const(args[i]))
+            if (!is_const(args[i].value))
                 return false;
         }
         return true;
@@ -8005,9 +8043,9 @@ struct NormalizeCtx {
     static bool has_foldable_args(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
-            if (is_const(args[i]))
+            if (is_const(args[i].value))
                 return true;
-            else if (is_return_parameter(args[i]))
+            else if (is_return_parameter(args[i].value))
                 return true;
         }
         return false;
@@ -8026,13 +8064,13 @@ struct NormalizeCtx {
     static bool is_continuing_from(Label *callee, Label *caller) {
         auto &&args = caller->body.args;
         assert(!args.empty());
-        return (args[0].type == TYPE_Label) && (args[0].label == callee);
+        return (args[0].value.type == TYPE_Label) && (args[0].value.label == callee);
     }
 
     static bool is_continuing_from(Parameter *callee, Label *caller) {
         auto &&args = caller->body.args;
         assert(!args.empty());
-        return (args[0].type == TYPE_Parameter) && (args[0].parameter == callee);
+        return (args[0].value.type == TYPE_Parameter) && (args[0].value.parameter == callee);
     }
 
     void verify_function_argument_signature(const FunctionType *fi, Label *l) {
@@ -8041,9 +8079,9 @@ struct NormalizeCtx {
 
         size_t fargcount = fi->argument_types.size();
         for (size_t i = 1; i < args.size(); ++i) {
-            Any &arg = args[i];
+            KeyAny &arg = args[i];
             size_t k = i - 1;
-            const Type *argT = arg.indirect_type();
+            const Type *argT = arg.value.indirect_type();
             if (k < fargcount) {
                 const Type *ft = fi->argument_types[k];
                 if (storage_type(ft) != storage_type(argT)) {
@@ -8096,13 +8134,13 @@ struct NormalizeCtx {
         if (fi->flags & FF_Variadic) {
             // convert C types
             size_t argcount = args.size() - 1;
-            std::vector<Any> cargs;
+            Args cargs;
             cargs.reserve(argcount);
             for (size_t i = 0; i < argcount; ++i) {
-                Any &srcarg = args[i + 1];
+                KeyAny &srcarg = args[i + 1];
                 if (i >= fi->argument_types.size()) {
-                    if (srcarg.type == TYPE_F32) {
-                        cargs.push_back(Any((double)srcarg.f32));
+                    if (srcarg.value.type == TYPE_F32) {
+                        cargs.push_back(KeyAny(srcarg.key, (double)srcarg.value.f32));
                         continue;
                     }
                 }
@@ -8114,20 +8152,84 @@ struct NormalizeCtx {
         }
 
         l->unlink_backrefs();
-        enter = args[0];
-        args = { none };
+        enter = args[0].value;
+        args = { KeyAny() };
         if (fi->return_type != TYPE_Void) {
             if (isa<TupleType>(fi->return_type)) {
                 // unpack
                 auto ti = cast<TupleType>(fi->return_type);
                 size_t count = ti->types.size();
                 for (size_t i = 0; i < count; ++i) {
-                    args.push_back(ti->unpack(result.pointer, i));
+                    args.push_back(KeyAny(ti->unpack(result.pointer, i)));
                 }
             } else {
-                args.push_back(result);
+                args.push_back(KeyAny(result));
             }
         }
+        l->link_backrefs();
+    }
+
+    void solve_keyed_args(Label *l) {
+        Label *enter = l->get_label_enter();
+
+        auto &&args = l->body.args;
+        assert(!args.empty());
+        Args newargs;
+        newargs.reserve(args.size());
+        newargs.push_back(args[0]);
+        Parameter *vaparam = nullptr;
+        if (!enter->params.empty() && enter->params.back()->is_vararg()) {
+            vaparam = enter->params.back();
+        }
+        std::vector<bool> mapped;
+        mapped.reserve(args.size());
+        mapped.push_back(true);
+        size_t next_index = 1;
+        for (size_t i = 1; i < args.size(); ++i) {
+            auto &&arg = args[i];
+            if (arg.key == SYM_Unnamed) {
+                while ((next_index < mapped.size()) && mapped[next_index])
+                    next_index++;
+                while (mapped.size() <= next_index) {
+                    mapped.push_back(false);
+                    newargs.push_back(none);
+                }
+                mapped[next_index] = true;
+                newargs[next_index] = arg;
+                next_index++;
+            } else {
+                auto param = enter->get_param_by_name(arg.key);
+                size_t index = -1;
+                if (param && (param != vaparam)) {
+                    while (mapped.size() <= (size_t)param->index) {
+                        mapped.push_back(false);
+                        newargs.push_back(none);
+                    }
+                    if (mapped[param->index]) {
+                        StyledString ss;
+                        ss.out << "duplicate binding to parameter " << arg.key;
+                        location_error(ss.str());
+                    }
+                    index = param->index;
+                } else if (vaparam) {
+                    while (mapped.size() < (size_t)vaparam->index) {
+                        mapped.push_back(false);
+                        newargs.push_back(none);
+                    }
+                    index = newargs.size();
+                    mapped.push_back(false);
+                    newargs.push_back(none);
+                    newargs[index].key = arg.key;
+                } else {
+                    // no such parameter, ignore
+                    continue;
+                }
+                mapped[index] = true;
+                newargs[index].value = arg.value;
+            }
+        }
+        l->unlink_backrefs();
+        args = newargs;
         l->link_backrefs();
     }
 
@@ -8145,23 +8247,23 @@ struct NormalizeCtx {
         assert(enter.type == TYPE_Label);
 
         // inline constant arguments
-        std::vector<Any> callargs;
+        Args callargs;
 
         Any anyval = none;
         anyval.type = TYPE_Void;
 
-        std::vector<Any> keys;
+        Args keys;
         auto &&args = l->body.args;
         callargs.push_back(args[0]);
-        keys.push_back(anyval);
+        keys.push_back(KeyAny(anyval));
         for (size_t i = 1; i < args.size(); ++i) {
             auto &&arg = args[i];
-            if (is_const(arg)) {
+            if (is_const(arg.value)) {
                 keys.push_back(arg);
-            } else if (is_return_parameter(arg)) {
+            } else if (is_return_parameter(arg.value)) {
                 keys.push_back(arg);
             } else {
-                keys.push_back(unknown_of(arg.indirect_type()));
+                keys.push_back(KeyAny(unknown_of(arg.value.indirect_type())));
                 callargs.push_back(arg);
             }
         }
@@ -8182,11 +8284,23 @@ struct NormalizeCtx {
         case FN_TypeOf:
         case FN_IsConstant:
         case FN_VaCountOf:
+        case FN_VaKeys:
         case FN_VaAt:
         case FN_Location:
         case FN_Dump:
-        case SYM_Extern:
+        case FN_ExternNew:
         case FN_ExternSymbol:
+            return true;
+        default: return false;
+        }
+    }
+
+    bool builtin_has_keyed_args(Builtin builtin) {
+        switch(builtin.value()) {
+        case FN_VaCountOf:
+        case FN_VaKeys:
+        case FN_VaAt:
+        case FN_Dump:
             return true;
         default: return false;
         }
@@ -8220,13 +8334,13 @@ struct NormalizeCtx {
         switch(enter.builtin.value()) {
         case OP_Tertiary: {
             CHECKARGS(3, 3);
-            verify(TYPE_Bool, args[1].indirect_type());
-            verify(args[2].indirect_type(), args[3].indirect_type());
-            RETARGTYPES(args[2].indirect_type());
+            verify(TYPE_Bool, args[1].value.indirect_type());
+            verify(args[2].value.indirect_type(), args[3].value.indirect_type());
+            RETARGTYPES(args[2].value.indirect_type());
         } break;
         case FN_Unconst: {
             CHECKARGS(1, 1);
-            auto T = args[1].indirect_type();
+            auto T = args[1].value.indirect_type();
             auto et = dyn_cast<ExternType>(T);
             if (et) {
                 RETARGTYPES(Pointer(et->type));
@@ -8238,42 +8352,42 @@ struct NormalizeCtx {
             CHECKARGS(2, 2);
             // todo: verify source and dest type are non-aggregate
             // also, both must be of same category
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             RETARGTYPES(DestT);
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
-            verify_integer(storage_type(args[1].indirect_type()));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            verify_integer(storage_type(args[1].value.indirect_type()));
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_kind<TK_Pointer>(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_PtrToInt: {
             CHECKARGS(2, 2);
             verify_kind<TK_Pointer>(
-                storage_type(args[1].indirect_type()));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+                storage_type(args[1].value.indirect_type()));
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_Trunc: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].indirect_type();
+            const Type *T = args[1].value.indirect_type();
             verify_integer(storage_type(T));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_FPTrunc: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].indirect_type();
+            const Type *T = args[1].value.indirect_type();
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
             if (cast<RealType>(T)->width >= cast<RealType>(DestT)->width) {
             } else { invalid_op2_types_error(T, DestT); }
@@ -8281,10 +8395,10 @@ struct NormalizeCtx {
         } break;
         case FN_FPExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].indirect_type();
+            const Type *T = args[1].value.indirect_type();
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
             if (cast<RealType>(T)->width <= cast<RealType>(DestT)->width) {
             } else { invalid_op2_types_error(T, DestT); }
@@ -8292,10 +8406,10 @@ struct NormalizeCtx {
         } break;
         case FN_FPToUI: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(DestT);
             if ((T == TYPE_F32) || (T == TYPE_F64)) {
             } else {
@@ -8305,10 +8419,10 @@ struct NormalizeCtx {
         } break;
         case FN_FPToSI: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(DestT);
             if ((T == TYPE_F32) || (T == TYPE_F64)) {
             } else {
@@ -8318,10 +8432,10 @@ struct NormalizeCtx {
         } break;
         case FN_UIToFP: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_integer(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
             if ((DestT == TYPE_F32) || (DestT == TYPE_F64)) {
             } else {
@@ -8331,10 +8445,10 @@ struct NormalizeCtx {
         } break;
         case FN_SIToFP: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_integer(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
             if ((DestT == TYPE_F32) || (DestT == TYPE_F64)) {
             } else {
@@ -8344,26 +8458,26 @@ struct NormalizeCtx {
         } break;
         case FN_ZExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].indirect_type();
+            const Type *T = args[1].value.indirect_type();
             verify_integer(storage_type(T));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_SExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].indirect_type();
+            const Type *T = args[1].value.indirect_type();
             verify_integer(storage_type(T));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
-            size_t idx = cast_number<size_t>(args[2]);
-            const Type *T = storage_type(args[1].indirect_type());
+            size_t idx = cast_number<size_t>(args[2].value);
+            const Type *T = storage_type(args[1].value.indirect_type());
             switch(T->kind()) {
             case TK_Array: {
                 auto ai = cast<ArrayType>(T);
@@ -8386,9 +8500,9 @@ struct NormalizeCtx {
         } break;
         case FN_InsertValue: {
             CHECKARGS(3, 3);
-            const Type *T = storage_type(args[1].indirect_type());
-            const Type *ET = storage_type(args[2].indirect_type());
-            size_t idx = cast_number<size_t>(args[3]);
+            const Type *T = storage_type(args[1].value.indirect_type());
+            const Type *ET = storage_type(args[2].value.indirect_type());
+            size_t idx = cast_number<size_t>(args[3].value);
             switch(T->kind()) {
             case TK_Array: {
                 auto ai = cast<ArrayType>(T);
@@ -8408,43 +8522,43 @@ struct NormalizeCtx {
                 location_error(ss.str());
             } break;
             }
-            RETARGTYPES(args[1].indirect_type());
+            RETARGTYPES(args[1].value.indirect_type());
         } break;
         case FN_Undef: {
             CHECKARGS(1, 1);
-            args[1].verify(TYPE_Type);
-            RETARGTYPES(args[1].typeref);
+            args[1].value.verify(TYPE_Type);
+            RETARGTYPES(args[1].value.typeref);
         } break;
         case FN_NullOf: {
             CHECKARGS(1, 1);
-            args[1].verify(TYPE_Type);
-            RETARGTYPES(args[1].typeref);
+            args[1].value.verify(TYPE_Type);
+            RETARGTYPES(args[1].value.typeref);
         } break;
         case FN_Malloc:
         case FN_Alloca: {
             CHECKARGS(1, 1);
-            args[1].verify(TYPE_Type);
-            RETARGTYPES(Pointer(args[1].typeref));
+            args[1].value.verify(TYPE_Type);
+            RETARGTYPES(Pointer(args[1].value.typeref));
         } break;
         case FN_MallocArray:
         case FN_AllocaArray: {
             CHECKARGS(2, 2);
-            args[1].verify(TYPE_Type);
-            verify_integer(storage_type(args[2].indirect_type()));
-            RETARGTYPES(Pointer(args[1].typeref));
+            args[1].value.verify(TYPE_Type);
+            verify_integer(storage_type(args[2].value.indirect_type()));
+            RETARGTYPES(Pointer(args[1].value.typeref));
         } break;
         case FN_Free: {
             CHECKARGS(1, 1);
-            verify_kind<TK_Pointer>(args[1].indirect_type());
+            verify_kind<TK_Pointer>(args[1].value.indirect_type());
             RETARGTYPES();
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
-            const Type *T = storage_type(args[1].indirect_type());
+            const Type *T = storage_type(args[1].value.indirect_type());
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             T = pi->element_type;
-            verify_integer(storage_type(args[2].indirect_type()));
+            verify_integer(storage_type(args[2].value.indirect_type()));
             for (size_t i = 3; i < args.size(); ++i) {
                 
                 const Type *ST = storage_type(T);
@@ -8453,22 +8567,22 @@ struct NormalizeCtx {
                 case TK_Array: {
                     auto ai = cast<ArrayType>(ST);
                     T = ai->element_type;
-                    verify_integer(storage_type(arg.indirect_type()));
+                    verify_integer(storage_type(arg.value.indirect_type()));
                 } break;
                 case TK_Tuple: {
                     auto ti = cast<TupleType>(ST);
                     size_t idx = 0;
-                    if ((T->kind() == TK_Typename) && (arg.type == TYPE_Symbol)) {
-                        idx = cast<TypenameType>(T)->field_index(arg.symbol);
+                    if ((T->kind() == TK_Typename) && (arg.value.type == TYPE_Symbol)) {
+                        idx = cast<TypenameType>(T)->field_index(arg.value.symbol);
                         if (idx == (size_t)-1) {
                             StyledString ss;
-                            ss.out << "no such field " << arg.symbol << " in typename " << T;
+                            ss.out << "no such field " << arg.value.symbol << " in typename " << T;
                             location_error(ss.str());
                         }
                         // rewrite field
-                        arg = (int)idx;
+                        arg = KeyAny(arg.key, Any((int)idx));
                     } else {
-                        idx = cast_number<size_t>(arg);
+                        idx = cast_number<size_t>(arg.value);
                     }
                     T = ti->type_at_index(idx);
                 } break;
@@ -8485,7 +8599,7 @@ struct NormalizeCtx {
         case FN_VolatileLoad:
         case FN_Load: {
             CHECKARGS(1, 1);
-            const Type *T = storage_type(args[1].indirect_type());
+            const Type *T = storage_type(args[1].value.indirect_type());
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             RETARGTYPES(pi->element_type);
@@ -8493,11 +8607,11 @@ struct NormalizeCtx {
         case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
-            const Type *T = storage_type(args[2].indirect_type());
+            const Type *T = storage_type(args[2].value.indirect_type());
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             verify(storage_type(pi->element_type),
-                storage_type(args[1].indirect_type()));
+                storage_type(args[1].value.indirect_type()));
             RETARGTYPES();
         } break;
         case OP_ICmpEQ:
@@ -8511,7 +8625,7 @@ struct NormalizeCtx {
         case OP_ICmpSLT:
         case OP_ICmpSLE: {
             CHECKARGS(2, 2);
-            verify_integer_ops(args[1], args[2]);
+            verify_integer_ops(args[1].value, args[2].value);
             RETARGTYPES(TYPE_Bool);
         } break;
         case OP_FCmpOEQ:
@@ -8529,7 +8643,7 @@ struct NormalizeCtx {
         case OP_FCmpULT:
         case OP_FCmpULE: {
             CHECKARGS(2, 2);
-            verify_real_ops(args[1], args[2]);
+            verify_real_ops(args[1].value, args[2].value);
             RETARGTYPES(TYPE_Bool);
         } break;
 #define IARITH_NUW_NSW_OPS(NAME, OP) \
@@ -8537,20 +8651,20 @@ struct NormalizeCtx {
     case OP_ ## NAME ## NUW: \
     case OP_ ## NAME ## NSW: { \
         CHECKARGS(2, 2); \
-        verify_integer_ops(args[1], args[2]); \
-        RETARGTYPES(args[1].indirect_type()); \
+        verify_integer_ops(args[1].value, args[2].value); \
+        RETARGTYPES(args[1].value.indirect_type()); \
     } break;
 #define IARITH_OP(NAME, OP, PFX) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
-        verify_integer_ops(args[1], args[2]); \
-        RETARGTYPES(args[1].indirect_type()); \
+        verify_integer_ops(args[1].value, args[2].value); \
+        RETARGTYPES(args[1].value.indirect_type()); \
     } break;
 #define FARITH_OP(NAME, OP) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
-        verify_real_ops(args[1], args[2]); \
-        RETARGTYPES(args[1].indirect_type()); \
+        verify_real_ops(args[1].value, args[2].value); \
+        RETARGTYPES(args[1].value.indirect_type()); \
     } break;
 #define FARITH_OPF FARITH_OP
 
@@ -8570,7 +8684,7 @@ struct NormalizeCtx {
 
 #define RETARGS(...) \
     l->unlink_backrefs(); \
-    enter = args[0]; \
+    enter = args[0].value; \
     args = { none, __VA_ARGS__ }; \
     l->link_backrefs();
 
@@ -8617,7 +8731,7 @@ struct NormalizeCtx {
         auto result = T->lookup_call_handler(value);
         assert(result);
         l->unlink_backrefs();
-        args.insert(args.begin() + 1, enter);
+        args.insert(args.begin() + 1, KeyAny(enter));
         enter = value;
         l->link_backrefs();
     }
@@ -8640,14 +8754,14 @@ struct NormalizeCtx {
         switch(enter.builtin.value()) {
         case FN_ExternSymbol: {
             CHECKARGS(1, 1);
-            verify_kind<TK_Extern>(args[1]);
-            RETARGS(args[1].symbol);
+            verify_kind<TK_Extern>(args[1].value);
+            RETARGS(args[1].value.symbol);
         } break;
-        case SYM_Extern: {
+        case FN_ExternNew: {
             CHECKARGS(2, 2);
-            args[1].verify(TYPE_Symbol);
-            const Type *T = args[2];
-            Any value(args[1].symbol);
+            args[1].value.verify(TYPE_Symbol);
+            const Type *T = args[2].value;
+            Any value(args[1].value.symbol);
             value.type = Extern(T);
             RETARGS(value);
         } break;
@@ -8656,16 +8770,16 @@ struct NormalizeCtx {
             std::vector<const Type *> types;
             size_t k = 2;
             while (k < args.size()) {
-                if (args[k].type != TYPE_Type)
+                if (args[k].value.type != TYPE_Type)
                     break;
-                types.push_back(args[k]);
+                types.push_back(args[k].value);
                 k++;
             }
             uint32_t flags = 0;
             
             while (k < args.size()) {
-                args[k].verify(TYPE_Symbol);
-                Symbol sym = args[k].symbol;
+                args[k].value.verify(TYPE_Symbol);
+                Symbol sym = args[k].value.symbol;
                 uint64_t flag = 0;
                 switch(sym.value()) {
                 case SYM_Variadic: flag = FF_Variadic; break;
@@ -8679,13 +8793,13 @@ struct NormalizeCtx {
                 flags |= flag;
                 k++;
             }
-            RETARGS(Function(args[1], types, flags));
+            RETARGS(Function(args[1].value, types, flags));
         } break;
         case FN_TupleType: {
             CHECKARGS(0, -1);
             std::vector<const Type *> types;
             for (size_t i = 1; i < args.size(); ++i) {
-                types.push_back(args[i]);
+                types.push_back(args[i].value);
             }
             RETARGS(Tuple(types));
         } break;
@@ -8695,32 +8809,32 @@ struct NormalizeCtx {
         } break;
         case SFXFN_SetTypenameStorage: {
             CHECKARGS(2, 2);
-            const Type *T = args[1];
-            const Type *T2 = args[2];
+            const Type *T = args[1].value;
+            const Type *T2 = args[2].value;
             verify_kind<TK_Typename>(T);
             cast<TypenameType>(const_cast<Type *>(T))->finalize(T2);
             RETARGS();
         } break;
         case SFXFN_SetTypeSymbol: {
             CHECKARGS(3, 3);
-            const Type *T = args[1];
-            args[2].verify(TYPE_Symbol);
-            const_cast<Type *>(T)->bind(args[2].symbol, args[3]);
+            const Type *T = args[1].value;
+            args[2].value.verify(TYPE_Symbol);
+            const_cast<Type *>(T)->bind(args[2].value.symbol, args[3].value);
             RETARGS();
         } break;
         case SFXFN_DelTypeSymbol: {
             CHECKARGS(2, 2);
-            const Type *T = args[1];
-            args[2].verify(TYPE_Symbol);
-            const_cast<Type *>(T)->del(args[2].symbol);
+            const Type *T = args[1].value;
+            args[2].value.verify(TYPE_Symbol);
+            const_cast<Type *>(T)->del(args[2].value.symbol);
             RETARGS();
         } break;
         case FN_TypeAt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1];
-            args[2].verify(TYPE_Symbol);
+            const Type *T = args[1].value;
+            args[2].value.verify(TYPE_Symbol);
             Any result = none;
-            if (!T->lookup(args[2].symbol, result)) {
+            if (!T->lookup(args[2].value.symbol, result)) {
                 RETARGS(none, false);
             } else {
                 RETARGS(result, true);
@@ -8728,52 +8842,61 @@ struct NormalizeCtx {
         } break;
         case FN_IsConstant: {
             CHECKARGS(1, 1);
-            RETARGS(is_const(args[1]));
+            RETARGS(is_const(args[1].value));
         } break;
         case FN_VaCountOf: {
             RETARGS((int)(args.size()-1));
         } break;
+        case FN_VaKeys: {
+            CHECKARGS(0, -1);
+            Args result = { none };
+            for (size_t i = 1; i < args.size(); ++i) {
+                result.push_back(args[i].key);
+            }
+            l->unlink_backrefs();
+            enter = args[0].value;
+            args = result;
+            l->link_backrefs();
+        } break;
         case FN_VaAt: {
             CHECKARGS(1, -1);
-            std::vector<Any> result = { none };
-            if (args[1].type == TYPE_Symbol) {
-                auto key = args[1].symbol;
-                for (size_t i = 2; i < args.size(); i += 2) {
-                    if ((args[i].type == TYPE_Symbol) 
-                        && (args[i].symbol == key)
-                        && ((i + 1) < args.size())) {
-                        result.push_back(args[i + 1]);
+            Args result = { none };
+            if (args[1].value.type == TYPE_Symbol) {
+                auto key = args[1].value.symbol;
+                for (size_t i = 2; i < args.size(); ++i) {
+                    if (args[i].key == key) {
+                        result.push_back(args[i]);
                     }
                 }
             } else {
-                size_t idx = cast_number<size_t>(args[1]);
+                size_t idx = cast_number<size_t>(args[1].value);
                 for (size_t i = (idx + 2); i < args.size(); ++i) {
                     result.push_back(args[i]);
                 }
             }
             l->unlink_backrefs();
-            enter = args[0];
+            enter = args[0].value;
             args = result;
             l->link_backrefs();
         } break;
         case FN_Branch: {
             CHECKARGS(3, 3);
-            args[1].verify(TYPE_Bool);
+            args[1].value.verify(TYPE_Bool);
             // either branch label is typed and binds no parameters,
             // so we can directly inline it
             Label *newl = nullptr;
-            if (args[1].i1) {
-                newl = inline_branch_continuation(args[2], args[0]);
+            if (args[1].value.i1) {
+                newl = inline_branch_continuation(args[2].value, args[0].value);
             } else {
-                newl = inline_branch_continuation(args[3], args[0]);
+                newl = inline_branch_continuation(args[3].value, args[0].value);
             }
             copy_body(l, newl);
         } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
-            args[1].verify(TYPE_Bool);
-            verify(args[2].type, args[3].type);
-            if (args[1].i1) {
+            args[1].value.verify(TYPE_Bool);
+            verify(args[2].value.type, args[3].value.type);
+            if (args[1].value.i1) {
                 RETARGS(args[2]);
             } else {
                 RETARGS(args[3]);
@@ -8783,77 +8906,77 @@ struct NormalizeCtx {
             CHECKARGS(2, 2);
             // todo: verify source and dest type are non-aggregate
             // also, both must be of same category
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
-            Any result = args[1];
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
+            Any result = args[1].value;
             result.type = DestT;
             RETARGS(result);
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
-            verify_integer(storage_type(args[1].type));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            verify_integer(storage_type(args[1].value.type));
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_kind<TK_Pointer>(storage_type(DestT));
-            Any result = args[1];
+            Any result = args[1].value;
             result.type = DestT;
             RETARGS(result);
         } break;
         case FN_PtrToInt: {
             CHECKARGS(2, 2);
-            verify_kind<TK_Pointer>(storage_type(args[1].type));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            verify_kind<TK_Pointer>(storage_type(args[1].value.type));
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(storage_type(DestT));
-            Any result = args[1];
+            Any result = args[1].value;
             result.type = DestT;
             RETARGS(result);
         } break;
         case FN_Trunc: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_integer(storage_type(T));
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(storage_type(DestT));
-            Any result = args[1];
+            Any result = args[1].value;
             result.type = DestT;
             RETARGS(result);
         } break;
         case FN_FPTrunc: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
             if ((T == TYPE_F64) && (DestT == TYPE_F32)) {
-                RETARGS((float)args[1].f64);
+                RETARGS((float)args[1].value.f64);
             } else { invalid_op2_types_error(T, DestT); }
         } break;
         case FN_FPExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
             if ((T == TYPE_F32) && (DestT == TYPE_F64)) {
-                RETARGS((double)args[1].f32);
+                RETARGS((double)args[1].value.f32);
             } else { invalid_op2_types_error(T, DestT); }
         } break;
         case FN_FPToUI: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(DestT);
             uint64_t val = 0;
             if (T == TYPE_F32) {
-                val = (uint64_t)args[1].f32;
+                val = (uint64_t)args[1].value.f32;
             } else if (T == TYPE_F64) {
-                val = (uint64_t)args[1].f64;
+                val = (uint64_t)args[1].value.f64;
             } else {
                 invalid_op2_types_error(T, DestT);
             }
@@ -8863,16 +8986,16 @@ struct NormalizeCtx {
         } break;
         case FN_FPToSI: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_real(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_integer(DestT);
             int64_t val = 0;
             if (T == TYPE_F32) {
-                val = (int64_t)args[1].f32;
+                val = (int64_t)args[1].value.f32;
             } else if (T == TYPE_F64) {
-                val = (int64_t)args[1].f64;
+                val = (int64_t)args[1].value.f64;
             } else {
                 invalid_op2_types_error(T, DestT);
             }
@@ -8882,12 +9005,12 @@ struct NormalizeCtx {
         } break;
         case FN_UIToFP: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_integer(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
-            uint64_t src = cast_number<uint64_t>(args[1]);
+            uint64_t src = cast_number<uint64_t>(args[1].value);
             Any result = none;
             if (DestT == TYPE_F32) {
                 result = (float)src;
@@ -8900,12 +9023,12 @@ struct NormalizeCtx {
         } break;
         case FN_SIToFP: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             verify_integer(T);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             verify_real(DestT);
-            int64_t src = cast_number<int64_t>(args[1]);
+            int64_t src = cast_number<int64_t>(args[1].value);
             Any result = none;
             if (DestT == TYPE_F32) {
                 result = (float)src;
@@ -8918,14 +9041,14 @@ struct NormalizeCtx {
         } break;
         case FN_ZExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             auto ST = storage_type(T);
             verify_integer(ST);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             auto DestST = storage_type(DestT);
             verify_integer(DestST);
-            Any result = args[1];
+            Any result = args[1].value;
             result.type = DestT;
             int oldbitnum = integer_type_bit_size(ST);
             int newbitnum = integer_type_bit_size(DestST);
@@ -8936,14 +9059,14 @@ struct NormalizeCtx {
         } break;
         case FN_SExt: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].type;
+            const Type *T = args[1].value.type;
             auto ST = storage_type(T);
             verify_integer(ST);
-            args[2].verify(TYPE_Type);
-            const Type *DestT = args[2].typeref;
+            args[2].value.verify(TYPE_Type);
+            const Type *DestT = args[2].value.typeref;
             auto DestST = storage_type(DestT);
             verify_integer(DestST);
-            Any result = args[1];
+            Any result = args[1].value;
             result.type = DestT;
             int oldbitnum = integer_type_bit_size(ST);
             int newbitnum = integer_type_bit_size(DestST);
@@ -8956,24 +9079,24 @@ struct NormalizeCtx {
         } break;
         case FN_TypeOf: {
             CHECKARGS(1, 1);
-            RETARGS(args[1].indirect_type());
+            RETARGS(args[1].value.indirect_type());
         } break;
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
-            size_t idx = cast_number<size_t>(args[2]);
-            const Type *T = storage_type(args[1].type);
+            size_t idx = cast_number<size_t>(args[2].value);
+            const Type *T = storage_type(args[1].value.type);
             switch(T->kind()) {
             case TK_Array: {
                 auto ai = cast<ArrayType>(T);
-                RETARGS(ai->unpack(args[1].pointer, idx));
+                RETARGS(ai->unpack(args[1].value.pointer, idx));
             } break;
             case TK_Tuple: {
                 auto ti = cast<TupleType>(T);
-                RETARGS(ti->unpack(args[1].pointer, idx));
+                RETARGS(ti->unpack(args[1].value.pointer, idx));
             } break;
             case TK_Union: {
                 auto ui = cast<UnionType>(T);
-                RETARGS(ui->unpack(args[1].pointer, idx));
+                RETARGS(ui->unpack(args[1].value.pointer, idx));
             } break;
             default: {
                 StyledString ss;
@@ -8984,11 +9107,11 @@ struct NormalizeCtx {
         } break;
         case FN_InsertValue: {
             CHECKARGS(3, 3);
-            const Type *T = storage_type(args[1].type);
-            const Type *ET = storage_type(args[2].type);
-            size_t idx = cast_number<size_t>(args[3]);
+            const Type *T = storage_type(args[1].value.type);
+            const Type *ET = storage_type(args[2].value.type);
+            size_t idx = cast_number<size_t>(args[3].value);
 
-            void *destptr = args[1].pointer;
+            void *destptr = args[1].value.pointer;
             void *offsetptr = nullptr;
             switch(T->kind()) {
             case TK_Array: {
@@ -9015,44 +9138,44 @@ struct NormalizeCtx {
                 location_error(ss.str());
             } break;
             }
-            void *srcptr = get_pointer(ET, args[1]);
+            void *srcptr = get_pointer(ET, args[1].value);
             memcpy(offsetptr, srcptr, size_of(ET));
-            RETARGS(Any::from_pointer(args[1].type, destptr));
+            RETARGS(Any::from_pointer(args[1].value.type, destptr));
         } break;
         case FN_VolatileLoad:
         case FN_Load: {
             CHECKARGS(1, 1);
-            const Type *T = storage_type(args[1].type);
+            const Type *T = storage_type(args[1].value.type);
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
-            RETARGS(pi->unpack(args[1].pointer));
+            RETARGS(pi->unpack(args[1].value.pointer));
         } break;
         case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
-            const Type *T = storage_type(args[2].type);
+            const Type *T = storage_type(args[2].value.type);
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
-            verify(storage_type(pi->element_type), storage_type(args[1].type));
-            void *destptr = args[2].pointer;
-            auto ET = args[1].type;
-            void *srcptr = get_pointer(ET, args[1]);
+            verify(storage_type(pi->element_type), storage_type(args[1].value.type));
+            void *destptr = args[2].value.pointer;
+            auto ET = args[1].value.type;
+            void *srcptr = get_pointer(ET, args[1].value);
             memcpy(destptr, srcptr, size_of(ET));
             RETARGS();
         } break;
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
-            const Type *T = storage_type(args[1].type);
+            const Type *T = storage_type(args[1].value.type);
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             T = pi->element_type;
-            void *ptr = args[1].pointer;
-            size_t idx = cast_number<size_t>(args[2]);
+            void *ptr = args[1].value.pointer;
+            size_t idx = cast_number<size_t>(args[2].value);
             ptr = pi->getelementptr(ptr, idx);
 
             for (size_t i = 3; i < args.size(); ++i) {
                 const Type *ST = storage_type(T);
-                auto &&arg = args[i];
+                auto &&arg = args[i].value;
                 switch(ST->kind()) {
                 case TK_Array: {
                     auto ai = cast<ArrayType>(ST);
@@ -9090,19 +9213,19 @@ struct NormalizeCtx {
         } break;
         case FN_AnyExtract: {
             CHECKARGS(1, 1);
-            args[1].verify(TYPE_Any);
-            Any arg = *args[1].ref;
+            args[1].value.verify(TYPE_Any);
+            Any arg = *args[1].value.ref;
             RETARGS(arg);
         } break;
         case FN_AnyWrap: {
             CHECKARGS(1, 1);
-            Any arg = args[1].toref();
+            Any arg = args[1].value.toref();
             arg.type = TYPE_Any;
             RETARGS(arg);
         } break;
         case FN_Purify: {
             CHECKARGS(1, 1);
-            Any arg = args[1];
+            Any arg = args[1].value;
             verify_function_pointer(arg.type);
             auto pi = cast<PointerType>(arg.type);
             auto fi = cast<FunctionType>(pi->element_type);
@@ -9116,14 +9239,14 @@ struct NormalizeCtx {
         } break;
         case SFXFN_CompilerError: {
             CHECKARGS(1, 1);
-            location_error(args[1]);
+            location_error(args[1].value);
             RETARGS();
         } break;
         case FN_CompilerMessage: {
             CHECKARGS(1, 1);
-            args[1].verify(TYPE_String);
+            args[1].value.verify(TYPE_String);
             StyledString ss;
-            ss.out << l->body.anchor << " message: " << args[1].string->data << std::endl;
+            ss.out << l->body.anchor << " message: " << args[1].value.string->data << std::endl;
             std::cout << ss.str()->data;
             RETARGS();
         } break;
@@ -9132,17 +9255,20 @@ struct NormalizeCtx {
             StyledStream ss(std::cerr);
             ss << l->body.anchor << " dump: ";
             for (size_t i = 1; i < args.size(); ++i) {
-                if (is_const(args[i])) {
-                    stream_expr(ss, args[i], StreamExprFormat());
+                if (args[i].key != SYM_Unnamed) {
+                    ss << args[i].key << " " << Style_Operator << "=" << Style_None << " ";
+                }
+                if (is_const(args[i].value)) {
+                    stream_expr(ss, args[i].value, StreamExprFormat());
                 } else {
                     ss << "<unknown>" 
                         << Style_Operator << ":" << Style_None
-                        << args[i].indirect_type() << std::endl;
+                        << args[i].value.indirect_type() << std::endl;
                 }
             }
             l->unlink_backrefs();
-            enter = args[0];
-            args[0] = none;
+            enter = args[0].value;
+            args[0].value = none;
             l->link_backrefs();
         } break;
         case OP_ICmpEQ:
@@ -9156,14 +9282,14 @@ struct NormalizeCtx {
         case OP_ICmpSLT:
         case OP_ICmpSLE: {
             CHECKARGS(2, 2);
-            verify_integer_ops(args[1], args[2]);
+            verify_integer_ops(args[1].value, args[2].value);
 #define B_INT_OP2(OP, N) \
-    switch(cast<IntegerType>(storage_type(args[1].type))->width) { \
-    case 1: result = (args[1].i1 OP args[2].i1); break; \
-    case 8: result = (args[1].N ## 8 OP args[2].N ## 8); break; \
-    case 16: result = (args[1].N ## 16 OP args[2].N ## 16); break; \
-    case 32: result = (args[1].N ## 32 OP args[2].N ## 32); break; \
-    case 64: result = (args[1].N ## 64 OP args[2].N ## 64); break; \
+    switch(cast<IntegerType>(storage_type(args[1].value.type))->width) { \
+    case 1: result = (args[1].value.i1 OP args[2].value.i1); break; \
+    case 8: result = (args[1].value.N ## 8 OP args[2].value.N ## 8); break; \
+    case 16: result = (args[1].value.N ## 16 OP args[2].value.N ## 16); break; \
+    case 32: result = (args[1].value.N ## 32 OP args[2].value.N ## 32); break; \
+    case 64: result = (args[1].value.N ## 64 OP args[2].value.N ## 64); break; \
     default: assert(false); break; \
     }
             bool result = false;
@@ -9197,25 +9323,25 @@ struct NormalizeCtx {
         case OP_FCmpULT:
         case OP_FCmpULE: {
 #define B_FLOAT_OP2(OP) \
-    switch(cast<RealType>(storage_type(args[1].type))->width) { \
-    case 32: result = (args[1].f32 OP args[2].f32); break; \
-    case 64: result = (args[1].f64 OP args[2].f64); break; \
+    switch(cast<RealType>(storage_type(args[1].value.type))->width) { \
+    case 32: result = (args[1].value.f32 OP args[2].value.f32); break; \
+    case 64: result = (args[1].value.f64 OP args[2].value.f64); break; \
     default: assert(false); break; \
     }
 #define B_FLOAT_OPF2(OP) \
-    switch(cast<RealType>(storage_type(args[1].type))->width) { \
-    case 32: result = OP(args[1].f32, args[2].f32); break; \
-    case 64: result = OP(args[1].f64, args[2].f64); break; \
+    switch(cast<RealType>(storage_type(args[1].value.type))->width) { \
+    case 32: result = OP(args[1].value.f32, args[2].value.f32); break; \
+    case 64: result = OP(args[1].value.f64, args[2].value.f64); break; \
     default: assert(false); break; \
     }
             CHECKARGS(2, 2);
-            verify_real_ops(args[1], args[2]);
+            verify_real_ops(args[1].value, args[2].value);
             bool result;
             bool failed = false;
             bool nan;
-            switch(cast<RealType>(storage_type(args[1].type))->width) {
-            case 32: nan = isnan(args[1].f32) || isnan(args[2].f32); break;
-            case 64: nan = isnan(args[1].f64) || isnan(args[2].f64); break;
+            switch(cast<RealType>(storage_type(args[1].value.type))->width) {
+            case 32: nan = isnan(args[1].value.f32) || isnan(args[2].value.f32); break;
+            case 64: nan = isnan(args[1].value.f64) || isnan(args[2].value.f64); break;
             default: assert(false); break;
             }
             switch(enter.builtin.value()) {
@@ -9270,7 +9396,7 @@ struct NormalizeCtx {
     case OP_ ## NAME ## NUW: \
     case OP_ ## NAME ## NSW: { \
         CHECKARGS(2, 2); \
-        verify_integer_ops(args[1], args[2]); \
+        verify_integer_ops(args[1].value, args[2].value); \
         Any result = none; \
         switch(enter.builtin.value()) { \
         case OP_ ## NAME: B_INT_OP2(OP, u); break; \
@@ -9278,22 +9404,22 @@ struct NormalizeCtx {
         case OP_ ## NAME ## NSW: B_INT_OP2(OP, i); break; \
         default: assert(false); break; \
         } \
-        result.type = args[1].type; \
+        result.type = args[1].value.type; \
         RETARGS(result); \
     } break;
 #define IARITH_OP(NAME, OP, PFX) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
-        verify_integer_ops(args[1], args[2]); \
+        verify_integer_ops(args[1].value, args[2].value); \
         Any result = none; \
         B_INT_OP2(OP, PFX); \
-        result.type = args[1].type; \
+        result.type = args[1].value.type; \
         RETARGS(result); \
     } break;
 #define FARITH_OP(NAME, OP) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
-        verify_real_ops(args[1], args[2]); \
+        verify_real_ops(args[1].value, args[2].value); \
         Any result = none; \
         B_FLOAT_OP2(OP); \
         RETARGS(result); \
@@ -9301,7 +9427,7 @@ struct NormalizeCtx {
 #define FARITH_OPF(NAME, OP) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
-        verify_real_ops(args[1], args[2]); \
+        verify_real_ops(args[1].value, args[2].value); \
         Any result = none; \
         B_FLOAT_OPF2(OP); \
         RETARGS(result); \
@@ -9324,13 +9450,13 @@ struct NormalizeCtx {
 
         auto &&args = l->body.args;
         CHECKARGS(3, 3);
-        args[1].verify_indirect(TYPE_Bool);
-        Label *then_br = inline_branch_continuation(args[2], args[0]);
-        Label *else_br = inline_branch_continuation(args[3], args[0]);
+        args[1].value.verify_indirect(TYPE_Bool);
+        Label *then_br = inline_branch_continuation(args[2].value, args[0].value);
+        Label *else_br = inline_branch_continuation(args[3].value, args[0].value);
         l->unlink_backrefs();
-        args[0] = none;
-        args[2] = then_br;
-        args[3] = else_br;
+        args[0].value = none;
+        args[2].value = then_br;
+        args[3].value = else_br;
         l->link_backrefs();
     }
 
@@ -9446,7 +9572,7 @@ struct NormalizeCtx {
         Any voidarg = none;
         voidarg.type = TYPE_Void;
 
-        std::vector<Any> newargs = { args[0] };
+        Args newargs = { args[0] };
         for (size_t i = 1; i < enter_label->params.size(); ++i) {
             newargs.push_back(voidarg);
         }
@@ -9472,7 +9598,7 @@ struct NormalizeCtx {
 
         if (isa<TypedLabelType>(cont_type)) {
             auto tli = cast<TypedLabelType>(cont_type);
-            Any newarg = type_continuation(args[0], tli->types);
+            Any newarg = type_continuation(args[0].value, tli->types);
             l->unlink_backrefs();
             args[0] = newarg;
             l->link_backrefs();
@@ -9498,7 +9624,7 @@ struct NormalizeCtx {
         } else {
             std::vector<const Type *> argtypes;
             argtypes_from_builtin_call(l, argtypes);
-            Any newarg = type_continuation(args[0], argtypes);
+            Any newarg = type_continuation(args[0].value, argtypes);
             l->unlink_backrefs();
             args[0] = newarg;
             l->link_backrefs();
@@ -9512,7 +9638,7 @@ struct NormalizeCtx {
         std::vector<const Type *> argtypes;
         argtypes_from_function_call(l, argtypes);
         auto &&args = l->body.args;
-        Any newarg = type_continuation(args[0], argtypes);
+        Any newarg = type_continuation(args[0].value, argtypes);
         l->unlink_backrefs();
         args[0] = newarg;
         l->link_backrefs();
@@ -9523,12 +9649,12 @@ struct NormalizeCtx {
         ss_cout << "typing continuation call in " << l << std::endl;
 #endif
         auto &&args = l->body.args;
-        if (args[0].type != TYPE_Nothing) {
-            args[0].type = TYPE_Nothing;
+        if (args[0].value.type != TYPE_Nothing) {
+            args[0].value.type = TYPE_Nothing;
         }
         std::vector<const Type *> argtypes = {};
         for (auto &&arg : args) {
-            argtypes.push_back(arg.indirect_type());
+            argtypes.push_back(arg.value.indirect_type());
         }
         type_continuation(l->body.enter, argtypes);
     }
@@ -9617,6 +9743,7 @@ struct NormalizeCtx {
                 fold_callable_call(l);
                 goto process_body;
             } else if (is_calling_function(l)) {
+                verify_no_keyed_args(l);
                 if (is_calling_pure_function(l)
                     && all_args_constant(l)) {
                     fold_pure_function_call(l);
@@ -9625,6 +9752,8 @@ struct NormalizeCtx {
                     type_continuation_from_function_call(l);
                 }
             } else if (is_calling_builtin(l)) {
+                if (!builtin_has_keyed_args(l->get_builtin_enter()))
+                    verify_no_keyed_args(l);
                 if ((all_args_constant(l)
                     && !builtin_never_folds(l->get_builtin_enter()))
                     || builtin_always_folds(l->get_builtin_enter())) {
@@ -9638,8 +9767,8 @@ struct NormalizeCtx {
                 } else if (l->body.enter.builtin == FN_Branch) {
                     inline_branch_continuations(l);
                     auto &&args = l->body.args;
-                    push_label(args[3]);
-                    push_label(args[2]);
+                    push_label(args[3].value);
+                    push_label(args[2].value);
                 } else {
                     type_continuation_from_builtin_call(l);
                 }
@@ -9656,11 +9785,15 @@ struct NormalizeCtx {
                 }
                 #endif
 
+                if (has_keyed_args(l)) {
+                    solve_keyed_args(l);
+                }
+
                 fold_type_label_arguments(l);
 
                 Label *enter_label = l->get_label_enter();
                 if (is_basic_block_like(enter_label)) {
-                    if (!has_args(enter_label)) {
+                    if (!has_params(enter_label)) {
 #if SCOPES_DEBUG_CODEGEN
                         ss_cout << "folding jump to label in " << l << std::endl;
 #endif
@@ -9732,7 +9865,7 @@ struct NormalizeCtx {
             set_done(l);
 
             if (is_continuing_to_label(l)) {
-                push_label(l->body.args[0].label);
+                push_label(l->body.args[0].value.label);
             }
         }
 
@@ -9817,13 +9950,13 @@ struct NormalizeCtx {
                         assert(!args.empty());
 
                         auto &&cont = args[0];
-                        if ((cont.type == TYPE_Parameter)
-                            && (cont.parameter->label == l)) {
+                        if ((cont.value.type == TYPE_Parameter)
+                            && (cont.value.parameter->label == l)) {
 #if SCOPES_DEBUG_CODEGEN
                             ss_cout << "skipping recursive call" << std::endl;
 #endif
                         } else {
-                            std::vector<Any> newargs = { cont };
+                            Args newargs = { cont };
                             for (size_t i = 1; i < l->params.size(); ++i) {
                                 newargs.push_back(voidarg);
                             }
@@ -10001,7 +10134,7 @@ struct NormalizeCtx {
         }
     }
 
-    Any run_ffi_function(Any enter, Any *args, size_t argcount) {
+    Any run_ffi_function(Any enter, KeyAny *args, size_t argcount) {
         auto pi = cast<PointerType>(enter.type);
         auto fi = cast<FunctionType>(pi->element_type);
 
@@ -10013,9 +10146,9 @@ struct NormalizeCtx {
         ffi_type *argtypes[argcount];
         void *avalues[argcount];
         for (size_t i = 0; i < argcount; ++i) {
-            Any &arg = args[i];
-            argtypes[i] = get_ffi_type(arg.type);
-            avalues[i] = get_pointer(arg.type, arg);
+            KeyAny &arg = args[i];
+            argtypes[i] = get_ffi_type(arg.value.type);
+            avalues[i] = get_pointer(arg.value.type, arg.value);
         }
         ffi_status prep_result;
         if (fi->flags & FF_Variadic) {
@@ -10118,7 +10251,7 @@ struct Expander {
 
     // arguments must include continuation
     // enter and args must be passed with syntax object removed
-    void br(Any enter, const std::vector<Any> &args, uint64_t flags = 0) {
+    void br(Any enter, const Args &args, uint64_t flags = 0) {
         assert(!args.empty());
         const Anchor *anchor = get_active_anchor();
         assert(anchor);
@@ -10127,16 +10260,12 @@ struct Expander {
             location_error(String::from("can not define body: continuation already exited."));
             return;
         }
-        assert(!is_goto_label(enter) || (args[0].type == TYPE_Nothing));
+        assert(!is_goto_label(enter) || (args[0].value.type == TYPE_Nothing));
         assert(state->body.enter.type == TYPE_Nothing);
         assert(state->body.args.empty());
         state->body.flags = flags;
         state->body.enter = enter;
-        size_t count = args.size();
-        state->body.args.reserve(count);
-        for (size_t i = 0; i < count; ++i) {
-            state->body.args.push_back(args[i]);
-        }
+        state->body.args = args;
         state->body.anchor = anchor;
         state->link_backrefs();
         state = nullptr;
@@ -10216,16 +10345,6 @@ struct Expander {
         }
     }
 
-    bool ends_with_assign_parenthesis(Symbol sym) {
-        if (sym == SYM_AssignParenthesis)
-            return true;
-        const String *str = sym.name();
-        if (str->count < 4)
-            return false;
-        const char *dot = str->data + str->count - 4;
-        return !strcmp(dot, "=...");
-    }
-
     bool ends_with_parenthesis(Symbol sym) {
         if (sym == SYM_Parenthesis)
             return true;
@@ -10247,9 +10366,7 @@ struct Expander {
         } else {
             _value.verify(TYPE_Symbol);
             Parameter *param = nullptr;
-            if (ends_with_assign_parenthesis(_value.symbol)) {
-                param = Parameter::varkwarg_from(anchor, _value.symbol, TYPE_Void);
-            } else if (ends_with_parenthesis(_value.symbol)) {
+            if (ends_with_parenthesis(_value.symbol)) {
                 param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
             } else {
                 param = Parameter::from(anchor, _value.symbol, TYPE_Void);
@@ -10437,7 +10554,7 @@ struct Expander {
             location_error(String::from("= expected"));
         }
 
-        std::vector<Any> args;
+        Args args;
         args.reserve(it->count);
         args.push_back(none);
 
@@ -10596,7 +10713,7 @@ struct Expander {
         return result;
     }
     
-    static bool get_kwargs(Any it, Symbol &key, Any &value) {
+    static bool get_kwargs(Any it, KeyAny &value) {
         it = unsyntax(it);
         if (it.type != TYPE_List) return false;
         auto l = it.list;
@@ -10604,13 +10721,13 @@ struct Expander {
         if (l->count != 3) return false;
         it = unsyntax(l->at);
         if (it.type != TYPE_Symbol) return false;
-        key = it.symbol;
+        value.key = it.symbol;
         l = l->next;
         it = unsyntax(l->at);
         if (it.type != TYPE_Symbol) return false;
         if (it.symbol != OP_Set) return false;
         l = l->next;
-        value = l->at;
+        value.value = l->at;
         return true;
     }
 
@@ -10620,7 +10737,7 @@ struct Expander {
         auto _anchor = get_active_anchor();
         Expander subexp(state, env, it->next);
 
-        std::vector<Any> args;
+        Args args;
         args.reserve(it->count);
 
         Label *nextstate = nullptr;
@@ -10659,77 +10776,21 @@ struct Expander {
             args[0] = none;
         }
 
-        std::vector<bool> mapped = { true };
         it = subexp.next;
-        size_t next_index = 0;
-        Parameter *kwparam = nullptr;
-        if (enter.type == TYPE_Label) {
-            kwparam = enter.label->get_varkwargs_param();
-        }
         while (it) {
             subexp.next = it->next;
-            Symbol key; Any value = none;
+            KeyAny value;
             set_active_anchor(((const Syntax *)it->at)->anchor);
-            if (get_kwargs(it->at, key, value)) {
-                if (enter.type != TYPE_Label) {
-                    StyledString ss;
-                    ss.out << "can't pass keyword arguments to " << enter.type;
-                    location_error(ss.str());
-                }                    
-                // find index for key
-                auto label = enter.label;
-                auto param = label->get_param_by_name(key);
-                size_t index = -1;
-                if (param) {
-                    while (mapped.size() <= (size_t)param->index) {
-                        mapped.push_back(false);
-                        args.push_back(none);
-                    }
-                    if (mapped[param->index]) {
-                        StyledString ss;
-                        ss.out << "duplicate binding to parameter " << key;
-                        location_error(ss.str());
-                    }
-                    mapped[param->index] = true;
-                    index = param->index;
-                } else if (kwparam) {
-                    while (mapped.size() < (size_t)kwparam->index) {
-                        mapped.push_back(false);
-                        args.push_back(none);
-                    }
-                    mapped.push_back(true);
-                    args.push_back(key);
-                    index = args.size();
-                    mapped.push_back(true);
-                    args.push_back(none);
-                } else {
-                    StyledString ss;
-                    ss.out << "no parameter named " << key;
-                    location_error(ss.str());
-                }
-                args[index] = subexp.expand(value, Symbol(SYM_Unnamed), longdest);
+            if (get_kwargs(it->at, value)) {
+                value.value = subexp.expand(
+                    value.value, Symbol(SYM_Unnamed), longdest);
             } else {
-                while ((next_index < mapped.size()) && mapped[next_index])
-                    next_index++;
-                while (mapped.size() <= next_index) {
-                    mapped.push_back(false);
-                    args.push_back(none);
-                }
-                if (kwparam && (next_index >= (size_t)kwparam->index)) {
-                    mapped[next_index] = true;
-                    args[next_index] = Symbol(SYM_Unnamed);
-                    next_index++;
-                    if (mapped.size() <= next_index) {
-                        mapped.push_back(false);
-                        args.push_back(none);
-                    }
-                }
-                mapped[next_index] = true;
-                args[next_index] = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
-                next_index++;
+                value = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
             }
+            args.push_back(value);
             it = subexp.next;
         }
+
         state = subexp.state;
         set_active_anchor(_anchor);
         br(enter, args, rawcall?LBF_RawCall:0);
@@ -10747,7 +10808,7 @@ struct Expander {
         Label *func = subexp.expand(it->at, Symbol(SYM_Unnamed), longdest);
         it = subexp.next;
 
-        std::vector<Any> args;
+        Args args;
         args.reserve(((it == EOL)?0:(it->count)) + 1);
         Label *nextstate = nullptr;
         Any result = none;
@@ -10988,6 +11049,9 @@ static void init_types() {
     DEFINE_TYPENAME("constant", TYPE_Constant);
     DEFINE_TYPENAME("function", TYPE_Function);
     DEFINE_TYPENAME("extern", TYPE_Extern);
+    DEFINE_TYPENAME("CStruct", TYPE_CStruct);
+    DEFINE_TYPENAME("CUnion", TYPE_CUnion);
+    DEFINE_TYPENAME("CEnum", TYPE_CEnum);
 
     TYPE_Bool = Integer(1, false);
 
@@ -11160,6 +11224,7 @@ static const Type *f_elementtype(const Type *T, int i) {
     case TK_Tuple: return cast<TupleType>(T)->type_at_index(i);
     case TK_Union: return cast<UnionType>(T)->type_at_index(i);
     case TK_Function:  return cast<FunctionType>(T)->type_at_index(i);
+    case TK_Extern: return cast<ExternType>(T)->type;
     default: {
         StyledString ss;
         ss.out << "type " << T << " has no elements" << std::endl;

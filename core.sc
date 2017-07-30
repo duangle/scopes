@@ -145,6 +145,9 @@ fn raise! (value)
     __raise! (Any-new value)
     unreachable!;
 
+fn va-empty? (...)
+    icmp== (va-countof ...) 0
+
 fn cons (...)
     let i = (va-countof ...)
     if (icmp<s i 2)
@@ -172,7 +175,7 @@ syntax-extend
         fn (cls ...)
             let val ok = (type@ cls 'apply-type)
             if ok
-                call val ...
+                call val cls ...
             else
                 compiler-error!
                     string-join "type "
@@ -180,11 +183,17 @@ syntax-extend
                             Any-repr (Any-wrap cls)
                             " has no apply-type attribute"
 
-    set-type-symbol! list 'apply-type list-new
-    set-type-symbol! Any 'apply-type Any-new
-    set-type-symbol! Symbol 'apply-type string->Symbol
+    set-type-symbol! list 'apply-type
+        fn (cls ...)
+            list-new ...
+    set-type-symbol! Any 'apply-type 
+        fn (cls value)
+            Any-new value
+    set-type-symbol! Symbol 'apply-type 
+        fn (cls value)
+            string->Symbol value
     set-type-symbol! Scope 'apply-type
-        fn (parent)
+        fn (cls parent)
             if (type== (typeof parent) Nothing)
                 Scope-new;
             else
@@ -246,7 +255,7 @@ syntax-extend
         set-type-symbol! T '| (gen-type-op2 bor)
         set-type-symbol! T '^ (gen-type-op2 bxor)
         set-type-symbol! T 'apply-type
-            fn (val)
+            fn (cls val)
                 let vT = (typeof val)
                 if (type== T vT) val
                 else
@@ -307,7 +316,7 @@ syntax-extend
             sdiv (fptosi a i32) (fptosi b i32)
 
         set-type-symbol! T 'apply-type
-            fn (val)
+            fn (cls val)
                 let vT = (typeof val)
                 if (type== T vT) val
                 elseif (integer-type? vT)
@@ -731,15 +740,33 @@ fn set-scope-symbol! (scope sym value)
     __set-scope-symbol! scope sym (Any value)
 
 syntax-extend
-    set-type-symbol! integer 'apply-type integer-type
-    #set-type-symbol! real 'apply-type real-type
-    set-type-symbol! pointer 'apply-type pointer-type
-    set-type-symbol! array 'apply-type array-type
-    #set-type-symbol! vector 'apply-type vector-type
-    set-type-symbol! tuple 'apply-type tuple-type
-    #set-type-symbol! union 'apply-type union-type
-    set-type-symbol! typename 'apply-type typename-type
-    set-type-symbol! function 'apply-type function-type
+    set-type-symbol! integer 'apply-type 
+        fn (cls ...)
+            integer-type ...
+    #set-type-symbol! real 'apply-type 
+        fn (cls ...)
+            real-type ...
+    set-type-symbol! pointer 'apply-type 
+        fn (cls ...)
+            pointer-type ...
+    set-type-symbol! array 'apply-type 
+        fn (cls ...)
+            array-type ...
+    #set-type-symbol! vector 'apply-type 
+        fn (cls ...)
+            vector-type ...
+    set-type-symbol! tuple 'apply-type 
+        fn (cls ...)
+            tuple-type ...
+    #set-type-symbol! union 'apply-type 
+        fn (cls ...)
+            union-type ...
+    set-type-symbol! typename 'apply-type 
+        fn (cls ...)
+            typename-type ...
+    set-type-symbol! function 'apply-type 
+        fn (cls ...)
+            function-type ...
 
     set-type-symbol! Any 'typeof Any-typeof
 
@@ -763,7 +790,7 @@ syntax-extend
     let empty-symbol = (Symbol "")
 
     set-type-symbol! Parameter 'apply-type
-        fn (params...)
+        fn (cls params...)
             let param1 param2 param3 = params...
             let TT = (tuple (typeof param1) (typeof param2) (typeof param3))
             if (type== TT (tuple Anchor Symbol type))
@@ -1061,7 +1088,7 @@ syntax-extend
             function (tuple list Scope) list list Scope
     set-typename-storage! Macro BlockScopeFunction
     set-type-symbol! Macro 'apply-type
-        fn (f)
+        fn (cls f)
             assert-typeof f BlockScopeFunction
             bitcast f Macro
     set-type-symbol! Macro 'cast
@@ -1445,7 +1472,7 @@ define-infix> 800 @
 define reference 
     typename "reference"
 set-type-symbol! reference 'apply-type
-    fn (element)
+    fn (cls element)
         # due to auto-memoization, we'll always get the same type back
             provided the element type is a constant
         assert (constant? element)
@@ -1455,7 +1482,7 @@ set-type-symbol! reference 'apply-type
         set-typename-super! T reference
         set-typename-storage! T ptrtype
         set-type-symbol! T 'apply-type
-            fn (value)
+            fn (cls value)
                 assert-typeof value ptrtype
                 bitcast value T
         set-type-symbol! T 'repr
