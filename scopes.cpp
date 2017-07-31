@@ -5693,6 +5693,7 @@ public:
 
                 auto name = Symbol(String::from_stdstring(it->getName().data()));
                 auto value = make_integer(tag_type, val.getExtValue());
+                value.type = enum_type;
 
                 tni->bind(name, value);
                 dest->bind(name, value);

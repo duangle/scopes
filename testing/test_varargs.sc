@@ -32,10 +32,11 @@ fn test-kwva-keys (x y args...)
     assert (x == 5)
     assert (y == 0)
 
-test-kwva-keys (x = 5) (y = 0) (z = 1) 2 3 (w = 4)
-test-kwva-keys 5 0 (z = 1) 2 3 (w = 4)
 test-kwva-keys
     call
         fn () # pass-through
             return (x = 5) (y = 0) (z = 1) 2 3 (w = 4)
+
+test-kwva-keys (x = 5) (y = 0) (z = 1) 2 3 (w = 4)
+test-kwva-keys 5 0 (z = 1) 2 3 (w = 4)
 

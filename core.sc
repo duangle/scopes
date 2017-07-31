@@ -170,6 +170,9 @@ fn list-new (...)
                 list-cons (Any-new val) tail
     loop (va-countof ...) eol
 
+# forward decl
+fn cast
+
 syntax-extend
     set-type-symbol! type 'call
         fn (cls ...)
@@ -254,29 +257,29 @@ syntax-extend
         set-type-symbol! T '& (gen-type-op2 band)
         set-type-symbol! T '| (gen-type-op2 bor)
         set-type-symbol! T '^ (gen-type-op2 bxor)
+        set-type-symbol! T 'cast
+            fn (destT val)
+                let vT = (typeof val)
+                let destST = (storageof destT)
+                if (integer-type? destST)
+                    let valw destw = (bitcountof vT) (bitcountof destST)
+                    if (icmp== destw valw)
+                        bitcast val destT
+                    elseif (icmp<s destw valw)
+                        trunc val destT
+                    elseif (signed? vT)
+                        sext val destT
+                    else
+                        zext val destT
+                elseif (real-type? destST)
+                    if (signed? vT)
+                        sitofp val destT
+                    else
+                        uitofp val destT
+
         set-type-symbol! T 'apply-type
             fn (cls val)
-                let vT = (typeof val)
-                if (type== T vT) val
-                else
-                    let sT = (storageof vT)
-                    if (integer-type? sT)
-                        let Tw vTw = (bitcountof T) (bitcountof sT)
-                        if (icmp== Tw vTw)
-                            bitcast val T
-                        elseif (icmp>s vTw Tw)
-                            trunc val T
-                        elseif (signed? sT)
-                            sext val T
-                        else
-                            zext val T
-                    elseif (real-type? vT)
-                        if (signed? T)
-                            fptosi val T
-                        else
-                            fptoui val T
-                    else
-                        compiler-error! "integer or float expected"
+                cast cls val
 
         fn ufdiv(a b)
             let Ta Tb = (typeof a) (typeof b)
@@ -315,23 +318,27 @@ syntax-extend
         fn floordiv (a b)
             sdiv (fptosi a i32) (fptosi b i32)
 
+        set-type-symbol! T 'cast
+            fn (destT val)
+                let vT = (typeof val)
+                let destST = (storageof destT)
+                if (integer-type? destST)
+                    if (signed? destST)
+                        fptosi val destT
+                    else
+                        fptoui val destT
+                elseif (real-type? destST)
+                    let valw destw = (bitcountof vT) (bitcountof destST)
+                    if (icmp== destw valw)
+                        bitcast val destT
+                    elseif (icmp<s destw valw)
+                        fptrunc val destT
+                    else
+                        fpext val destT
+
         set-type-symbol! T 'apply-type
             fn (cls val)
-                let vT = (typeof val)
-                if (type== T vT) val
-                elseif (integer-type? vT)
-                    if (signed? vT)
-                        sitofp val T
-                    else
-                        uitofp val T
-                elseif (real-type? vT)
-                    let Tw vTw = (bitcountof T) (bitcountof vT)
-                    if (icmp>s vTw Tw)
-                        fptrunc val T
-                    else
-                        fpext val T
-                else
-                    compiler-error! "integer or float expected"
+                cast cls val
         set-type-symbol! T '== (gen-type-op2 fcmp==o)
         set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
         set-type-symbol! T '> (gen-type-op2 fcmp>o)
@@ -1471,40 +1478,58 @@ define-infix> 800 @
 
 define reference 
     typename "reference"
+syntax-extend
+    fn deref (val)
+        let T = (typeof val)
+        if (T <: reference)
+            load (bitcast val (storageof T))
+        else val
+
+    let T = reference
+    fn passthru-overload (sym func)
+        set-type-symbol! T sym (fn (a b flipped) (func (deref a) (deref b)))
+    passthru-overload '== ==; passthru-overload '!= !=
+    passthru-overload '< <; passthru-overload '<= <=
+    passthru-overload '> >; passthru-overload '>= >=
+    passthru-overload '& &; passthru-overload '| |; passthru-overload '^ ^
+    passthru-overload '+ +; passthru-overload '- -
+    passthru-overload '/ /; passthru-overload '/ /
+    passthru-overload '// //; passthru-overload '// //
+
+    set-type-symbol! T 'repr
+        fn (self)
+            repr (load (bitcast self (storageof (typeof self))))
+    
+    set-type-symbol! T 'cast
+        fn (destT self)
+            let ptrtype = (storageof (typeof self))
+            if (type== destT ptrtype)
+                bitcast self ptrtype
+            else
+                cast destT (load (bitcast self ptrtype))
+
+    set-type-symbol! T '=
+        fn (self value)
+            store value (bitcast self (storageof (typeof self)))
+            true
+
+    syntax-scope
+
 set-type-symbol! reference 'apply-type
     fn (cls element)
-        # due to auto-memoization, we'll always get the same type back
-            provided the element type is a constant
-        assert (constant? element)
-        assert-typeof element type
-        let T = (typename (.. "&" (type-name element)))
-        let ptrtype = (pointer element)
-        set-typename-super! T reference
-        set-typename-storage! T ptrtype
-        set-type-symbol! T 'apply-type
-            fn (cls value)
-                assert-typeof value ptrtype
-                bitcast value T
-        set-type-symbol! T 'repr
-            fn (self)
-                repr (load (bitcast self ptrtype))
-        set-type-symbol! T 'deref
-            fn (self)
-                load (bitcast self ptrtype)
-        set-type-symbol! T 'ref
-            fn (self)
-                bitcast self ptrtype
-        set-type-symbol! T 'cast
-            fn (destT self)
-                if (type== destT ptrtype)
-                    bitcast self ptrtype
-                elseif (type== destT element)
-                    load (bitcast self ptrtype)
-        set-type-symbol! T '=
-            fn (self value)
-                store value (bitcast self ptrtype)
-                true
-        T
+        if (type== cls reference)
+            # due to auto-memoization, we'll always get the same type back
+                provided the element type is a constant
+            assert (constant? element)
+            assert-typeof element type
+            let T = (typename (.. "&" (type-name element)))
+            let ptrtype = (pointer element)
+            set-typename-super! T reference
+            set-typename-storage! T ptrtype
+            T
+        else
+            assert-typeof element (storageof cls)
+            bitcast element cls
 
 define-block-scope-macro var
     let args = (list-next expr)
@@ -1519,8 +1544,8 @@ define-block-scope-macro var
         cons
             list let tmp '= value
             list let T '= (list typeof tmp)
-            #list let name '= (list (list reference T) (list alloca T))
-            list let name '= (list alloca T)
+            list let name '= (list (list reference T) (list alloca T))
+            #list let name '= (list alloca T)
             list (do =) name tmp
             next-expr
         syntax-scope
@@ -1665,7 +1690,7 @@ fn prompt (prefix preload)
         else preload
 
 #-------------------------------------------------------------------------------
-# various sugar
+# various C related sugar
 #-------------------------------------------------------------------------------
 
 # support assignment syntax
@@ -1689,7 +1714,9 @@ set-type-symbol! pointer 'getattr
         if (ET <: typename)
             let idx = (typename-field-index ET name)
             if (icmp>=s idx 0)
-                getelementptr self 0 idx
+                # cast result to reference
+                let val = (getelementptr self 0 idx)
+                (reference (element-type (typeof val) 0)) val
 
 # extern cast to element type/pointer executes load/unconst
 set-type-symbol! extern 'cast
@@ -1699,6 +1726,34 @@ set-type-symbol! extern 'cast
             load (unconst self)
         elseif (type== destT (pointer ET))
             unconst self
+
+# support for C enum comparisons
+set-type-symbol! CEnum '==
+    fn (a b)
+        let T = (typeof a)
+        if (type== T (typeof b))
+            let ST = (storageof T)
+            (bitcast a ST) == (bitcast b ST)
+
+# support for downcast
+set-type-symbol! CEnum 'cast
+    fn (destT self)
+        let ST = (storageof (typeof self))
+        if (type== destT ST)
+            bitcast self ST
+
+# binary logic operators for C enumerators
+set-type-symbol! CEnum '|
+    fn (a b)
+        | (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+
+set-type-symbol! CEnum '^
+    fn (a b)
+        ^ (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+
+set-type-symbol! CEnum '&
+    fn (a b)
+        & (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
 
 # support for C struct initializers
 set-type-symbol! CStruct 'apply-type
@@ -1723,7 +1778,8 @@ set-type-symbol! CStruct 'apply-type
             else
                 instance
 
-#set-type-symbol! pointer 'call
+# extern call attempts to cast arguments to correct type
+set-type-symbol! extern 'call
     fn (self ...)
         let ET = (rawcall element-type (typeof self) 0)
         let ST = (rawcall superof ET)
