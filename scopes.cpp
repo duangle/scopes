@@ -172,6 +172,8 @@ const char *scopes_compile_time_date();
 #include "clang/AST/RecordLayout.h"
 #include "clang/CodeGen/CodeGenAction.h"
 #include "clang/Lex/PreprocessorOptions.h"
+#include "clang/Lex/Preprocessor.h"
+#include "clang/Lex/LiteralSupport.h"
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
@@ -5541,7 +5543,10 @@ public:
     NamespaceMap named_enums;
     NamespaceMap typedefs;
 
-    CVisitor() : dest(nullptr), Context(NULL) {}
+    CVisitor() : dest(nullptr), Context(NULL) {
+        typedefs.insert({Symbol("__builtin_va_list"), 
+            Typename(String::from("__builtin_va_list")) });
+    }
 
     const Anchor *anchorFromLocation(clang::SourceLocation loc) {
         auto &SM = Context->getSourceManager();
@@ -5788,8 +5793,11 @@ public:
             return Pointer(TranslateType(ETy));
         } break;
         case clang::Type::VariableArray:
-        case clang::Type::IncompleteArray:
             break;
+        case clang::Type::IncompleteArray: {
+            const IncompleteArrayType *ATy = cast<IncompleteArrayType>(Ty);
+            return Pointer(TranslateType(ATy->getElementType()));
+        } break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
             const Type *at = TranslateType(ATy->getElementType());
@@ -5986,6 +5994,52 @@ static void init_llvm() {
 
 static std::vector<LLVMModuleRef> llvm_c_modules;
 
+static void add_c_macro(clang::Preprocessor & PP, 
+    const clang::IdentifierInfo * II, 
+    clang::MacroDirective * MD, Scope *scope) {
+    if(!II->hasMacroDefinition())
+        return;
+    clang::MacroInfo * MI = MD->getMacroInfo();
+    if(MI->isFunctionLike())
+        return;
+    bool negate = false;
+    const clang::Token * Tok;
+    if(MI->getNumTokens() == 2 && MI->getReplacementToken(0).is(clang::tok::minus)) {
+        negate = true;
+        Tok = &MI->getReplacementToken(1);
+    } else if(MI->getNumTokens() == 1) {
+        Tok = &MI->getReplacementToken(0);
+    } else {
+        return;
+    }
+    
+    if(Tok->isNot(clang::tok::numeric_constant))
+        return;
+    
+    clang::SmallString<64> IntegerBuffer;
+    bool NumberInvalid = false;
+    clang::StringRef Spelling = PP.getSpelling(*Tok, IntegerBuffer, &NumberInvalid);
+    clang::NumericLiteralParser Literal(Spelling, Tok->getLocation(), PP);
+    if(Literal.hadError)
+        return;
+    const String *name = String::from_cstr(II->getName().str().c_str());
+    if(Literal.isFloatingLiteral()) {
+        llvm::APFloat Result(0.0);
+        Literal.GetFloatValue(Result);
+        double V = Result.convertToDouble();
+        if (negate)
+            V = -V;
+        scope->bind(Symbol(name), V);
+    } else {
+        llvm::APInt Result(64,0);
+        Literal.GetIntegerValue(Result);
+        int64_t i = Result.getSExtValue();
+        if (negate)
+            i = -i;
+        scope->bind(Symbol(name), i);
+    }
+}
+
 static Scope *import_c_module (
     const std::string &path, const std::vector<std::string> &args,
     const char *buffer = nullptr) {
@@ -6027,6 +6081,18 @@ static Scope *import_c_module (
     // Create and execute the frontend to generate an LLVM bitcode module.
     std::unique_ptr<CodeGenAction> Act(new BangEmitLLVMOnlyAction(result));
     if (compiler.ExecuteAction(*Act)) {
+
+        clang::Preprocessor & PP = compiler.getPreprocessor();
+        PP.getDiagnostics().setClient(new IgnoringDiagConsumer(), true);
+
+        for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false); 
+            it != end; ++it) {
+            const IdentifierInfo * II = it->first;
+            MacroDirective * MD = it->second.getLatest();
+
+            add_c_macro(PP, II, MD, result);
+        }
+
         M = (LLVMModuleRef)Act->takeModule().release();
         assert(M);
         llvm_c_modules.push_back(M);
