@@ -257,12 +257,36 @@ syntax-extend
         set-type-symbol! T '& (gen-type-op2 band)
         set-type-symbol! T '| (gen-type-op2 bor)
         set-type-symbol! T '^ (gen-type-op2 bxor)
+
+        # only perform safe casts i.e. integer / usize conversions that expand width
         set-type-symbol! T 'cast
             fn (destT val)
                 let vT = (typeof val)
-                let destST = (storageof destT)
+                let destST =
+                    if (type== destT usize) (storageof destT)
+                    else destT
                 if (integer-type? destST)
                     let valw destw = (bitcountof vT) (bitcountof destST)
+                    # must have same signed bit
+                    if (icmp== (signed? vT) (signed? destST))
+                        if (icmp== destw valw)
+                            bitcast val destT
+                        elseif (icmp>s destw valw)
+                            if (signed? vT)
+                                sext val destT
+                            else
+                                zext val destT
+
+        # more aggressive constructor that converts from all numerical types
+          and usize.
+        set-type-symbol! T 'apply-type
+            fn (destT val)
+                let vT = (typeof val)
+                let vT = 
+                    if (type== vT usize) (storageof vT)
+                    else vT
+                if (integer-type? vT)
+                    let valw destw = (bitcountof vT) (bitcountof destT)
                     if (icmp== destw valw)
                         bitcast val destT
                     elseif (icmp<s destw valw)
@@ -271,15 +295,14 @@ syntax-extend
                         sext val destT
                     else
                         zext val destT
-                elseif (real-type? destST)
-                    if (signed? vT)
-                        sitofp val destT
+                elseif (real-type? vT)
+                    if (signed? destT)
+                        fptosi val destT
                     else
-                        uitofp val destT
-
-        set-type-symbol! T 'apply-type
-            fn (cls val)
-                cast cls val
+                        fptoui val destT
+                else
+                    # defer to source type
+                    cast destT val
 
         fn ufdiv(a b)
             let Ta Tb = (typeof a) (typeof b)
@@ -318,27 +341,42 @@ syntax-extend
         fn floordiv (a b)
             sdiv (fptosi a i32) (fptosi b i32)
 
+        # only perform safe casts: i.e. float to double
         set-type-symbol! T 'cast
             fn (destT val)
                 let vT = (typeof val)
-                let destST = (storageof destT)
-                if (integer-type? destST)
-                    if (signed? destST)
-                        fptosi val destT
+                if (real-type? destT)
+                    let valw destw = (bitcountof vT) (bitcountof destT)
+                    if (icmp== destw valw)
+                        bitcast val destT
+                    elseif (icmp>s destw valw)
+                        fpext val destT
+
+        # more aggressive constructor that converts from all numerical types
+          and usize.
+        set-type-symbol! T 'apply-type
+            fn (destT val)
+                let vT = (typeof val)
+                let vT = 
+                    if (type== vT usize) (storageof vT)
+                    else vT                
+                if (integer-type? vT)
+                    if (signed? vT)
+                        sitofp val destT
                     else
-                        fptoui val destT
-                elseif (real-type? destST)
-                    let valw destw = (bitcountof vT) (bitcountof destST)
+                        uitofp val destT
+                elseif (real-type? vT)
+                    let valw destw = (bitcountof vT) (bitcountof destT)
                     if (icmp== destw valw)
                         bitcast val destT
                     elseif (icmp<s destw valw)
                         fptrunc val destT
                     else
                         fpext val destT
+                else
+                    # defer to source type
+                    cast destT val
 
-        set-type-symbol! T 'apply-type
-            fn (cls val)
-                cast cls val
         set-type-symbol! T '== (gen-type-op2 fcmp==o)
         set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
         set-type-symbol! T '> (gen-type-op2 fcmp>o)
@@ -549,13 +587,9 @@ fn empty? (x)
     == (countof x) 0:usize
 
 fn cast (dest-type value)
-    assert-typeof dest-type type
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    if (type== T (storageof dest-type))
-        # possibly not a good rule; dest-type should perform the cast
-        return (bitcast value dest-type)
     let f ok = (type@ T 'cast)
     if ok
         let result... = (f dest-type value)
@@ -1478,16 +1512,16 @@ define-infix> 800 @
 
 define reference 
     typename "reference"
-syntax-extend
+
+do
     fn deref (val)
         let T = (typeof val)
         if (T <: reference)
             load (bitcast val (storageof T))
         else val
 
-    let T = reference
     fn passthru-overload (sym func)
-        set-type-symbol! T sym (fn (a b flipped) (func (deref a) (deref b)))
+        set-type-symbol! reference sym (fn (a b flipped) (func (deref a) (deref b)))
     passthru-overload '== ==; passthru-overload '!= !=
     passthru-overload '< <; passthru-overload '<= <=
     passthru-overload '> >; passthru-overload '>= >=
@@ -1495,12 +1529,15 @@ syntax-extend
     passthru-overload '+ +; passthru-overload '- -
     passthru-overload '/ /; passthru-overload '/ /
     passthru-overload '// //; passthru-overload '// //
+    passthru-overload '% %
+    passthru-overload '<< <<; passthru-overload '>> >>
+    passthru-overload '.. ..; passthru-overload '.. ..
 
-    set-type-symbol! T 'repr
+    set-type-symbol! reference 'repr
         fn (self)
             repr (load (bitcast self (storageof (typeof self))))
-    
-    set-type-symbol! T 'cast
+
+    set-type-symbol! reference 'cast
         fn (destT self)
             let ptrtype = (storageof (typeof self))
             if (type== destT ptrtype)
@@ -1508,47 +1545,58 @@ syntax-extend
             else
                 cast destT (load (bitcast self ptrtype))
 
-    set-type-symbol! T '=
+    set-type-symbol! reference '=
         fn (self value)
             store value (bitcast self (storageof (typeof self)))
             true
 
-    syntax-scope
-
-set-type-symbol! reference 'apply-type
-    fn (cls element)
-        if (type== cls reference)
-            # due to auto-memoization, we'll always get the same type back
-                provided the element type is a constant
-            assert (constant? element)
-            assert-typeof element type
-            let T = (typename (.. "&" (type-name element)))
-            let ptrtype = (pointer element)
-            set-typename-super! T reference
-            set-typename-storage! T ptrtype
-            T
-        else
-            assert-typeof element (storageof cls)
-            bitcast element cls
+    set-type-symbol! reference 'apply-type
+        fn (cls element)
+            if (type== cls reference)
+                # due to auto-memoization, we'll always get the same type back
+                    provided the element type is a constant
+                assert (constant? element)
+                assert-typeof element type
+                let T = (typename (.. "&" (type-name element)))
+                let ptrtype = (pointer element)
+                set-typename-super! T reference
+                set-typename-storage! T ptrtype
+                T
+            else
+                assert-typeof element (storageof cls)
+                bitcast element cls
 
 define-block-scope-macro var
     let args = (list-next expr)
     let name token rest = (decons args 2)
     let token = (cast Symbol (cast Syntax token))
-    if (token != '=)
-        syntax-error! (active-anchor) "= token expected"
-    let value rest = (decons rest)
-    let tmp = (Parameter 'tmp)
-    let T = (Parameter 'T)
-    return 
-        cons
-            list let tmp '= value
-            list let T '= (list typeof tmp)
-            list let name '= (list (list reference T) (list alloca T))
-            #list let name '= (list alloca T)
-            list (do =) name tmp
-            next-expr
-        syntax-scope
+    if (token == '=)
+        let value rest = (decons rest)
+        let tmp = (Parameter 'tmp)
+        let T = (Parameter 'T)
+        return 
+            cons
+                list let tmp '= value
+                list let T '= (list typeof tmp)
+                list let name '= (list (list reference T) (list alloca T))
+                #list let name '= (list alloca T)
+                list (do =) name tmp
+                next-expr
+            syntax-scope
+    elseif (token == '@)
+        let size token rest = (decons rest 2)
+        let token = (cast Symbol (cast Syntax token))
+        if (token == ':)
+            let deftype rest = (decons rest)
+            return
+                cons
+                    list let name '= (list malloc-array deftype (list usize size))
+                    next-expr
+                syntax-scope
+        else
+            syntax-error! (active-anchor) "syntax: let <name> @ <size> : <type>"
+    else
+        syntax-error! (active-anchor) "syntax: let <name> = <value> | <name> @ <size> : <type>"
 
 #-------------------------------------------------------------------------------
 # module loading
@@ -1717,6 +1765,12 @@ set-type-symbol! pointer 'getattr
                 # cast result to reference
                 let val = (getelementptr self 0 idx)
                 (reference (element-type (typeof val) 0)) val
+
+# support @
+set-type-symbol! pointer '@
+    fn (self index)
+        let ET = (element-type (typeof self) 0)
+        (reference ET) (getelementptr self (usize index))
 
 # extern cast to element type/pointer executes load/unconst
 set-type-symbol! extern 'cast

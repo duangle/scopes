@@ -11272,6 +11272,7 @@ static int32_t f_bitcountof(const Type *T) {
 }
 
 static bool f_issigned(const Type *T) {
+    T = storage_type(T);
     verify_kind<TK_Integer>(T);
     return cast<IntegerType>(T)->issigned;
 }
