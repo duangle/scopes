@@ -1715,7 +1715,16 @@ syntax-extend
     syntax-scope
 
 define-scope-macro locals
-    return syntax-scope syntax-scope
+    let newscope = (Scope)
+    let [loop] last-key = (unconst none)
+    let key value =
+        Scope-next syntax-scope (Any last-key)
+    if (not (('typeof key) == Nothing))
+        if (('typeof key) == Symbol)
+            let key = (cast Symbol key)
+            set-scope-symbol! newscope key value
+        loop key
+    return newscope syntax-scope
 
 define-macro import
     let name = (decons args)
