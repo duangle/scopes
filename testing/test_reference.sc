@@ -1,29 +1,32 @@
 
-
+# `var` creates a stack variable of reference type
 var x = 5
-assert ((load x) == 5)
-x = 10
-assert ((load x) == 10)
+assert (x == 5)
+x = 10              # references support assignment operator
+assert (x == 10)
 
-# transparent pass-through of values
 var y = 2
 var z = 12
-assert ((x + y) == z)
+assert ((x + y) == z) # references pass-through overloadable operators
 
-# same binding
+# bind same reference to different name via let
 let w = y
-# copy-by-value to a new ref
+# copy by value to a new, independent reference
 var z = y
 y = 3
 assert (y == 3)
 assert (z == 2)
 assert (w == y)
 
-# declare unsized array on stack
-var x @ 5 : i32
+# declare unsized mutable array on stack; the size can be a variable
+var y = 5
+var x @ y : i32
 x @ 0 = 1
 x @ 1 = x @ 0 + 1
 x @ 2 = x @ 1 + 1
 x @ 3 = x @ 2 + 1
 x @ 4 = x @ 3 + 1
 assert ((x @ 4) == 5)
+
+
+

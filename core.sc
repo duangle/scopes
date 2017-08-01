@@ -283,11 +283,11 @@ syntax-extend
         set-type-symbol! T 'cast
             fn (destT val)
                 let vT = (typeof val)
-                let destT = 
+                let destST = 
                     if (type== destT usize) (storageof destT)
                     else destT
-                if (integer-type? destT)
-                    let valw destw = (bitcountof vT) (bitcountof destT)
+                if (integer-type? destST)
+                    let valw destw = (bitcountof vT) (bitcountof destST)
                     if (icmp== destw valw)
                         bitcast val destT
                     elseif (icmp>s destw valw)
@@ -297,7 +297,7 @@ syntax-extend
                             zext val destT
                     else
                         trunc val destT
-                elseif (real-type? destT)
+                elseif (real-type? destST)
                     if (signed? vT)
                         sitofp val destT
                     else
@@ -1979,7 +1979,7 @@ fn read-eval-print-loop ()
     let promptstr =
         .. idstr " "
             default-styler style-comment "▶"
-    let promptlen = ((countof idstr) + (usize 2))
+    let promptlen = ((countof idstr) + 2:usize)
     let cmd success =
         prompt
             ..
