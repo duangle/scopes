@@ -172,6 +172,7 @@ fn list-new (...)
 
 # forward decl
 fn cast
+fn hardcast
 
 syntax-extend
     set-type-symbol! type 'call
@@ -259,7 +260,7 @@ syntax-extend
         set-type-symbol! T '^ (gen-type-op2 bxor)
 
         # only perform safe casts i.e. integer / usize conversions that expand width
-        set-type-symbol! T 'cast
+        set-type-symbol! T 'softcast
             fn (destT val)
                 let vT = (typeof val)
                 let destST =
@@ -277,32 +278,35 @@ syntax-extend
                             else
                                 zext val destT
 
-        # more aggressive constructor that converts from all numerical types
+        # more aggressive cast that converts from all numerical types
           and usize.
-        set-type-symbol! T 'apply-type
+        set-type-symbol! T 'cast
             fn (destT val)
                 let vT = (typeof val)
-                let vT = 
-                    if (type== vT usize) (storageof vT)
-                    else vT
-                if (integer-type? vT)
+                let destT = 
+                    if (type== destT usize) (storageof destT)
+                    else destT
+                if (integer-type? destT)
                     let valw destw = (bitcountof vT) (bitcountof destT)
                     if (icmp== destw valw)
                         bitcast val destT
-                    elseif (icmp<s destw valw)
+                    elseif (icmp>s destw valw)
+                        if (signed? vT)
+                            sext val destT
+                        else
+                            zext val destT
+                    else
                         trunc val destT
-                    elseif (signed? vT)
-                        sext val destT
+                elseif (real-type? destT)
+                    if (signed? vT)
+                        sitofp val destT
                     else
-                        zext val destT
-                elseif (real-type? vT)
-                    if (signed? destT)
-                        fptosi val destT
-                    else
-                        fptoui val destT
-                else
-                    # defer to source type
-                    cast destT val
+                        uitofp val destT
+
+        # general constructor
+        set-type-symbol! T 'apply-type
+            fn (destT val)
+                cast destT val
 
         fn ufdiv(a b)
             let Ta Tb = (typeof a) (typeof b)
@@ -342,7 +346,7 @@ syntax-extend
             sdiv (fptosi a i32) (fptosi b i32)
 
         # only perform safe casts: i.e. float to double
-        set-type-symbol! T 'cast
+        set-type-symbol! T 'softcast
             fn (destT val)
                 let vT = (typeof val)
                 if (real-type? destT)
@@ -352,30 +356,9 @@ syntax-extend
                     elseif (icmp>s destw valw)
                         fpext val destT
 
-        # more aggressive constructor that converts from all numerical types
-          and usize.
         set-type-symbol! T 'apply-type
             fn (destT val)
-                let vT = (typeof val)
-                let vT = 
-                    if (type== vT usize) (storageof vT)
-                    else vT                
-                if (integer-type? vT)
-                    if (signed? vT)
-                        sitofp val destT
-                    else
-                        uitofp val destT
-                elseif (real-type? vT)
-                    let valw destw = (bitcountof vT) (bitcountof destT)
-                    if (icmp== destw valw)
-                        bitcast val destT
-                    elseif (icmp<s destw valw)
-                        fptrunc val destT
-                    else
-                        fpext val destT
-                else
-                    # defer to source type
-                    cast destT val
+                cast destT val
 
         set-type-symbol! T '== (gen-type-op2 fcmp==o)
         set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
@@ -590,6 +573,11 @@ fn cast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
         return value
+    let f ok = (type@ T 'softcast)
+    if ok
+        let result... = (f dest-type value)
+        if (icmp!= (va-countof result...) 0)
+            return result...
     let f ok = (type@ T 'cast)
     if ok
         let result... = (f dest-type value)
@@ -597,6 +585,21 @@ fn cast (dest-type value)
             return result...
     compiler-error!
         string-join "cannot cast value of type " 
+            string-join (Any-repr (Any-wrap T))
+                string-join " to "
+                    Any-repr (Any-wrap dest-type)
+
+fn softcast (dest-type value)
+    let T = (typeof value)
+    if (type== T dest-type)
+        return value
+    let f ok = (type@ T 'softcast)
+    if ok
+        let result... = (f dest-type value)
+        if (icmp!= (va-countof result...) 0)
+            return result...
+    compiler-error!
+        string-join "cannot softcast value of type " 
             string-join (Any-repr (Any-wrap T))
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
@@ -811,11 +814,11 @@ syntax-extend
 
     set-type-symbol! Any 'typeof Any-typeof
 
-    set-type-symbol! Any 'cast
+    set-type-symbol! Any 'softcast
         fn (destT src)
             Any-extract src destT
 
-    set-type-symbol! Syntax 'cast
+    set-type-symbol! Syntax 'softcast
         fn (destT src)
             Any-extract (Syntax->datum src) destT
 
@@ -919,7 +922,7 @@ syntax-extend
             return false
         let un vn = (list-next a) (list-next b)
         if (type== uT list)
-            if (list== (cast list u) (cast list v))
+            if (list== (softcast list u) (softcast list v))
                 loop un vn
             else
                 return false
@@ -947,7 +950,7 @@ syntax-extend
 
     let rawstring = (pointer i8)
     set-scope-symbol! syntax-scope 'rawstring (pointer i8)
-    set-type-symbol! string 'cast
+    set-type-symbol! string 'softcast
         fn (destT self)
             if (type== destT rawstring)
                 getelementptr self 0 1 0
@@ -1532,12 +1535,21 @@ do
     passthru-overload '% %
     passthru-overload '<< <<; passthru-overload '>> >>
     passthru-overload '.. ..; passthru-overload '.. ..
+    set-type-symbol! reference 'getattr
+        fn (self name)
+            let ET = (element-type (typeof self) 0)
+            if (ET <: typename)
+                let idx = (typename-field-index ET name)
+                if (icmp>=s idx 0)
+                    # cast result to reference
+                    let val = (getelementptr self 0 idx)
+                    (reference (element-type (typeof val) 0)) val
 
     set-type-symbol! reference 'repr
         fn (self)
             repr (load (bitcast self (storageof (typeof self))))
 
-    set-type-symbol! reference 'cast
+    set-type-symbol! reference 'softcast
         fn (destT self)
             let ptrtype = (storageof (typeof self))
             if (type== destT ptrtype)
@@ -1738,6 +1750,40 @@ fn prompt (prefix preload)
         else preload
 
 #-------------------------------------------------------------------------------
+# using
+#-------------------------------------------------------------------------------
+
+fn merge-scope-symbols (source target filter)
+    let [loop] last-key = (unconst none)
+    let key value =
+        Scope-next source (Any last-key)
+    if (not (('typeof key) == Nothing))
+        if (('typeof key) == Symbol)
+            let key = (cast Symbol key)
+            if 
+                or (none? filter)
+                    do
+                        let keystr = (cast string key)                
+                        string-match? filter keystr
+                set-scope-symbol! target key value
+        loop key
+
+define-macro using
+    let name rest = (decons args)
+    list syntax-extend
+        cons merge-scope-symbols name 'syntax-scope 
+            if (empty? rest) '()
+            else
+                let token pattern rest = (decons rest 2)
+                let token = (cast Symbol (cast Syntax token))
+                if (token != 'filter)
+                    syntax-error! (active-anchor)
+                        "syntax: using <scope> [filter <filter-string>]"
+                let pattern = (cast string (cast Syntax pattern))
+                list pattern
+        'syntax-scope
+
+#-------------------------------------------------------------------------------
 # various C related sugar
 #-------------------------------------------------------------------------------
 
@@ -1773,7 +1819,7 @@ set-type-symbol! pointer '@
         (reference ET) (getelementptr self (usize index))
 
 # extern cast to element type/pointer executes load/unconst
-set-type-symbol! extern 'cast
+set-type-symbol! extern 'softcast
     fn (destT self)
         let ET = (element-type (typeof self) 0)
         if (type== destT ET)
@@ -1781,33 +1827,37 @@ set-type-symbol! extern 'cast
         elseif (type== destT (pointer ET))
             unconst self
 
-# support for C enum comparisons
-set-type-symbol! CEnum '==
-    fn (a b)
-        let T = (typeof a)
-        if (type== T (typeof b))
-            let ST = (storageof T)
-            (bitcast a ST) == (bitcast b ST)
+do
+    # support for C enum comparisons
+    set-type-symbol! CEnum '==
+        fn (a b)
+            let T = (typeof a)
+            if (type== T (typeof b))
+                let ST = (storageof T)
+                (bitcast a ST) == (bitcast b ST)
 
-# support for downcast
-set-type-symbol! CEnum 'cast
-    fn (destT self)
-        let ST = (storageof (typeof self))
-        if (type== destT ST)
-            bitcast self ST
+    # support for downcast
+    set-type-symbol! CEnum 'softcast
+        fn (destT self)
+            let ST = (storageof (typeof self))
+            if (type== destT ST)
+                bitcast self ST
 
-# binary logic operators for C enumerators
-set-type-symbol! CEnum '|
-    fn (a b)
-        | (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+    # binary logic operators for C enumerators
+    set-type-symbol! CEnum '|
+        fn (a b)
+            if (type== (typeof a) (typeof b))
+                | (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
 
-set-type-symbol! CEnum '^
-    fn (a b)
-        ^ (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+    set-type-symbol! CEnum '^
+        fn (a b)
+            if (type== (typeof a) (typeof b))
+                ^ (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
 
-set-type-symbol! CEnum '&
-    fn (a b)
-        & (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+    set-type-symbol! CEnum '&
+        fn (a b)
+            if (type== (typeof a) (typeof b))
+                & (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
 
 # support for C struct initializers
 set-type-symbol! CStruct 'apply-type
@@ -1828,7 +1878,7 @@ set-type-symbol! CStruct 'apply-type
                         typename-field-index cls key
                 let ET = (element-type T k)
                 loop (add i 1)
-                    insertvalue instance (cast ET arg) k
+                    insertvalue instance (softcast ET arg) k
             else
                 instance
 
@@ -1846,7 +1896,7 @@ set-type-symbol! extern 'call
                 let i-1 = (sub i 1)
                 let arg = (va@ i-1 ...)
                 let argtype = (rawcall element-type ET i)
-                loop i-1 (cast argtype arg) args...
+                loop i-1 (softcast argtype arg) args...
         else
             rawcall self ...
 
