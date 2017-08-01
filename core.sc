@@ -1828,13 +1828,11 @@ set-type-symbol! extern 'softcast
             unconst self
 
 do
-    # support for C enum comparisons
-    set-type-symbol! CEnum '==
-        fn (a b)
-            let T = (typeof a)
-            if (type== T (typeof b))
-                let ST = (storageof T)
-                (bitcast a ST) == (bitcast b ST)
+    fn unenum (val)
+        let T = (typeof val)
+        if (T <: CEnum)
+            bitcast val (storageof T)
+        else val
 
     # support for downcast
     set-type-symbol! CEnum 'softcast
@@ -1843,21 +1841,19 @@ do
             if (type== destT ST)
                 bitcast self ST
 
-    # binary logic operators for C enumerators
-    set-type-symbol! CEnum '|
-        fn (a b)
-            if (type== (typeof a) (typeof b))
-                | (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+    fn passthru-overload (sym func)
+        set-type-symbol! CEnum sym (fn (a b flipped) (func (unenum a) (unenum b)))
 
-    set-type-symbol! CEnum '^
-        fn (a b)
-            if (type== (typeof a) (typeof b))
-                ^ (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
-
-    set-type-symbol! CEnum '&
-        fn (a b)
-            if (type== (typeof a) (typeof b))
-                & (bitcast a (storageof (typeof a))) (bitcast b (storageof (typeof b)))
+    passthru-overload '!= ==; passthru-overload '== ==
+    passthru-overload '< <; passthru-overload '<= <=
+    passthru-overload '> >; passthru-overload '>= >=
+    passthru-overload '+ +; passthru-overload '- -
+    passthru-overload '* *; passthru-overload '/ /
+    passthru-overload '// //; passthru-overload '% %
+    passthru-overload '<< <<; passthru-overload '>> >>
+    passthru-overload '| |
+    passthru-overload '^ ^
+    passthru-overload '& &
 
 # support for C struct initializers
 set-type-symbol! CStruct 'apply-type
