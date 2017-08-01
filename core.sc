@@ -1559,26 +1559,39 @@ do
 
     set-type-symbol! reference '=
         fn (self value)
-            store value (bitcast self (storageof (typeof self)))
+            let ET = (element-type (storageof (typeof self)) 0)
+            store (softcast ET value) self
             true
 
     set-type-symbol! reference 'apply-type
         fn (cls element)
             if (type== cls reference)
+                fn make-reference-type (ET)
+                    let T = (typename (.. "&" (type-name ET)))
+                    set-typename-super! T reference
+                    set-typename-storage! T (pointer ET)
+                    T
+
                 # due to auto-memoization, we'll always get the same type back
                     provided the element type is a constant
                 assert (constant? element)
                 assert-typeof element type
-                let T = (typename (.. "&" (type-name element)))
-                let ptrtype = (pointer element)
-                set-typename-super! T reference
-                set-typename-storage! T ptrtype
-                T
+                if (element <: reference)
+                    compiler-error! 
+                        .. "cannot create reference type of reference type " 
+                            repr element
+                make-reference-type element
             else
-                assert-typeof element (storageof cls)
-                bitcast element cls
+                let ET = (storageof cls)
+                bitcast (softcast ET element) cls
 
 define-block-scope-macro var
+    fn element-typeof (value)
+        let T = (typeof value)
+        if (T <: reference)
+            element-type (storageof T) 0
+        else T
+
     let args = (list-next expr)
     let name token rest = (decons args 2)
     let token = (cast Symbol (cast Syntax token))
@@ -1589,7 +1602,7 @@ define-block-scope-macro var
         return 
             cons
                 list let tmp '= value
-                list let T '= (list typeof tmp)
+                list let T '= (list element-typeof tmp)
                 list let name '= (list (list reference T) (list alloca T))
                 #list let name '= (list alloca T)
                 list (do =) name tmp
