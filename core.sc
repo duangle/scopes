@@ -521,6 +521,13 @@ fn Any-payload (val)
     assert-typeof val Any
     extractvalue val 1
 
+fn forward-repr (value)
+    let op success = (type@ (typeof value) 'repr)
+    if success
+        op value
+    else
+        Any-repr (Any value)
+
 fn repr (value)
     let T = (typeof value)
     let CT = 
@@ -1541,7 +1548,7 @@ do
 
     set-type-symbol! reference 'repr
         fn (self)
-            repr (load (bitcast self (storageof (typeof self))))
+            forward-repr (load self)
 
     set-type-symbol! reference 'softcast
         fn (destT self)

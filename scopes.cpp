@@ -6035,6 +6035,11 @@ static void add_c_macro(clang::Preprocessor & PP,
     if(Literal.hadError)
         return;
     const String *name = String::from_cstr(II->getName().str().c_str());
+    std::string suffix;
+    if (Literal.hasUDSuffix()) {
+        suffix = Literal.getUDSuffix();
+        std::cout << "TODO: macro literal suffix: " << suffix << std::endl;
+    }
     if(Literal.isFloatingLiteral()) {
         llvm::APFloat Result(0.0);
         Literal.GetFloatValue(Result);
@@ -6048,7 +6053,13 @@ static void add_c_macro(clang::Preprocessor & PP,
         int64_t i = Result.getSExtValue();
         if (negate)
             i = -i;
-        scope->bind(Symbol(name), i);
+        Any value = Any(i);
+        if ((i >= -0x80000000ll) && (i <= 0x7fffffffll)) {
+            value = Any(int32_t(i));
+        } else if ((i >= 0x80000000ll) && (i <= 0xffffffffll)) {
+            value = Any(uint32_t(i));
+        }
+        scope->bind(Symbol(name), value);
     }
 }
 
