@@ -1537,13 +1537,7 @@ do
     passthru-overload '.. ..; passthru-overload '.. ..
     set-type-symbol! reference 'getattr
         fn (self name)
-            let ET = (element-type (typeof self) 0)
-            if (ET <: typename)
-                let idx = (typename-field-index ET name)
-                if (icmp>=s idx 0)
-                    # cast result to reference
-                    let val = (getelementptr self 0 idx)
-                    (reference (element-type (typeof val) 0)) val
+            getattr (bitcast self (storageof (typeof self))) name
 
     set-type-symbol! reference 'repr
         fn (self)
@@ -1827,12 +1821,13 @@ set-type-symbol! pointer 'cast
 set-type-symbol! pointer 'getattr
     fn (self name)
         let ET = (element-type (typeof self) 0)
-        if (ET <: typename)
-            let idx = (typename-field-index ET name)
-            if (icmp>=s idx 0)
-                # cast result to reference
-                let val = (getelementptr self 0 idx)
-                (reference (element-type (typeof val) 0)) val
+        let op success = (type@ ET 'getattr&)
+        if success
+            let result... = (op self name)
+            if (icmp== (va-countof result...) 0)
+            else                
+                return result...
+        getattr (load self) name
 
 # support @
 set-type-symbol! pointer '@
@@ -1899,6 +1894,31 @@ set-type-symbol! CStruct 'apply-type
                     insertvalue instance (softcast ET arg) k
             else
                 instance
+
+# access reference to struct element from pointer/reference
+set-type-symbol! CStruct 'getattr&
+    fn (self name)
+        let ET = (element-type (typeof self) 0)
+        let idx = (typename-field-index ET name)
+        if (icmp>=s idx 0)
+            # cast result to reference
+            let val = (getelementptr self 0 idx)
+            (reference (element-type (typeof val) 0)) val
+
+# support for basic C union initializer
+set-type-symbol! CUnion 'apply-type
+    fn (cls)
+        nullof cls
+
+# access reference to union element from pointer/reference
+set-type-symbol! CUnion 'getattr&
+    fn (self name)
+        let ET = (element-type (typeof self) 0)
+        let idx = (typename-field-index ET name)
+        if (icmp>=s idx 0)
+            let FT = (element-type ET idx)
+            # cast pointer to reference to alternative type
+            (reference FT) (bitcast self (pointer FT))
 
 # extern call attempts to cast arguments to correct type
 set-type-symbol! extern 'call

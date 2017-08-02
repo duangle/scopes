@@ -536,6 +536,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Countof, "countof") \
     T(FN_Compile, "__compile") \
     T(FN_TypenameFieldIndex, "typename-field-index") \
+    T(FN_TypenameFieldName, "typename-field-name") \
     T(FN_CompilerMessage, "compiler-message") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
@@ -2288,9 +2289,14 @@ struct UnionType : StorageType {
 
         size_t sz = 0;
         size_t al = 1;
+        largest_field = 0;
         for (size_t i = 0; i < types.size(); ++i) {
             const Type *ET = types[i];
-            sz = std::max(sz, size_of(ET));
+            auto newsz = size_of(ET);
+            if (newsz > sz) {
+                largest_field = i;
+                sz = newsz;
+            }
             al = std::max(al, align_of(ET));
         }
         size = ::align(sz, al);
@@ -2307,6 +2313,7 @@ struct UnionType : StorageType {
     }
 
     std::vector<const Type *> types;
+    size_t largest_field;
 };
 
 static const Type *Union(const std::vector<const Type *> &types) {
@@ -2492,6 +2499,11 @@ struct TypenameType : Type {
                 return i;
         }
         return (size_t)-1;
+    }
+
+    Symbol field_name(size_t i) const {
+        verify_range(i, field_names.size());
+        return field_names[i];
     }
 
     TypenameType(const String *name)
@@ -6376,6 +6388,10 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
             }
         }
         return words;        
+    } break;
+    case TK_Union: {
+        auto ut = cast<UnionType>(T);
+        return classify(ut->types[ut->largest_field], classes, offset);
     } break;
     case TK_Tuple: {
         const size_t UNITS_PER_WORD = 8;
@@ -11514,6 +11530,12 @@ static int f_typename_field_index(const Type *type, Symbol name) {
     return tn->field_index(name);
 }
 
+static Symbol f_typename_field_name(const Type *type, int index) {
+    verify_kind<TK_Typename>(type);
+    auto tn = cast<TypenameType>(type);
+    return tn->field_name(index);
+}
+
 typedef struct { Any _0; Any _1; } AnyAnyPair;
 static AnyAnyPair f_scope_next(Scope *scope, Any key) {
     auto &&map = scope->map;
@@ -11634,6 +11656,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);    
     DEFINE_PURE_C_FUNCTION(FN_ScopeNext, f_scope_next, Tuple({TYPE_Any, TYPE_Any}), TYPE_Scope, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_TypenameFieldIndex, f_typename_field_index, TYPE_I32, TYPE_Type, TYPE_Symbol);
+    DEFINE_PURE_C_FUNCTION(FN_TypenameFieldName, f_typename_field_name, TYPE_Symbol, TYPE_Type, TYPE_I32);
     DEFINE_PURE_C_FUNCTION(FN_StringMatch, f_string_match, TYPE_Bool, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
