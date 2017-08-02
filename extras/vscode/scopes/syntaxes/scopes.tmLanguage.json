@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.scopes",
-                    "match": "(using|filter|\\:|var|as|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(using|filter|\\:|var|global|as|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},

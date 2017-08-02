@@ -799,7 +799,10 @@ syntax-extend
             real-type ...
     set-type-symbol! pointer 'apply-type 
         fn (cls ...)
-            pointer-type ...
+            if (va-empty? ...)
+                nullof cls
+            else
+                pointer-type ...
     set-type-symbol! array 'apply-type 
         fn (cls ...)
             array-type ...
@@ -1369,7 +1372,7 @@ syntax-extend
         list syntax-extend
             list set-scope-symbol! 'syntax-scope 
                 list quote defname
-                list-cons (Any do) content
+                cons do content
             'syntax-scope
 
     fn make-expand-and-or (flip)
@@ -1616,13 +1619,49 @@ define-block-scope-macro var
             let deftype rest = (decons rest)
             return
                 cons
-                    list let name '= (list malloc-array deftype (list usize size))
+                    list let name '= (list alloca-array deftype (list usize size))
                     next-expr
                 syntax-scope
         else
-            syntax-error! (active-anchor) "syntax: let <name> @ <size> : <type>"
+            syntax-error! (active-anchor) 
+                "syntax: var <name> @ <size> : <type>"
     else
-        syntax-error! (active-anchor) "syntax: let <name> = <value> | <name> @ <size> : <type>"
+        syntax-error! (active-anchor) 
+            "syntax: var <name> = <value> | <name> @ <size> : <type>"
+
+define-macro global
+    fn element-typeof (value)
+        let T = (typeof value)
+        if (T <: reference)
+            element-type (storageof T) 0
+        else T
+
+    let name token rest = (decons args 2)
+    let token = (cast Symbol (cast Syntax token))
+    if (token == '=)
+        let value rest = (decons rest)
+        let tmp = (Parameter 'tmp)
+        let T = (Parameter 'T)
+        list define name
+            list let tmp '= value
+            list let T '= (list element-typeof tmp)
+            list let name '= (list (list reference T) (list malloc T))
+            list (do =) name tmp
+            name
+    elseif (token == '@)
+        let size token rest = (decons rest 2)
+        let token = (cast Symbol (cast Syntax token))
+        if (token == ':)
+            let deftype rest = (decons rest)
+            list define name
+                list let name '= (list malloc-array deftype (list usize size))
+                name
+        else
+            syntax-error! (active-anchor) 
+                "syntax: global <name> @ <size> : <type>"
+    else
+        syntax-error! (active-anchor)
+            "syntax: global <name> = <value> | <name> @ <size> : <type>"
 
 #-------------------------------------------------------------------------------
 # module loading
@@ -1809,6 +1848,27 @@ define-macro using
 #-------------------------------------------------------------------------------
 # various C related sugar
 #-------------------------------------------------------------------------------
+
+# labels softcast to function pointers
+set-type-symbol! Label 'softcast
+    fn (destT self)
+        if (function-pointer-type? destT)
+            let ET = (rawcall element-type destT 0)
+            let sz = (trunc (rawcall type-countof ET) i32)
+            if (rawcall function-type-variadic? ET)
+                compiler-error! "cannot typify to variadic function"
+            let [loop] i args... = sz
+            if (icmp== i 1)
+                let result =
+                    compile (typify self args...)
+                if (destT != ('typeof result))
+                    syntax-error! (Label-anchor self)
+                        .. "function does not compile to type " (repr destT)
+                            \ " but has type " (repr ('typeof result))
+                return (softcast destT result)
+            else
+                let i-1 = (sub i 1)
+                loop i-1 (rawcall element-type ET i-1) args...
 
 # none softcasts to null pointers
 set-type-symbol! Nothing 'softcast

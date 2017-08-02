@@ -583,6 +583,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
     T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
+    T(FN_LabelAnchor, "Label-anchor") \
     T(FN_ClosureEq, "Closure==") \
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
@@ -1564,7 +1565,6 @@ static void location_error(const String *msg);
     T(TK_Union, "type-kind-union") \
     T(TK_Typename, "type-kind-typename") \
     T(TK_TypedLabel, "type-kind-label") \
-    T(TK_TypeSet, "type-kind-typeset") \
     T(TK_Function, "type-kind-function") \
     T(TK_Constant, "type-kind-constant") \
     T(TK_Extern, "type-kind-extern")
@@ -1637,7 +1637,6 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Union, "union") \
     T(TYPE_Typename, "typename") \
     T(TYPE_TypedLabel, "typed-label") \
-    T(TYPE_TypeSet, "typeset") \
     T(TYPE_Function, "function") \
     T(TYPE_Constant, "constant") \
     T(TYPE_Extern, "extern") \
@@ -2635,75 +2634,6 @@ static const Type *TypedLabel(const std::vector<const Type *> &types) {
 }
 
 //------------------------------------------------------------------------------
-// TYPESET TYPE
-//------------------------------------------------------------------------------
-
-struct TypeSetType : Type {
-    static bool classof(const Type *T) {
-        return T->kind() == TK_TypeSet;
-    }
-
-    TypeSetType(const std::vector<Any> &_types)
-        : Type(TK_TypeSet) {
-        types.reserve(_types.size());
-        for (auto &&arg : _types) {
-            types.push_back(arg);
-        }
-
-        std::stringstream ss;
-        ss << "<";
-        for (size_t i = 0; i < types.size(); ++i) {
-            if (i > 0) {
-                ss << " | ";
-            }
-            ss << types[i]->name()->data;
-        }
-        ss << ">";
-        _name = String::from_stdstring(ss.str());
-    }
-
-    std::vector<const Type *> types;
-};
-
-static const Type *TypeSet(const std::vector<const Type *> &types) {
-    static TypeFactory<TypeSetType> typesets;
-
-    std::unordered_set<const Type *> typeset;
-
-    for (auto &&entry : types) {
-        const TypeSetType *ts = dyn_cast<TypeSetType>(entry);
-        if (ts) {
-            for (auto &&t : ts->types) {
-                typeset.insert(t);
-            }
-        } else {
-            typeset.insert(entry);
-        }
-    }
-
-    assert(!typeset.empty());
-
-    if (typeset.size() == 1) {
-        return *typeset.begin();
-    }
-
-    std::vector<const Type *> type_array;
-    type_array.reserve(typeset.size());
-    for (auto &&entry : typeset) {
-        type_array.push_back(entry);
-    }
-
-    std::sort(type_array.begin(), type_array.end());
-
-    std::vector<Any> atypes;
-    atypes.reserve(type_array.size());
-    for (auto &&arg : type_array) {
-        atypes.push_back(arg);
-    }
-    return typesets.insert(atypes);
-}
-
-//------------------------------------------------------------------------------
 // TYPE INQUIRIES
 //------------------------------------------------------------------------------
 
@@ -2721,7 +2651,6 @@ static void verify_kind(const Type *T) {
         case TK_Union: ss.out << "union"; break;
         case TK_Typename: ss.out << "typename"; break;
         case TK_TypedLabel: ss.out << "typed label"; break;
-        case TK_TypeSet: ss.out << "typeset"; break;
         case TK_Function: ss.out << "function"; break;
         case TK_Constant: ss.out << "constant"; break;
         case TK_Extern: ss.out << "extern"; break;
@@ -2750,7 +2679,6 @@ static bool is_opaque(const Type *T) {
     }
     switch(T->kind()) {
     case TK_TypedLabel:
-    case TK_TypeSet:
     case TK_Constant:
     case TK_Function: return true;
     default: break;
@@ -2895,7 +2823,6 @@ static const Type *superof(const Type *T) {
     case TK_Union: return TYPE_Union;
     case TK_Typename: return cast<TypenameType>(T)->super();
     case TK_TypedLabel: return TYPE_TypedLabel;
-    case TK_TypeSet: return TYPE_TypeSet;
     case TK_Function: return TYPE_Function;
     case TK_Constant: return TYPE_Constant;
     case TK_Extern: return TYPE_Extern;
@@ -6798,8 +6725,6 @@ struct GenerateCtx {
                 return false;
             if ((param->type == TYPE_Type) || (param->type == TYPE_Label))
                 return false;
-            if (isa<TypeSetType>(param->type))
-                return false;
             if (isa<TypedLabelType>(param->type) && (param->index != 0))
                 return false;
         }
@@ -7996,8 +7921,21 @@ struct NormalizeCtx {
                 location_error(String::from("attempting to call none continuation"));
             } else if (param->type == TYPE_Void) {
                 param->type = TypedLabel(argtypes);
+                param->anchor = get_active_anchor();
             } else {
-                param->type = TypeSet({param->type, TypedLabel(argtypes)});
+                const Type *T = TypedLabel(argtypes);
+                if (T != param->type) {
+                    {
+                        StyledStream cerr(std::cerr);
+                        cerr << param->anchor << " first typed here as " << param->type << std::endl;
+                        param->anchor->stream_source_line(cerr);
+                    }
+                    {
+                        StyledString ss;
+                        ss.out << "return continuation retyped as " << T;
+                        location_error(ss.str());
+                    }
+                }
             }
         } else if (dest.type == TYPE_Label) {
             dest = typify(dest.label, argtypes);
@@ -8419,6 +8357,10 @@ struct NormalizeCtx {
         case FN_Malloc:
         case FN_MallocArray:
         case SFXFN_Unreachable:
+        case FN_VolatileLoad:
+        case FN_Load:
+        case FN_VolatileStore:
+        case FN_Store:
             return true;
         default: return false;
         }
@@ -9245,6 +9187,7 @@ struct NormalizeCtx {
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].value.type, destptr));
         } break;
+        /*
         case FN_VolatileLoad:
         case FN_Load: {
             CHECKARGS(1, 1);
@@ -9252,7 +9195,7 @@ struct NormalizeCtx {
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             RETARGS(pi->unpack(args[1].value.pointer));
-        } break;
+        } break;        
         case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
@@ -9265,7 +9208,7 @@ struct NormalizeCtx {
             void *srcptr = get_pointer(ET, args[1].value);
             memcpy(destptr, srcptr, size_of(ET));
             RETARGS();
-        } break;
+        } break;*/
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
             const Type *T = storage_type(args[1].value.type);
@@ -9587,7 +9530,6 @@ struct NormalizeCtx {
     static bool returns_higher_order_type(Label *l) {
         assert(!l->params.empty());
         const Type *T = l->params[0]->type;
-        if (isa<TypeSetType>(T)) return true;
         if (!isa<TypedLabelType>(T)) return false;
         auto tli = cast<TypedLabelType>(T);
         for (size_t i = 1; i < tli->types.size(); ++i) {
@@ -11148,7 +11090,6 @@ static void init_types() {
     DEFINE_TYPENAME("tuple", TYPE_Tuple);
     DEFINE_TYPENAME("union", TYPE_Union);
     DEFINE_TYPENAME("typed-label", TYPE_TypedLabel);
-    DEFINE_TYPENAME("typeset", TYPE_TypeSet);
     DEFINE_TYPENAME("constant", TYPE_Constant);
     DEFINE_TYPENAME("function", TYPE_Function);
     DEFINE_TYPENAME("extern", TYPE_Extern);
@@ -11624,6 +11565,10 @@ static void f_set_typename_super(const Type *T, const Type *ST) {
     const_cast<TypenameType *>(tn)->super_type = ST;
 }
 
+static const Anchor *f_label_anchor(Label *label) {
+    return label->anchor;
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -11679,6 +11624,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_FunctionTypeIsVariadic, f_function_type_is_variadic, TYPE_Bool, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);    
     
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
