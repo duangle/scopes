@@ -1810,6 +1810,12 @@ define-macro using
 # various C related sugar
 #-------------------------------------------------------------------------------
 
+# none softcasts to null pointers
+set-type-symbol! Nothing 'softcast
+    fn (destT self)
+        if (pointer-type? destT)
+            nullof destT
+
 # support assignment syntax
 set-type-symbol! pointer '=
     fn (self value)

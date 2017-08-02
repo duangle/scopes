@@ -45,7 +45,7 @@
 			    },
                 {
 				    "name": "constant.language.nothing.scopes",
-				    "match": "(none|unnamed)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(none|unnamed|null)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
 			    },
                 {
                     "match": "(\\'[^\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#]+)",
