@@ -603,6 +603,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
     T(FN_PointerType, "pointer-type") \
     T(FN_FunctionType, "function-type") \
+    T(FN_FunctionTypeIsVariadic, "function-type-variadic?") \
     T(FN_TupleType, "tuple-type") \
     T(FN_ArrayType, "array-type") \
     T(FN_TypenameType, "typename-type") \
@@ -11598,6 +11599,12 @@ static const String *f_type_name(const Type *T) {
     return T->name();
 }
 
+static bool f_function_type_is_variadic(const Type *T) {
+    verify_kind<TK_Function>(T);
+    auto ft = cast<FunctionType>(T);
+    return ft->flags & FF_Variadic;
+}
+
 static void f_set_typename_super(const Type *T, const Type *ST) {
     verify_kind<TK_Typename>(T);
     verify_kind<TK_Typename>(ST);
@@ -11671,7 +11678,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_StringMatch, f_string_match, TYPE_Bool, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
-
+    DEFINE_PURE_C_FUNCTION(FN_FunctionTypeIsVariadic, f_function_type_is_variadic, TYPE_Bool, TYPE_Type);
+    
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);

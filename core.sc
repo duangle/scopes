@@ -1934,14 +1934,19 @@ set-type-symbol! extern 'call
         let ST = (rawcall superof ET)
         if (type== ST function)
             let sz = (va-countof ...)
+            let count = (trunc (rawcall type-countof ET) i32)
+            let variadic = (rawcall function-type-variadic? ET)
             let [loop] i args... = sz
             if (icmp== i 0)
                 rawcall self args...
             else
                 let i-1 = (sub i 1)
                 let arg = (va@ i-1 ...)
-                let argtype = (rawcall element-type ET i)
-                loop i-1 (softcast argtype arg) args...
+                if ((not variadic) or (icmp<s i count))
+                    let argtype = (rawcall element-type ET i)
+                    loop i-1 (softcast argtype arg) args...
+                else
+                    loop i-1 arg args...
         else
             rawcall self ...
 
