@@ -1870,11 +1870,18 @@ set-type-symbol! Label 'softcast
                 let i-1 = (sub i 1)
                 loop i-1 (rawcall element-type ET i-1) args...
 
-# none softcasts to null pointers
-set-type-symbol! Nothing 'softcast
-    fn (destT self)
-        if (pointer-type? destT)
-            nullof destT
+# a nullptr type that casts to whatever null pointer is required
+syntax-extend
+    let NullType = (typename "NullType")
+    set-typename-storage! NullType (pointer void)
+    set-type-symbol! NullType 'softcast
+        fn (destT self)
+            if (pointer-type? destT)
+                nullof destT
+    let null = (nullof NullType)
+    set-scope-symbol! syntax-scope 'NullType NullType
+    set-scope-symbol! syntax-scope 'null null
+    syntax-scope
 
 # support assignment syntax
 set-type-symbol! pointer '=
