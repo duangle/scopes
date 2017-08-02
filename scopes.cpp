@@ -5952,6 +5952,15 @@ static void add_c_macro(clang::Preprocessor & PP,
     } else {
         return;
     }
+
+    if (Tok->is(clang::tok::string_literal)) {
+        clang::Token tokens[] = { *Tok };
+        clang::StringLiteralParser Literal(tokens, PP, false);
+        const String *name = String::from_cstr(II->getName().str().c_str());
+        std::string svalue = Literal.GetString();
+        const String *value = String::from(svalue.c_str(), svalue.size());
+        scope->bind(Symbol(name), value);
+    }
     
     if(Tok->isNot(clang::tok::numeric_constant))
         return;
