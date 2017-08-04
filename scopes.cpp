@@ -5936,7 +5936,7 @@ static std::vector<LLVMModuleRef> llvm_c_modules;
 
 static void add_c_macro(clang::Preprocessor & PP, 
     const clang::IdentifierInfo * II, 
-    clang::MacroDirective * MD, Scope *scope) {
+    clang::MacroDirective * MD, Scope *scope, std::list< std::pair<Symbol, Symbol> > &aliases) {
     if(!II->hasMacroDefinition())
         return;
     clang::MacroInfo * MI = MD->getMacroInfo();
@@ -5944,22 +5944,32 @@ static void add_c_macro(clang::Preprocessor & PP,
         return;
     bool negate = false;
     const clang::Token * Tok;
-    if(MI->getNumTokens() == 2 && MI->getReplacementToken(0).is(clang::tok::minus)) {
+    auto numtokens = MI->getNumTokens();
+    if(numtokens == 2 && MI->getReplacementToken(0).is(clang::tok::minus)) {
         negate = true;
         Tok = &MI->getReplacementToken(1);
-    } else if(MI->getNumTokens() == 1) {
+    } else if(numtokens == 1) {
         Tok = &MI->getReplacementToken(0);
     } else {
         return;
     }
 
-    if (Tok->is(clang::tok::string_literal)) {
+    if ((numtokens == 1) && Tok->is(clang::tok::identifier)) {
+        // aliases need to be resolved once the whole namespace is known
+        const String *name = String::from_cstr(II->getName().str().c_str());
+        const String *value = String::from_cstr(Tok->getIdentifierInfo()->getName().str().c_str());
+        aliases.push_back({ Symbol(name), Symbol(value) });
+        return;
+    }
+
+    if ((numtokens == 1) && Tok->is(clang::tok::string_literal)) {
         clang::Token tokens[] = { *Tok };
         clang::StringLiteralParser Literal(tokens, PP, false);
         const String *name = String::from_cstr(II->getName().str().c_str());
         std::string svalue = Literal.GetString();
         const String *value = String::from(svalue.c_str(), svalue.size());
         scope->bind(Symbol(name), value);
+        return;
     }
     
     if(Tok->isNot(clang::tok::numeric_constant))
@@ -6045,12 +6055,27 @@ static Scope *import_c_module (
         clang::Preprocessor & PP = compiler.getPreprocessor();
         PP.getDiagnostics().setClient(new IgnoringDiagConsumer(), true);
 
+        std::list< std::pair<Symbol, Symbol> > todo;
         for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false); 
             it != end; ++it) {
             const IdentifierInfo * II = it->first;
             MacroDirective * MD = it->second.getLatest();
 
-            add_c_macro(PP, II, MD, result);
+            add_c_macro(PP, II, MD, result, todo);
+        }
+
+        while (!todo.empty()) {
+            auto sz = todo.size();
+            for (auto it = todo.begin(); it != todo.end(); ++it) {
+                Any value = none;
+                if (result->lookup(it->second, value)) {
+                    result->bind(it->first, value);
+                    auto oldit = it++;
+                    todo.erase(oldit);
+                }
+            }
+            // couldn't resolve any more keys, abort
+            if (todo.size() == sz) break;
         }
 
         M = (LLVMModuleRef)Act->takeModule().release();

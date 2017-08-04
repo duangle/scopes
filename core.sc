@@ -1891,6 +1891,15 @@ set-type-symbol! pointer '=
             self
         true
 
+# pointer comparisons
+set-type-symbol! pointer '==
+    fn (a b flipped)
+        if flipped
+            icmp== (ptrtoint (softcast (typeof b) a) usize) (ptrtoint b usize)
+        else
+            icmp== (ptrtoint a usize) (ptrtoint (softcast (typeof a) b) usize)
+
+
 # pointer cast to element type executes load
 set-type-symbol! pointer 'cast
     fn (destT self)
@@ -1912,6 +1921,9 @@ set-type-symbol! pointer 'getattr
 # support @
 set-type-symbol! pointer '@
     fn (self index)
+        let index =
+            if (none? index) 0:usize # simple dereference
+            else index
         let ET = (element-type (typeof self) 0)
         (reference ET) (getelementptr self (usize index))
 
@@ -1923,6 +1935,17 @@ set-type-symbol! extern 'softcast
             load (unconst self)
         elseif (type== destT (pointer ET))
             unconst self
+
+# support assignment syntax for extern
+set-type-symbol! extern '=
+    fn (self value)
+        (unconst self) = value
+        true
+
+# support @ for extern
+set-type-symbol! extern '@
+    fn (self value)
+        @ (unconst self) value
 
 do
     fn unenum (val)
@@ -2000,28 +2023,36 @@ set-type-symbol! CUnion 'getattr&
             # cast pointer to reference to alternative type
             (reference FT) (bitcast self (pointer FT))
 
+fn pointer-call (self ...)
+    fn docall (dest ET)
+        let sz = (va-countof ...)
+        let count = (trunc (rawcall type-countof ET) i32)
+        let variadic = (rawcall function-type-variadic? ET)
+        let [loop] i args... = sz
+        if (icmp== i 0)
+            rawcall dest args...
+        else
+            let i-1 = (sub i 1)
+            let arg = (va@ i-1 ...)
+            if ((not variadic) or (icmp<s i count))
+                let argtype = (rawcall element-type ET i)
+                loop i-1 (softcast argtype arg) args...
+            else
+                loop i-1 arg args...
+
+    let ET = (rawcall element-type (typeof self) 0)
+    let ST = (rawcall superof ET)
+    if (type== ST function)
+        docall self ET
+    elseif (function-pointer-type? ET) # can also call pointer to pointer to function
+        docall (load self) (rawcall element-type ET 0)
+    else
+        (load self) ...
+
 # extern call attempts to cast arguments to correct type
 set-type-symbol! extern 'call
     fn (self ...)
-        let ET = (rawcall element-type (typeof self) 0)
-        let ST = (rawcall superof ET)
-        if (type== ST function)
-            let sz = (va-countof ...)
-            let count = (trunc (rawcall type-countof ET) i32)
-            let variadic = (rawcall function-type-variadic? ET)
-            let [loop] i args... = sz
-            if (icmp== i 0)
-                rawcall self args...
-            else
-                let i-1 = (sub i 1)
-                let arg = (va@ i-1 ...)
-                if ((not variadic) or (icmp<s i count))
-                    let argtype = (rawcall element-type ET i)
-                    loop i-1 (softcast argtype arg) args...
-                else
-                    loop i-1 arg args...
-        else
-            rawcall self ...
+        pointer-call (unconst self) ...
 
 #-------------------------------------------------------------------------------
 # REPL
