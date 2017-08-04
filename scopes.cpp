@@ -11563,7 +11563,11 @@ static bool f_string_match(const String *pattern, const String *text) {
 
 static void f_load_library(const String *name) {
     dlerror();
+#ifdef SCOPES_WIN32
+    void *handle = dlopen(name->data, RTLD_LAZY);
+#else
     void *handle = dlopen(name->data, RTLD_LAZY|RTLD_DEEPBIND);
+#endif
     if (!handle) {
         location_error(String::from_cstr(dlerror()));
     }
