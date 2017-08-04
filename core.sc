@@ -172,7 +172,27 @@ fn list-new (...)
 
 # forward decl
 fn cast
-fn hardcast
+fn forward-cast
+fn softcast
+fn forward-softcast
+
+fn not (x)
+    bxor (softcast bool x) true
+
+fn gen-type-op2 (f)
+    fn (a b flipped)
+        if (type== (typeof a) (typeof b))
+            f a b
+        elseif flipped
+            let result... = (forward-softcast (typeof b) a)
+            if (va-empty? result...)
+            else
+                f result... b
+        else
+            let result... = (forward-softcast (typeof a) b)
+            if (va-empty? result...)
+            else
+                f a result...
 
 syntax-extend
     set-type-symbol! type 'call
@@ -202,11 +222,6 @@ syntax-extend
                 Scope-new;
             else
                 Scope-new-subscope parent
-
-    fn gen-type-op2 (op)
-        fn (a b flipped)
-            if (type== (typeof a) (typeof b))
-                op a b
 
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! Any '== (gen-type-op2 Any==)
@@ -259,29 +274,10 @@ syntax-extend
         set-type-symbol! T '| (gen-type-op2 bor)
         set-type-symbol! T '^ (gen-type-op2 bxor)
 
-        # only perform safe casts i.e. integer / usize conversions that expand width
-        set-type-symbol! T 'softcast
-            fn (destT val)
-                let vT = (typeof val)
-                let destST =
-                    if (type== destT usize) (storageof destT)
-                    else destT
-                if (integer-type? destST)
-                    let valw destw = (bitcountof vT) (bitcountof destST)
-                    # must have same signed bit
-                    if (icmp== (signed? vT) (signed? destST))
-                        if (icmp== destw valw)
-                            bitcast val destT
-                        elseif (icmp>s destw valw)
-                            if (signed? vT)
-                                sext val destT
-                            else
-                                zext val destT
-
         # more aggressive cast that converts from all numerical types
           and usize.
         set-type-symbol! T 'cast
-            fn (destT val)
+            fn hardcast (destT val)
                 let vT = (typeof val)
                 let destST = 
                     if (type== destT usize) (storageof destT)
@@ -302,6 +298,29 @@ syntax-extend
                         sitofp val destT
                     else
                         uitofp val destT
+
+        # only perform safe casts i.e. integer / usize conversions that expand width
+        # unless the value is constant
+        set-type-symbol! T 'softcast
+            fn (destT val)
+                if (constant? val)
+                    hardcast destT val
+                else   
+                    let vT = (typeof val)
+                    let destST =
+                        if (type== destT usize) (storageof destT)
+                        else destT
+                    if (integer-type? destST)
+                        let valw destw = (bitcountof vT) (bitcountof destST)
+                        # must have same signed bit
+                        if (icmp== (signed? vT) (signed? destST))
+                            if (icmp== destw valw)
+                                bitcast val destT
+                            elseif (icmp>s destw valw)
+                                if (signed? vT)
+                                    sext val destT
+                                else
+                                    zext val destT
 
         # general constructor
         set-type-symbol! T 'apply-type
@@ -576,6 +595,21 @@ fn getattr (self name)
 fn empty? (x)
     == (countof x) 0:usize
 
+fn forward-cast (dest-type value)
+    let T = (typeof value)
+    if (type== T dest-type)
+        return value
+    let f ok = (type@ T 'softcast)
+    if ok
+        let result... = (f dest-type value)
+        if (icmp!= (va-countof result...) 0)
+            return result...
+    let f ok = (type@ T 'cast)
+    if ok
+        let result... = (f dest-type value)
+        if (icmp!= (va-countof result...) 0)
+            return result...
+
 fn cast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
@@ -596,6 +630,16 @@ fn cast (dest-type value)
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
 
+fn forward-softcast (dest-type value)
+    let T = (typeof value)
+    if (type== T dest-type)
+        return value
+    let f ok = (type@ T 'softcast)
+    if ok
+        let result... = (f dest-type value)
+        if (icmp!= (va-countof result...) 0)
+            return result...
+
 fn softcast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
@@ -610,10 +654,6 @@ fn softcast (dest-type value)
             string-join (Any-repr (Any-wrap T))
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
-
-fn not (x)
-    assert-typeof x bool
-    bxor x true
 
 fn Any-extract (val T)
     assert-typeof val Any
@@ -1810,6 +1850,27 @@ fn prompt (prefix preload)
     __prompt prefix
         if (none? preload) "" 
         else preload
+
+# earliest form of match macro - doesn't do elaborate patterns yet, just
+  simple switch-case style comparisons
+define-macro match
+    let value rest = (decons args)
+    let tmp = (Parameter 'tmp)
+    fn process (i src expr)
+        if (empty? expr)
+            return '()        
+        let pair rest = (decons expr)
+        let key dst = (decons (cast list (cast Syntax pair)))
+        let kkey = (cast Symbol (cast Syntax key))
+        cons
+            if (kkey == 'else)
+                cons 'else dst
+            else        
+                cons (? (i == 0) 'if 'elseif) (list '== src key) dst
+            process (i + 1) src rest
+    cons do
+        list let tmp '= value
+        process (unconst 0) tmp rest
 
 #-------------------------------------------------------------------------------
 # using

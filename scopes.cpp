@@ -6000,13 +6000,7 @@ static void add_c_macro(clang::Preprocessor & PP,
         int64_t i = Result.getSExtValue();
         if (negate)
             i = -i;
-        Any value = Any(i);
-        if ((i >= -0x80000000ll) && (i <= 0x7fffffffll)) {
-            value = Any(int32_t(i));
-        } else if ((i >= 0x80000000ll) && (i <= 0xffffffffll)) {
-            value = Any(uint32_t(i));
-        }
-        scope->bind(Symbol(name), value);
+        scope->bind(Symbol(name), i);
     }
 }
 
@@ -6066,12 +6060,14 @@ static Scope *import_c_module (
 
         while (!todo.empty()) {
             auto sz = todo.size();
-            for (auto it = todo.begin(); it != todo.end(); ++it) {
+            for (auto it = todo.begin(); it != todo.end();) {
                 Any value = none;
                 if (result->lookup(it->second, value)) {
                     result->bind(it->first, value);
                     auto oldit = it++;
                     todo.erase(oldit);
+                } else {
+                    it++;
                 }
             }
             // couldn't resolve any more keys, abort
