@@ -8083,15 +8083,19 @@ struct NormalizeCtx {
         return true;
     }
 
-    static bool all_args_typed(Label *l) {
+    static size_t find_untyped_arg(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
             if ((args[i].value.type == TYPE_Parameter)
                 && (args[i].value.parameter->index != 0)
                 && (!args[i].value.parameter->is_typed()))
-                return false;
+                return i;
         }
-        return true;
+        return 0;
+    }
+
+    static bool all_args_typed(Label *l) {
+        return !find_untyped_arg(l);
     }
 
     static bool all_args_constant(Label *l) {
@@ -9809,10 +9813,16 @@ struct NormalizeCtx {
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
             assert(all_params_typed(l));
-            //assert(is_basic_block_like(l) || !is_return_param_typed(l));
-            assert(all_args_typed(l));
 
             set_active_anchor(l->body.anchor);
+
+            if (!all_args_typed(l)) {
+                size_t idx = find_untyped_arg(l);
+                StyledString ss;
+                ss.out << "parameter " << l->body.args[idx].value.parameter
+                    << " passed as argument " << idx << " has not been typed yet";
+                location_error(ss.str());
+            }
 
             if (is_calling_callable(l)) {
                 fold_callable_call(l);
