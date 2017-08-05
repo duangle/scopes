@@ -1624,6 +1624,8 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     \
     T(TYPE_Parameter, "Parameter") \
     T(TYPE_Label, "Label") \
+    T(TYPE_Frame, "Frame") \
+    T(TYPE_Closure, "Closure") \
     \
     T(TYPE_USize, "usize") \
     \
@@ -1695,6 +1697,8 @@ struct Label;
 struct Parameter;
 struct Scope;
 struct Exception;
+struct Frame;
+struct Closure;
 
 struct Any {
     struct Hash {
@@ -1731,6 +1735,8 @@ struct Any {
         Any *ref;
         void *pointer;
         const Exception *exception;
+        Frame *frame;
+        const Closure *closure;
     };
 
     Any(Nothing x) : type(TYPE_Nothing), u64(0) {}
@@ -1756,6 +1762,8 @@ struct Any {
     Any(Parameter *x) : type(TYPE_Parameter), parameter(x) {}
     Any(Builtin x) : type(TYPE_Builtin), builtin(x) {}
     Any(Scope *x) : type(TYPE_Scope), scope(x) {}
+    Any(Frame *x) : type(TYPE_Frame), frame(x) {}
+    Any(const Closure *x) : type(TYPE_Closure), closure(x) {}
     Any(Any *x) : type(TYPE_Ref), ref(x) {}
     template<unsigned N>
     Any(const char (&str)[N]) : type(TYPE_String), string(String::from(str)) {}
@@ -1794,6 +1802,8 @@ struct Any {
     operator Label *() const { verify(TYPE_Label); return label; }
     operator Scope *() const { verify(TYPE_Scope); return scope; }
     operator Parameter *() const { verify(TYPE_Parameter); return parameter; }
+    operator const Closure *() const { verify(TYPE_Closure); return closure; }
+    operator Frame *() const { verify(TYPE_Frame); return frame; }
 
     struct AnyStreamer {
         StyledStream& ost;
@@ -4410,6 +4420,58 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
     return ss;
 }
 
+//------------------------------------------------------------------------------
+
+struct Frame {
+    Frame(const Frame *_parent, Label *_label) :
+        parent(_parent), label(_label) {}
+
+    const Frame *parent;
+    Label *label;
+    std::vector<Any> args;
+
+    static Frame *from(const Frame *parent, Label *label) {
+        const Frame *top = parent;
+        #if 1
+        // truncate if we're remapping a label
+        while (top) {
+            if (top->label == label) {
+                parent = top->parent;
+            }
+            top = top->parent;
+        }
+        #endif
+        return new Frame(parent, label);
+    }
+
+};
+
+//------------------------------------------------------------------------------
+
+struct Closure {
+protected:
+
+    Closure(Label *_label, const Frame *_frame) :
+        label(_label), frame(_frame) {}
+
+public:
+    Label *label;
+    const Frame *frame;
+
+    static const Closure *from(Label *label, const Frame *frame) {
+        return new Closure(label, frame);
+    }
+
+    StyledStream &stream(StyledStream &ost) const;
+};
+
+static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
+    closure->stream(ss);
+    return ss;
+}
+
+//------------------------------------------------------------------------------
+
 enum LabelBodyFlags {
     LBF_RawCall = (1 << 0)
 };
@@ -4897,6 +4959,13 @@ static StyledStream& operator<<(StyledStream& ss, Label *label) {
 static StyledStream& operator<<(StyledStream& ss, const Label *label) {
     label->stream(ss);
     return ss;
+}
+
+StyledStream &Closure::stream(StyledStream &ost) const {
+    ost << Style_Comment << "[" << Style_None;
+    label->stream_short(ost);
+    ost << Style_Comment << "]@" << Style_None << frame;
+    return ost;
 }
 
 StyledStream &Parameter::stream(StyledStream &ss) const {
@@ -11178,6 +11247,8 @@ static void init_types() {
     DEFINE_OPAQUE_HANDLE_TYPE("Label", Label, TYPE_Label);
     DEFINE_OPAQUE_HANDLE_TYPE("Parameter", Parameter, TYPE_Parameter);
     DEFINE_OPAQUE_HANDLE_TYPE("Scope", Scope, TYPE_Scope);
+    DEFINE_OPAQUE_HANDLE_TYPE("Frame", Frame, TYPE_Frame);
+    DEFINE_OPAQUE_HANDLE_TYPE("Closure", Closure, TYPE_Closure);
 
     DEFINE_STRUCT_HANDLE_TYPE("Anchor", Anchor, TYPE_Anchor,
         Pointer(TYPE_SourceFile),
