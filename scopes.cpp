@@ -1790,8 +1790,6 @@ struct Any {
     }
 
     void verify(const Type *T) const;
-    void verify_indirect(const Type *T) const;
-    const Type *indirect_type() const;
 
     operator const Type *() const { verify(TYPE_Type); return typeref; }
     operator const List *() const { verify(TYPE_List); return list; }
@@ -4307,6 +4305,31 @@ static StyledStream& operator<<(StyledStream& ost, const List *list) {
 // Leissa et al., Graph-Based Higher-Order Intermediate Representation
 // http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
 
+struct KeyAny {
+    Symbol key;
+    Any value;
+
+    KeyAny() : key(SYM_Unnamed), value(none) {}
+    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
+    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
+    template<typename T>
+    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
+
+    bool operator ==(const KeyAny &other) const {
+        return (key == other.key) && (value == other.value);
+    }
+
+    bool operator !=(const KeyAny &other) const {
+        return (key != other.key) || (value != other.value);
+    }
+
+    uint64_t hash() const {
+        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
+    }
+};
+
+typedef std::vector<KeyAny> Args;
+
 //------------------------------------------------------------------------------
 
 enum {
@@ -4347,28 +4370,28 @@ struct ILNode {
 enum ParameterKind {
     PK_Regular = 0,
     PK_Variadic = 1,
+    PK_Nulled = 2, // for continuation parameters
 };
 
 struct Parameter : ILNode {
 protected:
-    Parameter(const Anchor *_anchor, Symbol _name, const Type *_type, ParameterKind _kind) :
-        anchor(_anchor), name(_name), type(_type), label(nullptr), index(-1),
+    Parameter(const Anchor *_anchor, Symbol _name, ParameterKind _kind) :
+        anchor(_anchor), name(_name), label(nullptr), index(-1),
         kind(_kind) {}
 
 public:
     const Anchor *anchor;
     Symbol name;
-    const Type *type;
     Label *label;
     int index;
     ParameterKind kind;
 
-    bool is_vararg() const {
-        return (kind == PK_Variadic);
+    bool is_nulled() const {
+        return (kind == PK_Nulled);
     }
 
-    bool is_typed() const {
-        return type != TYPE_Void;
+    bool is_vararg() const {
+        return (kind == PK_Variadic);
     }
 
     StyledStream &stream_local(StyledStream &ss) const {
@@ -4382,38 +4405,32 @@ public:
         if (is_vararg()) {
             ss << Style_Keyword << "…" << Style_None;
         }
+        /*
         if (is_typed()) {
             ss << Style_Operator << ":" << Style_None << type;
         }
+        */
         return ss;
     }
     StyledStream &stream(StyledStream &ss) const;
 
     static Parameter *from(const Parameter *_param) {
         return new Parameter(
-            _param->anchor, _param->name, _param->type, _param->kind);
+            _param->anchor, _param->name, _param->kind);
     }
 
-    static Parameter *from(const Anchor *_anchor, Symbol _name, const Type *_type) {
-        return new Parameter(_anchor, _name, _type, PK_Regular);
+    static Parameter *from(const Anchor *_anchor, Symbol _name) {
+        return new Parameter(_anchor, _name, PK_Regular);
     }
 
-    static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
-        return new Parameter(_anchor, _name, _type, PK_Variadic);
+    static Parameter *vararg_from(const Anchor *_anchor, Symbol _name) {
+        return new Parameter(_anchor, _name, PK_Variadic);
+    }
+
+    static Parameter *nulled_from(const Anchor *_anchor, Symbol _name) {
+        return new Parameter(_anchor, _name, PK_Nulled);
     }
 };
-
-void Any::verify_indirect(const Type *T) const {
-    scopes::verify(T, indirect_type());
-}
-
-const Type *Any::indirect_type() const {
-    if (type == TYPE_Parameter) {
-        return parameter->type;
-    } else {
-        return type;
-    }
-}
 
 static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
     param->stream(ss);
@@ -4422,84 +4439,9 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
 
 //------------------------------------------------------------------------------
 
-struct Frame {
-    Frame(const Frame *_parent, Label *_label) :
-        parent(_parent), label(_label) {}
-
-    const Frame *parent;
-    Label *label;
-    std::vector<Any> args;
-
-    static Frame *from(const Frame *parent, Label *label) {
-        const Frame *top = parent;
-        #if 1
-        // truncate if we're remapping a label
-        while (top) {
-            if (top->label == label) {
-                parent = top->parent;
-            }
-            top = top->parent;
-        }
-        #endif
-        return new Frame(parent, label);
-    }
-
-};
-
-//------------------------------------------------------------------------------
-
-struct Closure {
-protected:
-
-    Closure(Label *_label, const Frame *_frame) :
-        label(_label), frame(_frame) {}
-
-public:
-    Label *label;
-    const Frame *frame;
-
-    static const Closure *from(Label *label, const Frame *frame) {
-        return new Closure(label, frame);
-    }
-
-    StyledStream &stream(StyledStream &ost) const;
-};
-
-static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
-    closure->stream(ss);
-    return ss;
-}
-
-//------------------------------------------------------------------------------
-
 enum LabelBodyFlags {
     LBF_RawCall = (1 << 0)
 };
-
-struct KeyAny {
-    Symbol key;
-    Any value;
-
-    KeyAny() : key(SYM_Unnamed), value(none) {}
-    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
-    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
-    template<typename T>
-    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
-
-    bool operator ==(const KeyAny &other) const {
-        return (key == other.key) && (value == other.value);
-    }
-
-    bool operator !=(const KeyAny &other) const {
-        return (key != other.key) || (value != other.value);
-    }
-
-    uint64_t hash() const {
-        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
-    }
-};
-
-typedef std::vector<KeyAny> Args;
 
 struct Body {
     const Anchor *anchor;
@@ -4593,9 +4535,13 @@ public:
     }
 
     struct Args {
+        Frame *frame;
         scopes::Args args;
 
+        Args() : frame(nullptr) {}
+
         bool operator==(const Args &other) const {
+            if (frame != other.frame) return false;
             if (args.size() != other.args.size()) return false;
             for (size_t i = 0; i < args.size(); ++i) {
                 auto &&a = args[i];
@@ -4608,7 +4554,7 @@ public:
 
         struct Hash {
             std::size_t operator()(const Args& s) const {
-                std::size_t h = 0;
+                std::size_t h = std::hash<Frame *>{}(s.frame);
                 for (auto &&arg : s.args) {
                     h = HashLen16(h, arg.hash());
                 }
@@ -4618,8 +4564,8 @@ public:
 
     };
 
-    // inlined instances of this label
-    std::unordered_map<Args, Label *, Args::Hash> instances;
+    // instances of this label
+    std::unordered_map<Args, const Closure *, Args::Hash> instances;
 
 
     Label *get_label_enter() const {
@@ -4636,74 +4582,6 @@ public:
         assert(!body.args.empty());
         assert(body.args[0].value.type == TYPE_Label);
         return body.args[0].value.label;
-    }
-
-    const Type *get_return_type() const {
-        if (params[0]->type == TYPE_Void)
-            return TYPE_Void;
-
-        std::vector<const Type *> rettypes;
-        auto tl = cast<TypedLabelType>(params[0]->type);
-        for (size_t i = 1; i < tl->types.size(); ++i) {
-            rettypes.push_back(tl->types[i]);
-        }
-
-        const Type *rtype = TYPE_Void;
-        if (rettypes.size() == 1) {
-            rtype = rettypes[0];
-        } else if (!rettypes.empty()) {
-            rtype = Tuple(rettypes);
-        }
-        return rtype;
-    }
-
-    void verify_compilable() const {
-        if ((params[0]->type != TYPE_Void)
-            && (params[0]->type != TYPE_Nothing)) {
-            auto tl = dyn_cast<TypedLabelType>(params[0]->type);
-            if (!tl) {
-                set_active_anchor(anchor);
-                StyledString ss;
-                ss.out << "cannot compile function with complex continuation type " 
-                    << params[0]->type;
-                location_error(ss.str());
-            }
-            for (size_t i = 1; i < tl->types.size(); ++i) {
-                auto T = tl->types[i];
-                if (is_opaque(T)) {
-                    set_active_anchor(anchor);
-                    StyledString ss;
-                    ss.out << "cannot compile function with opaque return argument of type " 
-                        << T;
-                    location_error(ss.str());
-                }
-            }
-        }
-
-        std::vector<const Type *> argtypes;
-        for (size_t i = 1; i < params.size(); ++i) {
-            auto T = params[i]->type;
-            if (T == TYPE_Void) {
-                set_active_anchor(anchor);
-                location_error(String::from("cannot compile function with untyped argument"));
-            } else if (is_opaque(T)) {
-                set_active_anchor(anchor);
-                StyledString ss;
-                ss.out << "cannot compile function with opaque argument of type " 
-                    << T;
-                location_error(ss.str());
-            }
-        }
-    }
-
-    const Type *get_function_type() const {
-
-        std::vector<const Type *> argtypes;
-        for (size_t i = 1; i < params.size(); ++i) {
-            argtypes.push_back(params[i]->type);
-        }
-
-        return Function(get_return_type(), argtypes);
     }
 
     void use(const Any &arg, int i) {
@@ -4898,14 +4776,9 @@ public:
         }
         ss << Style_Operator << ")" << Style_None;
         if (count) {
-            const Type *rtype = params[0]->type;
-            if (rtype != TYPE_Nothing) {
+            if (!params[0]->is_nulled()) {
                 ss << Style_Comment << CONT_SEP << Style_None;
-                if (rtype == TYPE_Void) {
-                    ss << Style_Comment << "?" << Style_None;
-                } else {
-                    params[0]->stream_local(ss);
-                }
+                params[0]->stream_local(ss);
             }
             if (users) {
                 params[0]->stream_users(ss);
@@ -4931,7 +4804,7 @@ public:
     static Label *continuation_from(const Anchor *_anchor, Symbol _name) {
         Label *value = from(_anchor, _name);
         // first argument is present, but unused
-        value->append(Parameter::from(_anchor, _name, TYPE_Nothing));
+        value->append(Parameter::nulled_from(_anchor, _name));
         return value;
     }
 
@@ -4942,14 +4815,301 @@ public:
         // this argument will be called when the function is done
         value->append(
             Parameter::from(_anchor,
-                Symbol(format("return-%s", _name.name()->data)),
-                TYPE_Void));
+                Symbol(format("return-%s", _name.name()->data))));
         return value;
     }
 
 };
 
 uint64_t Label::next_uid = 0;
+
+//------------------------------------------------------------------------------
+
+struct Closure {
+protected:
+
+    Closure(Label *_label, const Frame *_frame) :
+        label(_label), frame(_frame) {}
+
+public:
+    Label *label;
+    const Frame *frame;
+
+    bool is_basic_block_like() const;
+
+    static const Closure *from(Label *label, const Frame *frame) {
+        return new Closure(label, frame);
+    }
+
+    StyledStream &stream(StyledStream &ost) const {
+        ost << Style_Comment << "[" << Style_None;
+        label->stream_short(ost);
+        ost << Style_Comment << "]@" << Style_None << frame;
+        return ost;
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
+    closure->stream(ss);
+    return ss;
+}
+
+//------------------------------------------------------------------------------
+
+struct FrameArgRef {
+    const Frame *frame;
+    size_t index;
+    size_t count;
+
+    KeyAny first() const;
+    const KeyAny &operator [](size_t i) const;
+};
+
+struct Frame {
+    Frame(const Frame *_parent, Label *_label) :
+        parent(_parent), label(_label) {
+        args.reserve(_label->params.size());
+    }
+
+    const Frame *parent;
+    Label *label;
+    Args args;
+
+    Body body;
+
+    struct Enumerator {
+        const Frame *frame;
+        const Label *label;        
+        FrameArgRef ref;
+        size_t i;
+        size_t k;
+
+        bool next_type(const Type *&val) {
+            while (i < label->params.size()) {
+                if (k == 0) {
+                    ref = frame->evaluate(label->params[i]);
+                }
+                while (k < ref.count) {
+                    auto &&arg = ref[k++];
+                    if (arg.value.type == TYPE_Unknown) {
+                        val = arg.value.typeref;
+                        return true;
+                    }
+                }
+                k = 0; ++i;
+            }
+            return false;
+        }
+    };
+
+    Enumerator enumerate(const Label *label, size_t start = 1) const {
+        Enumerator result;
+        result.frame = this;
+        result.label = label;
+        result.i = start;
+        result.k = 0;
+        return result;
+    }
+
+    void apply(Label *label) {
+        auto &&enter = label->body.enter;
+        Args &args = label->body.args;
+        if (enter.type == TYPE_Parameter) {
+            auto ref = evaluate(enter.parameter);
+            body.enter = ref.first().value;
+        } else {
+            body.enter = enter;
+        }
+        body.flags = label->body.flags;
+        body.anchor = label->body.anchor;
+        body.args.clear();
+
+        size_t lasti = (args.size() - 1);
+        for (size_t i = 0; i < args.size(); ++i) {
+            KeyAny arg = args[i];
+            if (arg.value.type == TYPE_Label) {
+                arg = Closure::from(arg.value.label, this);
+            } else if (arg.value.type == TYPE_Parameter) {
+                auto ref = evaluate(arg.value.parameter);
+                if ((i == lasti) && arg.value.parameter->is_vararg()) {
+                    for (size_t k = 0; k < ref.count; ++k) {
+                        body.args.push_back(ref[k]);
+                    }
+                    continue;
+                } else {
+                    arg.value = ref.first();
+                }
+            }
+            body.args.push_back(arg);
+        }
+    }
+
+    FrameArgRef evaluate(Parameter *param) const {
+        assert(param->label);
+        const Frame *frame = find_frame(param->label);
+        if (frame) {
+            if (param->is_vararg()) {
+                size_t count = ((size_t)param->index >= frame->args.size()) ? 0 :
+                    (frame->args.size() - (size_t)param->index);
+                return { frame, (size_t)param->index, count };                    
+            } else {
+                return { frame, (size_t)param->index, 1 };
+            }
+        }
+        assert(false && "could not resolve parameter");
+        return { nullptr, 0, 0 };
+    }
+
+    bool is_constant(const FrameArgRef &argref) const {
+        assert(argref.frame);
+        if (!argref.count) return true;
+        for (size_t i = argref.index; i < argref.count; ++i) {
+            auto &&val = argref.frame->args[i];
+            if (val.value.type == TYPE_Unknown) return false;
+        }
+        return true;
+    }
+
+    const Type *single_type(const FrameArgRef &argref) const {
+        assert(argref.count == 1);
+        auto &&val = argref.frame->args[argref.index].value;
+        assert (val.type == TYPE_Unknown);
+        return val.typeref;
+    }
+
+    const Type *parameter_type(const Any &value) const {
+        return single_type(evaluate(value));
+    }
+
+    const Type *indirect_type(const Any &value) const {
+        assert (value.type != TYPE_Unknown);
+        if ((value.type == TYPE_Parameter) && value.parameter->label) {
+            return parameter_type(value.parameter);
+        } else {
+            return value.type;
+        }
+    }
+
+    void verify_indirect(const Type *T, const Any &value) const {
+        scopes::verify(T, indirect_type(value));
+    }   
+
+    const Frame *find_frame(const Label *label) const {
+        const Frame *top = this;
+        while (top) {
+            if (top->label == label) {
+                return top;
+            }
+            top = top->parent;
+        }
+        return nullptr;
+    }
+
+    const Type *return_type(const Label *label) const {
+        const Type *ptype = parameter_type(label->params[0]);
+        if (ptype == TYPE_Unknown)
+            return TYPE_Unknown;
+
+        std::vector<const Type *> rettypes;
+        auto tl = cast<TypedLabelType>(ptype);
+        for (size_t i = 1; i < tl->types.size(); ++i) {
+            rettypes.push_back(tl->types[i]);
+        }
+
+        const Type *rtype = TYPE_Void;
+        if (rettypes.size() == 1) {
+            rtype = rettypes[0];
+        } else if (!rettypes.empty()) {
+            rtype = Tuple(rettypes);
+        }
+        return rtype;
+    }
+
+    void verify_compilable(const Label *label) const {
+        const Type *ptype = parameter_type(label->params[0]);
+        if ((ptype != TYPE_Unknown) && (ptype != TYPE_Nothing)) {
+            auto tl = dyn_cast<TypedLabelType>(ptype);
+            if (!tl) {
+                set_active_anchor(label->anchor);
+                StyledString ss;
+                ss.out << "cannot compile function with complex continuation type " 
+                    << ptype;
+                location_error(ss.str());
+            }
+            for (size_t i = 1; i < tl->types.size(); ++i) {
+                auto T = tl->types[i];
+                if (is_opaque(T)) {
+                    set_active_anchor(label->anchor);
+                    StyledString ss;
+                    ss.out << "cannot compile function with opaque return argument of type " 
+                        << T;
+                    location_error(ss.str());
+                }
+            }
+        }
+
+        auto e = enumerate(label);
+        const Type *T;
+        while (e.next_type(T)) {
+            if (T == TYPE_Unknown) {
+                set_active_anchor(label->anchor);
+                location_error(String::from("cannot compile function with untyped argument"));
+            } else if (is_opaque(T)) {
+                set_active_anchor(label->anchor);
+                StyledString ss;
+                ss.out << "cannot compile function with opaque argument of type " 
+                    << T;
+                location_error(ss.str());
+            }
+        }
+    }
+
+    const Type *get_function_type(const Label *label) const {
+        std::vector<const Type *> argtypes;
+        auto e = enumerate(label);
+        const Type *T;
+        while (e.next_type(T)) {
+            argtypes.push_back(T);
+        }
+        return Function(return_type(label), argtypes);
+    }
+
+    bool is_basic_block_like(const Label *label) const {
+        if (label->params.empty())
+            return true;
+        if (label->params[0]->is_nulled())
+            return true;
+        if (parameter_type(label->params[0]) == TYPE_Nothing)
+            return true;
+        return false;
+    }
+
+    static Frame *from(const Frame *parent, Label *label) {
+        const Frame *top = parent->find_frame(label);
+        if (top) {
+            parent = top->parent;
+        }
+        return new Frame(parent, label);
+    }
+
+};
+
+const KeyAny &FrameArgRef::operator [](size_t i) const {
+    assert( i < count);
+    return frame->args[index + i];
+}
+
+KeyAny FrameArgRef::first() const {
+    if (!count)
+        return KeyAny();
+    return frame->args[index];
+}
+
+bool Closure::is_basic_block_like() const {
+    return frame->is_basic_block_like(label);
+}
+
+//------------------------------------------------------------------------------
 
 static StyledStream& operator<<(StyledStream& ss, Label *label) {
     label->stream(ss);
@@ -4959,13 +5119,6 @@ static StyledStream& operator<<(StyledStream& ss, Label *label) {
 static StyledStream& operator<<(StyledStream& ss, const Label *label) {
     label->stream(ss);
     return ss;
-}
-
-StyledStream &Closure::stream(StyledStream &ost) const {
-    ost << Style_Comment << "[" << Style_None;
-    label->stream_short(ost);
-    ost << Style_Comment << "]@" << Style_None << frame;
-    return ost;
 }
 
 StyledStream &Parameter::stream(StyledStream &ss) const {
@@ -5415,6 +5568,12 @@ static void verify_instance_count(Label *label) {
     location_error(ss.str());
 }
 
+static Any void_value() {
+    Any value = none;
+    value.type = TYPE_Void;
+    return value;
+}
+
 static Any unknown_of(const Type *T) {
     Any result(T);
     result.type = TYPE_Unknown;
@@ -5424,19 +5583,11 @@ static Any unknown_of(const Type *T) {
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
 // arguments are treated as follows:
-// TYPE_Void = leave the parameter as-is
-// TYPE_Unknown = type the parameter
+// TYPE_Unknown = type the parameter (typeref TYPE_Unknown = leave the parameter as-is)
 // any other = inline the argument and remove the parameter
-static Label *fold_type_label(Label *label, const Args &args) {
-#if 0
-    ss_cout << "inline-arguments " << label << ":";
-    for (size_t i = 0; i < args.size(); ++i) {
-        ss_cout << " " << args[i];
-    }
-    ss_cout << std::endl;
-#endif
-
+static const Closure *fold_type_label(Label *label, Frame *frame, const Args &args) {
     Label::Args la;
+    la.frame = frame;
     la.args = args;
     auto &&instances = label->instances;
     auto it = instances.find(la);
@@ -5444,10 +5595,8 @@ static Label *fold_type_label(Label *label, const Args &args) {
         return it->second;
     assert(!label->params.empty());
 
-    verify_instance_count(label);
+    frame = Frame::from(frame, label);
 
-    MangleMap map;
-    std::vector<Parameter *> newparams;
     size_t lasti = label->params.size() - 1;
     size_t srci = 0;
     for (size_t i = 0; i < label->params.size(); ++i) {
@@ -5455,83 +5604,36 @@ static Label *fold_type_label(Label *label, const Args &args) {
         if (param->is_vararg()) {
             assert(i == lasti);
             size_t ncount = args.size();
-            if (srci < ncount) {
-                ncount -= srci;
-                Args vargs;
-                for (size_t k = 0; k < ncount; ++k) {
-                    KeyAny value = args[srci + k];
-                    if ((value.value.type == TYPE_Void)
-                        || (value.value.type == TYPE_Unknown)) {
-                        Parameter *newparam = Parameter::from(param);
-                        newparam->kind = PK_Regular;
-                        newparam->type =
-                            (value.value.type == TYPE_Unknown)?value.value.typeref:TYPE_Void;
-                        newparam->name = Symbol(SYM_Unnamed);
-                        newparams.push_back(newparam);
-                        vargs.push_back(KeyAny(value.key, newparam));
-                    } else {
-                        vargs.push_back(value);
-                    }
-                }
-                map[param] = vargs;
-                srci = ncount;
-            } else {
-                map[param] = {};
+            while (srci < ncount) {
+                frame->args.push_back(args[srci++]);
             }
         } else if (srci < args.size()) {
-            KeyAny value = args[srci];
-            if ((value.value.type == TYPE_Void)
-                || (value.value.type == TYPE_Unknown)) {
-                Parameter *newparam = Parameter::from(param);
-                if (value.value.type == TYPE_Unknown) {
-                    if (newparam->is_typed()
-                        && (newparam->type != value.value.typeref)) {
-                        StyledString ss;
-                        ss.out << "attempting to retype parameter of type "
-                            << newparam->type << " as " << value.value.typeref;
-                        location_error(ss.str());
-                    } else {
-                        newparam->type = value.value.typeref;
-                    }
-                }
-                newparams.push_back(newparam);
-                map[param] = {KeyAny(value.key, newparam)};
-            } else {
-                if (!srci) {
-                    Parameter *newparam = Parameter::from(param);
-                    newparam->type = TYPE_Nothing;
-                    newparams.push_back(newparam);
-                }
-                map[param] = {value};
-            }
+            frame->args.push_back(args[srci]);
             srci++;
         } else {
-            map[param] = {KeyAny()};
+            frame->args.push_back(KeyAny());
             srci++;
         }
     }
-    Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
-    instances.insert({la, newlabel});
-    return newlabel;
+    auto closure = Closure::from(label, frame);
+    instances.insert({la, closure});
+    return closure;
 }
 
 typedef std::vector<const Type *> ArgTypes;
 
-static Label *typify(Label *label, const ArgTypes &argtypes) {
+static const Closure *typify(Label *label, Frame *frame, const ArgTypes &argtypes) {
     assert(!argtypes.empty());
     assert(!label->params.empty());
 
-    Any voidval = none;
-    voidval.type = TYPE_Void;
-
     Args args;
     args.reserve(argtypes.size());
-    args = { KeyAny(voidval) };
+    args = { KeyAny(void_value()) };
     for (size_t i = 1; i < argtypes.size(); ++i) {
         args.push_back(KeyAny(unknown_of(argtypes[i])));
     }
 
-    return fold_type_label(label, args);
+    return fold_type_label(label, frame, args);
 }
 
 //------------------------------------------------------------------------------
@@ -6513,14 +6615,6 @@ static bool is_memory_class(const Type *T) {
 // IL->IR LOWERING
 //------------------------------------------------------------------------------
 
-static bool is_basic_block_like(Label *label) {
-    if (label->params.empty())
-        return true;
-    if (label->params[0]->type == TYPE_Nothing)
-        return true;
-    return false;
-}
-
 static bool has_free_parameters(Label *label) {
     std::vector<Label *> scope;
     label->build_scope(scope);
@@ -6681,23 +6775,41 @@ static void *local_aware_dlsym(const char *name) {
     return dlsym(global_c_namespace, name);
 }
 
-struct GenerateCtx {
-    struct HashFuncLabelPair {
-        size_t operator ()(const std::pair<LLVMValueRef, Label *> &value) const {
+struct FrameParameter {
+    Frame *frame;
+    Parameter *parameter;
+
+    struct Hash {
+        size_t operator ()(const FrameParameter &value) const {
             return
-                HashLen16(std::hash<LLVMValueRef>()(value.first),
-                    std::hash<Label *>()(value.second));
+                HashLen16(std::hash<Frame *>{}(value.frame),
+                    std::hash<Parameter *>{}(value.parameter));
         }
     };
 
-    std::unordered_map<Label *, LLVMValueRef> label2func;
-    std::unordered_map< std::pair<LLVMValueRef, Label *>,
-        LLVMBasicBlockRef, HashFuncLabelPair> label2bb;
-    std::vector< std::pair<Label *, Label *> > bb_label_todo;
+    bool operator ==(const FrameParameter &other) const {
+        return (frame == other.frame) && (parameter == other.parameter);
+    }
+    
+};
 
-    std::unordered_map<Label *, LLVMValueRef> label2md;
+struct GenerateCtx {
+    struct HashFuncLabelPair {
+        size_t operator ()(const std::pair<LLVMValueRef, Closure *> &value) const {
+            return
+                HashLen16(std::hash<LLVMValueRef>()(value.first),
+                    std::hash<Closure *>()(value.second));
+        }
+    };
+
+    std::unordered_map<Closure *, LLVMValueRef> label2func;
+    std::unordered_map< std::pair<LLVMValueRef, Closure *>,
+        LLVMBasicBlockRef, HashFuncLabelPair> label2bb;
+    std::vector< std::pair<Closure *, Closure *> > bb_label_todo;
+
+    std::unordered_map<Closure *, LLVMValueRef> label2md;
     std::unordered_map<SourceFile *, LLVMValueRef> file2value;
-    std::unordered_map<Parameter *, LLVMValueRef> param2value;
+    std::unordered_map<FrameParameter, std::vector<LLVMValueRef>, FrameParameter::Hash> param2values;
     std::unordered_map<const Type *, LLVMTypeRef> type_cache;
     std::vector<const Type *> type_todo;
 
@@ -6720,7 +6832,7 @@ struct GenerateCtx {
 
     LLVMValueRef noneV;
 
-    Label *active_function;
+    Closure *active_function;
 
     LLVMAttributeRef attr_byval;
     LLVMAttributeRef attr_sret;
@@ -6763,14 +6875,14 @@ struct GenerateCtx {
         return result;
     }
 
-    LLVMValueRef label_to_subprogram(Label *l) {
+    LLVMValueRef label_to_subprogram(Closure *cl) {
         assert(use_debug_info);
 
-        auto it = label2md.find(l);
+        auto it = label2md.find(cl);
         if (it != label2md.end())
             return it->second;
 
-        const Anchor *anchor = l->anchor;
+        const Anchor *anchor = cl->label->anchor;
 
         LLVMValueRef difile = source_file_to_scope(anchor->file);
 
@@ -6781,11 +6893,12 @@ struct GenerateCtx {
             LLVMMDNode(subroutinevalues, 1));
 
         LLVMValueRef difunc = LLVMDIBuilderCreateFunction(
-            di_builder, difile, l->name.name()->data, l->name.name()->data,
+            di_builder, difile, cl->label->name.name()->data, 
+            cl->label->name.name()->data,
             difile, anchor->lineno, disrt, false, true,
             anchor->lineno);
 
-        label2md.insert({ l, difunc });
+        label2md.insert({ cl, difunc });
         return difunc;
     }
 
@@ -6817,18 +6930,6 @@ struct GenerateCtx {
     }
 
 #undef DEFINE_BUILTIN
-
-    static bool all_parameters_lowered(Label *label) {
-        for (auto &&param : label->params) {
-            if (param->kind != PK_Regular)
-                return false;
-            if ((param->type == TYPE_Type) || (param->type == TYPE_Label))
-                return false;
-            if (isa<TypedLabelType>(param->type) && (param->index != 0))
-                return false;
-        }
-        return true;
-    }
 
     LLVMTypeRef create_llvm_type(const Type *type) {
         switch(type->kind()) {
@@ -7036,15 +7137,16 @@ struct GenerateCtx {
         }
     }
 
-    LLVMValueRef label_to_value(Label *label) {
-        if (is_basic_block_like(label)) {
-            return LLVMBasicBlockAsValue(label_to_basic_block(label));
+    LLVMValueRef label_to_value(Closure *closure) {
+        if (closure->is_basic_block_like()) {
+            return LLVMBasicBlockAsValue(label_to_basic_block(closure));
         } else {
-            return label_to_function(label);
+            return label_to_function(closure);
         }
     }
 
-    LLVMValueRef argument_to_value(Any value) {
+    /*
+    LLVMValueRef argument_to_values(Any value) {
         if (value.type == TYPE_Parameter) {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
@@ -7054,6 +7156,11 @@ struct GenerateCtx {
             }
             return it->second;
         }
+    }
+    */
+
+    LLVMValueRef argument_to_value(Any value) {
+        assert(value.type != TYPE_Parameter);
 
         switch(value.type->kind()) {
         case TK_Integer: {
@@ -7608,26 +7715,37 @@ struct GenerateCtx {
         }
     }
 
-    LLVMBasicBlockRef label_to_basic_block(Label *label) {
+    LLVMBasicBlockRef label_to_basic_block(Closure *closure) {
         auto old_bb = LLVMGetInsertBlock(builder);
         LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
-        auto it = label2bb.find({func, label});
+        auto it = label2bb.find({func, closure});
         if (it == label2bb.end()) {
+            Frame *frame = closure->frame;
+            Label *label = closure->label;
             const char *name = label->name.name()->data;
             auto bb = LLVMAppendBasicBlock(func, name);
-            label2bb.insert({{func, label}, bb});
-            bb_label_todo.push_back({active_function, label});
+            label2bb.insert({{func, closure}, bb});
+            bb_label_todo.push_back({active_function, closure});
             LLVMPositionBuilderAtEnd(builder, bb);
 
             auto &&params = label->params;
             if (!params.empty()) {
-                size_t paramcount = label->params.size() - 1;
-                for (size_t i = 0; i < paramcount; ++i) {
-                    Parameter *param = params[i + 1];
-                    auto pvalue = LLVMBuildPhi(builder,
-                        type_to_llvm_type(param->type),
-                        param->name.name()->data);
-                    param2value[param] = pvalue;
+                size_t paramcount = label->params.size();
+                for (size_t i = 1; i < paramcount; ++i) {
+                    Parameter *param = params[i];
+                    auto ref = frame->evaluate(param);
+                    std::vector<LLVMValueRef> values;
+                    for (size_t k = 0; k < ref.count; ++k) {
+                        auto &&val = ref[k];
+                        if (val.value.type == TYPE_Unknown) {
+                            values.push_back(LLVMBuildPhi(builder,
+                                type_to_llvm_type(val.value.typeref),
+                                param->name.name()->data));
+                        }
+                    }
+                    if (values.size() || param->is_vararg()) {
+                        param2value[param] = values;
+                    }
                 }
             }
             
@@ -7638,14 +7756,16 @@ struct GenerateCtx {
         }
     }
 
-    LLVMValueRef label_to_function(Label *label, bool root_function = false) {
-        auto it = label2func.find(label);
+    LLVMValueRef label_to_function(Closure *closure, bool root_function = false) {
+        auto it = label2func.find(closure);
         if (it == label2func.end()) {
+            Frame *frame = closure->frame;
+            Label *label = closure->label;
 
             const Anchor *old_anchor = get_active_anchor();
             set_active_anchor(label->anchor);
-            Label *last_function = active_function;
-            active_function = label;
+            Closure *last_function = active_function;
+            active_function = closure;
 
             auto old_bb = LLVMGetInsertBlock(builder);
             
@@ -7659,8 +7779,8 @@ struct GenerateCtx {
             auto &&params = label->params;
             //auto &&contparam = params[0];
 
-            label->verify_compilable();
-            auto ilfunctype = label->get_function_type();
+            frame->verify_compilable(label);
+            auto ilfunctype = frame->get_function_type(label);
             auto fi = cast<FunctionType>(ilfunctype);
             bool use_sret = is_memory_class(fi->return_type);
 
