@@ -30,8 +30,9 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_VERSION_MINOR 8
 #define SCOPES_VERSION_PATCH 0
 
-#define SCOPES_DEBUG_CODEGEN 0
+#define SCOPES_DEBUG_CODEGEN 1
 #define SCOPES_OPTIMIZE_ASSEMBLY 1
+#define SCOPES_EARLY_ABORT 0
 
 #define SCOPES_MAX_LABEL_INSTANCES 256
 
@@ -2869,6 +2870,8 @@ StyledStream& Any::stream(StyledStream& ost, bool annotate_type) const {
     else if (type == TYPE_Label) { as.typed(label); }
     else if (type == TYPE_Parameter) { as.typed(parameter); }
     else if (type == TYPE_Scope) { as.typed(scope); }
+    else if (type == TYPE_Frame) { as.typed(frame); }
+    else if (type == TYPE_Closure) { as.typed(closure); }
     else if (type == TYPE_Ref) {
         ost << Style_Operator << "[" << Style_None;
         ref->stream(ost);
@@ -3079,11 +3082,15 @@ static ExceptionPad *_exc_pad = nullptr;
 static void default_exception_handler(const Any &value);
 
 static void error(const Any &value) {
+#if SCOPES_EARLY_ABORT
+    default_exception_handler(value);
+#else
     if (!_exc_pad) {
         default_exception_handler(value);
     } else {
         _exc_pad->invoke(value);
     }
+#endif
 }
 
 static void location_error(const String *msg) {
@@ -4306,6 +4313,43 @@ static StyledStream& operator<<(StyledStream& ost, const List *list) {
 // Leissa et al., Graph-Based Higher-Order Intermediate Representation
 // http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
 
+struct KeyAny {
+    Symbol key;
+    Any value;
+
+    KeyAny() : key(SYM_Unnamed), value(none) {}
+    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
+    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
+    template<typename T>
+    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
+
+    bool operator ==(const KeyAny &other) const {
+        return (key == other.key) && (value == other.value);
+    }
+
+    bool operator !=(const KeyAny &other) const {
+        return (key != other.key) || (value != other.value);
+    }
+
+    uint64_t hash() const {
+        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ost, KeyAny value) {
+    if (value.key != SYM_Unnamed) {
+        ost << value.key << Style_Operator << "=" << Style_None;
+    }
+    ost << value.value;
+    return ost;
+}
+
+typedef std::vector<KeyAny> Args;
+
+static KeyAny first(const Args &values) {
+    return values.empty()?KeyAny():values.front();
+}
+
 //------------------------------------------------------------------------------
 
 enum {
@@ -4342,6 +4386,9 @@ struct ILNode {
 
     void stream_users(StyledStream &ss) const;
 };
+
+typedef std::unordered_map<Parameter *, Args > MangleParamMap;
+typedef std::unordered_map<Label *, Label *> MangleLabelMap;
 
 enum ParameterKind {
     PK_Regular = 0,
@@ -4383,7 +4430,7 @@ public:
             ss << Style_Operator << "@" << Style_None << index;
         }
         if (is_vararg()) {
-            ss << Style_Keyword << "â€¦" << Style_None;
+            ss << Style_Keyword << "…" << Style_None;
         }
         if (is_typed()) {
             ss << Style_Operator << ":" << Style_None << type;
@@ -4425,84 +4472,9 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
 
 //------------------------------------------------------------------------------
 
-struct Frame {
-    Frame(const Frame *_parent, Label *_label) :
-        parent(_parent), label(_label) {}
-
-    const Frame *parent;
-    Label *label;
-    std::vector<Any> args;
-
-    static Frame *from(const Frame *parent, Label *label) {
-        const Frame *top = parent;
-        #if 1
-        // truncate if we're remapping a label
-        while (top) {
-            if (top->label == label) {
-                parent = top->parent;
-            }
-            top = top->parent;
-        }
-        #endif
-        return new Frame(parent, label);
-    }
-
-};
-
-//------------------------------------------------------------------------------
-
-struct Closure {
-protected:
-
-    Closure(Label *_label, const Frame *_frame) :
-        label(_label), frame(_frame) {}
-
-public:
-    Label *label;
-    const Frame *frame;
-
-    static const Closure *from(Label *label, const Frame *frame) {
-        return new Closure(label, frame);
-    }
-
-    StyledStream &stream(StyledStream &ost) const;
-};
-
-static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
-    closure->stream(ss);
-    return ss;
-}
-
-//------------------------------------------------------------------------------
-
 enum LabelBodyFlags {
     LBF_RawCall = (1 << 0)
 };
-
-struct KeyAny {
-    Symbol key;
-    Any value;
-
-    KeyAny() : key(SYM_Unnamed), value(none) {}
-    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
-    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
-    template<typename T>
-    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
-
-    bool operator ==(const KeyAny &other) const {
-        return (key == other.key) && (value == other.value);
-    }
-
-    bool operator !=(const KeyAny &other) const {
-        return (key != other.key) || (value != other.value);
-    }
-
-    uint64_t hash() const {
-        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
-    }
-};
-
-typedef std::vector<KeyAny> Args;
 
 struct Body {
     const Anchor *anchor;
@@ -4525,7 +4497,7 @@ struct Body {
     }
 };
 
-static const char CONT_SEP[] = "â–¶";
+static const char CONT_SEP[] = "▶";
 
 template<typename T>
 struct Tag {
@@ -4551,13 +4523,17 @@ uint64_t Tag<T>::active_gen = 0;
 
 typedef Tag<Label> LabelTag;
 
+enum LabelFlags {
+    LF_Template = (1 << 0),
+};
+
 struct Label : ILNode {
 protected:
     static uint64_t next_uid;
 
-    Label(const Anchor *_anchor, Symbol _name) :
+    Label(const Anchor *_anchor, Symbol _name, uint64_t _flags) :
         uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
-        paired(nullptr), num_instances(0)
+        paired(nullptr), num_instances(0), flags(_flags)
         {}
 
 public:
@@ -4570,9 +4546,14 @@ public:
     LabelTag tag;
     Label *paired;
     uint64_t num_instances;
+    uint64_t flags;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
+
+    bool is_template() const {
+        return flags & LF_Template;
+    }
 
     Parameter *get_param_by_name(Symbol name) {
         size_t count = params.size();
@@ -4596,9 +4577,13 @@ public:
     }
 
     struct Args {
+        const Frame *frame;
         scopes::Args args;
 
+        Args() : frame(nullptr) {}
+
         bool operator==(const Args &other) const {
+            if (frame != other.frame) return false;
             if (args.size() != other.args.size()) return false;
             for (size_t i = 0; i < args.size(); ++i) {
                 auto &&a = args[i];
@@ -4611,7 +4596,7 @@ public:
 
         struct Hash {
             std::size_t operator()(const Args& s) const {
-                std::size_t h = 0;
+                std::size_t h = std::hash<const Frame *>{}(s.frame);
                 for (auto &&arg : s.args) {
                     h = HashLen16(h, arg.hash());
                 }
@@ -4624,10 +4609,14 @@ public:
     // inlined instances of this label
     std::unordered_map<Args, Label *, Args::Hash> instances;
 
-
     Label *get_label_enter() const {
         assert(body.enter.type == TYPE_Label);
         return body.enter.label;
+    }
+
+    const Closure *get_closure_enter() const {
+        assert(body.enter.type == TYPE_Closure);
+        return body.enter.closure;
     }
 
     Builtin get_builtin_enter() const {
@@ -4697,6 +4686,14 @@ public:
                 location_error(ss.str());
             }
         }
+    }
+
+    const Type *get_params_as_return_label_type() const {
+        std::vector<const Type *> argtypes;
+        for (size_t i = 1; i < params.size(); ++i) {
+            argtypes.push_back(params[i]->type);
+        }
+        return ReturnLabel(argtypes);
     }
 
     const Type *get_function_type() const {
@@ -4878,6 +4875,9 @@ public:
         } else {
             ss << Style_Symbol;
             name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
+#if SCOPES_DEBUG_CODEGEN
+            ss << Style_Keyword << "λ" << Style_Symbol << uid;
+#endif
         }
         ss << Style_None;
         return ss;
@@ -4919,11 +4919,11 @@ public:
 
     static Label *from(const Anchor *_anchor, Symbol _name) {
         assert(_anchor);
-        return new Label(_anchor, _name);
+        return new Label(_anchor, _name, LF_Template);
     }
     // only inherits name and anchor
     static Label *from(Label *label) {
-        Label *result = new Label(label->anchor, label->name);
+        Label *result = new Label(label->anchor, label->name, 0);
         label->num_instances++;
         result->original = label->original?label->original:label;
         result->num_instances = label->num_instances;
@@ -4964,13 +4964,6 @@ static StyledStream& operator<<(StyledStream& ss, const Label *label) {
     return ss;
 }
 
-StyledStream &Closure::stream(StyledStream &ost) const {
-    ost << Style_Comment << "[" << Style_None;
-    label->stream_short(ost);
-    ost << Style_Comment << "]@" << Style_None << frame;
-    return ost;
-}
-
 StyledStream &Parameter::stream(StyledStream &ss) const {
     if (label) {
         label->stream_short(ss);
@@ -4997,6 +4990,114 @@ void ILNode::stream_users(StyledStream &ss) const {
         ss << Style_Comment << "}" << Style_None;
     }
 }
+
+
+//------------------------------------------------------------------------------
+
+struct Closure {
+protected:
+
+    Closure(Label *_label, const Frame *_frame) :
+        label(_label), frame(_frame) {}
+
+public:
+    Label *label;
+    const Frame *frame;
+
+    static const Closure *from(Label *label, const Frame *frame) {
+        return new Closure(label, frame);
+    }
+
+    StyledStream &stream(StyledStream &ost) const {
+        ost << Style_Comment << "<" << Style_None
+            << frame
+            << Style_Comment << "::" << Style_None;
+        label->stream_short(ost);
+        ost << Style_Comment << ">" << Style_None;
+        return ost;
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
+    closure->stream(ss);
+    return ss;
+}
+
+//------------------------------------------------------------------------------
+
+struct Frame {
+    Frame(const Frame *_parent, Label *_label) :
+        parent(_parent), label(_label) {
+        args.reserve(_label->params.size());
+    }
+
+    const Frame *parent;
+    Label *label;
+    Args args;
+
+    const Frame *find_frame(Label *label) const {
+        const Frame *top = this;
+        while (top) {
+            if (top->label == label) {
+                return top;
+            }
+            top = top->parent;
+        }
+        return nullptr;        
+    }
+
+    static Frame *from(const Frame *parent, Label *label) {
+        const Frame *top = parent->find_frame(label);
+        if (top) {
+            parent = top->parent;
+        }
+        return new Frame(parent, label);
+    }
+
+};
+
+void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
+    if (arg.value.type == TYPE_Label) {
+        dest.push_back(KeyAny(arg.key, Closure::from(arg.value.label, frame)));
+    } else if (arg.value.type == TYPE_Parameter
+        && arg.value.parameter->label) {
+        auto param = arg.value.parameter;
+        frame = frame->find_frame(param->label);
+        if (!frame) {
+            StyledString ss;
+            ss.out << "parameter " << param << " is unbound";
+            location_error(ss.str());
+        }
+        if (last_param && param->is_vararg()) {
+            for (size_t i = (size_t)param->index; i < frame->args.size(); ++i) {
+                dest.push_back(frame->args[i]);
+            }
+        } else if ((size_t)param->index < frame->args.size()) {
+            dest.push_back(KeyAny(arg.key, frame->args[param->index].value));
+        } else {
+            if (!param->is_vararg()) {
+#if SCOPES_DEBUG_CODEGEN
+                {
+                    StyledStream ss;
+                    ss << frame << " " << frame->label;
+                    for (size_t i = 0; i < frame->args.size(); ++i) {
+                        ss << " " << frame->args[i];
+                    }
+                    ss << std::endl;
+                }
+#endif
+                StyledString ss;
+                ss.out << "parameter " << param << " is out of bounds ("
+                    << param->index << " >= " << (int)frame->args.size() << ")";                    
+                location_error(ss.str());
+            }
+            dest.push_back(KeyAny(arg.key, none));
+        }
+    } else {
+        dest.push_back(arg);
+    }
+}
+
 
 //------------------------------------------------------------------------------
 // IL PRINTER
@@ -5148,7 +5249,7 @@ struct StreamLabel : StreamAnchors {
         if (!alabel->body.args.empty()) {
             auto &&cont = alabel->body.args[0];
             if (cont.value.type != TYPE_Nothing) {
-                ss << Style_Comment << CONT_SEP << Style_None;
+                ss << " " << Style_Comment << CONT_SEP << Style_None << " ";
                 stream_argument(cont.value, alabel);
             }
         }
@@ -5296,24 +5397,18 @@ struct SCCBuilder {
 // IL MANGLING
 //------------------------------------------------------------------------------
 
-typedef std::unordered_map<ILNode *, Args > MangleMap;
-
-static KeyAny first(const Args &values) {
-    return values.empty()?KeyAny():values.front();
-}
-
-static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
+static void mangle_remap_body(Label *ll, Label *entry, MangleLabelMap &lmap, MangleParamMap &pmap) {
     Any enter = entry->body.enter;
     Args &args = entry->body.args;
     Args &body = ll->body.args;
     if (enter.type == TYPE_Label) {
-        auto it = map.find(enter.label);
-        if (it != map.end()) {
-            enter = first(it->second).value;
+        auto it = lmap.find(enter.label);
+        if (it != lmap.end()) {
+            enter = it->second;
         }
     } else if (enter.type == TYPE_Parameter) {
-        auto it = map.find(enter.parameter);
-        if (it != map.end()) {
+        auto it = pmap.find(enter.parameter);
+        if (it != pmap.end()) {
             enter = first(it->second).value;
         }
     }
@@ -5321,18 +5416,17 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
     ll->body.anchor = entry->body.anchor;
     ll->body.enter = enter;
 
-    StyledStream ss(std::cout);
     size_t lasti = (args.size() - 1);
     for (size_t i = 0; i < args.size(); ++i) {
         KeyAny arg = args[i];
         if (arg.value.type == TYPE_Label) {
-            auto it = map.find(arg.value.label);
-            if (it != map.end()) {
-                arg.value = first(it->second).value;
+            auto it = lmap.find(arg.value.label);
+            if (it != lmap.end()) {
+                arg.value = it->second;
             }
         } else if (arg.value.type == TYPE_Parameter) {
-            auto it = map.find(arg.value.parameter);
-            if (it != map.end()) {
+            auto it = pmap.find(arg.value.parameter);
+            if (it != pmap.end()) {
                 if ((i == lasti) && arg.value.parameter->is_vararg()) {
                     for (auto subit = it->second.begin(); subit != it->second.end(); ++subit) {
                         body.push_back(*subit);
@@ -5349,12 +5443,32 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleMap &map) {
     ll->link_backrefs();
 }
 
+static void evaluate_body(const Frame *frame, Label *dest, Label *source) {
+    dest->unlink_backrefs();
+    Args &args = source->body.args;
+    Args &body = dest->body.args;
+    Args ret;
+    dest->body.flags = source->body.flags;
+    dest->body.anchor = source->body.anchor;
+    evaluate(frame, source->body.enter, ret);
+    dest->body.enter = first(ret).value;
+    body.clear();
+
+    size_t lasti = (args.size() - 1);
+    for (size_t i = 0; i < args.size(); ++i) {
+        evaluate(frame, args[i], body, (i == lasti));
+    }
+
+    dest->link_backrefs();
+}
+
 enum MangleFlag {
     Mangle_Verbose = (1<<0),
 };
 
-static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &map,
-    int verbose = 0) {
+static Label *mangle(Label *entry, std::vector<Parameter *> params,
+    MangleParamMap &pmap, int verbose = 0) {
+    MangleLabelMap lmap;
 
     std::vector<Label *> entry_scope;
     entry->build_scope(entry_scope);
@@ -5366,11 +5480,11 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     for (auto &&l : entry_scope) {
         Label *ll = Label::from(l);
         l->paired = ll;
-        map.insert(MangleMap::value_type(l, {KeyAny(Any(ll))}));
+        lmap.insert({l, ll});
         ll->params.reserve(l->params.size());
         for (auto &&param : l->params) {
             Parameter *pparam = Parameter::from(param);
-            map.insert(MangleMap::value_type(param, {KeyAny(Any(pparam))}));
+            pmap.insert({ param, {KeyAny(Any(pparam))}});
             ll->append(pparam);
         }
     }
@@ -5379,9 +5493,9 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     for (auto &&l : entry_scope) {
         Label *ll = l->paired;
         l->paired = nullptr;
-        mangle_remap_body(ll, l, map);
+        mangle_remap_body(ll, l, lmap, pmap);
     }
-    mangle_remap_body(le, entry, map);
+    mangle_remap_body(le, entry, lmap, pmap);
 
     if (verbose & Mangle_Verbose) {
     StyledStream ss(std::cout);
@@ -5394,8 +5508,8 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params, MangleMap &m
     ss << "OUT[\n";
     stream_label(ss, le, StreamLabelFormat::debug_single());
     for (auto && l : entry_scope) {
-        auto it = map.find(l);
-        stream_label(ss, it->second.front().value, StreamLabelFormat::debug_single());
+        auto it = lmap.find(l);
+        stream_label(ss, it->second, StreamLabelFormat::debug_single());
     }
     ss << "]OUT\n";
     }
@@ -5436,6 +5550,7 @@ static Any untyped() {
     return unknown_of(TYPE_Unknown);
 }
 
+#if 1
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
 // arguments are treated as follows:
@@ -5461,7 +5576,7 @@ static Label *fold_type_label(Label *label, const Args &args) {
 
     verify_instance_count(label);
 
-    MangleMap map;
+    MangleParamMap map;
     std::vector<Parameter *> newparams;
     size_t lasti = label->params.size() - 1;
     size_t srci = 0;
@@ -5526,9 +5641,100 @@ static Label *fold_type_label(Label *label, const Args &args) {
     instances.insert({la, newlabel});
     return newlabel;
 }
+#endif
+
+// inlining the arguments of an untyped scope (including continuation)
+// folds arguments and types parameters
+// arguments are treated as follows:
+// TYPE_Unknown = type the parameter
+//      type as TYPE_Unknown = leave the parameter as-is
+// any other = inline the argument and remove the parameter
+static Label *fold_type_label_single(const Frame *parent, Label *label, const Args &args) {
+    Label::Args la;
+    la.frame = parent;
+    la.args = args;
+    auto &&instances = label->instances;
+    auto it = instances.find(la);
+    if (it != instances.end())
+        return it->second;
+    assert(!label->params.empty());
+
+#if SCOPES_DEBUG_CODEGEN
+    {
+        StyledStream ss;
+        ss << "fold-type-label-single " << label << std::endl;
+        stream_label(ss, label, StreamLabelFormat::debug_single());
+    }
+#endif
+
+    verify_instance_count(label);
+
+    Label *newlabel = Label::from(label);
+    instances.insert({la, newlabel});
+
+    Frame *frame = Frame::from(parent, label);
+
+    size_t lasti = label->params.size() - 1;
+    size_t srci = 0;
+    for (size_t i = 0; i < label->params.size(); ++i) {
+        Parameter *param = label->params[i];
+        if (param->is_vararg()) {
+            assert(i == lasti);
+            size_t ncount = args.size();
+            while (srci < ncount) {
+                KeyAny value = args[srci];
+                if (is_unknown(value.value)) {
+                    Parameter *newparam = Parameter::from(param);
+                    newparam->kind = PK_Regular;
+                    newparam->type = value.value.typeref;
+                    newparam->name = Symbol(SYM_Unnamed);
+                    newlabel->append(newparam);
+                    frame->args.push_back(KeyAny(value.key, newparam));
+                } else {
+                    frame->args.push_back(value);
+                }
+                srci++;
+            }
+        } else if (srci < args.size()) {
+            KeyAny value = args[srci];
+            if (is_unknown(value.value)) {
+                Parameter *newparam = Parameter::from(param);
+                if (is_typed(value.value)) {
+                    if (newparam->is_typed()
+                        && (newparam->type != value.value.typeref)) {
+                        StyledString ss;
+                        ss.out << "attempting to retype parameter of type "
+                            << newparam->type << " as " << value.value.typeref;
+                        location_error(ss.str());
+                    } else {
+                        newparam->type = value.value.typeref;
+                    }
+                }
+                newlabel->append(newparam);
+                frame->args.push_back(KeyAny(value.key, newparam));
+            } else {
+                if (!srci) {
+                    Parameter *newparam = Parameter::from(param);
+                    newparam->type = TYPE_Nothing;
+                    newlabel->append(newparam);
+                }
+                frame->args.push_back(value);
+            }
+            srci++;
+        } else {
+            frame->args.push_back(none);
+            srci++;
+        }
+    }
+
+    evaluate_body(frame, newlabel, label);
+
+    return newlabel;
+}
 
 typedef std::vector<const Type *> ArgTypes;
 
+#if 0
 static Label *typify(Label *label, const ArgTypes &argtypes) {
     assert(!label->params.empty());
 
@@ -5540,6 +5746,20 @@ static Label *typify(Label *label, const ArgTypes &argtypes) {
     }
 
     return fold_type_label(label, args);
+}
+#endif
+
+static Label *typify_single(const Frame *frame, Label *label, const ArgTypes &argtypes) {
+    assert(!label->params.empty());
+
+    Args args;
+    args.reserve(argtypes.size());
+    args = { KeyAny(untyped()) };
+    for (size_t i = 0; i < argtypes.size(); ++i) {
+        args.push_back(KeyAny(unknown_of(argtypes[i])));
+    }
+
+    return fold_type_label_single(frame, label, args);
 }
 
 //------------------------------------------------------------------------------
@@ -6196,7 +6416,7 @@ static void *global_c_namespace = nullptr;
 
 static bool signal_abort = false;
 void f_abort() {
-    if (signal_abort) {
+    if (SCOPES_EARLY_ABORT || signal_abort) {
         std::abort();
     } else {
         exit(1);
@@ -7979,18 +8199,18 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
         FARITH_OP(FDiv, /) \
         FARITH_OPF(FRem, std::fmod)
 
-struct NormalizeCtx {
+struct Solver {
 #if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
 #endif
 
-    Label *start_entry;
+    std::unordered_set<Label *> done;
+    std::vector<Label *> todo;
 
-    NormalizeCtx() :
+    Solver()
 #if SCOPES_DEBUG_CODEGEN
-        ss_cout(std::cout),
+        : ss_cout(std::cout)
 #endif
-        start_entry(nullptr)
     {}
 
     ILNode *node_from_continuation(Any cont) {
@@ -8009,13 +8229,13 @@ struct NormalizeCtx {
     }
 
     // inlining the continuation of a branch label without arguments
-    Label *inline_branch_continuation(Label *label, Any cont) {
-        if (!is_basic_block_like(label)) {
+    const Closure *inline_branch_continuation(const Closure *closure, Any cont) {
+        if (!is_basic_block_like(closure->label)) {
             StyledString ss;
             ss.out << "branch destination must be label, not function" << std::endl;
             location_error(ss.str());
         }
-        return label;
+        return closure;
     }
 
     Any type_return(Any dest, const ArgTypes &argtypes) {
@@ -8043,8 +8263,25 @@ struct NormalizeCtx {
                     }
                 }
             }
+        } else if (dest.type == TYPE_Closure) {
+            dest = typify_single(dest.closure->frame, dest.closure->label, argtypes);
         } else if (dest.type == TYPE_Label) {
-            dest = typify(dest.label, argtypes);
+#if SCOPES_DEBUG_CODEGEN
+            auto TL = ReturnLabel(argtypes);
+            auto TR = dest.label->get_params_as_return_label_type();
+            if (TL != TR) {
+                {
+                    StyledStream cerr(std::cerr);
+                    cerr << dest.label->anchor << " typed as " << TR << std::endl;
+                    dest.label->anchor->stream_source_line(cerr);
+                }
+                {
+                    StyledString ss;
+                    ss.out << "return continuation retyped as " << TL;
+                    location_error(ss.str());
+                }
+            }
+#endif
         } else {
             apply_type_error(dest);
         }
@@ -8063,12 +8300,6 @@ struct NormalizeCtx {
 
     static bool is_const(Any a) {
         return (a.type != TYPE_Parameter);
-    }
-
-    void copy_body(Label *dest, Label *source) {
-        dest->unlink_backrefs();
-        dest->body = source->body;
-        dest->link_backrefs();
     }
 
     static bool has_params(Label *l) {
@@ -8104,6 +8335,11 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         assert(!args.empty());
         return args[0].value.type == TYPE_Label;
+    }
+
+    static bool is_calling_closure(Label *l) {
+        auto &&enter = l->body.enter;
+        return enter.type == TYPE_Closure;
     }
 
     static bool is_calling_label(Label *l) {
@@ -8312,7 +8548,7 @@ struct NormalizeCtx {
     }
 
     void solve_keyed_args(Label *l) {
-        Label *enter = l->get_label_enter();
+        Label *enter = l->get_closure_enter()->label;
 
         auto &&args = l->body.args;
         assert(!args.empty());
@@ -8384,17 +8620,18 @@ struct NormalizeCtx {
     }
 
     bool fold_type_label_arguments(Label *l) {
+        /*
         if (!has_foldable_args(l)
-            && all_params_typed(l->get_label_enter())) {
+            && all_params_typed(l->get_closure_enter()->label)) {
             return false;
-        }
+        }*/
 
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
 #endif
 
         auto &&enter = l->body.enter;
-        assert(enter.type == TYPE_Label);
+        assert(enter.type == TYPE_Closure);
 
         // inline constant arguments
         Args callargs;
@@ -8415,7 +8652,8 @@ struct NormalizeCtx {
             }
         }
 
-        Label *newl = fold_type_label(enter.label, keys);
+        Label *newl = fold_type_label_single(
+            enter.closure->frame, enter.closure->label, keys);
         l->unlink_backrefs();
         enter = newl;
         args = callargs;
@@ -9035,13 +9273,13 @@ struct NormalizeCtx {
             args[1].value.verify(TYPE_Bool);
             // either branch label is typed and binds no parameters,
             // so we can directly inline it
-            Label *newl = nullptr;
+            const Closure *newl = nullptr;
             if (args[1].value.i1) {
                 newl = inline_branch_continuation(args[2].value, args[0].value);
             } else {
                 newl = inline_branch_continuation(args[3].value, args[0].value);
             }
-            copy_body(l, newl);
+            evaluate_body(newl->frame, l, newl->label);
         } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
@@ -9603,12 +9841,14 @@ struct NormalizeCtx {
         auto &&args = l->body.args;
         CHECKARGS(3, 3);
         args[1].value.verify_indirect(TYPE_Bool);
-        Label *then_br = inline_branch_continuation(args[2].value, args[0].value);
-        Label *else_br = inline_branch_continuation(args[3].value, args[0].value);
+        const Closure *then_br = inline_branch_continuation(
+            args[2].value, args[0].value);
+        const Closure *else_br = inline_branch_continuation(
+            args[3].value, args[0].value);
         l->unlink_backrefs();
         args[0].value = none;
-        args[2].value = then_br;
-        args[3].value = else_br;
+        args[2].value = typify_single(then_br->frame, then_br->label, {});
+        args[3].value = typify_single(else_br->frame, else_br->label, {});
         l->link_backrefs();
     }
 
@@ -9640,6 +9880,7 @@ struct NormalizeCtx {
         auto tli = cast<ReturnLabelType>(T);
         for (size_t i = 0; i < tli->types.size(); ++i) {
             if (tli->types[i] == TYPE_Label) return true;
+            if (tli->types[i] == TYPE_Closure) return true;
             if (tli->types[i] == TYPE_Type) return true;
         }
         return false;
@@ -9696,13 +9937,9 @@ struct NormalizeCtx {
             auto users = owner->users; // make copy
             for (auto kv = users.begin(); kv != users.end(); ++kv) {
                 Label *user = kv->first;
-                if (is_calling_label(user) && (user->get_label_enter() == owner)) {
-                    /*
-                    if (is_continuing_to_label(user)) {
-                        set_active_anchor(user->body.anchor);
-                        location_error(String::from("return call must be last expression in function"));
-                    }*/
-                    //assert(!is_continuing_to_label(user));
+                if (is_calling_closure(user) && (user->get_closure_enter()->label == owner)) { 
+                    clear_continuation_arg(user);
+                } else if (is_calling_label(user) && (user->get_label_enter() == owner)) { 
                     clear_continuation_arg(user);
                 }
             }
@@ -9804,9 +10041,6 @@ struct NormalizeCtx {
         type_return(l->body.enter, argtypes);
     }
 
-    std::unordered_set<Label *> done;
-    std::vector<Label *> todo;
-
     bool is_done(Label *l) {
         return done.count(l);
     }
@@ -9821,28 +10055,24 @@ struct NormalizeCtx {
         todo.push_back(l);
     }
 
-    bool called_in_todo_list(Label *l) {
-        for (size_t i = 0; i < todo.size(); ++i) {
-            Label *ll = todo[i];
-            if (is_calling_label(ll)
-                && (ll->get_label_enter() == l))
-                return true;
-        }
-        return false;
-    }
-
     Label *pop_label() {
-        Label *l = todo.back();
+        Label *val = todo.back();
         todo.pop_back();
-        return l;
+        return val;
     }
 
-    Label *peek_label() {
-        return todo.back();
+    Label *solve(Label *entry) {
+        normalize_label(entry);
+        return lower2cff(entry);
     }
 
-    void normalize(Label *entry) {
-
+    void copy_body(Label *dest, Label *source) {
+        dest->unlink_backrefs();
+        dest->body = source->body;
+        dest->link_backrefs();
+    }
+    
+    void normalize_label(Label *entry) {
         SCOPES_TRY()
 
         done.clear();
@@ -9850,12 +10080,14 @@ struct NormalizeCtx {
 
         while (!todo.empty()) {
             Label *l = pop_label();
+            assert(!l->is_template());
+
+        process_body:
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "processing " << l << std::endl;
 #endif
             l->verify_complete();
 
-        process_body:
 #if SCOPES_DEBUG_CODEGEN
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
@@ -9904,10 +10136,11 @@ struct NormalizeCtx {
                 } else {
                     type_continuation_from_builtin_call(l);
                 }
-            } else if (is_calling_label(l)) {
+            } else if (is_calling_closure(l)) {
+                /*
                 #if SCOPES_DEBUG_CODEGEN
-                if (!is_done(l->get_label_enter())) {
-                    Label *dest = l->get_label_enter();
+                if (!is_done(l->get_closure_enter())) {
+                    Label *dest = l->get_closure_enter();
                     SCCBuilder scc(dest);
                     if (scc.is_recursive(dest)) {
                         ss_cout << std::endl;
@@ -9916,13 +10149,15 @@ struct NormalizeCtx {
                     }
                 }
                 #endif
+                */
 
                 if (has_keyed_args(l)) {
                     solve_keyed_args(l);
                 }
 
                 fold_type_label_arguments(l);
-
+                goto process_body;
+            } else if (is_calling_label(l)) {
                 Label *enter_label = l->get_label_enter();
                 if (is_basic_block_like(enter_label)) {
                     if (!has_params(enter_label)) {
@@ -9939,8 +10174,6 @@ struct NormalizeCtx {
                     }
                 } else if (is_return_param_typed(enter_label)) {
                     if (returns_immediately(enter_label)
-                        // this one causes problems
-                        //|| forwards_continuation_immediately(enter_label)
                         || returns_higher_order_type(enter_label)) {
                         inline_label_call(l);
                         goto process_body;
@@ -9952,7 +10185,6 @@ struct NormalizeCtx {
                     if (is_done(enter_label)) {
                         SCCBuilder scc(enter_label);
                         if (scc.is_recursive(enter_label)) {
-                        //if (called_in_todo_list(enter_label)) {
                             // possible recursion - entry label has already been
                             // processed, but not exited yet, so we don't have the
                             // continuation type yet.
@@ -10092,7 +10324,7 @@ struct NormalizeCtx {
                             Label *newl = fold_type_label(l, newargs);
 
 #if SCOPES_DEBUG_CODEGEN
-                            ss_cout << l << "(" << cont << ") -> " << newl << std::endl;
+                            ss_cout << l << "(" << cont.value << ") -> " << newl << std::endl;
 #endif
 
                             user->unlink_backrefs();
@@ -10297,27 +10529,6 @@ struct NormalizeCtx {
 
 };
 
-static Label *normalize(Label *entry) {
-#if 0
-    StyledStream ss;
-    ss << entry << std::endl;
-#endif
-
-    NormalizeCtx ctx;
-    ctx.start_entry = entry;
-    ctx.normalize(entry);
-    ctx.lower2cff(entry);
-
-#if 0
-    {
-        auto tt = normalize_timer.getTotalTime();
-        std::cout << "normalize time: " << (tt.getUserTime() * 1000.0) << "ms" << std::endl;
-    }
-#endif
-    
-    return entry;
-}
-
 //------------------------------------------------------------------------------
 // MACRO EXPANDER
 //------------------------------------------------------------------------------
@@ -10440,8 +10651,9 @@ struct Expander {
 
         set_active_anchor(_anchor);
 
-        func = fold_type_label(func, { untyped(), env });
-        func = normalize(func);
+        Solver solver;
+        func = fold_type_label_single(nullptr, func, { untyped(), env });
+        func = solver.solve(func);
 
         // expected type
         const Type *expected_functype = Function( TYPE_Scope, {} );
@@ -11481,7 +11693,8 @@ static void f_set_globals(Scope *s) {
 }
 
 static Label *f_eval(const Syntax *expr, Scope *scope) {
-    return normalize(expand_module(expr, scope));
+    Solver solver;    
+    return solver.solve(typify_single(nullptr, expand_module(expr, scope), {}));
 }
 
 static void f_set_scope_symbol(Scope *scope, Symbol sym, Any value) {
@@ -11492,13 +11705,14 @@ static void f_del_scope_symbol(Scope *scope, Symbol sym) {
     scope->del(sym);
 }
 
-static Label *f_typify(Label *srcl, int numtypes, const Type **typeargs) {
+static Label *f_typify(Closure *srcl, int numtypes, const Type **typeargs) {
     std::vector<const Type *> types;
     for (int i = 0; i < numtypes; ++i) {
         types.push_back(typeargs[i]);
 
     }
-    return normalize(typify(srcl, types)); 
+    Solver solver;
+    return solver.solve(typify_single(srcl->frame, srcl->label, types)); 
 }
 
 static Any f_compile(Label *srcl, uint64_t flags) {
@@ -11702,7 +11916,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
-    DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Label, TYPE_I32, Pointer(TYPE_Type));
+    DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, Pointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);
@@ -12061,7 +12275,8 @@ skip_regular_load:
     std::cout << std::endl;
 #endif
 
-    fn = normalize(fn);
+    Solver solver;
+    fn = solver.solve(typify_single(nullptr, fn, {}));
 #if SCOPES_DEBUG_CODEGEN
     std::cout << "normalized:" << std::endl;
     stream_label(ss, fn, StreamLabelFormat::debug_all());
