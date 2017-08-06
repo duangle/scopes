@@ -4420,58 +4420,6 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
     return ss;
 }
 
-//------------------------------------------------------------------------------
-
-struct Frame {
-    Frame(const Frame *_parent, Label *_label) :
-        parent(_parent), label(_label) {}
-
-    const Frame *parent;
-    Label *label;
-    std::vector<Any> args;
-
-    static Frame *from(const Frame *parent, Label *label) {
-        const Frame *top = parent;
-        #if 1
-        // truncate if we're remapping a label
-        while (top) {
-            if (top->label == label) {
-                parent = top->parent;
-            }
-            top = top->parent;
-        }
-        #endif
-        return new Frame(parent, label);
-    }
-
-};
-
-//------------------------------------------------------------------------------
-
-struct Closure {
-protected:
-
-    Closure(Label *_label, const Frame *_frame) :
-        label(_label), frame(_frame) {}
-
-public:
-    Label *label;
-    const Frame *frame;
-
-    static const Closure *from(Label *label, const Frame *frame) {
-        return new Closure(label, frame);
-    }
-
-    StyledStream &stream(StyledStream &ost) const;
-};
-
-static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
-    closure->stream(ss);
-    return ss;
-}
-
-//------------------------------------------------------------------------------
-
 enum LabelBodyFlags {
     LBF_RawCall = (1 << 0)
 };
