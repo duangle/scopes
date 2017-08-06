@@ -2595,7 +2595,7 @@ struct TypedLabelType : Type {
         }
 
         std::stringstream ss;
-        ss << "λ(";
+        ss << "Î»(";
         for (size_t i = 0; i < types.size(); ++i) {
             if (i > 0) {
                 ss << " ";
@@ -4000,7 +4000,7 @@ struct LexerParser {
 // EXPRESSION PRINTER
 //------------------------------------------------------------------------------
 
-static const char INDENT_SEP[] = "⁞";
+static const char INDENT_SEP[] = "âž";
 
 static Style default_symbol_styler(Symbol name) {
     if (!name.is_known())
@@ -4368,7 +4368,11 @@ public:
     }
 
     bool is_typed() const {
-        return type != TYPE_Void;
+        return type != TYPE_Unknown;
+    }
+
+    bool is_none() const {
+        return type == TYPE_Nothing;
     }
 
     StyledStream &stream_local(StyledStream &ss) const {
@@ -4380,7 +4384,7 @@ public:
             ss << Style_Operator << "@" << Style_None << index;
         }
         if (is_vararg()) {
-            ss << Style_Keyword << "…" << Style_None;
+            ss << Style_Keyword << "â€¦" << Style_None;
         }
         if (is_typed()) {
             ss << Style_Operator << ":" << Style_None << type;
@@ -4419,6 +4423,58 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
     param->stream(ss);
     return ss;
 }
+
+//------------------------------------------------------------------------------
+
+struct Frame {
+    Frame(const Frame *_parent, Label *_label) :
+        parent(_parent), label(_label) {}
+
+    const Frame *parent;
+    Label *label;
+    std::vector<Any> args;
+
+    static Frame *from(const Frame *parent, Label *label) {
+        const Frame *top = parent;
+        #if 1
+        // truncate if we're remapping a label
+        while (top) {
+            if (top->label == label) {
+                parent = top->parent;
+            }
+            top = top->parent;
+        }
+        #endif
+        return new Frame(parent, label);
+    }
+
+};
+
+//------------------------------------------------------------------------------
+
+struct Closure {
+protected:
+
+    Closure(Label *_label, const Frame *_frame) :
+        label(_label), frame(_frame) {}
+
+public:
+    Label *label;
+    const Frame *frame;
+
+    static const Closure *from(Label *label, const Frame *frame) {
+        return new Closure(label, frame);
+    }
+
+    StyledStream &stream(StyledStream &ost) const;
+};
+
+static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
+    closure->stream(ss);
+    return ss;
+}
+
+//------------------------------------------------------------------------------
 
 enum LabelBodyFlags {
     LBF_RawCall = (1 << 0)
@@ -4470,7 +4526,7 @@ struct Body {
     }
 };
 
-static const char CONT_SEP[] = "▶";
+static const char CONT_SEP[] = "â–¶";
 
 template<typename T>
 struct Tag {
@@ -4587,8 +4643,8 @@ public:
     }
 
     const Type *get_return_type() const {
-        if (params[0]->type == TYPE_Void)
-            return TYPE_Void;
+        if (!params[0]->is_typed())
+            return TYPE_Unknown;
 
         std::vector<const Type *> rettypes;
         auto tl = cast<TypedLabelType>(params[0]->type);
@@ -4606,8 +4662,8 @@ public:
     }
 
     void verify_compilable() const {
-        if ((params[0]->type != TYPE_Void)
-            && (params[0]->type != TYPE_Nothing)) {
+        if (params[0]->is_typed()
+            && !params[0]->is_none()) {
             auto tl = dyn_cast<TypedLabelType>(params[0]->type);
             if (!tl) {
                 set_active_anchor(anchor);
@@ -4631,7 +4687,7 @@ public:
         std::vector<const Type *> argtypes;
         for (size_t i = 1; i < params.size(); ++i) {
             auto T = params[i]->type;
-            if (T == TYPE_Void) {
+            if (T == TYPE_Unknown) {
                 set_active_anchor(anchor);
                 location_error(String::from("cannot compile function with untyped argument"));
             } else if (is_opaque(T)) {
@@ -4819,7 +4875,7 @@ public:
 
     StyledStream &stream_short(StyledStream &ss) const {
         if (name == SYM_Unnamed) {
-            ss << Style_Keyword << "λ" << Style_Symbol << uid;
+            ss << Style_Keyword << "Î»" << Style_Symbol << uid;
         } else {
             ss << Style_Symbol;
             name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
@@ -4849,7 +4905,7 @@ public:
             const Type *rtype = params[0]->type;
             if (rtype != TYPE_Nothing) {
                 ss << Style_Comment << CONT_SEP << Style_None;
-                if (rtype == TYPE_Void) {
+                if (rtype == TYPE_Unknown) {
                     ss << Style_Comment << "?" << Style_None;
                 } else {
                     params[0]->stream_local(ss);
@@ -4891,7 +4947,7 @@ public:
         value->append(
             Parameter::from(_anchor,
                 Symbol(format("return-%s", _name.name()->data)),
-                TYPE_Void));
+                TYPE_Unknown));
         return value;
     }
 
@@ -5363,17 +5419,29 @@ static void verify_instance_count(Label *label) {
     location_error(ss.str());
 }
 
+static bool is_unknown(const Any &value) {
+    return value.type == TYPE_Unknown;
+}
+
+static bool is_typed(const Any &value) {
+    return (value.type != TYPE_Unknown) || (value.typeref != TYPE_Unknown);
+}
+
 static Any unknown_of(const Type *T) {
     Any result(T);
     result.type = TYPE_Unknown;
     return result;
 }
 
+static Any untyped() {
+    return unknown_of(TYPE_Unknown);
+}
+
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
 // arguments are treated as follows:
-// TYPE_Void = leave the parameter as-is
 // TYPE_Unknown = type the parameter
+//      type as TYPE_Unknown = leave the parameter as-is
 // any other = inline the argument and remove the parameter
 static Label *fold_type_label(Label *label, const Args &args) {
 #if 0
@@ -5408,12 +5476,10 @@ static Label *fold_type_label(Label *label, const Args &args) {
                 Args vargs;
                 for (size_t k = 0; k < ncount; ++k) {
                     KeyAny value = args[srci + k];
-                    if ((value.value.type == TYPE_Void)
-                        || (value.value.type == TYPE_Unknown)) {
+                    if (value.value.type == TYPE_Unknown) {
                         Parameter *newparam = Parameter::from(param);
                         newparam->kind = PK_Regular;
-                        newparam->type =
-                            (value.value.type == TYPE_Unknown)?value.value.typeref:TYPE_Void;
+                        newparam->type = value.value.typeref;
                         newparam->name = Symbol(SYM_Unnamed);
                         newparams.push_back(newparam);
                         vargs.push_back(KeyAny(value.key, newparam));
@@ -5428,10 +5494,9 @@ static Label *fold_type_label(Label *label, const Args &args) {
             }
         } else if (srci < args.size()) {
             KeyAny value = args[srci];
-            if ((value.value.type == TYPE_Void)
-                || (value.value.type == TYPE_Unknown)) {
+            if (is_unknown(value.value)) {
                 Parameter *newparam = Parameter::from(param);
-                if (value.value.type == TYPE_Unknown) {
+                if (is_typed(value.value)) {
                     if (newparam->is_typed()
                         && (newparam->type != value.value.typeref)) {
                         StyledString ss;
@@ -5469,12 +5534,9 @@ static Label *typify(Label *label, const ArgTypes &argtypes) {
     assert(!argtypes.empty());
     assert(!label->params.empty());
 
-    Any voidval = none;
-    voidval.type = TYPE_Void;
-
     Args args;
     args.reserve(argtypes.size());
-    args = { KeyAny(voidval) };
+    args = { KeyAny(untyped()) };
     for (size_t i = 1; i < argtypes.size(); ++i) {
         args.push_back(KeyAny(unknown_of(argtypes[i])));
     }
@@ -6957,7 +7019,7 @@ struct GenerateCtx {
     }
 
     LLVMTypeRef return_type_to_llvm_type(const Type *type) {
-        if (type == TYPE_Void) {
+        if (type == TYPE_Unknown) {
             StyledString ss;
             ss.out << "IL->IR: untyped continuation encountered";
             location_error(ss.str());
@@ -7964,9 +8026,9 @@ struct NormalizeCtx {
 
         if (dest.type == TYPE_Parameter) {
             Parameter *param = dest.parameter;
-            if (param->type == TYPE_Nothing) {
+            if (param->is_none()) {
                 location_error(String::from("attempting to call none continuation"));
-            } else if (param->type == TYPE_Void) {
+            } else if (!param->is_typed()) {
                 param->type = TypedLabel(argtypes);
                 param->anchor = get_active_anchor();
             } else {
@@ -8341,13 +8403,10 @@ struct NormalizeCtx {
         // inline constant arguments
         Args callargs;
 
-        Any anyval = none;
-        anyval.type = TYPE_Void;
-
         Args keys;
         auto &&args = l->body.args;
         callargs.push_back(args[0]);
-        keys.push_back(KeyAny(anyval));
+        keys.push_back(KeyAny(untyped()));
         for (size_t i = 1; i < args.size(); ++i) {
             auto &&arg = args[i];
             if (is_const(arg.value)) {
@@ -9665,12 +9724,9 @@ struct NormalizeCtx {
         ss_cout << "inlining label call to " << enter_label << " in " << l << std::endl;
 #endif
 
-        Any voidarg = none;
-        voidarg.type = TYPE_Void;
-
         Args newargs = { args[0] };
         for (size_t i = 1; i < enter_label->params.size(); ++i) {
-            newargs.push_back(voidarg);
+            newargs.push_back(untyped());
         }
         Label *newl = fold_type_label(enter_label, newargs);
         l->unlink_backrefs();
@@ -9753,25 +9809,6 @@ struct NormalizeCtx {
             argtypes.push_back(arg.value.indirect_type());
         }
         type_continuation(l->body.enter, argtypes);
-    }
-
-    void set_const(std::vector<Any> &consts, size_t i, Any arg) {
-        if (arg.type == TYPE_Void) {
-        } else if (is_const(arg)) {
-        } else {
-            arg = none;
-            arg.type = TYPE_Void;
-        }
-
-        if (i == consts.size()) {
-            consts.push_back(arg);
-        } else {
-            if (consts[i].type == TYPE_Void) {
-            } else if (consts[i] != arg) {
-                consts[i] = none;
-                consts[i].type = TYPE_Void;
-            }
-        }
     }
 
     std::unordered_set<Label *> done;
@@ -9978,9 +10015,6 @@ struct NormalizeCtx {
     }
 
     Label *lower2cff(Label *entry) {
-        Any voidarg = none;
-        voidarg.type = TYPE_Void;
-
 
         size_t numchanges = 0;
         size_t iterations = 0;
@@ -10060,7 +10094,7 @@ struct NormalizeCtx {
                         } else {
                             Args newargs = { cont };
                             for (size_t i = 1; i < l->params.size(); ++i) {
-                                newargs.push_back(voidarg);
+                                newargs.push_back(untyped());
                             }
                             Label *newl = fold_type_label(l, newargs);
 
@@ -10327,7 +10361,6 @@ struct Expander {
     Label *state;
     Scope *env;
     const List *next;
-    Any voidval;
     static bool verbose;
 
     const Type *list_expander_func_type;
@@ -10336,9 +10369,7 @@ struct Expander {
         state(_state),
         env(_env),
         next(_next),
-        voidval(none),
         list_expander_func_type(nullptr) {
-        voidval.type = TYPE_Void;
         list_expander_func_type = Pointer(Function(
             Tuple({TYPE_List, TYPE_Scope}),
             {TYPE_List, TYPE_Scope}));
@@ -10401,8 +10432,8 @@ struct Expander {
 
         Label *func = Label::from(_anchor, Symbol(KW_SyntaxExtend));
 
-        auto retparam = Parameter::from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
-        auto scopeparam = Parameter::from(_anchor, Symbol(SYM_SyntaxScope), TYPE_Void);
+        auto retparam = Parameter::from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
+        auto scopeparam = Parameter::from(_anchor, Symbol(SYM_SyntaxScope), TYPE_Unknown);
 
         func->append(retparam);
         func->append(scopeparam);
@@ -10416,7 +10447,7 @@ struct Expander {
 
         set_active_anchor(_anchor);
 
-        func = fold_type_label(func, { Any::from_opaque(TYPE_Void), env });
+        func = fold_type_label(func, { untyped(), env });
         func = normalize(func);
 
         // expected type
@@ -10469,9 +10500,9 @@ struct Expander {
             _value.verify(TYPE_Symbol);
             Parameter *param = nullptr;
             if (ends_with_parenthesis(_value.symbol)) {
-                param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Void);
+                param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Unknown);
             } else {
-                param = Parameter::from(anchor, _value.symbol, TYPE_Void);
+                param = Parameter::from(anchor, _value.symbol, TYPE_Unknown);
             }
             env->bind(_value.symbol, param);
             return param;
@@ -10519,7 +10550,7 @@ struct Expander {
             assert(!func->params.empty());
             retparam = func->params[0];
         } else {
-            retparam = Parameter::from(_anchor, Symbol(SYM_Unnamed), label?TYPE_Nothing:TYPE_Void);
+            retparam = Parameter::from(_anchor, Symbol(SYM_Unnamed), label?TYPE_Nothing:TYPE_Unknown);
             func->append(retparam);
         }
 
@@ -10578,7 +10609,7 @@ struct Expander {
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
             Parameter *param = Parameter::vararg_from(_anchor, 
-                Symbol(SYM_Unnamed), TYPE_Void);
+                Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             longdest = nextstate;
             result = param;
@@ -10762,7 +10793,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             longdest = nextstate;
             result = param;
@@ -10846,7 +10877,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             args.push_back(nextstate);
             longdest = nextstate;
@@ -10916,7 +10947,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Void);
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             args.push_back(nextstate);
             result = param;
@@ -11465,7 +11496,8 @@ static void f_del_scope_symbol(Scope *scope, Symbol sym) {
 }
 
 static Label *f_typify(Label *srcl, int numtypes, const Type **typeargs) {
-    std::vector<const Type *> types = { TYPE_Void };
+    std::vector<const Type *> types;
+    types.push_back(TYPE_Unknown);
     for (int i = 0; i < numtypes; ++i) {
         types.push_back(typeargs[i]);
 

@@ -890,11 +890,11 @@ syntax-extend
             if (type== TT (tuple Anchor Symbol type))
                 Parameter-new param1 param2 param3
             elseif (type== TT (tuple Anchor Symbol Nothing))
-                Parameter-new param1 param2 void
+                Parameter-new param1 param2 unknown
             elseif (type== TT (tuple Symbol type Nothing))
                 Parameter-new (active-anchor) param1 param2
             elseif (type== TT (tuple Symbol Nothing Nothing))
-                Parameter-new (active-anchor) param1 void
+                Parameter-new (active-anchor) param1 unknown
             else
                 compiler-error! "usage: Parameter [anchor] symbol [type]"
 
@@ -1428,7 +1428,7 @@ syntax-extend
             let tmp =
                 Parameter-new
                     Syntax-anchor (cast Syntax (list-at head))
-                    \ 'tmp void
+                    \ 'tmp unknown
             loop
                 Any
                     list do
@@ -1496,7 +1496,7 @@ define-macro assert
     let sxcond = (cast Syntax cond)
     let anchor = (Syntax-anchor sxcond)
     let tmp =
-        Parameter-new anchor 'tmp void
+        Parameter-new anchor 'tmp unknown
     list do
         list let tmp '= cond
         list if tmp
