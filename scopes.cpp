@@ -1564,7 +1564,7 @@ static void location_error(const String *msg);
     T(TK_Tuple, "type-kind-tuple") \
     T(TK_Union, "type-kind-union") \
     T(TK_Typename, "type-kind-typename") \
-    T(TK_TypedLabel, "type-kind-label") \
+    T(TK_ReturnLabel, "type-kind-return-label") \
     T(TK_Function, "type-kind-function") \
     T(TK_Constant, "type-kind-constant") \
     T(TK_Extern, "type-kind-extern")
@@ -1638,7 +1638,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Tuple, "tuple") \
     T(TYPE_Union, "union") \
     T(TYPE_Typename, "typename") \
-    T(TYPE_TypedLabel, "typed-label") \
+    T(TYPE_ReturnLabel, "return-label") \
     T(TYPE_Function, "function") \
     T(TYPE_Constant, "constant") \
     T(TYPE_Extern, "extern") \
@@ -2580,15 +2580,15 @@ static const Type *storage_type(const Type *T) {
 // TYPED LABEL TYPE
 //------------------------------------------------------------------------------
 
-static const Type *TypedLabel(const std::vector<const Type *> &types);
+static const Type *ReturnLabel(const std::vector<const Type *> &types);
 
-struct TypedLabelType : Type {
+struct ReturnLabelType : Type {
     static bool classof(const Type *T) {
-        return T->kind() == TK_TypedLabel;
+        return T->kind() == TK_ReturnLabel;
     }
 
-    TypedLabelType(const std::vector<Any> &_types)
-        : Type(TK_TypedLabel) {
+    ReturnLabelType(const std::vector<Any> &_types)
+        : Type(TK_ReturnLabel) {
         types.reserve(_types.size());
         for (auto &&arg : _types) {
             types.push_back(arg);
@@ -2626,14 +2626,14 @@ struct TypedLabelType : Type {
             }
             dest_types.push_back(T);
         }
-        return TypedLabel(dest_types);
+        return ReturnLabel(dest_types);
     }
 
     std::vector<const Type *> types;
 };
 
-static const Type *TypedLabel(const std::vector<const Type *> &types) {
-    static TypeFactory<TypedLabelType> typed_labels;
+static const Type *ReturnLabel(const std::vector<const Type *> &types) {
+    static TypeFactory<ReturnLabelType> typed_labels;
     assert(!types.empty());
     std::vector<Any> atypes;
     atypes.reserve(types.size());
@@ -2660,7 +2660,7 @@ static void verify_kind(const Type *T) {
         case TK_Tuple: ss.out << "tuple"; break;
         case TK_Union: ss.out << "union"; break;
         case TK_Typename: ss.out << "typename"; break;
-        case TK_TypedLabel: ss.out << "typed label"; break;
+        case TK_ReturnLabel: ss.out << "return label"; break;
         case TK_Function: ss.out << "function"; break;
         case TK_Constant: ss.out << "constant"; break;
         case TK_Extern: ss.out << "extern"; break;
@@ -2688,7 +2688,7 @@ static bool is_opaque(const Type *T) {
         }
     }
     switch(T->kind()) {
-    case TK_TypedLabel:
+    case TK_ReturnLabel:
     case TK_Constant:
     case TK_Function: return true;
     default: break;
@@ -2832,7 +2832,7 @@ static const Type *superof(const Type *T) {
     case TK_Tuple: return TYPE_Tuple;
     case TK_Union: return TYPE_Union;
     case TK_Typename: return cast<TypenameType>(T)->super();
-    case TK_TypedLabel: return TYPE_TypedLabel;
+    case TK_ReturnLabel: return TYPE_ReturnLabel;
     case TK_Function: return TYPE_Function;
     case TK_Constant: return TYPE_Constant;
     case TK_Extern: return TYPE_Extern;
@@ -4647,7 +4647,7 @@ public:
             return TYPE_Unknown;
 
         std::vector<const Type *> rettypes;
-        auto tl = cast<TypedLabelType>(params[0]->type);
+        auto tl = cast<ReturnLabelType>(params[0]->type);
         for (size_t i = 1; i < tl->types.size(); ++i) {
             rettypes.push_back(tl->types[i]);
         }
@@ -4664,7 +4664,7 @@ public:
     void verify_compilable() const {
         if (params[0]->is_typed()
             && !params[0]->is_none()) {
-            auto tl = dyn_cast<TypedLabelType>(params[0]->type);
+            auto tl = dyn_cast<ReturnLabelType>(params[0]->type);
             if (!tl) {
                 set_active_anchor(anchor);
                 StyledString ss;
@@ -6834,7 +6834,7 @@ struct GenerateCtx {
                 return false;
             if ((param->type == TYPE_Type) || (param->type == TYPE_Label))
                 return false;
-            if (isa<TypedLabelType>(param->type) && (param->index != 0))
+            if (isa<ReturnLabelType>(param->type) && (param->index != 0))
                 return false;
         }
         return true;
@@ -7023,12 +7023,12 @@ struct GenerateCtx {
             StyledString ss;
             ss.out << "IL->IR: untyped continuation encountered";
             location_error(ss.str());
-        } else if (!isa<TypedLabelType>(type)) {
+        } else if (!isa<ReturnLabelType>(type)) {
             StyledString ss;
             ss.out << "IL->IR: invalid continuation type: " << type;
             location_error(ss.str());
         }
-        auto tli = cast<TypedLabelType>(type);
+        auto tli = cast<ReturnLabelType>(type);
         assert(tli->types[0] == TYPE_Nothing);
         size_t count = tli->types.size() - 1;
         if (!count) {
@@ -8029,10 +8029,10 @@ struct NormalizeCtx {
             if (param->is_none()) {
                 location_error(String::from("attempting to call none continuation"));
             } else if (!param->is_typed()) {
-                param->type = TypedLabel(argtypes);
+                param->type = ReturnLabel(argtypes);
                 param->anchor = get_active_anchor();
             } else {
-                const Type *T = TypedLabel(argtypes);
+                const Type *T = ReturnLabel(argtypes);
                 if (T != param->type) {
                     {
                         StyledStream cerr(std::cerr);
@@ -9640,8 +9640,8 @@ struct NormalizeCtx {
     static bool returns_higher_order_type(Label *l) {
         assert(!l->params.empty());
         const Type *T = l->params[0]->type;
-        if (!isa<TypedLabelType>(T)) return false;
-        auto tli = cast<TypedLabelType>(T);
+        if (!isa<ReturnLabelType>(T)) return false;
+        auto tli = cast<ReturnLabelType>(T);
         for (size_t i = 1; i < tli->types.size(); ++i) {
             if (tli->types[i] == TYPE_Label) return true;
             if (tli->types[i] == TYPE_Type) return true;
@@ -9748,8 +9748,8 @@ struct NormalizeCtx {
         Parameter *cont_param = enter_label->params[0];
         const Type *cont_type = cont_param->type;
 
-        if (isa<TypedLabelType>(cont_type)) {
-            auto tli = cast<TypedLabelType>(cont_type);
+        if (isa<ReturnLabelType>(cont_type)) {
+            auto tli = cast<ReturnLabelType>(cont_type);
             Any newarg = type_continuation(args[0].value, tli->types);
             l->unlink_backrefs();
             args[0] = newarg;
@@ -11177,7 +11177,7 @@ static void init_types() {
     DEFINE_TYPENAME("vector", TYPE_Vector);
     DEFINE_TYPENAME("tuple", TYPE_Tuple);
     DEFINE_TYPENAME("union", TYPE_Union);
-    DEFINE_TYPENAME("typed-label", TYPE_TypedLabel);
+    DEFINE_TYPENAME("return-label", TYPE_ReturnLabel);
     DEFINE_TYPENAME("constant", TYPE_Constant);
     DEFINE_TYPENAME("function", TYPE_Function);
     DEFINE_TYPENAME("extern", TYPE_Extern);
