@@ -2595,7 +2595,7 @@ struct ReturnLabelType : Type {
         }
 
         std::stringstream ss;
-        ss << "Î»(";
+        ss << "λ(";
         for (size_t i = 0; i < types.size(); ++i) {
             if (i > 0) {
                 ss << " ";
@@ -2633,14 +2633,13 @@ struct ReturnLabelType : Type {
 };
 
 static const Type *ReturnLabel(const std::vector<const Type *> &types) {
-    static TypeFactory<ReturnLabelType> typed_labels;
-    assert(!types.empty());
+    static TypeFactory<ReturnLabelType> return_labels;
     std::vector<Any> atypes;
     atypes.reserve(types.size());
     for (auto &&arg : types) {
         atypes.push_back(arg);
     }
-    return typed_labels.insert(atypes);
+    return return_labels.insert(atypes);
 }
 
 //------------------------------------------------------------------------------
@@ -4000,7 +3999,7 @@ struct LexerParser {
 // EXPRESSION PRINTER
 //------------------------------------------------------------------------------
 
-static const char INDENT_SEP[] = "âž";
+static const char INDENT_SEP[] = "⁞";
 
 static Style default_symbol_styler(Symbol name) {
     if (!name.is_known())
@@ -4648,7 +4647,7 @@ public:
 
         std::vector<const Type *> rettypes;
         auto tl = cast<ReturnLabelType>(params[0]->type);
-        for (size_t i = 1; i < tl->types.size(); ++i) {
+        for (size_t i = 0; i < tl->types.size(); ++i) {
             rettypes.push_back(tl->types[i]);
         }
 
@@ -4672,7 +4671,7 @@ public:
                     << params[0]->type;
                 location_error(ss.str());
             }
-            for (size_t i = 1; i < tl->types.size(); ++i) {
+            for (size_t i = 0; i < tl->types.size(); ++i) {
                 auto T = tl->types[i];
                 if (is_opaque(T)) {
                     set_active_anchor(anchor);
@@ -4875,7 +4874,7 @@ public:
 
     StyledStream &stream_short(StyledStream &ss) const {
         if (name == SYM_Unnamed) {
-            ss << Style_Keyword << "Î»" << Style_Symbol << uid;
+            ss << Style_Keyword << "λ" << Style_Symbol << uid;
         } else {
             ss << Style_Symbol;
             name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
@@ -5531,13 +5530,12 @@ static Label *fold_type_label(Label *label, const Args &args) {
 typedef std::vector<const Type *> ArgTypes;
 
 static Label *typify(Label *label, const ArgTypes &argtypes) {
-    assert(!argtypes.empty());
     assert(!label->params.empty());
 
     Args args;
     args.reserve(argtypes.size());
     args = { KeyAny(untyped()) };
-    for (size_t i = 1; i < argtypes.size(); ++i) {
+    for (size_t i = 0; i < argtypes.size(); ++i) {
         args.push_back(KeyAny(unknown_of(argtypes[i])));
     }
 
@@ -7029,14 +7027,13 @@ struct GenerateCtx {
             location_error(ss.str());
         }
         auto tli = cast<ReturnLabelType>(type);
-        assert(tli->types[0] == TYPE_Nothing);
-        size_t count = tli->types.size() - 1;
+        size_t count = tli->types.size();
         if (!count) {
             return LLVMVoidType();
         }
         LLVMTypeRef element_types[count];
         for (size_t i = 0; i < count; ++i) {
-            const Type *arg = tli->types[i + 1];
+            const Type *arg = tli->types[i];
             element_types[i] = type_to_llvm_type(arg);
         }
         if (count == 1) {
@@ -8021,8 +8018,8 @@ struct NormalizeCtx {
         return label;
     }
 
-    Any type_continuation(Any dest, const ArgTypes &argtypes) {
-        //ss_cout << "type_continuation: " << dest << std::endl;
+    Any type_return(Any dest, const ArgTypes &argtypes) {
+        //ss_cout << "type_return: " << dest << std::endl;
 
         if (dest.type == TYPE_Parameter) {
             Parameter *param = dest.parameter;
@@ -8248,7 +8245,6 @@ struct NormalizeCtx {
 
         verify_function_argument_signature(fi, l);
 
-        retargtypes = { TYPE_Nothing };
         if (fi->return_type != TYPE_Void) {
             if (isa<TupleType>(fi->return_type)) {
                 auto ti = cast<TupleType>(fi->return_type);
@@ -8480,7 +8476,7 @@ struct NormalizeCtx {
     checkargs<MINARGS, MAXARGS>(args.size())
 
 #define RETARGTYPES(...) \
-    retargtypes = { TYPE_Nothing, __VA_ARGS__ }
+    retargtypes = { __VA_ARGS__ }
 
     void argtypes_from_builtin_call(Label *l, std::vector<const Type *> &retargtypes) {
         auto &&enter = l->body.enter;
@@ -9642,7 +9638,7 @@ struct NormalizeCtx {
         const Type *T = l->params[0]->type;
         if (!isa<ReturnLabelType>(T)) return false;
         auto tli = cast<ReturnLabelType>(T);
-        for (size_t i = 1; i < tli->types.size(); ++i) {
+        for (size_t i = 0; i < tli->types.size(); ++i) {
             if (tli->types[i] == TYPE_Label) return true;
             if (tli->types[i] == TYPE_Type) return true;
         }
@@ -9750,7 +9746,7 @@ struct NormalizeCtx {
 
         if (isa<ReturnLabelType>(cont_type)) {
             auto tli = cast<ReturnLabelType>(cont_type);
-            Any newarg = type_continuation(args[0].value, tli->types);
+            Any newarg = type_return(args[0].value, tli->types);
             l->unlink_backrefs();
             args[0] = newarg;
             l->link_backrefs();
@@ -9776,7 +9772,7 @@ struct NormalizeCtx {
         } else {
             std::vector<const Type *> argtypes;
             argtypes_from_builtin_call(l, argtypes);
-            Any newarg = type_continuation(args[0].value, argtypes);
+            Any newarg = type_return(args[0].value, argtypes);
             l->unlink_backrefs();
             args[0] = newarg;
             l->link_backrefs();
@@ -9790,7 +9786,7 @@ struct NormalizeCtx {
         std::vector<const Type *> argtypes;
         argtypes_from_function_call(l, argtypes);
         auto &&args = l->body.args;
-        Any newarg = type_continuation(args[0].value, argtypes);
+        Any newarg = type_return(args[0].value, argtypes);
         l->unlink_backrefs();
         args[0] = newarg;
         l->link_backrefs();
@@ -9801,14 +9797,11 @@ struct NormalizeCtx {
         ss_cout << "typing continuation call in " << l << std::endl;
 #endif
         auto &&args = l->body.args;
-        if (args[0].value.type != TYPE_Nothing) {
-            args[0].value.type = TYPE_Nothing;
-        }
         std::vector<const Type *> argtypes = {};
-        for (auto &&arg : args) {
-            argtypes.push_back(arg.value.indirect_type());
+        for (size_t i = 1; i < args.size(); ++i) {
+            argtypes.push_back(args[i].value.indirect_type());
         }
-        type_continuation(l->body.enter, argtypes);
+        type_return(l->body.enter, argtypes);
     }
 
     std::unordered_set<Label *> done;
@@ -10455,7 +10448,11 @@ struct Expander {
         const Type *functype = func->get_function_type();
         if (functype != expected_functype) {
             set_active_anchor(_anchor);
-            location_error(String::from("syntax-extend must return a scope"));
+            StyledString ss;
+            ss.out << "syntax-extend has wrong function type (expected "
+                << expected_functype << " but got "
+                << functype << ")" << std::endl;
+            location_error(ss.str());
         }
 
         typedef Scope *(*FuncType)();
@@ -11497,7 +11494,6 @@ static void f_del_scope_symbol(Scope *scope, Symbol sym) {
 
 static Label *f_typify(Label *srcl, int numtypes, const Type **typeargs) {
     std::vector<const Type *> types;
-    types.push_back(TYPE_Unknown);
     for (int i = 0; i < numtypes; ++i) {
         types.push_back(typeargs[i]);
 
