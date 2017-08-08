@@ -4533,7 +4533,7 @@ protected:
 
     Label(const Anchor *_anchor, Symbol _name, uint64_t _flags) :
         uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
-        paired(nullptr), num_instances(0), flags(_flags)
+        paired(nullptr), num_instances(0), flags(_flags), scope_label(nullptr)
         {}
 
 public:
@@ -4547,6 +4547,9 @@ public:
     Label *paired;
     uint64_t num_instances;
     uint64_t flags;
+    // if there's a scope label, the current frame will be truncated to the
+    // parent frame that maps the scope label.
+    Label *scope_label;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
@@ -5644,6 +5647,16 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
                 " Use 'unconst' to prevent constant propagation.";
                 location_error(ss.str());
             }
+        }
+    }
+    
+    if (label->scope_label) {
+        const Frame *top = parent->find_frame(label->scope_label);
+        if (top) {
+            parent = top;
+        } else {
+            // the scope label isn't even part of this frame, truncate all of it
+            parent = nullptr;
         }
     }
     
@@ -8228,13 +8241,12 @@ struct Solver {
     }
 
     // inlining the continuation of a branch label without arguments
-    const Closure *inline_branch_continuation(const Closure *closure, Any cont) {
+    void verify_branch_continuation(const Closure *closure) {
         if (!is_basic_block_like(closure->label)) {
             StyledString ss;
             ss.out << "branch destination must be label, not function" << std::endl;
             location_error(ss.str());
         }
-        return closure;
     }
 
     Any type_return(Any dest, const ArgTypes &argtypes) {
@@ -9274,10 +9286,11 @@ struct Solver {
             // so we can directly inline it
             const Closure *newl = nullptr;
             if (args[1].value.i1) {
-                newl = inline_branch_continuation(args[2].value, args[0].value);
+                newl = args[2].value;
             } else {
-                newl = inline_branch_continuation(args[3].value, args[0].value);
+                newl = args[3].value;
             }
+            verify_branch_continuation(newl);
             evaluate_body(newl->frame, l, newl->label);
         } break;
         case OP_Tertiary: {
@@ -9840,10 +9853,10 @@ struct Solver {
         auto &&args = l->body.args;
         CHECKARGS(3, 3);
         args[1].value.verify_indirect(TYPE_Bool);
-        const Closure *then_br = inline_branch_continuation(
-            args[2].value, args[0].value);
-        const Closure *else_br = inline_branch_continuation(
-            args[3].value, args[0].value);
+        const Closure *then_br = args[2].value;
+        const Closure *else_br = args[3].value;
+        verify_branch_continuation(then_br);
+        verify_branch_continuation(else_br);
         l->unlink_backrefs();
         args[0].value = none;
         args[2].value = typify_single(then_br->frame, then_br->label, {});
@@ -10794,6 +10807,10 @@ struct Expander {
         }
 
         subexpr.expand_function_body(it, label?longdest:Any(func->params[0]));
+
+        if (state) {
+            func->scope_label = state;
+        }
 
         set_active_anchor(_anchor);
         return write_dest(func, dest);
