@@ -9112,16 +9112,22 @@ struct Solver {
     args = { none, __VA_ARGS__ }; \
     l->link_backrefs();
 
-    void print_traceback_entry(Label *l) {
-        StyledStream ss(std::cerr);
-        ss << l->body.anchor << " in ";
-        if (l->name == SYM_Unnamed) {
-            ss << "anonymous function";
-        } else {
-            ss << l->name.name()->data;
+    std::vector<Label *> traceback;
+
+    void print_traceback() {
+        size_t i = traceback.size();
+        while (i-- > 1) {
+            Label *l = traceback[i];
+            StyledStream ss(std::cerr);
+            ss << l->body.anchor << " in ";
+            if (l->name == SYM_Unnamed) {
+                ss << "anonymous function";
+            } else {
+                ss << l->name.name()->data;
+            }
+            ss << std::endl;
+            l->body.anchor->stream_source_line(ss);
         }
-        ss << std::endl;
-        l->body.anchor->stream_source_line(ss);
     }
 
     void *aligned_alloc(size_t sz, size_t al) {
@@ -10084,7 +10090,15 @@ struct Solver {
 
     Label *solve(Label *entry) {
         done.clear();
+        SCOPES_TRY()
+        
         normalize_label(entry);
+
+        SCOPES_CATCH(exc)
+            print_traceback();
+            error(exc);
+        SCOPES_TRY_END()
+
         return lower2cff(entry);
     }
 
@@ -10242,7 +10256,7 @@ struct Solver {
         }
 
         SCOPES_CATCH(exc)
-            print_traceback_entry(l);
+            traceback.push_back(l);
             error(exc);
         SCOPES_TRY_END()
     }
