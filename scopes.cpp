@@ -4525,6 +4525,7 @@ typedef Tag<Label> LabelTag;
 
 enum LabelFlags {
     LF_Template = (1 << 0),
+    LF_Done = (1 << 1),
 };
 
 struct Label : ILNode {
@@ -4554,8 +4555,16 @@ public:
     // with these arguments
     std::vector<Any> return_constants;
 
+    bool is_done() const {
+        return flags & LF_Done;
+    }
+
     bool is_template() const {
         return flags & LF_Template;
+    }
+
+    void set_done() {
+        flags |= LF_Done;
     }
 
     Parameter *get_param_by_name(Symbol name) {
@@ -5058,7 +5067,11 @@ struct Frame {
 
 void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
     if (arg.value.type == TYPE_Label) {
-        dest.push_back(KeyAny(arg.key, Closure::from(arg.value.label, frame)));
+        if (arg.value.label->is_done()) {
+            dest.push_back(KeyAny(arg.key, arg.value.label));
+        } else {
+            dest.push_back(KeyAny(arg.key, Closure::from(arg.value.label, frame)));
+        }
     } else if (arg.value.type == TYPE_Parameter
         && arg.value.parameter->label) {
         auto param = arg.value.parameter;
@@ -10125,7 +10138,9 @@ struct Solver {
             error(exc);
         SCOPES_TRY_END()
 
-        return lower2cff(entry);
+        lower2cff(entry);
+        entry->set_done();
+        return entry;
     }
 
     void copy_body(Label *dest, Label *source) {

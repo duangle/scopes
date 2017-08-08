@@ -20,11 +20,12 @@ do
         syntax-extend
             let sc = (Scope syntax-scope)
             set-scope-symbol! sc 'injected-var 3
-            set-scope-symbol! sc 'm
+            let m =
                 eval
                     list-load
                         .. compiler-dir "/testing/test_module.sc"
                     \ sc
+            set-scope-symbol! sc 'm m
             sc
         set-scope-symbol! syntax-scope 't (m)
         syntax-scope
