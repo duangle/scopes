@@ -29,6 +29,21 @@
     functions and macros, parses the command-line and optionally enters
     the REPL.
 
+#do
+    let printf =
+        extern-new 'printf (function-type i32 (pointer-type i8) 'variadic)
+
+    fn str (s)
+        getelementptr s 0 1 0
+
+    let [loop] i = 0
+    if (icmp<s i 33)
+        #io-write! (Any-repr (Any-wrap i))
+        printf (str "%i!\n") i
+        loop (add i 1)
+
+    true
+
 fn tie-const (a b)
     if (constant? a) b
     else (unconst b)
@@ -275,7 +290,7 @@ syntax-extend
         set-type-symbol! T '^ (gen-type-op2 bxor)
 
         # more aggressive cast that converts from all numerical types
-          and usize.
+            and usize.
         set-type-symbol! T 'cast
             fn hardcast (destT val)
                 let vT = (typeof val)
@@ -1211,7 +1226,7 @@ syntax-extend
                 return (cons (f (list-next at)) next) scope
 
     # dotted symbol expander
-      --------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     fn dotted-symbol? (env head)
         let s = (Symbol->string head)
@@ -1249,7 +1264,7 @@ syntax-extend
         loop (+ i 1:usize)
     
     # infix notation support
-      --------------------------------------------------------------------------
+    # --------------------------------------------------------------------------
 
     fn get-ifx-symbol (name)
         Symbol (.. "#ifx:" (Symbol->string name))
@@ -1278,7 +1293,7 @@ syntax-extend
 
     fn has-infix-ops? (infix-table expr)
         # any expression of which one odd argument matches an infix operator
-          has infix operations.
+            has infix operations.
         let [loop] expr = expr
         if (< (countof expr) 3:usize)
             return false
@@ -1852,7 +1867,7 @@ fn prompt (prefix preload)
         else preload
 
 # earliest form of match macro - doesn't do elaborate patterns yet, just
-  simple switch-case style comparisons
+    simple switch-case style comparisons
 define-macro match
     let value rest = (decons args)
     let tmp = (Parameter 'tmp)
@@ -2256,10 +2271,10 @@ fn read-eval-print-loop ()
 fn print-help (exename)
     print "usage:" exename "[option [...]] [filename]
 Options:
-   -h, --help                  print this text and exit.
-   -v, --version               print program version and exit.
-   -s, --signal-abort          raise SIGABRT when calling `abort!`.
-   --                          terminate option list."
+-h, --help                  print this text and exit.
+-v, --version               print program version and exit.
+-s, --signal-abort          raise SIGABRT when calling `abort!`.
+--                          terminate option list."
     exit 0
     unreachable!;
 

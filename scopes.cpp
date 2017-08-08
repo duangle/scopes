@@ -30,11 +30,11 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_VERSION_MINOR 8
 #define SCOPES_VERSION_PATCH 0
 
-#define SCOPES_DEBUG_CODEGEN 1
+#define SCOPES_DEBUG_CODEGEN 0
 #define SCOPES_OPTIMIZE_ASSEMBLY 1
 #define SCOPES_EARLY_ABORT 0
 
-#define SCOPES_MAX_LABEL_INSTANCES 256
+#define SCOPES_MAX_RECURSIONS 32
 
 #ifndef SCOPES_WIN32
 #   ifdef _WIN32
@@ -5026,14 +5026,15 @@ static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
 //------------------------------------------------------------------------------
 
 struct Frame {
-    Frame(const Frame *_parent, Label *_label) :
-        parent(_parent), label(_label) {
+    Frame(const Frame *_parent, Label *_label, size_t _loop_count = 0) :
+        parent(_parent), label(_label), loop_count(_loop_count) {
         args.reserve(_label->params.size());
     }
 
     const Frame *parent;
     Label *label;
     Args args;
+    size_t loop_count;
 
     const Frame *find_frame(Label *label) const {
         const Frame *top = this;
@@ -5046,12 +5047,8 @@ struct Frame {
         return nullptr;        
     }
 
-    static Frame *from(const Frame *parent, Label *label) {
-        const Frame *top = parent->find_frame(label);
-        if (top) {
-            parent = top->parent;
-        }
-        return new Frame(parent, label);
+    static Frame *from(const Frame *parent, Label *label, size_t loop_count) {
+        return new Frame(parent, label, loop_count);
     }
 
 };
@@ -5517,21 +5514,6 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params,
     return le;
 }
 
-static void verify_instance_count(Label *label) {
-    if (label->num_instances < SCOPES_MAX_LABEL_INSTANCES)
-        return;
-    if (label->name == SYM_Unnamed)
-        return;
-    SCCBuilder scc(label);
-    if (!scc.is_recursive(label))
-        return;
-    set_active_anchor(label->anchor);
-    StyledString ss;
-    ss.out << "instance limit reached while unrolling named recursive function. "
-        "Use less constant arguments.";
-    location_error(ss.str());
-}
-
 static bool is_unknown(const Any &value) {
     return value.type == TYPE_Unknown;
 }
@@ -5573,8 +5555,6 @@ static Label *fold_type_label(Label *label, const Args &args) {
     if (it != instances.end())
         return it->second;
     assert(!label->params.empty());
-
-    verify_instance_count(label);
 
     MangleParamMap map;
     std::vector<Parameter *> newparams;
@@ -5650,6 +5630,23 @@ static Label *fold_type_label(Label *label, const Args &args) {
 //      type as TYPE_Unknown = leave the parameter as-is
 // any other = inline the argument and remove the parameter
 static Label *fold_type_label_single(const Frame *parent, Label *label, const Args &args) {
+
+    size_t loop_count = 0;
+    {
+        const Frame *top = parent->find_frame(label);
+        if (top) {
+            parent = top->parent;
+            loop_count = top->loop_count + 1;
+            if (loop_count > SCOPES_MAX_RECURSIONS) {
+                StyledString ss;
+                ss.out << "maximum number of recursions exceeded during"
+                " compile time evaluation (" << SCOPES_MAX_RECURSIONS << ")."
+                " Use 'unconst' to prevent constant propagation.";
+                location_error(ss.str());
+            }
+        }
+    }
+    
     Label::Args la;
     la.frame = parent;
     la.args = args;
@@ -5667,12 +5664,10 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
     }
 #endif
 
-    verify_instance_count(label);
-
     Label *newlabel = Label::from(label);
     instances.insert({la, newlabel});
 
-    Frame *frame = Frame::from(parent, label);
+    Frame *frame = Frame::from(parent, label, loop_count);
 
     size_t lasti = label->params.size() - 1;
     size_t srci = 0;
@@ -7324,10 +7319,10 @@ struct GenerateCtx {
                 if ((namestr->count > 5) && !strncmp(name, "llvm.", 5)) {
                     result = LLVMAddFunction(module, name, LLT);
                 } else {
-                    uint64_t ptr = LLVMGetGlobalValueAddress(ee, name);
+                    void *pptr = local_aware_dlsym(name);
+                    uint64_t ptr = *(uint64_t*)&pptr;
                     if (!ptr) {
-                        void *pptr = local_aware_dlsym(name);
-                        ptr = *(uint64_t*)&pptr;
+                        ptr = LLVMGetGlobalValueAddress(ee, name);
                     }
                     if (!ptr) {
                         StyledString ss;
@@ -7714,6 +7709,10 @@ struct GenerateCtx {
                     enter.label->get_function_type(), 
                     value, args);
             }
+        } else if (enter.type == TYPE_Closure) {
+            StyledString ss;
+            ss.out << "IL->IR: invalid call of compile time closure at runtime";
+            location_error(ss.str());
         } else if (is_function_pointer(enter.indirect_type())) {
             retvalue = build_call(extract_function_type(enter.indirect_type()), 
                 argument_to_value(enter), args);
