@@ -8237,6 +8237,8 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
         FARITH_OP(FDiv, /) \
         FARITH_OPF(FRem, std::fmod)
 
+static Label *expand_module(Any expr, Scope *scope = nullptr);
+
 struct Solver {
 #if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
@@ -9179,6 +9181,30 @@ struct Solver {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case KW_SyntaxExtend: {
+            CHECKARGS(3, 3);
+            const Closure *cl = args[1].value;
+            const Syntax *sx = args[2].value;
+            Scope *env = args[3].value;
+            Label *metafunc = fold_type_label_single(cl->frame, cl->label,
+                { untyped(), env });
+            normalize_label(metafunc);
+            const Type *expected_functype = Function( TYPE_Scope, {} );
+            const Type *functype = metafunc->get_function_type();
+            if (functype != expected_functype) {
+                set_active_anchor(sx->anchor);
+                location_error(String::from("syntax-extend must return a scope"));
+            }
+            typedef Scope *(*FuncType)();
+            FuncType fptr = (FuncType)compile(metafunc, 0).pointer;
+            Scope *scope = fptr();
+            Label *func = fold_type_label_single(cl->frame, 
+                expand_module(sx, scope), { args[0] });
+            l->unlink_backrefs();
+            enter = func;
+            args = { none };
+            l->link_backrefs();
+        } break;            
         case FN_ExternSymbol: {
             CHECKARGS(1, 1);
             verify_kind<TK_Extern>(args[1].value);
@@ -10673,28 +10699,30 @@ struct Expander {
 
         set_active_anchor(_anchor);
 
-        Solver solver;
-        func = fold_type_label_single(nullptr, func, { untyped(), env });
-        func = solver.solve(func);
-
-        // expected type
-        const Type *expected_functype = Function( TYPE_Scope, {} );
-        const Type *functype = func->get_function_type();
-        if (functype != expected_functype) {
-            set_active_anchor(_anchor);
-            StyledString ss;
-            ss.out << "syntax-extend has wrong function type (expected "
-                << expected_functype << " but got "
-                << functype << ")" << std::endl;
-            location_error(ss.str());
+        Args args;
+        args.reserve(4);
+        Label *nextstate = nullptr;
+        Any result = none;
+        if (dest.type == TYPE_Symbol) {
+            nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
+            nextstate->append(param);
+            args.push_back(nextstate);
+            result = param;
+        } else if (is_parameter_or_label(dest)) {
+            args.push_back(dest);
+        } else {
+            assert(false && "syntax extend: illegal dest type");
         }
-
-        typedef Scope *(*FuncType)();
-
-        FuncType fptr = (FuncType)compile(func, 0).pointer;
-        env = fptr();
-
-        return write_dest(none, dest);
+        args.push_back(func);
+        args.push_back(Syntax::from(_anchor, next));
+        args.push_back(env);
+        //state = subexp.state;
+        set_active_anchor(_anchor);
+        br(Builtin(KW_SyntaxExtend), args);
+        state = nextstate;
+        next = EOL;
+        return result;
     }
 
     void expand_function_body(const List *it, const Any &longdest) {
@@ -11347,7 +11375,7 @@ struct Expander {
 
 bool Expander::verbose = false;
 
-static Label *expand_module(Any expr, Scope *scope = nullptr) {
+static Label *expand_module(Any expr, Scope *scope) {
     const Anchor *anchor = get_active_anchor();
     if (expr.type == TYPE_Syntax) {
         anchor = expr.syntax->anchor;

@@ -131,7 +131,6 @@ fn Any-new (val)
                     Any-repr (Any-wrap T)
         if (pointer-type? T)
             #compiler-message "wrapping pointer"
-            compiler-error! "test"
             construct
                 ptrtoint val u64
         elseif (extern-type? T)
