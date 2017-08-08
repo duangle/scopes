@@ -5626,6 +5626,32 @@ static Label *fold_type_label(Label *label, const Args &args) {
 }
 #endif
 
+static void map_constant_arguments(Frame *frame, Label *label, const Args &args) {
+    size_t lasti = label->params.size() - 1;
+    size_t srci = 0;
+    for (size_t i = 0; i < label->params.size(); ++i) {
+        Parameter *param = label->params[i];
+        if (param->is_vararg()) {
+            assert(i == lasti);
+            size_t ncount = args.size();
+            while (srci < ncount) {
+                KeyAny value = args[srci];
+                assert(!is_unknown(value.value));
+                frame->args.push_back(value);
+                srci++;
+            }
+        } else if (srci < args.size()) {
+            KeyAny value = args[srci];
+            assert(!is_unknown(value.value));
+            frame->args.push_back(value);
+            srci++;
+        } else {
+            frame->args.push_back(none);
+            srci++;
+        }
+    }
+}
+
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
 // arguments are treated as follows:
@@ -7284,7 +7310,7 @@ struct GenerateCtx {
             auto it = param2value.find(value.parameter);
             if (it == param2value.end()) {
                 StyledString ss;
-                ss.out << "can't translate free variable " << value.parameter;
+                ss.out << "IL->IR: can't translate free variable " << value.parameter;
                 location_error(ss.str());
             }
             return it->second;
@@ -8215,9 +8241,7 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
 #endif
-
     std::unordered_set<Label *> done;
-    std::vector<Label *> todo;
 
     Solver()
 #if SCOPES_DEBUG_CODEGEN
@@ -9088,19 +9112,16 @@ struct Solver {
     args = { none, __VA_ARGS__ }; \
     l->link_backrefs();
 
-    void print_traceback() {
+    void print_traceback_entry(Label *l) {
         StyledStream ss(std::cerr);
-        for (size_t i = 0; i < todo.size(); ++i) {
-            Label *l = todo[i];
-            ss << l->body.anchor << " in ";
-            if (l->name == SYM_Unnamed) {
-                ss << "anonymous function";
-            } else {
-                ss << l->name.name()->data;
-            }
-            ss << std::endl;
-            l->body.anchor->stream_source_line(ss);
+        ss << l->body.anchor << " in ";
+        if (l->name == SYM_Unnamed) {
+            ss << "anonymous function";
+        } else {
+            ss << l->name.name()->data;
         }
+        ss << std::endl;
+        l->body.anchor->stream_source_line(ss);
     }
 
     void *aligned_alloc(size_t sz, size_t al) {
@@ -10061,19 +10082,8 @@ struct Solver {
         done.insert(l);
     }
 
-    void push_label(Label *l) {
-        if (done.count(l))
-            return;
-        todo.push_back(l);
-    }
-
-    Label *pop_label() {
-        Label *val = todo.back();
-        todo.pop_back();
-        return val;
-    }
-
     Label *solve(Label *entry) {
+        done.clear();
         normalize_label(entry);
         return lower2cff(entry);
     }
@@ -10084,17 +10094,12 @@ struct Solver {
         dest->link_backrefs();
     }
     
-    void normalize_label(Label *entry) {
+    void normalize_label(Label *l) {
         SCOPES_TRY()
 
-        done.clear();
-        todo = { entry };
-
-        while (!todo.empty()) {
-            Label *l = pop_label();
+        while (!is_done(l)) {
             assert(!l->is_template());
 
-        process_body:
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "processing " << l << std::endl;
 #endif
@@ -10117,13 +10122,13 @@ struct Solver {
 
             if (is_calling_callable(l)) {
                 fold_callable_call(l);
-                goto process_body;
+                continue;
             } else if (is_calling_function(l)) {
                 verify_no_keyed_args(l);
                 if (is_calling_pure_function(l)
                     && all_args_constant(l)) {
                     fold_pure_function_call(l);
-                    goto process_body;
+                    continue;
                 } else {
                     type_continuation_from_function_call(l);
                 }
@@ -10133,42 +10138,25 @@ struct Solver {
                 if ((all_args_constant(l)
                     && !builtin_never_folds(l->get_builtin_enter()))
                     || builtin_always_folds(l->get_builtin_enter())) {
-                    if (fold_builtin_call(l)) {
-                        goto process_body;
-                    } else {
-                        // exception for typify: the new label has to be
-                        // normalized before we can continue
-                        continue;
-                    }
+                    fold_builtin_call(l);
+                    continue;
                 } else if (l->body.enter.builtin == FN_Branch) {
                     inline_branch_continuations(l);
                     auto &&args = l->body.args;
-                    push_label(args[3].value);
-                    push_label(args[2].value);
+                    set_done(l);
+                    normalize_label(args[2].value);
+                    l = args[3].value;
+                    continue;
                 } else {
                     type_continuation_from_builtin_call(l);
                 }
             } else if (is_calling_closure(l)) {
-                /*
-                #if SCOPES_DEBUG_CODEGEN
-                if (!is_done(l->get_closure_enter())) {
-                    Label *dest = l->get_closure_enter();
-                    SCCBuilder scc(dest);
-                    if (scc.is_recursive(dest)) {
-                        ss_cout << std::endl;
-                        scc.stream_group(ss_cout, scc.group(dest));
-                        ss_cout << std::endl;
-                    }
-                }
-                #endif
-                */
-
                 if (has_keyed_args(l)) {
                     solve_keyed_args(l);
                 }
 
                 fold_type_label_arguments(l);
-                goto process_body;
+                continue;
             } else if (is_calling_label(l)) {
                 Label *enter_label = l->get_label_enter();
                 if (is_basic_block_like(enter_label)) {
@@ -10177,24 +10165,33 @@ struct Solver {
                         ss_cout << "folding jump to label in " << l << std::endl;
 #endif
                         copy_body(l, enter_label);
-                        goto process_body;
+                        continue;
                     } else {
                         if (!is_jumping(l)) {
                             clear_continuation_arg(l);
                         }
-                        push_label(enter_label);
+                        set_done(l);
+                        l = enter_label;
+                        continue;
                     }
                 } else if (is_return_param_typed(enter_label)) {
-                    if (returns_immediately(enter_label)
-                        || returns_higher_order_type(enter_label)) {
+                    if (returns_immediately(enter_label)) {
+#if SCOPES_DEBUG_CODEGEN
+                        ss_cout << "inlining immediately returning label in " << l << std::endl;
+#endif                        
+                        Frame frame(nullptr, enter_label);
+                        map_constant_arguments(&frame, enter_label, l->body.args);
+                        evaluate_body(&frame, l, enter_label);
+                        continue;
+                    } else if (returns_higher_order_type(enter_label)) {
                         inline_label_call(l);
-                        goto process_body;
+                        continue;
                     } else {
                         type_continuation_from_label_return_type(l);
                     }
                 } else {
                     // returning function with untyped continuation
-                    if (is_done(enter_label)) {
+                    if (is_done(enter_label)) {                        
                         SCCBuilder scc(enter_label);
                         if (scc.is_recursive(enter_label)) {
                             // possible recursion - entry label has already been
@@ -10214,9 +10211,8 @@ struct Solver {
                             delete_continuation(enter_label);
                         }
                     } else {
-                        // queue for processing
-                        push_label(l); // we need to try again after label has been visited
-                        push_label(enter_label);
+                        // we need to try again after label has been visited
+                        normalize_label(enter_label);
                         continue;
                     }
                 }
@@ -10241,12 +10237,12 @@ struct Solver {
             set_done(l);
 
             if (is_continuing_to_label(l)) {
-                push_label(l->body.args[0].value.label);
+                l = l->body.args[0].value.label;
             }
         }
 
         SCOPES_CATCH(exc)
-            print_traceback();
+            print_traceback_entry(l);
             error(exc);
         SCOPES_TRY_END()
     }
