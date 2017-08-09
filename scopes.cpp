@@ -5067,6 +5067,7 @@ struct Frame {
 
 void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
     if (arg.value.type == TYPE_Label) {
+        // do not wrap labels in closures that have been solved
         if (arg.value.label->is_done()) {
             dest.push_back(KeyAny(arg.key, arg.value.label));
         } else {
@@ -10025,6 +10026,7 @@ struct Solver {
 
     }
 
+    /*
     void inline_label_call(Label *l) {
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
@@ -10045,6 +10047,7 @@ struct Solver {
         enter = newl;
         l->link_backrefs();
     }
+    */
 
     void type_continuation_from_label_return_type(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
@@ -10237,9 +10240,6 @@ struct Solver {
                         Frame frame(nullptr, enter_label);
                         map_constant_arguments(&frame, enter_label, l->body.args);
                         evaluate_body(&frame, l, enter_label);
-                        continue;
-                    } else if (returns_higher_order_type(enter_label)) {
-                        inline_label_call(l);
                         continue;
                     } else {
                         type_continuation_from_label_return_type(l);
