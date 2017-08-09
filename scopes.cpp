@@ -758,6 +758,13 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Variadic, "variadic") \
     T(SYM_Pure, "pure") \
     \
+    /* timer names */ \
+    T(TIMER_Compile, "compile()") \
+    T(TIMER_Generate, "generate()") \
+    T(TIMER_Optimize, "build_and_run_opt_passes()") \
+    T(TIMER_MCJIT, "mcjit()") \
+    T(TIMER_Lower2CFF, "lower2cff()") \
+    \
     /* ad-hoc builtin names */ \
     T(SYM_ExecuteReturn, "execute-return") \
     T(SYM_RCompare, "rcompare") \
@@ -4387,31 +4394,7 @@ enum {
 };
 
 struct ILNode {
-    std::unordered_map<Label *, int> users;
-
-    void add_user(Label *label, int argindex) {
-        auto it = users.find(label);
-        if (it == users.end()) {
-            users.insert(std::pair<Label *,int>(label, 1));
-        } else {
-            it->second++;
-        }
-    }
-    void del_user(Label *label, int argindex) {
-        auto it = users.find(label);
-        if (it == users.end()) {
-            std::cerr << "internal warning: attempting to remove user, but user is unknown." << std::endl;
-        } else {
-            if (it->second == 1) {
-                // remove last reference
-                users.erase(it);
-            } else {
-                it->second--;
-            }
-        }
-    }
-
-    void stream_users(StyledStream &ss) const;
+    int _empty;
 };
 
 typedef std::unordered_map<Parameter *, Args > MangleParamMap;
@@ -4615,13 +4598,36 @@ public:
         }
     }
 
-    bool has_single_caller() {
-        if (users.size() != 1)
-            return false;
-        auto it = users.begin();
-        Label *l = it->first;
-        return (l->body.enter == Any(this));
-    }
+    struct UserMap {
+        std::unordered_map<ILNode *, std::unordered_set<Label *> > map;
+
+        void clear() {
+            map.clear();
+        }
+
+        void insert(Label *source, ILNode *dest) {
+            map[dest].insert(source);
+        }
+
+        void stream_users(ILNode *node, StyledStream &ss) const {
+            auto it = map.find(node);
+            if (it != map.end()) {
+                auto &&users = it->second;
+                ss << Style_Comment << "{" << Style_None;
+                size_t i = 0;
+                for (auto &&kv : users) {
+                    if (i > 0) {
+                        ss << " ";
+                    }
+                    Label *label = kv;
+                    label->stream_short(ss);
+                    i++;
+                }
+                ss << Style_Comment << "}" << Style_None;
+            }
+        }
+        
+    };
 
     struct Args {
         const Frame *frame;
@@ -4753,35 +4759,19 @@ public:
         return Function(get_return_type(), argtypes);
     }
 
-    void use(const Any &arg, int i) {
+    void use(UserMap &um, const Any &arg, int i) {
         if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
-            arg.parameter->add_user(this, i);
+            um.insert(this, arg.parameter /*, i*/);
         } else if (arg.type == TYPE_Label && (arg.label != this)) {
-            arg.label->add_user(this, i);
+            um.insert(this, arg.label /*, i*/);
         }
     }
 
-    void unuse(const Any &arg, int i) {
-        if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
-            arg.parameter->del_user(this, i);
-        } else if (arg.type == TYPE_Label && (arg.label != this)) {
-            arg.label->del_user(this, i);
-        }
-    }
-
-    void link_backrefs() {
-        use(body.enter, -1);
+    void insert_into_usermap(UserMap &um) {
+        use(um, body.enter, -1);
         size_t count = body.args.size();
         for (size_t i = 0; i < count; ++i) {
-            use(body.args[i].value, i);
-        }
-    }
-
-    void unlink_backrefs() {
-        unuse(body.enter, -1);
-        size_t count = body.args.size();
-        for (size_t i = 0; i < count; ++i) {
-            unuse(body.args[i].value, i);
+            use(um, body.args[i].value, i);
         }
     }
 
@@ -4800,37 +4790,6 @@ public:
             assert(!param->label);
             param->label = this;
             param->index = (int)i;
-        }
-    }
-
-    void build_reachable(std::vector<Label *> &labels, std::unordered_set<Label *> &visited) {
-        labels.clear();
-        visited.clear();
-
-        visited.insert(this);
-        std::vector<Label *> stack = { this };
-        while (!stack.empty()) {
-            Label *parent = stack.back();
-            stack.pop_back();
-            labels.push_back(parent);
-
-            int size = (int)parent->body.args.size();
-            for (int i = -1; i < size; ++i) {
-                Any arg = none;
-                if (i == -1) {
-                    arg = parent->body.enter;
-                } else {
-                    arg = parent->body.args[i].value;
-                }
-
-                if (arg.type == TYPE_Label) {
-                    Label *label = arg.label;
-                    if (!visited.count(label)) {
-                        visited.insert(label);
-                        stack.push_back(label);
-                    }
-                }
-            }
         }
     }
 
@@ -4863,10 +4822,7 @@ public:
         }
     }
 
-    void build_scope(std::vector<Label *> &tempscope) {
-        std::unordered_set<Label *> reachable;
-        build_reachable(reachable);
-
+    void build_scope(UserMap &um, std::vector<Label *> &tempscope) {
         tempscope.clear();
 
         std::unordered_set<Label *> visited;
@@ -4874,12 +4830,14 @@ public:
         visited.insert(this);
 
         for (auto &&param : params) {
-            // every label using one of our parameters is live in scope
-            for (auto &&kv : param->users) {
-                Label *live_label = kv.first;
-                if (!visited.count(live_label)) {
-                    visited.insert(live_label);
-                    if (reachable.count(live_label)) {
+            auto it = um.map.find(param);
+            if (it != um.map.end()) {
+                auto &&users = it->second;
+                // every label using one of our parameters is live in scope
+                for (auto &&kv : users) {
+                    Label *live_label = kv;
+                    if (!visited.count(live_label)) {
+                        visited.insert(live_label);
                         tempscope.push_back(live_label);
                     }
                 }
@@ -4890,30 +4848,45 @@ public:
         while (index < tempscope.size()) {
             Label *scope_label = tempscope[index++];
 
-            // users of scope_label are indirectly live in scope
-            for (auto &&kv : scope_label->users) {
-                Label *live_label = kv.first;
-                if (!visited.count(live_label)) {
-                    visited.insert(live_label);
-                    if (reachable.count(live_label)) {
+            auto it = um.map.find(scope_label);
+            if (it != um.map.end()) {
+                auto &&users = it->second;
+                // users of scope_label are indirectly live in scope
+                for (auto &&kv : users) {
+                    Label *live_label = kv;
+                    if (!visited.count(live_label)) {
+                        visited.insert(live_label);
                         tempscope.push_back(live_label);
                     }
                 }
             }
 
             for (auto &&param : scope_label->params) {
-                // every label using scope_label's parameters is live in scope
-                for (auto &&kv : param->users) {
-                    Label *live_label = kv.first;
-                    if (!visited.count(live_label)) {
-                        visited.insert(live_label);
-                        if (reachable.count(live_label)) {
+                auto it = um.map.find(param);
+                if (it != um.map.end()) {
+                    auto &&users = it->second;
+                    // every label using scope_label's parameters is live in scope
+                    for (auto &&kv : users) {
+                        Label *live_label = kv;
+                        if (!visited.count(live_label)) {
+                            visited.insert(live_label);
                             tempscope.push_back(live_label);
                         }
                     }
                 }
             }
         }
+    }
+
+    void build_scope(std::vector<Label *> &tempscope) {
+        std::unordered_set<Label *> reachable;
+        build_reachable(reachable);        
+        UserMap um;
+        for (auto it = reachable.begin(); it != reachable.end(); ++it) {
+            (*it)->insert_into_usermap(um);
+        }
+
+        build_scope(um, tempscope);
     }
 
     StyledStream &stream_short(StyledStream &ss) const {
@@ -4932,9 +4905,6 @@ public:
 
     StyledStream &stream(StyledStream &ss, bool users = false) const {
         stream_short(ss);
-        if (users) {
-            stream_users(ss);
-        }
         ss << Style_Operator << "(" << Style_None;
         size_t count = params.size();
         for (size_t i = 1; i < count; ++i) {
@@ -4942,9 +4912,6 @@ public:
                 ss << " ";
             }
             params[i]->stream_local(ss);
-            if (users) {
-                params[i]->stream_users(ss);
-            }
         }
         ss << Style_Operator << ")" << Style_None;
         if (count) {
@@ -4956,9 +4923,6 @@ public:
                 } else {
                     params[0]->stream_local(ss);
                 }
-            }
-            if (users) {
-                params[0]->stream_users(ss);
             }
         }
         return ss;
@@ -5021,23 +4985,6 @@ StyledStream &Parameter::stream(StyledStream &ss) const {
     stream_local(ss);
     return ss;
 }
-
-void ILNode::stream_users(StyledStream &ss) const {
-    if (!users.empty()) {
-        ss << Style_Comment << "{" << Style_None;
-        size_t i = 0;
-        for (auto &&kv : users) {
-            if (i > 0) {
-                ss << " ";
-            }
-            Label *label = kv.first;
-            label->stream_short(ss);
-            i++;
-        }
-        ss << Style_Comment << "}" << Style_None;
-    }
-}
-
 
 //------------------------------------------------------------------------------
 
@@ -5446,7 +5393,7 @@ struct SCCBuilder {
 // IL MANGLING
 //------------------------------------------------------------------------------
 
-static void mangle_remap_body(Label *ll, Label *entry, MangleLabelMap &lmap, MangleParamMap &pmap) {
+static void mangle_remap_body(Label::UserMap &um, Label *ll, Label *entry, MangleLabelMap &lmap, MangleParamMap &pmap) {
     Any enter = entry->body.enter;
     Args &args = entry->body.args;
     Args &body = ll->body.args;
@@ -5489,11 +5436,10 @@ static void mangle_remap_body(Label *ll, Label *entry, MangleLabelMap &lmap, Man
         body.push_back(arg);
     }
 
-    ll->link_backrefs();
+    ll->insert_into_usermap(um);
 }
 
 static void evaluate_body(const Frame *frame, Label *dest, Label *source) {
-    dest->unlink_backrefs();
     Args &args = source->body.args;
     Args &body = dest->body.args;
     Args ret;
@@ -5507,20 +5453,18 @@ static void evaluate_body(const Frame *frame, Label *dest, Label *source) {
     for (size_t i = 0; i < args.size(); ++i) {
         evaluate(frame, args[i], body, (i == lasti));
     }
-
-    dest->link_backrefs();
 }
 
 enum MangleFlag {
     Mangle_Verbose = (1<<0),
 };
 
-static Label *mangle(Label *entry, std::vector<Parameter *> params,
-    MangleParamMap &pmap, int verbose = 0) {
+static Label *mangle(Label::UserMap &um, Label *entry, 
+    std::vector<Parameter *> params, MangleParamMap &pmap, int verbose = 0) {
     MangleLabelMap lmap;
 
     std::vector<Label *> entry_scope;
-    entry->build_scope(entry_scope);
+    entry->build_scope(um, entry_scope);
 
     // remap entry point
     Label *le = Label::from(entry);
@@ -5542,9 +5486,9 @@ static Label *mangle(Label *entry, std::vector<Parameter *> params,
     for (auto &&l : entry_scope) {
         Label *ll = l->paired;
         l->paired = nullptr;
-        mangle_remap_body(ll, l, lmap, pmap);
+        mangle_remap_body(um, ll, l, lmap, pmap);
     }
-    mangle_remap_body(le, entry, lmap, pmap);
+    mangle_remap_body(um, le, entry, lmap, pmap);
 
     if (verbose & Mangle_Verbose) {
     StyledStream ss(std::cout);
@@ -5591,7 +5535,7 @@ static Any untyped() {
 // TYPE_Unknown = type the parameter
 //      type as TYPE_Unknown = leave the parameter as-is
 // any other = inline the argument and remove the parameter
-static Label *fold_type_label(Label *label, const Args &args) {
+static Label *fold_type_label(Label::UserMap &um, Label *label, const Args &args) {
 #if 0
     ss_cout << "inline-arguments " << label << ":";
     for (size_t i = 0; i < args.size(); ++i) {
@@ -5669,7 +5613,7 @@ static Label *fold_type_label(Label *label, const Args &args) {
             srci++;
         }
     }
-    Label *newlabel = mangle(label, newparams, map);//, Mangle_Verbose);
+    Label *newlabel = mangle(um, label, newparams, map);//, Mangle_Verbose);
     instances.insert({la, newlabel});
     return newlabel;
 }
@@ -5816,21 +5760,6 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
 }
 
 typedef std::vector<const Type *> ArgTypes;
-
-#if 0
-static Label *typify(Label *label, const ArgTypes &argtypes) {
-    assert(!label->params.empty());
-
-    Args args;
-    args.reserve(argtypes.size());
-    args = { KeyAny(untyped()) };
-    for (size_t i = 0; i < argtypes.size(); ++i) {
-        args.push_back(KeyAny(unknown_of(argtypes[i])));
-    }
-
-    return fold_type_label(label, args);
-}
-#endif
 
 static Label *typify_single(const Frame *frame, Label *label, const ArgTypes &argtypes) {
     assert(!label->params.empty());
@@ -6832,26 +6761,6 @@ static bool is_basic_block_like(Label *label) {
     return false;
 }
 
-static bool has_free_parameters(Label *label) {
-    std::vector<Label *> scope;
-    label->build_scope(scope);
-    scope.push_back(label);
-    std::unordered_set<Label *> labels;
-    for (auto &&label : scope) {
-        labels.insert(label);
-    }
-    for (auto &&label : scope) {
-        auto &&enter = label->body.enter;
-        if (enter.type == TYPE_Parameter && !labels.count(enter.parameter->label))
-            return true;
-        for (auto &&arg : label->body.args) {
-            if (arg.value.type == TYPE_Parameter && !labels.count(arg.value.parameter->label))
-                return true;
-        }
-    }
-    return false;
-}
-
 static void build_and_run_opt_passes(LLVMModuleRef module) {
     LLVMPassManagerBuilderRef passBuilder;
 
@@ -7013,6 +6922,7 @@ struct GenerateCtx {
     std::vector<const Type *> type_todo;
 
     std::unordered_map<Any, LLVMValueRef, Any::Hash> extern2global;
+    Label::UserMap user_map;
 
     LLVMModuleRef module;
     LLVMBuilderRef builder;
@@ -7540,6 +7450,7 @@ struct GenerateCtx {
 
     void write_label_body(Label *label) {
     repeat:
+        bool terminated = false;
         auto &&body = label->body;
         auto &&enter = body.enter;
         auto &&args = body.args;
@@ -7806,6 +7717,7 @@ struct GenerateCtx {
                     LLVMAddIncoming(phinode, incovals, incobbs, 1);
                 }
                 LLVMBuildBr(builder, LLVMValueAsBasicBlock(value));
+                terminated = true;
             } else {
                 if (use_debug_info) {
                     LLVMSetCurrentDebugLocation(builder, diloc);
@@ -7822,6 +7734,8 @@ struct GenerateCtx {
             retvalue = build_call(extract_function_type(enter.indirect_type()), 
                 argument_to_value(enter), args);
         } else if (enter.type == TYPE_Parameter) {
+            assert (enter.parameter->type != TYPE_Nothing);
+            assert(enter.parameter->type != TYPE_Unknown);
             LLVMValueRef values[argcount];
             for (size_t i = 0; i < argcount; ++i) {
                 values[i] = argument_to_value(args[i + 1].value);
@@ -7865,7 +7779,11 @@ struct GenerateCtx {
         }
 
         Any contarg = args[0].value;
-        if (contarg.type == TYPE_Parameter) {
+        if (terminated) {
+            // write nothing
+        } else if ((contarg.type == TYPE_Parameter)
+            && (contarg.parameter->type != TYPE_Nothing)) {
+            assert(contarg.parameter->type != TYPE_Unknown);
             assert(contarg.parameter->index == 0);
             assert(contarg.parameter->label == active_function);
             Label *label = contarg.parameter->label;
@@ -7961,12 +7879,26 @@ struct GenerateCtx {
         }
     }
 
+    bool has_single_caller(Label *l) {
+        auto it = user_map.map.find(l);
+        assert(it != user_map.map.end());
+        auto &&users = it->second;
+        if (users.size() != 1)
+            return false;
+        Label *userl = *users.begin();
+        if (userl->body.enter == Any(l))
+            return true;
+        if (userl->body.args[0] == Any(l))
+            return true;
+        return false;
+    }
+
     LLVMBasicBlockRef label_to_basic_block(Label *label) {
         auto old_bb = LLVMGetInsertBlock(builder);
         LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
         auto it = label2bb.find({func, label});
         if (it == label2bb.end()) {
-            if (label->has_single_caller()) {
+            if (has_single_caller(label)) {
                 // not generating basic blocks for single user labels
                 label2bb.insert({{func, label}, nullptr});
                 return nullptr;
@@ -8067,9 +7999,16 @@ struct GenerateCtx {
     }
 
     std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
-        assert(!has_free_parameters(entry));
         assert(all_parameters_lowered(entry));
         assert(!is_basic_block_like(entry));
+
+        {
+            std::unordered_set<Label *> labels;
+            entry->build_reachable(labels);
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                (*it)->insert_into_usermap(user_map);
+            }
+        }
 
         const char *name = entry->name.name()->data;
         module = LLVMModuleCreateWithName(name);
@@ -8220,7 +8159,7 @@ enum {
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
-    Timer sum_compile_time(Symbol("compile()"));
+    Timer sum_compile_time(TIMER_Compile);
 //#ifdef SCOPES_WIN32
     flags |= CF_NoDebugInfo;
 //#endif
@@ -8235,7 +8174,7 @@ static Any compile(Label *fn, uint64_t flags) {
 
     std::pair<LLVMModuleRef, LLVMValueRef> result;
     {
-        Timer generate_timer(Symbol("generate()"));
+        Timer generate_timer(TIMER_Generate);
         result = ctx.generate(fn);
     }
 
@@ -8265,7 +8204,7 @@ static Any compile(Label *fn, uint64_t flags) {
 
 #if SCOPES_OPTIMIZE_ASSEMBLY
     if (!(flags & CF_NoOpts)) {
-        Timer optimize_timer(Symbol("build_and_run_opt_passes()"));
+        Timer optimize_timer(TIMER_Optimize);
         build_and_run_opt_passes(module);
     }
 #endif
@@ -8277,7 +8216,7 @@ static Any compile(Label *fn, uint64_t flags) {
 
     void *pfunc;
     {
-        Timer mcjit_timer(Symbol("LLVMGetPointerToGlobal()"));
+        Timer mcjit_timer(TIMER_MCJIT);
         pfunc = LLVMGetPointerToGlobal(ee, func);
     }
     if (flags & CF_DumpDisassembly) {
@@ -8670,7 +8609,6 @@ struct Solver {
             result = run_ffi_function(enter, &args[1], args.size() - 1);
         }
 
-        l->unlink_backrefs();
         enter = args[0].value;
         args = { KeyAny() };
         if (fi->return_type != TYPE_Void) {
@@ -8685,7 +8623,6 @@ struct Solver {
                 args.push_back(KeyAny(result));
             }
         }
-        l->link_backrefs();
     }
 
     void solve_keyed_args(Label *l) {
@@ -8755,9 +8692,7 @@ struct Solver {
                 newargs[index].value = arg.value;
             }
         }
-        l->unlink_backrefs();
         args = newargs;
-        l->link_backrefs();
     }
 
     bool fold_type_label_arguments(Label *l) {
@@ -8795,10 +8730,8 @@ struct Solver {
 
         Label *newl = fold_type_label_single(
             enter.closure->frame, enter.closure->label, keys);
-        l->unlink_backrefs();
         enter = newl;
         args = callargs;
-        l->link_backrefs();
 
         return true;
     }
@@ -9213,10 +9146,8 @@ struct Solver {
     }
 
 #define RETARGS(...) \
-    l->unlink_backrefs(); \
     enter = args[0].value; \
-    args = { none, __VA_ARGS__ }; \
-    l->link_backrefs();
+    args = { none, __VA_ARGS__ };
 
     std::vector<Label *> traceback;
 
@@ -9263,10 +9194,8 @@ struct Solver {
         Any value = none;
         auto result = T->lookup_call_handler(value);
         assert(result);
-        l->unlink_backrefs();
         args.insert(args.begin() + 1, KeyAny(enter));
         enter = value;
-        l->link_backrefs();
     }
 
     bool isnan(float f) {
@@ -9304,10 +9233,8 @@ struct Solver {
             Scope *scope = fptr();
             Label *func = fold_type_label_single(cl->frame, 
                 expand_module(sx, scope), { args[0] });
-            l->unlink_backrefs();
             enter = func;
             args = { none };
-            l->link_backrefs();
         } break;            
         case FN_ExternSymbol: {
             CHECKARGS(1, 1);
@@ -9410,10 +9337,8 @@ struct Solver {
             for (size_t i = 1; i < args.size(); ++i) {
                 result.push_back(args[i].key);
             }
-            l->unlink_backrefs();
             enter = args[0].value;
             args = result;
-            l->link_backrefs();
         } break;
         case FN_VaAt: {
             CHECKARGS(1, -1);
@@ -9431,10 +9356,8 @@ struct Solver {
                     result.push_back(args[i]);
                 }
             }
-            l->unlink_backrefs();
             enter = args[0].value;
             args = result;
-            l->link_backrefs();
         } break;
         case FN_Branch: {
             CHECKARGS(3, 3);
@@ -9825,10 +9748,8 @@ struct Solver {
                         << args[i].value.indirect_type() << std::endl;
                 }
             }
-            l->unlink_backrefs();
             enter = args[0].value;
             args[0].value = none;
-            l->link_backrefs();
         } break;
         case OP_ICmpEQ:
         case OP_ICmpNE:
@@ -10014,11 +9935,9 @@ struct Solver {
         const Closure *else_br = args[3].value;
         verify_branch_continuation(then_br);
         verify_branch_continuation(else_br);
-        l->unlink_backrefs();
         args[0].value = none;
         args[2].value = typify_single(then_br->frame, then_br->label, {});
         args[3].value = typify_single(else_br->frame, else_br->label, {});
-        l->link_backrefs();
     }
 
 #undef IARITH_NUW_NSW_OPS
@@ -10057,9 +9976,7 @@ struct Solver {
 
     void clear_continuation_arg(Label *l) {
         auto &&args = l->body.args;
-        l->unlink_backrefs();
         args[0] = none;
-        l->link_backrefs();
     }
 
     // clear continuation argument and clear it for labels that use it
@@ -10077,9 +9994,10 @@ struct Solver {
             clear_continuation_arg(owner);
         }
 
+        /*
         {
             // remove argument from users
-            auto users = param->users; // make copy
+            auto users = param->get_users(); // make copy
             for (auto kv = users.begin(); kv != users.end(); ++kv) {
                 Label *user = kv->first;
                 if (is_called_by(param, user)) {
@@ -10103,7 +10021,7 @@ struct Solver {
 
         {
             // calls to this label also need to be adjusted
-            auto users = owner->users; // make copy
+            auto users = owner->get_users(); // make copy
             for (auto kv = users.begin(); kv != users.end(); ++kv) {
                 Label *user = kv->first;
                 if (is_calling_closure(user) && (user->get_closure_enter()->label == owner)) { 
@@ -10113,31 +10031,9 @@ struct Solver {
                 }
             }
         }
+        */
 
     }
-
-    /*
-    void inline_label_call(Label *l) {
-        auto &&enter = l->body.enter;
-        auto &&args = l->body.args;
-        assert(enter.type == TYPE_Label);
-        Label *enter_label = enter.label;
-        assert(!args.empty());
-#if SCOPES_DEBUG_CODEGEN
-        ss_cout << "inlining label call to " << enter_label << " in " << l << std::endl;
-#endif
-
-        Args newargs = { args[0] };
-        for (size_t i = 1; i < enter_label->params.size(); ++i) {
-            newargs.push_back(untyped());
-        }
-        Label *newl = fold_type_label(enter_label, newargs);
-        l->unlink_backrefs();
-        args[0] = none;
-        enter = newl;
-        l->link_backrefs();
-    }
-    */
 
     void type_continuation_from_label_return_type(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
@@ -10155,9 +10051,7 @@ struct Solver {
         if (isa<ReturnLabelType>(cont_type)) {
             auto tli = cast<ReturnLabelType>(cont_type);
             Any newarg = type_return(args[0].value, tli->types);
-            l->unlink_backrefs();
             args[0] = newarg;
-            l->link_backrefs();
         } else {
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "unexpected return type: " << cont_type << std::endl;
@@ -10174,16 +10068,12 @@ struct Solver {
         assert(enter.type == TYPE_Builtin);
         auto &&args = l->body.args;
         if (enter.builtin == SFXFN_Unreachable) {
-            l->unlink_backrefs();
             args[0] = none;
-            l->link_backrefs();
         } else {
             std::vector<const Type *> argtypes;
             argtypes_from_builtin_call(l, argtypes);
             Any newarg = type_return(args[0].value, argtypes);
-            l->unlink_backrefs();
             args[0] = newarg;
-            l->link_backrefs();
         }
     }
 
@@ -10195,9 +10085,7 @@ struct Solver {
         argtypes_from_function_call(l, argtypes);
         auto &&args = l->body.args;
         Any newarg = type_return(args[0].value, argtypes);
-        l->unlink_backrefs();
         args[0] = newarg;
-        l->link_backrefs();
     }
 
     void type_continuation_call(Label *l) {
@@ -10231,18 +10119,13 @@ struct Solver {
             error(exc);
         SCOPES_TRY_END()
 
-        {
-            Timer lower2cff_timer(Symbol("lower2cff()"));
-            lower2cff(entry);
-        }
+        lower2cff(entry);
         entry->set_done();
         return entry;
     }
 
     void copy_body(Label *dest, Label *source) {
-        dest->unlink_backrefs();
         dest->body = source->body;
-        dest->link_backrefs();
     }
     
     void normalize_label(Label *l) {
@@ -10396,6 +10279,7 @@ struct Solver {
     }
 
     Label *lower2cff(Label *entry) {
+        Timer lower2cff_timer(TIMER_Lower2CFF);
 
         size_t numchanges = 0;
         size_t iterations = 0;
@@ -10407,9 +10291,13 @@ struct Solver {
                     "free variable elimination not terminated after 256 iterations"));
             }
 
-            std::vector<Label *> labels;
-            std::unordered_set<Label *> visited;
-            entry->build_reachable(labels, visited);
+            std::unordered_set<Label *> labels;
+            entry->build_reachable(labels);
+
+            Label::UserMap um;
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                (*it)->insert_into_usermap(um);
+            }
 
             std::unordered_set<Label *> illegal;
             std::unordered_set<Label *> has_illegals;
@@ -10419,7 +10307,7 @@ struct Solver {
                     continue;
                 }
                 std::vector<Label *> scope;
-                l->build_scope(scope);
+                l->build_scope(um, scope);
                 bool found = false;
                 for (size_t i = 0; i < scope.size(); ++i) {
                     Label *subl = scope[i];
@@ -10442,57 +10330,44 @@ struct Solver {
                 ss_cout << "invalid: ";
                 stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
-                auto users_copy = l->users;
-                // continuation must be eliminated
-                for (auto kv = users_copy.begin(); kv != users_copy.end(); ++kv) {
-                    Label *user = kv->first;
-                    if (!visited.count(user)) {
-#if SCOPES_DEBUG_CODEGEN
-                        ss_cout << "warning: unreachable user encountered" << std::endl;
-#endif
-                        continue;
-                    }
-                    auto &&enter = user->body.enter;
-                    auto &&args = user->body.args;
-                    #if 0
-                    // labels can be passed to API functions, so this is legal
-                    for (size_t i = 0; i < args.size(); ++i) {
-                        auto &&arg = args[i];
-                        if ((arg.type == TYPE_Label) && (arg.label == l)) {                            
-                            assert(false && "unexpected use of label as argument");
-                        }
-                    }
-                    #endif
-                    if ((enter.type == TYPE_Label) && (enter.label == l)) {
-                        assert(!args.empty());
+                
+                auto umit = um.map.find(l);
+                if (umit != um.map.end()) {
+                    auto &&users = umit->second;
+                    // continuation must be eliminated
+                    for (auto kv = users.begin(); kv != users.end(); ++kv) {
+                        Label *user = *kv;
+                        auto &&enter = user->body.enter;
+                        auto &&args = user->body.args;
+                        if ((enter.type == TYPE_Label) && (enter.label == l)) {
+                            assert(!args.empty());
 
-                        auto &&cont = args[0];
-                        if ((cont.value.type == TYPE_Parameter)
-                            && (cont.value.parameter->label == l)) {
+                            auto &&cont = args[0];
+                            if ((cont.value.type == TYPE_Parameter)
+                                && (cont.value.parameter->label == l)) {
 #if SCOPES_DEBUG_CODEGEN
-                            ss_cout << "skipping recursive call" << std::endl;
+                                ss_cout << "skipping recursive call" << std::endl;
 #endif
-                        } else {
-                            Args newargs = { cont };
-                            for (size_t i = 1; i < l->params.size(); ++i) {
-                                newargs.push_back(untyped());
+                            } else {
+                                Args newargs = { cont };
+                                for (size_t i = 1; i < l->params.size(); ++i) {
+                                    newargs.push_back(untyped());
+                                }
+                                Label *newl = fold_type_label(um, l, newargs);
+
+#if SCOPES_DEBUG_CODEGEN
+                                ss_cout << l << "(" << cont.value << ") -> " << newl << std::endl;
+#endif
+
+                                cont = none;
+                                enter = newl;
+                                numchanges++;
                             }
-                            Label *newl = fold_type_label(l, newargs);
-
+                        } else {
 #if SCOPES_DEBUG_CODEGEN
-                            ss_cout << l << "(" << cont.value << ") -> " << newl << std::endl;
+                            ss_cout << "warning: invalidated user encountered" << std::endl;
 #endif
-
-                            user->unlink_backrefs();
-                            cont = none;
-                            enter = newl;
-                            user->link_backrefs();
-                            numchanges++;
                         }
-                    } else {
-#if SCOPES_DEBUG_CODEGEN
-                        ss_cout << "warning: invalidated user encountered" << std::endl;
-#endif
                     }
                 }
             }
@@ -10760,7 +10635,6 @@ struct Expander {
         state->body.enter = enter;
         state->body.args = args;
         state->body.anchor = anchor;
-        state->link_backrefs();
         state = nullptr;
     }
 
