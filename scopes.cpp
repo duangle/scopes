@@ -33,6 +33,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_DEBUG_CODEGEN 0
 #define SCOPES_OPTIMIZE_ASSEMBLY 1
 #define SCOPES_EARLY_ABORT 0
+#define SCOPES_PRINT_TIMERS 0
 
 #define SCOPES_MAX_RECURSIONS 32
 
@@ -1373,6 +1374,32 @@ uint64_t Symbol::next_symbol_id = SYM_Count;
 static StyledStream& operator<<(StyledStream& ost, Symbol sym) {
     return sym.stream(ost);
 }
+
+//------------------------------------------------------------------------------
+// TIMER
+//------------------------------------------------------------------------------
+
+struct Timer {
+    static std::unordered_map<Symbol, double, Symbol::Hash> timers;
+    Symbol name;
+    std::chrono::time_point<std::chrono::high_resolution_clock> start;
+    std::chrono::time_point<std::chrono::high_resolution_clock> end;
+
+    Timer(Symbol _name) : name(_name), start(std::chrono::high_resolution_clock::now()) {}
+    ~Timer() {
+        std::chrono::duration<double> diff = std::chrono::high_resolution_clock::now() - start;
+        timers[name] = timers[name] + (diff.count() * 1000.0);
+    }
+
+    static void print_timers() {
+        StyledStream ss;
+        for (auto it = timers.begin(); it != timers.end(); ++it) {
+            ss << it->first.name()->data << ": " << it->second << "ms" << std::endl;
+        }
+    }
+};
+
+std::unordered_map<Symbol, double, Symbol::Hash> Timer::timers;
 
 //------------------------------------------------------------------------------
 // SOURCE FILE
@@ -4588,6 +4615,14 @@ public:
         }
     }
 
+    bool has_single_caller() {
+        if (users.size() != 1)
+            return false;
+        auto it = users.begin();
+        Label *l = it->first;
+        return (l->body.enter == Any(this));
+    }
+
     struct Args {
         const Frame *frame;
         scopes::Args args;
@@ -7313,7 +7348,10 @@ struct GenerateCtx {
 
     LLVMValueRef label_to_value(Label *label) {
         if (is_basic_block_like(label)) {
-            return LLVMBasicBlockAsValue(label_to_basic_block(label));
+            auto bb = label_to_basic_block(label);
+            if (!bb) return nullptr;
+            else
+                return LLVMBasicBlockAsValue(bb);
         } else {
             return label_to_function(label);
         }
@@ -7501,6 +7539,7 @@ struct GenerateCtx {
     }
 
     void write_label_body(Label *label) {
+    repeat:
         auto &&body = label->body;
         auto &&enter = body.enter;
         auto &&args = body.args;
@@ -7524,7 +7563,8 @@ struct GenerateCtx {
         LLVMValueRef NAME = argument_to_value(args[argn++].value);
 #define READ_LABEL_VALUE(NAME) \
         assert(argn <= argcount); \
-        LLVMValueRef NAME = label_to_value(args[argn++].value);
+        LLVMValueRef NAME = label_to_value(args[argn++].value); \
+        assert(NAME);
 #define READ_TYPE(NAME) \
         assert(argn <= argcount); \
         assert(args[argn].value.type == TYPE_Type); \
@@ -7738,7 +7778,19 @@ struct GenerateCtx {
             }
         } else if (enter.type == TYPE_Label) {
             LLVMValueRef value = label_to_value(enter);
-            if (LLVMValueIsBasicBlock(value)) {
+            if (!value) {
+                // no basic block was generated - just generate assignments
+                LLVMValueRef values[argcount];
+                for (size_t i = 0; i < argcount; ++i) {
+                    values[i] = argument_to_value(args[i + 1].value);
+                }
+                auto &&params = enter.label->params;
+                for (size_t i = 1; i < params.size(); ++i) {
+                    param2value[params[i]] = values[i - 1];
+                }
+                label = enter.label;
+                goto repeat;
+            } else if (LLVMValueIsBasicBlock(value)) {
                 LLVMValueRef values[argcount];
                 for (size_t i = 0; i < argcount; ++i) {
                     values[i] = argument_to_value(args[i + 1].value);
@@ -7834,26 +7886,48 @@ struct GenerateCtx {
             }
         } else if (contarg.type == TYPE_Label) {
             auto bb = label_to_basic_block(contarg.label);
-            if (retvalue) {
-                auto bbfrom = LLVMGetInsertBlock(builder);
-                // assign phi nodes
-                auto &&params = contarg.label->params;
-                LLVMBasicBlockRef incobbs[] = { bbfrom };
-                for (size_t i = 1; i < params.size(); ++i) {
-                    Parameter *param = params[i];
-                    LLVMValueRef phinode = argument_to_value(param);
-                    LLVMValueRef incoval = nullptr;
-                    if (params.size() == 2) {
-                        // single argument
-                        incoval = retvalue;
-                    } else {
-                        // multiple arguments
-                        incoval = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+            if (bb) {
+                if (retvalue) {
+                    auto bbfrom = LLVMGetInsertBlock(builder);
+                    // assign phi nodes
+                    auto &&params = contarg.label->params;
+                    LLVMBasicBlockRef incobbs[] = { bbfrom };
+                    for (size_t i = 1; i < params.size(); ++i) {
+                        Parameter *param = params[i];
+                        LLVMValueRef phinode = argument_to_value(param);
+                        LLVMValueRef incoval = nullptr;
+                        if (params.size() == 2) {
+                            // single argument
+                            incoval = retvalue;
+                        } else {
+                            // multiple arguments
+                            incoval = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                        }
+                        LLVMAddIncoming(phinode, &incoval, incobbs, 1);
                     }
-                    LLVMAddIncoming(phinode, &incoval, incobbs, 1);
                 }
+                
+                LLVMBuildBr(builder, bb);
+            } else { 
+                if (retvalue) {
+                    // no basic block - just add assignments and continue
+                    auto &&params = contarg.label->params;
+                    for (size_t i = 1; i < params.size(); ++i) {
+                        Parameter *param = params[i];
+                        LLVMValueRef pvalue = nullptr;
+                        if (params.size() == 2) {
+                            // single argument
+                            pvalue = retvalue;
+                        } else {
+                            // multiple arguments
+                            pvalue = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                        }
+                        param2value[param] = pvalue;
+                    }
+                }
+                label = contarg.label;
+                goto repeat;
             }
-            LLVMBuildBr(builder, bb);
         } else if (contarg.type == TYPE_Nothing) {
         } else {
             assert(false && "todo: continuing with unexpected value");
@@ -7892,6 +7966,11 @@ struct GenerateCtx {
         LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
         auto it = label2bb.find({func, label});
         if (it == label2bb.end()) {
+            if (label->has_single_caller()) {
+                // not generating basic blocks for single user labels
+                label2bb.insert({{func, label}, nullptr});
+                return nullptr;
+            }
             const char *name = label->name.name()->data;
             auto bb = LLVMAppendBasicBlock(func, name);
             label2bb.insert({{func, label}, bb});
@@ -8141,6 +8220,7 @@ enum {
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
+    Timer sum_compile_time(Symbol("compile()"));
 //#ifdef SCOPES_WIN32
     flags |= CF_NoDebugInfo;
 //#endif
@@ -8152,7 +8232,12 @@ static Any compile(Label *fn, uint64_t flags) {
     if (flags & CF_NoDebugInfo) {
         ctx.use_debug_info = false;
     }
-    auto result = ctx.generate(fn);
+
+    std::pair<LLVMModuleRef, LLVMValueRef> result;
+    {
+        Timer generate_timer(Symbol("generate()"));
+        result = ctx.generate(fn);
+    }
 
     auto module = result.first;
     auto func = result.second;
@@ -8180,6 +8265,7 @@ static Any compile(Label *fn, uint64_t flags) {
 
 #if SCOPES_OPTIMIZE_ASSEMBLY
     if (!(flags & CF_NoOpts)) {
+        Timer optimize_timer(Symbol("build_and_run_opt_passes()"));
         build_and_run_opt_passes(module);
     }
 #endif
@@ -8189,7 +8275,11 @@ static Any compile(Label *fn, uint64_t flags) {
         LLVMDumpValue(func);
     }
 
-    void *pfunc = LLVMGetPointerToGlobal(ee, func);
+    void *pfunc;
+    {
+        Timer mcjit_timer(Symbol("LLVMGetPointerToGlobal()"));
+        pfunc = LLVMGetPointerToGlobal(ee, func);
+    }
     if (flags & CF_DumpDisassembly) {
         assert(disassembly_listener);
         //auto td = LLVMGetExecutionEngineTargetData(ee);
@@ -10141,7 +10231,10 @@ struct Solver {
             error(exc);
         SCOPES_TRY_END()
 
-        lower2cff(entry);
+        {
+            Timer lower2cff_timer(Symbol("lower2cff()"));
+            lower2cff(entry);
+        }
         entry->set_done();
         return entry;
     }
@@ -12354,6 +12447,9 @@ skip_regular_load:
 
     typedef void (*MainFuncType)();
     MainFuncType fptr = (MainFuncType)compile(fn, CF_NoOpts).pointer;
+#if SCOPES_PRINT_TIMERS
+    Timer::print_timers();
+#endif
     fptr();
 
     return 0;

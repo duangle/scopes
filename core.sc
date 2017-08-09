@@ -29,21 +29,6 @@
     functions and macros, parses the command-line and optionally enters
     the REPL.
 
-#do
-    let printf =
-        extern-new 'printf (function-type i32 (pointer-type i8) 'variadic)
-
-    fn str (s)
-        getelementptr s 0 1 0
-
-    let [loop] i = 0
-    if (icmp<s i 33)
-        #io-write! (Any-repr (Any-wrap i))
-        printf (str "%i!\n") i
-        loop (add i 1)
-
-    true
-
 fn tie-const (a b)
     if (constant? a) b
     else (unconst b)
@@ -1416,6 +1401,7 @@ syntax-extend
     set-scope-symbol! syntax-scope 'scope-macro scope-macro
     set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (Symbol "#list")
+        #compile (typify list-handler list Scope) 'no-opts 'dump-module
         compile (typify list-handler list Scope)
     set-scope-symbol! syntax-scope (Symbol "#symbol")
         compile (typify symbol-handler list Scope)
