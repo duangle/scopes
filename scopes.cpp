@@ -585,7 +585,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
     T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
-    T(FN_LabelAnchor, "Label-anchor") \
+    T(FN_ClosureAnchor, "Closure-anchor") \
     T(FN_ClosureEq, "Closure==") \
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
@@ -6428,11 +6428,22 @@ static void *global_c_namespace = nullptr;
 
 static bool signal_abort = false;
 void f_abort() {
+#if SCOPES_PRINT_TIMERS
+    Timer::print_timers();
+#endif    
     if (SCOPES_EARLY_ABORT || signal_abort) {
         std::abort();
     } else {
         exit(1);
     }
+}
+
+
+void f_exit(int c) {
+#if SCOPES_PRINT_TIMERS
+    Timer::print_timers();
+#endif        
+    exit(c);
 }
 
 static void default_exception_handler(const Any &value) {
@@ -11906,8 +11917,8 @@ static void f_set_typename_super(const Type *T, const Type *ST) {
     const_cast<TypenameType *>(tn)->super_type = ST;
 }
 
-static const Anchor *f_label_anchor(Label *label) {
-    return label->anchor;
+static const Anchor *f_closure_anchor(Closure *closure) {
+    return closure->label->anchor;
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -11965,7 +11976,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_FunctionTypeIsVariadic, f_function_type_is_variadic, TYPE_Bool, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);    
+    DEFINE_PURE_C_FUNCTION(FN_ClosureAnchor, f_closure_anchor, TYPE_Anchor, TYPE_Closure);    
     
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
@@ -11990,7 +12001,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_Abort, f_abort, TYPE_Void);
-    DEFINE_C_FUNCTION(FN_Exit, exit, TYPE_Void, TYPE_I32);    
+    DEFINE_C_FUNCTION(FN_Exit, f_exit, TYPE_Void, TYPE_I32);    
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
 
     const Type *exception_pad_type = Array(TYPE_U8, sizeof(ExceptionPad));
@@ -12321,10 +12332,10 @@ skip_regular_load:
 
     typedef void (*MainFuncType)();
     MainFuncType fptr = (MainFuncType)compile(fn, CF_NoOpts).pointer;
+    fptr();
 #if SCOPES_PRINT_TIMERS
     Timer::print_timers();
 #endif
-    fptr();
 
     return 0;
 }

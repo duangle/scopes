@@ -1912,7 +1912,7 @@ define-macro using
 #-------------------------------------------------------------------------------
 
 # labels softcast to function pointers
-set-type-symbol! Label 'softcast
+set-type-symbol! Closure 'softcast
     fn (destT self)
         if (function-pointer-type? destT)
             let ET = (rawcall element-type destT 0)
@@ -1924,7 +1924,7 @@ set-type-symbol! Label 'softcast
                 let result =
                     compile (typify self args...)
                 if (destT != ('typeof result))
-                    syntax-error! (Label-anchor self)
+                    syntax-error! (Closure-anchor self)
                         .. "function does not compile to type " (repr destT)
                             \ " but has type " (repr ('typeof result))
                 return (softcast destT result)
