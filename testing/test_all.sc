@@ -6,6 +6,7 @@ let modules =
     quote
         test_assorted
         test_call_override
+        test_clang
         test_dots
         test_extraparams
         test_fwdecl
