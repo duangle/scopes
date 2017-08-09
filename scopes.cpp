@@ -4054,10 +4054,6 @@ static Style default_symbol_styler(Symbol name) {
         return Style_SfxFunction;
     else if ((val >= OPERATOR_FIRST) && (val <= OPERATOR_LAST))
         return Style_Operator;
-    /*
-    // TODO
-    else if ((val >= TYPE_FIRST) && (val <= TYPE_LAST))
-        return Style_Type;*/
     return Style_Symbol;
 }
 
@@ -4260,12 +4256,6 @@ struct StreamExpr : StreamAnchors {
                 it = it->next;
                 offset = offset + 1;
                 while (it != EOL) {
-                    /*if (is_list(it->at)) {
-                        numsublists = numsublists + 1;
-                        if (numsublists >= 2) {
-                            break;
-                        }
-                    }*/
                     if (is_nested(it->at)) {
                         break;
                     }
@@ -5199,24 +5189,6 @@ struct StreamLabel : StreamAnchors {
         }
     }
 
-    #if 0
-    local function stream_scope(_scope)
-        if _scope then
-            writer(" ")
-            writer(styler(Style.Comment, "<"))
-            local k = 0
-            for dest,_ in pairs(_scope) do
-                if k > 0 then
-                    writer(" ")
-                end
-                stream_label_label_user(dest)
-                k = k + 1
-            end
-            writer(styler(Style.Comment, ">"))
-        end
-    end
-    #endif
-
     void stream_label (Label *alabel) {
         if (visited.count(alabel)) {
             return;
@@ -5528,7 +5500,6 @@ static Any untyped() {
     return unknown_of(TYPE_Unknown);
 }
 
-#if 1
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
 // arguments are treated as follows:
@@ -5536,14 +5507,6 @@ static Any untyped() {
 //      type as TYPE_Unknown = leave the parameter as-is
 // any other = inline the argument and remove the parameter
 static Label *fold_type_label(Label::UserMap &um, Label *label, const Args &args) {
-#if 0
-    ss_cout << "inline-arguments " << label << ":";
-    for (size_t i = 0; i < args.size(); ++i) {
-        ss_cout << " " << args[i];
-    }
-    ss_cout << std::endl;
-#endif
-
     Label::Args la;
     la.args = args;
     auto &&instances = label->instances;
@@ -5617,7 +5580,6 @@ static Label *fold_type_label(Label::UserMap &um, Label *label, const Args &args
     instances.insert({la, newlabel});
     return newlabel;
 }
-#endif
 
 static void map_constant_arguments(Frame *frame, Label *label, const Args &args) {
     size_t lasti = label->params.size() - 1;
@@ -5892,11 +5854,6 @@ public:
                 cast<TypenameType>(const_cast<Type *>(struct_type)),
                 defn);
 
-            #if 0
-            auto &rl = Context->getASTRecordLayout(rd);
-            auto align = (size_t)rl.getAlignment().getQuantity();
-            auto size = (size_t)rl.getSize().getQuantity();
-            #endif
         }
 
         return struct_type;
@@ -8243,13 +8200,6 @@ static Any compile(Label *fn, uint64_t flags) {
         }
     }
 
-#if 0
-        if (flags & CF_DumpTime) {
-            auto tt = compile_timer.getTotalTime();
-            std::cout << "compile time: " << (tt.getUserTime() * 1000.0) << "ms" << std::endl;
-        }
-#endif
-
     return Any::from_pointer(functype, pfunc);
 }
 
@@ -8707,12 +8657,6 @@ struct Solver {
     }
 
     bool fold_type_label_arguments(Label *l) {
-        /*
-        if (!has_foldable_args(l)
-            && all_params_typed(l->get_closure_enter()->label)) {
-            return false;
-        }*/
-
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
 #endif
@@ -9960,13 +9904,6 @@ struct Solver {
 #undef CHECKARGS
 #undef RETARGS
 
-    /*
-    static bool forwards_continuation_immediately(Label *l) {
-        assert(!l->params.empty());
-        return is_continuing_from(l->params[0], l);
-    }
-    */
-
     static bool returns_immediately(Label *l) {
         assert(!l->params.empty());
         return is_called_by(l->params[0], l);
@@ -10004,46 +9941,6 @@ struct Solver {
         if (is_continuing_from(param, owner)) {
             clear_continuation_arg(owner);
         }
-
-        /*
-        {
-            // remove argument from users
-            auto users = param->get_users(); // make copy
-            for (auto kv = users.begin(); kv != users.end(); ++kv) {
-                Label *user = kv->first;
-                if (is_called_by(param, user)) {
-                    set_active_anchor(user->body.anchor);
-                    {
-                        StyledStream ss;
-                        stream_label(ss, user, StreamLabelFormat());
-                        ss << owner->anchor 
-                            << " while lowering function to label" << std::endl;
-                        owner->anchor->stream_source_line(ss);
-                    }
-                    StyledString ss;
-                    ss.out << "attempting to return from lowered function";
-                    location_error(ss.str());
-                }
-                if (is_continuing_from(param, user)) {
-                    clear_continuation_arg(user);
-                }
-            }
-        }
-
-        {
-            // calls to this label also need to be adjusted
-            auto users = owner->get_users(); // make copy
-            for (auto kv = users.begin(); kv != users.end(); ++kv) {
-                Label *user = kv->first;
-                if (is_calling_closure(user) && (user->get_closure_enter()->label == owner)) { 
-                    clear_continuation_arg(user);
-                } else if (is_calling_label(user) && (user->get_label_enter() == owner)) { 
-                    clear_continuation_arg(user);
-                }
-            }
-        }
-        */
-
     }
 
     void type_continuation_from_label_return_type(Label *l) {
@@ -12282,13 +12179,6 @@ int main(int argc, char *argv[]) {
 
         scopes_compiler_dir = dirname(strdup(scopes_compiler_path));
     }
-
-#if 0
-#ifndef SCOPES_WIN32
-    signal(SIGSEGV, crash_handler);
-    signal(SIGABRT, crash_handler);
-#endif
-#endif
 
     init_types();
     init_globals(argc, argv);
