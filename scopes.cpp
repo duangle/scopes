@@ -3913,7 +3913,7 @@ struct LexerParser {
             this->read_token();
             return Syntax::from(anchor,
                 List::from({ 
-                    Syntax::from(anchor, Symbol(KW_Quote)), 
+                    Any(Syntax::from(anchor, Symbol(KW_Quote))), 
                     parse_any() }));
         } else {
             location_error(format("unexpected token: %c (%i)",
@@ -3992,7 +3992,7 @@ struct LexerParser {
     Any parse() {
         this->read_token();
         int lineno = 0;
-        bool escape = false;
+        //bool escape = false;
 
         const Anchor *anchor = this->anchor();
         ListBuilder builder(*this);
@@ -4001,7 +4001,7 @@ struct LexerParser {
             if (this->token == tok_none) {
                 break;
             } else if (this->token == tok_escape) {
-                escape = true;
+                //escape = true;
                 this->read_token();
                 if (this->lineno <= lineno) {
                     location_error(String::from(
@@ -4014,7 +4014,7 @@ struct LexerParser {
                         "indentation mismatch"));
                 }
 
-                escape = false;
+                //escape = false;
                 lineno = this->lineno;
                 // keep adding elements while we're in the same line
                 while ((this->token != tok_eof)
@@ -8161,13 +8161,15 @@ static Any compile(Label *fn, uint64_t flags) {
         if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
             sizeof(opts), &errormsg)) {
             location_error(String::from_cstr(errormsg));
-        }
+        }        
+    } else {
+        LLVMAddModule(ee, module);
+    }
 
+    if (!disassembly_listener && (flags & CF_DumpDisassembly)) {
         llvm::ExecutionEngine *pEE = reinterpret_cast<llvm::ExecutionEngine*>(ee);
         disassembly_listener = new DisassemblyListener(pEE);
         pEE->RegisterJITEventListener(disassembly_listener);
-    } else {
-        LLVMAddModule(ee, module);
     }
 
 #if SCOPES_OPTIMIZE_ASSEMBLY

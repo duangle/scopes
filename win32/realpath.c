@@ -12,7 +12,11 @@ I am placing this in the public domain for anyone to use or modify
 #include <errno.h>
 #include <sys/stat.h>
 
-char *realpath(const char *path, char resolved_path[PATH_MAX])
+#ifndef PATH_MAX
+#define PATH_MAX 4096
+#endif
+
+char *realpath(const char *path, char *resolved_path)
 {
   char *return_path = 0;
 

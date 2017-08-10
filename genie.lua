@@ -71,11 +71,13 @@ local LLVM_CONFIG = toolpath("llvm-config", CLANG_PATH)
 
 local LLVM_LDFLAGS = pkg_config(LLVM_CONFIG .. " --ldflags")
 local LLVM_CXXFLAGS = pkg_config(LLVM_CONFIG .. " --cxxflags")
-local LLVM_LIBS = pkg_config(LLVM_CONFIG .. " --libs engine passes option objcarcopts coverage support lto coroutines")
+local LLVM_LIBS = pkg_config(LLVM_CONFIG .. " --link-static --libs engine passes option objcarcopts coverage support lto coroutines")
 
-premake.gcc.cxx = CLANG_CXX
-premake.gcc.cc = CLANG_CC
-premake.gcc.llvm = true
+if not os.is("windows") then
+    premake.gcc.cxx = CLANG_CXX
+    premake.gcc.cc = CLANG_CC
+    premake.gcc.llvm = true
+end
 
 solution "scopes"
     location "build"
@@ -108,33 +110,33 @@ project "scopes"
         "SCOPES_MAIN_CPP_IMPL",
     }
 
-    buildoptions_cpp {
-        "-std=c++11",
-        "-fno-rtti",
-        "-fno-exceptions",
-        "-ferror-limit=1",
-        "-pedantic",
-        "-Wall",
-        "-Wno-keyword-macro",
-    }
-
-    buildoptions_cpp(LLVM_CXXFLAGS)
-
-    links {
-        "clangFrontend",
-        "clangDriver",
-        "clangSerialization",
-        "clangCodeGen",
-        "clangParse",
-        "clangSema",
-        "clangAnalysis",
-        "clangEdit",
-        "clangAST",
-        "clangLex",
-        "clangBasic"        
-    }
-
     configuration { "linux" }
+        buildoptions_cpp(LLVM_CXXFLAGS)
+
+        links {
+            "clangFrontend",
+            "clangDriver",
+            "clangSerialization",
+            "clangCodeGen",
+            "clangParse",
+            "clangSema",
+            "clangAnalysis",
+            "clangEdit",
+            "clangAST",
+            "clangLex",
+            "clangBasic"        
+        }
+
+        buildoptions_cpp {
+            "-std=c++11",
+            "-fno-rtti",
+            "-fno-exceptions",
+            "-ferror-limit=1",
+            "-pedantic",
+            "-Wall",
+            "-Wno-keyword-macro",
+        }
+    
         files {
             "external/minilibs/regexp.c"
         }
@@ -170,7 +172,34 @@ project "scopes"
     
     configuration { "windows" }
         buildoptions_cpp {
-            "-Wno-unknown-warning-option",
+            "-D_GNU_SOURCE",
+            "-Wa,-mbig-obj",
+            "-std=gnu++11",
+            "-fno-exceptions",
+            "-fno-rtti",
+            "-D__STDC_CONSTANT_MACROS",
+            "-D__STDC_FORMAT_MACROS",
+            "-D__STDC_LIMIT_MACROS",
+        }
+
+        buildoptions_cpp {
+            "-Wall",
+        }
+
+        -- gcc-only options
+        buildoptions_cpp {
+            "-Wno-error=date-time",
+            "-fmax-errors=1",
+            "-Wno-vla",
+            "-Wno-enum-compare",
+            "-Wno-comment",
+            "-Wno-misleading-indentation",
+            "-Wno-pragmas",
+            "-Wno-return-type",
+            "-Wno-variadic-macros",
+        }
+    
+        buildoptions_cpp {
             "-Wno-unused-variable",
             "-Wno-unused-function",        
         }
@@ -196,15 +225,25 @@ project "scopes"
         }
 
         links { 
-            "ffi", "ole32", "uuid", "version", "psapi"
+            "ffi", "uuid", "ole32", "psapi", "version", "stdc++",
         }
 
-        linkoptions { "-Wl,--allow-multiple-definition" }
         linkoptions(LLVM_LDFLAGS)
-        linkoptions { "-Wl,--whole-archive", "-Wl,--export-all-symbols" }
+        linkoptions {
+            "-lclangFrontend",
+            "-lclangDriver",
+            "-lclangSerialization",
+            "-lclangCodeGen",
+            "-lclangParse",
+            "-lclangSema",
+            "-lclangAnalysis",
+            "-lclangEdit",
+            "-lclangAST",
+            "-lclangLex",
+            "-lclangBasic"
+        }
         linkoptions(LLVM_LIBS)
-        linkoptions { "-Wl,--no-whole-archive" }
-        
+
         if os.is("windows") then
             local CP = toolpath("cp", MSYS_BIN_PATH)
 
@@ -214,7 +253,6 @@ project "scopes"
                 CP .. " -v " .. dllpath("libgcc_s_seh-1") .. " " .. THISDIR,
                 CP .. " -v " .. dllpath("libstdc++-6") .. " " .. THISDIR,
                 CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. THISDIR,
-                CP .. " -v " .. dllpath("LLVM") .. " " .. THISDIR,
             }
         end
     
