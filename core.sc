@@ -33,18 +33,26 @@ fn tie-const (a b)
     if (constant? a) b
     else (unconst b)
 
+fn cond-const (a b)
+    if a b
+    else (unconst b)
+
 fn type? (T)
     rawcall icmp== (rawcall ptrtoint type usize) (rawcall ptrtoint (rawcall typeof T) usize)
 
+fn assert-type (T)
+    if (type? T)
+    else
+        rawcall compiler-error!
+            rawcall string-join "type expected, not " (rawcall Any-repr (rawcall Any-wrap T))
 fn type== (a b)
-    fn assert-type (T)
-        if (type? T)
-        else
-            rawcall compiler-error!
-                rawcall string-join "type expected, not " (rawcall Any-repr (rawcall Any-wrap T))
     assert-type a
     assert-type b
     rawcall icmp== (rawcall ptrtoint a usize) (rawcall ptrtoint b usize)
+
+fn unknownof (T)
+    assert-type T
+    bitcast T Unknown
 
 fn todo! (msg)
     compiler-error!
@@ -73,7 +81,7 @@ fn extern-type? (T)
 fn function-pointer-type? (T)
     if (pointer-type? T)
         function-type? (element-type T 0)
-    else false
+    else (tie-const T false)
 fn typename? (val)
     typename-type? (typeof val)
 fn integer? (val)
@@ -554,15 +562,16 @@ fn repr (value)
             Any-typeof value
         else T
     fn append-type? ()
-        if (type== CT i32) false
-        elseif (type== CT bool) false
-        elseif (type== CT Nothing) false
-        elseif (type== CT f32) false
-        elseif (type== CT string) false
-        elseif (type== CT list) false
-        elseif (type== CT Symbol) false
-        elseif (type== CT type) false
-        else true
+        tie-const CT
+            if (type== CT i32) false
+            elseif (type== CT bool) false
+            elseif (type== CT Nothing) false
+            elseif (type== CT f32) false
+            elseif (type== CT string) false
+            elseif (type== CT list) false
+            elseif (type== CT Symbol) false
+            elseif (type== CT type) false
+            else true
     let op success = (type@ T 'repr)
     let text =
         if success
@@ -722,20 +731,23 @@ fn list-empty? (l)
 fn list-at (l)
     assert-typeof l list
     if (list-empty? l)
-        Any-wrap none
+        tie-const l (Any-wrap none)
     else
         extractvalue (load l) 0
 
 fn list-next (l)
     assert-typeof l list
-    if (list-empty? l) eol
+    if (list-empty? l) 
+        tie-const l eol
     else
         bitcast (extractvalue (load l) 1) list
 
 fn list-at-next (l)
     assert-typeof l list
     if (list-empty? l)
-        return (Any-wrap none) eol
+        return 
+            tie-const l (Any-wrap none) 
+            tie-const l eol
     else
         return
             extractvalue (load l) 0
@@ -753,7 +765,7 @@ fn decons (val count)
 
 fn list-countof (l)
     assert-typeof l list
-    if (list-empty? l) 0:usize
+    if (list-empty? l) (tie-const l 0:usize)
     else
         extractvalue (load l) 2
 
@@ -801,18 +813,18 @@ fn string-compare (a b)
         tie-const cc 0:usize
     if (== i cc)
         if (< ca cb)
-            return -1
+            return (tie-const cc -1)
         elseif (> ca cb)
-            return 1
+            return (tie-const cc 1)
         else
-            return 0
+            return (tie-const cc 0)
     let x y =
         load (getelementptr pa i)
         load (getelementptr pb i)
     if (< x y)
-        return -1
+        return (tie-const cc -1)
     elseif (> x y)
-        return 1
+        return (tie-const cc 1)
     else
         loop (+ i 1:usize)
 
@@ -849,6 +861,9 @@ syntax-extend
     #set-type-symbol! vector 'apply-type 
         fn (cls ...)
             vector-type ...
+    set-type-symbol! ReturnLabel 'apply-type
+        fn (cls ...)
+            ReturnLabel-type ...
     set-type-symbol! tuple 'apply-type 
         fn (cls ...)
             tuple-type ...
@@ -890,11 +905,11 @@ syntax-extend
             if (type== TT (tuple Anchor Symbol type))
                 Parameter-new param1 param2 param3
             elseif (type== TT (tuple Anchor Symbol Nothing))
-                Parameter-new param1 param2 unknown
+                Parameter-new param1 param2 Unknown
             elseif (type== TT (tuple Symbol type Nothing))
                 Parameter-new (active-anchor) param1 param2
             elseif (type== TT (tuple Symbol Nothing Nothing))
-                Parameter-new (active-anchor) param1 unknown
+                Parameter-new (active-anchor) param1 Unknown
             else
                 compiler-error! "usage: Parameter [anchor] symbol [type]"
 
@@ -962,24 +977,24 @@ syntax-extend
 
     fn list== (a b)
         if (icmp!= (list-countof a) (list-countof b))
-            return false
+            return (unconst false)
         let [loop] a b = (tie-const b a) (tie-const a b)
         if (list-empty? a)
-            return true
+            return (unconst true)
         let u v = (list-at a) (list-at b)
         let uT vT = ('typeof u) ('typeof v)
         if (not (type== uT vT))
-            return false
+            return (unconst false)
         let un vn = (list-next a) (list-next b)
         if (type== uT list)
             if (list== (softcast list u) (softcast list v))
                 loop un vn
             else
-                return false
+                return (unconst false)
         elseif (Any== u v)
             loop un vn
         else
-            return false
+            return (unconst false)
                 
     set-type-symbol! list '==
         fn (a b flipped)
@@ -1010,11 +1025,11 @@ syntax-extend
         fn string-at (s i)
             assert-typeof s string
             let i = (i64 i)
-            let len = (i64 (string-countof s))
             if (< i 0:i64)
-                return 0:i8
-            elseif (>= i len)
-                return 0:i8
+                return (tie-const i 0:i8)
+            let len = (i64 (string-countof s))
+            if (>= i len)
+                return (tie-const (tie-const len i) 0:i8)
             let s = (bitcast (getelementptr s 0 1 0) (pointer i8))
             load (getelementptr s i)
     set-type-symbol! string 'slice
@@ -1179,7 +1194,9 @@ syntax-extend
     let Macro = (typename "Macro")
     let BlockScopeFunction =
         pointer
-            function (tuple list Scope) list list Scope
+            function 
+                ReturnLabel (unknownof list) (unknownof Scope)
+                \ list list Scope
     set-typename-storage! Macro BlockScopeFunction
     set-type-symbol! Macro 'apply-type
         fn (cls f)
@@ -1218,9 +1235,9 @@ syntax-extend
         let sz = (countof s)
         let [loop] i = (unconst 0:usize)
         if (== i sz)
-            return false
+            return (unconst false)
         elseif (== (@ s i) (char "."))
-            return true
+            return (unconst true)
         loop (+ i 1:usize)
 
     fn split-dotted-symbol (head start end tail)
@@ -1233,15 +1250,15 @@ syntax-extend
             else
                 return (cons (Symbol (slice s start)) tail)
         if (== (@ s i) (char "."))
-            let dot = '.
             let tail =
                 # no remainder after dot
                 if (== i (- end 1:usize)) tail
                 else # remainder after dot, split the rest first
                     split-dotted-symbol head (+ i 1:usize) end tail
+            let dot = '.
             if (== i 0:usize)
                 # no prefix before dot
-                return (cons dot tail)
+                return (cons (unconst dot) tail)
             else
                 # prefix before dot
                 return
@@ -1274,19 +1291,21 @@ syntax-extend
         if (== ('typeof sym) Symbol)
             @ env (get-ifx-symbol (cast Symbol sym))
         else
-            return (Any none) false
+            return 
+                unconst (Any none)
+                unconst false
 
     fn has-infix-ops? (infix-table expr)
         # any expression of which one odd argument matches an infix operator
             has infix operations.
         let [loop] expr = expr
         if (< (countof expr) 3:usize)
-            return false
+            return (unconst false)
         let expr = (list-next expr)
         let at next = (decons expr)
         let result ok = (get-ifx-op infix-table at)
         if ok
-            return true
+            return (unconst true)
         loop expr
 
     fn unpack-infix-op (op)
@@ -1314,7 +1333,7 @@ syntax-extend
             if (== op-order '<)
                 ? (pred op-prec prec) op (Any none)
             else
-                Any none
+                unconst (Any none)
         else
             syntax-error! token
                 "unexpected token in infix expression"
@@ -1429,7 +1448,7 @@ syntax-extend
             let tmp =
                 Parameter-new
                     Syntax-anchor (cast Syntax (list-at head))
-                    \ 'tmp unknown
+                    \ 'tmp Unknown
             loop
                 Any
                     list do
@@ -1497,7 +1516,7 @@ define-macro assert
     let sxcond = (cast Syntax cond)
     let anchor = (Syntax-anchor sxcond)
     let tmp =
-        Parameter-new anchor 'tmp unknown
+        Parameter-new anchor 'tmp Unknown
     list do
         list let tmp '= cond
         list if tmp
@@ -1712,7 +1731,9 @@ define package
     let package = (Scope)
     set-scope-symbol! package 'path
         list "./?.sc"
+            "./?/init.sc"
             .. compiler-dir "/?.sc"
+            .. compiler-dir "/?/init.sc"
     set-scope-symbol! package 'modules (Scope)
     package
 
@@ -1736,7 +1757,7 @@ syntax-extend
         let f = (compile (eval expr eval-scope))
         let rettype =
             element-type (element-type ('typeof f) 0) 0
-        let ModuleFunctionType = (pointer (function Any))
+        let ModuleFunctionType = (pointer (function (ReturnLabel (unknownof Any))))
         let fptr =
             if (rettype == Any)
                 cast ModuleFunctionType f
@@ -1745,7 +1766,7 @@ syntax-extend
                 let expr =
                     list
                         list let 'tmp '= (list f)
-                        list Any-new 'tmp
+                        list Any-new (list unconst 'tmp)
                 let expr = (cast Syntax (Syntax-wrap expr-anchor (Any expr) false))
                 let f = (compile (eval expr (globals)))
                 cast ModuleFunctionType f
@@ -1759,10 +1780,10 @@ syntax-extend
             let modules = (cast Scope package.modules)
             let content ok = (@ modules name)
             if ok
-                return content true
+                return content (unconst true)
             let [loop] patterns = (cast list package.path)
             if (empty? patterns)
-                return (Any none) false
+                return (unconst (Any none)) (unconst false)
             let pattern patterns = (decons patterns)
             let pattern = (cast string pattern)
             let module-path = (make-module-path pattern namestr)
@@ -1773,7 +1794,7 @@ syntax-extend
             set-scope-symbol! eval-scope 'module-path module-path
             let content = (exec-module expr eval-scope)
             set-scope-symbol! modules name content
-            return content true
+            return content (unconst true)
         let content ok = (load-module name)
         if ok
             return content
@@ -1859,7 +1880,7 @@ define-macro match
     let tmp = (Parameter 'tmp)
     fn process (i src expr)
         if (empty? expr)
-            return '()        
+            return (unconst '())
         let pair rest = (decons expr)
         let key dst = (decons (cast list (cast Syntax pair)))
         let kkey = (cast Symbol (cast Syntax key))
@@ -1924,7 +1945,7 @@ set-type-symbol! Closure 'softcast
                 let result =
                     compile (typify self args...)
                 if (destT != ('typeof result))
-                    syntax-error! (Closure-anchor self)
+                    syntax-error! (Label-anchor (Closure-label self))
                         .. "function does not compile to type " (repr destT)
                             \ " but has type " (repr ('typeof result))
                 return (softcast destT result)
@@ -2164,9 +2185,9 @@ fn read-eval-print-loop ()
         let [loop] i =
             tie-const len 0
         if (i == len)
-            return true
+            return (unconst true)
         if ((@ s i) != (char " "))
-            return false
+            return (unconst false)
         loop (i + 1)
 
     print-logo;
@@ -2199,7 +2220,7 @@ fn read-eval-print-loop ()
         return;
     fn endswith-blank (s)
         let slen = (countof s)
-        if (slen == 0:usize) false
+        if (slen == 0:usize) (unconst false)
         else
             (@ s (slen - 1:usize)) == (char " ")
     let enter-multiline = (endswith-blank cmd)
@@ -2213,7 +2234,7 @@ fn read-eval-print-loop ()
             else cmd
             "\n"
     let preload =
-        if terminated? ""
+        if terminated? (unconst "")
         else (leading-spaces cmd)
     if (not terminated?)
         loop (unconst preload) cmdlist counter
@@ -2224,7 +2245,7 @@ fn read-eval-print-loop ()
             let f = (compile (eval expr eval-scope))
             let rettype =
                 element-type (element-type ('typeof f) 0) 0
-            let ModuleFunctionType = (pointer (function Any))
+            let ModuleFunctionType = (pointer (function (ReturnLabel (unknownof Any))))
             let fptr =
                 if (rettype == Any)
                     cast ModuleFunctionType f
@@ -2233,7 +2254,7 @@ fn read-eval-print-loop ()
                     let expr =
                         list
                             list let 'tmp '= (list f)
-                            list Any-new 'tmp
+                            list Any-new (list unconst 'tmp)
                     let expr = (cast Syntax (Syntax-wrap expr-anchor (Any expr) false))
                     let f = (compile (eval expr global-scope))
                     cast ModuleFunctionType f

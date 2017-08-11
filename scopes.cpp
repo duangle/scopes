@@ -467,7 +467,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_RawCall) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
     T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_Malloc) \
-    T(FN_AllocaArray) T(FN_MallocArray) \
+    T(FN_AllocaArray) T(FN_MallocArray) T(FN_ReturnLabelType) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
@@ -545,6 +545,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
     T(FN_DumpLabel, "dump-label") \
+    T(FN_ClosureLabel, "Closure-label") \
+    T(FN_ClosureFrame, "Closure-frame") \
     T(FN_FormatFrame, "Frame-format") \
     T(FN_ElementType, "element-type") T(FN_IsEmpty, "empty?") \
     T(FN_TypeCountOf, "type-countof") \
@@ -585,7 +587,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IsIterator, "iterator?") T(FN_IsLabel, "label?") \
     T(FN_LabelEq, "Label==") \
     T(FN_LabelNew, "Label-new") T(FN_LabelParameters, "Label-parameters") \
-    T(FN_ClosureAnchor, "Closure-anchor") \
+    T(FN_LabelAnchor, "Label-anchor") \
     T(FN_ClosureEq, "Closure==") \
     T(FN_ListAtom, "list-atom?") T(FN_ListCountOf, "list-countof") \
     T(FN_ListLoad, "list-load") T(FN_ListJoin, "list-join") \
@@ -608,6 +610,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FunctionType, "function-type") \
     T(FN_FunctionTypeIsVariadic, "function-type-variadic?") \
     T(FN_TupleType, "tuple-type") \
+    T(FN_ReturnLabelType, "ReturnLabel-type") \
     T(FN_ArrayType, "array-type") \
     T(FN_TypenameType, "typename-type") \
     T(FN_Purify, "purify") \
@@ -1601,7 +1604,6 @@ static void location_error(const String *msg);
     T(TK_Typename, "type-kind-typename") \
     T(TK_ReturnLabel, "type-kind-return-label") \
     T(TK_Function, "type-kind-function") \
-    T(TK_Constant, "type-kind-constant") \
     T(TK_Extern, "type-kind-extern")
 
 enum TypeKind {
@@ -1626,7 +1628,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Any, "Any") \
     \
     T(TYPE_Type, "type") \
-    T(TYPE_Unknown, "unknown") \
+    T(TYPE_Unknown, "Unknown") \
     T(TYPE_Symbol, "Symbol") \
     T(TYPE_Builtin, "Builtin") \
     \
@@ -1651,7 +1653,6 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Syntax, "Syntax") \
     T(TYPE_Anchor, "Anchor") \
     T(TYPE_String, "string") \
-    T(TYPE_Ref, "ref") \
     \
     T(TYPE_Scope, "Scope") \
     T(TYPE_SourceFile, "SourceFile") \
@@ -1673,7 +1674,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Tuple, "tuple") \
     T(TYPE_Union, "union") \
     T(TYPE_Typename, "typename") \
-    T(TYPE_ReturnLabel, "return-label") \
+    T(TYPE_ReturnLabel, "ReturnLabel") \
     T(TYPE_Function, "function") \
     T(TYPE_Constant, "constant") \
     T(TYPE_Extern, "extern") \
@@ -1799,7 +1800,6 @@ struct Any {
     Any(Scope *x) : type(TYPE_Scope), scope(x) {}
     Any(Frame *x) : type(TYPE_Frame), frame(x) {}
     Any(const Closure *x) : type(TYPE_Closure), closure(x) {}
-    Any(Any *x) : type(TYPE_Ref), ref(x) {}
     template<unsigned N>
     Any(const char (&str)[N]) : type(TYPE_String), string(String::from(str)) {}
     // a catch-all for unsupported types
@@ -1807,8 +1807,7 @@ struct Any {
     Any(const T &x);
 
     Any toref() {
-        Any *pvalue = new Any(*this);
-        return pvalue;
+        return from_pointer(TYPE_Any, new Any(*this));
     }
 
     static Any from_opaque(const Type *type) {
@@ -1827,6 +1826,7 @@ struct Any {
     void verify(const Type *T) const;
     void verify_indirect(const Type *T) const;
     const Type *indirect_type() const;
+    bool is_const() const;
 
     operator const Type *() const { verify(TYPE_Type); return typeref; }
     operator const List *() const { verify(TYPE_List); return list; }
@@ -1876,6 +1876,24 @@ struct Any {
 
 static StyledStream& operator<<(StyledStream& ost, Any value) {
     return value.stream(ost);
+}
+
+static bool is_unknown(const Any &value) {
+    return value.type == TYPE_Unknown;
+}
+
+static bool is_typed(const Any &value) {
+    return (value.type != TYPE_Unknown) || (value.typeref != TYPE_Unknown);
+}
+
+static Any unknown_of(const Type *T) {
+    Any result(T);
+    result.type = TYPE_Unknown;
+    return result;
+}
+
+static Any untyped() {
+    return unknown_of(TYPE_Unknown);
 }
 
 //------------------------------------------------------------------------------
@@ -2154,6 +2172,7 @@ struct PointerType : Type {
 
 static const Type *Pointer(const Type *element_type) {
     static TypeFactory<PointerType> pointers;
+    assert(element_type->kind() != TK_ReturnLabel);
     return pointers.insert(element_type);
 }
 
@@ -2397,6 +2416,69 @@ static const Type *Extern(const Type *type) {
 }
 
 //------------------------------------------------------------------------------
+// TYPED LABEL TYPE
+//------------------------------------------------------------------------------
+
+struct ReturnLabelType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_ReturnLabel;
+    }
+
+    ReturnLabelType(const std::vector<Any> &_values)
+        : Type(TK_ReturnLabel) {
+        values = _values;
+
+        StyledString ss = StyledString::plain();
+        ss.out << "λ(";
+        for (size_t i = 0; i < values.size(); ++i) {
+            if (i > 0) {
+                ss.out << " ";
+            }
+            if (is_unknown(values[i])) {
+                ss.out << values[i].typeref->name()->data;
+            } else {
+                ss.out << "!" << values[i];
+            }
+        }
+        ss.out << ")";
+        _name = ss.str();
+
+        return_type = get_return_type(this);
+    }
+
+    static const Type *get_return_type(const ReturnLabelType *lt) {
+        std::vector<const Type *> rettypes;
+        // prune constants
+        for (size_t i = 0; i < lt->values.size(); ++i) {
+            if (is_unknown(lt->values[i])) {
+                rettypes.push_back(lt->values[i].typeref);
+            }
+        }
+
+        const Type *rtype = TYPE_Void;
+        if (rettypes.size() == 1) {
+            rtype = rettypes[0];
+        } else if (!rettypes.empty()) {
+            rtype = Tuple(rettypes);
+        }
+        return rtype;
+    }
+
+    std::vector<Any> values;
+    const Type *return_type;
+};
+
+static const Type *ReturnLabel(const std::vector<Any> &values) {
+    static TypeFactory<ReturnLabelType> return_labels;
+#ifdef SCOPES_DEBUG
+    for (size_t i = 0; i < values.size(); ++i) {
+        assert(values[i].is_const());
+    }
+#endif
+    return return_labels.insert(values);
+}
+
+//------------------------------------------------------------------------------
 // FUNCTION TYPE
 //------------------------------------------------------------------------------
 
@@ -2463,6 +2545,20 @@ struct FunctionType : Type {
 static const Type *Function(const Type *return_type,
     const std::vector<const Type *> &argument_types, uint32_t flags = 0) {
     static TypeFactory<FunctionType> functions;
+    if (return_type->kind() != TK_ReturnLabel) {
+        if (return_type == TYPE_Void) {
+            return_type = ReturnLabel({});
+        } else if (return_type->kind() == TK_Tuple) {
+            auto &&types = cast<TupleType>(return_type)->types;
+            std::vector<Any> values;
+            for (auto it = types.begin(); it != types.end(); ++it) {
+                values.push_back(unknown_of(*it));
+            }
+            return_type = ReturnLabel(values);
+        } else {
+            return_type = ReturnLabel({unknown_of(return_type)});
+        }
+    }
     return functions.insert(return_type, Tuple(argument_types), flags);
 }
 
@@ -2501,30 +2597,6 @@ static const FunctionType *extract_function_type(const Type *T) {
     default: assert(false && "unexpected function type");
         return nullptr;
     }
-}
-
-//------------------------------------------------------------------------------
-// CONSTANT TYPE
-//------------------------------------------------------------------------------
-
-struct ConstantType : Type {
-    static bool classof(const Type *T) {
-        return T->kind() == TK_Constant;
-    }
-
-    ConstantType(const Any &_value) :
-        Type(TK_Constant), value(_value) {
-        StyledString ss;
-        ss.out << "!" << value;
-        _name = ss.str();
-    }
-
-    Any value;
-};
-
-static const Type *Constant(const Any &value) {
-    static TypeFactory<ConstantType> constants;
-    return constants.insert(value);
 }
 
 //------------------------------------------------------------------------------
@@ -2575,8 +2647,6 @@ struct TypenameType : Type {
         }
         if (isa<TypenameType>(_type)) {
             location_error(String::from("cannot use typename as storage type"));
-        } else if (isa<ConstantType>(_type)) {
-            location_error(String::from("cannot use constant as storage type"));
         }
         storage_type = _type;
     }
@@ -2601,80 +2671,22 @@ static const Type *Typename(const String *name) {
 }
 
 static const Type *storage_type(const Type *T) {
-    const TypenameType *tt = dyn_cast<TypenameType>(T);
-    if (!tt) return T;
-    if (!tt->finalized()) {
-        StyledString ss;
-        ss.out << "type " << T << " is opaque";
-        location_error(ss.str());
-    }
-    return tt->storage_type;
-}
-
-//------------------------------------------------------------------------------
-// TYPED LABEL TYPE
-//------------------------------------------------------------------------------
-
-static const Type *ReturnLabel(const std::vector<const Type *> &types);
-
-struct ReturnLabelType : Type {
-    static bool classof(const Type *T) {
-        return T->kind() == TK_ReturnLabel;
-    }
-
-    ReturnLabelType(const std::vector<Any> &_types)
-        : Type(TK_ReturnLabel) {
-        types.reserve(_types.size());
-        for (auto &&arg : _types) {
-            types.push_back(arg);
+    switch(T->kind()) {
+    case TK_Typename: {
+        const TypenameType *tt = cast<TypenameType>(T);
+        if (!tt->finalized()) {
+            StyledString ss;
+            ss.out << "type " << T << " is opaque";
+            location_error(ss.str());
         }
-
-        std::stringstream ss;
-        ss << "λ(";
-        for (size_t i = 0; i < types.size(); ++i) {
-            if (i > 0) {
-                ss << " ";
-            }
-            ss << types[i]->name()->data;
-        }
-        ss << ")";
-        _name = String::from_stdstring(ss.str());
-
+        return tt->storage_type;
+    } break;
+    case TK_ReturnLabel: {
+        const ReturnLabelType *rlt = cast<ReturnLabelType>(T);
+        return storage_type(rlt->return_type);
+    } break;
+    default: return T;
     }
-
-    bool has_constants() const {
-        for (size_t i = 0; i < types.size(); ++i) {
-            if (isa<ConstantType>(types[i]))
-                return true;
-        }
-        return false;
-    }
-
-    const Type *strip_constants() const {
-        std::vector<const Type *> dest_types;
-        dest_types.reserve(types.size());
-        for (size_t i = 0; i < types.size(); ++i) {
-            const Type *T = types[i];
-            const ConstantType *ct = dyn_cast<ConstantType>(T);
-            if (ct) {
-                T = ct->value.type;
-            }
-            dest_types.push_back(T);
-        }
-        return ReturnLabel(dest_types);
-    }
-
-    std::vector<const Type *> types;
-};
-
-static const Type *ReturnLabel(const std::vector<const Type *> &types) {
-    static TypeFactory<ReturnLabelType> return_labels;
-    std::vector<Any> atypes;
-    atypes.reserve(types.size());
-    for (auto &&arg : types) {
-        atypes.push_back(arg);
-    }
-    return return_labels.insert(atypes);
 }
 
 //------------------------------------------------------------------------------
@@ -2696,7 +2708,6 @@ static void verify_kind(const Type *T) {
         case TK_Typename: ss.out << "typename"; break;
         case TK_ReturnLabel: ss.out << "return label"; break;
         case TK_Function: ss.out << "function"; break;
-        case TK_Constant: ss.out << "constant"; break;
         case TK_Extern: ss.out << "extern"; break;
         }
         ss.out << " expected, got " << T;
@@ -2713,17 +2724,19 @@ static void verify_function_pointer(const Type *type) {
 }
 
 static bool is_opaque(const Type *T) {
-    const TypenameType *tt = dyn_cast<TypenameType>(T);
-    if (tt) {
+    switch(T->kind()) {
+    case TK_Typename: {
+        const TypenameType *tt = cast<TypenameType>(T);
         if (!tt->finalized()) {
             return true;
         } else {
-            T = tt->storage_type;
+            return is_opaque(tt->storage_type);
         }
-    }
-    switch(T->kind()) {
-    case TK_ReturnLabel:
-    case TK_Constant:
+    } break;
+    case TK_ReturnLabel: {
+        const ReturnLabelType *rlt = cast<ReturnLabelType>(T);
+        return is_opaque(rlt->return_type);
+    } break;
     case TK_Function: return true;
     default: break;
     }
@@ -2746,8 +2759,8 @@ static size_t size_of(const Type *T) {
     case TK_Vector: return cast<VectorType>(T)->size;
     case TK_Tuple: return cast<TupleType>(T)->size;
     case TK_Union: return cast<UnionType>(T)->size;
+    case TK_ReturnLabel:
     case TK_Typename: return size_of(storage_type(cast<TypenameType>(T)));
-    case TK_Constant: return size_of(cast<ConstantType>(T)->value.type);
     default: break;
     }
 
@@ -2773,8 +2786,8 @@ static size_t align_of(const Type *T) {
     case TK_Vector: return cast<VectorType>(T)->align;
     case TK_Tuple: return cast<TupleType>(T)->align;
     case TK_Union: return cast<UnionType>(T)->align;
+    case TK_ReturnLabel:
     case TK_Typename: return align_of(storage_type(cast<TypenameType>(T)));
-    case TK_Constant: return align_of(cast<ConstantType>(T)->value.type);
     default: break;
     }
 
@@ -2868,7 +2881,6 @@ static const Type *superof(const Type *T) {
     case TK_Typename: return cast<TypenameType>(T)->super();
     case TK_ReturnLabel: return TYPE_ReturnLabel;
     case TK_Function: return TYPE_Function;
-    case TK_Constant: return TYPE_Constant;
     case TK_Extern: return TYPE_Extern;
     }
     assert(false && "unhandled type kind");    
@@ -2906,9 +2918,9 @@ StyledStream& Any::stream(StyledStream& ost, bool annotate_type) const {
     else if (type == TYPE_Scope) { as.typed(scope); }
     else if (type == TYPE_Frame) { as.typed(frame); }
     else if (type == TYPE_Closure) { as.typed(closure); }
-    else if (type == TYPE_Ref) {
+    else if (type == TYPE_Any) {
         ost << Style_Operator << "[" << Style_None;
-        ref->stream(ost);
+        ((Any *)pointer)->stream(ost);
         ost << Style_Operator << "]" << Style_None;
         as.stream_type_suffix();
     } else if (type->kind() == TK_Extern) {
@@ -4383,10 +4395,6 @@ enum {
     PARAM_Arg0 = 1,
 };
 
-struct ILNode {
-    int _empty;
-};
-
 typedef std::unordered_map<Parameter *, Args > MangleParamMap;
 typedef std::unordered_map<Label *, Label *> MangleLabelMap;
 
@@ -4395,7 +4403,7 @@ enum ParameterKind {
     PK_Variadic = 1,
 };
 
-struct Parameter : ILNode {
+struct Parameter {
 protected:
     Parameter(const Anchor *_anchor, Symbol _name, const Type *_type, ParameterKind _kind) :
         anchor(_anchor), name(_name), type(_type), label(nullptr), index(-1),
@@ -4457,8 +4465,12 @@ void Any::verify_indirect(const Type *T) const {
     scopes::verify(T, indirect_type());
 }
 
+bool Any::is_const() const {
+    return !((type == TYPE_Parameter) && parameter->label);
+}
+
 const Type *Any::indirect_type() const {
-    if (type == TYPE_Parameter) {
+    if (!is_const()) {
         return parameter->type;
     } else {
         return type;
@@ -4473,7 +4485,8 @@ static StyledStream& operator<<(StyledStream& ss, Parameter *param) {
 //------------------------------------------------------------------------------
 
 enum LabelBodyFlags {
-    LBF_RawCall = (1 << 0)
+    LBF_RawCall = (1 << 0),
+    LBF_Complete = (1 << 1)
 };
 
 struct Body {
@@ -4483,6 +4496,16 @@ struct Body {
     uint64_t flags;    
 
     Body() : anchor(nullptr), enter(none), flags(0) {}
+
+    bool is_complete() const {
+        return flags & LBF_Complete;
+    }
+    void set_complete() {
+        flags |= LBF_Complete;
+    }
+    void unset_complete() {
+        flags &= ~LBF_Complete;
+    }
 
     bool is_rawcall() {
         return (flags & LBF_RawCall) == LBF_RawCall;
@@ -4525,10 +4548,9 @@ typedef Tag<Label> LabelTag;
 
 enum LabelFlags {
     LF_Template = (1 << 0),
-    LF_Done = (1 << 1),
 };
 
-struct Label : ILNode {
+struct Label {
 protected:
     static uint64_t next_uid;
 
@@ -4555,16 +4577,8 @@ public:
     // with these arguments
     std::vector<Any> return_constants;
 
-    bool is_done() const {
-        return flags & LF_Done;
-    }
-
     bool is_template() const {
         return flags & LF_Template;
-    }
-
-    void set_done() {
-        flags |= LF_Done;
     }
 
     Parameter *get_param_by_name(Symbol name) {
@@ -4589,34 +4603,60 @@ public:
     }
 
     struct UserMap {
-        std::unordered_map<ILNode *, std::unordered_set<Label *> > map;
+        std::unordered_map<Label *, std::unordered_set<Label *> > label_map;
+        std::unordered_map<Parameter *, std::unordered_set<Label *> > param_map;
 
         void clear() {
-            map.clear();
+            label_map.clear();
+            param_map.clear();
         }
 
-        void insert(Label *source, ILNode *dest) {
-            map[dest].insert(source);
+        void insert(Label *source, Label *dest) {
+            label_map[dest].insert(source);
         }
 
-        void stream_users(ILNode *node, StyledStream &ss) const {
-            auto it = map.find(node);
-            if (it != map.end()) {
-                auto &&users = it->second;
-                ss << Style_Comment << "{" << Style_None;
-                size_t i = 0;
-                for (auto &&kv : users) {
-                    if (i > 0) {
-                        ss << " ";
-                    }
-                    Label *label = kv;
-                    label->stream_short(ss);
-                    i++;
-                }
-                ss << Style_Comment << "}" << Style_None;
+        void insert(Label *source, Parameter *dest) {
+            param_map[dest].insert(source);
+        }
+
+        void remove(Label *source, Label *dest) {
+            auto it = label_map.find(dest);
+            if (it != label_map.end()) {
+                it->second.erase(source);
             }
         }
+
+        void remove(Label *source, Parameter *dest) {
+            auto it = param_map.find(dest);
+            if (it != param_map.end()) {
+                it->second.erase(source);
+            }
+        }
+
+        void stream_users(const std::unordered_set<Label *> &users, 
+            StyledStream &ss) const {
+            ss << Style_Comment << "{" << Style_None;
+            size_t i = 0;
+            for (auto &&kv : users) {
+                if (i > 0) {
+                    ss << " ";
+                }
+                Label *label = kv;
+                label->stream_short(ss);
+                i++;
+            }
+            ss << Style_Comment << "}" << Style_None;
+        }
+
+        void stream_users(Label *node, StyledStream &ss) const {
+            auto it = label_map.find(node);
+            if (it != label_map.end()) stream_users(it->second, ss);
+        }
         
+        void stream_users(Parameter *node, StyledStream &ss) const {
+            auto it = param_map.find(node);
+            if (it != param_map.end()) stream_users(it->second, ss);
+        }
     };
 
     struct Args {
@@ -4673,23 +4713,14 @@ public:
         return body.args[0].value.label;
     }
 
+    const ReturnLabelType *verify_return_label();
+
     const Type *get_return_type() const {
         if (!params[0]->is_typed())
             return TYPE_Unknown;
-
-        std::vector<const Type *> rettypes;
-        auto tl = cast<ReturnLabelType>(params[0]->type);
-        for (size_t i = 0; i < tl->types.size(); ++i) {
-            rettypes.push_back(tl->types[i]);
-        }
-
-        const Type *rtype = TYPE_Void;
-        if (rettypes.size() == 1) {
-            rtype = rettypes[0];
-        } else if (!rettypes.empty()) {
-            rtype = Tuple(rettypes);
-        }
-        return rtype;
+        // verify that the return type is the one we expect
+        cast<ReturnLabelType>(params[0]->type);
+        return params[0]->type;
     }
 
     void verify_compilable() const {
@@ -4699,18 +4730,21 @@ public:
             if (!tl) {
                 set_active_anchor(anchor);
                 StyledString ss;
-                ss.out << "cannot compile function with complex continuation type " 
+                ss.out << "cannot compile function with return type " 
                     << params[0]->type;
                 location_error(ss.str());
             }
-            for (size_t i = 0; i < tl->types.size(); ++i) {
-                auto T = tl->types[i];
-                if (is_opaque(T)) {
-                    set_active_anchor(anchor);
-                    StyledString ss;
-                    ss.out << "cannot compile function with opaque return argument of type " 
-                        << T;
-                    location_error(ss.str());
+            for (size_t i = 0; i < tl->values.size(); ++i) {
+                auto &&val = tl->values[i];
+                if (is_unknown(val)) {
+                    auto T = val.typeref;
+                    if (is_opaque(T)) {
+                        set_active_anchor(anchor);
+                        StyledString ss;
+                        ss.out << "cannot compile function with opaque return argument of type " 
+                            << T;
+                        location_error(ss.str());
+                    }
                 }
             }
         }
@@ -4732,11 +4766,11 @@ public:
     }
 
     const Type *get_params_as_return_label_type() const {
-        std::vector<const Type *> argtypes;
+        std::vector<Any> values;
         for (size_t i = 1; i < params.size(); ++i) {
-            argtypes.push_back(params[i]->type);
+            values.push_back(unknown_of(params[i]->type));
         }
-        return ReturnLabel(argtypes);
+        return ReturnLabel(values);
     }
 
     const Type *get_function_type() const {
@@ -4757,11 +4791,27 @@ public:
         }
     }
 
+    void unuse(UserMap &um, const Any &arg, int i) {
+        if (arg.type == TYPE_Parameter && (arg.parameter->label != this)) {
+            um.remove(this, arg.parameter /*, i*/);
+        } else if (arg.type == TYPE_Label && (arg.label != this)) {
+            um.remove(this, arg.label /*, i*/);
+        }
+    }
+
     void insert_into_usermap(UserMap &um) {
         use(um, body.enter, -1);
         size_t count = body.args.size();
         for (size_t i = 0; i < count; ++i) {
             use(um, body.args[i].value, i);
+        }
+    }
+
+    void remove_from_usermap(UserMap &um) {
+        unuse(um, body.enter, -1);
+        size_t count = body.args.size();
+        for (size_t i = 0; i < count; ++i) {
+            unuse(um, body.args[i].value, i);
         }
     }
 
@@ -4820,8 +4870,8 @@ public:
         visited.insert(this);
 
         for (auto &&param : params) {
-            auto it = um.map.find(param);
-            if (it != um.map.end()) {
+            auto it = um.param_map.find(param);
+            if (it != um.param_map.end()) {
                 auto &&users = it->second;
                 // every label using one of our parameters is live in scope
                 for (auto &&kv : users) {
@@ -4838,8 +4888,8 @@ public:
         while (index < tempscope.size()) {
             Label *scope_label = tempscope[index++];
 
-            auto it = um.map.find(scope_label);
-            if (it != um.map.end()) {
+            auto it = um.label_map.find(scope_label);
+            if (it != um.label_map.end()) {
                 auto &&users = it->second;
                 // users of scope_label are indirectly live in scope
                 for (auto &&kv : users) {
@@ -4852,8 +4902,8 @@ public:
             }
 
             for (auto &&param : scope_label->params) {
-                auto it = um.map.find(param);
-                if (it != um.map.end()) {
+                auto it = um.param_map.find(param);
+                if (it != um.param_map.end()) {
                     auto &&users = it->second;
                     // every label using scope_label's parameters is live in scope
                     for (auto &&kv : users) {
@@ -4880,14 +4930,17 @@ public:
     }
 
     StyledStream &stream_short(StyledStream &ss) const {
+#if SCOPES_DEBUG_CODEGEN
+        if (is_template()) {
+            ss << Style_Keyword << "T:" << Style_None;
+        }
+#endif
         if (name == SYM_Unnamed) {
             ss << Style_Keyword << "λ" << Style_Symbol << uid;
         } else {
             ss << Style_Symbol;
             name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
-#if SCOPES_DEBUG_CODEGEN
             ss << Style_Keyword << "λ" << Style_Symbol << uid;
-#endif
         }
         ss << Style_None;
         return ss;
@@ -5040,7 +5093,7 @@ struct Frame {
 void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
     if (arg.value.type == TYPE_Label) {
         // do not wrap labels in closures that have been solved
-        if (arg.value.label->is_done()) {
+        if (arg.value.label->body.is_complete()) {
             dest.push_back(KeyAny(arg.key, arg.value.label));
         } else {
             dest.push_back(KeyAny(arg.key, Closure::from(arg.value.label, frame)));
@@ -5206,6 +5259,9 @@ struct StreamLabel : StreamAnchors {
             stream_anchor(alabel->body.anchor);
             ss << " ";
         }
+        if (!alabel->body.is_complete()) {
+            ss << Style_Keyword << "T " << Style_None;
+        }
         if (alabel->body.is_rawcall()) {
             ss << Style_Keyword << "rawcall " << Style_None;
         }
@@ -5256,6 +5312,23 @@ static void stream_label(
     StyledStream &_ss, Label *label, const StreamLabelFormat &_fmt) {
     StreamLabel streamer(_ss, _fmt);
     streamer.stream(label);
+}
+
+const ReturnLabelType *Label::verify_return_label() {
+    if (!params.empty()) {
+        const ReturnLabelType *rt = dyn_cast<ReturnLabelType>(params[0]->type);
+        if (rt)
+            return rt;
+    }
+#if SCOPES_DEBUG_CODEGEN
+    {
+        StyledStream ss;
+        stream_label(ss, this, StreamLabelFormat::debug_all());
+    }
+#endif
+    set_active_anchor(anchor);
+    location_error(String::from("label has no return type"));
+    return nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -5482,24 +5555,6 @@ static Label *mangle(Label::UserMap &um, Label *entry,
     return le;
 }
 
-static bool is_unknown(const Any &value) {
-    return value.type == TYPE_Unknown;
-}
-
-static bool is_typed(const Any &value) {
-    return (value.type != TYPE_Unknown) || (value.typeref != TYPE_Unknown);
-}
-
-static Any unknown_of(const Type *T) {
-    Any result(T);
-    result.type = TYPE_Unknown;
-    return result;
-}
-
-static Any untyped() {
-    return unknown_of(TYPE_Unknown);
-}
-
 // inlining the arguments of an untyped scope (including continuation)
 // folds arguments and types parameters
 // arguments are treated as follows:
@@ -5614,7 +5669,7 @@ static void map_constant_arguments(Frame *frame, Label *label, const Args &args)
 //      type as TYPE_Unknown = leave the parameter as-is
 // any other = inline the argument and remove the parameter
 static Label *fold_type_label_single(const Frame *parent, Label *label, const Args &args) {
-
+    assert(!label->body.is_complete());
     size_t loop_count = 0;
     {
         const Frame *top = parent->find_frame(label);
@@ -5650,15 +5705,14 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
         return it->second;
     assert(!label->params.empty());
 
+    Label *newlabel = Label::from(label);
 #if SCOPES_DEBUG_CODEGEN
     {
         StyledStream ss;
-        ss << "fold-type-label-single " << label << std::endl;
+        ss << "fold-type-label-single " << label << " -> " << newlabel << std::endl;
         stream_label(ss, label, StreamLabelFormat::debug_single());
     }
 #endif
-
-    Label *newlabel = Label::from(label);
     instances.insert({la, newlabel});
 
     Frame *frame = Frame::from(parent, label, loop_count);
@@ -5731,6 +5785,19 @@ static Label *typify_single(const Frame *frame, Label *label, const ArgTypes &ar
     args = { KeyAny(untyped()) };
     for (size_t i = 0; i < argtypes.size(); ++i) {
         args.push_back(KeyAny(unknown_of(argtypes[i])));
+    }
+
+    return fold_type_label_single(frame, label, args);
+}
+
+static Label *fold_typify_single(const Frame *frame, Label *label, const std::vector<Any> &values) {
+    assert(!label->params.empty());
+
+    Args args;
+    args.reserve(values.size());
+    args = { KeyAny(untyped()) };
+    for (size_t i = 0; i < values.size(); ++i) {
+        args.push_back(KeyAny(values[i]));
     }
 
     return fold_type_label_single(frame, label, args);
@@ -6376,7 +6443,7 @@ inline int checkargs(size_t argsize) {
     }
     if ((mincount >= 0) && (count < mincount)) {
         location_error(
-            format("at least %i arguments expected", mincount));
+            format("at least %i arguments expected, got %i", mincount, count));
     }
     return count;
 }
@@ -6570,6 +6637,7 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
             assert(false && "illegal type");
         }
     } break;
+    case TK_ReturnLabel:
     case TK_Typename: {
         if (is_opaque(T)) {
             classes[0] = ABI_CLASS_NO_CLASS;
@@ -6878,6 +6946,16 @@ struct GenerateCtx {
         }
     };
 
+
+    typedef std::pair<LLVMValueRef, Parameter *> ParamKey;
+    struct HashFuncParamPair {
+        size_t operator ()(const ParamKey &value) const {
+            return
+                HashLen16(std::hash<LLVMValueRef>()(value.first),
+                    std::hash<Parameter *>()(value.second));
+        }
+    };
+
     std::unordered_map<Label *, LLVMValueRef> label2func;
     std::unordered_map< std::pair<LLVMValueRef, Label *>,
         LLVMBasicBlockRef, HashFuncLabelPair> label2bb;
@@ -6885,9 +6963,9 @@ struct GenerateCtx {
 
     std::unordered_map<Label *, LLVMValueRef> label2md;
     std::unordered_map<SourceFile *, LLVMValueRef> file2value;
-    std::unordered_map<Parameter *, LLVMValueRef> param2value;
-    std::unordered_map<const Type *, LLVMTypeRef> type_cache;
-    std::vector<const Type *> type_todo;
+    std::unordered_map< ParamKey, LLVMValueRef, HashFuncParamPair> param2value;
+    static std::unordered_map<const Type *, LLVMTypeRef> type_cache;
+    static std::vector<const Type *> type_todo;
 
     std::unordered_map<Any, LLVMValueRef, Any::Hash> extern2global;
     Label::UserMap user_map;
@@ -6896,24 +6974,23 @@ struct GenerateCtx {
     LLVMBuilderRef builder;
     LLVMDIBuilderRef di_builder;
 
-    LLVMTypeRef voidT;
-    LLVMTypeRef i1T;
-    LLVMTypeRef i8T;
-    LLVMTypeRef i16T;
-    LLVMTypeRef i32T;
-    LLVMTypeRef i64T;
-    LLVMTypeRef f32T;
-    LLVMTypeRef f64T;
-    LLVMTypeRef rawstringT;
-    LLVMTypeRef noneT;
-
-    LLVMValueRef noneV;
+    static LLVMTypeRef voidT;
+    static LLVMTypeRef i1T;
+    static LLVMTypeRef i8T;
+    static LLVMTypeRef i16T;
+    static LLVMTypeRef i32T;
+    static LLVMTypeRef i64T;
+    static LLVMTypeRef f32T;
+    static LLVMTypeRef f64T;
+    static LLVMTypeRef rawstringT;
+    static LLVMTypeRef noneT;
+    static LLVMValueRef noneV;
+    static LLVMAttributeRef attr_byval;
+    static LLVMAttributeRef attr_sret;
+    static LLVMAttributeRef attr_nonnull;
 
     Label *active_function;
-
-    LLVMAttributeRef attr_byval;
-    LLVMAttributeRef attr_sret;
-    LLVMAttributeRef attr_nonnull;
+    LLVMValueRef active_function_value;
 
     bool use_debug_info;
 
@@ -6926,10 +7003,9 @@ struct GenerateCtx {
 
     GenerateCtx() :
         active_function(nullptr),
+        active_function_value(nullptr),
         use_debug_info(true) {
-        attr_byval = get_attribute("byval");
-        attr_sret = get_attribute("sret");
-        attr_nonnull = get_attribute("nonnull");
+        static_init();
     }
 
     LLVMValueRef source_file_to_scope(SourceFile *sf) {
@@ -6991,7 +7067,8 @@ struct GenerateCtx {
         return result;
     }
 
-    void define_builtin_functions() {
+    static void static_init() {
+        if (voidT) return;
         voidT = LLVMVoidType();
         i1T = LLVMInt1Type();
         i8T = LLVMInt8Type();
@@ -7003,6 +7080,9 @@ struct GenerateCtx {
         noneV = LLVMConstStruct(nullptr, 0, false);
         noneT = LLVMTypeOf(noneV);
         rawstringT = LLVMPointerType(LLVMInt8Type(), 0);
+        attr_byval = get_attribute("byval");
+        attr_sret = get_attribute("sret");
+        attr_nonnull = get_attribute("nonnull");        
     }
 
 #undef DEFINE_BUILTIN
@@ -7019,7 +7099,7 @@ struct GenerateCtx {
         return true;
     }
 
-    LLVMTypeRef create_llvm_type(const Type *type) {
+    static LLVMTypeRef create_llvm_type(const Type *type) {
         switch(type->kind()) {
         case TK_Integer:
             return LLVMIntType(cast<IntegerType>(type)->width);
@@ -7097,6 +7177,10 @@ struct GenerateCtx {
             return LLVMStructCreateNamed(
                 LLVMGetGlobalContext(), type->name()->data);
         } break;
+        case TK_ReturnLabel: {
+            auto rlt = cast<ReturnLabelType>(type);
+            return _type_to_llvm_type(rlt->return_type);
+        } break;
         case TK_Function: {
             auto fi = cast<FunctionType>(type);
             size_t count = fi->argument_types.size();
@@ -7108,7 +7192,7 @@ struct GenerateCtx {
             LLVMTypeRef elements[count + offset];
             LLVMTypeRef rettype;
             if (use_sret) {
-                elements[0] = _type_to_llvm_type(Pointer(fi->return_type));
+                elements[0] = LLVMPointerType(_type_to_llvm_type(fi->return_type), 0);
                 rettype = voidT;
             } else {
                 rettype = _type_to_llvm_type(fi->return_type);
@@ -7123,7 +7207,6 @@ struct GenerateCtx {
             return LLVMFunctionType(rettype,
                 elements, count + offset, fi->vararg());
         } break;
-        default: break;
         };
 
         StyledString ss;
@@ -7132,7 +7215,8 @@ struct GenerateCtx {
         return nullptr;
     }
 
-    void finalize_types() {
+    static size_t finalize_types() {
+        size_t result = type_todo.size();
         while (!type_todo.empty()) {
             const Type *T = type_todo.back();
             type_todo.pop_back();
@@ -7178,9 +7262,10 @@ struct GenerateCtx {
             default: assert(false); break;
             }
         }
+        return result;
     }
 
-    LLVMTypeRef _type_to_llvm_type(const Type *type) {
+    static LLVMTypeRef _type_to_llvm_type(const Type *type) {
         auto it = type_cache.find(type);
         if (it == type_cache.end()) {
             LLVMTypeRef result = create_llvm_type(type);
@@ -7191,37 +7276,10 @@ struct GenerateCtx {
         }
     }
 
-    LLVMTypeRef type_to_llvm_type(const Type *type) {
+    static LLVMTypeRef type_to_llvm_type(const Type *type) {
         auto typeref = _type_to_llvm_type(type);
         finalize_types();
         return typeref;
-    }
-
-    LLVMTypeRef return_type_to_llvm_type(const Type *type) {
-        if (type == TYPE_Unknown) {
-            StyledString ss;
-            ss.out << "IL->IR: untyped continuation encountered";
-            location_error(ss.str());
-        } else if (!isa<ReturnLabelType>(type)) {
-            StyledString ss;
-            ss.out << "IL->IR: invalid continuation type: " << type;
-            location_error(ss.str());
-        }
-        auto tli = cast<ReturnLabelType>(type);
-        size_t count = tli->types.size();
-        if (!count) {
-            return LLVMVoidType();
-        }
-        LLVMTypeRef element_types[count];
-        for (size_t i = 0; i < count; ++i) {
-            const Type *arg = tli->types[i];
-            element_types[i] = type_to_llvm_type(arg);
-        }
-        if (count == 1) {
-            return element_types[0];
-        } else {
-            return LLVMStructType(element_types, count, false);
-        }
     }
 
     LLVMValueRef label_to_value(Label *label) {
@@ -7237,8 +7295,21 @@ struct GenerateCtx {
 
     LLVMValueRef argument_to_value(Any value) {
         if (value.type == TYPE_Parameter) {
-            auto it = param2value.find(value.parameter);
+            auto it = param2value.find({active_function_value, value.parameter});
             if (it == param2value.end()) {
+                assert(active_function_value);
+#if 0
+                {
+                    StyledStream ss(std::cerr);
+                    ss << "function context:" << std::endl;
+                    stream_label(ss, active_function, StreamLabelFormat::debug_scope());
+                }
+                if (value.parameter->label) {
+                    StyledStream ss(std::cerr);
+                    ss << "parameter context:" << std::endl;
+                    stream_label(ss, value.parameter->label, StreamLabelFormat::debug_scope());
+                }
+#endif
                 StyledString ss;
                 ss.out << "IL->IR: can't translate free variable " << value.parameter;
                 location_error(ss.str());
@@ -7409,15 +7480,18 @@ struct GenerateCtx {
         if (use_sret) {
             LLVMAddCallSiteAttribute(ret, 1, attr_sret);
             return LLVMBuildLoad(builder, values[0], "");
-        } else if (fi->return_type != TYPE_Void) {
-            return ret;
-        } else {
+        } else if ((fi->return_type == TYPE_Void)
+           || ((fi->return_type->kind() == TK_ReturnLabel)
+            && (cast<ReturnLabelType>(fi->return_type)->return_type == TYPE_Void))) {
             return nullptr;
+        } else {
+            return ret;
         }
     }
 
     void write_label_body(Label *label) {
     repeat:
+        assert(label->body.is_complete());
         bool terminated = false;
         auto &&body = label->body;
         auto &&enter = body.enter;
@@ -7665,7 +7739,7 @@ struct GenerateCtx {
                 }
                 auto &&params = enter.label->params;
                 for (size_t i = 1; i < params.size(); ++i) {
-                    param2value[params[i]] = values[i - 1];
+                    param2value[{active_function_value, params[i]}] = values[i - 1];
                 }
                 label = enter.label;
                 goto repeat;
@@ -7716,7 +7790,7 @@ struct GenerateCtx {
             Label *label = enter.parameter->label;
             bool use_sret = is_memory_class(label->get_return_type());
             if (use_sret) {
-                auto it = param2value.find(enter.parameter);
+                auto it = param2value.find({active_function_value,enter.parameter});
                 assert (it != param2value.end());                   
                 if (argcount > 1) {
                     LLVMTypeRef types[argcount];
@@ -7743,7 +7817,9 @@ struct GenerateCtx {
                 }
             }
         } else {
-            assert(false && "todo: translate non-builtin call");
+            StyledString ss;
+            ss.out << "IL->IR: cannot translate call to " << enter;
+            location_error(ss.str());            
         }
 
         Any contarg = args[0].value;
@@ -7757,7 +7833,7 @@ struct GenerateCtx {
             Label *label = contarg.parameter->label;
             bool use_sret = is_memory_class(label->get_return_type());
             if (use_sret) {
-                auto it = param2value.find(contarg.parameter);
+                auto it = param2value.find({active_function_value,contarg.parameter});
                 assert (it != param2value.end());
                 if (retvalue) {
                     LLVMBuildStore(builder, retvalue, it->second);
@@ -7808,7 +7884,7 @@ struct GenerateCtx {
                             // multiple arguments
                             pvalue = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
                         }
-                        param2value[param] = pvalue;
+                        param2value[{active_function_value,param}] = pvalue;
                     }
                 }
                 label = contarg.label;
@@ -7827,18 +7903,26 @@ struct GenerateCtx {
 #undef READ_TYPE
 #undef READ_LABEL_VALUE
 
+    void set_active_function(Label *l) {
+        if (active_function == l) return;
+        active_function = l;
+        if (l) {
+            auto it = label2func.find(l);
+            assert(it != label2func.end());
+            active_function_value = it->second;
+        } else {
+            active_function_value = nullptr;
+        }
+    }
+
     void process_labels() {
         while (!bb_label_todo.empty()) {
             auto it = bb_label_todo.back();
-            active_function = it.first;
+            set_active_function(it.first);
             Label *label = it.second;
             bb_label_todo.pop_back();
 
-            auto it3 = label2func.find(active_function);
-            assert(it3 != label2func.end());
-            LLVMValueRef func = it3->second;
-
-            auto it2 = label2bb.find({func, label});
+            auto it2 = label2bb.find({active_function_value, label});
             assert(it2 != label2bb.end());
             LLVMBasicBlockRef bb = it2->second;
             LLVMPositionBuilderAtEnd(builder, bb);
@@ -7848,8 +7932,8 @@ struct GenerateCtx {
     }
 
     bool has_single_caller(Label *l) {
-        auto it = user_map.map.find(l);
-        assert(it != user_map.map.end());
+        auto it = user_map.label_map.find(l);
+        assert(it != user_map.label_map.end());
         auto &&users = it->second;
         if (users.size() != 1)
             return false;
@@ -7885,7 +7969,7 @@ struct GenerateCtx {
                     auto pvalue = LLVMBuildPhi(builder,
                         type_to_llvm_type(param->type),
                         param->name.name()->data);
-                    param2value[param] = pvalue;
+                    param2value[{active_function_value,param}] = pvalue;
                 }
             }
             
@@ -7903,7 +7987,6 @@ struct GenerateCtx {
             const Anchor *old_anchor = get_active_anchor();
             set_active_anchor(label->anchor);
             Label *last_function = active_function;
-            active_function = label;
 
             auto old_bb = LLVMGetInsertBlock(builder);
             
@@ -7914,9 +7997,6 @@ struct GenerateCtx {
                 name = label->name.name()->data;
             }
 
-            auto &&params = label->params;
-            //auto &&contparam = params[0];
-
             label->verify_compilable();
             auto ilfunctype = label->get_function_type();
             auto fi = cast<FunctionType>(ilfunctype);
@@ -7924,10 +8004,10 @@ struct GenerateCtx {
 
             auto functype = type_to_llvm_type(ilfunctype);
 
-            size_t paramcount = label->params.size() - 1;
-
             auto func = LLVMAddFunction(module, name, functype);
             LLVMSetLinkage(func, LLVMPrivateLinkage);
+            label2func[label] = func;
+            set_active_function(label);
 
             if (use_debug_info) {
                 LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
@@ -7936,12 +8016,15 @@ struct GenerateCtx {
             auto bb = LLVMAppendBasicBlock(func, "");
             LLVMPositionBuilderAtEnd(builder, bb);
 
+            auto &&params = label->params;
             size_t offset = 0;
             if (use_sret) {
                 offset++;         
                 Parameter *param = params[0];
-                param2value[param] = LLVMGetParam(func, 0);
+                param2value[{active_function_value,param}] = LLVMGetParam(func, 0);
             }
+
+            size_t paramcount = params.size() - 1;
 
             for (size_t i = 0; i < paramcount; ++i) {
                 Parameter *param = params[i + 1];
@@ -7949,16 +8032,14 @@ struct GenerateCtx {
                 if (is_memory_class(param->type)) {
                     val = LLVMBuildLoad(builder, val, "");
                 }
-                param2value[param] = val;
+                param2value[{active_function_value,param}] = val;
             }
-
-            label2func[label] = func;
 
             write_label_body(label);
 
             LLVMPositionBuilderAtEnd(builder, old_bb);
 
-            active_function = last_function;
+            set_active_function(last_function);
             set_active_anchor(old_anchor);
             return func;
         } else {
@@ -7982,7 +8063,6 @@ struct GenerateCtx {
         module = LLVMModuleCreateWithName(name);
         builder = LLVMCreateBuilder();
         di_builder = LLVMCreateDIBuilder(module);
-        define_builtin_functions();
 
         if (use_debug_info) {
             const char *DebugStr = "Debug Info Version";
@@ -8003,7 +8083,8 @@ struct GenerateCtx {
         LLVMSetLinkage(func, LLVMExternalLinkage);
         process_labels();
 
-        finalize_types();
+        size_t k = finalize_types();
+        assert(!k);
 
         LLVMDisposeBuilder(builder);
         LLVMDisposeDIBuilder(di_builder);
@@ -8025,6 +8106,23 @@ struct GenerateCtx {
     }
 
 };
+
+std::unordered_map<const Type *, LLVMTypeRef> GenerateCtx::type_cache;
+std::vector<const Type *> GenerateCtx::type_todo;
+LLVMTypeRef GenerateCtx::voidT = nullptr;
+LLVMTypeRef GenerateCtx::i1T = nullptr;
+LLVMTypeRef GenerateCtx::i8T = nullptr;
+LLVMTypeRef GenerateCtx::i16T = nullptr;
+LLVMTypeRef GenerateCtx::i32T = nullptr;
+LLVMTypeRef GenerateCtx::i64T = nullptr;
+LLVMTypeRef GenerateCtx::f32T = nullptr;
+LLVMTypeRef GenerateCtx::f64T = nullptr;
+LLVMTypeRef GenerateCtx::rawstringT = nullptr;
+LLVMTypeRef GenerateCtx::noneT = nullptr;
+LLVMValueRef GenerateCtx::noneV = nullptr;
+LLVMAttributeRef GenerateCtx::attr_byval = nullptr;
+LLVMAttributeRef GenerateCtx::attr_sret = nullptr;
+LLVMAttributeRef GenerateCtx::attr_nonnull = nullptr;
 
 //------------------------------------------------------------------------------
 // IL COMPILER
@@ -8249,28 +8347,11 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
 #endif
-    std::unordered_set<Label *> done;
-
     Solver()
 #if SCOPES_DEBUG_CODEGEN
         : ss_cout(std::cout)
 #endif
     {}
-
-    ILNode *node_from_continuation(Any cont) {
-        if (cont.type == TYPE_Nothing) {
-            return nullptr;
-        } else if (cont.type == TYPE_Label) {
-            return cont.label;
-        } else if (cont.type == TYPE_Parameter) {
-            return cont.parameter;
-        } else {
-            StyledString ss;
-            ss.out << "don't know how to apply continuation of type " << cont.type;
-            location_error(ss.str());
-        }
-        return nullptr;
-    }
 
     // inlining the continuation of a branch label without arguments
     void verify_branch_continuation(const Closure *closure) {
@@ -8282,6 +8363,15 @@ struct Solver {
     }
 
     Any type_return(Any dest, const ArgTypes &argtypes) {
+        std::vector<Any> values;
+        values.reserve(argtypes.size());
+        for (size_t i = 0; i < argtypes.size(); ++i) {
+            values.push_back(unknown_of(argtypes[i]));
+        }
+        return fold_type_return(dest, values);
+    }
+
+    Any fold_type_return(Any dest, const std::vector<Any> &values) {
         //ss_cout << "type_return: " << dest << std::endl;
 
         if (dest.type == TYPE_Parameter) {
@@ -8289,10 +8379,10 @@ struct Solver {
             if (param->is_none()) {
                 location_error(String::from("attempting to call none continuation"));
             } else if (!param->is_typed()) {
-                param->type = ReturnLabel(argtypes);
+                param->type = ReturnLabel(values);
                 param->anchor = get_active_anchor();
             } else {
-                const Type *T = ReturnLabel(argtypes);
+                const Type *T = ReturnLabel(values);
                 if (T != param->type) {
                     {
                         StyledStream cerr(std::cerr);
@@ -8307,10 +8397,10 @@ struct Solver {
                 }
             }
         } else if (dest.type == TYPE_Closure) {
-            dest = typify_single(dest.closure->frame, dest.closure->label, argtypes);
+            dest = fold_typify_single(dest.closure->frame, dest.closure->label, values);
         } else if (dest.type == TYPE_Label) {
-#if SCOPES_DEBUG_CODEGEN
-            auto TL = ReturnLabel(argtypes);
+#if 1 //SCOPES_DEBUG_CODEGEN
+            auto TL = ReturnLabel(values);            
             auto TR = dest.label->get_params_as_return_label_type();
             if (TL != TR) {
                 {
@@ -8339,10 +8429,6 @@ struct Solver {
     static void verify_real_ops(Any a, Any b) {
         verify_real(storage_type(a.indirect_type()));
         verify(a.indirect_type(), b.indirect_type());
-    }
-
-    static bool is_const(Any a) {
-        return (a.type != TYPE_Parameter);
     }
 
     static bool has_params(Label *l) {
@@ -8378,6 +8464,12 @@ struct Solver {
         auto &&args = l->body.args;
         assert(!args.empty());
         return args[0].value.type == TYPE_Label;
+    }
+
+    static bool is_continuing_to_closure(Label *l) {
+        auto &&args = l->body.args;
+        assert(!args.empty());
+        return args[0].value.type == TYPE_Closure;
     }
 
     static bool is_calling_closure(Label *l) {
@@ -8456,7 +8548,7 @@ struct Solver {
     static bool all_args_constant(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
-            if (!is_const(args[i].value))
+            if (!args[i].value.is_const())
                 return false;
         }
         return true;
@@ -8465,7 +8557,7 @@ struct Solver {
     static bool has_foldable_args(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
-            if (is_const(args[i].value))
+            if (args[i].value.is_const())
                 return true;
             else if (is_return_parameter(args[i].value))
                 return true;
@@ -8515,27 +8607,6 @@ struct Solver {
         }
     }
 
-    void argtypes_from_function_call(Label *l, std::vector<const Type *> &retargtypes) {
-
-        auto &&enter = l->body.enter;
-        //auto &&args = l->body.args;
-
-        const FunctionType *fi = extract_function_type(enter.indirect_type());
-
-        verify_function_argument_signature(fi, l);
-
-        if (fi->return_type != TYPE_Void) {
-            if (isa<TupleType>(fi->return_type)) {
-                auto ti = cast<TupleType>(fi->return_type);
-                for (size_t i = 0; i < ti->types.size(); ++i) {
-                    retargtypes.push_back(ti->types[i]);
-                }
-            } else {
-                retargtypes.push_back(fi->return_type);
-            }
-        }
-    }
-
     void fold_pure_function_call(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding pure function call in " << l << std::endl;
@@ -8574,10 +8645,11 @@ struct Solver {
 
         enter = args[0].value;
         args = { KeyAny() };
-        if (fi->return_type != TYPE_Void) {
-            if (isa<TupleType>(fi->return_type)) {
+        auto rlt = cast<ReturnLabelType>(fi->return_type);
+        if (rlt->return_type != TYPE_Void) {
+            if (isa<TupleType>(rlt->return_type)) {
                 // unpack
-                auto ti = cast<TupleType>(fi->return_type);
+                auto ti = cast<TupleType>(rlt->return_type);
                 size_t count = ti->types.size();
                 for (size_t i = 0; i < count; ++i) {
                     args.push_back(KeyAny(ti->unpack(result.pointer, i)));
@@ -8658,6 +8730,20 @@ struct Solver {
         args = newargs;
     }
 
+    bool label_returns_closures(Label *l) {
+        if (is_basic_block_like(l))
+            return false;
+        if (!is_return_param_typed(l))
+            return false;
+        const ReturnLabelType *rlt = cast<ReturnLabelType>(l->params[0]->type);
+        for (size_t i = 0; i < rlt->values.size(); ++i) {
+            auto &&val = rlt->values[i];
+            if (val.type == TYPE_Closure)
+                return true;
+        }
+        return false;
+    }
+
     bool fold_type_label_arguments(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
@@ -8675,7 +8761,7 @@ struct Solver {
         keys.push_back(KeyAny(untyped()));
         for (size_t i = 1; i < args.size(); ++i) {
             auto &&arg = args[i];
-            if (is_const(arg.value)) {
+            if (arg.value.is_const()) {
                 keys.push_back(arg);
             } else if (is_return_parameter(arg.value)) {
                 keys.push_back(arg);
@@ -8687,6 +8773,17 @@ struct Solver {
 
         Label *newl = fold_type_label_single(
             enter.closure->frame, enter.closure->label, keys);
+        if (!is_basic_block_like(newl) && !newl->body.is_complete()) {
+            // we need to solve the return type asap for the next test
+            normalize_label(newl);
+        }
+        if (label_returns_closures(newl)) {
+            // need to inline the function
+            callargs[0] = none;
+            keys[0] = args[0];
+            newl = fold_type_label_single(
+                enter.closure->frame, enter.closure->label, keys);
+        }
         enter = newl;
         args = callargs;
 
@@ -8706,6 +8803,7 @@ struct Solver {
         case FN_Dump:
         case FN_ExternNew:
         case FN_ExternSymbol:
+        case FN_ReturnLabelType:
             return true;
         default: return false;
         }
@@ -9178,20 +9276,50 @@ struct Solver {
             Scope *env = args[3].value;
             Label *metafunc = fold_type_label_single(cl->frame, cl->label,
                 { untyped(), env });
-            normalize_label(metafunc);
-            const Type *expected_functype = Function( TYPE_Scope, {} );
-            const Type *functype = metafunc->get_function_type();
-            if (functype != expected_functype) {
-                set_active_anchor(sx->anchor);
-                location_error(String::from("syntax-extend must return a scope"));
+            Solver solver;
+            solver.solve(metafunc);
+            auto rlt = metafunc->verify_return_label();
+            //const Type *functype = metafunc->get_function_type();
+            if (rlt->values.size() != 1)
+                goto failed;
+            {
+                Scope *scope = nullptr;
+                Any compiled = compile(metafunc, 0);
+                if (rlt->values[0].type == TYPE_Scope) {
+                    // returns a constant scope
+                    typedef void (*FuncType)();
+                    FuncType fptr = (FuncType)compiled.pointer;
+                    fptr();
+                    scope = rlt->values[0].scope;
+                } else if ((rlt->values[0].type == TYPE_Unknown)
+                    && (rlt->values[0].typeref == TYPE_Scope)) {
+                    // returns a variable scope
+                    typedef Scope *(*FuncType)();
+                    FuncType fptr = (FuncType)compiled.pointer;
+                    scope = fptr();
+                } else {
+                    goto failed;
+                }
+#if 0
+                enter = Closure::from(expand_module(sx, scope), cl->frame);
+                auto cont = args[0];
+                args = { cont };
+                return true;
+#else
+                enter = fold_type_label_single(cl->frame, 
+                    expand_module(sx, scope), { args[0] });
+                args = { none };
+                return false;
+#endif
             }
-            typedef Scope *(*FuncType)();
-            FuncType fptr = (FuncType)compile(metafunc, 0).pointer;
-            Scope *scope = fptr();
-            Label *func = fold_type_label_single(cl->frame, 
-                expand_module(sx, scope), { args[0] });
-            enter = func;
-            args = { none };
+        failed:
+            set_active_anchor(sx->anchor);
+            StyledString ss;
+            const Type *T = rlt;
+            ss.out << "syntax-extend has wrong return type (expected " 
+                << ReturnLabel({unknown_of(TYPE_Scope)}) << ", got " 
+                << T << ")";
+            location_error(ss.str());
         } break;            
         case FN_ExternSymbol: {
             CHECKARGS(1, 1);
@@ -9244,7 +9372,19 @@ struct Solver {
             }
             RETARGS(Tuple(types));
         } break;
-        case FN_Location: {
+        case FN_ReturnLabelType: {
+            CHECKARGS(0, -1);
+            std::vector<Any> values;
+            for (size_t i = 1; i < args.size(); ++i) {
+                if (args[i].value.is_const()) {
+                    values.push_back(args[i].value);
+                } else {
+                    values.push_back(unknown_of(args[i].value.indirect_type()));
+                }
+            }
+            RETARGS(ReturnLabel(values));
+        } break;
+        case FN_Location: {            
             CHECKARGS(0, 0);
             RETARGS(l->body.anchor);
         } break;
@@ -9283,7 +9423,7 @@ struct Solver {
         } break;
         case FN_IsConstant: {
             CHECKARGS(1, 1);
-            RETARGS(is_const(args[1].value));
+            RETARGS(args[1].value.is_const());
         } break;
         case FN_VaCountOf: {
             RETARGS((int)(args.size()-1));
@@ -9580,7 +9720,6 @@ struct Solver {
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].value.type, destptr));
         } break;
-        /*
         case FN_VolatileLoad:
         case FN_Load: {
             CHECKARGS(1, 1);
@@ -9589,6 +9728,7 @@ struct Solver {
             auto pi = cast<PointerType>(T);
             RETARGS(pi->unpack(args[1].value.pointer));
         } break;        
+        /*
         case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
@@ -9658,9 +9798,7 @@ struct Solver {
         } break;
         case FN_AnyWrap: {
             CHECKARGS(1, 1);
-            Any arg = args[1].value.toref();
-            arg.type = TYPE_Any;
-            RETARGS(arg);
+            RETARGS(args[1].value.toref());
         } break;
         case FN_Purify: {
             CHECKARGS(1, 1);
@@ -9697,12 +9835,15 @@ struct Solver {
                 if (args[i].key != SYM_Unnamed) {
                     ss << args[i].key << " " << Style_Operator << "=" << Style_None << " ";
                 }
-                if (is_const(args[i].value)) {
+                if (args[i].value.is_const()) {
                     stream_expr(ss, args[i].value, StreamExprFormat());
                 } else {
+                    /*
                     ss << "<unknown>" 
                         << Style_Operator << ":" << Style_None
-                        << args[i].value.indirect_type() << std::endl;
+                        << args[i].value.indirect_type() << std::endl;*/
+                    args[i].value.stream(ss, false);
+                    ss << std::endl;
                 }
             }
             enter = args[0].value;
@@ -9911,19 +10052,6 @@ struct Solver {
         return is_called_by(l->params[0], l);
     }
 
-    static bool returns_higher_order_type(Label *l) {
-        assert(!l->params.empty());
-        const Type *T = l->params[0]->type;
-        if (!isa<ReturnLabelType>(T)) return false;
-        auto tli = cast<ReturnLabelType>(T);
-        for (size_t i = 0; i < tli->types.size(); ++i) {
-            if (tli->types[i] == TYPE_Label) return true;
-            if (tli->types[i] == TYPE_Closure) return true;
-            if (tli->types[i] == TYPE_Type) return true;
-        }
-        return false;
-    }
-
     void clear_continuation_arg(Label *l) {
         auto &&args = l->body.args;
         args[0] = none;
@@ -9960,8 +10088,7 @@ struct Solver {
 
         if (isa<ReturnLabelType>(cont_type)) {
             auto tli = cast<ReturnLabelType>(cont_type);
-            Any newarg = type_return(args[0].value, tli->types);
-            args[0] = newarg;
+            args[0] = fold_type_return(args[0].value, tli->values);
         } else {
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "unexpected return type: " << cont_type << std::endl;
@@ -9982,8 +10109,7 @@ struct Solver {
         } else {
             std::vector<const Type *> argtypes;
             argtypes_from_builtin_call(l, argtypes);
-            Any newarg = type_return(args[0].value, argtypes);
-            args[0] = newarg;
+            args[0] = type_return(args[0].value, argtypes);
         }
     }
 
@@ -9991,11 +10117,13 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "typing continuation from function call in " << l << std::endl;
 #endif
-        std::vector<const Type *> argtypes;
-        argtypes_from_function_call(l, argtypes);
+        auto &&enter = l->body.enter;
+
+        const FunctionType *fi = extract_function_type(enter.indirect_type());
+        verify_function_argument_signature(fi, l);
         auto &&args = l->body.args;
-        Any newarg = type_return(args[0].value, argtypes);
-        args[0] = newarg;
+        args[0] = fold_type_return(args[0].value, 
+            cast<ReturnLabelType>(fi->return_type)->values);
     }
 
     void type_continuation_call(Label *l) {
@@ -10003,23 +10131,24 @@ struct Solver {
         ss_cout << "typing continuation call in " << l << std::endl;
 #endif
         auto &&args = l->body.args;
-        std::vector<const Type *> argtypes = {};
+        Args newargs;
+        std::vector<Any> values;
+        values.reserve(args.size());
+        newargs.reserve(args.size());
+        newargs.push_back(none);
         for (size_t i = 1; i < args.size(); ++i) {
-            argtypes.push_back(args[i].value.indirect_type());
+            if (args[i].value.is_const()) {
+                values.push_back(args[i].value);
+            } else {
+                values.push_back(unknown_of(args[i].value.indirect_type()));
+                newargs.push_back(args[i]);
+            }
         }
-        type_return(l->body.enter, argtypes);
-    }
-
-    bool is_done(Label *l) {
-        return done.count(l);
-    }
-
-    void set_done(Label *l) {
-        done.insert(l);
+        fold_type_return(l->body.enter, values);
+        args = newargs;
     }
 
     Label *solve(Label *entry) {
-        done.clear();
         SCOPES_TRY()
         
         normalize_label(entry);
@@ -10030,18 +10159,56 @@ struct Solver {
         SCOPES_TRY_END()
 
         lower2cff(entry);
-        entry->set_done();
         return entry;
     }
 
-    void copy_body(Label *dest, Label *source) {
-        dest->body = source->body;
+    void complete_label_continuation (Label *l) {
+        Label *enter_label = l->get_label_enter();
+        if (is_basic_block_like(enter_label)) {
+            // we deal with this on loop exit further down
+        } else {
+            if (is_return_param_typed(enter_label)) {
+                // function is now typed
+                assert(enter_label->body.is_complete());
+                type_continuation_from_label_return_type(l);
+                if (returns_immediately(enter_label)) {
+#if SCOPES_DEBUG_CODEGEN
+                    stream_label(ss_cout, l, StreamLabelFormat::debug_single());
+                    ss_cout << "inlining immediately returning label in " << l << std::endl;
+#endif                        
+                    Frame frame(nullptr, enter_label);
+                    map_constant_arguments(&frame, enter_label, l->body.args);
+                    evaluate_body(&frame, l, enter_label);
+                }
+            } else {
+                // function with untyped continuation
+                assert(enter_label->body.is_complete());
+                SCCBuilder scc(enter_label);
+                if (scc.is_recursive(enter_label)) {
+                    // possible recursion - entry label has already been
+                    // processed, but not exited yet, so we don't have the
+                    // continuation type yet.
+
+                    // as long as we don't have to pass on the result,
+                    // that's not a problem though
+                    assert(!is_continuing_to_label(l));
+                } else {
+                    // apparently we returned from this label, but
+                    // its continuation has not been typed,
+                    // which means that it's functioning more like
+                    // a basic block
+                    // cut it
+                    assert(!is_return_param_typed(enter_label));
+                    delete_continuation(enter_label);
+                }
+            }
+        }
     }
-    
+
     void normalize_label(Label *l) {
         SCOPES_TRY()
 
-        while (!is_done(l)) {
+        while (!l->body.is_complete()) {
             assert(!l->is_template());
 
 #if SCOPES_DEBUG_CODEGEN
@@ -10082,12 +10249,12 @@ struct Solver {
                 if ((all_args_constant(l)
                     && !builtin_never_folds(l->get_builtin_enter()))
                     || builtin_always_folds(l->get_builtin_enter())) {
-                    fold_builtin_call(l);
-                    continue;
+                    if (fold_builtin_call(l))
+                        continue;
                 } else if (l->body.enter.builtin == FN_Branch) {
                     inline_branch_continuations(l);
                     auto &&args = l->body.args;
-                    set_done(l);
+                    l->body.set_complete();
                     normalize_label(args[2].value);
                     l = args[3].value;
                     continue;
@@ -10100,69 +10267,16 @@ struct Solver {
                 }
 
                 fold_type_label_arguments(l);
-                continue;
-            } else if (is_calling_label(l)) {
-                Label *enter_label = l->get_label_enter();
-                if (is_basic_block_like(enter_label)) {
-                    if (!has_params(enter_label)) {
-#if SCOPES_DEBUG_CODEGEN
-                        ss_cout << "folding jump to label in " << l << std::endl;
-#endif
-                        copy_body(l, enter_label);
-                        continue;
-                    } else {
-                        if (!is_jumping(l)) {
-                            clear_continuation_arg(l);
-                        }
-                        set_done(l);
-                        l = enter_label;
-                        continue;
-                    }
-                } else if (is_return_param_typed(enter_label)) {
-                    if (returns_immediately(enter_label)) {
-#if SCOPES_DEBUG_CODEGEN
-                        ss_cout << "inlining immediately returning label in " << l << std::endl;
-#endif                        
-                        Frame frame(nullptr, enter_label);
-                        map_constant_arguments(&frame, enter_label, l->body.args);
-                        evaluate_body(&frame, l, enter_label);
-                        continue;
-                    } else {
-                        type_continuation_from_label_return_type(l);
-                    }
-                } else {
-                    // returning function with untyped continuation
-                    if (is_done(enter_label)) {                        
-                        SCCBuilder scc(enter_label);
-                        if (scc.is_recursive(enter_label)) {
-                            // possible recursion - entry label has already been
-                            // processed, but not exited yet, so we don't have the
-                            // continuation type yet.
-
-                            // as long as we don't have to pass on the result,
-                            // that's not a problem though
-                            assert(!is_continuing_to_label(l));
-                        } else {
-                            // apparently we returned from this label, but
-                            // its continuation has not been typed,
-                            // which means that it's functioning more like
-                            // a basic block
-                            // cut it
-                            assert(!is_return_param_typed(enter_label));
-                            delete_continuation(enter_label);
-                        }
-                    } else {
-                        // we need to try again after label has been visited
-                        normalize_label(enter_label);
-                        continue;
-                    }
-                }
+                complete_label_continuation(l);
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
+            } else if (is_calling_label(l)
+                && l->get_label_enter()->body.is_complete()) {
+                complete_label_continuation(l);
             } else {
                 StyledString ss;
                 auto &&enter = l->body.enter;
-                if (!is_const(enter)) {
+                if (!enter.is_const()) {
                     ss.out << "unable to call variable of type " << enter.indirect_type();
                 } else {
                     ss.out << "unable to call constant of type " << enter.type;
@@ -10171,15 +10285,34 @@ struct Solver {
             }
 
 #if SCOPES_DEBUG_CODEGEN
-            ss_cout << "done: ";
-            stream_label(ss_cout, l, StreamLabelFormat::debug_single());
+            Label *oldl = l;
 #endif
-
-            set_done(l);
-
-            if (is_continuing_to_label(l)) {
+            l->body.set_complete();
+            if (is_calling_label(l)
+                && is_basic_block_like(l->get_label_enter())) {
+                Label *enter_label = l->get_label_enter();
+                if (!has_params(enter_label)) {
+#if SCOPES_DEBUG_CODEGEN
+                    stream_label(ss_cout, l, StreamLabelFormat::debug_single());
+                    stream_label(ss_cout, enter_label, StreamLabelFormat::debug_single());
+                    ss_cout << "folding jump to label in " << l << std::endl;
+#endif
+                    l->body = enter_label->body;
+                    continue;
+                } else {
+                    if (!is_jumping(l)) {
+                        clear_continuation_arg(l);
+                    }
+                    l = enter_label;
+                }
+            } else if (is_continuing_to_label(l)) {
                 l = l->body.args[0].value.label;
             }
+#if SCOPES_DEBUG_CODEGEN
+            ss_cout << "done: ";
+            stream_label(ss_cout, oldl, StreamLabelFormat::debug_single());
+#endif
+
         }
 
         SCOPES_CATCH(exc)
@@ -10198,7 +10331,8 @@ struct Solver {
             iterations++;
             if (iterations > 256) {
                 location_error(String::from(
-                    "free variable elimination not terminated after 256 iterations"));
+                    "free variable elimination not "
+                    "terminated after 256 iterations"));
             }
 
             std::unordered_set<Label *> labels;
@@ -10241,9 +10375,9 @@ struct Solver {
                 stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
                 
-                auto umit = um.map.find(l);
-                if (umit != um.map.end()) {
-                    auto &&users = umit->second;
+                auto umit = um.label_map.find(l);
+                if (umit != um.label_map.end()) {
+                    auto users = umit->second;
                     // continuation must be eliminated
                     for (auto kv = users.begin(); kv != users.end(); ++kv) {
                         Label *user = *kv;
@@ -10268,9 +10402,10 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
                                 ss_cout << l << "(" << cont.value << ") -> " << newl << std::endl;
 #endif
-
+                                user->remove_from_usermap(um);
                                 cont = none;
                                 enter = newl;
+                                user->insert_into_usermap(um);
                                 numchanges++;
                             }
                         } else {
@@ -10281,6 +10416,24 @@ struct Solver {
                     }
                 }
             }
+
+            if (!numchanges) {
+                if (!has_illegals.empty() || !illegal.empty()) {
+                    StyledStream ss(std::cerr);
+                    ss << "could not eliminate closures:" << std::endl;
+                    for (auto it = illegal.begin(); it != illegal.end(); ++it) {
+                        stream_label(ss, *it, StreamLabelFormat::debug_single());
+                    }
+                    ss << "within these functions:" << std::endl;
+                    for (auto it = has_illegals.begin(); it != has_illegals.end(); ++it) {
+                        stream_label(ss, *it, StreamLabelFormat::debug_scope());
+                        ss << "----" << std::endl;
+                    }
+                    location_error(String::from("closure elimination failed"));
+
+                }
+            }
+
         } while (numchanges);
 
 #if SCOPES_DEBUG_CODEGEN
@@ -10442,7 +10595,7 @@ struct Solver {
 
         size_t fargcount = fi->argument_types.size();
 
-        const Type *rettype = fi->return_type;
+        const Type *rettype = cast<ReturnLabelType>(fi->return_type)->return_type;
 
         ffi_cif cif;
         ffi_type *argtypes[argcount];
@@ -10489,7 +10642,7 @@ static bool verify_list_parameter_count(const List *expr, int mincount, int maxc
     }
     if ((mincount >= 0) && (argcount < mincount)) {
         location_error(
-            format("at least %i arguments expected", mincount));
+            format("at least %i arguments expected, got %i", mincount, argcount));
         return false;
     }
     return true;
@@ -10516,7 +10669,7 @@ struct Expander {
         next(_next),
         list_expander_func_type(nullptr) {
         list_expander_func_type = Pointer(Function(
-            Tuple({TYPE_List, TYPE_Scope}),
+            ReturnLabel({unknown_of(TYPE_List), unknown_of(TYPE_Scope)}),
             {TYPE_List, TYPE_Scope}));
     }
 
@@ -11332,7 +11485,7 @@ static void init_types() {
     DEFINE_TYPENAME("vector", TYPE_Vector);
     DEFINE_TYPENAME("tuple", TYPE_Tuple);
     DEFINE_TYPENAME("union", TYPE_Union);
-    DEFINE_TYPENAME("return-label", TYPE_ReturnLabel);
+    DEFINE_TYPENAME("ReturnLabel", TYPE_ReturnLabel);
     DEFINE_TYPENAME("constant", TYPE_Constant);
     DEFINE_TYPENAME("function", TYPE_Function);
     DEFINE_TYPENAME("extern", TYPE_Extern);
@@ -11356,8 +11509,6 @@ static void init_types() {
     TYPE_F32 = Real(32);
     TYPE_F64 = Real(64);
     TYPE_F80 = Real(80);
-
-    TYPE_Ref = Typename(String::from("ref"));
 
     DEFINE_BASIC_TYPE("usize", size_t, TYPE_USize, TYPE_U64);
 
@@ -11816,8 +11967,16 @@ static void f_set_typename_super(const Type *T, const Type *ST) {
     const_cast<TypenameType *>(tn)->super_type = ST;
 }
 
-static const Anchor *f_closure_anchor(Closure *closure) {
-    return closure->label->anchor;
+static const Anchor *f_label_anchor(Label *label) {
+    return label->anchor;
+}
+
+static Label *f_closure_label(const Closure *closure) {
+    return closure->label;
+}
+
+static const Frame *f_closure_frame(const Closure *closure) {
+    return closure->frame;
 }
 
 static void init_globals(int argc, char *argv[]) {
@@ -11875,7 +12034,9 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_FunctionTypeIsVariadic, f_function_type_is_variadic, TYPE_Bool, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_ClosureAnchor, f_closure_anchor, TYPE_Anchor, TYPE_Closure);    
+    DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);    
+    DEFINE_PURE_C_FUNCTION(FN_ClosureLabel, f_closure_label, TYPE_Label, TYPE_Closure);
+    DEFINE_PURE_C_FUNCTION(FN_ClosureFrame, f_closure_frame, TYPE_Frame, TYPE_Frame);
     
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 

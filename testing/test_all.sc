@@ -1,12 +1,16 @@
 
 set-scope-symbol! package 'path
-    cons (.. compiler-dir "/testing/?.sc") package.path
+    cons 
+        .. compiler-dir "/testing/?.sc"
+        .. compiler-dir "/testing/?/init.sc"
+        package.path
 
 let modules =
     quote
         test_assorted
         test_call_override
         test_clang
+        test_closure
         test_dots
         test_extraparams
         test_fwdecl
@@ -17,6 +21,7 @@ let modules =
         test_regexp
         test_scope
         test_scope_iter
+        test_submod
         test_semicolon
         #test_structof
         #test_tableof
@@ -44,11 +49,11 @@ fn run-tests ()
         xpcall
             fn ()
                 require module
-                true
+                unconst true
             fn (exc)
                 io-write!
                     format-exception exc
-                false
+                unconst false
     loop modules
         ? ok failed (failed + 1)
 
