@@ -184,7 +184,7 @@ extern "C" {
 }
 
 #pragma GCC diagnostic ignored "-Wvla-extension"
-// #pragma GCC diagnostic ignored "-Wzero-length-array"
+#pragma GCC diagnostic ignored "-Wzero-length-array"
 #pragma GCC diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
 // #pragma GCC diagnostic ignored "-Wembedded-directive"
 // #pragma GCC diagnostic ignored "-Wgnu-statement-expression"
@@ -600,6 +600,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Malloc, "malloc") T(FN_MallocArray, "malloc-array") T(FN_Unconst, "unconst") \
     T(FN_Macro, "macro") T(FN_Max, "max") T(FN_Min, "min") \
     T(FN_MemCpy, "memcpy") \
+    T(FN_IsMutable, "mutable?") \
     T(FN_IsNone, "none?") \
     T(FN_IsNull, "null?") T(FN_OrderedBranch, "ordered-branch") \
     T(FN_ParameterEq, "Parameter==") \
@@ -607,6 +608,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ParameterAnchor, "Parameter-anchor") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
     T(FN_PointerType, "pointer-type") \
+    T(FN_MutablePointerType, "mutable-pointer-type") \
     T(FN_FunctionType, "function-type") \
     T(FN_FunctionTypeIsVariadic, "function-type-variadic?") \
     T(FN_TupleType, "tuple-type") \
@@ -2143,15 +2145,26 @@ static auto Real = memoize(_Real);
 // POINTER TYPE
 //------------------------------------------------------------------------------
 
+enum PointerTypeFlags {
+    PTF_Mutable = (1 << 0),
+};
+
 struct PointerType : Type {
     static bool classof(const Type *T) {
         return T->kind() == TK_Pointer;
     }
 
-    PointerType(const Type *_element_type)
-        : Type(TK_Pointer), element_type(_element_type) {
+    PointerType(const Type *_element_type, uint64_t _flags)
+        : Type(TK_Pointer), 
+            element_type(_element_type), 
+            flags(_flags) {
         std::stringstream ss;
-        ss << element_type->name()->data << "*";
+        ss << element_type->name()->data;
+        if (is_mutable()) {
+            ss << "*";
+        } else {
+            ss << "(*)";
+        }
         _name = String::from_stdstring(ss.str());
     }
 
@@ -2167,13 +2180,22 @@ struct PointerType : Type {
         return sizeof(uint64_t);
     }
 
+    bool is_mutable() const {
+        return flags & PTF_Mutable;
+    }
+
     const Type *element_type;
+    uint64_t flags;
 };
 
-static const Type *Pointer(const Type *element_type) {
+static const Type *Pointer(const Type *element_type, uint64_t flags = 0) {
     static TypeFactory<PointerType> pointers;
     assert(element_type->kind() != TK_ReturnLabel);
-    return pointers.insert(element_type);
+    return pointers.insert(element_type, flags);
+}
+
+static const Type *MutPointer(const Type *element_type) {
+    return Pointer(element_type, PTF_Mutable);
 }
 
 //------------------------------------------------------------------------------
@@ -5981,6 +6003,90 @@ public:
         return enum_type;
     }
 
+    bool always_immutable(clang::QualType T) {
+        using namespace clang;
+        const clang::Type *Ty = T.getTypePtr();
+        assert(Ty);
+        switch (Ty->getTypeClass()) {
+        case clang::Type::Elaborated: {
+            const ElaboratedType *et = dyn_cast<ElaboratedType>(Ty);
+            return always_immutable(et->getNamedType());
+        } break;
+        case clang::Type::Paren: {
+            const ParenType *pt = dyn_cast<ParenType>(Ty);
+            return always_immutable(pt->getInnerType());
+        } break;
+        case clang::Type::Typedef:
+        case clang::Type::Record:
+        case clang::Type::Enum:
+            break;
+        case clang::Type::Builtin:
+            switch (cast<BuiltinType>(Ty)->getKind()) {
+            case clang::BuiltinType::Void:
+            case clang::BuiltinType::Bool:
+            case clang::BuiltinType::Char_S:
+            case clang::BuiltinType::SChar:
+            case clang::BuiltinType::Char_U:
+            case clang::BuiltinType::UChar:
+            case clang::BuiltinType::Short:
+            case clang::BuiltinType::UShort:
+            case clang::BuiltinType::Int:
+            case clang::BuiltinType::UInt:
+            case clang::BuiltinType::Long:
+            case clang::BuiltinType::ULong:
+            case clang::BuiltinType::LongLong:
+            case clang::BuiltinType::ULongLong:
+            case clang::BuiltinType::WChar_S:
+            case clang::BuiltinType::WChar_U:
+            case clang::BuiltinType::Char16:
+            case clang::BuiltinType::Char32:
+            case clang::BuiltinType::Half:
+            case clang::BuiltinType::Float:
+            case clang::BuiltinType::Double:
+            case clang::BuiltinType::LongDouble:
+            case clang::BuiltinType::NullPtr:
+            case clang::BuiltinType::UInt128:
+            default:
+                break;
+            }
+        case clang::Type::Complex:
+        case clang::Type::LValueReference:
+        case clang::Type::RValueReference:
+            break;
+        case clang::Type::Decayed: {
+            const clang::DecayedType *DTy = cast<clang::DecayedType>(Ty);
+            return always_immutable(DTy->getDecayedType());
+        } break;
+        case clang::Type::Pointer: 
+        case clang::Type::VariableArray:
+        case clang::Type::IncompleteArray: 
+        case clang::Type::ConstantArray: 
+            break;
+        case clang::Type::ExtVector:
+        case clang::Type::Vector: return true;
+        case clang::Type::FunctionNoProto:
+        case clang::Type::FunctionProto: return true;
+        case clang::Type::ObjCObject: break;
+        case clang::Type::ObjCInterface: break;
+        case clang::Type::ObjCObjectPointer: break;
+        case clang::Type::BlockPointer:
+        case clang::Type::MemberPointer:
+        case clang::Type::Atomic:
+        default:
+            break;
+        }
+        if (T.isLocalConstQualified())
+            return true;
+        return false;
+    }
+
+    uint64_t PointerFlags(clang::QualType T) {
+        uint64_t flags = 0;
+        if (!always_immutable(T))
+            flags |= PTF_Mutable;
+        return flags;
+    }
+
     const Type *TranslateType(clang::QualType T) {
         using namespace clang;
 
@@ -6063,13 +6169,14 @@ public:
         case clang::Type::Pointer: {
             const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            return Pointer(TranslateType(ETy));
+            return Pointer(TranslateType(ETy), PointerFlags(ETy));
         } break;
         case clang::Type::VariableArray:
             break;
         case clang::Type::IncompleteArray: {
             const IncompleteArrayType *ATy = cast<IncompleteArrayType>(Ty);
-            return Pointer(TranslateType(ATy->getElementType()));
+            QualType ETy = ATy->getElementType();
+            return Pointer(TranslateType(ETy), PointerFlags(ETy));
         } break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
@@ -8830,12 +8937,22 @@ struct Solver {
         case FN_Malloc:
         case FN_MallocArray:
         case SFXFN_Unreachable:
-        case FN_VolatileLoad:
-        case FN_Load:
         case FN_VolatileStore:
         case FN_Store:
+        case FN_VolatileLoad:
+        case FN_Load:
             return true;
         default: return false;
+        }
+    }
+
+    void verify_mutable(const Type *T) {
+        auto pi = cast<PointerType>(T);
+        if (!pi->is_mutable()) {
+            StyledString ss;
+            ss.out << "can not store value at address of type " << T 
+                << " because the target is immutable";
+            location_error(ss.str());
         }
     }
 
@@ -8843,9 +8960,19 @@ struct Solver {
     checkargs<MINARGS, MAXARGS>(args.size())
 
 #define RETARGTYPES(...) \
-    retargtypes = { __VA_ARGS__ }
+    { \
+        const Type *retargtypes[] = { __VA_ARGS__ }; \
+        size_t _count = (sizeof(retargtypes) / sizeof(const Type *)); \
+        retvalues.reserve(_count); \
+        for (size_t _i = 0; _i < _count; ++_i) { \
+            retvalues.push_back(unknown_of(retargtypes[_i])); \
+        } \
+    }
+#define RETARGS(...) \
+    retvalues = { __VA_ARGS__ };
 
-    void argtypes_from_builtin_call(Label *l, std::vector<const Type *> &retargtypes) {
+    // returns true if the call can be eliminated
+    bool values_from_builtin_call(Label *l, std::vector<Any> &retvalues) {
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
@@ -8861,7 +8988,7 @@ struct Solver {
             auto T = args[1].value.indirect_type();
             auto et = dyn_cast<ExternType>(T);
             if (et) {
-                RETARGTYPES(Pointer(et->type));
+                RETARGTYPES(MutPointer(et->type));
             } else {
                 RETARGTYPES(T);
             }
@@ -9056,18 +9183,20 @@ struct Solver {
         case FN_Alloca: {
             CHECKARGS(1, 1);
             args[1].value.verify(TYPE_Type);
-            RETARGTYPES(Pointer(args[1].value.typeref));
+            RETARGTYPES(Pointer(args[1].value.typeref, PTF_Mutable));
         } break;
         case FN_MallocArray:
         case FN_AllocaArray: {
             CHECKARGS(2, 2);
             args[1].value.verify(TYPE_Type);
             verify_integer(storage_type(args[2].value.indirect_type()));
-            RETARGTYPES(Pointer(args[1].value.typeref));
+            RETARGTYPES(Pointer(args[1].value.typeref, PTF_Mutable));
         } break;
         case FN_Free: {
             CHECKARGS(1, 1);
-            verify_kind<TK_Pointer>(args[1].value.indirect_type());
+            const Type *T = args[1].value.indirect_type();
+            verify_kind<TK_Pointer>(T);
+            verify_mutable(T);
             RETARGTYPES();
         } break;
         case FN_GetElementPtr: {
@@ -9111,7 +9240,7 @@ struct Solver {
                 } break;
                 }
             }
-            T = Pointer(T);
+            T = Pointer(T, pi->flags);
             RETARGTYPES(T);
         } break;
         case FN_VolatileLoad:
@@ -9120,13 +9249,20 @@ struct Solver {
             const Type *T = storage_type(args[1].value.indirect_type());
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
-            RETARGTYPES(pi->element_type);
+            if (args[1].value.is_const()
+                && !pi->is_mutable()) {
+                RETARGS(pi->unpack(args[1].value.pointer));
+                return true;
+            } else {
+                RETARGTYPES(pi->element_type);
+            }            
         } break;
         case FN_VolatileStore:
         case FN_Store: {
             CHECKARGS(2, 2);
             const Type *T = storage_type(args[2].value.indirect_type());
             verify_kind<TK_Pointer>(T);
+            verify_mutable(T);
             auto pi = cast<PointerType>(T);
             verify(storage_type(pi->element_type),
                 storage_type(args[1].value.indirect_type()));
@@ -9198,7 +9334,11 @@ struct Solver {
             location_error(ss.str());
         } break;
         }
+
+        return false;
     }
+#undef RETARGS
+#undef RETARGTYPES
 
 #define RETARGS(...) \
     enter = args[0].value; \
@@ -9206,19 +9346,33 @@ struct Solver {
 
     std::vector<Label *> traceback;
 
+    void print_traceback_entry(Label *l) {
+        StyledStream ss(std::cerr);
+        ss << l->body.anchor << " in ";
+        if (l->name == SYM_Unnamed) {
+            if (is_basic_block_like(l)) {
+                ss << "unnamed label";
+            } else {
+                ss << "unnamed function";
+            }
+        } else {
+            ss << l->name.name()->data;
+        }
+        ss << std::endl;
+        l->body.anchor->stream_source_line(ss);
+    }
+
     void print_traceback() {
         size_t i = traceback.size();
         while (i-- > 1) {
             Label *l = traceback[i];
-            StyledStream ss(std::cerr);
-            ss << l->body.anchor << " in ";
-            if (l->name == SYM_Unnamed) {
-                ss << "anonymous function";
-            } else {
-                ss << l->name.name()->data;
+            if (i > 0) {
+                Label *lnext = traceback[i - 1];
+                if ((l->name == SYM_Unnamed) && (lnext->name == SYM_Unnamed)) {
+                    continue;
+                }
             }
-            ss << std::endl;
-            l->body.anchor->stream_source_line(ss);
+            print_traceback_entry(l);
         }
     }
 
@@ -9720,14 +9874,6 @@ struct Solver {
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].value.type, destptr));
         } break;
-        case FN_VolatileLoad:
-        case FN_Load: {
-            CHECKARGS(1, 1);
-            const Type *T = storage_type(args[1].value.type);
-            verify_kind<TK_Pointer>(T);
-            auto pi = cast<PointerType>(T);
-            RETARGS(pi->unpack(args[1].value.pointer));
-        } break;        
         /*
         case FN_VolatileStore:
         case FN_Store: {
@@ -9787,7 +9933,7 @@ struct Solver {
                 } break;
                 }
             }
-            T = Pointer(T);
+            T = Pointer(T, pi->flags);
             RETARGS(Any::from_pointer(T, ptr));
         } break;
         case FN_AnyExtract: {
@@ -10043,7 +10189,6 @@ struct Solver {
 #undef FARITH_OP
 #undef FARITH_OPF
 #undef B_INT_OP2
-#undef RETARGTYPES
 #undef CHECKARGS
 #undef RETARGS
 
@@ -10097,7 +10242,7 @@ struct Solver {
         }
     }
 
-    void type_continuation_from_builtin_call(Label *l) {
+    bool type_continuation_from_builtin_call(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "typing continuation from builtin call in " << l << std::endl;
 #endif
@@ -10107,10 +10252,21 @@ struct Solver {
         if (enter.builtin == SFXFN_Unreachable) {
             args[0] = none;
         } else {
-            std::vector<const Type *> argtypes;
-            argtypes_from_builtin_call(l, argtypes);
-            args[0] = type_return(args[0].value, argtypes);
+            std::vector<Any> values;
+            bool fold = values_from_builtin_call(l, values);
+            if (fold) {
+                enter = args[0].value;
+                args = { none };
+                for (size_t i = 0; i < values.size(); ++i) {
+                    args.push_back(values[i]);
+                }
+                return true;
+            } else {
+                args[0] = fold_type_return(args[0].value, values);
+            }
         }
+
+        return false;
     }
 
     void type_continuation_from_function_call(Label *l) {
@@ -10259,7 +10415,8 @@ struct Solver {
                     l = args[3].value;
                     continue;
                 } else {
-                    type_continuation_from_builtin_call(l);
+                    if (type_continuation_from_builtin_call(l))
+                        continue;
                 }
             } else if (is_calling_closure(l)) {
                 if (has_keyed_args(l)) {
@@ -11678,6 +11835,15 @@ static const Type *f_pointertype(const Type *T) {
     return Pointer(T);
 }
 
+static const Type *f_mutpointertype(const Type *T) {
+    return Pointer(T, PTF_Mutable);
+}
+
+static bool f_is_mutable(const Type *T) {
+    verify_kind<TK_Pointer>(T);
+    return cast<PointerType>(T)->is_mutable();
+}
+
 static const List *f_list_cons(Any at, const List *next) {
     return List::from(at, next);
 }
@@ -12005,6 +12171,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
     DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_PointerType, f_pointertype, TYPE_Type, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_MutablePointerType, f_mutpointertype, TYPE_Type, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_IsMutable, f_is_mutable, TYPE_Bool, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_ListCons, f_list_cons, TYPE_List, TYPE_Any, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_TypeKind, f_type_kind, TYPE_I32, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_BitCountOf, f_bitcountof, TYPE_I32, TYPE_Type);
@@ -12065,16 +12233,16 @@ static void init_globals(int argc, char *argv[]) {
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
 
     const Type *exception_pad_type = Array(TYPE_U8, sizeof(ExceptionPad));
-    const Type *p_exception_pad_type = Pointer(exception_pad_type);
+    const Type *p_exception_pad_type = MutPointer(exception_pad_type);
 
     DEFINE_C_FUNCTION(Symbol("set-exception-pad"), f_set_exception_pad, 
         p_exception_pad_type, p_exception_pad_type);
     #if SCOPES_WIN32
     DEFINE_C_FUNCTION(Symbol("catch-exception"), _setjmpex, TYPE_I32, 
-        Pointer(exception_pad_type), Pointer(TYPE_I8));
+        p_exception_pad_type, Pointer(TYPE_I8));
     #else
     DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32, 
-        Pointer(exception_pad_type));
+        p_exception_pad_type);
     #endif
     DEFINE_C_FUNCTION(Symbol("exception-value"), f_exception_value,
         TYPE_Any, p_exception_pad_type);

@@ -850,11 +850,21 @@ syntax-extend
         fn (cls ...)
             real-type ...
     set-type-symbol! pointer 'apply-type 
-        fn (cls ...)
-            if (va-empty? ...)
-                nullof cls
+        fn (cls T opt)
+            let ptypefunc =
+                if (none? opt) pointer-type
+                else
+                    assert-typeof opt Symbol
+                    if (icmp== opt 'mutable) mutable-pointer-type
+                    else
+                        compiler-error! "invalid option passed to pointer type constructor"
+            if (none? T)
+                if (type== cls pointer)
+                    compiler-error! "type expected"
+                else
+                    nullof cls
             else
-                pointer-type ...
+                ptypefunc T
     set-type-symbol! array 'apply-type 
         fn (cls ...)
             array-type ...
@@ -1128,7 +1138,7 @@ fn typify (f types...)
     let [loop] i = 0
     if (== i vacount)
         return
-            __typify f vacount types
+            __typify f vacount (bitcast types (pointer-type type))
     let T = (va@ i types...)
     store T (getelementptr types i)
     loop (+ i 1)
@@ -1606,7 +1616,7 @@ do
     passthru-overload '<< <<; passthru-overload '>> >>
     passthru-overload '.. ..; passthru-overload '.. ..
     set-type-symbol! reference 'getattr
-        fn (self name)
+        fn "reference-getattr" (self name)
             getattr (bitcast self (storageof (typeof self))) name
 
     set-type-symbol! reference 'repr
@@ -1628,12 +1638,12 @@ do
             true
 
     set-type-symbol! reference 'apply-type
-        fn (cls element)
+        fn "reference-apply-type" (cls element)
             if (type== cls reference)
                 fn make-reference-type (ET)
                     let T = (typename (.. "&" (type-name ET)))
                     set-typename-super! T reference
-                    set-typename-storage! T (pointer ET)
+                    set-typename-storage! T (mutable-pointer-type ET)
                     T
 
                 # due to auto-memoization, we'll always get the same type back
@@ -1988,6 +1998,11 @@ set-type-symbol! pointer 'cast
     fn (destT self)
         if (type== destT (element-type (typeof self) 0))
             load self
+# also supports mutable pointer softcast to immutable pointer
+set-type-symbol! pointer 'softcast
+    fn (destT self)
+        if (type== destT (pointer-type (element-type (typeof self) 0)))
+            bitcast self destT
 
 # support getattr syntax
 set-type-symbol! pointer 'getattr
@@ -2104,7 +2119,12 @@ set-type-symbol! CUnion 'getattr&
         if (icmp>=s idx 0)
             let FT = (element-type ET idx)
             # cast pointer to reference to alternative type
-            (reference FT) (bitcast self (pointer FT))
+            (reference FT) 
+                bitcast self 
+                    if (mutable? (typeof self))
+                        pointer FT 'mutable
+                    else
+                        pointer FT
 
 fn pointer-call (self ...)
     fn docall (dest ET)
