@@ -986,25 +986,27 @@ syntax-extend
                 build-slice (list-next l) (list-cons (list-at l) next) (+ i 1:i64)
 
     fn list== (a b)
+        label xreturn (value)
+            return (tie-const (tie-const a b) value)
         if (icmp!= (list-countof a) (list-countof b))
-            return (unconst false)
+            xreturn false
         let [loop] a b = (tie-const b a) (tie-const a b)
         if (list-empty? a)
-            return (unconst true)
+            xreturn true
         let u v = (list-at a) (list-at b)
         let uT vT = ('typeof u) ('typeof v)
         if (not (type== uT vT))
-            return (unconst false)
+            xreturn false
         let un vn = (list-next a) (list-next b)
         if (type== uT list)
             if (list== (softcast list u) (softcast list v))
                 loop un vn
             else
-                return (unconst false)
+                xreturn false
         elseif (Any== u v)
             loop un vn
         else
-            return (unconst false)
+            xreturn false
                 
     set-type-symbol! list '==
         fn (a b flipped)
