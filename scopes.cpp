@@ -466,7 +466,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
 #define B_GLOBALS() \
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_RawCall) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
-    T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_Malloc) \
+    T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_AllocaOf) T(FN_Malloc) \
     T(FN_AllocaArray) T(FN_MallocArray) T(FN_ReturnLabelType) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
@@ -655,6 +655,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_TypeKind, "type-kind") \
     T(FN_TypeAt, "type@") \
     T(FN_Undef, "undef") T(FN_NullOf, "nullof") T(FN_Alloca, "alloca") \
+    T(FN_AllocaOf, "allocaof") \
     T(FN_AllocaArray, "alloca-array") \
     T(FN_Location, "compiler-anchor") \
     T(FN_ExternNew, "extern-new") \
@@ -1972,7 +1973,14 @@ protected:
 };
 
 static StyledStream& operator<<(StyledStream& ost, const Type *type) {
-    return type->stream(ost);
+    if (!type) {
+        ost << Style_Error;
+        ost << "<null type>";
+        ost << Style_None;
+        return ost;        
+    } else {
+        return type->stream(ost);
+    }
 }
 
 static Any wrap_pointer(const Type *type, void *ptr);
@@ -2459,7 +2467,8 @@ struct ReturnLabelType : Type {
             if (is_unknown(values[i])) {
                 ss.out << values[i].typeref->name()->data;
             } else {
-                ss.out << "!" << values[i];
+                ss.out << "!" << values[i].type;
+                // ss.out << "!" << values[i];
             }
         }
         ss.out << ")";
@@ -2903,9 +2912,9 @@ static const Type *superof(const Type *T) {
     case TK_Typename: return cast<TypenameType>(T)->super();
     case TK_ReturnLabel: return TYPE_ReturnLabel;
     case TK_Function: return TYPE_Function;
-    case TK_Extern: return TYPE_Extern;
+    case TK_Extern: return TYPE_Extern; 
     }
-    assert(false && "unhandled type kind");    
+    assert(false && "unhandled type kind; corrupt pointer?");
     return nullptr;
 }
 
@@ -7515,6 +7524,16 @@ struct GenerateCtx {
             } break;
             }
         } break;
+        case TK_Array: {
+            auto ai = cast<ArrayType>(value.type);
+            size_t count = ai->count;
+            LLVMValueRef values[count];
+            for (size_t i = 0; i < count; ++i) {
+                values[i] = argument_to_value(ai->unpack(value.pointer, i));
+            }
+            return LLVMConstArray(type_to_llvm_type(ai->element_type),
+                values, count);                    
+        } break;
         case TK_Tuple: {
             auto ti = cast<TupleType>(value.type);
             size_t count = ti->types.size();
@@ -7675,6 +7694,11 @@ struct GenerateCtx {
                 retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
             case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
                 retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
+            case FN_AllocaOf: { 
+                READ_VALUE(val);
+                retvalue = LLVMBuildAlloca(builder, LLVMTypeOf(val), "");
+                LLVMBuildStore(builder, val, retvalue);
+            } break;
             case FN_Malloc: { READ_TYPE(ty);
                 retvalue = LLVMBuildMalloc(builder, ty, ""); } break;
             case FN_MallocArray: { READ_TYPE(ty); READ_VALUE(val);
@@ -8902,6 +8926,7 @@ struct Solver {
     bool builtin_always_folds(Builtin builtin) {
         switch(builtin.value()) {
         case FN_TypeOf:
+        case FN_NullOf:
         case FN_IsConstant:
         case FN_VaCountOf:
         case FN_VaKeys:
@@ -8931,7 +8956,6 @@ struct Solver {
         switch(builtin.value()) {
         case FN_Unconst:
         case FN_Undef:
-        case FN_NullOf:
         case FN_Alloca:
         case FN_AllocaArray:
         case FN_Malloc:
@@ -9174,16 +9198,15 @@ struct Solver {
             args[1].value.verify(TYPE_Type);
             RETARGTYPES(args[1].value.typeref);
         } break;
-        case FN_NullOf: {
-            CHECKARGS(1, 1);
-            args[1].value.verify(TYPE_Type);
-            RETARGTYPES(args[1].value.typeref);
-        } break;
         case FN_Malloc:
         case FN_Alloca: {
             CHECKARGS(1, 1);
             args[1].value.verify(TYPE_Type);
             RETARGTYPES(Pointer(args[1].value.typeref, PTF_Mutable));
+        } break;
+        case FN_AllocaOf: {
+            CHECKARGS(1, 1);
+            RETARGTYPES(Pointer(args[1].value.indirect_type(), PTF_Mutable));
         } break;
         case FN_MallocArray:
         case FN_AllocaArray: {
@@ -9475,6 +9498,23 @@ struct Solver {
                 << T << ")";
             location_error(ss.str());
         } break;            
+        case FN_AllocaOf: {
+            CHECKARGS(1, 1);
+            const Type *T = args[1].value.type;
+            void *src = get_pointer(T, args[1].value);
+            void *dst = malloc(size_of(T));
+            memcpy(dst, src, size_of(T));
+            RETARGS(Any::from_pointer(Pointer(T), dst));
+        } break;
+        case FN_NullOf: {
+            CHECKARGS(1, 1);
+            const Type *T = args[1].value;
+            Any value = none;
+            value.type = T;
+            void *ptr = get_pointer(T, value, true);
+            memset(ptr, 0, size_of(T));
+            RETARGS(value);
+        } break;
         case FN_ExternSymbol: {
             CHECKARGS(1, 1);
             verify_kind<TK_Extern>(args[1].value);
@@ -9870,7 +9910,7 @@ struct Solver {
                 location_error(ss.str());
             } break;
             }
-            void *srcptr = get_pointer(ET, args[1].value);
+            void *srcptr = get_pointer(ET, args[2].value);
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].value.type, destptr));
         } break;

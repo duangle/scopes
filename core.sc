@@ -1135,15 +1135,13 @@ fn walk-list (on-leaf l depth)
 
 fn typify (f types...)
     let vacount = (va-countof types...)
-    let atype = (array-type type (usize vacount))
-    let types = (getelementptr (alloca atype) 0 0)
-    let [loop] i = 0
+    let [loop] i types = 0 (nullof (array-type type (usize vacount)))
     if (== i vacount)
         return
-            __typify f vacount (bitcast types (pointer-type type))
+            __typify f vacount (bitcast (allocaof types) (pointer type))
     let T = (va@ i types...)
-    store T (getelementptr types i)
-    loop (+ i 1)
+    let types = (insertvalue types T i)
+    loop (+ i 1) types
 
 fn compile (f opts...)
     let vacount = (va-countof opts...)
@@ -1778,7 +1776,7 @@ syntax-extend
                 let expr =
                     list
                         list let 'tmp '= (list f)
-                        list Any-new (list unconst 'tmp)
+                        list unconst (list Any-new 'tmp)
                 let expr = (cast Syntax (Syntax-wrap expr-anchor (Any expr) false))
                 let f = (compile (eval expr (globals)))
                 cast ModuleFunctionType f
@@ -2276,7 +2274,7 @@ fn read-eval-print-loop ()
                     let expr =
                         list
                             list let 'tmp '= (list f)
-                            list Any-new (list unconst 'tmp)
+                            list unconst (list Any-new 'tmp)
                     let expr = (cast Syntax (Syntax-wrap expr-anchor (Any expr) false))
                     let f = (compile (eval expr global-scope))
                     cast ModuleFunctionType f
