@@ -2395,6 +2395,7 @@ struct UnionType : StorageType {
         }
         size = ::align(sz, al);
         align = al;
+        tuple_type = Tuple({types[largest_field]});
     }
 
     Any unpack(void *src, size_t i) const {
@@ -2408,6 +2409,7 @@ struct UnionType : StorageType {
 
     std::vector<const Type *> types;
     size_t largest_field;
+    const Type *tuple_type;
 };
 
 static const Type *Union(const std::vector<const Type *> &types) {
@@ -7252,28 +7254,7 @@ struct GenerateCtx {
         } break;
         case TK_Union: {
             auto ui = cast<UnionType>(type);
-            size_t count = ui->types.size();
-            size_t sz = ui->size;
-            size_t al = ui->align;
-            // find member with the same alignment
-            for (size_t i = 0; i < count; ++i) {
-                const Type *ET = ui->types[i];
-                size_t etal = align_of(ET);
-                if (etal == al) {
-                    size_t remsz = sz - size_of(ET);
-                    LLVMTypeRef values[2];
-                    values[0] = _type_to_llvm_type(ET);
-                    if (remsz) {
-                        // too small, add padding
-                        values[1] = LLVMArrayType(i8T, remsz);
-                        return LLVMStructType(values, 2, false);
-                    } else {
-                        return LLVMStructType(values, 1, false);
-                    }
-                }
-            }
-            // should never get here
-            assert(false);
+            return _type_to_llvm_type(ui->tuple_type);
         } break;
         case TK_Typename: {
             if (type == TYPE_Void)
@@ -7542,6 +7523,11 @@ struct GenerateCtx {
                 values[i] = argument_to_value(ti->unpack(value.pointer, i));
             }
             return LLVMConstStruct(values, count, false);
+        } break;
+        case TK_Union: {
+            auto ui = cast<UnionType>(value.type);
+            value.type = ui->tuple_type;
+            return argument_to_value(value);
         } break;
         default: break;
         };
