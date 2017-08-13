@@ -2790,7 +2790,9 @@ static size_t size_of(const Type *T) {
     case TK_Vector: return cast<VectorType>(T)->size;
     case TK_Tuple: return cast<TupleType>(T)->size;
     case TK_Union: return cast<UnionType>(T)->size;
-    case TK_ReturnLabel:
+    case TK_ReturnLabel: {
+        return size_of(cast<ReturnLabelType>(T)->return_type);
+    } break;
     case TK_Typename: return size_of(storage_type(cast<TypenameType>(T)));
     default: break;
     }
@@ -2817,7 +2819,9 @@ static size_t align_of(const Type *T) {
     case TK_Vector: return cast<VectorType>(T)->align;
     case TK_Tuple: return cast<TupleType>(T)->align;
     case TK_Union: return cast<UnionType>(T)->align;
-    case TK_ReturnLabel:
+    case TK_ReturnLabel: {
+        return size_of(cast<ReturnLabelType>(T)->return_type);
+    } break;
     case TK_Typename: return align_of(storage_type(cast<TypenameType>(T)));
     default: break;
     }
@@ -6889,6 +6893,9 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
 
 static bool is_memory_class(const Type *T) {
 #ifdef SCOPES_WIN32
+    if (T->kind() == TK_ReturnLabel) {
+        T = cast<ReturnLabelType>(T)->return_type;
+    }
     if (T == TYPE_Void)
         return false;
     if (size_of(T) > 8)
