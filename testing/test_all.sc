@@ -28,6 +28,7 @@ let modules =
         #test_tuple_array
         #test_xlet
         test_varargs
+        test_vector
 
 fn run-tests ()
     let total =

@@ -868,7 +868,7 @@ syntax-extend
     set-type-symbol! array 'apply-type 
         fn (cls ...)
             array-type ...
-    #set-type-symbol! vector 'apply-type 
+    set-type-symbol! vector 'apply-type 
         fn (cls ...)
             vector-type ...
     set-type-symbol! ReturnLabel 'apply-type

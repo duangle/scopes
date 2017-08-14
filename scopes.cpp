@@ -479,6 +479,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Purify) T(FN_Unconst) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_VolatileLoad) T(FN_VolatileStore) \
+    T(FN_ExtractElement) T(FN_InsertElement) T(FN_ShuffleVector) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_VaKeys) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
@@ -556,7 +557,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExternSymbol, "extern-symbol") \
     T(FN_ExtractMemory, "extract-memory") \
     T(FN_ExtractValue, "extractvalue") T(FN_InsertValue, "insertvalue") \
-    T(FN_GetElementPtr, "getelementptr") \
+    T(FN_ExtractElement, "extractelement") T(FN_InsertElement, "insertelement") \
+    T(FN_ShuffleVector, "shufflevector") T(FN_GetElementPtr, "getelementptr") \
     T(FN_FFISymbol, "ffi-symbol") T(FN_FFICall, "ffi-call") \
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
@@ -661,6 +663,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExternNew, "extern-new") \
     T(FN_VaCountOf, "va-countof") T(FN_VaKeys, "va-keys") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
+    T(FN_VectorType, "vector-type") \
     T(FN_ZipFill, "zip-fill") \
     \
     /* builtin and global functions with side effects */ \
@@ -2000,7 +2003,7 @@ static void verify(const Type *typea, const Type *typeb) {
 static void verify_integer(const Type *type) {
     if (type->kind() != TK_Integer) {
         StyledString ss;
-        ss.out << "integer or bool type expected, got " << type;
+        ss.out << "integer type expected, got " << type;
         location_error(ss.str());
     }
 }
@@ -2284,6 +2287,28 @@ struct VectorType : SizedStorageType {
 static const Type *Vector(const Type *element_type, size_t count) {
     static TypeFactory<VectorType> vectors;
     return vectors.insert(element_type, count);
+}
+
+static void verify_integer_vector(const Type *type) {
+    if (type->kind() == TK_Vector) {
+        type = cast<VectorType>(type)->element_type;
+    }
+    if (type->kind() != TK_Integer) {
+        StyledString ss;
+        ss.out << "integer scalar or vector type expected, got " << type;
+        location_error(ss.str());
+    }
+}
+
+static void verify_real_vector(const Type *type) {
+    if (type->kind() == TK_Vector) {
+        type = cast<VectorType>(type)->element_type;
+    }
+    if (type->kind() != TK_Real) {
+        StyledString ss;
+        ss.out << "real scalar or vector type expected, got " << type;
+        location_error(ss.str());
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -6720,6 +6745,66 @@ static ABIClass merge_abi_classes(ABIClass class1, ABIClass class2) {
 }
 
 const size_t MAX_ABI_CLASSES = 4;
+static size_t classify(const Type *T, ABIClass *classes, size_t offset);
+
+static size_t classify_array_like(size_t size, 
+    const Type *element_type, size_t count, 
+    ABIClass *classes, size_t offset) {
+    const size_t UNITS_PER_WORD = 8;
+    size_t words = (size + UNITS_PER_WORD - 1) / UNITS_PER_WORD;
+    if (size > 32)
+        return 0;
+    for (size_t i = 0; i < MAX_ABI_CLASSES; i++)
+        classes[i] = ABI_CLASS_NO_CLASS;
+    if (!words) {
+        classes[0] = ABI_CLASS_NO_CLASS;
+        return 1;
+    }
+    auto ET = element_type;
+    ABIClass subclasses[MAX_ABI_CLASSES];
+    size_t alignment = align_of(ET);
+    size_t esize = size_of(ET);
+    for (size_t i = 0; i < count; ++i) {
+        offset = align(offset, alignment);
+        size_t num = classify(ET, subclasses, offset % 8);
+        if (!num) return 0;
+        for (size_t k = 0; k < num; ++k) {
+            size_t pos = offset / 8;
+            classes[k + pos] =
+                merge_abi_classes (subclasses[k], classes[k + pos]);
+        }
+        offset += esize;
+    }
+    if (words > 2) {
+        if (classes[0] != ABI_CLASS_SSE)
+            return 0;
+        for (size_t i = 1; i < words; ++i) {
+            if (classes[i] != ABI_CLASS_SSEUP)
+                return 0;
+        }
+    }
+    for (size_t i = 0; i < words; i++) {
+        if (classes[i] == ABI_CLASS_MEMORY)
+            return 0;
+
+        if (classes[i] == ABI_CLASS_SSEUP) {
+            assert(i > 0);
+            if (classes[i - 1] != ABI_CLASS_SSE
+                && classes[i - 1] != ABI_CLASS_SSEUP) {
+                classes[i] = ABI_CLASS_SSE;
+            }
+        }
+
+        if (classes[i] == ABI_CLASS_X87UP) {
+            assert(i > 0);
+            if(classes[i - 1] != ABI_CLASS_X87) {
+                return 0;
+            }
+        }
+    }
+    return words;            
+}
+
 static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
     switch(T->kind()) {
     case TK_Integer: 
@@ -6768,62 +6853,15 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
             return classify(storage_type(T), classes, offset);
         }
     } break;
+    case TK_Vector: {
+        auto tt = cast<VectorType>(T);
+        return classify_array_like(size_of(T), 
+            tt->element_type, tt->count, classes, offset);
+    } break;
     case TK_Array: {
-        const size_t UNITS_PER_WORD = 8;
-        size_t size = size_of(T);
-	    size_t words = (size + UNITS_PER_WORD - 1) / UNITS_PER_WORD;
-        if (size > 32)
-            return 0;
-        for (size_t i = 0; i < MAX_ABI_CLASSES; i++)
-	        classes[i] = ABI_CLASS_NO_CLASS;
-        if (!words) {
-            classes[0] = ABI_CLASS_NO_CLASS;
-            return 1;
-        }
         auto tt = cast<ArrayType>(T);
-        auto ET = tt->element_type;
-        ABIClass subclasses[MAX_ABI_CLASSES];
-        size_t alignment = align_of(ET);
-        size_t esize = size_of(ET);
-        for (size_t i = 0; i < tt->count; ++i) {
-            offset = align(offset, alignment);
-            size_t num = classify(ET, subclasses, offset % 8);
-            if (!num) return 0;
-            for (size_t k = 0; k < num; ++k) {
-                size_t pos = offset / 8;
-		        classes[k + pos] =
-		            merge_abi_classes (subclasses[k], classes[k + pos]);
-            }
-            offset += esize;
-        }
-        if (words > 2) {
-            if (classes[0] != ABI_CLASS_SSE)
-                return 0;
-            for (size_t i = 1; i < words; ++i) {
-                if (classes[i] != ABI_CLASS_SSEUP)
-                    return 0;
-            }
-        }
-        for (size_t i = 0; i < words; i++) {
-            if (classes[i] == ABI_CLASS_MEMORY)
-                return 0;
-
-            if (classes[i] == ABI_CLASS_SSEUP) {
-                assert(i > 0);
-                if (classes[i - 1] != ABI_CLASS_SSE
-                    && classes[i - 1] != ABI_CLASS_SSEUP) {
-                    classes[i] = ABI_CLASS_SSE;
-                }
-            }
-
-            if (classes[i] == ABI_CLASS_X87UP) {
-                assert(i > 0);
-                if(classes[i - 1] != ABI_CLASS_X87) {
-                    return 0;
-                }
-            }
-        }
-        return words;        
+        return classify_array_like(size_of(T), 
+            tt->element_type, tt->count, classes, offset);
     } break;
     case TK_Union: {
         auto ut = cast<UnionType>(T);
@@ -7522,6 +7560,15 @@ struct GenerateCtx {
             return LLVMConstArray(type_to_llvm_type(ai->element_type),
                 values, count);                    
         } break;
+        case TK_Vector: {
+            auto vi = cast<VectorType>(value.type);
+            size_t count = vi->count;
+            LLVMValueRef values[count];
+            for (size_t i = 0; i < count; ++i) {
+                values[i] = argument_to_value(vi->unpack(value.pointer, i));
+            }
+            return LLVMConstVector(values, count);
+        } break;
         case TK_Tuple: {
             auto ti = cast<TupleType>(value.type);
             size_t count = ti->types.size();
@@ -7678,6 +7725,23 @@ struct GenerateCtx {
                 READ_ANY(index);
                 retvalue = LLVMBuildInsertValue(
                     builder, val, eltval, cast_number<int32_t>(index), "");
+            } break;
+            case FN_ExtractElement: {
+                READ_VALUE(val);
+                READ_VALUE(index);
+                retvalue = LLVMBuildExtractElement(builder, val, index, "");
+            } break;
+            case FN_InsertElement: {
+                READ_VALUE(val);
+                READ_VALUE(eltval);
+                READ_VALUE(index);
+                retvalue = LLVMBuildInsertElement(builder, val, eltval, index, "");
+            } break;
+            case FN_ShuffleVector: {
+                READ_VALUE(v1);
+                READ_VALUE(v2);
+                READ_VALUE(mask);
+                retvalue = LLVMBuildShuffleVector(builder, v1, v2, mask, "");
             } break;
             case FN_Undef: { READ_TYPE(ty);
                 retvalue = LLVMGetUndef(ty); } break;
@@ -8438,32 +8502,271 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
 }
 
 //------------------------------------------------------------------------------
+// OPERATOR TEMPLATES
+//------------------------------------------------------------------------------
+
+#define OP_TEMPLATE(NAME, RTYPE, OP) \
+    template<typename T> struct op_ ## NAME { \
+        typedef RTYPE rtype; \
+        rtype operator()(T a, T b) { \
+            return OP; \
+        } \
+    };
+
+template<typename T>
+inline bool isnan(T f) {
+    return f != f;
+}
+    
+#define BOOL_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, a OP b)
+#define BOOL_OF_TEMPLATE(NAME) OP_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b))
+#define BOOL_UF_TEMPLATE(NAME) OP_TEMPLATE(NAME, bool, isnan(a) || isnan(b))
+#define BOOL_OF_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b) && (a OP b))
+#define BOOL_UF_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, isnan(a) || isnan(b) || (a OP b))
+#define IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, T, a OP b)
+#define PFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, T, OP(a, b))
+
+template<typename RType>
+struct select_op_return_type {
+    const Type *operator ()(const Type *T) { return T; }
+};
+
+static const Type *bool_op_return_type(const Type *T) {
+    T = storage_type(T);
+    if (T->kind() == TK_Vector) {
+        auto vi = cast<VectorType>(T);
+        return Vector(TYPE_Bool, vi->count);
+    } else {
+        return TYPE_Bool;
+    }    
+}
+
+template<>
+struct select_op_return_type<bool> {
+    const Type *operator ()(const Type *T) {
+        return bool_op_return_type(T);
+    }
+};
+
+BOOL_IFXOP_TEMPLATE(Equal, ==)
+BOOL_IFXOP_TEMPLATE(NotEqual, !=)
+BOOL_IFXOP_TEMPLATE(Greater, >)
+BOOL_IFXOP_TEMPLATE(GreaterEqual, >=)
+BOOL_IFXOP_TEMPLATE(Less, <)
+BOOL_IFXOP_TEMPLATE(LessEqual, <=)
+
+BOOL_OF_IFXOP_TEMPLATE(OEqual, ==)
+BOOL_OF_IFXOP_TEMPLATE(ONotEqual, !=)
+BOOL_OF_IFXOP_TEMPLATE(OGreater, >)
+BOOL_OF_IFXOP_TEMPLATE(OGreaterEqual, >=)
+BOOL_OF_IFXOP_TEMPLATE(OLess, <)
+BOOL_OF_IFXOP_TEMPLATE(OLessEqual, <=)
+BOOL_OF_TEMPLATE(Ordered)
+
+BOOL_UF_IFXOP_TEMPLATE(UEqual, ==)
+BOOL_UF_IFXOP_TEMPLATE(UNotEqual, !=)
+BOOL_UF_IFXOP_TEMPLATE(UGreater, >)
+BOOL_UF_IFXOP_TEMPLATE(UGreaterEqual, >=)
+BOOL_UF_IFXOP_TEMPLATE(ULess, <)
+BOOL_UF_IFXOP_TEMPLATE(ULessEqual, <=)
+BOOL_UF_TEMPLATE(Unordered)
+
+IFXOP_TEMPLATE(Add, +)
+IFXOP_TEMPLATE(Sub, -)
+IFXOP_TEMPLATE(Mul, *)
+
+IFXOP_TEMPLATE(SDiv, /)
+IFXOP_TEMPLATE(UDiv, /)
+IFXOP_TEMPLATE(SRem, %)
+IFXOP_TEMPLATE(URem, %)
+
+IFXOP_TEMPLATE(BAnd, &)
+IFXOP_TEMPLATE(BOr, |)
+IFXOP_TEMPLATE(BXor, ^)
+
+IFXOP_TEMPLATE(Shl, <<)
+IFXOP_TEMPLATE(LShr, >>)
+IFXOP_TEMPLATE(AShr, >>)
+
+IFXOP_TEMPLATE(FAdd, +)
+IFXOP_TEMPLATE(FSub, -)
+IFXOP_TEMPLATE(FMul, *)
+IFXOP_TEMPLATE(FDiv, /)
+PFXOP_TEMPLATE(FRem, std::fmod)
+
+#undef BOOL_IFXOP_TEMPLATE
+#undef BOOL_OF_TEMPLATE
+#undef BOOL_UF_TEMPLATE
+#undef BOOL_OF_IFXOP_TEMPLATE
+#undef BOOL_UF_IFXOP_TEMPLATE
+#undef IFXOP_TEMPLATE
+#undef PFXOP_TEMPLATE
+
+static void *aligned_alloc(size_t sz, size_t al) {
+    assert(sz);
+    assert(al);
+    return reinterpret_cast<void *>(
+        ::align(reinterpret_cast<uintptr_t>(malloc(sz + al - 1)), al));
+}
+
+static void *alloc_storage(const Type *T) {
+    size_t sz = size_of(T);
+    size_t al = align_of(T);
+    return aligned_alloc(sz, al);
+}
+
+static void *copy_storage(const Type *T, void *ptr) {
+    size_t sz = size_of(T);
+    size_t al = align_of(T);
+    void *destptr = aligned_alloc(sz, al);
+    memcpy(destptr, ptr, sz);
+    return destptr;
+}
+
+struct IntTypes_i {
+    typedef bool i1;
+    typedef int8_t i8;
+    typedef int16_t i16;
+    typedef int32_t i32;
+    typedef int64_t i64;
+};
+struct IntTypes_u {
+    typedef bool i1;
+    typedef uint8_t i8;
+    typedef uint16_t i16;
+    typedef uint32_t i32;
+    typedef uint64_t i64;
+};
+
+template<typename IT, template<typename T> class OpT>
+static void apply_integer_vector_op(void *srcptr_a, void *srcptr_b, void *destptr, size_t count) {
+    typedef typename OpT<IT>::rtype rtype;
+    for (size_t i = 0; i < count; ++i) {
+        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i], ((IT *)srcptr_b)[i]);
+    }
+}
+
+template<typename IT, template<typename T> class OpT >
+static Any apply_integer_op(Any a, Any b) {
+    auto ST = storage_type(a.type);
+    size_t count;
+    size_t width;
+    void *srcptr_a;
+    void *srcptr_b;
+    void *destptr;
+    Any result = none;
+    auto RT = select_op_return_type<typename OpT<int8_t>::rtype>{}(a.type);
+    if (ST->kind() == TK_Vector) {
+        auto vi = cast<VectorType>(ST);
+        count = vi->count;
+        width = cast<IntegerType>(storage_type(vi->element_type))->width;
+        srcptr_a = a.pointer;
+        srcptr_b = b.pointer;        
+        destptr = alloc_storage(RT);
+        result = Any::from_pointer(RT, destptr);
+    } else {
+        count = 1;
+        width = cast<IntegerType>(ST)->width;
+        srcptr_a = get_pointer(a.type, a);
+        srcptr_b = get_pointer(b.type, b);
+        result.type = RT;
+        destptr = get_pointer(result.type, result);
+    }
+    switch(width) {
+    case 1: apply_integer_vector_op<typename IT::i1, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    case 8: apply_integer_vector_op<typename IT::i8, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    case 16: apply_integer_vector_op<typename IT::i16, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    case 32: apply_integer_vector_op<typename IT::i32, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    case 64: apply_integer_vector_op<typename IT::i64, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    default:
+        StyledString ss;
+        ss.out << "unsupported bitwidth (" << width << ") for integer operation";
+        location_error(ss.str());
+        break;
+    };
+    return result;
+}
+
+template<typename IT, template<typename T> class OpT>
+static void apply_real_vector_op(void *srcptr_a, void *srcptr_b, void *destptr, size_t count) {
+    typedef typename OpT<IT>::rtype rtype;
+    for (size_t i = 0; i < count; ++i) {
+        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i], ((IT *)srcptr_b)[i]);
+    }
+}
+
+template<template<typename T> class OpT>
+static Any apply_real_op(Any a, Any b) {
+    auto ST = storage_type(a.type);
+    size_t count;
+    size_t width;
+    void *srcptr_a;
+    void *srcptr_b;
+    void *destptr;
+    Any result = none;
+    auto RT = select_op_return_type<typename OpT<float>::rtype>{}(a.type);
+    if (ST->kind() == TK_Vector) {
+        auto vi = cast<VectorType>(ST);
+        count = vi->count;
+        width = cast<RealType>(storage_type(vi->element_type))->width;
+        srcptr_a = a.pointer;
+        srcptr_b = b.pointer;        
+        destptr = alloc_storage(RT);
+        result = Any::from_pointer(RT, destptr);
+    } else {
+        count = 1;
+        width = cast<RealType>(ST)->width;
+        srcptr_a = get_pointer(a.type, a);
+        srcptr_b = get_pointer(b.type, b);
+        result.type = RT;
+        destptr = get_pointer(result.type, result);
+    }
+    switch(width) {
+    case 32: apply_real_vector_op<float, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    case 64: apply_real_vector_op<double, OpT>(
+        srcptr_a, srcptr_b, destptr, count); break;
+    default:
+        StyledString ss;
+        ss.out << "unsupported bitwidth (" << width << ") for float operation";
+        location_error(ss.str());
+        break;
+    };
+    return result;
+}
+
+//------------------------------------------------------------------------------
 // NORMALIZE
 //------------------------------------------------------------------------------
 
 #define B_ARITH_OPS() \
-        IARITH_NUW_NSW_OPS(Add, +) \
-        IARITH_NUW_NSW_OPS(Sub, -) \
-        IARITH_NUW_NSW_OPS(Mul, *) \
-         \
-        IARITH_OP(SDiv, /, i) \
-        IARITH_OP(UDiv, /, u) \
-        IARITH_OP(SRem, %, i) \
-        IARITH_OP(URem, %, u) \
-         \
-        IARITH_OP(BAnd, &, u) \
-        IARITH_OP(BOr, |, u) \
-        IARITH_OP(BXor, ^, u) \
-         \
-        IARITH_OP(Shl, <<, u) \
-        IARITH_OP(LShr, >>, u) \
-        IARITH_OP(AShr, >>, i) \
-         \
-        FARITH_OP(FAdd, +) \
-        FARITH_OP(FSub, -) \
-        FARITH_OP(FMul, *) \
-        FARITH_OP(FDiv, /) \
-        FARITH_OPF(FRem, std::fmod)
+        IARITH_NUW_NSW_OPS(Add) \
+        IARITH_NUW_NSW_OPS(Sub) \
+        IARITH_NUW_NSW_OPS(Mul) \
+        \
+        IARITH_OP(SDiv, i) \
+        IARITH_OP(UDiv, u) \
+        IARITH_OP(SRem, i) \
+        IARITH_OP(URem, u) \
+        \
+        IARITH_OP(BAnd, u) \
+        IARITH_OP(BOr, u) \
+        IARITH_OP(BXor, u) \
+        \
+        IARITH_OP(Shl, u) \
+        IARITH_OP(LShr, u) \
+        IARITH_OP(AShr, i) \
+        \
+        FARITH_OP(FAdd) \
+        FARITH_OP(FSub) \
+        FARITH_OP(FMul) \
+        FARITH_OP(FDiv) \
+        FARITH_OP(FRem)
 
 static Label *expand_module(Any expr, Scope *scope = nullptr);
 
@@ -8546,12 +8849,12 @@ struct Solver {
     }
 
     static void verify_integer_ops(Any a, Any b) {
-        verify_integer(storage_type(a.indirect_type()));
+        verify_integer_vector(storage_type(a.indirect_type()));
         verify(a.indirect_type(), b.indirect_type());
     }
 
     static void verify_real_ops(Any a, Any b) {
-        verify_real(storage_type(a.indirect_type()));
+        verify_real_vector(storage_type(a.indirect_type()));
         verify(a.indirect_type(), b.indirect_type());
     }
 
@@ -9136,6 +9439,45 @@ struct Solver {
             verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
+        case FN_ExtractElement: {
+            CHECKARGS(2, 2);
+            const Type *T = storage_type(args[1].value.indirect_type());
+            verify_kind<TK_Vector>(T);
+            auto vi = cast<VectorType>(T);
+            verify_integer(storage_type(args[2].value.indirect_type()));
+            RETARGTYPES(vi->element_type);
+        } break;
+        case FN_InsertElement: {
+            CHECKARGS(3, 3);
+            const Type *T = storage_type(args[1].value.indirect_type());
+            const Type *ET = storage_type(args[2].value.indirect_type());
+            verify_integer(storage_type(args[3].value.indirect_type()));
+            verify_kind<TK_Vector>(T);
+            auto vi = cast<VectorType>(T);
+            verify(storage_type(vi->element_type), ET);
+            RETARGTYPES(args[1].value.indirect_type());
+        } break;
+        case FN_ShuffleVector: {
+            CHECKARGS(3, 3);
+            const Type *TV1 = args[1].value.indirect_type();
+            const Type *TV2 = args[2].value.indirect_type();
+            const Type *TMask = args[3].value.type;
+            verify_kind<TK_Vector>(TV1);
+            verify_kind<TK_Vector>(TV2);
+            verify_kind<TK_Vector>(TMask);
+            verify(TV1, TV2);
+            auto vi = cast<VectorType>(TV1);
+            auto mask_vi = cast<VectorType>(TMask);
+            verify(TYPE_I32, mask_vi->element_type);
+            size_t incount = vi->count * 2;
+            size_t outcount = mask_vi->count;
+            for (size_t i = 0; i < outcount; ++i) {
+                verify_range(
+                    (size_t)mask_vi->unpack(args[3].value.pointer, i).i32, 
+                    incount);
+            }
+            RETARGTYPES(Vector(vi->element_type, outcount));
+        } break;
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
             size_t idx = cast_number<size_t>(args[2].value);
@@ -9296,7 +9638,8 @@ struct Solver {
         case OP_ICmpSLE: {
             CHECKARGS(2, 2);
             verify_integer_ops(args[1].value, args[2].value);
-            RETARGTYPES(TYPE_Bool);
+            RETARGTYPES(
+                bool_op_return_type(args[1].value.indirect_type()));
         } break;
         case OP_FCmpOEQ:
         case OP_FCmpONE:
@@ -9314,9 +9657,10 @@ struct Solver {
         case OP_FCmpULE: {
             CHECKARGS(2, 2);
             verify_real_ops(args[1].value, args[2].value);
-            RETARGTYPES(TYPE_Bool);
+            RETARGTYPES(
+                bool_op_return_type(args[1].value.indirect_type()));
         } break;
-#define IARITH_NUW_NSW_OPS(NAME, OP) \
+#define IARITH_NUW_NSW_OPS(NAME) \
     case OP_ ## NAME: \
     case OP_ ## NAME ## NUW: \
     case OP_ ## NAME ## NSW: { \
@@ -9324,26 +9668,23 @@ struct Solver {
         verify_integer_ops(args[1].value, args[2].value); \
         RETARGTYPES(args[1].value.indirect_type()); \
     } break;
-#define IARITH_OP(NAME, OP, PFX) \
+#define IARITH_OP(NAME, PFX) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
         verify_integer_ops(args[1].value, args[2].value); \
         RETARGTYPES(args[1].value.indirect_type()); \
     } break;
-#define FARITH_OP(NAME, OP) \
+#define FARITH_OP(NAME) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
         verify_real_ops(args[1].value, args[2].value); \
         RETARGTYPES(args[1].value.indirect_type()); \
     } break;
-#define FARITH_OPF FARITH_OP
-
         B_ARITH_OPS()
 
 #undef IARITH_NUW_NSW_OPS
 #undef IARITH_OP
 #undef FARITH_OP
-#undef FARITH_OPF
         default: {
             StyledString ss;
             ss.out << "can not type builtin " << enter.builtin;
@@ -9392,21 +9733,6 @@ struct Solver {
         }
     }
 
-    void *aligned_alloc(size_t sz, size_t al) {
-        assert(sz);
-        assert(al);
-        return reinterpret_cast<void *>(
-            ::align(reinterpret_cast<uintptr_t>(malloc(sz + al - 1)), al));
-    }
-
-    void *copy_storage(const Type *T, void *ptr) {
-        size_t sz = size_of(T);
-        size_t al = align_of(T);
-        void *destptr = aligned_alloc(sz, al);
-        memcpy(destptr, ptr, sz);
-        return destptr;
-    }
-
     void fold_callable_call(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding callable call in " << l << std::endl;
@@ -9421,13 +9747,6 @@ struct Solver {
         assert(result);
         args.insert(args.begin() + 1, KeyAny(enter));
         enter = value;
-    }
-
-    bool isnan(float f) {
-        return f != f;
-    }
-    bool isnan(double f) {
-        return f != f;
     }
 
     bool fold_builtin_call(Label *l) {
@@ -9470,17 +9789,10 @@ struct Solver {
                 } else {
                     goto failed;
                 }
-#if 0
-                enter = Closure::from(expand_module(sx, scope), cl->frame);
-                auto cont = args[0];
-                args = { cont };
-                return true;
-#else
                 enter = fold_type_label_single(cl->frame, 
                     expand_module(sx, scope), { args[0] });
                 args = { none };
                 return false;
-#endif
             }
         failed:
             set_active_anchor(sx->anchor);
@@ -9846,6 +10158,65 @@ struct Solver {
             CHECKARGS(1, 1);
             RETARGS(args[1].value.indirect_type());
         } break;
+        case FN_ExtractElement: {
+            CHECKARGS(2, 2);
+            const Type *T = storage_type(args[1].value.type);
+            verify_kind<TK_Vector>(T);
+            auto vi = cast<VectorType>(T);
+            size_t idx = cast_number<size_t>(args[2].value);
+            RETARGS(vi->unpack(args[1].value.pointer, idx));
+        } break;
+        case FN_InsertElement: {
+            CHECKARGS(3, 3);
+            const Type *T = storage_type(args[1].value.type);
+            const Type *ET = storage_type(args[2].value.type);
+            size_t idx = cast_number<size_t>(args[3].value);
+            void *destptr = args[1].value.pointer;
+            void *offsetptr = nullptr;
+            destptr = copy_storage(T, destptr);
+            auto vi = cast<VectorType>(T);
+            verify(storage_type(vi->type_at_index(idx)), ET);
+            offsetptr = vi->getelementptr(destptr, idx);
+            void *srcptr = get_pointer(ET, args[2].value);
+            memcpy(offsetptr, srcptr, size_of(ET));
+            RETARGS(Any::from_pointer(args[1].value.type, destptr));
+        } break;        
+        case FN_ShuffleVector: {
+            CHECKARGS(3, 3);
+            const Type *TV1 = storage_type(args[1].value.type);
+            const Type *TV2 = storage_type(args[2].value.type);
+            const Type *TMask = storage_type(args[3].value.type);
+            verify_kind<TK_Vector>(TV1);
+            verify_kind<TK_Vector>(TV2);
+            verify_kind<TK_Vector>(TMask);
+            verify(TV1, TV2);
+            auto vi = cast<VectorType>(TV1);
+            auto mask_vi = cast<VectorType>(TMask);
+            verify(TYPE_I32, storage_type(mask_vi->element_type));
+            size_t halfcount = vi->count;
+            size_t incount = halfcount * 2;
+            size_t outcount = mask_vi->count;
+            const Type *T = Vector(vi->element_type, outcount);
+            void *srcptr_a = get_pointer(TV1, args[1].value);
+            void *srcptr_b = get_pointer(TV1, args[2].value);
+            void *destptr = alloc_storage(T);            
+            size_t esize = size_of(vi->element_type);
+            for (size_t i = 0; i < outcount; ++i) {
+                size_t idx = (size_t)mask_vi->unpack(args[3].value.pointer, i).i32;
+                verify_range(idx, incount);
+                void *srcptr;
+                if (idx < halfcount) {
+                    srcptr = srcptr_a;
+                } else {
+                    srcptr = srcptr_b;
+                    idx -= halfcount;
+                }
+                void *inp = vi->getelementptr(srcptr, idx);
+                void *outp = vi->getelementptr(destptr, i);
+                memcpy(outp, inp, esize);
+            }
+            RETARGS(Any::from_pointer(T, destptr));
+        } break;        
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
             size_t idx = cast_number<size_t>(args[2].value);
@@ -10041,26 +10412,19 @@ struct Solver {
             CHECKARGS(2, 2);
             verify_integer_ops(args[1].value, args[2].value);
 #define B_INT_OP2(OP, N) \
-    switch(cast<IntegerType>(storage_type(args[1].value.type))->width) { \
-    case 1: result = (args[1].value.i1 OP args[2].value.i1); break; \
-    case 8: result = (args[1].value.N ## 8 OP args[2].value.N ## 8); break; \
-    case 16: result = (args[1].value.N ## 16 OP args[2].value.N ## 16); break; \
-    case 32: result = (args[1].value.N ## 32 OP args[2].value.N ## 32); break; \
-    case 64: result = (args[1].value.N ## 64 OP args[2].value.N ## 64); break; \
-    default: assert(false); break; \
-    }
-            bool result = false;
+    result = apply_integer_op<IntTypes_ ## N, op_ ## OP>(args[1].value, args[2].value);
+            Any result = false;
             switch(enter.builtin.value()) {
-            case OP_ICmpEQ: B_INT_OP2(==, u); break;
-            case OP_ICmpNE: B_INT_OP2(!=, u); break;
-            case OP_ICmpUGT: B_INT_OP2(>, u); break;
-            case OP_ICmpUGE: B_INT_OP2(>=, u); break;
-            case OP_ICmpULT: B_INT_OP2(<, u); break;
-            case OP_ICmpULE: B_INT_OP2(<=, u); break;
-            case OP_ICmpSGT: B_INT_OP2(>, i); break;
-            case OP_ICmpSGE: B_INT_OP2(>=, i); break;
-            case OP_ICmpSLT: B_INT_OP2(<, i); break;
-            case OP_ICmpSLE: B_INT_OP2(<=, i); break;
+            case OP_ICmpEQ: B_INT_OP2(Equal, u); break;
+            case OP_ICmpNE: B_INT_OP2(NotEqual, u); break;
+            case OP_ICmpUGT: B_INT_OP2(Greater, u); break;
+            case OP_ICmpUGE: B_INT_OP2(GreaterEqual, u); break;
+            case OP_ICmpULT: B_INT_OP2(Less, u); break;
+            case OP_ICmpULE: B_INT_OP2(LessEqual, u); break;
+            case OP_ICmpSGT: B_INT_OP2(Greater, i); break;
+            case OP_ICmpSGE: B_INT_OP2(GreaterEqual, i); break;
+            case OP_ICmpSLT: B_INT_OP2(Less, i); break;
+            case OP_ICmpSLE: B_INT_OP2(LessEqual, i); break;
             default: assert(false); break;
             }
             RETARGS(result);
@@ -10079,76 +10443,31 @@ struct Solver {
         case OP_FCmpUGE:
         case OP_FCmpULT:
         case OP_FCmpULE: {
-#define B_FLOAT_OP2(OP) \
-    switch(cast<RealType>(storage_type(args[1].value.type))->width) { \
-    case 32: result = (args[1].value.f32 OP args[2].value.f32); break; \
-    case 64: result = (args[1].value.f64 OP args[2].value.f64); break; \
-    default: assert(false); break; \
-    }
-#define B_FLOAT_OPF2(OP) \
-    switch(cast<RealType>(storage_type(args[1].value.type))->width) { \
-    case 32: result = OP(args[1].value.f32, args[2].value.f32); break; \
-    case 64: result = OP(args[1].value.f64, args[2].value.f64); break; \
-    default: assert(false); break; \
-    }
             CHECKARGS(2, 2);
             verify_real_ops(args[1].value, args[2].value);
-            bool result;
-            bool failed = false;
-            bool nan;
-            switch(cast<RealType>(storage_type(args[1].value.type))->width) {
-            case 32: nan = isnan(args[1].value.f32) || isnan(args[2].value.f32); break;
-            case 64: nan = isnan(args[1].value.f64) || isnan(args[2].value.f64); break;
-            default: assert(false); break;
-            }
+#define B_FLOAT_OP2(OP) \
+    result = apply_real_op<op_ ## OP>(args[1].value, args[2].value);
+            Any result = false;
             switch(enter.builtin.value()) {
-            case OP_FCmpOEQ:
-            case OP_FCmpONE:
-            case OP_FCmpORD:
-            case OP_FCmpOGT:
-            case OP_FCmpOGE:
-            case OP_FCmpOLT:
-            case OP_FCmpOLE:
-                if (nan) {
-                    result = false;
-                    failed = true;
-                } break;
-            case OP_FCmpUEQ:
-            case OP_FCmpUNE:
-            case OP_FCmpUNO:
-            case OP_FCmpUGT:
-            case OP_FCmpUGE:
-            case OP_FCmpULT:
-            case OP_FCmpULE:
-                if (nan) {
-                    result = true;
-                    failed = true;
-                } break;
+            case OP_FCmpOEQ: B_FLOAT_OP2(OEqual); break;
+            case OP_FCmpONE: B_FLOAT_OP2(ONotEqual); break;
+            case OP_FCmpORD: B_FLOAT_OP2(Ordered); break;
+            case OP_FCmpOGT: B_FLOAT_OP2(OGreater); break;
+            case OP_FCmpOGE: B_FLOAT_OP2(OGreaterEqual); break;
+            case OP_FCmpOLT: B_FLOAT_OP2(OLess); break;
+            case OP_FCmpOLE: B_FLOAT_OP2(OLessEqual); break;
+            case OP_FCmpUEQ: B_FLOAT_OP2(UEqual); break;
+            case OP_FCmpUNE: B_FLOAT_OP2(UNotEqual); break;
+            case OP_FCmpUNO: B_FLOAT_OP2(Unordered); break;
+            case OP_FCmpUGT: B_FLOAT_OP2(UGreater); break;
+            case OP_FCmpUGE: B_FLOAT_OP2(UGreaterEqual); break;
+            case OP_FCmpULT: B_FLOAT_OP2(ULess); break;
+            case OP_FCmpULE: B_FLOAT_OP2(ULessEqual); break;
             default: assert(false); break;
-            }
-
-            if (!failed) {
-                switch(enter.builtin.value()) {
-                case OP_FCmpOEQ: B_FLOAT_OP2(==); break;
-                case OP_FCmpONE: B_FLOAT_OP2(!=); break;
-                case OP_FCmpORD: break;
-                case OP_FCmpOGT: B_FLOAT_OP2(>); break;
-                case OP_FCmpOGE: B_FLOAT_OP2(>=); break;
-                case OP_FCmpOLT: B_FLOAT_OP2(<); break;
-                case OP_FCmpOLE: B_FLOAT_OP2(<=); break;
-                case OP_FCmpUEQ: B_FLOAT_OP2(==); break;
-                case OP_FCmpUNE: B_FLOAT_OP2(!=); break;
-                case OP_FCmpUNO: break;
-                case OP_FCmpUGT: B_FLOAT_OP2(>); break;
-                case OP_FCmpUGE: B_FLOAT_OP2(>=); break;
-                case OP_FCmpULT: B_FLOAT_OP2(<); break;
-                case OP_FCmpULE: B_FLOAT_OP2(<=); break;
-                default: assert(false); break;
-                }
-            }
+            }            
             RETARGS(result);
         } break;
-#define IARITH_NUW_NSW_OPS(NAME, OP) \
+#define IARITH_NUW_NSW_OPS(NAME) \
     case OP_ ## NAME: \
     case OP_ ## NAME ## NUW: \
     case OP_ ## NAME ## NSW: { \
@@ -10156,44 +10475,36 @@ struct Solver {
         verify_integer_ops(args[1].value, args[2].value); \
         Any result = none; \
         switch(enter.builtin.value()) { \
-        case OP_ ## NAME: B_INT_OP2(OP, u); break; \
-        case OP_ ## NAME ## NUW: B_INT_OP2(OP, u); break; \
-        case OP_ ## NAME ## NSW: B_INT_OP2(OP, i); break; \
+        case OP_ ## NAME: B_INT_OP2(NAME, u); break; \
+        case OP_ ## NAME ## NUW: B_INT_OP2(NAME, u); break; \
+        case OP_ ## NAME ## NSW: B_INT_OP2(NAME, i); break; \
         default: assert(false); break; \
         } \
         result.type = args[1].value.type; \
         RETARGS(result); \
     } break;
-#define IARITH_OP(NAME, OP, PFX) \
+#define IARITH_OP(NAME, PFX) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
         verify_integer_ops(args[1].value, args[2].value); \
         Any result = none; \
-        B_INT_OP2(OP, PFX); \
+        B_INT_OP2(NAME, PFX); \
         result.type = args[1].value.type; \
         RETARGS(result); \
     } break;
-#define FARITH_OP(NAME, OP) \
+#define FARITH_OP(NAME) \
     case OP_ ## NAME: { \
         CHECKARGS(2, 2); \
         verify_real_ops(args[1].value, args[2].value); \
         Any result = none; \
-        B_FLOAT_OP2(OP); \
-        RETARGS(result); \
-    } break;
-#define FARITH_OPF(NAME, OP) \
-    case OP_ ## NAME: { \
-        CHECKARGS(2, 2); \
-        verify_real_ops(args[1].value, args[2].value); \
-        Any result = none; \
-        B_FLOAT_OPF2(OP); \
+        B_FLOAT_OP2(NAME); \
         RETARGS(result); \
     } break;
         B_ARITH_OPS()
 
         default: {
             StyledString ss;
-            ss.out << "can not inline builtin " << enter.builtin;
+            ss.out << "can not fold constant expression using builtin " << enter.builtin;
             location_error(ss.str());
         } break;
         }
@@ -12019,6 +12330,10 @@ static const Type *f_array_type(const Type *element_type, size_t count) {
     return Array(element_type, count);
 }
 
+static const Type *f_vector_type(const Type *element_type, size_t count) {
+    return Vector(element_type, count);
+}
+
 static const String *f_default_styler(Symbol style, const String *str) {
     StyledString ss;
     if (!style.is_known()) {
@@ -12224,6 +12539,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, Pointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
+    DEFINE_PURE_C_FUNCTION(FN_VectorType, f_vector_type, TYPE_Type, TYPE_Type, TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(Symbol("Any=="), f_any_eq, TYPE_Bool, TYPE_Any, TYPE_Any);
