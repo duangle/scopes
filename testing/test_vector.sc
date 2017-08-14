@@ -1,11 +1,4 @@
 
-fn print-vector (v)
-    print
-        extractelement v 0
-        extractelement v 1
-        extractelement v 2
-        extractelement v 3
-
 fn do-ops (v w)
     v + w * w
 
@@ -17,14 +10,17 @@ fn do-ops (v w)
     'dump-disassembly
 
 fn test-vector-ops (v w)
-    let v = (vectorof f32 1.0 2.0 3.0 4.0)
-    let w = (vectorof f32 0.1 0.2 0.3 0.4)
-    print-vector (do-ops v w)
-    print-vector (fcmp>o v w)
-    print-vector
-        shufflevector v w (vectorof i32 7 5 3 1)
+    let v = (vectorof i32 10 20 (unpack (vectorof i32 30 40)))
+    let w = (vectorof i32 1 2 3 4)
+    assert 
+        all? 
+            (do-ops v w) == (vectorof i32 11 24 39 56)
+    assert
+        all? 
+            (shufflevector v w (vectorof i32 7 5 3 1)) == (vectorof i32 4 2 40 20)
+    print v w
 
-let VT = (vector f32 4:usize)
+let VT = (vector i32 4:usize)
 
 # working with constants
 test-vector-ops (nullof VT) (nullof VT)

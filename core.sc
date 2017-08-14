@@ -524,6 +524,7 @@ fn << (a b) ((op2-dispatch-bidi '<<) a b)
 fn >> (a b) ((op2-dispatch-bidi '>>) a b)
 fn .. (...) ((op2-ltr-multiop (op2-dispatch-bidi '..)) ...)
 fn countof (x) ((opN-dispatch 'countof) x)
+fn unpack (x) ((opN-dispatch 'unpack) x)
 fn @ (...)
     fn at (obj key)
         (op2-dispatch '@) obj
@@ -2249,6 +2250,17 @@ set-type-symbol! vector '<= (vector-op2-dispatch 'vector<=)
 set-type-symbol! vector 'countof
     fn (self)
         type-countof (typeof self)
+
+set-type-symbol! vector 'unpack
+    fn "vector-unpack" (v)
+        let count = (type-countof (typeof v))
+        let [loop] i result... = count
+        if (i == 0:usize) result...
+        else
+            let i = (sub i 1:usize)
+            loop i
+                extractelement v i
+                result...
 
 set-type-symbol! vector '@
     fn (self x)
