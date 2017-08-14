@@ -32,7 +32,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 #define SCOPES_DEBUG_CODEGEN 0
 #define SCOPES_OPTIMIZE_ASSEMBLY 1
-#define SCOPES_EARLY_ABORT 0
+#define SCOPES_EARLY_ABORT 1
 #define SCOPES_PRINT_TIMERS 0
 
 #define SCOPES_MAX_RECURSIONS 32
@@ -2988,6 +2988,22 @@ StyledStream& Any::stream(StyledStream& ost, bool annotate_type) const {
     } else if (type->kind() == TK_Extern) {
         ost << symbol;
         as.stream_type_suffix();                
+    } else if (type->kind() == TK_Vector) {
+        auto vt = cast<VectorType>(type);
+        ost << Style_Operator << "<" << Style_None;
+        for (size_t i = 0; i < vt->count; ++i) {
+            if (i != 0) {
+                ost << " ";
+            }
+            vt->unpack(pointer, i).stream(ost, false);
+        }
+        ost << Style_Operator << ">" << Style_None;
+        auto ET = vt->element_type;
+        if (!((ET == TYPE_Bool)
+            || (ET == TYPE_I32)
+            || (ET == TYPE_F32)
+            ))
+            as.stream_type_suffix();
     } else { as.typed(pointer); }
     return ost;
 }
@@ -10200,6 +10216,7 @@ struct Solver {
             void *srcptr_a = get_pointer(TV1, args[1].value);
             void *srcptr_b = get_pointer(TV1, args[2].value);
             void *destptr = alloc_storage(T);            
+            auto out_vi = cast<VectorType>(T);
             size_t esize = size_of(vi->element_type);
             for (size_t i = 0; i < outcount; ++i) {
                 size_t idx = (size_t)mask_vi->unpack(args[3].value.pointer, i).i32;
@@ -10212,7 +10229,7 @@ struct Solver {
                     idx -= halfcount;
                 }
                 void *inp = vi->getelementptr(srcptr, idx);
-                void *outp = vi->getelementptr(destptr, i);
+                void *outp = out_vi->getelementptr(destptr, i);
                 memcpy(outp, inp, esize);
             }
             RETARGS(Any::from_pointer(T, destptr));

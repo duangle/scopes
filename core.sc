@@ -76,6 +76,8 @@ fn tuple-type? (T)
     icmp== (type-kind T) type-kind-tuple
 fn array-type? (T)
     icmp== (type-kind T) type-kind-array
+fn vector-type? (T)
+    icmp== (type-kind T) type-kind-vector
 fn extern-type? (T)
     icmp== (type-kind T) type-kind-extern
 fn function-pointer-type? (T)
@@ -92,6 +94,8 @@ fn pointer? (val)
     pointer-type? (typeof val)
 fn array? (val)
     array-type? (typeof val)
+fn vector? (T)
+    vector-type? (typeof T)    
 fn tuple? (val)
     tuple-type? (typeof val)
 fn extern? (val)
@@ -571,6 +575,12 @@ fn repr (value)
             elseif (type== CT list) false
             elseif (type== CT Symbol) false
             elseif (type== CT type) false
+            elseif (vector-type? CT)
+                let ET = (element-type CT 0)
+                if (type== ET i32) false
+                elseif (type== ET bool) false
+                elseif (type== ET f32) false
+                else true
             else true
     let op success = (type@ T 'repr)
     let text =
@@ -2156,6 +2166,42 @@ fn pointer-call (self ...)
 set-type-symbol! extern 'call
     fn (self ...)
         pointer-call (unconst self) ...
+
+#-------------------------------------------------------------------------------
+# vectors
+#-------------------------------------------------------------------------------
+
+fn vectorof (T ...)
+    let count = (va-countof ...)
+    let [loop] i result = 0 (nullof (vector T (usize count)))
+    if (i < count)
+        let element = (va@ i ...)
+        loop (i + 1) (insertelement result (softcast T element) i)
+    else result
+
+set-type-symbol! real 'vector+ fadd
+set-type-symbol! real 'vector- fsub
+set-type-symbol! real 'vector* fmul
+set-type-symbol! real 'vector/ fdiv
+
+fn vector-op2-dispatch (symbol)
+    fn (a b flipped)
+        label complete (a b)
+            let Ta = (element-type (typeof a) 0)
+            let op success = (type@ Ta symbol)
+            if success
+                let result... = (op a b)
+                if (icmp== (va-countof result...) 0)
+                else
+                    return result...
+        if (type== (typeof a) (typeof b))
+            complete a b
+
+set-type-symbol! vector '+ (vector-op2-dispatch 'vector+)
+set-type-symbol! vector '- (vector-op2-dispatch 'vector-)
+set-type-symbol! vector '* (vector-op2-dispatch 'vector*)
+set-type-symbol! vector '/ (vector-op2-dispatch 'vector/)
+
 
 #-------------------------------------------------------------------------------
 # REPL

@@ -7,15 +7,7 @@ fn print-vector (v)
         extractelement v 3
 
 fn do-ops (v w)
-    fadd v (fmul w w)
-
-fn vectorof (T ...)
-    let count = (va-countof ...)
-    let [loop] i result = 0 (nullof (vector T (usize count)))
-    if (i < count)
-        let element = (va@ i ...)
-        loop (i + 1) (insertelement result element i)
-    else result
+    v + w * w
 
 #compile
     typify
