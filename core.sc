@@ -222,6 +222,9 @@ syntax-extend
     set-type-symbol! list 'apply-type
         fn (cls ...)
             list-new ...
+    set-type-symbol! extern 'apply-type
+        fn (cls ...)
+            extern-new ...
     set-type-symbol! Any 'apply-type 
         fn (cls value)
             Any-new value
@@ -392,7 +395,7 @@ syntax-extend
                 cast destT val
 
         set-type-symbol! T '== (gen-type-op2 fcmp==o)
-        set-type-symbol! T '!= (gen-type-op2 fcmp!=o)
+        set-type-symbol! T '!= (gen-type-op2 fcmp!=u)
         set-type-symbol! T '> (gen-type-op2 fcmp>o)
         set-type-symbol! T '>= (gen-type-op2 fcmp>=o)
         set-type-symbol! T '< (gen-type-op2 fcmp<o)
@@ -2137,7 +2140,7 @@ set-type-symbol! CUnion 'getattr&
                         pointer FT
 
 fn pointer-call (self ...)
-    fn docall (dest ET)
+    label docall (dest ET)
         let sz = (va-countof ...)
         let count = (trunc (rawcall type-countof ET) i32)
         let variadic = (rawcall function-type-variadic? ET)
@@ -2165,7 +2168,7 @@ fn pointer-call (self ...)
 # extern call attempts to cast arguments to correct type
 set-type-symbol! extern 'call
     fn (self ...)
-        pointer-call (unconst self) ...
+        pointer-call self ...
 
 #-------------------------------------------------------------------------------
 # vectors
@@ -2180,14 +2183,45 @@ fn vectorof (T ...)
             insertelement result (softcast T element) i
     else result
 
+fn vector-signed-dispatch (fsigned funsigned)
+    fn (a b)
+        if (signed? (element-type (typeof a) 0))
+            fsigned a b
+        else
+            funsigned a b
+
+set-type-symbol! integer 'vector+ add
+set-type-symbol! integer 'vector- sub
+set-type-symbol! integer 'vector* mul
+set-type-symbol! integer 'vector// (vector-signed-dispatch sdiv udiv)
+set-type-symbol! integer 'vector% (vector-signed-dispatch srem urem)
+set-type-symbol! integer 'vector& band
+set-type-symbol! integer 'vector| bor
+set-type-symbol! integer 'vector^ bxor
+set-type-symbol! integer 'vector<< shl
+set-type-symbol! integer 'vector>> (vector-signed-dispatch ashr lshr)
+set-type-symbol! integer 'vector== icmp==
+set-type-symbol! integer 'vector!= icmp!=
+set-type-symbol! integer 'vector> (vector-signed-dispatch icmp>s icmp>u)
+set-type-symbol! integer 'vector>= (vector-signed-dispatch icmp>s icmp>=u)
+set-type-symbol! integer 'vector< (vector-signed-dispatch icmp<s icmp<u)
+set-type-symbol! integer 'vector<= (vector-signed-dispatch icmp<=s icmp<=u)
+
 set-type-symbol! real 'vector+ fadd
 set-type-symbol! real 'vector- fsub
 set-type-symbol! real 'vector* fmul
 set-type-symbol! real 'vector/ fdiv
+set-type-symbol! real 'vector% frem
+set-type-symbol! real 'vector== fcmp==o
+set-type-symbol! real 'vector!= fcmp!=u
+set-type-symbol! real 'vector> fcmp>o
+set-type-symbol! real 'vector>= fcmp>=o
+set-type-symbol! real 'vector< fcmp<o
+set-type-symbol! real 'vector<= fcmp<=o
 
 fn vector-op2-dispatch (symbol)
     fn (a b flipped)
-        label complete (a b)
+        if (type== (typeof a) (typeof b))
             let Ta = (element-type (typeof a) 0)
             let op success = (type@ Ta symbol)
             if success
@@ -2195,13 +2229,62 @@ fn vector-op2-dispatch (symbol)
                 if (icmp== (va-countof result...) 0)
                 else
                     return result...
-        if (type== (typeof a) (typeof b))
-            complete a b
 
 set-type-symbol! vector '+ (vector-op2-dispatch 'vector+)
 set-type-symbol! vector '- (vector-op2-dispatch 'vector-)
 set-type-symbol! vector '* (vector-op2-dispatch 'vector*)
 set-type-symbol! vector '/ (vector-op2-dispatch 'vector/)
+set-type-symbol! vector '// (vector-op2-dispatch 'vector//)
+set-type-symbol! vector '% (vector-op2-dispatch 'vector%)
+set-type-symbol! vector '& (vector-op2-dispatch 'vector&)
+set-type-symbol! vector '| (vector-op2-dispatch 'vector|)
+set-type-symbol! vector '^ (vector-op2-dispatch 'vector^)
+set-type-symbol! vector '== (vector-op2-dispatch 'vector==)
+set-type-symbol! vector '!= (vector-op2-dispatch 'vector!=)
+set-type-symbol! vector '> (vector-op2-dispatch 'vector>)
+set-type-symbol! vector '>= (vector-op2-dispatch 'vector>=)
+set-type-symbol! vector '< (vector-op2-dispatch 'vector<)
+set-type-symbol! vector '<= (vector-op2-dispatch 'vector<=)
+
+set-type-symbol! vector 'countof
+    fn (self)
+        type-countof (typeof self)
+
+set-type-symbol! vector '@
+    fn (self x)
+        if (integer? x)
+            extractelement self x
+
+set-type-symbol! vector 'slice
+    fn (self i0 i1)
+        if ((constant? i0) and (constant? i1))
+            let usz = (sub i1 i0)
+            let [loop] i mask = i0 (nullof (vector i32 usz))
+            if (icmp<u i i1)
+                loop (add i 1:usize) (insertelement mask (i32 i) (sub i i0))
+            else
+                shufflevector self self mask
+        else
+            compiler-error! "slice indices must be constant"
+
+fn vector-reduce (f v)
+    let [loop] v = v
+    let sz = (countof v)
+    if (sz == 1:usize)
+        extractelement v 0
+    else
+        let hsz = (sz >> 1:usize)
+        let fsz = (hsz << 1:usize)
+        if (fsz != sz)
+            compiler-error! "vector size must be a power of two"
+        let a = (slice v 0 hsz)
+        let b = (slice v hsz fsz)
+        loop (f a b)
+
+fn any? (v)
+    vector-reduce bor v
+fn all? (v)
+    vector-reduce band v
 
 set-type-symbol! vector '..
     fn (a b flipped)

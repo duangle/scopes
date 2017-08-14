@@ -9621,9 +9621,13 @@ struct Solver {
         case FN_Load: {
             CHECKARGS(1, 1);
             const Type *T = storage_type(args[1].value.indirect_type());
+            bool is_extern = (T->kind() == TK_Extern);
+            if (is_extern) {
+                T = MutPointer(cast<ExternType>(T)->type);
+            }
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
-            if (args[1].value.is_const()
+            if (!is_extern && args[1].value.is_const()
                 && !pi->is_mutable()) {
                 RETARGS(pi->unpack(args[1].value.pointer));
                 return true;
