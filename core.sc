@@ -2176,7 +2176,8 @@ fn vectorof (T ...)
     let [loop] i result = 0 (nullof (vector T (usize count)))
     if (i < count)
         let element = (va@ i ...)
-        loop (i + 1) (insertelement result (softcast T element) i)
+        loop (i + 1)
+            insertelement result (softcast T element) i
     else result
 
 set-type-symbol! real 'vector+ fadd
@@ -2202,6 +2203,36 @@ set-type-symbol! vector '- (vector-op2-dispatch 'vector-)
 set-type-symbol! vector '* (vector-op2-dispatch 'vector*)
 set-type-symbol! vector '/ (vector-op2-dispatch 'vector/)
 
+set-type-symbol! vector '..
+    fn (a b flipped)
+        let Ta Tb = (typeof a) (typeof b)
+        if (not (vector-type? Ta))
+            return;
+        if (not (vector-type? Tb))
+            return;
+        let ET = (element-type Ta 0)
+        if (not (type== ET (element-type Tb 0)))
+            return;
+        if (type== Ta Tb)
+            let usz = (mul (type-countof (typeof a)) 2:usize)
+            let sz = (trunc usz i32)
+            let [loop] i mask = 0 (nullof (vector i32 usz))
+            if (icmp<u i sz)
+                loop (add i 1) (insertelement mask i i)
+            else
+                shufflevector a b mask
+        else
+            let asz = (type-countof (typeof a))
+            let bsz = (type-countof (typeof b))
+            let count = (add asz bsz)
+            let [loop] i result = 0:usize (nullof (vector ET count))
+            if (icmp<u i asz)
+                loop (add i 1:usize)
+                    insertelement result (extractelement a i) i
+            elseif (icmp<u i count)
+                loop (add i 1:usize)
+                    insertelement result (extractelement b (sub i asz)) i
+            else result
 
 #-------------------------------------------------------------------------------
 # REPL

@@ -32,7 +32,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 #define SCOPES_DEBUG_CODEGEN 0
 #define SCOPES_OPTIMIZE_ASSEMBLY 1
-#define SCOPES_EARLY_ABORT 1
+#define SCOPES_EARLY_ABORT 0
 #define SCOPES_PRINT_TIMERS 0
 
 #define SCOPES_MAX_RECURSIONS 32
