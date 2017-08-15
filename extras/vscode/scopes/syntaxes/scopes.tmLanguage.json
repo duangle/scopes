@@ -17,7 +17,7 @@
 			"patterns": [
                 {
                     "name": "keyword.control.builtin.scopes",
-                    "match": "(quote|do|if|elseif|else|return|let|fn|label|(raw)?call|syntax-extend|syntax-log)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(quote|do(-in)?|if|elseif|else|return|let|fn|label|(raw)?call|syntax-extend|syntax-log)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "keyword.control.library.scopes",

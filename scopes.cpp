@@ -467,7 +467,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Branch) T(KW_Fn) T(KW_Label) T(KW_SyntaxApplyBlock) T(KW_Quote) \
     T(KW_Call) T(KW_RawCall) T(KW_CCCall) T(SYM_QuoteForm) T(FN_Dump) T(KW_Do) \
     T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_AllocaOf) T(FN_Malloc) \
-    T(FN_AllocaArray) T(FN_MallocArray) T(FN_ReturnLabelType) \
+    T(FN_AllocaArray) T(FN_MallocArray) T(FN_ReturnLabelType) T(KW_DoIn) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
     T(OP_ICmpEQ) T(OP_ICmpNE) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
@@ -504,7 +504,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     \
     /* keywords and macros */ \
     T(KW_CatRest, "::*") T(KW_CatOne, "::@") \
-    T(KW_SyntaxLog, "syntax-log") \
+    T(KW_SyntaxLog, "syntax-log") T(KW_DoIn, "do-in") \
     T(KW_Assert, "assert") T(KW_Break, "break") T(KW_Label, "label") \
     T(KW_Call, "call") T(KW_RawCall, "rawcall") T(KW_CCCall, "cc/call") T(KW_Continue, "continue") \
     T(KW_Define, "define") T(KW_Do, "do") T(KW_DumpSyntax, "dump-syntax") \
@@ -11433,7 +11433,7 @@ struct Expander {
         return next == EOL;
     }
 
-    Any expand_do(const List *it, const Any &dest, Any longdest) {
+    Any expand_do(const List *it, const Any &dest, Any longdest, bool new_scope) {
         auto _anchor = get_active_anchor();
 
         it = it->next;
@@ -11460,7 +11460,10 @@ struct Expander {
         }
 
         Label *func = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-        Scope *subenv = Scope::from(env);
+        Scope *subenv = env;
+        if (new_scope) {
+            subenv = Scope::from(env);
+        }
         Expander subexpr(func, subenv);
         subexpr.expand_function_body(it, longdest);
 
@@ -11895,7 +11898,8 @@ struct Expander {
                 case KW_Let: return expand_let(list, dest, longdest);
                 case KW_If: return expand_if(list, dest, longdest);
                 case KW_Quote: return expand_quote(list, dest, longdest);
-                case KW_Do: return expand_do(list, dest, longdest);
+                case KW_Do: return expand_do(list, dest, longdest, true);
+                case KW_DoIn: return expand_do(list, dest, longdest, false);
                 case KW_RawCall:
                 case KW_Call: {
                     verify_list_parameter_count(list, 1, -1);

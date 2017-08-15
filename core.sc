@@ -697,7 +697,7 @@ fn Any-extract (val T)
                     T
             else
                 compiler-error!
-                    .. "unable to extract value of type " T
+                    .. "unable to extract value of type " (Any-repr (Any-wrap T))
     elseif (constant? val)
         compiler-error!
             type-mismatch-string T valT
@@ -910,7 +910,12 @@ syntax-extend
 
     set-type-symbol! Syntax 'imply
         fn (src destT)
-            Any-extract (Syntax->datum src) destT
+            if (type== destT Any)
+                Syntax->datum src
+            elseif (type== destT Anchor)
+                Syntax-anchor src
+            else
+                Any-extract (Syntax->datum src) destT
 
     set-type-symbol! type '@
         fn (self key)
@@ -1480,7 +1485,7 @@ syntax-extend
                     \ 'tmp Unknown
             loop
                 Any
-                    list do
+                    list do-in
                         list let tmp '= (list-at head)
                         list if tmp
                             if flip tmp
@@ -1913,26 +1918,103 @@ fn prompt (prefix preload)
         if (none? preload) "" 
         else preload
 
+#-------------------------------------------------------------------------------
+# match
+#-------------------------------------------------------------------------------
+
 # earliest form of match macro - doesn't do elaborate patterns yet, just
     simple switch-case style comparisons
 define-macro match
     let value rest = (decons args)
     let tmp = (Parameter 'tmp)
+
+    fn vardef? (val)
+        (('typeof val) == Symbol) and ((@ (val as Symbol as string) 0) == (char "$"))
+
+    fn match-pattern (src sxkey)
+        assert-typeof src Parameter
+        assert-typeof sxkey Syntax
+        let anchor = (sxkey as Anchor)
+        let key = (sxkey as Any)
+        let result =
+            if (('typeof key) == list)
+                let key = (key as list)
+                if (empty? key)
+                    list 'empty? src
+                else
+                    let head rest = (decons key)
+                    let head = (head as Syntax as Symbol)
+                    if (head == 'quote)
+                        list '== src sxkey
+                    # better support generic iterator
+                    #elseif (head == 'list)
+                        fn process-list-args (anchor src rest)
+                            if (empty? rest)
+                                list (list 'empty? src)
+                            else
+                                let tmp tmprest = (Parameter 'tmp) (Parameter 'rest)
+                                let x rest = (decons rest)
+                                cons
+                                    list 'not (list 'empty? src)
+                                    list do-in
+                                        list let tmp tmprest '= (list 'decons src)
+                                        match-pattern tmp (x as Syntax)
+                                    process-list-args anchor tmprest rest
+                        cons 'and
+                            list '== (list typeof src) list
+                            process-list-args anchor src rest
+                    elseif (head == 'or)
+                        if ((countof rest) < 2)
+                            error! "'or' needs two arguments"
+                        fn process-or-args (src rest)
+                            let a rest = (decons rest)
+                            if ((countof rest) <= 1)
+                                let b = (decons rest)
+                                list 'or
+                                    match-pattern src (a as Syntax)
+                                    match-pattern src (b as Syntax)
+                            else
+                                list 'or
+                                    match-pattern src (a as Syntax)
+                                    process-or-args src rest
+                        process-or-args src rest
+                    else
+                        error! 
+                            .. "invalid pattern: " (repr key)
+            elseif (vardef? key)
+                let sym = (Symbol (slice (key as Symbol as string) 1))
+                list do-in
+                    list let sym '= src
+                    true
+            else                
+                # simple comparison
+                list '== src key
+        print result
+        Syntax-wrap anchor (Any result) false
+
     fn process (i src expr)
         if (empty? expr)
-            return (unconst '())
+            error! "else expected"
         let pair rest = (decons expr)
         let key dst = (decons (pair as Syntax as list))
-        let kkey = (key as Syntax as Symbol)
-        cons
-            if (kkey == 'else)
-                cons 'else dst
-            else        
-                cons (? (i == 0) 'if 'elseif) (list '== src key) dst
-            process (i + 1) src rest
+        let kkey = (key as Syntax as Any)
+        let keytype = ('typeof kkey)
+        if ((keytype == Symbol) and (kkey == 'else))
+            cons (cons 'else dst) '()
+        else
+            cons
+                cons 
+                    ? (i == 0) 'if 'elseif
+                    match-pattern src (key as Syntax)
+                    dst
+                process (i + 1) src rest
     cons do
         list let tmp '= value
-        process (unconst 0) tmp rest
+        do
+            let k = 
+                process (unconst 0) tmp rest
+            print k
+            k
 
 #-------------------------------------------------------------------------------
 # using
