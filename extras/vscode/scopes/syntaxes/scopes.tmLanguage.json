@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.scopes",
-                    "match": "(match|using|filter|\\:|var|global|as|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(match|using|filter|\\:|var|global|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -108,7 +108,7 @@
                 },
                 {
                     "name": "support.function.library.scopes",
-				    "match": "(unpack|vectorof|unknownof|va-empty\\?|(forward-|(forward-)?safe)?cast|xpcall|require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|(tie|cond)-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|typename|Symbol|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer|typename)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(unpack|vectorof|unknownof|va-empty\\?|imply|forward-imply|forward-as|xpcall|require|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|(tie|cond)-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|typename|Symbol|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer|typename)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.builtin.scopes",
@@ -123,7 +123,7 @@
 		"operators": {
             "patterns":[{
                 "name": "keyword.operator.scopes",
-                "match": "(\\<\\:|and|or|not|\\/\\/|\\@|[\\=\\!\\<\\>]\\=?|[\\.\\?\\+\\-\\*\\/\\%\\&\\|\\^\\~]|\\<\\<|\\>\\>|\\.\\.)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                "match": "(as|\\<\\:|and|or|not|\\/\\/|\\@|[\\=\\!\\<\\>]\\=?|[\\.\\?\\+\\-\\*\\/\\%\\&\\|\\^\\~]|\\<\\<|\\>\\>|\\.\\.)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
             }]
 		},
 		"symbol": {

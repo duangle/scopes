@@ -5,7 +5,7 @@ syntax-extend
     let key value =
         Scope-next t (Any last-key)
     if (not (('typeof key) == Nothing))
-        print (cast Symbol key) (repr value)
+        print (key as Symbol) (repr value)
         loop key
     syntax-scope
 

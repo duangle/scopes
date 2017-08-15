@@ -10,11 +10,11 @@ fn inner-func2 (x y)
         locals;
 
 let scope = (inner-func 2 3)
-assert ((cast i32 scope.x) == 2)
-assert ((cast i32 scope.y) == 3)
-assert ((cast i32 scope.z) == 5)
+assert (scope.x == 2)
+assert (scope.y == 3)
+assert (scope.z == 5)
 let scope = (inner-func2 2 3)
-assert ((cast i32 scope.x) == 2)
-assert ((cast i32 scope.y) == 3)
-assert ((cast i32 scope.z) == 5)
+assert (scope.x == 2)
+assert (scope.y == 3)
+assert (scope.z == 5)
 

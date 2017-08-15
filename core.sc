@@ -183,25 +183,25 @@ fn list-new (...)
     loop (va-countof ...) eol
 
 # forward decl
-fn cast
-fn forward-cast
-fn safecast
-fn forward-safecast
+fn as
+fn forward-as
+fn imply
+fn forward-imply
 
 fn not (x)
-    bxor (safecast bool x) true
+    bxor (imply x bool) true
 
 fn gen-type-op2 (f)
     fn (a b flipped)
         if (type== (typeof a) (typeof b))
             f a b
         elseif flipped
-            let result... = (forward-safecast (typeof b) a)
+            let result... = (forward-imply a (typeof b))
             if (va-empty? result...)
             else
                 f result... b
         else
-            let result... = (forward-safecast (typeof a) b)
+            let result... = (forward-imply b (typeof a))
             if (va-empty? result...)
             else
                 f a result...
@@ -251,8 +251,8 @@ syntax-extend
             else
                 return;
 
-    set-type-symbol! Symbol 'cast
-        fn (destT self)
+    set-type-symbol! Symbol 'as
+        fn (self destT)
             if (type== destT string)
                 Symbol->string self
 
@@ -291,8 +291,8 @@ syntax-extend
 
         # more aggressive cast that converts from all numerical types
             and usize.
-        set-type-symbol! T 'cast
-            fn hardcast (destT val)
+        set-type-symbol! T 'as
+            fn hardcast (val destT)
                 let vT = (typeof val)
                 let destST = 
                     if (type== destT usize) (storageof destT)
@@ -316,10 +316,10 @@ syntax-extend
 
         # only perform safe casts i.e. integer / usize conversions that expand width
         # unless the value is constant
-        set-type-symbol! T 'safecast
-            fn (destT val)
+        set-type-symbol! T 'imply
+            fn (val destT)
                 if (constant? val)
-                    hardcast destT val
+                    hardcast val destT
                 else   
                     let vT = (typeof val)
                     let destST =
@@ -340,7 +340,7 @@ syntax-extend
         # general constructor
         set-type-symbol! T 'apply-type
             fn (destT val)
-                cast destT val
+                as val destT
 
         fn ufdiv(a b)
             let Ta Tb = (typeof a) (typeof b)
@@ -380,8 +380,8 @@ syntax-extend
             sdiv (fptosi a i32) (fptosi b i32)
 
         # only perform safe casts: i.e. float to double
-        set-type-symbol! T 'safecast
-            fn (destT val)
+        set-type-symbol! T 'imply
+            fn (val destT)
                 let vT = (typeof val)
                 if (real-type? destT)
                     let valw destw = (bitcountof vT) (bitcountof destT)
@@ -392,7 +392,7 @@ syntax-extend
 
         set-type-symbol! T 'apply-type
             fn (destT val)
-                cast destT val
+                as val destT
 
         set-type-symbol! T '== (gen-type-op2 fcmp==o)
         set-type-symbol! T '!= (gen-type-op2 fcmp!=u)
@@ -618,62 +618,62 @@ fn getattr (self name)
 fn empty? (x)
     == (countof x) 0:usize
 
-fn forward-cast (dest-type value)
+fn forward-as (value dest-type)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'safecast)
+    let f ok = (type@ T 'imply)
     if ok
-        let result... = (f dest-type value)
+        let result... = (f value dest-type)
         if (icmp!= (va-countof result...) 0)
             return result...
-    let f ok = (type@ T 'cast)
+    let f ok = (type@ T 'as)
     if ok
-        let result... = (f dest-type value)
+        let result... = (f value dest-type)
         if (icmp!= (va-countof result...) 0)
             return result...
 
-fn cast (dest-type value)
+fn as (value dest-type)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'safecast)
+    let f ok = (type@ T 'imply)
     if ok
-        let result... = (f dest-type value)
+        let result... = (f value dest-type)
         if (icmp!= (va-countof result...) 0)
             return result...
-    let f ok = (type@ T 'cast)
+    let f ok = (type@ T 'as)
     if ok
-        let result... = (f dest-type value)
+        let result... = (f value dest-type)
         if (icmp!= (va-countof result...) 0)
             return result...
     compiler-error!
-        string-join "cannot cast value of type " 
+        string-join "cannot convert value of type " 
             string-join (Any-repr (Any-wrap T))
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
 
-fn forward-safecast (dest-type value)
+fn forward-imply (value dest-type)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'safecast)
+    let f ok = (type@ T 'imply)
     if ok
-        let result... = (f dest-type value)
+        let result... = (f value dest-type)
         if (icmp!= (va-countof result...) 0)
             return result...
 
-fn safecast (dest-type value)
+fn imply (value dest-type)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'safecast)
+    let f ok = (type@ T 'imply)
     if ok
-        let result... = (f dest-type value)
+        let result... = (f value dest-type)
         if (icmp!= (va-countof result...) 0)
             return result...
     compiler-error!
-        string-join "cannot safecast value of type " 
+        string-join "cannot implicitly convert value of type " 
             string-join (Any-repr (Any-wrap T))
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
@@ -904,12 +904,12 @@ syntax-extend
 
     set-type-symbol! Any 'typeof Any-typeof
 
-    set-type-symbol! Any 'safecast
-        fn (destT src)
+    set-type-symbol! Any 'imply
+        fn (src destT)
             Any-extract src destT
 
-    set-type-symbol! Syntax 'safecast
-        fn (destT src)
+    set-type-symbol! Syntax 'imply
+        fn (src destT)
             Any-extract (Syntax->datum src) destT
 
     set-type-symbol! type '@
@@ -1018,7 +1018,7 @@ syntax-extend
             xreturn false
         let un vn = (list-next a) (list-next b)
         if (type== uT list)
-            if (list== (safecast list u) (safecast list v))
+            if (list== (imply u list) (imply v list))
                 loop un vn
             else
                 xreturn false
@@ -1046,8 +1046,8 @@ syntax-extend
 
     let rawstring = (pointer i8)
     set-scope-symbol! syntax-scope 'rawstring (pointer i8)
-    set-type-symbol! string 'safecast
-        fn (destT self)
+    set-type-symbol! string 'imply
+        fn (self destT)
             if (type== destT rawstring)
                 getelementptr self 0 1 0
 
@@ -1088,7 +1088,7 @@ fn Any-list? (val)
 
 fn maybe-unsyntax (val)
     if (type== ('typeof val) Syntax)
-        extractvalue (load (cast Syntax val)) 1
+        extractvalue (load (as val Syntax)) 1
     else val
 
 fn powi (base exponent)
@@ -1145,7 +1145,7 @@ fn walk-list (on-leaf l depth)
             print-spaces depth
             io-write! ";\n"
             walk-list on-leaf
-                cast list value
+                as value list
                 add depth 1
         else
             on-leaf value depth
@@ -1193,9 +1193,9 @@ fn syntax-error! (anchor msg)
         if (== T Any)
             let T = ('typeof anchor)
             if (== T Syntax)
-                Syntax-anchor (cast Syntax anchor)
+                Syntax-anchor (as anchor Syntax)
             else
-                cast Anchor anchor
+                as anchor Anchor
         elseif (== T Syntax)
             Syntax-anchor anchor
         else anchor
@@ -1231,8 +1231,8 @@ syntax-extend
         fn (cls f)
             assert-typeof f BlockScopeFunction
             bitcast f Macro
-    set-type-symbol! Macro 'cast
-        fn (destT self)
+    set-type-symbol! Macro 'as
+        fn (self destT)
             if (type== destT function)
                 bitcast self BlockScopeFunction
             elseif (type== destT BlockScopeFunction)
@@ -1244,8 +1244,8 @@ syntax-extend
 
     fn block-scope-macro (f)
         Macro
-            cast BlockScopeFunction
-                compile (typify f list list Scope)
+            as (compile (typify f list list Scope))
+                BlockScopeFunction
     fn scope-macro (f)
         block-scope-macro
             fn (at next scope)
@@ -1304,21 +1304,21 @@ syntax-extend
         fn expand-define-infix (args scope)
             let prec token func = (decons args 3)
             let prec = 
-                cast i32 (cast Syntax prec)
+                as (as prec Syntax) i32
             let token = 
-                cast Symbol (cast Syntax token)
+                as (as token Syntax) Symbol
             let func = 
                 if (== ('typeof func) Nothing) token
                 else
-                    cast Symbol (cast Syntax func)
+                    as (as func Syntax) Symbol
             set-scope-symbol! scope (get-ifx-symbol token)
                 list prec order func
             return none scope
 
     fn get-ifx-op (env op)
-        let sym = (Syntax->datum (cast Syntax op))
+        let sym = (Syntax->datum (as op Syntax))
         if (== ('typeof sym) Symbol)
-            @ env (get-ifx-symbol (cast Symbol sym))
+            @ env (get-ifx-symbol (as sym Symbol))
         else
             return 
                 unconst (Any none)
@@ -1338,11 +1338,11 @@ syntax-extend
         loop expr
 
     fn unpack-infix-op (op)
-        let op-prec op-order op-func = (decons (cast list op) 3)
+        let op-prec op-order op-func = (decons (as op list) 3)
         return
-            cast i32 op-prec
-            cast Symbol op-order
-            cast Symbol op-func
+            as op-prec i32
+            as op-order Symbol
+            as op-func Symbol
 
     fn infix-op (infix-table token prec pred)
         let op ok =
@@ -1401,24 +1401,24 @@ syntax-extend
     # install general list hook for this scope
     # is called for every list the expander would otherwise consider a call
     fn list-handler (topexpr env)
-        let sxexpr = (cast Syntax (list-at topexpr))
+        let sxexpr = (as (list-at topexpr) Syntax)
         let expr expr-anchor = (Syntax->datum sxexpr) (Syntax-anchor sxexpr)
         if (!= ('typeof expr) list)
             return topexpr env
-        let expr = (cast list expr)
-        let head-key = (Syntax->datum (cast Syntax (list-at expr)))
+        let expr = (as expr list)
+        let head-key = (Syntax->datum (as (list-at expr) Syntax))
         let head =
             if (== ('typeof head-key) Symbol)
-                let head success = (@ env (cast Symbol head-key))
+                let head success = (@ env (as head-key Symbol))
                 if success head
                 else head-key
             else head-key
         if (== ('typeof head) Macro)
-            let head = (cast Macro head)
+            let head = (as head Macro)
             let next = (list-next topexpr)
             let expr env = (head expr next env)
             let expr = (Syntax-wrap expr-anchor (Any expr) false)
-            return (cast list (cast Syntax expr)) env
+            return (as (as expr Syntax) list) env
         elseif (has-infix-ops? env expr)
             let at next = (decons expr)
             let expr =
@@ -1433,8 +1433,8 @@ syntax-extend
     # is called for every symbol the expander could not resolve
     fn symbol-handler (topexpr env)
         let at next = (decons topexpr)
-        let sxname = (cast Syntax at)
-        let name name-anchor = (cast Symbol sxname) (Syntax-anchor sxname)
+        let sxname = (as at Syntax)
+        let name name-anchor = (as sxname Symbol) (Syntax-anchor sxname)
         if (dotted-symbol? env name)
             let s = (Symbol->string name)
             let sz = (countof s)
@@ -1476,7 +1476,7 @@ syntax-extend
                 return result
             let tmp =
                 Parameter-new
-                    Syntax-anchor (cast Syntax (list-at head))
+                    Syntax-anchor (as (list-at head) Syntax)
                     \ 'tmp Unknown
             loop
                 Any
@@ -1542,7 +1542,7 @@ define-macro assert
         else
             syntax-error! anchor assert-msg
     let cond body = (decons args)
-    let sxcond = (cast Syntax cond)
+    let sxcond = (as cond Syntax)
     let anchor = (Syntax-anchor sxcond)
     let tmp =
         Parameter-new anchor 'tmp Unknown
@@ -1560,7 +1560,7 @@ define-macro assert
 # (. value symbol ...)
 define-macro .
     fn op (a b)
-        let sym = (cast Symbol (cast Syntax b))
+        let sym = (as (as b Syntax) Symbol)
         list getattr a (list quote sym)
     let a b rest = (decons args 2)
     let loop (rest result) = rest (op a b)
@@ -1602,6 +1602,7 @@ define-infix> 600 /
 define-infix> 600 //
 define-infix> 600 *
 #define-infix< 700 **
+define-infix> 750 as
 define-infix> 800 .
 define-infix> 800 @
 #define-infix> 800 .=
@@ -1642,18 +1643,18 @@ do
         fn (self)
             forward-repr (load self)
 
-    set-type-symbol! reference 'safecast
-        fn (destT self)
+    set-type-symbol! reference 'imply
+        fn (self destT)
             let ptrtype = (storageof (typeof self))
             if (type== destT ptrtype)
                 bitcast self ptrtype
             else
-                cast destT (load (bitcast self ptrtype))
+                (load (bitcast self ptrtype)) as destT
 
     set-type-symbol! reference '=
         fn (self value)
             let ET = (element-type (storageof (typeof self)) 0)
-            store (safecast ET value) self
+            store (imply value ET) self
             true
 
     set-type-symbol! reference 'apply-type
@@ -1676,7 +1677,7 @@ do
                 make-reference-type element
             else
                 let ET = (storageof cls)
-                bitcast (safecast ET element) cls
+                bitcast (imply element ET) cls
 
 define-block-scope-macro var
     fn element-typeof (value)
@@ -1687,7 +1688,7 @@ define-block-scope-macro var
 
     let args = (list-next expr)
     let name token rest = (decons args 2)
-    let token = (cast Symbol (cast Syntax token))
+    let token = (token as Syntax as Symbol)
     if (token == '=)
         let value rest = (decons rest)
         let tmp = (Parameter 'tmp)
@@ -1703,7 +1704,7 @@ define-block-scope-macro var
             syntax-scope
     elseif (token == '@)
         let size token rest = (decons rest 2)
-        let token = (cast Symbol (cast Syntax token))
+        let token = (token as Syntax as Symbol)
         if (token == ':)
             let deftype rest = (decons rest)
             return
@@ -1726,7 +1727,7 @@ define-macro global
         else T
 
     let name token rest = (decons args 2)
-    let token = (cast Symbol (cast Syntax token))
+    let token = (token as Syntax as Symbol)
     if (token == '=)
         let value rest = (decons rest)
         let tmp = (Parameter 'tmp)
@@ -1739,7 +1740,7 @@ define-macro global
             name
     elseif (token == '@)
         let size token rest = (decons rest 2)
-        let token = (cast Symbol (cast Syntax token))
+        let token = (token as Syntax as Symbol)
         if (token == ':)
             let deftype rest = (decons rest)
             list define name
@@ -1789,16 +1790,16 @@ syntax-extend
         let ModuleFunctionType = (pointer (function (ReturnLabel (unknownof Any))))
         let fptr =
             if (rettype == Any)
-                cast ModuleFunctionType f
+                f as ModuleFunctionType
             else
                 # build a wrapper
                 let expr =
                     list
                         list let 'tmp '= (list f)
                         list unconst (list Any-new 'tmp)
-                let expr = (cast Syntax (Syntax-wrap expr-anchor (Any expr) false))
+                let expr = ((Syntax-wrap expr-anchor (Any expr) false) as Syntax)
                 let f = (compile (eval expr (globals)))
-                cast ModuleFunctionType f
+                f as ModuleFunctionType
         fptr;
 
     fn require (name)
@@ -1806,15 +1807,15 @@ syntax-extend
         assert-typeof name Symbol
         let namestr = (Symbol->string name)
         fn load-module (name)
-            let modules = (cast Scope package.modules)
+            let modules = (package.modules as Scope)
             let content ok = (@ modules name)
             if ok
                 return content (unconst true)
-            let loop (patterns) = (cast list package.path)
+            let loop (patterns) = (package.path as list)
             if (empty? patterns)
                 return (unconst (Any none)) (unconst false)
             let pattern patterns = (decons patterns)
-            let pattern = (cast string pattern)
+            let pattern = (pattern as string)
             let module-path = (make-module-path pattern namestr)
             if (not (file? module-path))
                 loop patterns
@@ -1830,12 +1831,12 @@ syntax-extend
         io-write! "no such module '"
         io-write! (Symbol->string name)
         io-write! "' in paths:\n"
-        let loop (patterns) = (cast list package.path)
+        let loop (patterns) = (package.path as list)
         if (empty? patterns)
             abort!;
             unreachable!;
         let pattern patterns = (decons patterns)
-        let pattern = (cast string pattern)
+        let pattern = (pattern as string)
         let module-path = (make-module-path pattern namestr)
         io-write! "    "
         io-write! module-path
@@ -1859,7 +1860,7 @@ define-scope-macro locals
     else
         loop (unconst key)
             if (('typeof key) == Symbol)
-                let key = (cast Symbol key)
+                let key = (key as Symbol)
                 cons
                     list set-scope-symbol! tmp (list quote key) value
                     result
@@ -1869,7 +1870,7 @@ define-scope-macro locals
 
 define-macro import
     let name = (decons args)
-    let name = (cast Symbol (cast Syntax name))
+    let name = (name as Syntax as Symbol)
     list define name
         list require
             list quote name
@@ -1900,7 +1901,7 @@ fn xpcall (f errorf)
 
 fn format-exception (exc)
     if (('typeof exc) == Exception)
-        let exc = (cast Exception exc)
+        let exc = (exc as Exception)
         format-message (Exception-anchor exc)
             .. (default-styler style-error "error:")
                 \ " " (Exception-message exc)
@@ -1921,8 +1922,8 @@ define-macro match
         if (empty? expr)
             return (unconst '())
         let pair rest = (decons expr)
-        let key dst = (decons (cast list (cast Syntax pair)))
-        let kkey = (cast Symbol (cast Syntax key))
+        let key dst = (decons (pair as Syntax as list))
+        let kkey = (key as Syntax as Symbol)
         cons
             if (kkey == 'else)
                 cons 'else dst
@@ -1943,11 +1944,11 @@ fn merge-scope-symbols (source target filter)
         Scope-next source (Any last-key)
     if (not (('typeof key) == Nothing))
         if (('typeof key) == Symbol)
-            let key = (cast Symbol key)
+            let key = (key as Symbol)
             if 
                 or (none? filter)
                     do
-                        let keystr = (cast string key)                
+                        let keystr = (key as string)
                         string-match? filter keystr
                 set-scope-symbol! target key value
         loop key
@@ -1959,11 +1960,11 @@ define-macro using
             if (empty? rest) '()
             else
                 let token pattern rest = (decons rest 2)
-                let token = (cast Symbol (cast Syntax token))
+                let token = (token as Syntax as Symbol)
                 if (token != 'filter)
                     syntax-error! (active-anchor)
                         "syntax: using <scope> [filter <filter-string>]"
-                let pattern = (cast string (cast Syntax pattern))
+                let pattern = (pattern as Syntax as string)
                 list pattern
         'syntax-scope
 
@@ -1972,8 +1973,8 @@ define-macro using
 #-------------------------------------------------------------------------------
 
 # labels safecast to function pointers
-set-type-symbol! Closure 'safecast
-    fn (destT self)
+set-type-symbol! Closure 'imply
+    fn (self destT)
         if (function-pointer-type? destT)
             let ET = (rawcall element-type destT 0)
             let sz = (trunc (rawcall type-countof ET) i32)
@@ -1987,7 +1988,7 @@ set-type-symbol! Closure 'safecast
                     syntax-error! (Label-anchor (Closure-label self))
                         .. "function does not compile to type " (repr destT)
                             \ " but has type " (repr ('typeof result))
-                return (safecast destT result)
+                return (imply result destT)
             else
                 let i-1 = (sub i 1)
                 loop i-1 (rawcall element-type ET i-1) args...
@@ -1996,8 +1997,8 @@ set-type-symbol! Closure 'safecast
 syntax-extend
     let NullType = (typename "NullType")
     set-typename-storage! NullType (pointer void)
-    set-type-symbol! NullType 'safecast
-        fn (destT self)
+    set-type-symbol! NullType 'imply
+        fn (self destT)
             if (pointer-type? destT)
                 nullof destT
     let null = (nullof NullType)
@@ -2009,7 +2010,7 @@ syntax-extend
 set-type-symbol! pointer '=
     fn (self value)
         store
-            cast (element-type (typeof self) 0) value
+            value as (element-type (typeof self) 0)
             self
         true
 
@@ -2017,19 +2018,19 @@ set-type-symbol! pointer '=
 set-type-symbol! pointer '==
     fn (a b flipped)
         if flipped
-            icmp== (ptrtoint (safecast (typeof b) a) usize) (ptrtoint b usize)
+            icmp== (ptrtoint (a as (typeof b)) usize) (ptrtoint b usize)
         else
-            icmp== (ptrtoint a usize) (ptrtoint (safecast (typeof a) b) usize)
+            icmp== (ptrtoint a usize) (ptrtoint (b as (typeof a)) usize)
 
 
 # pointer cast to element type executes load
-set-type-symbol! pointer 'cast
-    fn (destT self)
+set-type-symbol! pointer 'as
+    fn (self destT)
         if (type== destT (element-type (typeof self) 0))
             load self
 # also supports mutable pointer safecast to immutable pointer
-set-type-symbol! pointer 'safecast
-    fn (destT self)
+set-type-symbol! pointer 'imply
+    fn (self destT)
         if (type== destT (pointer-type (element-type (typeof self) 0)))
             bitcast self destT
 
@@ -2055,8 +2056,8 @@ set-type-symbol! pointer '@
         (reference ET) (getelementptr self (usize index))
 
 # extern cast to element type/pointer executes load/unconst
-set-type-symbol! extern 'safecast
-    fn (destT self)
+set-type-symbol! extern 'imply
+    fn (self destT)
         let ET = (element-type (typeof self) 0)
         if (type== destT ET)
             load (unconst self)
@@ -2082,8 +2083,8 @@ do
         else val
 
     # support for downcast
-    set-type-symbol! CEnum 'safecast
-        fn (destT self)
+    set-type-symbol! CEnum 'imply
+        fn (self destT)
             let ST = (storageof (typeof self))
             if (type== destT ST)
                 bitcast self ST
@@ -2121,7 +2122,7 @@ set-type-symbol! CStruct 'apply-type
                         typename-field-index cls key
                 let ET = (element-type T k)
                 loop (add i 1)
-                    insertvalue instance (safecast ET arg) k
+                    insertvalue instance (imply arg ET) k
             else
                 instance
 
@@ -2168,7 +2169,7 @@ fn pointer-call (self ...)
             let arg = (va@ i-1 ...)
             if ((not variadic) or (icmp<s i count))
                 let argtype = (rawcall element-type ET i)
-                loop i-1 (safecast argtype arg) args...
+                loop i-1 (imply arg argtype) args...
             else
                 loop i-1 arg args...
 
@@ -2196,7 +2197,7 @@ fn vectorof (T ...)
     if (i < count)
         let element = (va@ i ...)
         loop (i + 1)
-            insertelement result (safecast T element) i
+            insertelement result (imply element T) i
     else result
 
 fn vector-signed-dispatch (fsigned funsigned)
@@ -2455,16 +2456,16 @@ fn read-eval-print-loop ()
             let ModuleFunctionType = (pointer (function (ReturnLabel (unknownof Any))))
             let fptr =
                 if (rettype == Any)
-                    cast ModuleFunctionType f
+                    f as ModuleFunctionType
                 else
                     # build a wrapper
                     let expr =
                         list
                             list let 'tmp '= (list f)
                             list unconst (list Any-new 'tmp)
-                    let expr = (cast Syntax (Syntax-wrap expr-anchor (Any expr) false))
+                    let expr = ((Syntax-wrap expr-anchor (Any expr) false) as Syntax)
                     let f = (compile (eval expr global-scope))
-                    cast ModuleFunctionType f
+                    f as ModuleFunctionType
             set-anchor! expr-anchor
             let result = (fptr)
             if (('typeof result) != Nothing)

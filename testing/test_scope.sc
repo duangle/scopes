@@ -1,7 +1,7 @@
 
 define-scope-macro isvar?
     let key = (decons args)
-    let key = (cast Symbol (cast Syntax key))
+    let key = (key as Syntax as Symbol)
     let _ ok = (@ syntax-scope key)
     return ok syntax-scope
 

@@ -43,7 +43,7 @@ fn run-tests ()
         return;
     
     let module modules = (decons modules)
-    let module = (cast Symbol module)
+    let module = (module as Symbol)
     print
     print "* running:" module
     print "***********************************************"
