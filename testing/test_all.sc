@@ -35,7 +35,7 @@ fn run-tests ()
     let total =
         i32 (countof modules)
 
-    let [loop] modules failed = (unconst modules) (unconst 0)
+    let loop (modules failed) = (unconst modules) (unconst 0)
     if (empty? modules)
         print
         print total "tests executed," (total - failed) "succeeded," failed "failed."

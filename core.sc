@@ -165,7 +165,7 @@ fn cons (...)
     if (icmp<s i 2)
         compiler-error! "at least two parameters expected"
     let i = (sub i 2)
-    let [loop] i at tail = i (va@ i ...)
+    let loop (i at tail) = i (va@ i ...)
     if (icmp== i 0)
         list-cons (Any at) tail
     else
@@ -185,23 +185,23 @@ fn list-new (...)
 # forward decl
 fn cast
 fn forward-cast
-fn softcast
-fn forward-softcast
+fn safecast
+fn forward-safecast
 
 fn not (x)
-    bxor (softcast bool x) true
+    bxor (safecast bool x) true
 
 fn gen-type-op2 (f)
     fn (a b flipped)
         if (type== (typeof a) (typeof b))
             f a b
         elseif flipped
-            let result... = (forward-softcast (typeof b) a)
+            let result... = (forward-safecast (typeof b) a)
             if (va-empty? result...)
             else
                 f result... b
         else
-            let result... = (forward-softcast (typeof a) b)
+            let result... = (forward-safecast (typeof a) b)
             if (va-empty? result...)
             else
                 f a result...
@@ -316,7 +316,7 @@ syntax-extend
 
         # only perform safe casts i.e. integer / usize conversions that expand width
         # unless the value is constant
-        set-type-symbol! T 'softcast
+        set-type-symbol! T 'safecast
             fn (destT val)
                 if (constant? val)
                     hardcast destT val
@@ -380,7 +380,7 @@ syntax-extend
             sdiv (fptosi a i32) (fptosi b i32)
 
         # only perform safe casts: i.e. float to double
-        set-type-symbol! T 'softcast
+        set-type-symbol! T 'safecast
             fn (destT val)
                 let vT = (typeof val)
                 if (real-type? destT)
@@ -494,7 +494,7 @@ fn op2-dispatch-bidi (symbol fallback)
 
 fn op2-ltr-multiop (f)
     fn (a b ...)
-        let [loop] i result... = 0 (f a b)
+        let loop (i result...) = 0 (f a b)
         if (icmp<s i (va-countof ...))
             let x = (va@ i ...)
             loop (add i 1) (f result... x)
@@ -622,7 +622,7 @@ fn forward-cast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'softcast)
+    let f ok = (type@ T 'safecast)
     if ok
         let result... = (f dest-type value)
         if (icmp!= (va-countof result...) 0)
@@ -637,7 +637,7 @@ fn cast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'softcast)
+    let f ok = (type@ T 'safecast)
     if ok
         let result... = (f dest-type value)
         if (icmp!= (va-countof result...) 0)
@@ -653,27 +653,27 @@ fn cast (dest-type value)
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
 
-fn forward-softcast (dest-type value)
+fn forward-safecast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'softcast)
+    let f ok = (type@ T 'safecast)
     if ok
         let result... = (f dest-type value)
         if (icmp!= (va-countof result...) 0)
             return result...
 
-fn softcast (dest-type value)
+fn safecast (dest-type value)
     let T = (typeof value)
     if (type== T dest-type)
         return value
-    let f ok = (type@ T 'softcast)
+    let f ok = (type@ T 'safecast)
     if ok
         let result... = (f dest-type value)
         if (icmp!= (va-countof result...) 0)
             return result...
     compiler-error!
-        string-join "cannot softcast value of type " 
+        string-join "cannot safecast value of type " 
             string-join (Any-repr (Any-wrap T))
                 string-join " to "
                     Any-repr (Any-wrap dest-type)
@@ -824,7 +824,7 @@ fn string-compare (a b)
     let pa pb =
         bitcast (getelementptr a 0 1 0) (pointer-type i8)
         bitcast (getelementptr b 0 1 0) (pointer-type i8)
-    let [loop] i =
+    let loop (i) =
         tie-const cc 0:usize
     if (== i cc)
         if (< ca cb)
@@ -849,7 +849,7 @@ fn list-reverse (l tail)
         if (type== (typeof tail) Nothing) eol
         else tail
     assert-typeof tail list
-    let [loop] l next = l (tie-const l tail)
+    let loop (l next) = l (tie-const l tail)
     if (list-empty? l) next
     else
         loop (list-next l) (list-cons (list-at l) next)
@@ -904,11 +904,11 @@ syntax-extend
 
     set-type-symbol! Any 'typeof Any-typeof
 
-    set-type-symbol! Any 'softcast
+    set-type-symbol! Any 'safecast
         fn (destT src)
             Any-extract src destT
 
-    set-type-symbol! Syntax 'softcast
+    set-type-symbol! Syntax 'safecast
         fn (destT src)
             Any-extract (Syntax->datum src) destT
 
@@ -976,7 +976,7 @@ syntax-extend
                 list-countof self
     set-type-symbol! list '@
         fn (self i)
-            let [loop] x i = (tie-const i self) (i32 i)
+            let loop (x i) = (tie-const i self) (i32 i)
             if (< i 0)
                 Any none
             elseif (== i 0)
@@ -987,7 +987,7 @@ syntax-extend
         fn (self i0 i1)
             # todo: use isize
             let i0 i1 = (i64 i0) (i64 i1)
-            let [skip-head] l i =
+            let skip-head (l i) =
                 tie-const i0 self
                 tie-const i0 (i64 0)
             if (< i i0)
@@ -995,7 +995,7 @@ syntax-extend
             let count = (i64 (list-countof l))
             if (== (- i1 i0) count)
                 return l
-            let [build-slice] l next i = 
+            let build-slice (l next i) = 
                 tie-const i1 l
                 tie-const i1 eol
                 tie-const i1 i
@@ -1009,7 +1009,7 @@ syntax-extend
             return (tie-const (tie-const a b) value)
         if (icmp!= (list-countof a) (list-countof b))
             xreturn false
-        let [loop] a b = (tie-const b a) (tie-const a b)
+        let loop (a b) = (tie-const b a) (tie-const a b)
         if (list-empty? a)
             xreturn true
         let u v = (list-at a) (list-at b)
@@ -1018,7 +1018,7 @@ syntax-extend
             xreturn false
         let un vn = (list-next a) (list-next b)
         if (type== uT list)
-            if (list== (softcast list u) (softcast list v))
+            if (list== (safecast list u) (safecast list v))
                 loop un vn
             else
                 xreturn false
@@ -1046,7 +1046,7 @@ syntax-extend
 
     let rawstring = (pointer i8)
     set-scope-symbol! syntax-scope 'rawstring (pointer i8)
-    set-type-symbol! string 'softcast
+    set-type-symbol! string 'safecast
         fn (destT self)
             if (type== destT rawstring)
                 getelementptr self 0 1 0
@@ -1075,7 +1075,7 @@ syntax-extend
     syntax-scope
 
 fn <: (T superT)
-    let [loop] T = T
+    let loop (T) = T
     let value = (superof T)
     if (type== value superT) true
     elseif (type== value typename) false
@@ -1094,7 +1094,7 @@ fn maybe-unsyntax (val)
 fn powi (base exponent)
     assert-typeof base i32
     assert-typeof exponent i32
-    let [loop] result cur exponent =
+    let loop (result cur exponent) =
         tie-const exponent 1
         tie-const exponent base
         exponent
@@ -1116,7 +1116,7 @@ fn print (...)
         else
             io-write! (repr val)
 
-    let [loop] i = 0
+    let loop (i) = 0
     if (< i (va-countof ...))
         if (> i 0)
             io-write! " "
@@ -1134,7 +1134,7 @@ fn print-spaces (depth)
         print-spaces (sub depth 1)
 
 fn walk-list (on-leaf l depth)
-    let [loop] l = l
+    let loop (l) = l
     if (list-empty? l) true
     else
         let at next =
@@ -1154,7 +1154,7 @@ fn walk-list (on-leaf l depth)
 
 fn typify (f types...)
     let vacount = (va-countof types...)
-    let [loop] i types = 0 (nullof (array-type type (usize vacount)))
+    let loop (i types) = 0 (nullof (array-type type (usize vacount)))
     if (== i vacount)
         return
             __typify f vacount (bitcast (allocaof types) (pointer type))
@@ -1164,7 +1164,7 @@ fn typify (f types...)
 
 fn compile (f opts...)
     let vacount = (va-countof opts...)
-    let [loop] i flags = 0 0:u64
+    let loop (i flags) = 0 0:u64
     if (== i vacount)
         return
             __compile f flags
@@ -1262,7 +1262,7 @@ syntax-extend
     fn dotted-symbol? (env head)
         let s = (Symbol->string head)
         let sz = (countof s)
-        let [loop] i = (unconst 0:usize)
+        let loop (i) = (unconst 0:usize)
         if (== i sz)
             return (unconst false)
         elseif (== (@ s i) (char "."))
@@ -1271,7 +1271,7 @@ syntax-extend
 
     fn split-dotted-symbol (head start end tail)
         let s = (Symbol->string head)
-        let [loop] i = (unconst start)
+        let loop (i) = (unconst start)
         if (== i end)
             # did not find a dot
             if (== start 0:usize)
@@ -1327,7 +1327,7 @@ syntax-extend
     fn has-infix-ops? (infix-table expr)
         # any expression of which one odd argument matches an infix operator
             has infix operations.
-        let [loop] expr = expr
+        let loop (expr) = expr
         if (< (countof expr) 3:usize)
             return (unconst false)
         let expr = (list-next expr)
@@ -1372,7 +1372,7 @@ syntax-extend
         assert-typeof lhs Any
         assert-typeof state list
         assert-typeof mprec i32
-        let [loop] lhs state = lhs state
+        let loop (lhs state) = lhs state
         if (empty? state)
             return lhs state
         let la next-state = (decons state)
@@ -1380,7 +1380,7 @@ syntax-extend
         if (== ('typeof op) Nothing)
             return lhs state
         let op-prec op-order op-name = (unpack-infix-op op)
-        let [rhs-loop] rhs state = (decons next-state)
+        let rhs-loop (rhs state) = (decons next-state)
         if (empty? state)
             loop (Any (list op-name lhs rhs)) state
         let ra = (list-at state)
@@ -1471,7 +1471,7 @@ syntax-extend
             elseif (== (list-countof expr) 1:usize)
                 return (list-at expr)
             let expr = (list-reverse expr)
-            let [loop] result head = (decons expr)
+            let loop (result head) = (decons expr)
             if (list-empty? head)
                 return result
             let tmp =
@@ -1563,7 +1563,7 @@ define-macro .
         let sym = (cast Symbol (cast Syntax b))
         list getattr a (list quote sym)
     let a b rest = (decons args 2)
-    let [loop] rest result = rest (op a b)
+    let loop (rest result) = rest (op a b)
     if (list-empty? rest) result
     else
         let c rest = (decons rest)
@@ -1642,7 +1642,7 @@ do
         fn (self)
             forward-repr (load self)
 
-    set-type-symbol! reference 'softcast
+    set-type-symbol! reference 'safecast
         fn (destT self)
             let ptrtype = (storageof (typeof self))
             if (type== destT ptrtype)
@@ -1653,7 +1653,7 @@ do
     set-type-symbol! reference '=
         fn (self value)
             let ET = (element-type (storageof (typeof self)) 0)
-            store (softcast ET value) self
+            store (safecast ET value) self
             true
 
     set-type-symbol! reference 'apply-type
@@ -1676,7 +1676,7 @@ do
                 make-reference-type element
             else
                 let ET = (storageof cls)
-                bitcast (softcast ET element) cls
+                bitcast (safecast ET element) cls
 
 define-block-scope-macro var
     fn element-typeof (value)
@@ -1769,7 +1769,7 @@ define package
 syntax-extend
     fn make-module-path (pattern name)
         let sz = (countof pattern)
-        let [loop] i start result = 
+        let loop (i start result) = 
             unconst 0:usize
             unconst 0:usize
             unconst ""
@@ -1810,7 +1810,7 @@ syntax-extend
             let content ok = (@ modules name)
             if ok
                 return content (unconst true)
-            let [loop] patterns = (cast list package.path)
+            let loop (patterns) = (cast list package.path)
             if (empty? patterns)
                 return (unconst (Any none)) (unconst false)
             let pattern patterns = (decons patterns)
@@ -1830,7 +1830,7 @@ syntax-extend
         io-write! "no such module '"
         io-write! (Symbol->string name)
         io-write! "' in paths:\n"
-        let [loop] patterns = (cast list package.path)
+        let loop (patterns) = (cast list package.path)
         if (empty? patterns)
             abort!;
             unreachable!;
@@ -1847,7 +1847,7 @@ syntax-extend
 
 define-scope-macro locals
     let tmp = (Parameter 'tmp)
-    let [loop] last-key result = (unconst none) (unconst (list tmp))
+    let loop (last-key result) = (unconst none) (unconst (list tmp))
     let key value =
         Scope-next syntax-scope (Any last-key)
     if (('typeof key) == Nothing)
@@ -1938,7 +1938,7 @@ define-macro match
 #-------------------------------------------------------------------------------
 
 fn merge-scope-symbols (source target filter)
-    let [loop] last-key = (unconst none)
+    let loop (last-key) = (unconst none)
     let key value =
         Scope-next source (Any last-key)
     if (not (('typeof key) == Nothing))
@@ -1971,15 +1971,15 @@ define-macro using
 # various C related sugar
 #-------------------------------------------------------------------------------
 
-# labels softcast to function pointers
-set-type-symbol! Closure 'softcast
+# labels safecast to function pointers
+set-type-symbol! Closure 'safecast
     fn (destT self)
         if (function-pointer-type? destT)
             let ET = (rawcall element-type destT 0)
             let sz = (trunc (rawcall type-countof ET) i32)
             if (rawcall function-type-variadic? ET)
                 compiler-error! "cannot typify to variadic function"
-            let [loop] i args... = sz
+            let loop (i args...) = sz
             if (icmp== i 1)
                 let result =
                     compile (typify self args...)
@@ -1987,7 +1987,7 @@ set-type-symbol! Closure 'softcast
                     syntax-error! (Label-anchor (Closure-label self))
                         .. "function does not compile to type " (repr destT)
                             \ " but has type " (repr ('typeof result))
-                return (softcast destT result)
+                return (safecast destT result)
             else
                 let i-1 = (sub i 1)
                 loop i-1 (rawcall element-type ET i-1) args...
@@ -1996,7 +1996,7 @@ set-type-symbol! Closure 'softcast
 syntax-extend
     let NullType = (typename "NullType")
     set-typename-storage! NullType (pointer void)
-    set-type-symbol! NullType 'softcast
+    set-type-symbol! NullType 'safecast
         fn (destT self)
             if (pointer-type? destT)
                 nullof destT
@@ -2017,9 +2017,9 @@ set-type-symbol! pointer '=
 set-type-symbol! pointer '==
     fn (a b flipped)
         if flipped
-            icmp== (ptrtoint (softcast (typeof b) a) usize) (ptrtoint b usize)
+            icmp== (ptrtoint (safecast (typeof b) a) usize) (ptrtoint b usize)
         else
-            icmp== (ptrtoint a usize) (ptrtoint (softcast (typeof a) b) usize)
+            icmp== (ptrtoint a usize) (ptrtoint (safecast (typeof a) b) usize)
 
 
 # pointer cast to element type executes load
@@ -2027,8 +2027,8 @@ set-type-symbol! pointer 'cast
     fn (destT self)
         if (type== destT (element-type (typeof self) 0))
             load self
-# also supports mutable pointer softcast to immutable pointer
-set-type-symbol! pointer 'softcast
+# also supports mutable pointer safecast to immutable pointer
+set-type-symbol! pointer 'safecast
     fn (destT self)
         if (type== destT (pointer-type (element-type (typeof self) 0)))
             bitcast self destT
@@ -2055,7 +2055,7 @@ set-type-symbol! pointer '@
         (reference ET) (getelementptr self (usize index))
 
 # extern cast to element type/pointer executes load/unconst
-set-type-symbol! extern 'softcast
+set-type-symbol! extern 'safecast
     fn (destT self)
         let ET = (element-type (typeof self) 0)
         if (type== destT ET)
@@ -2082,7 +2082,7 @@ do
         else val
 
     # support for downcast
-    set-type-symbol! CEnum 'softcast
+    set-type-symbol! CEnum 'safecast
         fn (destT self)
             let ST = (storageof (typeof self))
             if (type== destT ST)
@@ -2111,7 +2111,7 @@ set-type-symbol! CStruct 'apply-type
         else
             let T = (storageof cls)
             let keys... = (va-keys args...)
-            let [loop] i instance = 0 (nullof cls)
+            let loop (i instance) = 0 (nullof cls)
             if (icmp<s i sz)
                 let key = (va@ i keys...) 
                 let arg = (va@ i args...)
@@ -2121,7 +2121,7 @@ set-type-symbol! CStruct 'apply-type
                         typename-field-index cls key
                 let ET = (element-type T k)
                 loop (add i 1)
-                    insertvalue instance (softcast ET arg) k
+                    insertvalue instance (safecast ET arg) k
             else
                 instance
 
@@ -2160,7 +2160,7 @@ fn pointer-call (self ...)
         let sz = (va-countof ...)
         let count = (trunc (rawcall type-countof ET) i32)
         let variadic = (rawcall function-type-variadic? ET)
-        let [loop] i args... = sz
+        let loop (i args...) = sz
         if (icmp== i 0)
             rawcall dest args...
         else
@@ -2168,7 +2168,7 @@ fn pointer-call (self ...)
             let arg = (va@ i-1 ...)
             if ((not variadic) or (icmp<s i count))
                 let argtype = (rawcall element-type ET i)
-                loop i-1 (softcast argtype arg) args...
+                loop i-1 (safecast argtype arg) args...
             else
                 loop i-1 arg args...
 
@@ -2192,11 +2192,11 @@ set-type-symbol! extern 'call
 
 fn vectorof (T ...)
     let count = (va-countof ...)
-    let [loop] i result = 0 (nullof (vector T (usize count)))
+    let loop (i result) = 0 (nullof (vector T (usize count)))
     if (i < count)
         let element = (va@ i ...)
         loop (i + 1)
-            insertelement result (softcast T element) i
+            insertelement result (safecast T element) i
     else result
 
 fn vector-signed-dispatch (fsigned funsigned)
@@ -2269,7 +2269,7 @@ set-type-symbol! vector 'countof
 set-type-symbol! vector 'unpack
     fn "vector-unpack" (v)
         let count = (type-countof (typeof v))
-        let [loop] i result... = count
+        let loop (i result...) = count
         if (i == 0:usize) result...
         else
             let i = (sub i 1:usize)
@@ -2286,7 +2286,7 @@ set-type-symbol! vector 'slice
     fn (self i0 i1)
         if ((constant? i0) and (constant? i1))
             let usz = (sub i1 i0)
-            let [loop] i mask = i0 (nullof (vector i32 usz))
+            let loop (i mask) = i0 (nullof (vector i32 usz))
             if (icmp<u i i1)
                 loop (add i 1:usize) (insertelement mask (i32 i) (sub i i0))
             else
@@ -2295,7 +2295,7 @@ set-type-symbol! vector 'slice
             compiler-error! "slice indices must be constant"
 
 fn vector-reduce (f v)
-    let [loop] v = v
+    let loop (v) = v
     let sz = (countof v)
     if (sz == 1:usize)
         extractelement v 0
@@ -2326,7 +2326,7 @@ set-type-symbol! vector '..
         if (type== Ta Tb)
             let usz = (mul (type-countof (typeof a)) 2:usize)
             let sz = (trunc usz i32)
-            let [loop] i mask = 0 (nullof (vector i32 usz))
+            let loop (i mask) = 0 (nullof (vector i32 usz))
             if (icmp<u i sz)
                 loop (add i 1) (insertelement mask i i)
             else
@@ -2335,7 +2335,7 @@ set-type-symbol! vector '..
             let asz = (type-countof (typeof a))
             let bsz = (type-countof (typeof b))
             let count = (add asz bsz)
-            let [loop] i result = 0:usize (nullof (vector ET count))
+            let loop (i result) = 0:usize (nullof (vector ET count))
             if (icmp<u i asz)
                 loop (add i 1:usize)
                     insertelement result (extractelement a i) i
@@ -2369,7 +2369,7 @@ fn print-logo ()
 
 fn read-eval-print-loop ()
     fn repeat-string (n c)
-        let [loop] i s =
+        let loop (i s) =
             tie-const n (usize 0)
             tie-const n ""
         if (i == n)
@@ -2379,7 +2379,7 @@ fn read-eval-print-loop ()
 
     fn leading-spaces (s)
         let len = (i32 (countof s))
-        let [loop] i = (tie-const len 0)
+        let loop (i) = (tie-const len 0)
         if (i == len)
             return s
         let c = (@ s i)
@@ -2389,7 +2389,7 @@ fn read-eval-print-loop ()
 
     fn blank? (s)
         let len = (i32 (countof s))
-        let [loop] i =
+        let loop (i) =
             tie-const len 0
         if (i == len)
             return (unconst true)
@@ -2403,7 +2403,7 @@ fn read-eval-print-loop ()
 
     let global-scope = (globals)
     let eval-scope = (Scope global-scope)
-    let [loop] preload cmdlist counter =
+    let loop (preload cmdlist counter) =
         unconst ""
         unconst ""
         unconst 0
@@ -2501,7 +2501,7 @@ fn print-version ()
 
 fn run-main (args...)
     let argcount = (va-countof args...)
-    let [loop] i sourcepath parse-options = 1 none true
+    let loop (i sourcepath parse-options) = 1 none true
     if (i < argcount)
         let k = (i + 1)
         let arg = (va@ i args...)

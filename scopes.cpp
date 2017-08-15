@@ -11470,7 +11470,12 @@ struct Expander {
         return result;
     }
 
-    // (let x ... = args ...)
+    bool is_equal_token(const Any &name) {
+        return (name.type == TYPE_Symbol) && (name.symbol == OP_Set);
+    }
+
+    // (let x ... [= args ...])
+    // (let name ([x ...]) [= args ...])
     // ...
     Any expand_let(const List *it, const Any &dest, const Any &longdest) {
 
@@ -11480,39 +11485,45 @@ struct Expander {
         auto _anchor = get_active_anchor();
 
         Symbol labelname = Symbol(SYM_Unnamed);
+        const List *params = nullptr;
+        const List *values = nullptr;
 
         if (it) {
             auto name = unsyntax(it->at);
-            if (name.type == TYPE_List) {
-                const List *val = name.list;
-                if (val != EOL) {
-                    auto head = val->at;
-                    if (head == Symbol(SYM_SquareList)) {
-                        val = val->next;
-                        if (val != EOL) {
-                            auto name = unsyntax(val->at);
-                            name.verify(TYPE_Symbol);
-                            labelname = name.symbol;
-                            it = it->next;
+            auto nextit = it->next;
+            if ((name.type == TYPE_Symbol) && nextit) {
+                auto val = unsyntax(nextit->at);
+                if (val.type == TYPE_List) {
+                    labelname = name.symbol;
+                    params = val.list;
+                    nextit = nextit->next;
+                    it = params;
+                    if (nextit != EOL) {
+                        if (!is_equal_token(unsyntax(nextit->at))) {
+                            location_error(String::from("equal sign (=) expected"));
                         }
+                        values = nextit;
                     }
                 }
             }
         }
 
-        auto endit = it;
-        // read parameter names
-        StyledStream ss;
-        while (endit) {
-            auto name = unsyntax(endit->at);
-            if ((name.type == TYPE_Symbol)
-                && (name.symbol == OP_Set))
-                break;
-            endit = endit->next;
+        auto endit = EOL;
+        if (!params) {
+            endit = it;
+            // read parameter names
+            while (endit) {
+                auto name = unsyntax(endit->at);
+                if (is_equal_token(name))
+                    break;
+                endit = endit->next;
+            }
+            if (endit != EOL)
+                values = endit;
         }
 
         Label *nextstate = nullptr;
-        if (endit == EOL) {
+        if (!values) {
             // no assignments, reimport parameter names into local scope
             if (labelname != SYM_Unnamed) {
                 nextstate = Label::continuation_from(_anchor, labelname);
@@ -11552,6 +11563,8 @@ struct Expander {
             nextstate->append(expand_parameter(it->at));
             it = it->next;
         }
+
+        it = values;
 
         Args args;
         args.reserve(it->count);

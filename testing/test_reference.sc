@@ -20,7 +20,7 @@ assert (w == y)
 
 # loop with a mutable counter
 var i = 0
-let [loop]
+let loop ()
 if (i < 10)
     i = i + 1    
     loop;
