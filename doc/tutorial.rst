@@ -256,7 +256,7 @@ Many calculations require repeating an operation several times, and of course
 Scopes can also do that. For instance, here is one of the typical examples
 for such a task, computing the first few numbers of the fibonacci sequence::
 
-    $0 ▶ let [loop] a b = 0 1 
+    $0 ▶ let loop (a b) = 0 1 
     .... if (b < 10)
     ....     print b
     ....     loop b (a + b)
@@ -336,7 +336,7 @@ Let's generalize the fibonacci example from earlier to a function that can
 write numbers from the fibonacci sequence up to an arbitrary boundary::
 
     $0 ▶ fn fib (n) # write Fibonacci series up to n
-    ....     let [repeat] a b = 0 (unconst 1)
+    ....     let repeat (a b) = 0 (unconst 1)
     ....     if (a < n)
     ....         io-write! (repr a)
     ....         io-write! " "
@@ -385,7 +385,7 @@ for many iterations or have non-constant exit conditions. Let's see what happens
 when we remove `unconst` from ``fib``::
 
     $0 ▶ fn fib (n) 
-    ....     let [repeat] a b = 0 1
+    ....     let repeat (a b) = 0 1
     ....     if (a < n)
     ....         io-write! (repr a)
     ....         io-write! " "
