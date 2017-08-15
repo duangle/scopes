@@ -608,6 +608,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ParameterEq, "Parameter==") \
     T(FN_ParameterNew, "Parameter-new") T(FN_ParameterName, "Parameter-name") \
     T(FN_ParameterAnchor, "Parameter-anchor") \
+    T(FN_ParameterIndex, "Parameter-index") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
     T(FN_PointerType, "pointer-type") \
     T(FN_MutablePointerType, "mutable-pointer-type") \
@@ -670,6 +671,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_CopyMemory, "copy-memory!") \
     T(SFXFN_Unreachable, "unreachable!") \
     T(SFXFN_Error, "__error!") \
+    T(SFXFN_AnchorError, "__anchor-error!") \
     T(SFXFN_Raise, "__raise!") \
     T(SFXFN_Abort, "abort!") \
     T(SFXFN_CompilerError, "compiler-error!") \
@@ -11403,6 +11405,8 @@ struct Expander {
             subenv->bind(KW_Recur, func);
             subenv->bind(KW_Return, retparam);
         }
+        // ensure the local scope does not contain special symbols
+        subenv = Scope::from(subenv);
 
         Expander subexpr(func, subenv);
 
@@ -11502,7 +11506,7 @@ struct Expander {
         }
 
         Scope *orig_env = env;
-        env = Scope::from(env);
+        env = Scope::from();
         // read parameter names
         while (it) {
             auto name = unsyntax(it->at);
@@ -11530,6 +11534,12 @@ struct Expander {
             args.push_back(subexp.expand(it->at, Symbol(SYM_Unnamed), longdest));
             it = subexp.next;
         }
+
+        for (auto kv = env->map.begin(); kv != env->map.end(); ++kv) {
+            orig_env->bind(kv->first, kv->second);
+        }
+        env = orig_env;
+
         set_active_anchor(_anchor);
         state = subexp.state;
         br(nextstate, args);
@@ -12244,6 +12254,11 @@ static const Type *f_type_storage(const Type *T) {
 }
 
 static void f_error(const String *msg) {
+    const Exception *exc = new Exception(nullptr, msg);
+    error(exc);
+}
+
+static void f_anchor_error(const String *msg) {
     location_error(msg);
 }
 
@@ -12276,6 +12291,10 @@ static const Syntax *f_syntax_new(const Anchor *anchor, Any value, bool quoted) 
 
 static Parameter *f_parameter_new(const Anchor *anchor, Symbol symbol, const Type *type) {
     return Parameter::from(anchor, symbol, type);
+}
+
+static int f_parameter_index(const Parameter *param) {
+    return param->index;
 }
 
 static const String *f_string_new(const char *ptr, size_t count) {
@@ -12379,8 +12398,13 @@ static StringBoolPair f_prompt(const String *s, const String *pre) {
 
 static const String *f_format_message(const Anchor *anchor, const String *message) {
     StyledString ss;
-    ss.out << anchor << " " << message->data << std::endl;
-    anchor->stream_source_line(ss.out);
+    if (anchor) {
+        ss.out << anchor << " ";
+    }
+    ss.out << message->data << std::endl;
+    if (anchor) {
+        anchor->stream_source_line(ss.out);
+    }
     return ss.str();
 }
 
@@ -12555,6 +12579,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_SyntaxWrap, wrap_syntax, TYPE_Any, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
     DEFINE_PURE_C_FUNCTION(FN_SyntaxStrip, strip_syntax, TYPE_Any, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_ParameterNew, f_parameter_new, TYPE_Parameter, TYPE_Anchor, TYPE_Symbol, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_ParameterIndex, f_parameter_index, TYPE_I32, TYPE_Parameter);
     DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
@@ -12597,6 +12622,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_SetAnchor, f_set_anchor, TYPE_Void, TYPE_Anchor);
     DEFINE_C_FUNCTION(SFXFN_Error, f_error, TYPE_Void, TYPE_String);
+    DEFINE_C_FUNCTION(SFXFN_AnchorError, f_anchor_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_Abort, f_abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, f_exit, TYPE_Void, TYPE_I32);    

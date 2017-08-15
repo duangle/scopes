@@ -16,6 +16,7 @@ let modules =
         test_fwdecl
         #test_iterator
         test_let
+        test_locals
         test_loop
         test_reference
         test_regexp

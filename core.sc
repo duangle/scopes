@@ -703,7 +703,8 @@ fn Any-extract (val T)
             type-mismatch-string T valT
     else
         error!
-            type-mismatch-string T valT
+            .. "while extracting from Any at runtime: "
+                type-mismatch-string T valT
 
 fn string->rawstring (s)
     assert-typeof s string
@@ -936,6 +937,10 @@ syntax-extend
                 Parameter-new (active-anchor) param1 Unknown
             else
                 compiler-error! "usage: Parameter [anchor] symbol [type]"
+    
+    set-type-symbol! Parameter 'return-label?
+        fn (self)
+            icmp== (Parameter-index self) 0
 
     set-type-symbol! Symbol 'call
         fn (name self ...)
@@ -1194,7 +1199,7 @@ fn syntax-error! (anchor msg)
         elseif (== T Syntax)
             Syntax-anchor anchor
         else anchor
-    __error! msg
+    __anchor-error! msg
     unreachable!;
 
 syntax-extend
@@ -1841,16 +1846,26 @@ syntax-extend
     syntax-scope
 
 define-scope-macro locals
-    let newscope = (Scope)
-    let [loop] last-key = (unconst none)
+    let tmp = (Parameter 'tmp)
+    let [loop] last-key result = (unconst none) (unconst (list tmp))
     let key value =
         Scope-next syntax-scope (Any last-key)
-    if (not (('typeof key) == Nothing))
-        if (('typeof key) == Symbol)
-            let key = (cast Symbol key)
-            set-scope-symbol! newscope key value
-        loop key
-    return newscope syntax-scope
+    if (('typeof key) == Nothing)
+        return
+            cons do
+                list let tmp '= (list Scope)
+                result        
+            syntax-scope
+    else
+        loop (unconst key)
+            if (('typeof key) == Symbol)
+                let key = (cast Symbol key)
+                cons
+                    list set-scope-symbol! tmp (list quote key) value
+                    result
+            else
+                # skip
+                result
 
 define-macro import
     let name = (decons args)
