@@ -5,7 +5,7 @@ fn inner-func (x y)
 
 fn inner-func2 (x y)
     do
-        let x y = x y
+        let x y
         let z = (unconst (x + y))
         locals;
 

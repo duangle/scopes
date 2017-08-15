@@ -11474,7 +11474,7 @@ struct Expander {
     // ...
     Any expand_let(const List *it, const Any &dest, const Any &longdest) {
 
-        verify_list_parameter_count(it, 3, -1);
+        verify_list_parameter_count(it, 1, -1);
         it = it->next;
 
         auto _anchor = get_active_anchor();
@@ -11500,7 +11500,47 @@ struct Expander {
             }
         }
 
-        Label *nextstate = Label::continuation_from(_anchor, labelname);
+        auto endit = it;
+        // read parameter names
+        StyledStream ss;
+        while (endit) {
+            auto name = unsyntax(endit->at);
+            if ((name.type == TYPE_Symbol)
+                && (name.symbol == OP_Set))
+                break;
+            endit = endit->next;
+        }
+
+        Label *nextstate = nullptr;
+        if (endit == EOL) {
+            // no assignments, reimport parameter names into local scope
+            if (labelname != SYM_Unnamed) {
+                nextstate = Label::continuation_from(_anchor, labelname);
+                env->bind(labelname, nextstate);
+            }
+
+            while (it != endit) {
+                auto name = unsyntax(it->at);
+                name.verify(TYPE_Symbol);
+                Any value = none;
+                if (!env->lookup(name.symbol, value)) {
+                    StyledString ss;
+                    ss.out << "no such name bound in parent scope: " << name;
+                    location_error(ss.str());
+                }
+                env->bind(name.symbol, value);
+                it = it->next;
+            }
+
+            if (nextstate) {
+                br(nextstate, { none });
+                state = nextstate;
+            }
+
+            return write_dest(none, dest);
+        }
+
+        nextstate = Label::continuation_from(_anchor, labelname);
         if (labelname != SYM_Unnamed) {
             env->bind(labelname, nextstate);
         }
@@ -11508,17 +11548,9 @@ struct Expander {
         Scope *orig_env = env;
         env = Scope::from();
         // read parameter names
-        while (it) {
-            auto name = unsyntax(it->at);
-            if ((name.type == TYPE_Symbol)
-                && (name.symbol == OP_Set))
-                break;
+        while (it != endit) {
             nextstate->append(expand_parameter(it->at));
             it = it->next;
-        }
-
-        if (it == EOL) {
-            location_error(String::from("= expected"));
         }
 
         Args args;
@@ -11538,6 +11570,7 @@ struct Expander {
         for (auto kv = env->map.begin(); kv != env->map.end(); ++kv) {
             orig_env->bind(kv->first, kv->second);
         }
+        delete env;
         env = orig_env;
 
         set_active_anchor(_anchor);
@@ -11545,11 +11578,10 @@ struct Expander {
         br(nextstate, args);
         state = nextstate;
 
-        Any result = none;
         if (nextstate->params.size() > 1) {
-            return nextstate->params[1];
+            return write_dest(nextstate->params[1], dest);
         } else {
-            return result;
+            return write_dest(none, dest);
         }
     }
 

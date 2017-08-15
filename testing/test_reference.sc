@@ -18,6 +18,14 @@ assert (y == 3)
 assert (z == 2)
 assert (w == y)
 
+# loop with a mutable counter
+var i = 0
+let [loop]
+if (i < 10)
+    i = i + 1    
+    loop;
+assert (i == 10)
+
 # declare unsized mutable array on stack; the size can be a variable
 var y = 5
 var x @ y : i32
