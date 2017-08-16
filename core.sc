@@ -1854,6 +1854,10 @@ syntax-extend
     syntax-scope
 
 define-scope-macro locals
+    # export locals as a chain of two scopes: a scope that contains
+        all the constant symbols, and a scope that contains the dynamic 
+        ones.
+    let constant-scope = (Scope)
     let tmp = (Parameter 'tmp)
     let loop (last-key result) = (unconst none) (unconst (list tmp))
     let key value =
@@ -1861,15 +1865,20 @@ define-scope-macro locals
     if (('typeof key) == Nothing)
         return
             cons do
-                list let tmp '= (list Scope)
+                list let tmp '= (list Scope constant-scope)
                 result        
             syntax-scope
     else
         loop (unconst key)
             if (('typeof key) == Symbol)
                 let key = (key as Symbol)
-                cons
-                    list set-scope-symbol! tmp (list quote key) value
+                let keyT = ('typeof value)
+                if ((keyT == Parameter) or (keyT == Label))
+                    cons
+                        list set-scope-symbol! tmp (list quote key) value
+                        result
+                else
+                    set-scope-symbol! constant-scope key value
                     result
             else
                 # skip
@@ -2015,40 +2024,6 @@ define-macro match
         process (unconst 0) tmp rest
 
 #-------------------------------------------------------------------------------
-# using
-#-------------------------------------------------------------------------------
-
-fn merge-scope-symbols (source target filter)
-    let loop (last-key) = (unconst none)
-    let key value =
-        Scope-next source (Any last-key)
-    if (not (('typeof key) == Nothing))
-        if (('typeof key) == Symbol)
-            let key = (key as Symbol)
-            if 
-                or (none? filter)
-                    do
-                        let keystr = (key as string)
-                        string-match? filter keystr
-                set-scope-symbol! target key value
-        loop key
-
-define-macro using
-    let name rest = (decons args)
-    list syntax-extend
-        cons merge-scope-symbols name 'syntax-scope 
-            if (empty? rest) '()
-            else
-                let token pattern rest = (decons rest 2)
-                let token = (token as Syntax as Symbol)
-                if (token != 'filter)
-                    syntax-error! (active-anchor)
-                        "syntax: using <scope> [filter <filter-string>]"
-                let pattern = (pattern as Syntax as string)
-                list pattern
-        'syntax-scope
-
-#-------------------------------------------------------------------------------
 # various C related sugar
 #-------------------------------------------------------------------------------
 
@@ -2081,6 +2056,14 @@ syntax-extend
         fn (self destT)
             if (pointer-type? destT)
                 nullof destT
+    set-type-symbol! NullType '==
+        fn (a b flipped)
+            if flipped
+                if (pointer-type? (storageof (typeof a)))
+                    icmp== (ptrtoint a usize) 0:usize
+            else
+                if (pointer-type? (storageof (typeof b)))
+                    icmp== (ptrtoint b usize) 0:usize
     let null = (nullof NullType)
     set-scope-symbol! syntax-scope 'NullType NullType
     set-scope-symbol! syntax-scope 'null null
@@ -2101,7 +2084,6 @@ set-type-symbol! pointer '==
             icmp== (ptrtoint (a as (typeof b)) usize) (ptrtoint b usize)
         else
             icmp== (ptrtoint a usize) (ptrtoint (b as (typeof a)) usize)
-
 
 # pointer cast to element type executes load
 set-type-symbol! pointer 'as
@@ -2266,6 +2248,62 @@ fn pointer-call (self ...)
 set-type-symbol! extern 'call
     fn (self ...)
         pointer-call self ...
+
+#-------------------------------------------------------------------------------
+# using
+#-------------------------------------------------------------------------------
+
+fn merge-scope-symbols (source target filter)
+    let scope-loop (source) = (unconst source)
+    let loop (last-key) = (unconst none)
+    let key value =
+        Scope-next source (Any last-key)
+    if (not (('typeof key) == Nothing))
+        if (('typeof key) == Symbol)
+            let key = (key as Symbol)
+            if 
+                or (none? filter)
+                    do
+                        let keystr = (key as string)
+                        string-match? filter keystr
+                set-scope-symbol! target key value
+        loop key
+    let parent = (Scope-parent source)
+    if (parent != null)
+        scope-loop parent
+
+define-scope-macro using
+    let name rest = (decons args)
+    let nameval = (name as Syntax as Any)
+    let pattern = 
+        if (empty? rest) '()
+        else
+            let token pattern rest = (decons rest 2)
+            let token = (token as Syntax as Symbol)
+            if (token != 'filter)
+                syntax-error! (active-anchor)
+                    "syntax: using <scope> [filter <filter-string>]"
+            let pattern = (pattern as Syntax as string)
+            list pattern
+    # attempt to import directly if possible
+    label process (src)
+        if (empty? pattern)
+            merge-scope-symbols src syntax-scope
+        else
+            merge-scope-symbols src syntax-scope ((@ pattern 0) as string)
+        return (unconst (list do)) syntax-scope
+    if (('typeof nameval) == Symbol)
+        let sym = (nameval as Symbol)
+        let src ok = (@ syntax-scope sym)
+        if ok and (('typeof src) == Scope)
+            process (src as Scope)
+    elseif (('typeof nameval) == Scope)
+        process (nameval as Scope)
+    return
+        list syntax-extend
+            cons merge-scope-symbols name 'syntax-scope pattern
+            'syntax-scope
+        syntax-scope
 
 #-------------------------------------------------------------------------------
 # tuples

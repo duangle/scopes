@@ -626,7 +626,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Repeat, "repeat") T(FN_Repr, "Any-repr") T(FN_AnyString, "Any-string") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeEq, "Scope==") \
-    T(FN_ScopeNew, "Scope-new") \
+    T(FN_ScopeNew, "Scope-new") T(FN_ScopeParent, "Scope-parent") \
     T(FN_ScopeNewSubscope, "Scope-new-subscope") \
     T(FN_ScopeNext, "Scope-next") T(FN_SizeOf, "sizeof") \
     T(FN_Slice, "slice") T(FN_Store, "store") \
@@ -12382,6 +12382,9 @@ static Scope *f_scope_new() {
 static Scope *f_scope_new_subscope(Scope *scope) {
     return Scope::from(scope);
 }
+static Scope *f_scope_parent(Scope *scope) {
+    return scope->parent;
+}
 
 static Scope *f_globals() {
     return globals;
@@ -12663,6 +12666,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_ListLoad, f_list_load, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListParse, f_list_parse, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ScopeNew, f_scope_new, TYPE_Scope);
+    DEFINE_C_FUNCTION(FN_ScopeParent, f_scope_parent, TYPE_Scope, TYPE_Scope);
     DEFINE_C_FUNCTION(FN_ScopeNewSubscope, f_scope_new_subscope, TYPE_Scope, TYPE_Scope);
     DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);    
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
