@@ -2269,6 +2269,102 @@ set-type-symbol! extern 'call
     fn (self ...)
         pointer-call self ...
 
+fn range (a b c)
+    let num-type = (typeof a)
+    let step = 
+        if (c == none)
+            num-type 1
+        else c
+    let from =
+        if (b == none)
+            num-type 0
+        else a
+    let to =
+        if (b == none) a
+        else b
+    fn ()
+        return
+            label (f fdone x)
+                if (x < to)
+                    f (x + step) x
+                else
+                    fdone;
+            unconst from
+
+#-------------------------------------------------------------------------------
+# tuples
+#-------------------------------------------------------------------------------
+
+set-type-symbol! tuple '@
+    fn (self at)
+        extractvalue self at
+
+fn tupleof (...)
+    let sz = (va-countof ...)
+    # build tuple type
+    let loop (i result...) = sz
+    if (icmp>s i 0)        
+        let i = (sub i 1)
+        let T = (va@ i ...)
+        loop i (typeof T) result...
+    else
+        # build tuple
+        let loop (i result) = 0 (nullof (tuple result...))
+        if (icmp<s i sz)
+            let T = (va@ i ...)
+            loop (add i 1)
+                insertvalue result T i
+        else
+            result
+
+#-------------------------------------------------------------------------------
+# iterators
+#-------------------------------------------------------------------------------
+
+fn zip (a b)
+    let iter-a init-a = (a)
+    let iter-b init-b = (b)
+    fn ()
+        return
+            fn (fret fdone t)
+                let a = (@ t 0)
+                let b = (@ t 1)
+                iter-a 
+                    label (next-a at-a...)
+                        iter-b
+                            label (next-b at-b...)
+                                fret
+                                    tupleof next-a next-b
+                                    \ at-a... at-b...
+                            \ fdone b
+                    \ fdone a
+            tupleof init-a init-b
+
+define-macro for
+    let loop (it params) = args (unconst '())
+    if (empty? it)
+        error! "'in' expected"
+    let sxat it = (decons it)
+    let at = (sxat as Syntax as Symbol)
+    if (at != 'in)
+        loop it (cons sxat params)
+    let generator-expr body = (decons it)
+    let params = (list-reverse params)
+    let iter = (Parameter 'iter)
+    let start = (Parameter 'start)
+    let next = (Parameter 'next)
+    let loop = (Symbol "#loop")
+    list do
+        list let iter start '= (list generator-expr)
+        list label 'break '()
+        list iter
+            list label loop (cons next params)
+                list label 'continue '()
+                    list iter loop 'break next
+                cons do body
+                list 'continue
+            \ 'break start
+
 #-------------------------------------------------------------------------------
 # vectors
 #-------------------------------------------------------------------------------

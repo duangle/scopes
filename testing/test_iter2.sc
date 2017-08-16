@@ -1,36 +1,12 @@
 
-fn range (a b c)
-    let num-type = (typeof a)
-    let step = 
-        if (c == none)
-            num-type 1
-        else c
-    let from =
-        if (b == none)
-            num-type 0
-        else a
-    let to =
-        if (b == none) a
-        else b
-    fn ()
-        return
-            label (f fdone x)
-                if (x < to)
-                    f (x + step) x
-                else
-                    fdone;
-            unconst from
 
 fn do_loop (n)
-    let iter start = ((range 0 n 1))
-    do
-        label done ()
-        iter
-            label loop (next x...)
-                print x...
-                iter loop done next
-            done
-            start
+    #for x y in (zip (range n) (range 0 100 2))
+        print x y
+    for x in (range n)
+        if ((x % 2) == 1)
+            continue;
+        print x
     print "done"
 
 fn main ()

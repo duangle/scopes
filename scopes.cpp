@@ -3496,8 +3496,8 @@ static Any wrap_syntax(const Anchor *anchor, Any e, bool quoted = false) {
             }
             l = l->next;
         }
+        l = src;
         if (needs_wrap) {
-            l = src;
             const List *dst = EOL;
             while (l != EOL) {
                 dst = List::from(wrap_syntax(anchor, l->at, quoted), dst);

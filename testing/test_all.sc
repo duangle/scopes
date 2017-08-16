@@ -14,6 +14,7 @@ let modules =
         test_dots
         test_extraparams
         test_fwdecl
+        test_iter2
         #test_iterator
         test_let
         test_locals
