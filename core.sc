@@ -2361,6 +2361,15 @@ define-macro for
                 list 'continue
             \ 'break start
 
+define-macro while
+    let cond-expr body = (decons args)
+    list do
+        list label 'break '()
+        list let 'continue '()
+        list if cond-expr
+            cons do body
+            list 'continue
+
 #-------------------------------------------------------------------------------
 # vectors
 #-------------------------------------------------------------------------------

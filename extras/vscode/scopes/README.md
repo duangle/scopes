@@ -8,7 +8,7 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ## Release Notes
 
-### 0.21.0
+### 0.22.0
 
 * Added more keywords.
 
