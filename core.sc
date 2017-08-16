@@ -2265,28 +2265,6 @@ set-type-symbol! extern 'call
     fn (self ...)
         pointer-call self ...
 
-fn range (a b c)
-    let num-type = (typeof a)
-    let step = 
-        if (c == none)
-            num-type 1
-        else c
-    let from =
-        if (b == none)
-            num-type 0
-        else a
-    let to =
-        if (b == none) a
-        else b
-    fn ()
-        return
-            label (f fdone x)
-                if (x < to)
-                    f (x + step) x
-                else
-                    fdone;
-            unconst from
-
 #-------------------------------------------------------------------------------
 # tuples
 #-------------------------------------------------------------------------------
@@ -2314,8 +2292,43 @@ fn tupleof (...)
             result
 
 #-------------------------------------------------------------------------------
+# arrays
+#-------------------------------------------------------------------------------
+
+fn arrayof (T ...)
+    let count = (va-countof ...)
+    let loop (i result) = 0 (nullof (array T (usize count)))
+    if (i < count)
+        let element = (va@ i ...)
+        loop (i + 1)
+            insertvalue result (imply element T) i
+    else result
+
+#-------------------------------------------------------------------------------
 # iterators
 #-------------------------------------------------------------------------------
+
+fn range (a b c)
+    let num-type = (typeof a)
+    let step = 
+        if (c == none)
+            num-type 1
+        else c
+    let from =
+        if (b == none)
+            num-type 0
+        else a
+    let to =
+        if (b == none) a
+        else b
+    fn ()
+        return
+            label (f fdone x)
+                if (x < to)
+                    f (x + step) x
+                else
+                    fdone;
+            unconst from
 
 fn zip (a b)
     let iter-a init-a = (a)
