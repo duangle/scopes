@@ -97,6 +97,10 @@
                 {
                     "name": "support.type.library.scopes",
                     "match": "(Macro|rawstring|reference)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "support.type.glm.scopes",
+                    "match": "((i|d|b)?vec(2|3|4)|(i|d|b)?mat(2|3|4))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},

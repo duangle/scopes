@@ -924,6 +924,8 @@ syntax-extend
                 type@ self key
             elseif (type== keyT i32)
                 element-type self key
+            elseif (type== keyT Nothing)
+                element-type self 0
     set-type-symbol! type 'countof type-countof
 
     let empty-symbol = (Symbol "")
@@ -2494,8 +2496,27 @@ set-type-symbol! vector 'slice
 fn vector-reduce (f v)
     let loop (v) = v
     let sz = (countof v)
+    # special cases for low vector sizes
     if (sz == 1:usize)
         extractelement v 0
+    elseif (sz == 2:usize)
+        f
+            extractelement v 0
+            extractelement v 1
+    elseif (sz == 3:usize)
+        f
+            f
+                extractelement v 0
+                extractelement v 1
+            extractelement v 2
+    elseif (sz == 4:usize)
+        f
+            f
+                extractelement v 0
+                extractelement v 1
+            f
+                extractelement v 2
+                extractelement v 3
     else
         let hsz = (sz >> 1:usize)
         let fsz = (hsz << 1:usize)
