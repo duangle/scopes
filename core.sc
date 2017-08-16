@@ -1989,7 +1989,7 @@ define-macro match
             else                
                 # simple comparison
                 list '== src key
-        print result
+        #print result
         Syntax-wrap anchor (Any result) false
 
     fn process (i src expr)
@@ -2010,11 +2010,7 @@ define-macro match
                 process (i + 1) src rest
     cons do
         list let tmp '= value
-        do
-            let k = 
-                process (unconst 0) tmp rest
-            print k
-            k
+        process (unconst 0) tmp rest
 
 #-------------------------------------------------------------------------------
 # using
