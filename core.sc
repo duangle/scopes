@@ -2275,6 +2275,12 @@ fn merge-scope-symbols (source target filter)
 define-scope-macro using
     let name rest = (decons args)
     let nameval = (name as Syntax as Any)
+    if ((('typeof nameval) == Symbol) and ((nameval as Symbol) == 'import))
+        let name rest = (decons rest)
+        let name = (name as Syntax as Symbol)
+        let module = ((require name) as Scope)
+        merge-scope-symbols module syntax-scope
+        return (unconst (list do)) syntax-scope
     let pattern = 
         if (empty? rest) '()
         else
