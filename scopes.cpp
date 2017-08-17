@@ -9748,12 +9748,13 @@ struct Solver {
         size_t i = traceback.size();
         while (i-- > 1) {
             Label *l = traceback[i];
+            /*
             if (i > 0) {
                 Label *lnext = traceback[i - 1];
                 if ((l->name == SYM_Unnamed) && (lnext->name == SYM_Unnamed)) {
                     continue;
                 }
-            }
+            }*/
             print_traceback_entry(l);
         }
     }
