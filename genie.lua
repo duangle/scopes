@@ -91,7 +91,10 @@ project "scopes"
         "scopes.cpp", 
         "external/linenoise-ng/src/linenoise.cpp",
         "external/linenoise-ng/src/ConvertUTF.cpp",
-        "external/linenoise-ng/src/wcwidth.cpp"        
+        "external/linenoise-ng/src/wcwidth.cpp",
+        "external/glslang/SpvBuilder.cpp",
+        "external/glslang/Logger.cpp",
+        "external/glslang/InReadableOrder.cpp",
     }
     includedirs {
         "external/linenoise-ng/include",

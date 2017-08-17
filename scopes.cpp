@@ -177,6 +177,8 @@ const char *scopes_compile_time_date();
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/LiteralSupport.h"
 
+#include "external/glslang/SpvBuilder.h"
+
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
 extern "C" {
