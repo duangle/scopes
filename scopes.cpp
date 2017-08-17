@@ -178,6 +178,7 @@ const char *scopes_compile_time_date();
 #include "clang/Lex/LiteralSupport.h"
 
 #include "external/glslang/SpvBuilder.h"
+#include "external/glslang/disassemble.h"
 #include "external/spirv-cross/spirv_glsl.hpp"
 
 #define STB_SPRINTF_IMPLEMENTATION
@@ -540,7 +541,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Branch, "branch") T(FN_IsCallable, "callable?") T(FN_Cast, "cast") \
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_IsConstant, "constant?") \
     T(FN_Countof, "countof") \
-    T(FN_Compile, "__compile") \
+    T(FN_Compile, "__compile") T(FN_CompileSPIRV, "__compile-spirv") \
     T(FN_TypenameFieldIndex, "typename-field-index") \
     T(FN_TypenameFieldName, "typename-field-name") \
     T(FN_CompilerMessage, "compiler-message") \
@@ -774,7 +775,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     \
     /* timer names */ \
     T(TIMER_Compile, "compile()") \
+    T(TIMER_CompileSPIRV, "compile_spirv()") \
     T(TIMER_Generate, "generate()") \
+    T(TIMER_GenerateSPIRV, "generate_spirv()") \
     T(TIMER_Optimize, "build_and_run_opt_passes()") \
     T(TIMER_MCJIT, "mcjit()") \
     T(TIMER_Lower2CFF, "lower2cff()") \
@@ -6985,10 +6988,26 @@ static bool is_memory_class(const Type *T) {
 //------------------------------------------------------------------------------
 
 struct SPIRVGenerator {
+    spv::SpvBuildLogger logger;
+    spv::Builder builder;
+    
+    Label *active_function;
+    spv::Id active_function_value;
 
-    SPIRVGenerator() {
+    bool use_debug_info;
+
+    SPIRVGenerator() :
+        builder('S' << 24 | 'C' << 16 | 'O' << 8 | 'P', &logger),
+        active_function(nullptr),
+        active_function_value(0),
+        use_debug_info(true) {
+        
     }
-};    
+
+    void generate(std::vector<unsigned int> &result, Label *entry) {
+        builder.dump(result);
+    }
+};
 
 //------------------------------------------------------------------------------
 // IL->LLVM IR GENERATOR
@@ -8523,6 +8542,37 @@ static Any compile(Label *fn, uint64_t flags) {
     }
 
     return Any::from_pointer(functype, pfunc);
+}
+
+static const String *compile_spirv(Label *fn, uint64_t flags) {
+    Timer sum_compile_time(TIMER_CompileSPIRV);
+//#ifdef SCOPES_WIN32
+    flags |= CF_NoDebugInfo;
+//#endif
+
+    fn->verify_compilable();
+
+    SPIRVGenerator ctx;
+    if (flags & CF_NoDebugInfo) {
+        ctx.use_debug_info = false;
+    }
+
+    std::vector<unsigned int> result;
+    {
+        Timer generate_timer(TIMER_GenerateSPIRV);
+        ctx.generate(result, fn);
+    }
+
+    if (flags & CF_DumpModule) {
+    } else if (flags & CF_DumpFunction) {
+    }
+    if (flags & CF_DumpDisassembly) {
+        spv::Disassemble(std::cout, result);
+    }
+
+    size_t bytesize = sizeof(unsigned int) * result.size();
+
+    return String::from((char *)&result[0], bytesize);
 }
 
 //------------------------------------------------------------------------------
@@ -12435,6 +12485,10 @@ static Any f_compile(Label *srcl, uint64_t flags) {
     return compile(srcl, flags);
 }
 
+static const String *f_compile_spirv(Label *srcl, uint64_t flags) {
+    return compile_spirv(srcl, flags);
+}
+
 static const Type *f_array_type(const Type *element_type, size_t count) {
     return Array(element_type, count);
 }
@@ -12673,6 +12727,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
+    DEFINE_PURE_C_FUNCTION(FN_CompileSPIRV, f_compile_spirv, TYPE_String, TYPE_Label, TYPE_U64);
     DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
     DEFINE_C_FUNCTION(FN_LoadLibrary, f_load_library, TYPE_Void, TYPE_String);
 

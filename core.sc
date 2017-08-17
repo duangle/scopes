@@ -1190,6 +1190,27 @@ fn compile (f opts...)
                 compiler-error!
                     .. "illegal flag: " (repr flag)
 
+fn compile-spirv (f opts...)
+    let vacount = (va-countof opts...)
+    let loop (i flags) = 0 0:u64
+    if (== i vacount)
+        return
+            __compile-spirv f flags
+    let flag = (va@ i opts...)
+    if (not (constant? flag))
+        compiler-error! "symbolic flags must be constant"
+    assert-typeof flag Symbol
+    loop (+ i 1)
+        | flags
+            if (== flag 'dump-disassembly) compile-flag-dump-disassembly
+            elseif (== flag 'dump-module) compile-flag-dump-module
+            elseif (== flag 'dump-function) compile-flag-dump-function
+            elseif (== flag 'dump-time) compile-flag-dump-time
+            elseif (== flag 'no-opts) compile-flag-no-opts
+            else
+                compiler-error!
+                    .. "illegal flag: " (repr flag)
+
 fn syntax-error! (anchor msg)
     let T = (typeof anchor)
     if (== T string)

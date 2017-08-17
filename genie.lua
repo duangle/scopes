@@ -95,6 +95,8 @@ project "scopes"
         "external/glslang/SpvBuilder.cpp",
         "external/glslang/Logger.cpp",
         "external/glslang/InReadableOrder.cpp",
+        "external/glslang/disassemble.cpp",
+        "external/glslang/doc.cpp",
         "external/spirv-cross/spirv_glsl.cpp",
         "external/spirv-cross/spirv_cross.cpp",
         "external/spirv-cross/spirv_cfg.cpp",
@@ -142,6 +144,7 @@ project "scopes"
             "-pedantic",
             "-Wall",
             "-Wno-keyword-macro",
+            "-Wno-gnu-redeclared-enum",
         }
     
         files {
