@@ -95,6 +95,9 @@ project "scopes"
         "external/glslang/SpvBuilder.cpp",
         "external/glslang/Logger.cpp",
         "external/glslang/InReadableOrder.cpp",
+        "external/spirv-cross/spirv_glsl.cpp",
+        "external/spirv-cross/spirv_cross.cpp",
+        "external/spirv-cross/spirv_cfg.cpp",
     }
     includedirs {
         "external/linenoise-ng/include",
@@ -111,6 +114,7 @@ project "scopes"
     defines {
         "SCOPES_CPP_IMPL",
         "SCOPES_MAIN_CPP_IMPL",
+        "SPIRV_CROSS_EXCEPTIONS_TO_ASSERTIONS",
     }
 
     configuration { "linux" }

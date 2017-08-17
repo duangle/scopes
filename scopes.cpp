@@ -178,6 +178,7 @@ const char *scopes_compile_time_date();
 #include "clang/Lex/LiteralSupport.h"
 
 #include "external/glslang/SpvBuilder.h"
+#include "external/spirv-cross/spirv_glsl.hpp"
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
@@ -4676,6 +4677,14 @@ public:
         return nullptr;
     }
 
+    bool is_basic_block_like() {
+        if (params.empty())
+            return true;
+        if (params[0]->type == TYPE_Nothing)
+            return true;
+        return false;
+    }
+    
     bool is_complete() {
         return !params.empty() && body.anchor && !body.args.empty();
     }
@@ -6972,16 +6981,18 @@ static bool is_memory_class(const Type *T) {
 }
 
 //------------------------------------------------------------------------------
-// IL->IR LOWERING
+// IL->SPIR-V GENERATOR
 //------------------------------------------------------------------------------
 
-static bool is_basic_block_like(Label *label) {
-    if (label->params.empty())
-        return true;
-    if (label->params[0]->type == TYPE_Nothing)
-        return true;
-    return false;
-}
+struct SPIRVGenerator {
+
+    SPIRVGenerator() {
+    }
+};    
+
+//------------------------------------------------------------------------------
+// IL->LLVM IR GENERATOR
+//------------------------------------------------------------------------------
 
 static void build_and_run_opt_passes(LLVMModuleRef module) {
     LLVMPassManagerBuilderRef passBuilder;
@@ -7123,7 +7134,7 @@ static void *local_aware_dlsym(const char *name) {
     return dlsym(global_c_namespace, name);
 }
 
-struct GenerateCtx {
+struct LLVMIRGenerator {
     struct HashFuncLabelPair {
         size_t operator ()(const std::pair<LLVMValueRef, Label *> &value) const {
             return
@@ -7187,7 +7198,7 @@ struct GenerateCtx {
         return LLVMCreateEnumAttribute(LLVMGetGlobalContext(), kind, 0);
     }
 
-    GenerateCtx() :
+    LLVMIRGenerator() :
         active_function(nullptr),
         active_function_value(nullptr),
         use_debug_info(true) {
@@ -7448,7 +7459,7 @@ struct GenerateCtx {
     }
 
     LLVMValueRef label_to_value(Label *label) {
-        if (is_basic_block_like(label)) {
+        if (label->is_basic_block_like()) {
             auto bb = label_to_basic_block(label);
             if (!bb) return nullptr;
             else
@@ -8260,7 +8271,7 @@ struct GenerateCtx {
 
     std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
         assert(all_parameters_lowered(entry));
-        assert(!is_basic_block_like(entry));
+        assert(!entry->is_basic_block_like());
 
         {
             std::unordered_set<Label *> labels;
@@ -8318,22 +8329,22 @@ struct GenerateCtx {
 
 };
 
-std::unordered_map<const Type *, LLVMTypeRef> GenerateCtx::type_cache;
-std::vector<const Type *> GenerateCtx::type_todo;
-LLVMTypeRef GenerateCtx::voidT = nullptr;
-LLVMTypeRef GenerateCtx::i1T = nullptr;
-LLVMTypeRef GenerateCtx::i8T = nullptr;
-LLVMTypeRef GenerateCtx::i16T = nullptr;
-LLVMTypeRef GenerateCtx::i32T = nullptr;
-LLVMTypeRef GenerateCtx::i64T = nullptr;
-LLVMTypeRef GenerateCtx::f32T = nullptr;
-LLVMTypeRef GenerateCtx::f64T = nullptr;
-LLVMTypeRef GenerateCtx::rawstringT = nullptr;
-LLVMTypeRef GenerateCtx::noneT = nullptr;
-LLVMValueRef GenerateCtx::noneV = nullptr;
-LLVMAttributeRef GenerateCtx::attr_byval = nullptr;
-LLVMAttributeRef GenerateCtx::attr_sret = nullptr;
-LLVMAttributeRef GenerateCtx::attr_nonnull = nullptr;
+std::unordered_map<const Type *, LLVMTypeRef> LLVMIRGenerator::type_cache;
+std::vector<const Type *> LLVMIRGenerator::type_todo;
+LLVMTypeRef LLVMIRGenerator::voidT = nullptr;
+LLVMTypeRef LLVMIRGenerator::i1T = nullptr;
+LLVMTypeRef LLVMIRGenerator::i8T = nullptr;
+LLVMTypeRef LLVMIRGenerator::i16T = nullptr;
+LLVMTypeRef LLVMIRGenerator::i32T = nullptr;
+LLVMTypeRef LLVMIRGenerator::i64T = nullptr;
+LLVMTypeRef LLVMIRGenerator::f32T = nullptr;
+LLVMTypeRef LLVMIRGenerator::f64T = nullptr;
+LLVMTypeRef LLVMIRGenerator::rawstringT = nullptr;
+LLVMTypeRef LLVMIRGenerator::noneT = nullptr;
+LLVMValueRef LLVMIRGenerator::noneV = nullptr;
+LLVMAttributeRef LLVMIRGenerator::attr_byval = nullptr;
+LLVMAttributeRef LLVMIRGenerator::attr_sret = nullptr;
+LLVMAttributeRef LLVMIRGenerator::attr_nonnull = nullptr;
 
 //------------------------------------------------------------------------------
 // IL COMPILER
@@ -8444,7 +8455,7 @@ static Any compile(Label *fn, uint64_t flags) {
     fn->verify_compilable();
     const Type *functype = Pointer(fn->get_function_type());
 
-    GenerateCtx ctx;
+    LLVMIRGenerator ctx;
     if (flags & CF_NoDebugInfo) {
         ctx.use_debug_info = false;
     }
@@ -8805,7 +8816,7 @@ struct Solver {
 
     // inlining the continuation of a branch label without arguments
     void verify_branch_continuation(const Closure *closure) {
-        if (!is_basic_block_like(closure->label)) {
+        if (!closure->label->is_basic_block_like()) {
             StyledString ss;
             ss.out << "branch destination must be label, not function" << std::endl;
             location_error(ss.str());
@@ -9181,7 +9192,7 @@ struct Solver {
     }
 
     bool label_returns_closures(Label *l) {
-        if (is_basic_block_like(l))
+        if (l->is_basic_block_like())
             return false;
         if (!is_return_param_typed(l))
             return false;
@@ -9223,7 +9234,7 @@ struct Solver {
 
         Label *newl = fold_type_label_single(
             enter.closure->frame, enter.closure->label, keys);
-        if (!is_basic_block_like(newl) && !newl->body.is_complete()) {
+        if (!newl->is_basic_block_like() && !newl->body.is_complete()) {
             // we need to solve the return type asap for the next test
             normalize_label(newl);
         }
@@ -9734,7 +9745,7 @@ struct Solver {
         StyledStream ss(std::cerr);
         ss << l->body.anchor << " in ";
         if (l->name == SYM_Unnamed) {
-            if (is_basic_block_like(l)) {
+            if (l->is_basic_block_like()) {
                 ss << "unnamed label";
             } else {
                 ss << "unnamed function";
@@ -10693,7 +10704,7 @@ struct Solver {
 
     void complete_label_continuation (Label *l) {
         Label *enter_label = l->get_label_enter();
-        if (is_basic_block_like(enter_label)) {
+        if (enter_label->is_basic_block_like()) {
             // we deal with this on loop exit further down
         } else {
             if (is_return_param_typed(enter_label)) {
@@ -10819,7 +10830,7 @@ struct Solver {
 #endif
             l->body.set_complete();
             if (is_calling_label(l)
-                && is_basic_block_like(l->get_label_enter())) {
+                && l->get_label_enter()->is_basic_block_like()) {
                 Label *enter_label = l->get_label_enter();
                 if (!has_params(enter_label)) {
 #if SCOPES_DEBUG_CODEGEN
@@ -10877,7 +10888,7 @@ struct Solver {
             std::unordered_set<Label *> has_illegals;
             for (auto it = labels.begin(); it != labels.end(); ++it) {
                 Label *l = *it;
-                if (is_basic_block_like(l)) {
+                if (l->is_basic_block_like()) {
                     continue;
                 }
                 std::vector<Label *> scope;
@@ -10885,7 +10896,7 @@ struct Solver {
                 bool found = false;
                 for (size_t i = 0; i < scope.size(); ++i) {
                     Label *subl = scope[i];
-                    if (!is_basic_block_like(subl)) {
+                    if (!subl->is_basic_block_like()) {
                         illegal.insert(subl);
                         found = true;
                     }
