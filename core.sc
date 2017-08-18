@@ -1190,12 +1190,12 @@ fn compile (f opts...)
                 compiler-error!
                     .. "illegal flag: " (repr flag)
 
-fn compile-spirv (f opts...)
+fn compile-glsl (f opts...)
     let vacount = (va-countof opts...)
     let loop (i flags) = 0 0:u64
     if (== i vacount)
         return
-            __compile-spirv f flags
+            __compile-glsl f flags
     let flag = (va@ i opts...)
     if (not (constant? flag))
         compiler-error! "symbolic flags must be constant"

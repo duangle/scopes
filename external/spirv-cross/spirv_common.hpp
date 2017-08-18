@@ -43,11 +43,12 @@ namespace spirv_cross
     inline void
     report_and_abort(const std::string &msg)
 {
+    /*
 #ifdef NDEBUG
 	(void)msg;
-#else
+#else*/
 	fprintf(stderr, "There was a compiler error: %s\n", msg.c_str());
-#endif
+//#endif
 	abort();
 }
 

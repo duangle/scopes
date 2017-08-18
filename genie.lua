@@ -104,6 +104,7 @@ project "scopes"
     includedirs {
         "external/linenoise-ng/include",
         "libffi/include",
+        "SPIRV-Tools/include"
     }
     libdirs {
         --"bin",
@@ -121,20 +122,6 @@ project "scopes"
 
     configuration { "linux" }
         buildoptions_cpp(LLVM_CXXFLAGS)
-
-        links {
-            "clangFrontend",
-            "clangDriver",
-            "clangSerialization",
-            "clangCodeGen",
-            "clangParse",
-            "clangSema",
-            "clangAnalysis",
-            "clangEdit",
-            "clangAST",
-            "clangLex",
-            "clangBasic"        
-        }
 
         buildoptions_cpp {
             "-std=c++11",
@@ -169,11 +156,25 @@ project "scopes"
             --"-rdynamic",
             
             THISDIR .. "/libffi/.libs/libffi.a",
+            THISDIR .. "/SPIRV-Tools/build/source/libSPIRV-Tools.a",
         }
         linkoptions(LLVM_LDFLAGS)
-        linkoptions { "-Wl,--whole-archive" }
+        linkoptions {
+            "-lclangFrontend",
+            "-lclangDriver",
+            "-lclangSerialization",
+            "-lclangCodeGen",
+            "-lclangParse",
+            "-lclangSema",
+            "-lclangAnalysis",
+            "-lclangEdit",
+            "-lclangAST",
+            "-lclangLex",
+            "-lclangBasic"
+        }        
+        --linkoptions { "-Wl,--whole-archive" }
         linkoptions(LLVM_LIBS)
-        linkoptions { "-Wl,--no-whole-archive" }
+        --linkoptions { "-Wl,--no-whole-archive" }
 
         postbuildcommands {
             "cp -v " .. THISDIR .. "/bin/scopes " .. THISDIR,

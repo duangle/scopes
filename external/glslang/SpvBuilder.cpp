@@ -533,6 +533,10 @@ Op Builder::getMostBasicTypeClass(Id typeId) const
     }
 }
 
+Instruction *Builder::getInstruction(Id resultId) const {
+    return module.getInstruction(resultId);
+}
+
 int Builder::getNumTypeConstituents(Id typeId) const
 {
     Instruction* instr = module.getInstruction(typeId);

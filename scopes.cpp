@@ -180,6 +180,7 @@ const char *scopes_compile_time_date();
 #include "external/glslang/SpvBuilder.h"
 #include "external/glslang/disassemble.h"
 #include "external/spirv-cross/spirv_glsl.hpp"
+#include "spirv-tools/libspirv.hpp"
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
@@ -542,6 +543,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Concat, "concat") T(FN_Cons, "cons") T(FN_IsConstant, "constant?") \
     T(FN_Countof, "countof") \
     T(FN_Compile, "__compile") T(FN_CompileSPIRV, "__compile-spirv") \
+    T(FN_CompileGLSL, "__compile-glsl") \
     T(FN_TypenameFieldIndex, "typename-field-index") \
     T(FN_TypenameFieldName, "typename-field-name") \
     T(FN_CompilerMessage, "compiler-message") \
@@ -734,6 +736,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(Style_Type, "style-type") \
     T(Style_Comment, "style-comment") \
     T(Style_Error, "style-error") \
+    T(Style_Warning, "style-warning") \
     T(Style_Location, "style-location") \
     \
     /* builtins, forms, etc */ \
@@ -921,6 +924,7 @@ static void ansi_from_style(std::ostream &ost, Style style) {
     case Style_Type: ANSI::COLOR_RGB_FG(ost, 0xF99157); break;
     case Style_Comment: ANSI::COLOR_RGB_FG(ost, 0x999999); break;
     case Style_Error: ost << ANSI::COLOR_XRED; break;
+    case Style_Warning: ost << ANSI::COLOR_XYELLOW; break;
     case Style_Location: ANSI::COLOR_RGB_FG(ost, 0x999999); break;
 #else
     case Style_None: ost << ANSI::RESET; break;
@@ -935,6 +939,7 @@ static void ansi_from_style(std::ostream &ost, Style style) {
     case Style_Type: ost << ANSI::COLOR_XYELLOW; break;
     case Style_Comment: ost << ANSI::COLOR_GRAY30; break;
     case Style_Error: ost << ANSI::COLOR_XRED; break;
+    case Style_Warning: ost << ANSI::COLOR_XYELLOW; break;
     case Style_Location: ost << ANSI::COLOR_GRAY30; break;
 #endif
     default: break;
@@ -6987,25 +6992,971 @@ static bool is_memory_class(const Type *T) {
 // IL->SPIR-V GENERATOR
 //------------------------------------------------------------------------------
 
+static void disassemble_spirv(std::vector<unsigned int> &contents) {
+    spv_context context = spvContextCreate(SPV_ENV_UNIVERSAL_1_2);
+    uint32_t options = SPV_BINARY_TO_TEXT_OPTION_PRINT;
+    options |= SPV_BINARY_TO_TEXT_OPTION_INDENT;
+    options |= SPV_BINARY_TO_TEXT_OPTION_FRIENDLY_NAMES;
+    //options |= SPV_BINARY_TO_TEXT_OPTION_SHOW_BYTE_OFFSET;
+    if (stream_default_style == stream_ansi_style) {
+        options |= SPV_BINARY_TO_TEXT_OPTION_COLOR;
+    }
+    spv_diagnostic diagnostic = nullptr;
+    spv_result_t error =
+        spvBinaryToText(context, contents.data(), contents.size(), options,
+                        nullptr, &diagnostic);
+    spvContextDestroy(context);
+    if (error) {
+        spvDiagnosticPrint(diagnostic);
+        spvDiagnosticDestroy(diagnostic);
+        std::cerr << "error while pretty-printing disassembly, falling back to"
+            " failsafe disassembly" << std::endl;
+        spv::Disassemble(std::cerr, contents);
+    }
+}
+
 struct SPIRVGenerator {
+    struct HashFuncLabelPair {
+        size_t operator ()(const std::pair<spv::Function *, Label *> &value) const {
+            return
+                HashLen16(std::hash<spv::Function *>()(value.first),
+                    std::hash<Label *>()(value.second));
+        }
+    };
+
+    typedef std::pair<spv::Function *, Parameter *> ParamKey;
+    struct HashFuncParamPair {
+        size_t operator ()(const ParamKey &value) const {
+            return
+                HashLen16(std::hash<spv::Function *>()(value.first),
+                    std::hash<Parameter *>()(value.second));
+        }
+    };
+
     spv::SpvBuildLogger logger;
     spv::Builder builder;
     
     Label *active_function;
-    spv::Id active_function_value;
+    spv::Function *active_function_value;
 
     bool use_debug_info;
+
+    std::unordered_map<Label *, spv::Function *> label2func;
+    std::unordered_map< std::pair<spv::Function *, Label *>,
+        spv::Block *, HashFuncLabelPair> label2bb;
+    std::vector< std::pair<Label *, Label *> > bb_label_todo;
+
+    //std::unordered_map<Label *, LLVMValueRef> label2md;
+    //std::unordered_map<SourceFile *, LLVMValueRef> file2value;
+    std::unordered_map< ParamKey, spv::Id, HashFuncParamPair> param2value;
+
+    std::unordered_map<const Type *, spv::Id> type_cache;
+
+    Label::UserMap user_map;
 
     SPIRVGenerator() :
         builder('S' << 24 | 'C' << 16 | 'O' << 8 | 'P', &logger),
         active_function(nullptr),
-        active_function_value(0),
+        active_function_value(nullptr),
         use_debug_info(true) {
         
     }
 
+    spv::Id argument_to_value(Any value) {
+        if (value.type == TYPE_Parameter) {
+            auto it = param2value.find({active_function_value, value.parameter});
+            if (it == param2value.end()) {
+                assert(active_function_value);
+                StyledString ss;
+                ss.out << "IL->SPIR: can't translate free variable " << value.parameter;
+                location_error(ss.str());
+            }
+            return it->second;
+        }
+    
+        switch(value.type->kind()) {
+        case TK_Integer: {
+            auto it = cast<IntegerType>(value.type);
+            if (it->issigned) {
+                switch(it->width) {
+                case 32: return builder.makeIntConstant(value.i32);
+                case 64: return builder.makeInt64Constant(value.i64);
+                default: break;
+                }
+            } else {
+                switch(it->width) {
+                case 1: return builder.makeBoolConstant(value.i1);
+                case 32: return builder.makeUintConstant(value.u32);
+                case 64: return builder.makeUint64Constant(value.u64);
+                default: break;
+                }
+            }
+            StyledString ss;
+            ss.out << "IL->SPIR: unsupported integer constant type";
+            location_error(ss.str());
+        } break;
+        case TK_Real: {
+            auto rt = cast<RealType>(value.type);
+            switch(rt->width) {
+            case 32: return builder.makeFloatConstant(value.f32);
+            case 64: return builder.makeDoubleConstant(value.f64);
+            default: break;
+            }
+            StyledString ss;
+            ss.out << "IL->SPIR: unsupported real constant type";
+            location_error(ss.str());
+        } break;
+        case TK_Extern: {
+            assert(false && "todo: extern");
+            return 0;
+        } break;
+        case TK_Pointer: {
+            StyledString ss;
+            ss.out << "IL->SPIR: pointer constants are unsupported";
+            location_error(ss.str());            
+        } break;
+        case TK_Typename: {
+            auto tn = cast<TypenameType>(value.type);
+            assert(tn->finalized());
+            Any storage_value = value;
+            storage_value.type = tn->storage_type;
+            return argument_to_value(storage_value);
+        } break;
+        case TK_Array: {
+            auto ai = cast<ArrayType>(value.type);
+            size_t count = ai->count;
+            std::vector<spv::Id> values;
+            for (size_t i = 0; i < count; ++i) {
+                values.push_back(argument_to_value(ai->unpack(value.pointer, i)));
+            }
+            return builder.makeCompositeConstant(
+                type_to_spirv_type(value.type), values);
+        } break;
+        case TK_Vector: {
+            auto vi = cast<VectorType>(value.type);
+            size_t count = vi->count;
+            std::vector<spv::Id> values;
+            for (size_t i = 0; i < count; ++i) {
+                values.push_back(argument_to_value(vi->unpack(value.pointer, i)));
+            }
+            return builder.makeCompositeConstant(
+                type_to_spirv_type(value.type), values);
+        } break;
+        case TK_Tuple: {
+            auto ti = cast<TupleType>(value.type);
+            size_t count = ti->types.size();
+            std::vector<spv::Id> values;
+            for (size_t i = 0; i < count; ++i) {
+                values.push_back(argument_to_value(ti->unpack(value.pointer, i)));
+            }
+            return builder.makeCompositeConstant(
+                type_to_spirv_type(value.type), values);
+        } break;
+        case TK_Union: {
+            auto ui = cast<UnionType>(value.type);
+            value.type = ui->tuple_type;
+            return argument_to_value(value);
+        } break;
+        default: break;
+        };
+
+        StyledString ss;
+        ss.out << "IL->SPIR: cannot convert argument of type " << value.type;
+        location_error(ss.str());
+        return 0;
+    }
+    
+    void write_label_body(Label *label) {
+    repeat:
+        assert(label->body.is_complete());
+        bool terminated = false;
+        auto &&body = label->body;
+        auto &&enter = body.enter;
+        auto &&args = body.args;
+
+        set_active_anchor(label->body.anchor);
+
+        /*
+        LLVMValueRef diloc = nullptr;        
+        if (use_debug_info) {
+            diloc = anchor_to_location(label->body.anchor);
+            LLVMSetCurrentDebugLocation(builder, diloc);
+        }*/
+
+        assert(!args.empty());
+        size_t argcount = args.size() - 1;
+        size_t argn = 1;
+#define READ_ANY(NAME) \
+        assert(argn <= argcount); \
+        Any &NAME = args[argn++].value;
+#define READ_VALUE(NAME) \
+        assert(argn <= argcount); \
+        auto && _ ## NAME = args[argn++].value; \
+        spv::Id NAME = argument_to_value(_ ## NAME);
+#define READ_LABEL_BLOCK(NAME) \
+        assert(argn <= argcount); \
+        spv::Block *NAME = label_to_basic_block(args[argn++].value); \
+        assert(NAME);
+#define READ_TYPE(NAME) \
+        assert(argn <= argcount); \
+        assert(args[argn].value.type == TYPE_Type); \
+        spv::Id NAME = type_to_spirv_type(args[argn++].value.typeref);
+
+        spv::Id retvalue = 0;
+        if (enter.type == TYPE_Builtin) {
+            switch(enter.builtin.value()) {
+            case FN_Branch: {
+                READ_VALUE(cond);
+                READ_LABEL_BLOCK(then_block);
+                READ_LABEL_BLOCK(else_block);
+                builder.createConditionalBranch(cond, then_block, else_block);
+                terminated = true;
+            } break;
+            case OP_Tertiary: {
+                READ_VALUE(cond);
+                READ_VALUE(then_value);
+                READ_VALUE(else_value);                
+                auto op = new spv::Instruction(
+                    builder.getUniqueId(),
+                    builder.getTypeId(then_value), 
+                    spv::OpSelect);
+                op->addIdOperand(cond);
+                op->addIdOperand(then_value);
+                op->addIdOperand(else_value);
+                retvalue = op->getResultId();
+                builder.getBuildPoint()->addInstruction(
+                    std::unique_ptr<spv::Instruction>(op));
+            } break;
+            case FN_Unconst: {
+                READ_VALUE(val);
+                retvalue = val;
+            } break;
+            /*
+            case FN_ExtractValue: {
+                READ_VALUE(val);
+                READ_ANY(index);
+                retvalue = LLVMBuildExtractValue(
+                    builder, val, cast_number<int32_t>(index), "");
+            } break;
+            case FN_InsertValue: {
+                READ_VALUE(val);
+                READ_VALUE(eltval);
+                READ_ANY(index);
+                retvalue = LLVMBuildInsertValue(
+                    builder, val, eltval, cast_number<int32_t>(index), "");
+            } break;
+            */
+            case FN_ExtractElement: {
+                READ_VALUE(val);
+                READ_VALUE(index);
+                if (_index.is_const()) {
+                    retvalue = builder.createCompositeExtract(val, 
+                        builder.getContainedTypeId(builder.getTypeId(val)),
+                        cast_number<unsigned>(_index));
+                } else {
+                    retvalue = builder.createVectorExtractDynamic(val, 
+                        builder.getContainedTypeId(builder.getTypeId(val)), 
+                        index);
+                }
+            } break;
+            case FN_InsertElement: {
+                READ_VALUE(val);
+                READ_VALUE(eltval);
+                READ_VALUE(index);
+                if (_index.is_const()) {
+                    retvalue = builder.createCompositeInsert(eltval, val,
+                        builder.getTypeId(val),
+                        cast_number<unsigned>(_index));
+                } else {
+                    retvalue = builder.createVectorInsertDynamic(val, 
+                        builder.getTypeId(val), eltval, index);
+                }
+            } break;
+            /*
+            case FN_ShuffleVector: {
+                READ_VALUE(v1);
+                READ_VALUE(v2);
+                READ_VALUE(mask);
+                retvalue = LLVMBuildShuffleVector(builder, v1, v2, mask, "");
+            } break;
+            case FN_Undef: { READ_TYPE(ty);
+                retvalue = LLVMGetUndef(ty); } break;
+            case FN_NullOf: { READ_TYPE(ty);
+                retvalue = LLVMConstNull(ty); } break;
+            case FN_Alloca: { READ_TYPE(ty);
+                retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
+            case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
+                retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
+            case FN_AllocaOf: { 
+                READ_VALUE(val);
+                retvalue = LLVMBuildAlloca(builder, LLVMTypeOf(val), "");
+                LLVMBuildStore(builder, val, retvalue);
+            } break;
+            case FN_Malloc: { READ_TYPE(ty);
+                retvalue = LLVMBuildMalloc(builder, ty, ""); } break;
+            case FN_MallocArray: { READ_TYPE(ty); READ_VALUE(val);
+                retvalue = LLVMBuildArrayMalloc(builder, ty, val, ""); } break;
+            case FN_Free: { READ_VALUE(val);
+                retvalue = LLVMBuildFree(builder, val); } break;
+            case FN_GetElementPtr: {
+                READ_VALUE(pointer);
+                assert(argcount > 1);
+                size_t count = argcount - 1;
+                LLVMValueRef indices[count];
+                for (size_t i = 0; i < count; ++i) {
+                    indices[i] = argument_to_value(args[argn + i].value);
+                }
+                retvalue = LLVMBuildGEP(builder, pointer, indices, count, "");
+            } break;
+            case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildBitCast(builder, val, ty, ""); 
+            } break;
+            case FN_IntToPtr: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildIntToPtr(builder, val, ty, ""); } break;
+            case FN_PtrToInt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildPtrToInt(builder, val, ty, ""); } break;
+            case FN_Trunc: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildTrunc(builder, val, ty, ""); } break;
+            case FN_SExt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildSExt(builder, val, ty, ""); } break;
+            case FN_ZExt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildZExt(builder, val, ty, ""); } break;
+            case FN_FPTrunc: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildFPTrunc(builder, val, ty, ""); } break;
+            case FN_FPExt: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildFPExt(builder, val, ty, ""); } break;
+            case FN_VolatileLoad:
+            case FN_Load: { READ_VALUE(ptr);
+                retvalue = LLVMBuildLoad(builder, ptr, ""); 
+                if (enter.builtin.value() == FN_VolatileLoad) { LLVMSetVolatile(retvalue, true); }
+            } break;
+            case FN_VolatileStore:
+            case FN_Store: { READ_VALUE(val); READ_VALUE(ptr);
+                retvalue = LLVMBuildStore(builder, val, ptr); 
+                if (enter.builtin.value() == FN_VolatileStore) { LLVMSetVolatile(retvalue, true); }
+            } break;
+            case OP_ICmpEQ:
+            case OP_ICmpNE:
+            case OP_ICmpUGT:
+            case OP_ICmpUGE:
+            case OP_ICmpULT:
+            case OP_ICmpULE:
+            case OP_ICmpSGT:
+            case OP_ICmpSGE:
+            case OP_ICmpSLT:
+            case OP_ICmpSLE: {
+                READ_VALUE(a); READ_VALUE(b);
+                LLVMIntPredicate pred = LLVMIntEQ;
+                switch(enter.builtin.value()) {
+                    case OP_ICmpEQ: pred = LLVMIntEQ; break;
+                    case OP_ICmpNE: pred = LLVMIntNE; break;
+                    case OP_ICmpUGT: pred = LLVMIntUGT; break;
+                    case OP_ICmpUGE: pred = LLVMIntUGE; break;
+                    case OP_ICmpULT: pred = LLVMIntULT; break;
+                    case OP_ICmpULE: pred = LLVMIntULE; break;
+                    case OP_ICmpSGT: pred = LLVMIntSGT; break;
+                    case OP_ICmpSGE: pred = LLVMIntSGE; break;
+                    case OP_ICmpSLT: pred = LLVMIntSLT; break;
+                    case OP_ICmpSLE: pred = LLVMIntSLE; break;
+                    default: assert(false); break;
+                }
+                retvalue = LLVMBuildICmp(builder, pred, a, b, "");
+            } break;
+            case OP_FCmpOEQ:
+            case OP_FCmpONE:
+            case OP_FCmpORD:
+            case OP_FCmpOGT:
+            case OP_FCmpOGE:
+            case OP_FCmpOLT:
+            case OP_FCmpOLE:
+            case OP_FCmpUEQ:
+            case OP_FCmpUNE:
+            case OP_FCmpUNO:
+            case OP_FCmpUGT:
+            case OP_FCmpUGE:
+            case OP_FCmpULT:
+            case OP_FCmpULE: {
+                READ_VALUE(a); READ_VALUE(b);
+                LLVMRealPredicate pred = LLVMRealOEQ;
+                switch(enter.builtin.value()) {
+                    case OP_FCmpOEQ: pred = LLVMRealOEQ; break;
+                    case OP_FCmpONE: pred = LLVMRealONE; break;
+                    case OP_FCmpORD: pred = LLVMRealORD; break;
+                    case OP_FCmpOGT: pred = LLVMRealOGT; break;
+                    case OP_FCmpOGE: pred = LLVMRealOGE; break;
+                    case OP_FCmpOLT: pred = LLVMRealOLT; break;
+                    case OP_FCmpOLE: pred = LLVMRealOLE; break;
+                    case OP_FCmpUEQ: pred = LLVMRealUEQ; break;
+                    case OP_FCmpUNE: pred = LLVMRealUNE; break;
+                    case OP_FCmpUNO: pred = LLVMRealUNO; break;
+                    case OP_FCmpUGT: pred = LLVMRealUGT; break;
+                    case OP_FCmpUGE: pred = LLVMRealUGE; break;
+                    case OP_FCmpULT: pred = LLVMRealULT; break;
+                    case OP_FCmpULE: pred = LLVMRealULE; break;
+                    default: assert(false); break;
+                }
+                retvalue = LLVMBuildFCmp(builder, pred, a, b, "");
+            } break;
+            case OP_Add: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildAdd(builder, a, b, ""); } break;
+            case OP_AddNUW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNUWAdd(builder, a, b, ""); } break;
+            case OP_AddNSW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNSWAdd(builder, a, b, ""); } break;
+            case OP_Sub: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildSub(builder, a, b, ""); } break;
+            case OP_SubNUW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNUWSub(builder, a, b, ""); } break;
+            case OP_SubNSW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNSWSub(builder, a, b, ""); } break;
+            case OP_Mul: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildMul(builder, a, b, ""); } break;
+            case OP_MulNUW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNUWMul(builder, a, b, ""); } break;
+            case OP_MulNSW: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildNSWMul(builder, a, b, ""); } break;
+            case OP_SDiv: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildSDiv(builder, a, b, ""); } break;
+            case OP_UDiv: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildUDiv(builder, a, b, ""); } break;
+            case OP_SRem: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildSRem(builder, a, b, ""); } break;
+            case OP_URem: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildURem(builder, a, b, ""); } break;
+            case OP_Shl: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildShl(builder, a, b, ""); } break;
+            case OP_LShr: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildLShr(builder, a, b, ""); } break;
+            case OP_AShr: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildAShr(builder, a, b, ""); } break;
+            case OP_BAnd: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildAnd(builder, a, b, ""); } break;
+            case OP_BOr: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildOr(builder, a, b, ""); } break;
+            case OP_BXor: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildXor(builder, a, b, ""); } break;
+            case OP_FAdd: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFAdd(builder, a, b, ""); } break;
+            case OP_FSub: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFSub(builder, a, b, ""); } break;
+            case OP_FMul: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFMul(builder, a, b, ""); } break;
+            case OP_FDiv: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFDiv(builder, a, b, ""); } break;
+            case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
+                retvalue = LLVMBuildFRem(builder, a, b, ""); } break;
+            case SFXFN_Unreachable:
+                retvalue = LLVMBuildUnreachable(builder); break;*/
+            default: {
+                StyledString ss;
+                ss.out << "IL->SPIR: unsupported builtin " << enter.builtin << " encountered";
+                location_error(ss.str());
+            } break;
+            }
+        } else if (enter.type == TYPE_Label) {
+            if (enter.label->is_basic_block_like()) {
+                auto block = label_to_basic_block(enter.label);
+                if (!block) {
+                    // no basic block was generated - just generate assignments
+                    auto &&params = enter.label->params;
+                    for (size_t i = 1; i < params.size(); ++i) {
+                        param2value[{active_function_value, params[i]}] = 
+                            argument_to_value(args[i].value);
+                    }
+                    label = enter.label;
+                    goto repeat;
+                } else {
+                    auto bbfrom = builder.getBuildPoint();
+                    // assign phi nodes
+                    auto &&params = enter.label->params;
+                    for (size_t i = 1; i < params.size(); ++i) {
+                        Parameter *param = params[i];
+                        auto value = argument_to_value(args[i].value);
+                        auto phinode = argument_to_value(param);
+                        auto op = builder.getInstruction(phinode);
+                        assert(op);
+                        op->addIdOperand(value);
+                        op->addIdOperand(bbfrom->getId());
+                    }
+                    builder.createBranch(block);
+                    terminated = true;
+                }
+            } else {
+                /*if (use_debug_info) {
+                    LLVMSetCurrentDebugLocation(builder, diloc);
+                }*/
+                auto func = label_to_function(enter.label);
+                retvalue = build_call(enter.label->get_function_type(), func, args);
+            }
+        } else if (enter.type == TYPE_Closure) {
+            StyledString ss;
+            ss.out << "IL->SPIR: invalid call of compile time closure at runtime";
+            location_error(ss.str());
+        } else if (enter.type == TYPE_Parameter) {
+            assert (enter.parameter->type != TYPE_Nothing);
+            assert(enter.parameter->type != TYPE_Unknown);
+            std::vector<spv::Id> values;
+            for (size_t i = 0; i < argcount; ++i) {
+                values.push_back(argument_to_value(args[i + 1].value));
+            }
+            // must be a return
+            assert(enter.parameter->index == 0);
+            // must be returning from this function
+            assert(enter.parameter->label == active_function);
+
+            //Label *label = enter.parameter->label;
+            if (argcount > 1) {
+                location_error(
+                    String::from(
+                        "IL->SPIR: multiple return values not supported"));
+            } else if (argcount == 1) {
+                builder.makeReturn(true, values[0]);
+            } else {
+                builder.makeReturn(true, 0);
+            }
+        } else {
+            StyledString ss;
+            ss.out << "IL->SPIR: cannot translate call to " << enter;
+            location_error(ss.str());            
+        }
+
+        Any contarg = args[0].value;
+        if (terminated) {
+            // write nothing
+        } else if ((contarg.type == TYPE_Parameter)
+            && (contarg.parameter->type != TYPE_Nothing)) {
+            assert(contarg.parameter->type != TYPE_Unknown);
+            assert(contarg.parameter->index == 0);
+            assert(contarg.parameter->label == active_function);
+            //Label *label = contarg.parameter->label;
+            if (retvalue) {
+                builder.makeReturn(true, retvalue);
+            } else {
+                builder.makeReturn(true, 0);
+            }
+        } else if (contarg.type == TYPE_Label) {
+            auto bb = label_to_basic_block(contarg.label);
+            if (bb) {
+                if (retvalue) {
+                    auto bbfrom = builder.getBuildPoint();
+                    // assign phi nodes
+                    auto &&params = contarg.label->params;
+                    for (size_t i = 1; i < params.size(); ++i) {
+                        Parameter *param = params[i];
+                        auto phinode = argument_to_value(param);
+                        spv::Id incoval = 0;
+                        if (params.size() == 2) {
+                            // single argument
+                            incoval = retvalue;
+                        } else {
+                            // multiple arguments
+                            // incoval = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                            location_error(
+                                String::from(
+                                    "IL->SPIR: multiple return values not supported"));                                        
+                        }
+                        auto op = builder.getInstruction(phinode);
+                        assert(op);
+                        op->addIdOperand(incoval);
+                        op->addIdOperand(bbfrom->getId());
+                    }
+                }
+                
+                builder.createBranch(bb);
+            } else { 
+                if (retvalue) {
+                    // no basic block - just add assignments and continue
+                    auto &&params = contarg.label->params;
+                    for (size_t i = 1; i < params.size(); ++i) {
+                        Parameter *param = params[i];
+                        spv::Id pvalue = 0;
+                        if (params.size() == 2) {
+                            // single argument
+                            pvalue = retvalue;
+                        } else {
+                            // multiple arguments
+                            // pvalue = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                            location_error(
+                                String::from(
+                                    "IL->SPIR: multiple return values not supported"));                                        
+                        }
+                        param2value[{active_function_value,param}] = pvalue;
+                    }
+                }
+                label = contarg.label;
+                goto repeat;
+            }
+        } else if (contarg.type == TYPE_Nothing) {
+        } else {
+            assert(false && "todo: continuing with unexpected value");
+        }
+
+        //LLVMSetCurrentDebugLocation(builder, nullptr);
+    }
+    #undef READ_ANY
+    #undef READ_VALUE
+    #undef READ_TYPE
+    #undef READ_LABEL_BLOCK
+
+    spv::Id build_call(const Type *functype, spv::Function* func, Args &args) {
+        size_t argcount = args.size() - 1;
+
+        auto fi = cast<FunctionType>(functype);
+
+        std::vector<spv::Id> values;
+        for (size_t i = 0; i < argcount; ++i) {
+            auto &&arg = args[i + 1];
+            values.push_back(argument_to_value(arg.value));
+        }
+
+        size_t fargcount = fi->argument_types.size();
+        assert(argcount >= fargcount);
+        if (fi->flags & FF_Variadic) {
+            location_error(String::from("IL->SPIR: variadic calls not supported"));
+        }
+        
+        auto ret = builder.createFunctionCall(func, values);
+        
+        if (cast<ReturnLabelType>(fi->return_type)->return_type == TYPE_Void) {
+            return 0;
+        } else {
+            return ret;
+        }
+    }
+
+    void set_active_function(Label *l) {
+        if (active_function == l) return;
+        active_function = l;
+        if (l) {
+            auto it = label2func.find(l);
+            assert(it != label2func.end());
+            active_function_value = it->second;
+        } else {
+            active_function_value = nullptr;
+        }
+    }
+
+    void process_labels() {
+        while (!bb_label_todo.empty()) {
+            auto it = bb_label_todo.back();
+            set_active_function(it.first);
+            Label *label = it.second;
+            bb_label_todo.pop_back();
+
+            auto it2 = label2bb.find({active_function_value, label});
+            assert(it2 != label2bb.end());
+            spv::Block *bb = it2->second;
+            builder.setBuildPoint(bb);
+
+            write_label_body(label);
+        }
+    }
+
+    bool has_single_caller(Label *l) {
+        auto it = user_map.label_map.find(l);
+        assert(it != user_map.label_map.end());
+        auto &&users = it->second;
+        if (users.size() != 1)
+            return false;
+        Label *userl = *users.begin();
+        if (userl->body.enter == Any(l))
+            return true;
+        if (userl->body.args[0] == Any(l))
+            return true;
+        return false;
+    }
+    
+    spv::Id create_spirv_type(const Type *type) {
+        switch(type->kind()) {
+        case TK_Integer: {
+            if (type == TYPE_Bool)
+                return builder.makeBoolType();
+            auto it = cast<IntegerType>(type);
+            return builder.makeIntegerType(it->width, it->issigned);
+        } break;
+        case TK_Real: {
+            auto rt = cast<RealType>(type);
+            return builder.makeFloatType(rt->width);
+        } break;
+        case TK_Pointer: {
+            location_error(String::from("IL->SPIR: pointer types are not supported"));
+            return 0;
+            //Id makePointer(StorageClass, Id type);
+            //return LLVMPointerType(_type_to_llvm_type(cast<PointerType>(type)->element_type), 0);
+        } break;
+        case TK_Array: {
+            auto ai = cast<ArrayType>(type);
+            return builder.makeArrayType(
+                type_to_spirv_type(ai->element_type), 
+                builder.makeUintConstant(ai->count), 0);
+        } break;
+        case TK_Vector: {
+            auto vi = cast<VectorType>(type);
+            return builder.makeVectorType(
+                type_to_spirv_type(vi->element_type), 
+                vi->count);
+        } break;
+        case TK_Tuple: {
+            auto ti = cast<TupleType>(type);
+            size_t count = ti->types.size();
+            std::vector<spv::Id> members;
+            for (size_t i = 0; i < count; ++i) {
+                members.push_back(type_to_spirv_type(ti->types[i]));
+            }
+            return builder.makeStructType(members, "tuple");
+        } break;
+        case TK_Union: {
+            auto ui = cast<UnionType>(type);
+            return type_to_spirv_type(ui->tuple_type);
+        } break;
+        case TK_Extern: {
+            location_error(String::from("IL->SPIR: extern types are not supported"));
+            return 0;            
+            /*return LLVMPointerType(
+                _type_to_llvm_type(cast<ExternType>(type)->type), 0);*/
+        } break;
+        case TK_Typename: {
+            if (type == TYPE_Void)
+                return builder.makeVoidType();
+            auto tn = cast<TypenameType>(type);
+            if (tn->finalized()) {
+                return type_to_spirv_type(tn->storage_type);
+            } else {
+                location_error(String::from("IL->SPIR: opaque types are not supported"));
+                return 0;
+            }
+        } break;
+        case TK_ReturnLabel: {
+            auto rlt = cast<ReturnLabelType>(type);
+            return type_to_spirv_type(rlt->return_type);
+        } break;
+        case TK_Function: {
+            auto fi = cast<FunctionType>(type);
+            if (fi->vararg()) {
+                location_error(String::from("IL->SPIR: vararg functions are not supported"));
+            }
+            size_t count = fi->argument_types.size();
+            spv::Id rettype = type_to_spirv_type(fi->return_type);
+            std::vector<spv::Id> elements;
+            for (size_t i = 0; i < count; ++i) {
+                auto AT = fi->argument_types[i];
+                elements.push_back(type_to_spirv_type(AT));
+            }            
+            return builder.makeFunctionType(rettype, elements);
+        } break;
+        };
+
+        StyledString ss;
+        ss.out << "IL->SPIR: cannot convert type " << type;
+        location_error(ss.str());
+        return 0;
+    }
+
+    spv::Id type_to_spirv_type(const Type *type) {
+        auto it = type_cache.find(type);
+        if (it == type_cache.end()) {
+            spv::Id result = create_spirv_type(type);
+            type_cache.insert({type, result});
+            return result;
+        } else {
+            return it->second;
+        }
+    }
+    
+    spv::Block *label_to_basic_block(Label *label) {
+        auto old_bb = builder.getBuildPoint();
+        auto func = &old_bb->getParent();
+        auto it = label2bb.find({func, label});
+        if (it == label2bb.end()) {
+            if (has_single_caller(label)) {
+                // not generating basic blocks for single user labels
+                label2bb.insert({{func, label}, nullptr});
+                return nullptr;
+            }
+            //const char *name = label->name.name()->data;
+            auto bb = &builder.makeNewBlock();
+            label2bb.insert({{func, label}, bb});
+            bb_label_todo.push_back({active_function, label});
+            builder.setBuildPoint(bb);
+
+            auto &&params = label->params;
+            if (!params.empty()) {
+                size_t paramcount = label->params.size() - 1;
+                for (size_t i = 0; i < paramcount; ++i) {
+                    Parameter *param = params[i + 1];
+                    auto ptype = type_to_spirv_type(param->type);
+                    auto op = new spv::Instruction(
+                        builder.getUniqueId(), ptype, spv::OpPhi);
+                    builder.addName(op->getResultId(), param->name.name()->data);
+                    param2value[{active_function_value,param}] = op->getResultId();
+                    bb->addInstruction(std::unique_ptr<spv::Instruction>(op));
+                }
+            }
+            
+            builder.setBuildPoint(old_bb);
+            return bb;
+        } else {
+            return it->second;
+        }
+    }
+    
+    spv::Function *label_to_function(Label *label, bool root_function = false) {
+        auto it = label2func.find(label);
+        if (it == label2func.end()) {
+
+            const Anchor *old_anchor = get_active_anchor();
+            set_active_anchor(label->anchor);
+            Label *last_function = active_function;
+
+            auto old_bb = builder.getBuildPoint();
+
+            const char *name;
+            if (root_function && (label->name == SYM_Unnamed)) {
+                name = "unnamed";
+            } else {
+                name = label->name.name()->data;
+            }
+
+            label->verify_compilable();
+            auto ilfunctype = cast<FunctionType>(label->get_function_type());
+            //auto fi = cast<FunctionType>(ilfunctype);
+
+            auto rettype = type_to_spirv_type(ilfunctype->return_type);
+
+            spv::Block* bb;
+            std::vector<spv::Id> paramtypes;
+
+            auto &&argtypes = ilfunctype->argument_types;
+            for (auto it = argtypes.begin(); it != argtypes.end(); ++it) {
+                paramtypes.push_back(type_to_spirv_type(*it));
+            }
+
+            std::vector<std::vector<spv::Decoration>> decorations;
+            
+            auto func = builder.makeFunctionEntry(
+                spv::NoPrecision, rettype, name, paramtypes, decorations, &bb);
+            //LLVMSetLinkage(func, LLVMPrivateLinkage);
+
+            if (root_function) {
+                builder.addEntryPoint(spv::ExecutionModelVertex, func, name);
+            }
+
+            label2func[label] = func;
+            set_active_function(label);
+
+            if (use_debug_info) {
+                // LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
+            }
+
+            builder.setBuildPoint(bb);
+
+            auto &&params = label->params;
+            size_t paramcount = params.size() - 1;
+            for (size_t i = 0; i < paramcount; ++i) {
+                Parameter *param = params[i + 1];
+                auto val = func->getParamId(i);
+                param2value[{active_function_value,param}] = val;
+            }
+
+            write_label_body(label);
+
+            builder.setBuildPoint(old_bb);
+                        
+            set_active_function(last_function);
+            set_active_anchor(old_anchor);
+            return func;
+        } else {
+            return it->second;
+        }
+    }
+    
     void generate(std::vector<unsigned int> &result, Label *entry) {
+        //assert(all_parameters_lowered(entry));
+        assert(!entry->is_basic_block_like());
+
+        auto needfi = Function(TYPE_Void, {}, 0);
+        auto hasfi = entry->get_function_type();
+        if (hasfi != needfi) {
+            set_active_anchor(entry->anchor);
+            StyledString ss;
+            ss.out << "Entry function must have type " << needfi
+                << " but has type " << hasfi;
+            location_error(ss.str());
+        }
+
+        {
+            std::unordered_set<Label *> labels;
+            entry->build_reachable(labels);
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                (*it)->insert_into_usermap(user_map);
+            }
+        }
+
+        builder.addCapability(spv::CapabilityShader);
+        
+        //const char *name = entry->name.name()->data;
+        //module = LLVMModuleCreateWithName(name);
+
+        if (use_debug_info) {
+            /*
+            const char *DebugStr = "Debug Info Version";
+            LLVMValueRef DbgVer[3];
+            DbgVer[0] = LLVMConstInt(i32T, 1, 0);
+            DbgVer[1] = LLVMMDString(DebugStr, strlen(DebugStr));
+            DbgVer[2] = LLVMConstInt(i32T, 3, 0);
+            LLVMAddNamedMetadataOperand(module, "llvm.module.flags",
+                LLVMMDNode(DbgVer, 3));
+
+            LLVMDIBuilderCreateCompileUnit(di_builder,
+                llvm::dwarf::DW_LANG_C99, "file", "directory", "scopes",
+                false, "", 0, "", 0);*/
+        }
+
+        label_to_function(entry, true);
+        process_labels();
+
+        //size_t k = finalize_types();
+        //assert(!k);
+
         builder.dump(result);
+
+        {
+            spv_target_env target_env = SPV_ENV_UNIVERSAL_1_2;
+            //spvtools::ValidatorOptions options;
+
+            StyledString ss;
+            spvtools::SpirvTools tools(target_env);
+            tools.SetMessageConsumer([&ss](spv_message_level_t level, const char*,
+                                        const spv_position_t& position,
+                                        const char* message) {
+                switch (level) {
+                case SPV_MSG_FATAL:
+                case SPV_MSG_INTERNAL_ERROR:
+                case SPV_MSG_ERROR:
+                    ss.out << Style_Error << "error: " << Style_None
+                        << position.index << ": " << message << std::endl;
+                    break;
+                case SPV_MSG_WARNING:
+                    ss.out << Style_Warning << "warning: " << Style_None
+                        << position.index << ": " << message << std::endl;
+                    break;
+                case SPV_MSG_INFO:
+                    ss.out << Style_Comment << "info: " << Style_None
+                        << position.index << ": " << message << std::endl;
+                    break;
+                default:
+                    break;
+                }
+            });
+
+            bool succeed = tools.Validate(result);
+            if (!succeed) {
+                disassemble_spirv(result);
+                std::cerr << ss._ss.str();
+                location_error(String::from("SPIR-V validation found errors"));
+            }
+        }
+        
     }
 };
 
@@ -8567,12 +9518,70 @@ static const String *compile_spirv(Label *fn, uint64_t flags) {
     } else if (flags & CF_DumpFunction) {
     }
     if (flags & CF_DumpDisassembly) {
-        spv::Disassemble(std::cout, result);
+        disassemble_spirv(result);
     }
 
     size_t bytesize = sizeof(unsigned int) * result.size();
 
     return String::from((char *)&result[0], bytesize);
+}
+
+static const String *compile_glsl(Label *fn, uint64_t flags) {
+    Timer sum_compile_time(TIMER_CompileSPIRV);
+//#ifdef SCOPES_WIN32
+    flags |= CF_NoDebugInfo;    
+//#endif
+
+    fn->verify_compilable();
+
+    SPIRVGenerator ctx;
+    if (flags & CF_NoDebugInfo) {
+        ctx.use_debug_info = false;
+    }
+
+    std::vector<unsigned int> result;
+    {
+        Timer generate_timer(TIMER_GenerateSPIRV);
+        ctx.generate(result, fn);
+    }
+
+    if (flags & CF_DumpModule) {
+    } else if (flags & CF_DumpFunction) {
+    }
+    if (flags & CF_DumpDisassembly) {
+        disassemble_spirv(result);
+    }
+
+	spirv_cross::CompilerGLSL glsl(std::move(result));
+    
+    /*
+    // The SPIR-V is now parsed, and we can perform reflection on it.
+    spirv_cross::ShaderResources resources = glsl.get_shader_resources();
+    // Get all sampled images in the shader.
+    for (auto &resource : resources.sampled_images)
+    {
+        unsigned set = glsl.get_decoration(resource.id, spv::DecorationDescriptorSet);
+        unsigned binding = glsl.get_decoration(resource.id, spv::DecorationBinding);
+        printf("Image %s at set = %u, binding = %u\n", resource.name.c_str(), set, binding);
+
+        // Modify the decoration to prepare it for GLSL.
+        glsl.unset_decoration(resource.id, spv::DecorationDescriptorSet);
+
+        // Some arbitrary remapping if we want.
+        glsl.set_decoration(resource.id, spv::DecorationBinding, set * 16 + binding);
+    }
+    */
+
+    // Set some options.
+    /*
+    spirv_cross::CompilerGLSL::Options options;
+    options.version = 450;
+    glsl.set_options(options);*/
+
+    // Compile to GLSL, ready to give to GL driver.
+    std::string source = glsl.compile();
+
+    return String::from_stdstring(source);
 }
 
 //------------------------------------------------------------------------------
@@ -9455,7 +10464,7 @@ struct Solver {
         } break;
         case FN_FPToUI: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].value.type;
+            const Type *T = args[1].value.indirect_type();
             verify_real(T);
             args[2].value.verify(TYPE_Type);
             const Type *DestT = args[2].value.typeref;
@@ -9468,7 +10477,7 @@ struct Solver {
         } break;
         case FN_FPToSI: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].value.type;
+            const Type *T = args[1].value.indirect_type();
             verify_real(T);
             args[2].value.verify(TYPE_Type);
             const Type *DestT = args[2].value.typeref;
@@ -9481,7 +10490,7 @@ struct Solver {
         } break;
         case FN_UIToFP: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].value.type;
+            const Type *T = args[1].value.indirect_type();
             verify_integer(T);
             args[2].value.verify(TYPE_Type);
             const Type *DestT = args[2].value.typeref;
@@ -9494,7 +10503,7 @@ struct Solver {
         } break;
         case FN_SIToFP: {
             CHECKARGS(2, 2);
-            const Type *T = args[1].value.type;
+            const Type *T = args[1].value.indirect_type();
             verify_integer(T);
             args[2].value.verify(TYPE_Type);
             const Type *DestT = args[2].value.typeref;
@@ -12489,6 +13498,10 @@ static const String *f_compile_spirv(Label *srcl, uint64_t flags) {
     return compile_spirv(srcl, flags);
 }
 
+static const String *f_compile_glsl(Label *srcl, uint64_t flags) {
+    return compile_glsl(srcl, flags);
+}
+
 static const Type *f_array_type(const Type *element_type, size_t count) {
     return Array(element_type, count);
 }
@@ -12728,6 +13741,7 @@ static void init_globals(int argc, char *argv[]) {
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
     DEFINE_PURE_C_FUNCTION(FN_CompileSPIRV, f_compile_spirv, TYPE_String, TYPE_Label, TYPE_U64);
+    DEFINE_PURE_C_FUNCTION(FN_CompileGLSL, f_compile_glsl, TYPE_String, TYPE_Label, TYPE_U64);
     DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
     DEFINE_C_FUNCTION(FN_LoadLibrary, f_load_library, TYPE_Void, TYPE_String);
 
