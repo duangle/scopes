@@ -1190,12 +1190,12 @@ fn compile (f opts...)
                 compiler-error!
                     .. "illegal flag: " (repr flag)
 
-fn compile-glsl (f opts...)
+fn compile-glsl (f target opts...)
     let vacount = (va-countof opts...)
     let loop (i flags) = 0 0:u64
     if (== i vacount)
         return
-            __compile-glsl f flags
+            __compile-glsl f target flags
     let flag = (va@ i opts...)
     if (not (constant? flag))
         compiler-error! "symbolic flags must be constant"
@@ -2142,11 +2142,15 @@ set-type-symbol! pointer '@
 set-type-symbol! extern 'imply
     fn (self destT)
         let ET = (element-type (typeof self) 0)
-        if (type== destT ET)
-            load (unconst self)
-        elseif (type== destT (pointer ET))
+        if (type== destT (pointer ET))
             unconst self
+        else
+            forward-imply (load self) destT
 
+set-type-symbol! extern 'as
+    fn (self destT)
+        forward-as (load (unconst self)) destT
+            
 # support assignment syntax for extern
 set-type-symbol! extern '=
     fn (self value)
@@ -2336,9 +2340,13 @@ define-scope-macro using
 # tuples
 #-------------------------------------------------------------------------------
 
+set-type-symbol! tuple 'countof
+    fn (self)
+        countof (typeof self)
+
 set-type-symbol! tuple '@
     fn (self at)
-        extractvalue self at
+        extractvalue self (usize at)
 
 fn tupleof (...)
     let sz = (va-countof ...)
@@ -2361,6 +2369,18 @@ fn tupleof (...)
 #-------------------------------------------------------------------------------
 # arrays
 #-------------------------------------------------------------------------------
+
+set-type-symbol! array 'countof
+    fn (self)
+        countof (typeof self)
+
+set-type-symbol! array '@
+    fn (self at)
+        let val = (usize at)
+        if (constant? val)
+            extractvalue self val
+        else
+            load (getelementptr (allocaof self) 0 val)
 
 fn arrayof (T ...)
     let count = (va-countof ...)

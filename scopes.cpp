@@ -504,6 +504,71 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
     T(OP_Tertiary) T(KW_SyntaxLog)
 
+#define B_SPIRV_BUILTINS() \
+    T(Position) \
+    T(PointSize) \
+    T(ClipDistance) \
+    T(CullDistance) \
+    T(VertexId) \
+    T(InstanceId) \
+    T(PrimitiveId) \
+    T(InvocationId) \
+    T(Layer) \
+    T(ViewportIndex) \
+    T(TessLevelOuter) \
+    T(TessLevelInner) \
+    T(TessCoord) \
+    T(PatchVertices) \
+    T(FragCoord) \
+    T(PointCoord) \
+    T(FrontFacing) \
+    T(SampleId) \
+    T(SamplePosition) \
+    T(SampleMask) \
+    T(FragDepth) \
+    T(HelperInvocation) \
+    T(NumWorkgroups) \
+    T(WorkgroupSize) \
+    T(WorkgroupId) \
+    T(LocalInvocationId) \
+    T(GlobalInvocationId) \
+    T(LocalInvocationIndex) \
+    T(WorkDim) \
+    T(GlobalSize) \
+    T(EnqueuedWorkgroupSize) \
+    T(GlobalOffset) \
+    T(GlobalLinearId) \
+    T(SubgroupSize) \
+    T(SubgroupMaxSize) \
+    T(NumSubgroups) \
+    T(NumEnqueuedSubgroups) \
+    T(SubgroupId) \
+    T(SubgroupLocalInvocationId) \
+    T(VertexIndex) \
+    T(InstanceIndex) \
+    T(SubgroupEqMaskKHR) \
+    T(SubgroupGeMaskKHR) \
+    T(SubgroupGtMaskKHR) \
+    T(SubgroupLeMaskKHR) \
+    T(SubgroupLtMaskKHR) \
+    T(BaseVertex) \
+    T(BaseInstance) \
+    T(DrawIndex) \
+    T(DeviceIndex) \
+    T(ViewIndex) \
+    T(BaryCoordNoPerspAMD) \
+    T(BaryCoordNoPerspCentroidAMD) \
+    T(BaryCoordNoPerspSampleAMD) \
+    T(BaryCoordSmoothAMD) \
+    T(BaryCoordSmoothCentroidAMD) \
+    T(BaryCoordSmoothSampleAMD) \
+    T(BaryCoordPullModelAMD) \
+    T(ViewportMaskNV) \
+    T(SecondaryPositionNV) \
+    T(SecondaryViewportMaskNV) \
+    T(PositionPerViewNV) \
+    T(ViewportMaskPerViewNV)
+
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
     \
@@ -776,6 +841,16 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Variadic, "variadic") \
     T(SYM_Pure, "pure") \
     \
+    /* extern classes */ \
+    T(SYM_SPIRVInput, "input") \
+    T(SYM_SPIRVOutput, "output") \
+    \
+    /* compile targets */ \
+    T(SYM_TargetVertex, "vertex-stage") \
+    T(SYM_TargetFragment, "fragment-stage") \
+    T(SYM_TargetGeometry, "geometry-stage") \
+    T(SYM_TargetCompute, "compute-stage") \
+    \
     /* timer names */ \
     T(TIMER_Compile, "compile()") \
     T(TIMER_CompileSPIRV, "compile_spirv()") \
@@ -811,6 +886,10 @@ enum KnownSymbol {
 #undef T1
 #undef T2
 #undef T2T
+#define T(NAME) \
+    SYM_SPIRV_BuiltIn ## NAME,
+    B_SPIRV_BUILTINS()
+#undef T
     SYM_Count,
 };
 
@@ -829,7 +908,6 @@ enum {
 
     STYLE_FIRST = Style_None,
     STYLE_LAST = Style_Location,
-
 };
 
 static const char *get_known_symbol_name(KnownSymbol sym) {
@@ -846,6 +924,10 @@ static const char *get_known_symbol_name(KnownSymbol sym) {
 #undef T1
 #undef T2
 #undef T2T
+#define T(NAME) \
+    case SYM_SPIRV_BuiltIn ## NAME: return "SYM_SPIRV_BuiltIn" #NAME;
+B_SPIRV_BUILTINS()
+#undef T
     case SYM_Count: return "SYM_Count";
     }
 }
@@ -1383,6 +1465,10 @@ public:
     #undef T1
     #undef T2
     #undef T2T
+    #define T(NAME) \
+        map_known_symbol(SYM_SPIRV_BuiltIn ## NAME, String::from("spirv." #NAME));
+        B_SPIRV_BUILTINS()
+    #undef T    
     }
 
     StyledStream& stream(StyledStream& ost) const {
@@ -2464,25 +2550,33 @@ static const Type *Union(const std::vector<const Type *> &types) {
 // EXTERN TYPE
 //------------------------------------------------------------------------------
 
+enum ExternTypeClass {
+    ETC_C = 0, // C namespace symbol
+    ETC_SPIRV_Input, // SPIRV storage class: input
+    ETC_SPIRV_Output, // SPIRV storage class: output
+};
+
 struct ExternType : Type {
     static bool classof(const Type *T) {
         return T->kind() == TK_Extern;
     }
 
-    ExternType(const Type *_type) :
+    ExternType(const Type *_type, int _storage_class) :
         Type(TK_Extern),
         type(_type) {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
+        storage_class = (ExternTypeClass)_storage_class;
     }
 
     const Type *type;
+    ExternTypeClass storage_class;
 };
 
-static const Type *Extern(const Type *type) {
+static const Type *Extern(const Type *type, int storage_class = ETC_C) {
     static TypeFactory<ExternType> externs;
-    return externs.insert(type);
+    return externs.insert(type, storage_class);
 }
 
 //------------------------------------------------------------------------------
@@ -6712,7 +6806,12 @@ static T cast_number(const Any &value) {
         }
     }
     StyledString ss;
-    ss.out << "type " << value.type << " can not be converted to numerical type";
+    ss.out << "can not extract constant from ";
+    if (value.is_const()) {
+        ss.out << "value of type " << value.type;
+    } else {
+        ss.out << "variable of type " << value.indirect_type();
+    }
     location_error(ss.str());
     return 0;
 }
@@ -7062,6 +7161,20 @@ struct SPIRVGenerator {
         
     }
 
+    spv::StorageClass storage_class_from_extern_class(ExternTypeClass etc) {
+        switch(etc) {
+        case ETC_C: {
+            location_error(
+                String::from(
+                    "IL->SPIR: extern values with C storage class"
+                    " are unsupported"));
+        } break;
+        case ETC_SPIRV_Input: return spv::StorageClassInput;
+        case ETC_SPIRV_Output: return spv::StorageClassOutput;
+        }
+        return spv::StorageClassMax;
+    }
+
     spv::Id argument_to_value(Any value) {
         if (value.type == TYPE_Parameter) {
             auto it = param2value.find({active_function_value, value.parameter});
@@ -7107,13 +7220,40 @@ struct SPIRVGenerator {
             location_error(ss.str());
         } break;
         case TK_Extern: {
-            assert(false && "todo: extern");
-            return 0;
+            auto et = cast<ExternType>(value.type);
+            spv::StorageClass sc = storage_class_from_extern_class(
+                et->storage_class);
+            const char *name = nullptr;
+            spv::BuiltIn builtin = spv::BuiltInMax;
+            switch(value.symbol.value()) {
+            #define T(NAME) \
+            case SYM_SPIRV_BuiltIn ## NAME: \
+                builtin = spv::BuiltIn ## NAME; break;
+                B_SPIRV_BUILTINS()
+            #undef T
+                default:
+                    name = value.symbol.name()->data;
+                    break;
+            }
+            auto ty = type_to_spirv_type(et->type);           
+            auto id = builder.createVariable(sc, ty, name);
+            if (builtin != spv::BuiltInMax) {
+                builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
+            }
+            return id;
         } break;
         case TK_Pointer: {
-            StyledString ss;
-            ss.out << "IL->SPIR: pointer constants are unsupported";
-            location_error(ss.str());            
+            if (is_function_pointer(value.type)) {
+                StyledString ss;
+                ss.out << "IL->SPIR: function pointer constants are unsupported";
+                location_error(ss.str());
+            }
+            auto pt = cast<PointerType>(value.type);
+            auto val = argument_to_value(pt->unpack(value.pointer));
+            auto id = builder.createVariable(spv::StorageClassFunction, 
+                builder.getTypeId(val), nullptr);
+            builder.getInstruction(id)->addIdOperand(val);
+            return id;
         } break;
         case TK_Typename: {
             auto tn = cast<TypenameType>(value.type);
@@ -7272,13 +7412,28 @@ struct SPIRVGenerator {
                         builder.getTypeId(val), eltval, index);
                 }
             } break;
-            /*
             case FN_ShuffleVector: {
                 READ_VALUE(v1);
                 READ_VALUE(v2);
                 READ_VALUE(mask);
-                retvalue = LLVMBuildShuffleVector(builder, v1, v2, mask, "");
+                auto ET = builder.getContainedTypeId(builder.getTypeId(v1));
+                auto sz = builder.getNumTypeComponents(builder.getTypeId(mask));
+                auto op = new spv::Instruction(
+                    builder.getUniqueId(),
+                    builder.makeVectorType(ET, sz), 
+                    spv::OpVectorShuffle);
+                op->addIdOperand(v1);
+                op->addIdOperand(v2);
+                auto vt = cast<VectorType>(storage_type(_mask.type));
+                for (int i = 0; i < sz; ++i) {                    
+                    op->addImmediateOperand(
+                        cast_number<unsigned int>(vt->unpack(_mask.pointer, i)));
+                }
+                retvalue = op->getResultId();
+                builder.getBuildPoint()->addInstruction(
+                    std::unique_ptr<spv::Instruction>(op));
             } break;
+            /*
             case FN_Undef: { READ_TYPE(ty);
                 retvalue = LLVMGetUndef(ty); } break;
             case FN_NullOf: { READ_TYPE(ty);
@@ -7287,27 +7442,35 @@ struct SPIRVGenerator {
                 retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
             case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
                 retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
+            */
             case FN_AllocaOf: { 
                 READ_VALUE(val);
-                retvalue = LLVMBuildAlloca(builder, LLVMTypeOf(val), "");
-                LLVMBuildStore(builder, val, retvalue);
+                retvalue = builder.createVariable(spv::StorageClassFunction, 
+                    builder.getTypeId(val));
+                builder.createStore(val, retvalue);
             } break;
+            /*
             case FN_Malloc: { READ_TYPE(ty);
                 retvalue = LLVMBuildMalloc(builder, ty, ""); } break;
             case FN_MallocArray: { READ_TYPE(ty); READ_VALUE(val);
                 retvalue = LLVMBuildArrayMalloc(builder, ty, val, ""); } break;
             case FN_Free: { READ_VALUE(val);
                 retvalue = LLVMBuildFree(builder, val); } break;
+            */
             case FN_GetElementPtr: {
-                READ_VALUE(pointer);
+                READ_VALUE(pointer);                
                 assert(argcount > 1);
                 size_t count = argcount - 1;
-                LLVMValueRef indices[count];
-                for (size_t i = 0; i < count; ++i) {
-                    indices[i] = argument_to_value(args[argn + i].value);
+                std::vector<spv::Id> indices;
+                for (size_t i = 1; i < count; ++i) {
+                    indices.push_back(argument_to_value(args[argn + i].value));
                 }
-                retvalue = LLVMBuildGEP(builder, pointer, indices, count, "");
+                
+                retvalue = builder.createAccessChain(
+                    builder.getTypeStorageClass(builder.getTypeId(pointer)), 
+                    pointer, indices);
             } break;
+            /*
             case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildBitCast(builder, val, ty, ""); 
             } break;
@@ -7317,8 +7480,17 @@ struct SPIRVGenerator {
                 retvalue = LLVMBuildPtrToInt(builder, val, ty, ""); } break;
             case FN_Trunc: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildTrunc(builder, val, ty, ""); } break;
-            case FN_SExt: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildSExt(builder, val, ty, ""); } break;
+            */
+            case FN_SExt: {
+                READ_VALUE(val); READ_TYPE(ty);
+                auto op = new spv::Instruction(
+                    builder.getUniqueId(), ty, spv::OpSConvert);
+                op->addIdOperand(val);
+                retvalue = op->getResultId();
+                builder.getBuildPoint()->addInstruction(
+                    std::unique_ptr<spv::Instruction>(op));
+            } break;
+            /*
             case FN_ZExt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildZExt(builder, val, ty, ""); } break;
             case FN_FPTrunc: { READ_VALUE(val); READ_TYPE(ty);
@@ -7326,15 +7498,19 @@ struct SPIRVGenerator {
             case FN_FPExt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildFPExt(builder, val, ty, ""); } break;
             case FN_VolatileLoad:
-            case FN_Load: { READ_VALUE(ptr);
-                retvalue = LLVMBuildLoad(builder, ptr, ""); 
-                if (enter.builtin.value() == FN_VolatileLoad) { LLVMSetVolatile(retvalue, true); }
+            */
+            case FN_Load: { 
+                READ_VALUE(ptr);
+                retvalue = builder.createLoad(ptr);
             } break;
+            /*
             case FN_VolatileStore:
-            case FN_Store: { READ_VALUE(val); READ_VALUE(ptr);
-                retvalue = LLVMBuildStore(builder, val, ptr); 
-                if (enter.builtin.value() == FN_VolatileStore) { LLVMSetVolatile(retvalue, true); }
+            */
+            case FN_Store: { 
+                READ_VALUE(val); READ_VALUE(ptr);
+                builder.createStore(val, ptr);
             } break;
+            /*
             case OP_ICmpEQ:
             case OP_ICmpNE:
             case OP_ICmpUGT:
@@ -7435,16 +7611,24 @@ struct SPIRVGenerator {
                 retvalue = LLVMBuildOr(builder, a, b, ""); } break;
             case OP_BXor: { READ_VALUE(a); READ_VALUE(b);
                 retvalue = LLVMBuildXor(builder, a, b, ""); } break;
-            case OP_FAdd: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildFAdd(builder, a, b, ""); } break;
-            case OP_FSub: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildFSub(builder, a, b, ""); } break;
-            case OP_FMul: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildFMul(builder, a, b, ""); } break;
-            case OP_FDiv: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildFDiv(builder, a, b, ""); } break;
+            */
+            case OP_FAdd:
+            case OP_FSub:
+            case OP_FMul:
+            case OP_FDiv:
             case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildFRem(builder, a, b, ""); } break;
+                spv::Op op = spv::OpMax;
+                switch(enter.builtin.value()) {
+                case OP_FAdd: op = spv::OpFAdd; break;
+                case OP_FSub: op = spv::OpFSub; break;
+                case OP_FMul: op = spv::OpFMul; break;
+                case OP_FDiv: op = spv::OpFDiv; break;
+                case OP_FRem: op = spv::OpFRem; break;
+                default: break;
+                }
+                retvalue = builder.createBinOp(op, 
+                    builder.getTypeId(a), a, b); } break;
+            /*
             case SFXFN_Unreachable:
                 retvalue = LLVMBuildUnreachable(builder); break;*/
             default: {
@@ -7679,10 +7863,9 @@ struct SPIRVGenerator {
             return builder.makeFloatType(rt->width);
         } break;
         case TK_Pointer: {
-            location_error(String::from("IL->SPIR: pointer types are not supported"));
-            return 0;
-            //Id makePointer(StorageClass, Id type);
-            //return LLVMPointerType(_type_to_llvm_type(cast<PointerType>(type)->element_type), 0);
+            auto pt = cast<PointerType>(type);            
+            return builder.makePointer(spv::StorageClassFunction, 
+                type_to_spirv_type(pt->element_type));
         } break;
         case TK_Array: {
             auto ai = cast<ArrayType>(type);
@@ -7710,10 +7893,11 @@ struct SPIRVGenerator {
             return type_to_spirv_type(ui->tuple_type);
         } break;
         case TK_Extern: {
-            location_error(String::from("IL->SPIR: extern types are not supported"));
-            return 0;            
-            /*return LLVMPointerType(
-                _type_to_llvm_type(cast<ExternType>(type)->type), 0);*/
+            auto et = cast<ExternType>(type);
+            spv::StorageClass sc = storage_class_from_extern_class(
+                et->storage_class);
+            auto ty = type_to_spirv_type(et->type);
+            return builder.makePointer(sc, ty);
         } break;
         case TK_Typename: {
             if (type == TYPE_Void)
@@ -7837,10 +8021,6 @@ struct SPIRVGenerator {
                 spv::NoPrecision, rettype, name, paramtypes, decorations, &bb);
             //LLVMSetLinkage(func, LLVMPrivateLinkage);
 
-            if (root_function) {
-                builder.addEntryPoint(spv::ExecutionModelVertex, func, name);
-            }
-
             label2func[label] = func;
             set_active_function(label);
 
@@ -7870,7 +8050,7 @@ struct SPIRVGenerator {
         }
     }
     
-    void generate(std::vector<unsigned int> &result, Label *entry) {
+    void generate(std::vector<unsigned int> &result, Symbol target, Label *entry) {
         //assert(all_parameters_lowered(entry));
         assert(!entry->is_basic_block_like());
 
@@ -7892,8 +8072,6 @@ struct SPIRVGenerator {
             }
         }
 
-        builder.addCapability(spv::CapabilityShader);
-        
         //const char *name = entry->name.name()->data;
         //module = LLVMModuleCreateWithName(name);
 
@@ -7912,7 +8090,32 @@ struct SPIRVGenerator {
                 false, "", 0, "", 0);*/
         }
 
-        label_to_function(entry, true);
+        auto func = label_to_function(entry, true);
+
+        switch(target.value()) {
+        case SYM_TargetVertex: {
+            builder.addCapability(spv::CapabilityShader);
+            builder.addEntryPoint(spv::ExecutionModelVertex, func, "main");
+        } break;
+        case SYM_TargetFragment: {
+            builder.addCapability(spv::CapabilityShader);
+            builder.addEntryPoint(spv::ExecutionModelFragment, func, "main");
+        } break;
+        case SYM_TargetGeometry: {
+            builder.addCapability(spv::CapabilityShader);
+            builder.addEntryPoint(spv::ExecutionModelGeometry, func, "main");
+        } break;
+        case SYM_TargetCompute: {
+            builder.addCapability(spv::CapabilityShader);
+            builder.addEntryPoint(spv::ExecutionModelGLCompute, func, "main");
+        } break;
+        default: {
+            StyledString ss;
+            ss.out << "IL->SPIR: unsupported target: " << target;
+            location_error(ss.str());
+        } break;
+        }
+    
         process_labels();
 
         //size_t k = finalize_types();
@@ -9495,7 +9698,7 @@ static Any compile(Label *fn, uint64_t flags) {
     return Any::from_pointer(functype, pfunc);
 }
 
-static const String *compile_spirv(Label *fn, uint64_t flags) {
+static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_CompileSPIRV);
 //#ifdef SCOPES_WIN32
     flags |= CF_NoDebugInfo;
@@ -9511,7 +9714,7 @@ static const String *compile_spirv(Label *fn, uint64_t flags) {
     std::vector<unsigned int> result;
     {
         Timer generate_timer(TIMER_GenerateSPIRV);
-        ctx.generate(result, fn);
+        ctx.generate(result, target, fn);
     }
 
     if (flags & CF_DumpModule) {
@@ -9526,7 +9729,7 @@ static const String *compile_spirv(Label *fn, uint64_t flags) {
     return String::from((char *)&result[0], bytesize);
 }
 
-static const String *compile_glsl(Label *fn, uint64_t flags) {
+static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_CompileSPIRV);
 //#ifdef SCOPES_WIN32
     flags |= CF_NoDebugInfo;    
@@ -9542,7 +9745,7 @@ static const String *compile_glsl(Label *fn, uint64_t flags) {
     std::vector<unsigned int> result;
     {
         Timer generate_timer(TIMER_GenerateSPIRV);
-        ctx.generate(result, fn);
+        ctx.generate(result, target, fn);
     }
 
     if (flags & CF_DumpModule) {
@@ -10552,9 +10755,9 @@ struct Solver {
         } break;
         case FN_ShuffleVector: {
             CHECKARGS(3, 3);
-            const Type *TV1 = args[1].value.indirect_type();
-            const Type *TV2 = args[2].value.indirect_type();
-            const Type *TMask = args[3].value.type;
+            const Type *TV1 = storage_type(args[1].value.indirect_type());
+            const Type *TV2 = storage_type(args[2].value.indirect_type());
+            const Type *TMask = storage_type(args[3].value.type);
             verify_kind<TK_Vector>(TV1);
             verify_kind<TK_Vector>(TV2);
             verify_kind<TK_Vector>(TMask);
@@ -10716,6 +10919,10 @@ struct Solver {
         case FN_Store: {
             CHECKARGS(2, 2);
             const Type *T = storage_type(args[2].value.indirect_type());
+            bool is_extern = (T->kind() == TK_Extern);
+            if (is_extern) {
+                T = MutPointer(cast<ExternType>(T)->type);
+            }
             verify_kind<TK_Pointer>(T);
             verify_mutable(T);
             auto pi = cast<PointerType>(T);
@@ -10924,11 +11131,24 @@ struct Solver {
             RETARGS(args[1].value.symbol);
         } break;
         case FN_ExternNew: {
-            CHECKARGS(2, 2);
+            CHECKARGS(2, -1);
             args[1].value.verify(TYPE_Symbol);
             const Type *T = args[2].value;
             Any value(args[1].value.symbol);
-            value.type = Extern(T);
+            int extern_storage_class = ETC_C;
+            if (args.size() > 3) {
+                args[3].value.verify(TYPE_Symbol);
+                switch(args[3].value.symbol.value()) {
+                case SYM_SPIRVInput: extern_storage_class = ETC_SPIRV_Input; break;
+                case SYM_SPIRVOutput: extern_storage_class = ETC_SPIRV_Output; break;
+                default: {
+                    StyledString ss;
+                    ss.out << "unknown class for extern: " << args[3].value.symbol;
+                    location_error(ss.str());
+                } break;
+                }
+            }
+            value.type = Extern(T, extern_storage_class);
             RETARGS(value);
         } break;
         case FN_FunctionType: {
@@ -13494,12 +13714,13 @@ static Any f_compile(Label *srcl, uint64_t flags) {
     return compile(srcl, flags);
 }
 
-static const String *f_compile_spirv(Label *srcl, uint64_t flags) {
-    return compile_spirv(srcl, flags);
+static const String *f_compile_spirv(Symbol target, Label *srcl, uint64_t flags) {
+    return compile_spirv(target, srcl, flags);
 }
 
-static const String *f_compile_glsl(Label *srcl, uint64_t flags) {
-    return compile_glsl(srcl, flags);
+static const String *f_compile_glsl(Symbol target, Label *srcl, uint64_t flags) {
+
+    return compile_glsl(target, srcl, flags);
 }
 
 static const Type *f_array_type(const Type *element_type, size_t count) {
@@ -13740,8 +13961,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
-    DEFINE_PURE_C_FUNCTION(FN_CompileSPIRV, f_compile_spirv, TYPE_String, TYPE_Label, TYPE_U64);
-    DEFINE_PURE_C_FUNCTION(FN_CompileGLSL, f_compile_glsl, TYPE_String, TYPE_Label, TYPE_U64);
+    DEFINE_PURE_C_FUNCTION(FN_CompileSPIRV, f_compile_spirv, TYPE_String, TYPE_Symbol, TYPE_Label, TYPE_U64);
+    DEFINE_PURE_C_FUNCTION(FN_CompileGLSL, f_compile_glsl, TYPE_String, TYPE_Symbol, TYPE_Label, TYPE_U64);
     DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
     DEFINE_C_FUNCTION(FN_LoadLibrary, f_load_library, TYPE_Void, TYPE_String);
 
