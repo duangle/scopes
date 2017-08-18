@@ -179,6 +179,7 @@ const char *scopes_compile_time_date();
 
 #include "external/glslang/SpvBuilder.h"
 #include "external/glslang/disassemble.h"
+#include "external/glslang/GLSL.std.450.h"
 #include "external/spirv-cross/spirv_glsl.hpp"
 #include "spirv-tools/libspirv.hpp"
 #include "spirv-tools/optimizer.hpp"
@@ -570,6 +571,99 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(PositionPerViewNV) \
     T(ViewportMaskPerViewNV)
 
+#define B_GLSL_STD_450_BUILTINS() \
+    T(Round) \
+    T(RoundEven) \
+    T(Trunc) \
+    T(FAbs) \
+    T(SAbs) \
+    T(FSign) \
+    T(SSign) \
+    T(Floor) \
+    T(Ceil) \
+    T(Fract) \
+    \
+    T(Radians) \
+    T(Degrees) \
+    T(Sin) \
+    T(Cos) \
+    T(Tan) \
+    T(Asin) \
+    T(Acos) \
+    T(Atan) \
+    T(Sinh) \
+    T(Cosh) \
+    T(Tanh) \
+    T(Asinh) \
+    T(Acosh) \
+    T(Atanh) \
+    T(Atan2) \
+    \
+    T(Pow) \
+    T(Exp) \
+    T(Log) \
+    T(Exp2) \
+    T(Log2) \
+    T(Sqrt) \
+    T(InverseSqrt) \
+    \
+    T(Determinant) \
+    T(MatrixInverse) \
+    \
+    T(Modf) \
+    T(ModfStruct) \
+    T(FMin) \
+    T(UMin) \
+    T(SMin) \
+    T(FMax) \
+    T(UMax) \
+    T(SMax) \
+    T(FClamp) \
+    T(UClamp) \
+    T(SClamp) \
+    T(FMix) \
+    T(IMix) \
+    T(Step) \
+    T(SmoothStep) \
+    \
+    T(Fma) \
+    T(Frexp) \
+    T(FrexpStruct) \
+    T(Ldexp) \
+    \
+    T(PackSnorm4x8) \
+    T(PackUnorm4x8) \
+    T(PackSnorm2x16) \
+    T(PackUnorm2x16) \
+    T(PackHalf2x16) \
+    T(PackDouble2x32) \
+    T(UnpackSnorm2x16) \
+    T(UnpackUnorm2x16) \
+    T(UnpackHalf2x16) \
+    T(UnpackSnorm4x8) \
+    T(UnpackUnorm4x8) \
+    T(UnpackDouble2x32) \
+    \
+    T(Length) \
+    T(Distance) \
+    T(Cross) \
+    T(Normalize) \
+    T(FaceForward) \
+    T(Reflect) \
+    T(Refract) \
+    \
+    T(FindILsb) \
+    T(FindSMsb) \
+    T(FindUMsb) \
+    \
+    T(InterpolateAtCentroid) \
+    T(InterpolateAtSample) \
+    T(InterpolateAtOffset) \
+    \
+    T(NMin) \
+    T(NMax) \
+    T(NClamp)
+
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
     \
@@ -843,8 +937,18 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Pure, "pure") \
     \
     /* extern classes */ \
-    T(SYM_SPIRVInput, "input") \
-    T(SYM_SPIRVOutput, "output") \
+    T(SYM_SPIRV_UniformConstant, "uniform-constant") \
+    T(SYM_SPIRV_Input, "input") \
+    T(SYM_SPIRV_Uniform, "uniform") \
+    T(SYM_SPIRV_Output, "output") \
+    T(SYM_SPIRV_Workgroup, "workgroup") \
+    T(SYM_SPIRV_CrossWorkgroup, "cross-workgroup") \
+    T(SYM_SPIRV_PushConstant, "push-constant") \
+    T(SYM_SPIRV_AtomicCounter, "atomic-counter") \
+    T(SYM_SPIRV_Image, "image") \
+    T(SYM_SPIRV_StorageBuffer, "storage-buffer") \
+    \
+    T(SYM_Location, "location") \
     \
     /* compile targets */ \
     T(SYM_TargetVertex, "vertex-stage") \
@@ -891,6 +995,10 @@ enum KnownSymbol {
     SYM_SPIRV_BuiltIn ## NAME,
     B_SPIRV_BUILTINS()
 #undef T
+#define T(NAME) \
+    SYM_GLSL_std_450_ ## NAME,
+    B_GLSL_STD_450_BUILTINS()
+#undef T
     SYM_Count,
 };
 
@@ -929,7 +1037,11 @@ static const char *get_known_symbol_name(KnownSymbol sym) {
     case SYM_SPIRV_BuiltIn ## NAME: return "SYM_SPIRV_BuiltIn" #NAME;
 B_SPIRV_BUILTINS()
 #undef T
-    case SYM_Count: return "SYM_Count";
+#define T(NAME) \
+    case SYM_GLSL_std_450_ ## NAME: return "SYM_GLSL_std_450_" #NAME;
+B_GLSL_STD_450_BUILTINS()
+#undef T
+case SYM_Count: return "SYM_Count";
     }
 }
 
@@ -1469,6 +1581,10 @@ public:
     #define T(NAME) \
         map_known_symbol(SYM_SPIRV_BuiltIn ## NAME, String::from("spirv." #NAME));
         B_SPIRV_BUILTINS()
+    #undef T
+    #define T(NAME) \
+        map_known_symbol(SYM_GLSL_std_450_ ## NAME, String::from("glsl.std.450." #NAME));
+        B_GLSL_STD_450_BUILTINS()
     #undef T
     }
 
@@ -2551,33 +2667,29 @@ static const Type *Union(const std::vector<const Type *> &types) {
 // EXTERN TYPE
 //------------------------------------------------------------------------------
 
-enum ExternTypeClass {
-    ETC_C = 0, // C namespace symbol
-    ETC_SPIRV_Input, // SPIRV storage class: input
-    ETC_SPIRV_Output, // SPIRV storage class: output
-};
-
 struct ExternType : Type {
     static bool classof(const Type *T) {
         return T->kind() == TK_Extern;
     }
 
-    ExternType(const Type *_type, int _storage_class) :
+    ExternType(const Type *_type, Symbol _storage_class, int _location) :
         Type(TK_Extern),
         type(_type) {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
-        storage_class = (ExternTypeClass)_storage_class;
+        storage_class = _storage_class;
+        location = _location;
     }
 
     const Type *type;
-    ExternTypeClass storage_class;
+    Symbol storage_class;
+    int location;
 };
 
-static const Type *Extern(const Type *type, int storage_class = ETC_C) {
+static const Type *Extern(const Type *type, Symbol storage_class = SYM_Unnamed, int location = -1) {
     static TypeFactory<ExternType> externs;
-    return externs.insert(type, storage_class);
+    return externs.insert(type, storage_class, location);
 }
 
 //------------------------------------------------------------------------------
@@ -7138,6 +7250,7 @@ struct SPIRVGenerator {
 
     Label *active_function;
     spv::Function *active_function_value;
+    spv::Id glsl_ext_inst;
 
     bool use_debug_info;
 
@@ -7158,20 +7271,34 @@ struct SPIRVGenerator {
         builder('S' << 24 | 'C' << 16 | 'O' << 8 | 'P', &logger),
         active_function(nullptr),
         active_function_value(nullptr),
+        glsl_ext_inst(0),
         use_debug_info(true) {
 
     }
 
-    spv::StorageClass storage_class_from_extern_class(ExternTypeClass etc) {
-        switch(etc) {
-        case ETC_C: {
+    spv::StorageClass storage_class_from_extern_class(Symbol etc) {
+        switch(etc.value()) {
+        case SYM_SPIRV_UniformConstant: return spv::StorageClassUniformConstant;
+        case SYM_SPIRV_Input: return spv::StorageClassInput;
+        case SYM_SPIRV_Uniform: return spv::StorageClassUniform;
+        case SYM_SPIRV_Output: return spv::StorageClassOutput;
+        case SYM_SPIRV_Workgroup: return spv::StorageClassWorkgroup;
+        case SYM_SPIRV_CrossWorkgroup: return spv::StorageClassCrossWorkgroup;
+        case SYM_SPIRV_PushConstant: return spv::StorageClassPushConstant;
+        case SYM_SPIRV_AtomicCounter: return spv::StorageClassAtomicCounter;
+        case SYM_SPIRV_Image: return spv::StorageClassImage;
+        case SYM_SPIRV_StorageBuffer: return spv::StorageClassStorageBuffer;
+        case SYM_Unnamed: {
             location_error(
                 String::from(
                     "IL->SPIR: extern values with C storage class"
                     " are unsupported"));
         } break;
-        case ETC_SPIRV_Input: return spv::StorageClassInput;
-        case ETC_SPIRV_Output: return spv::StorageClassOutput;
+        default: {
+            location_error(
+                String::from(
+                    "IL->SPIR: unsupported storage class for extern value"));
+        } break;
         }
         return spv::StorageClassMax;
     }
@@ -7240,6 +7367,9 @@ struct SPIRVGenerator {
             auto id = builder.createVariable(sc, ty, name);
             if (builtin != spv::BuiltInMax) {
                 builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
+            }
+            if (et->location >= 0) {
+                builder.addDecoration(id, spv::DecorationLocation, et->location);
             }
             return id;
         } break;
@@ -7544,31 +7674,7 @@ struct SPIRVGenerator {
             case OP_FCmpUGT:
             case OP_FCmpUGE:
             case OP_FCmpULT:
-            case OP_FCmpULE:
-            case OP_Add:
-            case OP_AddNUW:
-            case OP_AddNSW:
-            case OP_Sub:
-            case OP_SubNUW:
-            case OP_SubNSW:
-            case OP_Mul:
-            case OP_MulNUW:
-            case OP_MulNSW:
-            case OP_SDiv:
-            case OP_UDiv:
-            case OP_SRem:
-            case OP_URem:
-            case OP_Shl:
-            case OP_LShr:
-            case OP_AShr:
-            case OP_BAnd:
-            case OP_BOr:
-            case OP_BXor:
-            case OP_FAdd:
-            case OP_FSub:
-            case OP_FMul:
-            case OP_FDiv:
-            case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
+            case OP_FCmpULE: { READ_VALUE(a); READ_VALUE(b);
                 spv::Op op = spv::OpMax;
 #define BOOL_OR_INT_OP(BOOL_OP, INT_OP) \
     (is_bool(a)?(BOOL_OP):(INT_OP))
@@ -7597,6 +7703,45 @@ struct SPIRVGenerator {
                 case OP_FCmpUGE: op = spv::OpFUnordGreaterThanEqual; break;
                 case OP_FCmpULT: op = spv::OpFUnordLessThan; break;
                 case OP_FCmpULE: op = spv::OpFUnordLessThanEqual; break;
+                default: break;
+                }
+#undef BOOL_OR_INT_OP
+                auto T = builder.getTypeId(a);
+                if (builder.isVectorType(T)) {
+                    T = builder.makeVectorType(builder.makeBoolType(),
+                        builder.getNumComponents(T));
+                } else {
+                    T = builder.makeBoolType();
+                }
+                retvalue = builder.createBinOp(op, T, a, b); } break;
+            case OP_Add:
+            case OP_AddNUW:
+            case OP_AddNSW:
+            case OP_Sub:
+            case OP_SubNUW:
+            case OP_SubNSW:
+            case OP_Mul:
+            case OP_MulNUW:
+            case OP_MulNSW:
+            case OP_SDiv:
+            case OP_UDiv:
+            case OP_SRem:
+            case OP_URem:
+            case OP_Shl:
+            case OP_LShr:
+            case OP_AShr:
+            case OP_BAnd:
+            case OP_BOr:
+            case OP_BXor:
+            case OP_FAdd:
+            case OP_FSub:
+            case OP_FMul:
+            case OP_FDiv:
+            case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
+                spv::Op op = spv::OpMax;
+                switch(enter.builtin.value()) {
+#define BOOL_OR_INT_OP(BOOL_OP, INT_OP) \
+    (is_bool(a)?(BOOL_OP):(INT_OP))
                 case OP_Add:
                 case OP_AddNUW:
                 case OP_AddNSW: op = spv::OpIAdd; break;
@@ -7635,6 +7780,27 @@ struct SPIRVGenerator {
                 location_error(ss.str());
             } break;
             }
+        } else if (enter.type->kind() == TK_Extern) {
+            auto et = cast<ExternType>(enter.type);
+            GLSLstd450 builtin = GLSLstd450Bad;
+            switch (enter.symbol.value()) {
+            #define T(NAME) \
+            case SYM_GLSL_std_450_ ## NAME: \
+                builtin = GLSLstd450 ## NAME; break;
+                B_GLSL_STD_450_BUILTINS()
+            #undef T
+            default: {
+                StyledString ss;
+                ss.out << "IL->SPIR: unsupported intrinsic " << enter << " encountered";
+                location_error(ss.str());
+            } break;
+            }
+            auto T = type_to_spirv_type(cast<FunctionType>(et->type)->return_type);
+            std::vector<spv::Id> values;
+            for (size_t i = 0; i < argcount; ++i) {
+                values.push_back(argument_to_value(args[i + 1].value));
+            }
+            retvalue = builder.createBuiltinCall(T, glsl_ext_inst, builtin, values);
         } else if (enter.type == TYPE_Label) {
             if (enter.label->is_basic_block_like()) {
                 auto block = label_to_basic_block(enter.label);
@@ -8051,6 +8217,8 @@ struct SPIRVGenerator {
     void generate(std::vector<unsigned int> &result, Symbol target, Label *entry) {
         //assert(all_parameters_lowered(entry));
         assert(!entry->is_basic_block_like());
+
+        glsl_ext_inst = builder.import("GLSL.std.450");
 
         auto needfi = Function(TYPE_Void, {}, 0);
         auto hasfi = entry->get_function_type();
@@ -11211,20 +11379,53 @@ struct Solver {
             args[1].value.verify(TYPE_Symbol);
             const Type *T = args[2].value;
             Any value(args[1].value.symbol);
-            int extern_storage_class = ETC_C;
+            Symbol extern_storage_class = SYM_Unnamed;
+            int location = -1;
             if (args.size() > 3) {
-                args[3].value.verify(TYPE_Symbol);
-                switch(args[3].value.symbol.value()) {
-                case SYM_SPIRVInput: extern_storage_class = ETC_SPIRV_Input; break;
-                case SYM_SPIRVOutput: extern_storage_class = ETC_SPIRV_Output; break;
-                default: {
-                    StyledString ss;
-                    ss.out << "unknown class for extern: " << args[3].value.symbol;
-                    location_error(ss.str());
-                } break;
+                size_t i = 3;
+                while (i < args.size()) {
+                    bool found = false;
+
+                    args[i].value.verify(TYPE_Symbol);
+
+                    if (args[i].value.symbol == SYM_Location) {
+                        i++;
+                        if (i == args.size()) {
+                            location_error(String::from("index expected after location tag"));
+                        }
+                        args[i].value.verify(TYPE_I32);
+                        location = args[i].value.i32;
+                        found = true;
+                    }
+
+                    if (!found && (extern_storage_class == SYM_Unnamed)) {
+                        switch(args[i].value.symbol.value()) {
+                        case SYM_SPIRV_UniformConstant:
+                        case SYM_SPIRV_Input:
+                        case SYM_SPIRV_Uniform:
+                        case SYM_SPIRV_Output:
+                        case SYM_SPIRV_Workgroup:
+                        case SYM_SPIRV_CrossWorkgroup:
+                        case SYM_SPIRV_PushConstant:
+                        case SYM_SPIRV_AtomicCounter:
+                        case SYM_SPIRV_Image:
+                        case SYM_SPIRV_StorageBuffer:
+                            found = true;
+                            extern_storage_class = args[i].value.symbol; break;
+                        default: break;
+                        }
+                    }
+
+                    if (!found) {
+                        StyledString ss;
+                        ss.out << "can't parse symbol: " << args[i].value.symbol;
+                        location_error(ss.str());
+                    }
+
+                    i++;
                 }
             }
-            value.type = Extern(T, extern_storage_class);
+            value.type = Extern(T, extern_storage_class, location);
             RETARGS(value);
         } break;
         case FN_FunctionType: {
