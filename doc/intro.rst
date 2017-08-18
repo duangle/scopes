@@ -7,8 +7,8 @@ Installation
 You can either download a binary distribution of Scopes from the
 `website <https://bitbucket.org/duangle/scopes>`_ or build Scopes from source.
 
-The main repository for scopes is on 
-`bitbucket <https://bitbucket.org/duangle/scopes>`_. A 
+The main repository for scopes is on
+`bitbucket <https://bitbucket.org/duangle/scopes>`_. A
 `github mirror <https://github.com/duangle/scopes>`_ is also available.
 
 Building Scopes on Windows
@@ -26,8 +26,8 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
 * Lastly, you need a build of `GENie <https://github.com/bkaradzic/GENie>`_ (binaries
   available on the page).
 * In the base directory, run ``genie gmake`` once to generate the project Makefiles.
-* To build in debug mode, run ``make -C build``. For release mode, use 
-  ``make -C build config=release``. 
+* To build in debug mode, run ``make -C build``. For release mode, use
+  ``make -C build config=release``.
 * There should now be a ``scopes.exe`` executable in the repo root folder.
 * For a fresh rebuild, just remove the ``build`` directory before running make.
 
@@ -37,7 +37,7 @@ Building Scopes on Linux
 * You need build-essentials, clang, libclang and LLVM 4.0.x installed - preferably
   locally:
 * Put ``clang++`` and ``llvm-config`` in your path **OR** extract the clang distro into
-  the repo folder and rename it to ``clang``. 
+  the repo folder and rename it to ``clang``.
 * You also need the latest source distributions of
   `libffi <https://sourceware.org/libffi/>`_ and a github checkout of
   `SPIRV-Tools <https://github.com/KhronosGroup/SPIRV-Tools>`_ (into the workspace folder).
@@ -46,10 +46,11 @@ Building Scopes on Linux
 * Build libffi using ``./configure --enable-shared=no --enable-static=yes && make`` and
   softlink or copy the generated build folder (e.g. ``x86_64-unknown-linux-gnu``)
   as ``libffi`` in the repo folder.
-* Build SPIRV-Tools according to the build instructions so that the compiled files
-  end up in ``scopes-repo/SPIRV-Tools/build``.
+* Build SPIRV-Tools using
+  ``mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make``
+  in ``scopes-repo/SPIRV-Tools/build``.
 * In the base directory, run ``genie gmake`` once to generate the project Makefiles.
-* To build in debug mode, run ``make -C build``. For release mode, use 
-  ``make -C build config=release``. 
+* To build in debug mode, run ``make -C build``. For release mode, use
+  ``make -C build config=release``.
 * There should now be a ``scopes`` executable in the repo root folder.
 * For a fresh rebuild, just remove the ``build`` directory before running make.

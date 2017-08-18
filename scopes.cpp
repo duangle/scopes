@@ -181,6 +181,7 @@ const char *scopes_compile_time_date();
 #include "external/glslang/disassemble.h"
 #include "external/spirv-cross/spirv_glsl.hpp"
 #include "spirv-tools/libspirv.hpp"
+#include "spirv-tools/optimizer.hpp"
 
 #define STB_SPRINTF_IMPLEMENTATION
 #include "external/stb_sprintf.h"
@@ -9701,6 +9702,68 @@ static Any compile(Label *fn, uint64_t flags) {
     return Any::from_pointer(functype, pfunc);
 }
 
+static void optimize_spirv(std::vector<unsigned int> &result) {
+    spvtools::Optimizer optimizer(SPV_ENV_UNIVERSAL_1_2);
+    /*
+    optimizer.SetMessageConsumer([](spv_message_level_t level, const char* source,
+        const spv_position_t& position,
+        const char* message) {
+    std::cerr << StringifyMessage(level, source, position, message)
+    << std::endl;
+    });*/
+    StyledStream ss(std::cerr);
+    optimizer.SetMessageConsumer([&ss](spv_message_level_t level, const char*,
+        const spv_position_t& position,
+        const char* message) {
+        switch (level) {
+        case SPV_MSG_FATAL:
+        case SPV_MSG_INTERNAL_ERROR:
+        case SPV_MSG_ERROR:
+            ss << Style_Error << "error: " << Style_None
+                << position.index << ": " << message << std::endl;
+            break;
+        case SPV_MSG_WARNING:
+            ss << Style_Warning << "warning: " << Style_None
+                << position.index << ": " << message << std::endl;
+            break;
+        case SPV_MSG_INFO:
+            ss << Style_Comment << "info: " << Style_None
+                << position.index << ": " << message << std::endl;
+            break;
+        default:
+            break;
+        }
+    });
+    //optimizer.RegisterPass(spvtools::CreateStripDebugInfoPass());
+    /*optimizer.RegisterPass(
+        CreateSetSpecConstantDefaultValuePass(std::move(*spec_ids_vals)));*/
+
+    optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
+    optimizer.RegisterPass(spvtools::CreateInlineExhaustivePass());
+    optimizer.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
+    optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
+    optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
+    optimizer.RegisterPass(spvtools::CreateLocalSingleBlockLoadStoreElimPass());
+    optimizer.RegisterPass(spvtools::CreateLocalSingleStoreElimPass());
+    optimizer.RegisterPass(spvtools::CreateBlockMergePass());
+    optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
+    optimizer.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
+    optimizer.RegisterPass(spvtools::CreateCommonUniformElimPass());
+    optimizer.RegisterPass(spvtools::CreateEliminateDeadConstantPass());
+    optimizer.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
+    optimizer.RegisterPass(spvtools::CreateUnifyConstantPass());
+    optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
+    optimizer.RegisterPass(spvtools::CreateCompactIdsPass());
+
+    std::vector<unsigned int> oldresult = result;
+    result.clear();
+    if (!optimizer.Run(oldresult.data(), oldresult.size(), &result)) {
+        location_error(String::from(
+            "IL->SPIR: error while running optimization passes"));
+    }
+
+}
+
 static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_CompileSPIRV);
 //#ifdef SCOPES_WIN32
@@ -9718,6 +9781,10 @@ static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
     {
         Timer generate_timer(TIMER_GenerateSPIRV);
         ctx.generate(result, target, fn);
+    }
+
+    if (!(flags & CF_NoOpts)) {
+        optimize_spirv(result);
     }
 
     if (flags & CF_DumpModule) {
@@ -9749,6 +9816,10 @@ static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
     {
         Timer generate_timer(TIMER_GenerateSPIRV);
         ctx.generate(result, target, fn);
+    }
+
+    if (!(flags & CF_NoOpts)) {
+        optimize_spirv(result);
     }
 
     if (flags & CF_DumpModule) {

@@ -16,7 +16,7 @@ local function flatten(t)
     local result = {}
     local function iterate(t)
         for _,k in pairs(t) do
-            if type(k) == "table" then 
+            if type(k) == "table" then
                 iterate(k)
             elseif k ~= nil and k ~= "" then
                 table.insert(result, k)
@@ -88,7 +88,7 @@ project "scopes"
     kind "ConsoleApp"
     language "C++"
     files {
-        "scopes.cpp", 
+        "scopes.cpp",
         "external/linenoise-ng/src/linenoise.cpp",
         "external/linenoise-ng/src/ConvertUTF.cpp",
         "external/linenoise-ng/src/wcwidth.cpp",
@@ -133,7 +133,7 @@ project "scopes"
             "-Wno-keyword-macro",
             "-Wno-gnu-redeclared-enum",
         }
-    
+
         files {
             "external/minilibs/regexp.c"
         }
@@ -142,21 +142,22 @@ project "scopes"
             "_GLIBCXX_USE_CXX11_ABI=0",
         }
 
-        links { 
+        links {
             "pthread", "m", "tinfo", "dl", "z",
         }
-        
+
         linkoptions {
             --"-Wl,--whole-archive",
             --"-l...",
             --"-Wl,--no-whole-archive",
-            
+
             -- can't use this or our LLVM will collide with LLVM in other libs
             --"-Wl,--export-dynamic",
             --"-rdynamic",
-            
+
             THISDIR .. "/libffi/.libs/libffi.a",
             THISDIR .. "/SPIRV-Tools/build/source/libSPIRV-Tools.a",
+            THISDIR .. "/SPIRV-Tools/build/source/opt/libSPIRV-Tools-opt.a",
         }
         linkoptions(LLVM_LDFLAGS)
         linkoptions {
@@ -171,7 +172,7 @@ project "scopes"
             "-lclangAST",
             "-lclangLex",
             "-lclangBasic"
-        }        
+        }
         --linkoptions { "-Wl,--whole-archive" }
         linkoptions(LLVM_LIBS)
         --linkoptions { "-Wl,--no-whole-archive" }
@@ -180,7 +181,7 @@ project "scopes"
             "cp -v " .. THISDIR .. "/bin/scopes " .. THISDIR,
             THISDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
         }
-    
+
     configuration { "windows" }
         buildoptions_cpp {
             "-D_GNU_SOURCE",
@@ -209,20 +210,20 @@ project "scopes"
             "-Wno-return-type",
             "-Wno-variadic-macros",
         }
-    
+
         buildoptions_cpp {
             "-Wno-unused-variable",
-            "-Wno-unused-function",        
+            "-Wno-unused-function",
         }
-    
+
         includedirs {
             "win32",
             MINGW_BASE_PATH .. "/lib/libffi-3.2.1/include"
         }
-    
+
         files {
             "external/minilibs/regexp.c",
-            "win32/mman.c",            
+            "win32/mman.c",
             "win32/realpath.c",
             "win32/dlfcn.c",
         }
@@ -235,7 +236,7 @@ project "scopes"
             "-Wno-shift-count-overflow"
         }
 
-        links { 
+        links {
             "ffi", "uuid", "ole32", "psapi", "version", "stdc++",
         }
 
@@ -266,7 +267,7 @@ project "scopes"
                 CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. THISDIR,
             }
         end
-    
+
     configuration "debug"
         defines { "SCOPES_DEBUG" }
         flags { "Symbols" }
@@ -274,9 +275,9 @@ project "scopes"
         buildoptions_cpp {
             "-O0"
         }
-    
+
     configuration "release"
         defines { "NDEBUG" }
         flags { "Optimize" }
-    
-    
+
+

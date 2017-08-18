@@ -90,6 +90,7 @@
         "__string": "cpp",
         "__tree": "cpp",
         "optional": "cpp",
-        "regexp.c": "cpp"
+        "regexp.c": "cpp",
+        "fstream": "cpp"
     }
 }
