@@ -9738,21 +9738,23 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
     /*optimizer.RegisterPass(
         CreateSetSpecConstantDefaultValuePass(std::move(*spec_ids_vals)));*/
 
-    optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
+    //optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
+    //optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
+    //optimizer.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
+    optimizer.RegisterPass(spvtools::CreateEliminateDeadConstantPass());
+    optimizer.RegisterPass(spvtools::CreateUnifyConstantPass());
     optimizer.RegisterPass(spvtools::CreateInlineExhaustivePass());
+
+    optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
+    optimizer.RegisterPass(spvtools::CreateBlockMergePass());
     optimizer.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
-    optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
-    optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalSingleBlockLoadStoreElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalSingleStoreElimPass());
-    optimizer.RegisterPass(spvtools::CreateBlockMergePass());
-    optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
+    optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
+    optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
+
     optimizer.RegisterPass(spvtools::CreateCommonUniformElimPass());
-    optimizer.RegisterPass(spvtools::CreateEliminateDeadConstantPass());
-    optimizer.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
-    optimizer.RegisterPass(spvtools::CreateUnifyConstantPass());
-    optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
     optimizer.RegisterPass(spvtools::CreateCompactIdsPass());
 
     std::vector<unsigned int> oldresult = result;
