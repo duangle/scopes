@@ -1468,7 +1468,7 @@ public:
     #define T(NAME) \
         map_known_symbol(SYM_SPIRV_BuiltIn ## NAME, String::from("spirv." #NAME));
         B_SPIRV_BUILTINS()
-    #undef T    
+    #undef T
     }
 
     StyledStream& stream(StyledStream& ost) const {
@@ -1604,7 +1604,7 @@ public:
         const char *indent = "    ") {
         auto str = strptr();
         if (offset >= length) {
-            ost << "<cannot display location in source file (offset " 
+            ost << "<cannot display location in source file (offset "
                 << offset << " is beyond length " << length << ")>" << std::endl;
             return ost;
         }
@@ -2060,7 +2060,7 @@ struct Type {
         }
         return false;
     }
-    
+
     bool lookup_call_handler(Any &dest) const {
         return lookup(KW_Call, dest);
     }
@@ -2079,7 +2079,7 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type) {
         ost << Style_Error;
         ost << "<null type>";
         ost << Style_None;
-        return ost;        
+        return ost;
     } else {
         return type->stream(ost);
     }
@@ -2265,8 +2265,8 @@ struct PointerType : Type {
     }
 
     PointerType(const Type *_element_type, uint64_t _flags)
-        : Type(TK_Pointer), 
-            element_type(_element_type), 
+        : Type(TK_Pointer),
+            element_type(_element_type),
             flags(_flags) {
         std::stringstream ss;
         ss << element_type->name()->data;
@@ -3050,7 +3050,7 @@ static const Type *superof(const Type *T) {
     case TK_Typename: return cast<TypenameType>(T)->super();
     case TK_ReturnLabel: return TYPE_ReturnLabel;
     case TK_Function: return TYPE_Function;
-    case TK_Extern: return TYPE_Extern; 
+    case TK_Extern: return TYPE_Extern;
     }
     assert(false && "unhandled type kind; corrupt pointer?");
     return nullptr;
@@ -3094,7 +3094,7 @@ StyledStream& Any::stream(StyledStream& ost, bool annotate_type) const {
         as.stream_type_suffix();
     } else if (type->kind() == TK_Extern) {
         ost << symbol;
-        as.stream_type_suffix();                
+        as.stream_type_suffix();
     } else if (type->kind() == TK_Vector) {
         auto vt = cast<VectorType>(type);
         ost << Style_Operator << "<" << Style_None;
@@ -3266,7 +3266,7 @@ struct Exception {
     const Anchor *anchor;
     const String *msg;
 
-    Exception() : 
+    Exception() :
         anchor(nullptr),
         msg(nullptr) {}
 
@@ -4112,8 +4112,8 @@ struct LexerParser {
         } else if (this->token == tok_quote) {
             this->read_token();
             return Syntax::from(anchor,
-                List::from({ 
-                    Any(Syntax::from(anchor, Symbol(KW_Quote))), 
+                List::from({
+                    Any(Syntax::from(anchor, Symbol(KW_Quote))),
                     parse_any() }));
         } else {
             location_error(format("unexpected token: %c (%i)",
@@ -4681,7 +4681,7 @@ struct Body {
     const Anchor *anchor;
     Any enter;
     Args args;
-    uint64_t flags;    
+    uint64_t flags;
 
     Body() : anchor(nullptr), enter(none), flags(0) {}
 
@@ -4698,7 +4698,7 @@ struct Body {
     bool is_rawcall() {
         return (flags & LBF_RawCall) == LBF_RawCall;
     }
-    
+
     void set_rawcall(bool enable = true) {
         if (enable) {
             flags |= LBF_RawCall;
@@ -4786,7 +4786,7 @@ public:
             return true;
         return false;
     }
-    
+
     bool is_complete() {
         return !params.empty() && body.anchor && !body.args.empty();
     }
@@ -4829,7 +4829,7 @@ public:
             }
         }
 
-        void stream_users(const std::unordered_set<Label *> &users, 
+        void stream_users(const std::unordered_set<Label *> &users,
             StyledStream &ss) const {
             ss << Style_Comment << "{" << Style_None;
             size_t i = 0;
@@ -4848,7 +4848,7 @@ public:
             auto it = label_map.find(node);
             if (it != label_map.end()) stream_users(it->second, ss);
         }
-        
+
         void stream_users(Parameter *node, StyledStream &ss) const {
             auto it = param_map.find(node);
             if (it != param_map.end()) stream_users(it->second, ss);
@@ -4926,7 +4926,7 @@ public:
             if (!tl) {
                 set_active_anchor(anchor);
                 StyledString ss;
-                ss.out << "cannot compile function with return type " 
+                ss.out << "cannot compile function with return type "
                     << params[0]->type;
                 location_error(ss.str());
             }
@@ -4937,7 +4937,7 @@ public:
                     if (is_opaque(T)) {
                         set_active_anchor(anchor);
                         StyledString ss;
-                        ss.out << "cannot compile function with opaque return argument of type " 
+                        ss.out << "cannot compile function with opaque return argument of type "
                             << T;
                         location_error(ss.str());
                     }
@@ -4954,7 +4954,7 @@ public:
             } else if (is_opaque(T)) {
                 set_active_anchor(anchor);
                 StyledString ss;
-                ss.out << "cannot compile function with opaque argument of type " 
+                ss.out << "cannot compile function with opaque argument of type "
                     << T;
                 location_error(ss.str());
             }
@@ -5116,7 +5116,7 @@ public:
 
     void build_scope(std::vector<Label *> &tempscope) {
         std::unordered_set<Label *> reachable;
-        build_reachable(reachable);        
+        build_reachable(reachable);
         UserMap um;
         for (auto it = reachable.begin(); it != reachable.end(); ++it) {
             (*it)->insert_into_usermap(um);
@@ -5277,7 +5277,7 @@ struct Frame {
             }
             top = top->parent;
         }
-        return nullptr;        
+        return nullptr;
     }
 
     static Frame *from(const Frame *parent, Label *label, size_t loop_count) {
@@ -5323,7 +5323,7 @@ void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = fals
 #endif
                 StyledString ss;
                 ss.out << "parameter " << param << " is out of bounds ("
-                    << param->index << " >= " << (int)frame->args.size() << ")";                    
+                    << param->index << " >= " << (int)frame->args.size() << ")";
                 location_error(ss.str());
             }
             dest.push_back(KeyAny(arg.key, none));
@@ -5700,7 +5700,7 @@ enum MangleFlag {
     Mangle_Verbose = (1<<0),
 };
 
-static Label *mangle(Label::UserMap &um, Label *entry, 
+static Label *mangle(Label::UserMap &um, Label *entry,
     std::vector<Parameter *> params, MangleParamMap &pmap, int verbose = 0) {
     MangleLabelMap lmap;
 
@@ -5881,7 +5881,7 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
             }
         }
     }
-    
+
     if (label->scope_label) {
         const Frame *top = parent->find_frame(label->scope_label);
         if (top) {
@@ -5891,7 +5891,7 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
             parent = nullptr;
         }
     }
-    
+
     Label::Args la;
     la.frame = parent;
     la.args = args;
@@ -6018,7 +6018,7 @@ public:
     NamespaceMap typedefs;
 
     CVisitor() : dest(nullptr), Context(NULL) {
-        typedefs.insert({Symbol("__builtin_va_list"), 
+        typedefs.insert({Symbol("__builtin_va_list"),
             Typename(String::from("__builtin_va_list")) });
     }
 
@@ -6231,10 +6231,10 @@ public:
             const clang::DecayedType *DTy = cast<clang::DecayedType>(Ty);
             return always_immutable(DTy->getDecayedType());
         } break;
-        case clang::Type::Pointer: 
+        case clang::Type::Pointer:
         case clang::Type::VariableArray:
-        case clang::Type::IncompleteArray: 
-        case clang::Type::ConstantArray: 
+        case clang::Type::IncompleteArray:
+        case clang::Type::ConstantArray:
             break;
         case clang::Type::ExtVector:
         case clang::Type::Vector: return true;
@@ -6548,8 +6548,8 @@ static void init_llvm() {
 
 static std::vector<LLVMModuleRef> llvm_c_modules;
 
-static void add_c_macro(clang::Preprocessor & PP, 
-    const clang::IdentifierInfo * II, 
+static void add_c_macro(clang::Preprocessor & PP,
+    const clang::IdentifierInfo * II,
     clang::MacroDirective * MD, Scope *scope, std::list< std::pair<Symbol, Symbol> > &aliases) {
     if(!II->hasMacroDefinition())
         return;
@@ -6585,10 +6585,10 @@ static void add_c_macro(clang::Preprocessor & PP,
         scope->bind(Symbol(name), value);
         return;
     }
-    
+
     if(Tok->isNot(clang::tok::numeric_constant))
         return;
-    
+
     clang::SmallString<64> IntegerBuffer;
     bool NumberInvalid = false;
     clang::StringRef Spelling = PP.getSpelling(*Tok, IntegerBuffer, &NumberInvalid);
@@ -6664,7 +6664,7 @@ static Scope *import_c_module (
         PP.getDiagnostics().setClient(new IgnoringDiagConsumer(), true);
 
         std::list< std::pair<Symbol, Symbol> > todo;
-        for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false); 
+        for(Preprocessor::macro_iterator it = PP.macro_begin(false),end = PP.macro_end(false);
             it != end; ++it) {
             const IdentifierInfo * II = it->first;
             MacroDirective * MD = it->second.getLatest();
@@ -6735,7 +6735,7 @@ static bool signal_abort = false;
 void f_abort() {
 #if SCOPES_PRINT_TIMERS
     Timer::print_timers();
-#endif    
+#endif
     if (SCOPES_EARLY_ABORT || signal_abort) {
         std::abort();
     } else {
@@ -6747,13 +6747,13 @@ void f_abort() {
 void f_exit(int c) {
 #if SCOPES_PRINT_TIMERS
     Timer::print_timers();
-#endif        
+#endif
     exit(c);
 }
 
 static void default_exception_handler(const Any &value) {
     auto cerr = StyledStream(std::cerr);
-    if (value.type == TYPE_Exception) {        
+    if (value.type == TYPE_Exception) {
         const Exception *exc = value;
         if (exc->anchor) {
             cerr << exc->anchor << " ";
@@ -6837,7 +6837,7 @@ enum ABIClass {
     ABI_CLASS_SSE,
     ABI_CLASS_SSESF,
     ABI_CLASS_SSEDF,
-    // The class consists of types that fit into a vector register and can be 
+    // The class consists of types that fit into a vector register and can be
     // passed and returned in the upper bytes of it.
     ABI_CLASS_SSEUP,
     // These classes consists of types that will be returned via the x87 FPU
@@ -6886,8 +6886,8 @@ static ABIClass merge_abi_classes(ABIClass class1, ABIClass class2) {
 const size_t MAX_ABI_CLASSES = 4;
 static size_t classify(const Type *T, ABIClass *classes, size_t offset);
 
-static size_t classify_array_like(size_t size, 
-    const Type *element_type, size_t count, 
+static size_t classify_array_like(size_t size,
+    const Type *element_type, size_t count,
     ABIClass *classes, size_t offset) {
     const size_t UNITS_PER_WORD = 8;
     size_t words = (size + UNITS_PER_WORD - 1) / UNITS_PER_WORD;
@@ -6941,12 +6941,12 @@ static size_t classify_array_like(size_t size,
             }
         }
     }
-    return words;            
+    return words;
 }
 
 static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
     switch(T->kind()) {
-    case TK_Integer: 
+    case TK_Integer:
     case TK_Extern:
     case TK_Pointer: {
         size_t size = size_of(T) + offset;
@@ -6994,12 +6994,12 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
     } break;
     case TK_Vector: {
         auto tt = cast<VectorType>(T);
-        return classify_array_like(size_of(T), 
+        return classify_array_like(size_of(T),
             tt->element_type, tt->count, classes, offset);
     } break;
     case TK_Array: {
         auto tt = cast<ArrayType>(T);
-        return classify_array_like(size_of(T), 
+        return classify_array_like(size_of(T),
             tt->element_type, tt->count, classes, offset);
     } break;
     case TK_Union: {
@@ -7134,7 +7134,7 @@ struct SPIRVGenerator {
 
     spv::SpvBuildLogger logger;
     spv::Builder builder;
-    
+
     Label *active_function;
     spv::Function *active_function_value;
 
@@ -7158,7 +7158,7 @@ struct SPIRVGenerator {
         active_function(nullptr),
         active_function_value(nullptr),
         use_debug_info(true) {
-        
+
     }
 
     spv::StorageClass storage_class_from_extern_class(ExternTypeClass etc) {
@@ -7186,7 +7186,7 @@ struct SPIRVGenerator {
             }
             return it->second;
         }
-    
+
         switch(value.type->kind()) {
         case TK_Integer: {
             auto it = cast<IntegerType>(value.type);
@@ -7235,7 +7235,7 @@ struct SPIRVGenerator {
                     name = value.symbol.name()->data;
                     break;
             }
-            auto ty = type_to_spirv_type(et->type);           
+            auto ty = type_to_spirv_type(et->type);
             auto id = builder.createVariable(sc, ty, name);
             if (builtin != spv::BuiltInMax) {
                 builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
@@ -7250,7 +7250,7 @@ struct SPIRVGenerator {
             }
             auto pt = cast<PointerType>(value.type);
             auto val = argument_to_value(pt->unpack(value.pointer));
-            auto id = builder.createVariable(spv::StorageClassFunction, 
+            auto id = builder.createVariable(spv::StorageClassFunction,
                 builder.getTypeId(val), nullptr);
             builder.getInstruction(id)->addIdOperand(val);
             return id;
@@ -7305,7 +7305,15 @@ struct SPIRVGenerator {
         location_error(ss.str());
         return 0;
     }
-    
+
+    bool is_bool(spv::Id value) {
+        auto T = builder.getTypeId(value);
+        return
+            (builder.isVectorType(T)
+             && builder.isBoolType(builder.getContainedTypeId(T)))
+            || builder.isBoolType(T);
+    }
+
     void write_label_body(Label *label) {
     repeat:
         assert(label->body.is_complete());
@@ -7317,7 +7325,7 @@ struct SPIRVGenerator {
         set_active_anchor(label->body.anchor);
 
         /*
-        LLVMValueRef diloc = nullptr;        
+        LLVMValueRef diloc = nullptr;
         if (use_debug_info) {
             diloc = anchor_to_location(label->body.anchor);
             LLVMSetCurrentDebugLocation(builder, diloc);
@@ -7355,47 +7363,40 @@ struct SPIRVGenerator {
             case OP_Tertiary: {
                 READ_VALUE(cond);
                 READ_VALUE(then_value);
-                READ_VALUE(else_value);                
-                auto op = new spv::Instruction(
-                    builder.getUniqueId(),
-                    builder.getTypeId(then_value), 
-                    spv::OpSelect);
-                op->addIdOperand(cond);
-                op->addIdOperand(then_value);
-                op->addIdOperand(else_value);
-                retvalue = op->getResultId();
-                builder.getBuildPoint()->addInstruction(
-                    std::unique_ptr<spv::Instruction>(op));
+                READ_VALUE(else_value);
+                retvalue = builder.createTriOp(spv::OpSelect,
+                    builder.getTypeId(then_value), cond,
+                    then_value, else_value);
             } break;
             case FN_Unconst: {
                 READ_VALUE(val);
                 retvalue = val;
             } break;
-            /*
             case FN_ExtractValue: {
                 READ_VALUE(val);
                 READ_ANY(index);
-                retvalue = LLVMBuildExtractValue(
-                    builder, val, cast_number<int32_t>(index), "");
+                retvalue = builder.createCompositeExtract(val,
+                    builder.getContainedTypeId(builder.getTypeId(val)),
+                    cast_number<unsigned>(index));
             } break;
             case FN_InsertValue: {
                 READ_VALUE(val);
                 READ_VALUE(eltval);
                 READ_ANY(index);
-                retvalue = LLVMBuildInsertValue(
-                    builder, val, eltval, cast_number<int32_t>(index), "");
+                retvalue = builder.createCompositeInsert(eltval, val,
+                    builder.getTypeId(val),
+                    cast_number<unsigned>(index));
             } break;
-            */
             case FN_ExtractElement: {
                 READ_VALUE(val);
                 READ_VALUE(index);
                 if (_index.is_const()) {
-                    retvalue = builder.createCompositeExtract(val, 
+                    retvalue = builder.createCompositeExtract(val,
                         builder.getContainedTypeId(builder.getTypeId(val)),
                         cast_number<unsigned>(_index));
                 } else {
-                    retvalue = builder.createVectorExtractDynamic(val, 
-                        builder.getContainedTypeId(builder.getTypeId(val)), 
+                    retvalue = builder.createVectorExtractDynamic(val,
+                        builder.getContainedTypeId(builder.getTypeId(val)),
                         index);
                 }
             } break;
@@ -7408,7 +7409,7 @@ struct SPIRVGenerator {
                         builder.getTypeId(val),
                         cast_number<unsigned>(_index));
                 } else {
-                    retvalue = builder.createVectorInsertDynamic(val, 
+                    retvalue = builder.createVectorInsertDynamic(val,
                         builder.getTypeId(val), eltval, index);
                 }
             } break;
@@ -7420,12 +7421,12 @@ struct SPIRVGenerator {
                 auto sz = builder.getNumTypeComponents(builder.getTypeId(mask));
                 auto op = new spv::Instruction(
                     builder.getUniqueId(),
-                    builder.makeVectorType(ET, sz), 
+                    builder.makeVectorType(ET, sz),
                     spv::OpVectorShuffle);
                 op->addIdOperand(v1);
                 op->addIdOperand(v2);
                 auto vt = cast<VectorType>(storage_type(_mask.type));
-                for (int i = 0; i < sz; ++i) {                    
+                for (int i = 0; i < sz; ++i) {
                     op->addImmediateOperand(
                         cast_number<unsigned int>(vt->unpack(_mask.pointer, i)));
                 }
@@ -7433,19 +7434,18 @@ struct SPIRVGenerator {
                 builder.getBuildPoint()->addInstruction(
                     std::unique_ptr<spv::Instruction>(op));
             } break;
-            /*
             case FN_Undef: { READ_TYPE(ty);
-                retvalue = LLVMGetUndef(ty); } break;
-            case FN_NullOf: { READ_TYPE(ty);
-                retvalue = LLVMConstNull(ty); } break;
+                retvalue = builder.createUndefined(ty); } break;
             case FN_Alloca: { READ_TYPE(ty);
-                retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
+                retvalue = builder.createVariable(
+                    spv::StorageClassFunction, ty); } break;
+            /*
             case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
                 retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
             */
-            case FN_AllocaOf: { 
+            case FN_AllocaOf: {
                 READ_VALUE(val);
-                retvalue = builder.createVariable(spv::StorageClassFunction, 
+                retvalue = builder.createVariable(spv::StorageClassFunction,
                     builder.getTypeId(val));
                 builder.createStore(val, retvalue);
             } break;
@@ -7458,59 +7458,68 @@ struct SPIRVGenerator {
                 retvalue = LLVMBuildFree(builder, val); } break;
             */
             case FN_GetElementPtr: {
-                READ_VALUE(pointer);                
+                READ_VALUE(pointer);
                 assert(argcount > 1);
                 size_t count = argcount - 1;
                 std::vector<spv::Id> indices;
                 for (size_t i = 1; i < count; ++i) {
                     indices.push_back(argument_to_value(args[argn + i].value));
                 }
-                
+
                 retvalue = builder.createAccessChain(
-                    builder.getTypeStorageClass(builder.getTypeId(pointer)), 
+                    builder.getTypeStorageClass(builder.getTypeId(pointer)),
                     pointer, indices);
             } break;
-            /*
-            case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildBitCast(builder, val, ty, ""); 
-            } break;
-            case FN_IntToPtr: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildIntToPtr(builder, val, ty, ""); } break;
-            case FN_PtrToInt: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildPtrToInt(builder, val, ty, ""); } break;
-            case FN_Trunc: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildTrunc(builder, val, ty, ""); } break;
-            */
-            case FN_SExt: {
+            case FN_Bitcast:
+            case FN_IntToPtr:
+            case FN_PtrToInt:
+            case FN_Trunc:
+            case FN_SExt:
+            case FN_ZExt:
+            case FN_FPTrunc:
+            case FN_FPExt:
+            case FN_FPToUI:
+            case FN_FPToSI:
+            case FN_UIToFP:
+            case FN_SIToFP:
+            {
                 READ_VALUE(val); READ_TYPE(ty);
-                auto op = new spv::Instruction(
-                    builder.getUniqueId(), ty, spv::OpSConvert);
-                op->addIdOperand(val);
-                retvalue = op->getResultId();
-                builder.getBuildPoint()->addInstruction(
-                    std::unique_ptr<spv::Instruction>(op));
+                spv::Op op = spv::OpMax;
+                switch(enter.builtin.value()) {
+                case FN_Bitcast: op = spv::OpBitcast; break;
+                case FN_IntToPtr: op = spv::OpConvertUToPtr; break;
+                case FN_PtrToInt: op = spv::OpConvertPtrToU; break;
+                case FN_SExt: op = spv::OpSConvert; break;
+                case FN_ZExt: op = spv::OpUConvert; break;
+                case FN_Trunc: op = spv::OpSConvert; break;
+                case FN_FPTrunc: op = spv::OpFConvert; break;
+                case FN_FPExt: op = spv::OpFConvert; break;
+                case FN_FPToUI: op = spv::OpConvertFToU; break;
+                case FN_FPToSI: op = spv::OpConvertFToS; break;
+                case FN_UIToFP: op = spv::OpConvertUToF; break;
+                case FN_SIToFP: op = spv::OpConvertSToF; break;
+                default: break;
+                }
+                retvalue = builder.createUnaryOp(op, ty, val);
             } break;
-            /*
-            case FN_ZExt: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildZExt(builder, val, ty, ""); } break;
-            case FN_FPTrunc: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildFPTrunc(builder, val, ty, ""); } break;
-            case FN_FPExt: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildFPExt(builder, val, ty, ""); } break;
             case FN_VolatileLoad:
-            */
-            case FN_Load: { 
+            case FN_Load: {
                 READ_VALUE(ptr);
                 retvalue = builder.createLoad(ptr);
+                if (enter.builtin == FN_VolatileLoad) {
+                    builder.getInstruction(retvalue)->addImmediateOperand(
+                        1<<spv::MemoryAccessVolatileShift);
+                }
             } break;
-            /*
             case FN_VolatileStore:
-            */
-            case FN_Store: { 
+            case FN_Store: {
                 READ_VALUE(val); READ_VALUE(ptr);
                 builder.createStore(val, ptr);
+                if (enter.builtin == FN_VolatileStore) {
+                    builder.getInstruction(retvalue)->addImmediateOperand(
+                        1<<spv::MemoryAccessVolatileShift);
+                }
             } break;
-            /*
             case OP_ICmpEQ:
             case OP_ICmpNE:
             case OP_ICmpUGT:
@@ -7520,24 +7529,7 @@ struct SPIRVGenerator {
             case OP_ICmpSGT:
             case OP_ICmpSGE:
             case OP_ICmpSLT:
-            case OP_ICmpSLE: {
-                READ_VALUE(a); READ_VALUE(b);
-                LLVMIntPredicate pred = LLVMIntEQ;
-                switch(enter.builtin.value()) {
-                    case OP_ICmpEQ: pred = LLVMIntEQ; break;
-                    case OP_ICmpNE: pred = LLVMIntNE; break;
-                    case OP_ICmpUGT: pred = LLVMIntUGT; break;
-                    case OP_ICmpUGE: pred = LLVMIntUGE; break;
-                    case OP_ICmpULT: pred = LLVMIntULT; break;
-                    case OP_ICmpULE: pred = LLVMIntULE; break;
-                    case OP_ICmpSGT: pred = LLVMIntSGT; break;
-                    case OP_ICmpSGE: pred = LLVMIntSGE; break;
-                    case OP_ICmpSLT: pred = LLVMIntSLT; break;
-                    case OP_ICmpSLE: pred = LLVMIntSLE; break;
-                    default: assert(false); break;
-                }
-                retvalue = LLVMBuildICmp(builder, pred, a, b, "");
-            } break;
+            case OP_ICmpSLE:
             case OP_FCmpOEQ:
             case OP_FCmpONE:
             case OP_FCmpORD:
@@ -7551,74 +7543,78 @@ struct SPIRVGenerator {
             case OP_FCmpUGT:
             case OP_FCmpUGE:
             case OP_FCmpULT:
-            case OP_FCmpULE: {
-                READ_VALUE(a); READ_VALUE(b);
-                LLVMRealPredicate pred = LLVMRealOEQ;
-                switch(enter.builtin.value()) {
-                    case OP_FCmpOEQ: pred = LLVMRealOEQ; break;
-                    case OP_FCmpONE: pred = LLVMRealONE; break;
-                    case OP_FCmpORD: pred = LLVMRealORD; break;
-                    case OP_FCmpOGT: pred = LLVMRealOGT; break;
-                    case OP_FCmpOGE: pred = LLVMRealOGE; break;
-                    case OP_FCmpOLT: pred = LLVMRealOLT; break;
-                    case OP_FCmpOLE: pred = LLVMRealOLE; break;
-                    case OP_FCmpUEQ: pred = LLVMRealUEQ; break;
-                    case OP_FCmpUNE: pred = LLVMRealUNE; break;
-                    case OP_FCmpUNO: pred = LLVMRealUNO; break;
-                    case OP_FCmpUGT: pred = LLVMRealUGT; break;
-                    case OP_FCmpUGE: pred = LLVMRealUGE; break;
-                    case OP_FCmpULT: pred = LLVMRealULT; break;
-                    case OP_FCmpULE: pred = LLVMRealULE; break;
-                    default: assert(false); break;
-                }
-                retvalue = LLVMBuildFCmp(builder, pred, a, b, "");
-            } break;
-            case OP_Add: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildAdd(builder, a, b, ""); } break;
-            case OP_AddNUW: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildNUWAdd(builder, a, b, ""); } break;
-            case OP_AddNSW: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildNSWAdd(builder, a, b, ""); } break;
-            case OP_Sub: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildSub(builder, a, b, ""); } break;
-            case OP_SubNUW: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildNUWSub(builder, a, b, ""); } break;
-            case OP_SubNSW: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildNSWSub(builder, a, b, ""); } break;
-            case OP_Mul: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildMul(builder, a, b, ""); } break;
-            case OP_MulNUW: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildNUWMul(builder, a, b, ""); } break;
-            case OP_MulNSW: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildNSWMul(builder, a, b, ""); } break;
-            case OP_SDiv: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildSDiv(builder, a, b, ""); } break;
-            case OP_UDiv: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildUDiv(builder, a, b, ""); } break;
-            case OP_SRem: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildSRem(builder, a, b, ""); } break;
-            case OP_URem: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildURem(builder, a, b, ""); } break;
-            case OP_Shl: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildShl(builder, a, b, ""); } break;
-            case OP_LShr: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildLShr(builder, a, b, ""); } break;
-            case OP_AShr: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildAShr(builder, a, b, ""); } break;
-            case OP_BAnd: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildAnd(builder, a, b, ""); } break;
-            case OP_BOr: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildOr(builder, a, b, ""); } break;
-            case OP_BXor: { READ_VALUE(a); READ_VALUE(b);
-                retvalue = LLVMBuildXor(builder, a, b, ""); } break;
-            */
+            case OP_FCmpULE:
+            case OP_Add:
+            case OP_AddNUW:
+            case OP_AddNSW:
+            case OP_Sub:
+            case OP_SubNUW:
+            case OP_SubNSW:
+            case OP_Mul:
+            case OP_MulNUW:
+            case OP_MulNSW:
+            case OP_SDiv:
+            case OP_UDiv:
+            case OP_SRem:
+            case OP_URem:
+            case OP_Shl:
+            case OP_LShr:
+            case OP_AShr:
+            case OP_BAnd:
+            case OP_BOr:
+            case OP_BXor:
             case OP_FAdd:
             case OP_FSub:
             case OP_FMul:
             case OP_FDiv:
             case OP_FRem: { READ_VALUE(a); READ_VALUE(b);
                 spv::Op op = spv::OpMax;
+#define BOOL_OR_INT_OP(BOOL_OP, INT_OP) \
+    (is_bool(a)?(BOOL_OP):(INT_OP))
                 switch(enter.builtin.value()) {
+                case OP_ICmpEQ: op = BOOL_OR_INT_OP(spv::OpLogicalEqual, spv::OpIEqual); break;
+                case OP_ICmpNE: op = BOOL_OR_INT_OP(spv::OpLogicalNotEqual, spv::OpINotEqual); break;
+                case OP_ICmpUGT: op = spv::OpUGreaterThan; break;
+                case OP_ICmpUGE: op = spv::OpUGreaterThanEqual; break;
+                case OP_ICmpULT: op = spv::OpULessThan; break;
+                case OP_ICmpULE: op = spv::OpULessThanEqual; break;
+                case OP_ICmpSGT: op = spv::OpSGreaterThan; break;
+                case OP_ICmpSGE: op = spv::OpSGreaterThanEqual; break;
+                case OP_ICmpSLT: op = spv::OpSLessThan; break;
+                case OP_ICmpSLE: op = spv::OpSLessThanEqual; break;
+                case OP_FCmpOEQ: op = spv::OpFOrdEqual; break;
+                case OP_FCmpONE: op = spv::OpFOrdNotEqual; break;
+                case OP_FCmpORD: op = spv::OpOrdered; break;
+                case OP_FCmpOGT: op = spv::OpFOrdGreaterThan; break;
+                case OP_FCmpOGE: op = spv::OpFOrdGreaterThanEqual; break;
+                case OP_FCmpOLT: op = spv::OpFOrdLessThan; break;
+                case OP_FCmpOLE: op = spv::OpFOrdLessThanEqual; break;
+                case OP_FCmpUEQ: op = spv::OpFUnordEqual; break;
+                case OP_FCmpUNE: op = spv::OpFUnordNotEqual; break;
+                case OP_FCmpUNO: op = spv::OpUnordered; break;
+                case OP_FCmpUGT: op = spv::OpFUnordGreaterThan; break;
+                case OP_FCmpUGE: op = spv::OpFUnordGreaterThanEqual; break;
+                case OP_FCmpULT: op = spv::OpFUnordLessThan; break;
+                case OP_FCmpULE: op = spv::OpFUnordLessThanEqual; break;
+                case OP_Add:
+                case OP_AddNUW:
+                case OP_AddNSW: op = spv::OpIAdd; break;
+                case OP_Sub:
+                case OP_SubNUW:
+                case OP_SubNSW: op = spv::OpISub; break;
+                case OP_Mul:
+                case OP_MulNUW:
+                case OP_MulNSW: op = spv::OpIMul; break;
+                case OP_SDiv: op = spv::OpSDiv; break;
+                case OP_UDiv: op = spv::OpUDiv; break;
+                case OP_SRem: op = spv::OpSRem; break;
+                case OP_URem: op = spv::OpUMod; break;
+                case OP_Shl: op = spv::OpShiftLeftLogical; break;
+                case OP_LShr: op = spv::OpShiftRightLogical; break;
+                case OP_AShr: op = spv::OpShiftRightArithmetic; break;
+                case OP_BAnd: op = BOOL_OR_INT_OP(spv::OpLogicalAnd, spv::OpBitwiseAnd); break;
+                case OP_BOr: op = BOOL_OR_INT_OP(spv::OpLogicalOr, spv::OpBitwiseOr); break;
+                case OP_BXor: op = BOOL_OR_INT_OP(spv::OpLogicalNotEqual, spv::OpBitwiseXor); break;
                 case OP_FAdd: op = spv::OpFAdd; break;
                 case OP_FSub: op = spv::OpFSub; break;
                 case OP_FMul: op = spv::OpFMul; break;
@@ -7626,11 +7622,12 @@ struct SPIRVGenerator {
                 case OP_FRem: op = spv::OpFRem; break;
                 default: break;
                 }
-                retvalue = builder.createBinOp(op, 
+#undef BOOL_OR_INT_OP
+                retvalue = builder.createBinOp(op,
                     builder.getTypeId(a), a, b); } break;
-            /*
             case SFXFN_Unreachable:
-                retvalue = LLVMBuildUnreachable(builder); break;*/
+                builder.makeUnreachable();
+                terminated = true; break;
             default: {
                 StyledString ss;
                 ss.out << "IL->SPIR: unsupported builtin " << enter.builtin << " encountered";
@@ -7644,7 +7641,7 @@ struct SPIRVGenerator {
                     // no basic block was generated - just generate assignments
                     auto &&params = enter.label->params;
                     for (size_t i = 1; i < params.size(); ++i) {
-                        param2value[{active_function_value, params[i]}] = 
+                        param2value[{active_function_value, params[i]}] =
                             argument_to_value(args[i].value);
                     }
                     label = enter.label;
@@ -7701,7 +7698,7 @@ struct SPIRVGenerator {
         } else {
             StyledString ss;
             ss.out << "IL->SPIR: cannot translate call to " << enter;
-            location_error(ss.str());            
+            location_error(ss.str());
         }
 
         Any contarg = args[0].value;
@@ -7737,7 +7734,7 @@ struct SPIRVGenerator {
                             // incoval = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
                             location_error(
                                 String::from(
-                                    "IL->SPIR: multiple return values not supported"));                                        
+                                    "IL->SPIR: multiple return values not supported"));
                         }
                         auto op = builder.getInstruction(phinode);
                         assert(op);
@@ -7745,9 +7742,9 @@ struct SPIRVGenerator {
                         op->addIdOperand(bbfrom->getId());
                     }
                 }
-                
+
                 builder.createBranch(bb);
-            } else { 
+            } else {
                 if (retvalue) {
                     // no basic block - just add assignments and continue
                     auto &&params = contarg.label->params;
@@ -7762,7 +7759,7 @@ struct SPIRVGenerator {
                             // pvalue = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
                             location_error(
                                 String::from(
-                                    "IL->SPIR: multiple return values not supported"));                                        
+                                    "IL->SPIR: multiple return values not supported"));
                         }
                         param2value[{active_function_value,param}] = pvalue;
                     }
@@ -7798,9 +7795,9 @@ struct SPIRVGenerator {
         if (fi->flags & FF_Variadic) {
             location_error(String::from("IL->SPIR: variadic calls not supported"));
         }
-        
+
         auto ret = builder.createFunctionCall(func, values);
-        
+
         if (cast<ReturnLabelType>(fi->return_type)->return_type == TYPE_Void) {
             return 0;
         } else {
@@ -7849,7 +7846,7 @@ struct SPIRVGenerator {
             return true;
         return false;
     }
-    
+
     spv::Id create_spirv_type(const Type *type) {
         switch(type->kind()) {
         case TK_Integer: {
@@ -7863,20 +7860,20 @@ struct SPIRVGenerator {
             return builder.makeFloatType(rt->width);
         } break;
         case TK_Pointer: {
-            auto pt = cast<PointerType>(type);            
-            return builder.makePointer(spv::StorageClassFunction, 
+            auto pt = cast<PointerType>(type);
+            return builder.makePointer(spv::StorageClassFunction,
                 type_to_spirv_type(pt->element_type));
         } break;
         case TK_Array: {
             auto ai = cast<ArrayType>(type);
             return builder.makeArrayType(
-                type_to_spirv_type(ai->element_type), 
+                type_to_spirv_type(ai->element_type),
                 builder.makeUintConstant(ai->count), 0);
         } break;
         case TK_Vector: {
             auto vi = cast<VectorType>(type);
             return builder.makeVectorType(
-                type_to_spirv_type(vi->element_type), 
+                type_to_spirv_type(vi->element_type),
                 vi->count);
         } break;
         case TK_Tuple: {
@@ -7925,7 +7922,7 @@ struct SPIRVGenerator {
             for (size_t i = 0; i < count; ++i) {
                 auto AT = fi->argument_types[i];
                 elements.push_back(type_to_spirv_type(AT));
-            }            
+            }
             return builder.makeFunctionType(rettype, elements);
         } break;
         };
@@ -7946,7 +7943,7 @@ struct SPIRVGenerator {
             return it->second;
         }
     }
-    
+
     spv::Block *label_to_basic_block(Label *label) {
         auto old_bb = builder.getBuildPoint();
         auto func = &old_bb->getParent();
@@ -7976,14 +7973,14 @@ struct SPIRVGenerator {
                     bb->addInstruction(std::unique_ptr<spv::Instruction>(op));
                 }
             }
-            
+
             builder.setBuildPoint(old_bb);
             return bb;
         } else {
             return it->second;
         }
     }
-    
+
     spv::Function *label_to_function(Label *label, bool root_function = false) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
@@ -8016,7 +8013,7 @@ struct SPIRVGenerator {
             }
 
             std::vector<std::vector<spv::Decoration>> decorations;
-            
+
             auto func = builder.makeFunctionEntry(
                 spv::NoPrecision, rettype, name, paramtypes, decorations, &bb);
             //LLVMSetLinkage(func, LLVMPrivateLinkage);
@@ -8041,7 +8038,7 @@ struct SPIRVGenerator {
             write_label_body(label);
 
             builder.setBuildPoint(old_bb);
-                        
+
             set_active_function(last_function);
             set_active_anchor(old_anchor);
             return func;
@@ -8049,7 +8046,7 @@ struct SPIRVGenerator {
             return it->second;
         }
     }
-    
+
     void generate(std::vector<unsigned int> &result, Symbol target, Label *entry) {
         //assert(all_parameters_lowered(entry));
         assert(!entry->is_basic_block_like());
@@ -8115,7 +8112,7 @@ struct SPIRVGenerator {
             location_error(ss.str());
         } break;
         }
-    
+
         process_labels();
 
         //size_t k = finalize_types();
@@ -8159,7 +8156,7 @@ struct SPIRVGenerator {
                 location_error(String::from("SPIR-V validation found errors"));
             }
         }
-        
+
     }
 };
 
@@ -8240,7 +8237,7 @@ static LLVMValueRef LLVMDIBuilderCreateCompileUnit(LLVMDIBuilderRef Builder,
     const char *Flags, unsigned RV, const char *SplitName,
     //DICompileUnit::DebugEmissionKind Kind,
     uint64_t DWOId) {
-    auto ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();    
+    auto ctx = (llvm::LLVMContext *)LLVMGetGlobalContext();
     auto file = llvm::DIFile::get(*ctx, File, Dir);
     return mdnode_to_value(
         Builder->createCompileUnit(Lang, file,
@@ -8452,7 +8449,7 @@ struct LLVMIRGenerator {
         rawstringT = LLVMPointerType(LLVMInt8Type(), 0);
         attr_byval = get_attribute("byval");
         attr_sret = get_attribute("sret");
-        attr_nonnull = get_attribute("nonnull");        
+        attr_nonnull = get_attribute("nonnull");
     }
 
 #undef DEFINE_BUILTIN
@@ -8765,7 +8762,7 @@ struct LLVMIRGenerator {
                 values[i] = argument_to_value(ai->unpack(value.pointer, i));
             }
             return LLVMConstArray(type_to_llvm_type(ai->element_type),
-                values, count);                    
+                values, count);
         } break;
         case TK_Vector: {
             auto vi = cast<VectorType>(value.type);
@@ -8814,7 +8811,7 @@ struct LLVMIRGenerator {
         }
         LLVMValueRef values[valuecount];
         if (use_sret) {
-            values[0] = LLVMBuildAlloca(builder, 
+            values[0] = LLVMBuildAlloca(builder,
                 _type_to_llvm_type(fi->return_type), "");
         }
         std::vector<size_t> memptrs;
@@ -8823,7 +8820,7 @@ struct LLVMIRGenerator {
             LLVMValueRef val = argument_to_value(arg.value);
             auto AT = arg.value.indirect_type();
             if (is_memory_class(AT)) {
-                LLVMValueRef ptrval = LLVMBuildAlloca(builder, 
+                LLVMValueRef ptrval = LLVMBuildAlloca(builder,
                     _type_to_llvm_type(AT), "");
                 LLVMBuildStore(builder, val, ptrval);
                 val = ptrval;
@@ -8952,13 +8949,11 @@ struct LLVMIRGenerator {
             } break;
             case FN_Undef: { READ_TYPE(ty);
                 retvalue = LLVMGetUndef(ty); } break;
-            case FN_NullOf: { READ_TYPE(ty);
-                retvalue = LLVMConstNull(ty); } break;
             case FN_Alloca: { READ_TYPE(ty);
                 retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
             case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
                 retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
-            case FN_AllocaOf: { 
+            case FN_AllocaOf: {
                 READ_VALUE(val);
                 retvalue = LLVMBuildAlloca(builder, LLVMTypeOf(val), "");
                 LLVMBuildStore(builder, val, retvalue);
@@ -8980,7 +8975,7 @@ struct LLVMIRGenerator {
                 retvalue = LLVMBuildGEP(builder, pointer, indices, count, "");
             } break;
             case FN_Bitcast: { READ_VALUE(val); READ_TYPE(ty);
-                retvalue = LLVMBuildBitCast(builder, val, ty, ""); 
+                retvalue = LLVMBuildBitCast(builder, val, ty, "");
             } break;
             case FN_IntToPtr: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildIntToPtr(builder, val, ty, ""); } break;
@@ -8996,14 +8991,22 @@ struct LLVMIRGenerator {
                 retvalue = LLVMBuildFPTrunc(builder, val, ty, ""); } break;
             case FN_FPExt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildFPExt(builder, val, ty, ""); } break;
+            case FN_FPToUI: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildFPToUI(builder, val, ty, ""); } break;
+            case FN_FPToSI: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildFPToSI(builder, val, ty, ""); } break;
+            case FN_UIToFP: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildUIToFP(builder, val, ty, ""); } break;
+            case FN_SIToFP: { READ_VALUE(val); READ_TYPE(ty);
+                retvalue = LLVMBuildSIToFP(builder, val, ty, ""); } break;
             case FN_VolatileLoad:
             case FN_Load: { READ_VALUE(ptr);
-                retvalue = LLVMBuildLoad(builder, ptr, ""); 
+                retvalue = LLVMBuildLoad(builder, ptr, "");
                 if (enter.builtin.value() == FN_VolatileLoad) { LLVMSetVolatile(retvalue, true); }
             } break;
             case FN_VolatileStore:
             case FN_Store: { READ_VALUE(val); READ_VALUE(ptr);
-                retvalue = LLVMBuildStore(builder, val, ptr); 
+                retvalue = LLVMBuildStore(builder, val, ptr);
                 if (enter.builtin.value() == FN_VolatileStore) { LLVMSetVolatile(retvalue, true); }
             } break;
             case OP_ICmpEQ:
@@ -9160,7 +9163,7 @@ struct LLVMIRGenerator {
                     LLVMSetCurrentDebugLocation(builder, diloc);
                 }
                 retvalue = build_call(
-                    enter.label->get_function_type(), 
+                    enter.label->get_function_type(),
                     value, args);
             }
         } else if (enter.type == TYPE_Closure) {
@@ -9168,7 +9171,7 @@ struct LLVMIRGenerator {
             ss.out << "IL->IR: invalid call of compile time closure at runtime";
             location_error(ss.str());
         } else if (is_function_pointer(enter.indirect_type())) {
-            retvalue = build_call(extract_function_type(enter.indirect_type()), 
+            retvalue = build_call(extract_function_type(enter.indirect_type()),
                 argument_to_value(enter), args);
         } else if (enter.type == TYPE_Parameter) {
             assert (enter.parameter->type != TYPE_Nothing);
@@ -9186,7 +9189,7 @@ struct LLVMIRGenerator {
             bool use_sret = is_memory_class(label->get_return_type());
             if (use_sret) {
                 auto it = param2value.find({active_function_value,enter.parameter});
-                assert (it != param2value.end());                   
+                assert (it != param2value.end());
                 if (argcount > 1) {
                     LLVMTypeRef types[argcount];
                     for (size_t i = 0; i < argcount; ++i) {
@@ -9214,7 +9217,7 @@ struct LLVMIRGenerator {
         } else {
             StyledString ss;
             ss.out << "IL->IR: cannot translate call to " << enter;
-            location_error(ss.str());            
+            location_error(ss.str());
         }
 
         Any contarg = args[0].value;
@@ -9263,9 +9266,9 @@ struct LLVMIRGenerator {
                         LLVMAddIncoming(phinode, &incoval, incobbs, 1);
                     }
                 }
-                
+
                 LLVMBuildBr(builder, bb);
-            } else { 
+            } else {
                 if (retvalue) {
                     // no basic block - just add assignments and continue
                     auto &&params = contarg.label->params;
@@ -9367,7 +9370,7 @@ struct LLVMIRGenerator {
                     param2value[{active_function_value,param}] = pvalue;
                 }
             }
-            
+
             LLVMPositionBuilderAtEnd(builder, old_bb);
             return bb;
         } else {
@@ -9384,7 +9387,7 @@ struct LLVMIRGenerator {
             Label *last_function = active_function;
 
             auto old_bb = LLVMGetInsertBlock(builder);
-            
+
             const char *name;
             if (root_function && (label->name == SYM_Unnamed)) {
                 name = "unnamed";
@@ -9414,7 +9417,7 @@ struct LLVMIRGenerator {
             auto &&params = label->params;
             size_t offset = 0;
             if (use_sret) {
-                offset++;         
+                offset++;
                 Parameter *param = params[0];
                 param2value[{active_function_value,param}] = LLVMGetParam(func, 0);
             }
@@ -9654,7 +9657,7 @@ static Any compile(Label *fn, uint64_t flags) {
         if (LLVMCreateMCJITCompilerForModule(&ee, module, &opts,
             sizeof(opts), &errormsg)) {
             location_error(String::from_cstr(errormsg));
-        }        
+        }
     } else {
         LLVMAddModule(ee, module);
     }
@@ -9732,7 +9735,7 @@ static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
 static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_CompileSPIRV);
 //#ifdef SCOPES_WIN32
-    flags |= CF_NoDebugInfo;    
+    flags |= CF_NoDebugInfo;
 //#endif
 
     fn->verify_compilable();
@@ -9756,7 +9759,7 @@ static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
     }
 
 	spirv_cross::CompilerGLSL glsl(std::move(result));
-    
+
     /*
     // The SPIR-V is now parsed, and we can perform reflection on it.
     spirv_cross::ShaderResources resources = glsl.get_shader_resources();
@@ -9813,7 +9816,7 @@ template<typename T>
 inline bool isnan(T f) {
     return f != f;
 }
-    
+
 #define BOOL_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, a OP b)
 #define BOOL_OF_TEMPLATE(NAME) OP_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b))
 #define BOOL_UF_TEMPLATE(NAME) OP_TEMPLATE(NAME, bool, isnan(a) || isnan(b))
@@ -9834,7 +9837,7 @@ static const Type *bool_op_return_type(const Type *T) {
         return Vector(TYPE_Bool, vi->count);
     } else {
         return TYPE_Bool;
-    }    
+    }
 }
 
 template<>
@@ -9957,7 +9960,7 @@ static Any apply_integer_op(Any a, Any b) {
         count = vi->count;
         width = cast<IntegerType>(storage_type(vi->element_type))->width;
         srcptr_a = a.pointer;
-        srcptr_b = b.pointer;        
+        srcptr_b = b.pointer;
         destptr = alloc_storage(RT);
         result = Any::from_pointer(RT, destptr);
     } else {
@@ -10011,7 +10014,7 @@ static Any apply_real_op(Any a, Any b) {
         count = vi->count;
         width = cast<RealType>(storage_type(vi->element_type))->width;
         srcptr_a = a.pointer;
-        srcptr_b = b.pointer;        
+        srcptr_b = b.pointer;
         destptr = alloc_storage(RT);
         result = Any::from_pointer(RT, destptr);
     } else {
@@ -10123,7 +10126,7 @@ struct Solver {
             dest = fold_typify_single(dest.closure->frame, dest.closure->label, values);
         } else if (dest.type == TYPE_Label) {
 #if 1 //SCOPES_DEBUG_CODEGEN
-            auto TL = ReturnLabel(values);            
+            auto TL = ReturnLabel(values);
             auto TR = dest.label->get_params_as_return_label_type();
             if (TL != TR) {
                 {
@@ -10566,7 +10569,7 @@ struct Solver {
         auto pi = cast<PointerType>(T);
         if (!pi->is_mutable()) {
             StyledString ss;
-            ss.out << "can not store value at address of type " << T 
+            ss.out << "can not store value at address of type " << T
                 << " because the target is immutable";
             location_error(ss.str());
         }
@@ -10769,7 +10772,7 @@ struct Solver {
             size_t outcount = mask_vi->count;
             for (size_t i = 0; i < outcount; ++i) {
                 verify_range(
-                    (size_t)mask_vi->unpack(args[3].value.pointer, i).i32, 
+                    (size_t)mask_vi->unpack(args[3].value.pointer, i).i32,
                     incount);
             }
             RETARGTYPES(Vector(vi->element_type, outcount));
@@ -10861,7 +10864,7 @@ struct Solver {
             T = pi->element_type;
             verify_integer(storage_type(args[2].value.indirect_type()));
             for (size_t i = 3; i < args.size(); ++i) {
-                
+
                 const Type *ST = storage_type(T);
                 auto &&arg = args[i];
                 switch(ST->kind()) {
@@ -10913,7 +10916,7 @@ struct Solver {
                 return true;
             } else {
                 RETARGTYPES(pi->element_type);
-            }            
+            }
         } break;
         case FN_VolatileStore:
         case FN_Store: {
@@ -11094,7 +11097,7 @@ struct Solver {
                 } else {
                     goto failed;
                 }
-                enter = fold_type_label_single(cl->frame, 
+                enter = fold_type_label_single(cl->frame,
                     expand_module(sx, scope), { args[0] });
                 args = { none };
                 return false;
@@ -11103,11 +11106,11 @@ struct Solver {
             set_active_anchor(sx->anchor);
             StyledString ss;
             const Type *T = rlt;
-            ss.out << "syntax-extend has wrong return type (expected " 
-                << ReturnLabel({unknown_of(TYPE_Scope)}) << ", got " 
+            ss.out << "syntax-extend has wrong return type (expected "
+                << ReturnLabel({unknown_of(TYPE_Scope)}) << ", got "
                 << T << ")";
             location_error(ss.str());
-        } break;            
+        } break;
         case FN_AllocaOf: {
             CHECKARGS(1, 1);
             const Type *T = args[1].value.type;
@@ -11162,7 +11165,7 @@ struct Solver {
                 k++;
             }
             uint32_t flags = 0;
-            
+
             while (k < args.size()) {
                 args[k].value.verify(TYPE_Symbol);
                 Symbol sym = args[k].value.symbol;
@@ -11201,7 +11204,7 @@ struct Solver {
             }
             RETARGS(ReturnLabel(values));
         } break;
-        case FN_Location: {            
+        case FN_Location: {
             CHECKARGS(0, 0);
             RETARGS(l->body.anchor);
         } break;
@@ -11498,7 +11501,7 @@ struct Solver {
             void *srcptr = get_pointer(ET, args[2].value);
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].value.type, destptr));
-        } break;        
+        } break;
         case FN_ShuffleVector: {
             CHECKARGS(3, 3);
             const Type *TV1 = storage_type(args[1].value.type);
@@ -11517,7 +11520,7 @@ struct Solver {
             const Type *T = Vector(vi->element_type, outcount);
             void *srcptr_a = get_pointer(TV1, args[1].value);
             void *srcptr_b = get_pointer(TV1, args[2].value);
-            void *destptr = alloc_storage(T);            
+            void *destptr = alloc_storage(T);
             auto out_vi = cast<VectorType>(T);
             size_t esize = size_of(vi->element_type);
             for (size_t i = 0; i < outcount; ++i) {
@@ -11535,7 +11538,7 @@ struct Solver {
                 memcpy(outp, inp, esize);
             }
             RETARGS(Any::from_pointer(T, destptr));
-        } break;        
+        } break;
         case FN_ExtractValue: {
             CHECKARGS(2, 2);
             size_t idx = cast_number<size_t>(args[2].value);
@@ -11708,7 +11711,7 @@ struct Solver {
                     stream_expr(ss, args[i].value, StreamExprFormat());
                 } else {
                     /*
-                    ss << "<unknown>" 
+                    ss << "<unknown>"
                         << Style_Operator << ":" << Style_None
                         << args[i].value.indirect_type() << std::endl;*/
                     args[i].value.stream(ss, false);
@@ -11783,7 +11786,7 @@ struct Solver {
             case OP_FCmpULT: B_FLOAT_OP2(ULess); break;
             case OP_FCmpULE: B_FLOAT_OP2(ULessEqual); break;
             default: assert(false); break;
-            }            
+            }
             RETARGS(result);
         } break;
 #define IARITH_NUW_NSW_OPS(NAME) \
@@ -11941,7 +11944,7 @@ struct Solver {
         const FunctionType *fi = extract_function_type(enter.indirect_type());
         verify_function_argument_signature(fi, l);
         auto &&args = l->body.args;
-        args[0] = fold_type_return(args[0].value, 
+        args[0] = fold_type_return(args[0].value,
             cast<ReturnLabelType>(fi->return_type)->values);
     }
 
@@ -11969,7 +11972,7 @@ struct Solver {
 
     Label *solve(Label *entry) {
         SCOPES_TRY()
-        
+
         normalize_label(entry);
 
         SCOPES_CATCH(exc)
@@ -11994,7 +11997,7 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
                     stream_label(ss_cout, l, StreamLabelFormat::debug_single());
                     ss_cout << "inlining immediately returning label in " << l << std::endl;
-#endif                        
+#endif
                     Frame frame(nullptr, enter_label);
                     map_constant_arguments(&frame, enter_label, l->body.args);
                     evaluate_body(&frame, l, enter_label);
@@ -12194,7 +12197,7 @@ struct Solver {
                 ss_cout << "invalid: ";
                 stream_label(ss_cout, l, StreamLabelFormat::debug_single());
 #endif
-                
+
                 auto umit = um.label_map.find(l);
                 if (umit != um.label_map.end()) {
                     auto users = umit->second;
@@ -12496,7 +12499,7 @@ struct Expander {
     ~Expander() {}
 
     bool is_goto_label(Any enter) {
-        return (enter.type == TYPE_Label)            
+        return (enter.type == TYPE_Label)
             && (enter.label->params[0]->type == TYPE_Nothing);
     }
 
@@ -12738,7 +12741,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, 
+            Parameter *param = Parameter::vararg_from(_anchor,
                 Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             longdest = nextstate;
@@ -12903,7 +12906,7 @@ struct Expander {
 
         verify_list_parameter_count(it, 1, -1);
         it = it->next;
-        
+
         Any result = none;
         if (it->count == 1) {
             result = it->at;
@@ -13029,7 +13032,7 @@ struct Expander {
         state = nextstate;
         return result;
     }
-    
+
     static bool get_kwargs(Any it, KeyAny &value) {
         it = unsyntax(it);
         if (it.type != TYPE_List) return false;
@@ -13170,7 +13173,7 @@ struct Expander {
                 ss << "expanding list ";
                 stream_expr(ss, sx, StreamExprFormat::debug_digest());
             }
-            
+
             const List *list = expr.list;
             if (list == EOL) {
                 location_error(String::from("expression is empty"));
@@ -13179,7 +13182,7 @@ struct Expander {
             Any head = unsyntax(list->at);
 
             // resolve symbol
-            if (head.type == TYPE_Symbol) {               
+            if (head.type == TYPE_Symbol) {
                 env->lookup(head.symbol, head);
             }
 
@@ -13238,7 +13241,7 @@ struct Expander {
                 ss << "expanding symbol ";
                 stream_expr(ss, sx, StreamExprFormat::debug_digest());
             }
-            
+
             Symbol name = expr.symbol;
 
             Any result = none;
@@ -13264,7 +13267,7 @@ struct Expander {
                         goto expand_again;
                     }
                 }
-                
+
                 StyledString ss;
                 ss.out << "use of undeclared identifier '" << name.name()->data << "'.";
                 auto syms = env->find_closest_match(name);
@@ -13288,7 +13291,7 @@ struct Expander {
                 StyledStream ss(std::cerr);
                 ss << "ignoring ";
                 stream_expr(ss, sx, StreamExprFormat::debug_digest());
-            }            
+            }
             return write_dest(expr, dest);
         }
     }
@@ -13624,7 +13627,7 @@ static const Type *f_typename_type(const String *str) {
 }
 
 static I3 f_compiler_version() {
-    return { 
+    return {
         SCOPES_VERSION_MAJOR,
         SCOPES_VERSION_MINOR,
         SCOPES_VERSION_PATCH };
@@ -13659,14 +13662,14 @@ static const Syntax *f_list_load(const String *path) {
         location_error(ss.str());
     }
     LexerParser parser(sf);
-    return parser.parse();    
+    return parser.parse();
 }
 
 static const Syntax *f_list_parse(const String *str) {
     auto sf = SourceFile::from_string(Symbol("<string>"), str);
     assert(sf);
     LexerParser parser(sf);
-    return parser.parse();   
+    return parser.parse();
 }
 
 static Scope *f_scope_new() {
@@ -13688,7 +13691,7 @@ static void f_set_globals(Scope *s) {
 }
 
 static Label *f_eval(const Syntax *expr, Scope *scope) {
-    Solver solver;    
+    Solver solver;
     return solver.solve(typify_single(nullptr, expand_module(expr, scope), {}));
 }
 
@@ -13707,7 +13710,7 @@ static Label *f_typify(Closure *srcl, int numtypes, const Type **typeargs) {
 
     }
     Solver solver;
-    return solver.solve(typify_single(srcl->frame, srcl->label, types)); 
+    return solver.solve(typify_single(srcl->frame, srcl->label, types));
 }
 
 static Any f_compile(Label *srcl, uint64_t flags) {
@@ -13916,7 +13919,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ScopeAt, f_scope_at, Tuple({TYPE_Any,TYPE_Bool}), TYPE_Scope, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_SymbolNew, f_symbol_new, TYPE_Symbol, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_Repr, f_repr, TYPE_String, TYPE_Any);
-    DEFINE_PURE_C_FUNCTION(FN_AnyString, f_any_string, TYPE_String, TYPE_Any);    
+    DEFINE_PURE_C_FUNCTION(FN_AnyString, f_any_string, TYPE_String, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
     DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_USize, TYPE_Type);
@@ -13932,8 +13935,8 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_CompilerVersion, f_compiler_version, Tuple({TYPE_I32, TYPE_I32, TYPE_I32}));
     DEFINE_PURE_C_FUNCTION(FN_TypeName, f_type_name, TYPE_String, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_TypenameType, f_typename_type, TYPE_Type, TYPE_String);
-    DEFINE_PURE_C_FUNCTION(FN_SyntaxNew, f_syntax_new, TYPE_Syntax, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
-    DEFINE_PURE_C_FUNCTION(FN_SyntaxWrap, wrap_syntax, TYPE_Any, TYPE_Anchor, TYPE_Any, TYPE_Bool); 
+    DEFINE_PURE_C_FUNCTION(FN_SyntaxNew, f_syntax_new, TYPE_Syntax, TYPE_Anchor, TYPE_Any, TYPE_Bool);
+    DEFINE_PURE_C_FUNCTION(FN_SyntaxWrap, wrap_syntax, TYPE_Any, TYPE_Anchor, TYPE_Any, TYPE_Bool);
     DEFINE_PURE_C_FUNCTION(FN_SyntaxStrip, strip_syntax, TYPE_Any, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_ParameterNew, f_parameter_new, TYPE_Parameter, TYPE_Anchor, TYPE_Symbol, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_ParameterIndex, f_parameter_index, TYPE_I32, TYPE_Parameter);
@@ -13946,7 +13949,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(Symbol("Any=="), f_any_eq, TYPE_Bool, TYPE_Any, TYPE_Any);
-    DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);    
+    DEFINE_PURE_C_FUNCTION(FN_ListJoin, f_list_join, TYPE_List, TYPE_List, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_ScopeNext, f_scope_next, Tuple({TYPE_Any, TYPE_Any}), TYPE_Scope, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_TypenameFieldIndex, f_typename_field_index, TYPE_I32, TYPE_Type, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_TypenameFieldName, f_typename_field_name, TYPE_Symbol, TYPE_Type, TYPE_I32);
@@ -13954,11 +13957,11 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(SFXFN_SetTypenameSuper, f_set_typename_super, TYPE_Void, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SuperOf, superof, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_FunctionTypeIsVariadic, f_function_type_is_variadic, TYPE_Bool, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);    
+    DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_ClosureLabel, f_closure_label, TYPE_Label, TYPE_Closure);
     DEFINE_PURE_C_FUNCTION(FN_ClosureFrame, f_closure_frame, TYPE_Frame, TYPE_Frame);
-    
-    DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);    
+
+    DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);
 
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
     DEFINE_PURE_C_FUNCTION(FN_CompileSPIRV, f_compile_spirv, TYPE_String, TYPE_Symbol, TYPE_Label, TYPE_U64);
@@ -13972,7 +13975,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_ScopeNew, f_scope_new, TYPE_Scope);
     DEFINE_C_FUNCTION(FN_ScopeParent, f_scope_parent, TYPE_Scope, TYPE_Scope);
     DEFINE_C_FUNCTION(FN_ScopeNewSubscope, f_scope_new_subscope, TYPE_Scope, TYPE_Scope);
-    DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);    
+    DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_DelScopeSymbol, f_del_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol);
@@ -13985,27 +13988,27 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_AnchorError, f_anchor_error, TYPE_Void, TYPE_String);
     DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_Abort, f_abort, TYPE_Void);
-    DEFINE_C_FUNCTION(FN_Exit, f_exit, TYPE_Void, TYPE_I32);    
+    DEFINE_C_FUNCTION(FN_Exit, f_exit, TYPE_Void, TYPE_I32);
     //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
 
     const Type *exception_pad_type = Array(TYPE_U8, sizeof(ExceptionPad));
     const Type *p_exception_pad_type = MutPointer(exception_pad_type);
 
-    DEFINE_C_FUNCTION(Symbol("set-exception-pad"), f_set_exception_pad, 
+    DEFINE_C_FUNCTION(Symbol("set-exception-pad"), f_set_exception_pad,
         p_exception_pad_type, p_exception_pad_type);
     #if SCOPES_WIN32
-    DEFINE_C_FUNCTION(Symbol("catch-exception"), _setjmpex, TYPE_I32, 
+    DEFINE_C_FUNCTION(Symbol("catch-exception"), _setjmpex, TYPE_I32,
         p_exception_pad_type, Pointer(TYPE_I8));
     #else
-    DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32, 
+    DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32,
         p_exception_pad_type);
     #endif
     DEFINE_C_FUNCTION(Symbol("exception-value"), f_exception_value,
         TYPE_Any, p_exception_pad_type);
-    DEFINE_C_FUNCTION(Symbol("set-signal-abort!"), f_set_signal_abort, 
+    DEFINE_C_FUNCTION(Symbol("set-signal-abort!"), f_set_signal_abort,
         TYPE_Void, TYPE_Bool);
 
-    
+
 
 #undef DEFINE_C_FUNCTION
 
@@ -14093,12 +14096,12 @@ B_TYPES()
 
 /* this function looks for a header at the end of the compiler executable
    that indicates a scopes core.
-   
+
    the header has the format (core-size <size>), where size is a i32 value
    holding the size of the core source file in bytes.
 
    the compiler uses this function to override the default scopes core 'core.sc'
-   located in the compiler's directory. 
+   located in the compiler's directory.
 
    to later override the default core file and load your own, cat the new core
    file behind the executable and append the header, like this:

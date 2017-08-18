@@ -1028,6 +1028,10 @@ Function* Builder::makeFunctionEntry(Decoration precision, Id returnType, const 
     return function;
 }
 
+void Builder::makeUnreachable() {
+    buildPoint->addInstruction(std::unique_ptr<Instruction>(new Instruction(NoResult, NoType, OpUnreachable)));
+}
+
 // Comments in header
 void Builder::makeReturn(bool implicit, Id retVal)
 {
