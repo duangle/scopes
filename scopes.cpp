@@ -4687,6 +4687,18 @@ static StyledStream& operator<<(StyledStream& ost, KeyAny value) {
 
 typedef std::vector<KeyAny> Args;
 
+static void stream_args(StyledStream &ss, const Args &args, size_t start = 1) {
+    for (size_t i = start; i < args.size(); ++i) {
+        ss << " ";
+        if (is_unknown(args[i].value)) {
+            ss << "<unknown>:" << args[i].value.typeref;
+        } else {
+            ss << args[i].value;
+        }
+    }
+    ss << std::endl;
+}
+
 static KeyAny first(const Args &values) {
     return values.empty()?KeyAny():values.front();
 }
@@ -5401,6 +5413,15 @@ struct Frame {
         return new Frame(parent, label, loop_count);
     }
 
+    bool all_args_constant() const {
+        for (size_t i = 1; i < args.size(); ++i) {
+            if (is_unknown(args[i].value))
+                return false;
+            if (!args[i].value.is_const())
+                return false;
+        }
+        return true;
+    }
 };
 
 void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
@@ -10373,7 +10394,7 @@ struct Solver {
                     && !truncates_args(enter_label, values.size()))
                     || is_calling_closure(newl))
                 && forwards_all_args(enter_label)
-                && !enter_frame->find_frame(enter_label)) {
+                /*&& !enter_frame->find_frame(enter_label)*/) {
                 /*
                 StyledStream ss;
                 stream_label(ss, newl, StreamLabelFormat::single());*/
@@ -10446,6 +10467,12 @@ struct Solver {
         auto &&args = l->body.args;
         assert(!args.empty());
         return args[0].value.type == TYPE_Label;
+    }
+
+    static bool is_continuing_to_parameter(Label *l) {
+        auto &&args = l->body.args;
+        assert(!args.empty());
+        return args[0].value.type == TYPE_Parameter;
     }
 
     static bool is_continuing_to_closure(Label *l) {
@@ -10726,6 +10753,22 @@ struct Solver {
         return false;
     }
 
+    bool frame_args_match_keys(const Args &args, const Args &keys) const {
+        if (args.size() != keys.size())
+            return false;
+        for (size_t i = 1; i < keys.size(); ++i) {
+            auto &&arg = args[i].value;
+            auto &&key = keys[i].value;
+            if (is_unknown(key)
+                && !arg.is_const()
+                && (arg.parameter->type == key.typeref))
+                continue;
+            if (args[i].value != keys[i].value)
+                return false;
+        }
+        return true;
+    }
+
     bool fold_type_label_arguments(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
@@ -10736,13 +10779,22 @@ struct Solver {
         const Frame *enter_frame = enter.closure->frame;
         Label *enter_label = enter.closure->label;
 
-        bool recursive = enter_frame->find_frame(enter_label);
+        const Frame *top_frame = enter_frame->find_frame(enter_label);
+        bool recursive = (top_frame != nullptr);
+        if (recursive) {
+            if (top_frame->all_args_constant()) {
+                //StyledStream ss(std::cerr);
+                //top_frame->stream(ss);
+                recursive = false;
+            }
+        }
 
         // inline constant arguments
         Args callargs;
         Args keys;
         auto &&args = l->body.args;
-        if (enter_label->is_basic_block_like() && !recursive) {
+        bool is_bb = enter_label->is_basic_block_like();
+        if (is_bb && !recursive) {
             // non-recursive jump, fold all arguments
             callargs.push_back(none);
             keys.push_back(args[0]);
@@ -10759,21 +10811,51 @@ struct Solver {
                 } else if (is_return_parameter(arg.value)) {
                     keys.push_back(arg);
                 } else {
-                    keys.push_back(KeyAny(arg.key, unknown_of(arg.value.indirect_type())));
+                    keys.push_back(KeyAny(arg.key,
+                        unknown_of(arg.value.indirect_type())));
                     callargs.push_back(arg);
                 }
             }
+
+            if (is_bb && recursive) {
+                // we're generating different code, unroll loop
+                if (!frame_args_match_keys(top_frame->args, keys)) {
+                    callargs.clear();
+                    keys.clear();
+                    callargs.push_back(none);
+                    keys.push_back(args[0]);
+                    for (size_t i = 1; i < args.size(); ++i) {
+                        keys.push_back(args[i]);
+                    }
+                } else {
+                    //StyledStream ss;
+                    //stream_args(ss, top_frame->args);
+                    //stream_args(ss, keys);
+                }
+            }
+
+            #if 1
+            // generated function will have only constant arguments, inline
+            if (!is_bb /* && !recursive */ && (callargs.size() == 1)) {
+                callargs[0] = none;
+                keys[0] = args[0];
+            }
+            #endif
         }
 
         Label *newl = fold_type_label_single(
             enter_frame, enter_label, keys);
-        if (!newl->is_basic_block_like() && !newl->body.is_complete()) {
-            // we need to solve the return type asap for the next test
-            normalize_label(newl);
-            if (label_returns_closures(newl)
-                || (newl->is_basic_block_like() && !recursive)) {
+        if (!newl->is_basic_block_like()) {
+            if (!newl->body.is_complete()) {
+                // we need to solve the return type asap for the next test
+                normalize_label(newl);
+            }
+            if ((newl->is_basic_block_like() /*&& !recursive*/)
+                || label_returns_closures(newl)
+                || has_single_instruction(newl)
+                || returns_immediately(newl)) {
                 // need to inline the function
-                if (!recursive) {
+                if (true /* && !recursive */) {
                     callargs.clear();
                     keys.clear();
                     callargs.push_back(none);
@@ -12181,6 +12263,30 @@ struct Solver {
         return is_called_by(l->params[0], l);
     }
 
+    static Label *skip_jumps(Label *l) {
+        size_t counter = 0;
+        while (jumps_immediately(l)) {
+            l = l->body.enter.label;
+            counter++;
+            assert(counter < 256);
+        }
+        return l;
+    }
+
+    static bool has_single_instruction(Label *l) {
+        assert(!l->params.empty());
+        l = skip_jumps(l);
+        if (is_continuing_to_parameter(l))
+            return true;
+        if (is_continuing_to_label(l)) {
+            l = l->body.args[0].value.label;
+            l = skip_jumps(l);
+            if (is_calling_continuation(l))
+                return true;
+        }
+        return false;
+    }
+
     static bool truncates_args(Label *l, size_t inargs) {
         auto &&params = l->params;
         size_t captured = 0;
@@ -12346,13 +12452,6 @@ struct Solver {
                 // function is now typed
                 assert(enter_label->body.is_complete());
                 type_continuation_from_label_return_type(l);
-                if (returns_immediately(enter_label)) {
-#if SCOPES_DEBUG_CODEGEN
-                    stream_label(ss_cout, l, StreamLabelFormat::debug_single());
-                    ss_cout << "inlining immediately returning label in " << l << std::endl;
-#endif
-                    inline_single_label(l, enter_label);
-                }
             } else {
                 // function with untyped continuation
                 assert(enter_label->body.is_complete());
@@ -12464,13 +12563,6 @@ struct Solver {
             l->body.set_complete();
             if (jumps_immediately(l)) {
                 Label *enter_label = l->get_label_enter();
-                if (!is_jumping(l)) {
-                    clear_continuation_arg(l);
-                }
-#if 0
-                inline_single_label(l, enter_label);
-                continue;
-#else
                 if (!has_params(enter_label)) {
 #if SCOPES_DEBUG_CODEGEN
                     stream_label(ss_cout, l, StreamLabelFormat::debug_single());
@@ -12480,9 +12572,11 @@ struct Solver {
                     l->body = enter_label->body;
                     continue;
                 } else {
+                    if (!is_jumping(l)) {
+                        clear_continuation_arg(l);
+                    }
                     l = enter_label;
                 }
-#endif
             } else if (is_continuing_to_label(l)) {
                 l = l->body.args[0].value.label;
             }
