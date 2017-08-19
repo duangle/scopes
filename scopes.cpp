@@ -7227,6 +7227,43 @@ static void disassemble_spirv(std::vector<unsigned int> &contents) {
     }
 }
 
+static void verify_spirv(std::vector<unsigned int> &contents) {
+    spv_target_env target_env = SPV_ENV_UNIVERSAL_1_2;
+    //spvtools::ValidatorOptions options;
+
+    StyledString ss;
+    spvtools::SpirvTools tools(target_env);
+    tools.SetMessageConsumer([&ss](spv_message_level_t level, const char*,
+                                const spv_position_t& position,
+                                const char* message) {
+        switch (level) {
+        case SPV_MSG_FATAL:
+        case SPV_MSG_INTERNAL_ERROR:
+        case SPV_MSG_ERROR:
+            ss.out << Style_Error << "error: " << Style_None
+                << position.index << ": " << message << std::endl;
+            break;
+        case SPV_MSG_WARNING:
+            ss.out << Style_Warning << "warning: " << Style_None
+                << position.index << ": " << message << std::endl;
+            break;
+        case SPV_MSG_INFO:
+            ss.out << Style_Comment << "info: " << Style_None
+                << position.index << ": " << message << std::endl;
+            break;
+        default:
+            break;
+        }
+    });
+
+    bool succeed = tools.Validate(contents);
+    if (!succeed) {
+        disassemble_spirv(contents);
+        std::cerr << ss._ss.str();
+        location_error(String::from("SPIR-V validation found errors"));
+    }
+}
+
 struct SPIRVGenerator {
     struct HashFuncLabelPair {
         size_t operator ()(const std::pair<spv::Function *, Label *> &value) const {
@@ -8289,43 +8326,7 @@ struct SPIRVGenerator {
 
         builder.dump(result);
 
-        {
-            spv_target_env target_env = SPV_ENV_UNIVERSAL_1_2;
-            //spvtools::ValidatorOptions options;
-
-            StyledString ss;
-            spvtools::SpirvTools tools(target_env);
-            tools.SetMessageConsumer([&ss](spv_message_level_t level, const char*,
-                                        const spv_position_t& position,
-                                        const char* message) {
-                switch (level) {
-                case SPV_MSG_FATAL:
-                case SPV_MSG_INTERNAL_ERROR:
-                case SPV_MSG_ERROR:
-                    ss.out << Style_Error << "error: " << Style_None
-                        << position.index << ": " << message << std::endl;
-                    break;
-                case SPV_MSG_WARNING:
-                    ss.out << Style_Warning << "warning: " << Style_None
-                        << position.index << ": " << message << std::endl;
-                    break;
-                case SPV_MSG_INFO:
-                    ss.out << Style_Comment << "info: " << Style_None
-                        << position.index << ": " << message << std::endl;
-                    break;
-                default:
-                    break;
-                }
-            });
-
-            bool succeed = tools.Validate(result);
-            if (!succeed) {
-                disassemble_spirv(result);
-                std::cerr << ss._ss.str();
-                location_error(String::from("SPIR-V validation found errors"));
-            }
-        }
-
+        verify_spirv(result);
     }
 };
 
@@ -9912,7 +9913,6 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
     optimizer.RegisterPass(spvtools::CreateEliminateDeadConstantPass());
     optimizer.RegisterPass(spvtools::CreateUnifyConstantPass());
     optimizer.RegisterPass(spvtools::CreateInlineExhaustivePass());
-
     optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
     optimizer.RegisterPass(spvtools::CreateBlockMergePass());
     optimizer.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
@@ -9921,7 +9921,6 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
     optimizer.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
     optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
     optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
-
     optimizer.RegisterPass(spvtools::CreateCommonUniformElimPass());
     optimizer.RegisterPass(spvtools::CreateCompactIdsPass());
 
@@ -9932,6 +9931,7 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
             "IL->SPIR: error while running optimization passes"));
     }
 
+    verify_spirv(result);
 }
 
 static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
