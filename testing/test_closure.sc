@@ -40,3 +40,4 @@ fn test2 ()
     typify test2
 #dump-label (Closure-label test2)
 test2;
+

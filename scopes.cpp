@@ -2724,6 +2724,10 @@ struct ReturnLabelType : Type {
         return_type = get_return_type(this);
     }
 
+    bool has_multiple_return_values() const {
+        return return_type->kind() == TK_Tuple;
+    }
+
     static const Type *get_return_type(const ReturnLabelType *lt) {
         std::vector<const Type *> rettypes;
         // prune constants
@@ -8966,7 +8970,8 @@ struct LLVMIRGenerator {
         return nullptr;
     }
 
-    LLVMValueRef build_call(const Type *functype, LLVMValueRef func, Args &args) {
+    LLVMValueRef build_call(const Type *functype, LLVMValueRef func, Args &args,
+        bool &multiple_return_values) {
         size_t argcount = args.size() - 1;
 
         auto fi = cast<FunctionType>(functype);
@@ -9017,12 +9022,12 @@ struct LLVMIRGenerator {
             LLVMAddCallSiteAttribute(ret, idx, attr_byval);
             LLVMAddCallSiteAttribute(ret, idx, attr_nonnull);
         }
+        auto rlt = cast<ReturnLabelType>(fi->return_type);
+        multiple_return_values = rlt->has_multiple_return_values();
         if (use_sret) {
             LLVMAddCallSiteAttribute(ret, 1, attr_sret);
             return LLVMBuildLoad(builder, values[0], "");
-        } else if ((fi->return_type == TYPE_Void)
-           || ((fi->return_type->kind() == TK_ReturnLabel)
-            && (cast<ReturnLabelType>(fi->return_type)->return_type == TYPE_Void))) {
+        } else if (rlt->return_type == TYPE_Void) {
             return nullptr;
         } else {
             return ret;
@@ -9064,6 +9069,7 @@ struct LLVMIRGenerator {
         LLVMTypeRef NAME = type_to_llvm_type(args[argn++].value.typeref);
 
         LLVMValueRef retvalue = nullptr;
+        bool multiple_return_values = false;
         if (enter.type == TYPE_Builtin) {
             switch(enter.builtin.value()) {
             case FN_Branch: {
@@ -9334,7 +9340,7 @@ struct LLVMIRGenerator {
                 }
                 retvalue = build_call(
                     enter.label->get_function_type(),
-                    value, args);
+                    value, args, multiple_return_values);
             }
         } else if (enter.type == TYPE_Closure) {
             StyledString ss;
@@ -9342,7 +9348,7 @@ struct LLVMIRGenerator {
             location_error(ss.str());
         } else if (is_function_pointer(enter.indirect_type())) {
             retvalue = build_call(extract_function_type(enter.indirect_type()),
-                argument_to_value(enter), args);
+                argument_to_value(enter), args, multiple_return_values);
         } else if (enter.type == TYPE_Parameter) {
             assert (enter.parameter->type != TYPE_Nothing);
             assert(enter.parameter->type != TYPE_Unknown);
@@ -9426,12 +9432,11 @@ struct LLVMIRGenerator {
                         Parameter *param = params[i];
                         LLVMValueRef phinode = argument_to_value(param);
                         LLVMValueRef incoval = nullptr;
-                        if (params.size() == 2) {
-                            // single argument
-                            incoval = retvalue;
-                        } else {
-                            // multiple arguments
+                        if (multiple_return_values) {
                             incoval = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                        } else {
+                            assert(params.size() == 2);
+                            incoval = retvalue;
                         }
                         LLVMAddIncoming(phinode, &incoval, incobbs, 1);
                     }
@@ -9445,12 +9450,11 @@ struct LLVMIRGenerator {
                     for (size_t i = 1; i < params.size(); ++i) {
                         Parameter *param = params[i];
                         LLVMValueRef pvalue = nullptr;
-                        if (params.size() == 2) {
-                            // single argument
-                            pvalue = retvalue;
-                        } else {
-                            // multiple arguments
+                        if (multiple_return_values) {
                             pvalue = LLVMBuildExtractValue(builder, retvalue, i - 1, "");
+                        } else {
+                            assert(params.size() == 2);
+                            pvalue = retvalue;
                         }
                         param2value[{active_function_value,param}] = pvalue;
                     }
@@ -9662,6 +9666,8 @@ struct LLVMIRGenerator {
 #endif
         char *errmsg = NULL;
         if (LLVMVerifyModule(module, LLVMReturnStatusAction, &errmsg)) {
+            StyledStream ss(std::cerr);
+            stream_label(ss, entry, StreamLabelFormat());
             LLVMDumpModule(module);
             location_error(
                 String::join(
@@ -9903,26 +9909,28 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
             break;
         }
     });
-    //optimizer.RegisterPass(spvtools::CreateStripDebugInfoPass());
-    /*optimizer.RegisterPass(
-        CreateSetSpecConstantDefaultValuePass(std::move(*spec_ids_vals)));*/
 
-    //optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
+    //optimizer.RegisterPass(spvtools::CreateStripDebugInfoPass());
+
     //optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
-    //optimizer.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
-    optimizer.RegisterPass(spvtools::CreateEliminateDeadConstantPass());
-    optimizer.RegisterPass(spvtools::CreateUnifyConstantPass());
+
     optimizer.RegisterPass(spvtools::CreateInlineExhaustivePass());
-    optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
-    optimizer.RegisterPass(spvtools::CreateBlockMergePass());
     optimizer.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
+    optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalSingleBlockLoadStoreElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalSingleStoreElimPass());
+    optimizer.RegisterPass(spvtools::CreateBlockMergePass());
+    optimizer.RegisterPass(spvtools::CreateEliminateDeadConstantPass());
+    optimizer.RegisterPass(spvtools::CreateFoldSpecConstantOpAndCompositePass());
+    optimizer.RegisterPass(spvtools::CreateUnifyConstantPass());
+
+    optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
-    optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
     optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
     optimizer.RegisterPass(spvtools::CreateCommonUniformElimPass());
-    optimizer.RegisterPass(spvtools::CreateCompactIdsPass());
+
+    //optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
+    //optimizer.RegisterPass(spvtools::CreateCompactIdsPass());
 
     std::vector<unsigned int> oldresult = result;
     result.clear();
@@ -10329,18 +10337,9 @@ struct Solver {
         }
     }
 
-    Any type_return(Any dest, const ArgTypes &argtypes) {
-        std::vector<Any> values;
-        values.reserve(argtypes.size());
-        for (size_t i = 0; i < argtypes.size(); ++i) {
-            values.push_back(unknown_of(argtypes[i]));
-        }
-        return fold_type_return(dest, values);
-    }
-
     Any fold_type_return(Any dest, const std::vector<Any> &values) {
         //ss_cout << "type_return: " << dest << std::endl;
-
+    repeat:
         if (dest.type == TYPE_Parameter) {
             Parameter *param = dest.parameter;
             if (param->is_none()) {
@@ -10364,9 +10363,26 @@ struct Solver {
                 }
             }
         } else if (dest.type == TYPE_Closure) {
-            dest = fold_typify_single(dest.closure->frame, dest.closure->label, values);
+            auto enter_frame = dest.closure->frame;
+            auto enter_label = dest.closure->label;
+            Label *newl = fold_typify_single(enter_frame, enter_label, values);
+            // skip labels that directly forward all return arguments
+            // if the label does not truncate the return parameters
+            if (is_jumping(newl)
+                && ((is_calling_continuation(newl)
+                    && !truncates_args(enter_label, values.size()))
+                    || is_calling_closure(newl))
+                && forwards_all_args(enter_label)
+                && !enter_frame->find_frame(enter_label)) {
+                /*
+                StyledStream ss;
+                stream_label(ss, newl, StreamLabelFormat::single());*/
+                dest = newl->body.enter;
+                goto repeat;
+            } else {
+                dest = newl;
+            }
         } else if (dest.type == TYPE_Label) {
-#if 1 //SCOPES_DEBUG_CODEGEN
             auto TL = ReturnLabel(values);
             auto TR = dest.label->get_params_as_return_label_type();
             if (TL != TR) {
@@ -10381,7 +10397,6 @@ struct Solver {
                     location_error(ss.str());
                 }
             }
-#endif
         } else {
             apply_type_error(dest);
         }
@@ -10718,38 +10733,61 @@ struct Solver {
 
         auto &&enter = l->body.enter;
         assert(enter.type == TYPE_Closure);
+        const Frame *enter_frame = enter.closure->frame;
+        Label *enter_label = enter.closure->label;
+
+        bool recursive = enter_frame->find_frame(enter_label);
 
         // inline constant arguments
         Args callargs;
-
         Args keys;
         auto &&args = l->body.args;
-        callargs.push_back(args[0]);
-        keys.push_back(KeyAny(untyped()));
-        for (size_t i = 1; i < args.size(); ++i) {
-            auto &&arg = args[i];
-            if (arg.value.is_const()) {
-                keys.push_back(arg);
-            } else if (is_return_parameter(arg.value)) {
-                keys.push_back(arg);
-            } else {
-                keys.push_back(KeyAny(arg.key, unknown_of(arg.value.indirect_type())));
-                callargs.push_back(arg);
+        if (enter_label->is_basic_block_like() && !recursive) {
+            // non-recursive jump, fold all arguments
+            callargs.push_back(none);
+            keys.push_back(args[0]);
+            for (size_t i = 1; i < args.size(); ++i) {
+                keys.push_back(args[i]);
+            }
+        } else {
+            callargs.push_back(args[0]);
+            keys.push_back(KeyAny(untyped()));
+            for (size_t i = 1; i < args.size(); ++i) {
+                auto &&arg = args[i];
+                if (arg.value.is_const()) {
+                    keys.push_back(arg);
+                } else if (is_return_parameter(arg.value)) {
+                    keys.push_back(arg);
+                } else {
+                    keys.push_back(KeyAny(arg.key, unknown_of(arg.value.indirect_type())));
+                    callargs.push_back(arg);
+                }
             }
         }
 
         Label *newl = fold_type_label_single(
-            enter.closure->frame, enter.closure->label, keys);
+            enter_frame, enter_label, keys);
         if (!newl->is_basic_block_like() && !newl->body.is_complete()) {
             // we need to solve the return type asap for the next test
             normalize_label(newl);
-        }
-        if (label_returns_closures(newl)) {
-            // need to inline the function
-            callargs[0] = none;
-            keys[0] = args[0];
-            newl = fold_type_label_single(
-                enter.closure->frame, enter.closure->label, keys);
+            if (label_returns_closures(newl)
+                || (newl->is_basic_block_like() && !recursive)) {
+                // need to inline the function
+                if (!recursive) {
+                    callargs.clear();
+                    keys.clear();
+                    callargs.push_back(none);
+                    keys.push_back(args[0]);
+                    for (size_t i = 1; i < args.size(); ++i) {
+                        keys.push_back(args[i]);
+                    }
+                } else {
+                    callargs[0] = none;
+                    keys[0] = args[0];
+                }
+                newl = fold_type_label_single(
+                    enter_frame, enter_label, keys);
+            }
         }
         enter = newl;
         args = callargs;
@@ -12132,9 +12170,50 @@ struct Solver {
 #undef CHECKARGS
 #undef RETARGS
 
+    void inline_single_label(Label *dest, Label *source) {
+        Frame frame(nullptr, source);
+        map_constant_arguments(&frame, source, dest->body.args);
+        evaluate_body(&frame, dest, source);
+    }
+
     static bool returns_immediately(Label *l) {
         assert(!l->params.empty());
         return is_called_by(l->params[0], l);
+    }
+
+    static bool truncates_args(Label *l, size_t inargs) {
+        auto &&params = l->params;
+        size_t captured = 0;
+        for (size_t i = 1; i < params.size(); ++i) {
+            auto &&param = params[i];
+            if (param->is_vararg())
+                return false;
+            else
+                captured++;
+        }
+        return captured < inargs;
+    }
+
+    static bool forwards_all_args(Label *l) {
+        assert(!l->params.empty());
+        auto &&args = l->body.args;
+        auto &&params = l->params;
+        if (args.size() != params.size())
+            return false;
+        for (size_t i = 1; i < args.size(); ++i) {
+            auto &&arg = args[i];
+            if (arg.value.type != TYPE_Parameter)
+                return false;
+            if (arg.value.parameter != params[i])
+                return false;
+        }
+        return true;
+    }
+
+    // a label just jumps to the next label
+    static bool jumps_immediately(Label *l) {
+        return is_calling_label(l)
+            && l->get_label_enter()->is_basic_block_like();
     }
 
     void clear_continuation_arg(Label *l) {
@@ -12272,9 +12351,7 @@ struct Solver {
                     stream_label(ss_cout, l, StreamLabelFormat::debug_single());
                     ss_cout << "inlining immediately returning label in " << l << std::endl;
 #endif
-                    Frame frame(nullptr, enter_label);
-                    map_constant_arguments(&frame, enter_label, l->body.args);
-                    evaluate_body(&frame, l, enter_label);
+                    inline_single_label(l, enter_label);
                 }
             } else {
                 // function with untyped continuation
@@ -12385,9 +12462,15 @@ struct Solver {
             Label *oldl = l;
 #endif
             l->body.set_complete();
-            if (is_calling_label(l)
-                && l->get_label_enter()->is_basic_block_like()) {
+            if (jumps_immediately(l)) {
                 Label *enter_label = l->get_label_enter();
+                if (!is_jumping(l)) {
+                    clear_continuation_arg(l);
+                }
+#if 0
+                inline_single_label(l, enter_label);
+                continue;
+#else
                 if (!has_params(enter_label)) {
 #if SCOPES_DEBUG_CODEGEN
                     stream_label(ss_cout, l, StreamLabelFormat::debug_single());
@@ -12397,11 +12480,9 @@ struct Solver {
                     l->body = enter_label->body;
                     continue;
                 } else {
-                    if (!is_jumping(l)) {
-                        clear_continuation_arg(l);
-                    }
                     l = enter_label;
                 }
+#endif
             } else if (is_continuing_to_label(l)) {
                 l = l->body.args[0].value.label;
             }
