@@ -31,22 +31,14 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_VERSION_PATCH 0
 
 #define SCOPES_DEBUG_CODEGEN 0
-#define SCOPES_OPTIMIZE_ASSEMBLY 1
+#define SCOPES_OPTIMIZE_ASSEMBLY 0
 #define SCOPES_EARLY_ABORT 0
 #define SCOPES_PRINT_TIMERS 0
 
 #define SCOPES_MAX_RECURSIONS 32
 
 // skip labels that directly forward all return arguments
-// if the label does not truncate the return parameters
-#define SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS 0
-
-// fold all arguments for labels that just perform jumps
-// and which aren't recursive
-// turning this on deletes labels that are annotated with scope info
-// and causes branch return label duplication
-// it also peels one iteration from each loop
-#define SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS 0
+#define SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS 1
 
 #ifndef SCOPES_WIN32
 #   ifdef _WIN32
@@ -975,6 +967,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(TIMER_Optimize, "build_and_run_opt_passes()") \
     T(TIMER_MCJIT, "mcjit()") \
     T(TIMER_Lower2CFF, "lower2cff()") \
+    T(TIMER_CleanupLabels, "cleanup_labels()") \
     \
     /* ad-hoc builtin names */ \
     T(SYM_ExecuteReturn, "execute-return") \
@@ -10413,7 +10406,7 @@ struct Solver {
 #if SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS
             if (is_jumping(newl)
                 && ((is_calling_continuation(newl)
-                    && !truncates_args(enter_label, values.size()))
+        /*&& !truncates_args(enter_label, values.size())*/)
                     || is_calling_closure(newl))
                 && forwards_all_args(enter_label)
                 /*&& !enter_frame->find_frame(enter_label)*/) {
@@ -10803,33 +10796,11 @@ struct Solver {
         const Frame *enter_frame = enter.closure->frame;
         Label *enter_label = enter.closure->label;
 
-#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
-        const Frame *top_frame = enter_frame->find_frame(enter_label);
-        bool recursive = (top_frame != nullptr);
-        if (recursive) {
-            if (top_frame->all_args_constant()) {
-                //StyledStream ss(std::cerr);
-                //top_frame->stream(ss);
-                recursive = false;
-            }
-        }
-#endif
-
         // inline constant arguments
         Args callargs;
         Args keys;
         auto &&args = l->body.args;
         bool is_bb = enter_label->is_basic_block_like();
-#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
-        if (is_bb && !recursive) {
-            // non-recursive jump, fold all arguments
-            callargs.push_back(none);
-            keys.push_back(args[0]);
-            for (size_t i = 1; i < args.size(); ++i) {
-                keys.push_back(args[i]);
-            }
-        } else
-#endif
         {
             callargs.push_back(args[0]);
             keys.push_back(KeyAny(untyped()));
@@ -10845,25 +10816,6 @@ struct Solver {
                     callargs.push_back(arg);
                 }
             }
-
-#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
-            if (is_bb && recursive) {
-                // we're generating different code, unroll loop
-                if (!frame_args_match_keys(top_frame->args, keys)) {
-                    callargs.clear();
-                    keys.clear();
-                    callargs.push_back(none);
-                    keys.push_back(args[0]);
-                    for (size_t i = 1; i < args.size(); ++i) {
-                        keys.push_back(args[i]);
-                    }
-                } else {
-                    //StyledStream ss;
-                    //stream_args(ss, top_frame->args);
-                    //stream_args(ss, keys);
-                }
-            }
-#endif
 
             #if 1
             // generated function will have only constant arguments, inline
@@ -10882,20 +10834,12 @@ struct Solver {
                 normalize_label(newl);
             }
             if (
-#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
-                (newl->is_basic_block_like() /*&& !recursive*/) ||
-#else
                 !newl->is_basic_block_like() && (
-#endif
                 label_returns_closures(newl)
                 || is_trivial_function(newl)
-#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
-#else
                 )
-#endif
                 ) {
                 // need to inline the function
-#if 1
                 if (true /* && !recursive */) {
                     callargs.clear();
                     keys.clear();
@@ -10904,9 +10848,7 @@ struct Solver {
                     for (size_t i = 1; i < args.size(); ++i) {
                         keys.push_back(args[i]);
                     }
-                } else
-#endif
-                {
+                } else {
                     callargs[0] = none;
                     keys[0] = args[0];
                 }
@@ -12480,6 +12422,7 @@ struct Solver {
         SCOPES_TRY_END()
 
         lower2cff(entry);
+        cleanup_labels(entry);
         return entry;
     }
 
@@ -12631,6 +12574,80 @@ struct Solver {
             traceback.push_back(l);
             error(exc);
         SCOPES_TRY_END()
+    }
+
+    // eliminate single user labels
+    void cleanup_labels(Label *entry) {
+        Timer cleanup_timer(TIMER_CleanupLabels);
+
+        size_t count = 0;
+        size_t total_processed = 0;
+        while (true) {
+            std::unordered_set<Label *> labels;
+            entry->build_reachable(labels);
+
+            Label::UserMap um;
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                (*it)->insert_into_usermap(um);
+            }
+
+            std::unordered_set<Label *> deleted;
+            size_t processed = 0;
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                Label *l = *it;
+                if (!l->is_basic_block_like())
+                    continue;
+                auto umit = um.label_map.find(l);
+                if (umit == um.label_map.end())
+                    continue;
+                auto &&users = umit->second;
+                if (users.size() != 1)
+                    continue;
+                Label *user = *users.begin();
+                if (deleted.count(user))
+                    continue;
+                if (user->body.enter.type != TYPE_Label)
+                    continue;
+                if (user->body.enter.label != l)
+                    continue;
+                auto &&args = user->body.args;
+                bool ok = true;
+                for (size_t i = 1; i < user->body.args.size(); ++i) {
+                    if (is_unknown(args[i].value)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) continue;
+                processed++;
+                deleted.insert(l);
+                Label *newl = l;
+                StyledStream ss;
+                if (l->params.size() > 1) {
+                    // inline parameters into scope
+                    Args newargs = { none };
+                    for (size_t i = 1; i < user->body.args.size(); ++i) {
+                        newargs.push_back(args[i]);
+                    }
+                    newl = fold_type_label(um, l, newargs);
+                }
+                l->remove_from_usermap(um);
+                user->remove_from_usermap(um);
+                user->body = newl->body;
+                user->insert_into_usermap(um);
+            }
+
+            if (!processed) break;
+
+            total_processed += processed;
+            count++;
+        }
+#if 0
+        if (total_processed)
+            std::cout << "eliminated "
+                << total_processed << " labels in "
+                << count << " passes" << std::endl;
+#endif
     }
 
     Label *lower2cff(Label *entry) {

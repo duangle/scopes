@@ -1494,7 +1494,7 @@ syntax-extend
     set-scope-symbol! syntax-scope 'scope-macro scope-macro
     set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (Symbol "#list")
-        compile (typify list-handler list Scope) #'dump-module
+        compile (typify list-handler list Scope)
         #compile (typify list-handler list Scope)
     set-scope-symbol! syntax-scope (Symbol "#symbol")
         compile (typify symbol-handler list Scope)
