@@ -13,6 +13,7 @@ let modules =
         test_closure
         test_dots
         test_extraparams
+        test_folding
         test_fwdecl
         test_glsl
         test_iter2
@@ -30,6 +31,7 @@ let modules =
         #test_tableof
         #test_tuple_array
         #test_xlet
+        test_while
         test_varargs
         test_vector
 

@@ -1,16 +1,33 @@
 
-fn dostuff (x)
-    let y =
-        (unconst true) or (unconst false)
-    #let y =
-        if (unconst true)
-            unconst 10
-        else
-            unconst 20
-    let z = (add y y)
-    z
+fn print_stuff (x)
+    print "line"
+    fn ()
+        print x
 
-dump-label (Closure-label dostuff)
-print;
-dump-label
-    typify dostuff i32
+fn main ()
+    let link = (print_stuff (unconst "hello"))
+    link;
+
+#dump-label
+    typify main
+
+main;
+
+# this case is illegal
+#do
+    define ascope (Scope)
+    syntax-extend
+        fn print_stuff2 (x)
+            print "line"
+            set-scope-symbol! ascope 'somefunc
+                fn ()
+                    print x
+
+        fn main2 ()
+            print_stuff2 (unconst "hello")
+        main2;
+        syntax-scope
+
+    ascope.somefunc;
+
+true

@@ -2790,7 +2790,6 @@ fn read-eval-print-loop ()
                     f as ModuleFunctionType
             set-anchor! expr-anchor
             let result = (fptr)
-            #dump "  loop 2"
             if (('typeof result) != Nothing)
                 set-scope-symbol! eval-scope (Symbol idstr) result
                 print idstr "=" result

@@ -40,6 +40,12 @@ BEWARE: If you build this with anything else but a recent enough clang,
 // skip labels that directly forward all return arguments
 #define SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS 1
 
+// inline a function from its template rather than mangling it
+#define SCOPES_INLINE_FUNCTION_FROM_TEMPLATE 0
+
+// cleanup useless labels after lower2cff
+#define SCOPES_CLEANUP_LABELS 1
+
 #ifndef SCOPES_WIN32
 #   ifdef _WIN32
 #   define SCOPES_WIN32
@@ -10406,7 +10412,7 @@ struct Solver {
 #if SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS
             if (is_jumping(newl)
                 && ((is_calling_continuation(newl)
-        /*&& !truncates_args(enter_label, values.size())*/)
+                        && !truncates_args(enter_label, values.size()))
                     || is_calling_closure(newl))
                 && forwards_all_args(enter_label)
                 /*&& !enter_frame->find_frame(enter_label)*/) {
@@ -10786,7 +10792,7 @@ struct Solver {
         return true;
     }
 
-    bool fold_type_label_arguments(Label *l) {
+    std::pair<Label *, bool> fold_type_label_arguments(Label *l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
 #endif
@@ -10833,14 +10839,15 @@ struct Solver {
                 // we need to solve the return type asap for the next test
                 normalize_label(newl);
             }
+            bool returns_closures = label_returns_closures(newl);
             if (
                 !newl->is_basic_block_like() && (
-                label_returns_closures(newl)
+                returns_closures
                 || is_trivial_function(newl)
                 )
                 ) {
                 // need to inline the function
-                if (true /* && !recursive */) {
+                if (SCOPES_INLINE_FUNCTION_FROM_TEMPLATE || returns_closures /* && !recursive */) {
                     callargs.clear();
                     keys.clear();
                     callargs.push_back(none);
@@ -10848,18 +10855,50 @@ struct Solver {
                     for (size_t i = 1; i < args.size(); ++i) {
                         keys.push_back(args[i]);
                     }
+                    newl = fold_type_label_single(
+                        enter_frame, enter_label, keys);
                 } else {
-                    callargs[0] = none;
-                    keys[0] = args[0];
+                    /*
+                    problem with this method:
+                    if closures escape the function, the closure's frames
+                    still map template parameters to labels used before the mangling.
+
+                    so for those cases, we fold the function again (see branch above)
+                    */
+                    Parameter *cont_param = newl->params[0];
+                    const Type *cont_type = cont_param->type;
+                    assert(isa<ReturnLabelType>(cont_type));
+                    auto tli = cast<ReturnLabelType>(cont_type);
+                    Any cont = fold_type_return(args[0].value, tli->values);
+                    assert(cont.type != TYPE_Closure);
+                    keys.clear();
+                    keys.push_back(cont);
+                    for (size_t i = 1; i < callargs.size(); ++i) {
+                        keys.push_back(callargs[i]);
+                    }
+                    assert(!callargs.empty());
+                    callargs[0] = { none };
+                    std::unordered_set<Label *> labels;
+                    newl->build_reachable(labels);
+                    Label::UserMap um;
+                    for (auto it = labels.begin(); it != labels.end(); ++it) {
+                        (*it)->insert_into_usermap(um);
+                    }
+                    Label *newll = fold_type_label(um, newl, keys);
+                    enter = newll;
+                    args = callargs;
+                    l->body.set_complete();
+                    if (cont.type == TYPE_Label
+                        /*&& !cont.label->body.is_complete()*/)
+                        return { cont.label, true };
+                    return { nullptr, false };
                 }
-                newl = fold_type_label_single(
-                    enter_frame, enter_label, keys);
             }
         }
         enter = newl;
         args = callargs;
-
-        return true;
+        complete_label_continuation(l);
+        return { nullptr, true };
     }
 
     // returns true if the builtin folds regardless of whether the arguments are
@@ -12422,7 +12461,9 @@ struct Solver {
         SCOPES_TRY_END()
 
         lower2cff(entry);
+#if SCOPES_CLEANUP_LABELS
         cleanup_labels(entry);
+#endif
         return entry;
     }
 
@@ -12522,8 +12563,16 @@ struct Solver {
                     solve_keyed_args(l);
                 }
 
-                fold_type_label_arguments(l);
-                complete_label_continuation(l);
+                auto result = fold_type_label_arguments(l);
+                if (result.first) {
+                    assert(result.second);
+                    l = result.first;
+                    continue;
+                } else {
+                    if (!result.second) {
+                        break;
+                    }
+                }
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
             } else if (is_calling_label(l)
