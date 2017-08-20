@@ -1,6 +1,6 @@
 
 set-scope-symbol! package 'path
-    cons 
+    cons
         .. compiler-dir "/testing/?.sc"
         .. compiler-dir "/testing/?/init.sc"
         package.path
@@ -14,6 +14,7 @@ let modules =
         test_dots
         test_extraparams
         test_fwdecl
+        test_glsl
         test_iter2
         #test_iterator
         test_let
@@ -42,7 +43,7 @@ fn run-tests ()
         print total "tests executed," (total - failed) "succeeded," failed "failed."
         print "done."
         return;
-    
+
     let module modules = (decons modules)
     let module = (module as Symbol)
     print
