@@ -1,24 +1,16 @@
 
-fn dostuff2 (x)
-    let y = (mul x x)
-    let z = y
-    let w = z
-    w
-
 fn dostuff (x)
-    let y = x
+    let y =
+        (unconst true) or (unconst false)
+    #let y =
+        if (unconst true)
+            unconst 10
+        else
+            unconst 20
     let z = (add y y)
-    let w = (dostuff2 z)
-    call
-        fn domorestuff (n)
-            mul w w
-        5
+    z
 
-fn dostuff3 (x)
-    let x = (add x x)
-    x
-
-#dump-label (Closure-label dostuff3)
+dump-label (Closure-label dostuff)
 print;
 dump-label
     typify dostuff i32

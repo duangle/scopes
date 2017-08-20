@@ -1494,8 +1494,8 @@ syntax-extend
     set-scope-symbol! syntax-scope 'scope-macro scope-macro
     set-scope-symbol! syntax-scope 'macro macro
     set-scope-symbol! syntax-scope (Symbol "#list")
-        #compile (typify list-handler list Scope) 'no-opts 'dump-module
-        compile (typify list-handler list Scope)
+        compile (typify list-handler list Scope) #'dump-module
+        #compile (typify list-handler list Scope)
     set-scope-symbol! syntax-scope (Symbol "#symbol")
         compile (typify symbol-handler list Scope)
 
@@ -2728,6 +2728,7 @@ fn read-eval-print-loop ()
         unconst ""
         unconst ""
         unconst 0
+    #dump "loop"
     fn make-idstr (counter)
         .. "$" (Any-string (Any counter))
 
@@ -2752,6 +2753,7 @@ fn read-eval-print-loop ()
         else
             (@ s (slen - 1:usize)) == (char " ")
     let enter-multiline = (endswith-blank cmd)
+    #dump "loop 1"
     let terminated? =
         (blank? cmd) or
             (empty? cmdlist) and (not enter-multiline)
@@ -2788,6 +2790,7 @@ fn read-eval-print-loop ()
                     f as ModuleFunctionType
             set-anchor! expr-anchor
             let result = (fptr)
+            #dump "  loop 2"
             if (('typeof result) != Nothing)
                 set-scope-symbol! eval-scope (Symbol idstr) result
                 print idstr "=" result

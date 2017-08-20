@@ -37,6 +37,17 @@ BEWARE: If you build this with anything else but a recent enough clang,
 
 #define SCOPES_MAX_RECURSIONS 32
 
+// skip labels that directly forward all return arguments
+// if the label does not truncate the return parameters
+#define SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS 0
+
+// fold all arguments for labels that just perform jumps
+// and which aren't recursive
+// turning this on deletes labels that are annotated with scope info
+// and causes branch return label duplication
+// it also peels one iteration from each loop
+#define SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS 0
+
 #ifndef SCOPES_WIN32
 #   ifdef _WIN32
 #   define SCOPES_WIN32
@@ -4812,7 +4823,11 @@ struct Body {
     Args args;
     uint64_t flags;
 
-    Body() : anchor(nullptr), enter(none), flags(0) {}
+    // if there's a scope label, the current frame will be truncated to the
+    // parent frame that maps the scope label.
+    Label *scope_label;
+
+    Body() : anchor(nullptr), enter(none), flags(0), scope_label(nullptr) {}
 
     bool is_complete() const {
         return flags & LBF_Complete;
@@ -4873,7 +4888,7 @@ protected:
 
     Label(const Anchor *_anchor, Symbol _name, uint64_t _flags) :
         uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
-        paired(nullptr), num_instances(0), flags(_flags), scope_label(nullptr)
+        paired(nullptr), num_instances(0), flags(_flags)
         {}
 
 public:
@@ -4887,9 +4902,6 @@ public:
     Label *paired;
     uint64_t num_instances;
     uint64_t flags;
-    // if there's a scope label, the current frame will be truncated to the
-    // parent frame that maps the scope label.
-    Label *scope_label;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
@@ -5367,6 +5379,7 @@ public:
     const Frame *frame;
 
     static const Closure *from(Label *label, const Frame *frame) {
+        assert (label->is_template());
         return new Closure(label, frame);
     }
 
@@ -5487,17 +5500,20 @@ struct StreamLabelFormat {
     Tagging anchors;
     Tagging follow;
     bool show_users;
+    bool show_scope;
 
     StreamLabelFormat() :
         anchors(None),
         follow(All),
-        show_users(false)
+        show_users(false),
+        show_scope(false)
         {}
 
     static StreamLabelFormat debug_all() {
         StreamLabelFormat fmt;
         fmt.follow = All;
         fmt.show_users = true;
+        fmt.show_scope = true;
         return fmt;
     }
 
@@ -5586,6 +5602,11 @@ struct StreamLabel : StreamAnchors {
         }
         alabel->stream(ss, fmt.show_users);
         ss << Style_Operator << ":" << Style_None;
+        if (fmt.show_scope && alabel->body.scope_label) {
+            ss << " " << Style_Operator << "[" << Style_None;
+            alabel->body.scope_label->stream_short(ss);
+            ss << Style_Operator << "]" << Style_None;
+        }
         //stream_scope(scopes[alabel])
         ss << std::endl;
         ss << "    ";
@@ -6020,13 +6041,13 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
         }
     }
 
-    if (label->scope_label) {
-        const Frame *top = parent->find_frame(label->scope_label);
+    if (label->body.scope_label) {
+        const Frame *top = parent->find_frame(label->body.scope_label);
         if (top) {
             parent = top;
         } else {
             // the scope label isn't even part of this frame, truncate all of it
-            parent = nullptr;
+            // parent = nullptr;
         }
     }
 
@@ -10360,7 +10381,9 @@ struct Solver {
 
     Any fold_type_return(Any dest, const std::vector<Any> &values) {
         //ss_cout << "type_return: " << dest << std::endl;
+#if SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS
     repeat:
+#endif
         if (dest.type == TYPE_Parameter) {
             Parameter *param = dest.parameter;
             if (param->is_none()) {
@@ -10387,8 +10410,7 @@ struct Solver {
             auto enter_frame = dest.closure->frame;
             auto enter_label = dest.closure->label;
             Label *newl = fold_typify_single(enter_frame, enter_label, values);
-            // skip labels that directly forward all return arguments
-            // if the label does not truncate the return parameters
+#if SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS
             if (is_jumping(newl)
                 && ((is_calling_continuation(newl)
                     && !truncates_args(enter_label, values.size()))
@@ -10400,7 +10422,9 @@ struct Solver {
                 stream_label(ss, newl, StreamLabelFormat::single());*/
                 dest = newl->body.enter;
                 goto repeat;
-            } else {
+            } else
+#endif
+            {
                 dest = newl;
             }
         } else if (dest.type == TYPE_Label) {
@@ -10779,6 +10803,7 @@ struct Solver {
         const Frame *enter_frame = enter.closure->frame;
         Label *enter_label = enter.closure->label;
 
+#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
         const Frame *top_frame = enter_frame->find_frame(enter_label);
         bool recursive = (top_frame != nullptr);
         if (recursive) {
@@ -10788,12 +10813,14 @@ struct Solver {
                 recursive = false;
             }
         }
+#endif
 
         // inline constant arguments
         Args callargs;
         Args keys;
         auto &&args = l->body.args;
         bool is_bb = enter_label->is_basic_block_like();
+#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
         if (is_bb && !recursive) {
             // non-recursive jump, fold all arguments
             callargs.push_back(none);
@@ -10801,7 +10828,9 @@ struct Solver {
             for (size_t i = 1; i < args.size(); ++i) {
                 keys.push_back(args[i]);
             }
-        } else {
+        } else
+#endif
+        {
             callargs.push_back(args[0]);
             keys.push_back(KeyAny(untyped()));
             for (size_t i = 1; i < args.size(); ++i) {
@@ -10817,6 +10846,7 @@ struct Solver {
                 }
             }
 
+#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
             if (is_bb && recursive) {
                 // we're generating different code, unroll loop
                 if (!frame_args_match_keys(top_frame->args, keys)) {
@@ -10833,6 +10863,7 @@ struct Solver {
                     //stream_args(ss, keys);
                 }
             }
+#endif
 
             #if 1
             // generated function will have only constant arguments, inline
@@ -10850,11 +10881,21 @@ struct Solver {
                 // we need to solve the return type asap for the next test
                 normalize_label(newl);
             }
-            if ((newl->is_basic_block_like() /*&& !recursive*/)
-                || label_returns_closures(newl)
-                || has_single_instruction(newl)
-                || returns_immediately(newl)) {
+            if (
+#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
+                (newl->is_basic_block_like() /*&& !recursive*/) ||
+#else
+                !newl->is_basic_block_like() && (
+#endif
+                label_returns_closures(newl)
+                || is_trivial_function(newl)
+#if SCOPES_FOLD_NONRECURSIVE_JUMP_LABELS
+#else
+                )
+#endif
+                ) {
                 // need to inline the function
+#if 1
                 if (true /* && !recursive */) {
                     callargs.clear();
                     keys.clear();
@@ -10863,7 +10904,9 @@ struct Solver {
                     for (size_t i = 1; i < args.size(); ++i) {
                         keys.push_back(args[i]);
                     }
-                } else {
+                } else
+#endif
+                {
                     callargs[0] = none;
                     keys[0] = args[0];
                 }
@@ -12258,11 +12301,6 @@ struct Solver {
         evaluate_body(&frame, dest, source);
     }
 
-    static bool returns_immediately(Label *l) {
-        assert(!l->params.empty());
-        return is_called_by(l->params[0], l);
-    }
-
     static Label *skip_jumps(Label *l) {
         size_t counter = 0;
         while (jumps_immediately(l)) {
@@ -12273,9 +12311,11 @@ struct Solver {
         return l;
     }
 
-    static bool has_single_instruction(Label *l) {
+    static bool is_trivial_function(Label *l) {
         assert(!l->params.empty());
         l = skip_jumps(l);
+        if (is_calling_continuation(l))
+            return true;
         if (is_continuing_to_parameter(l))
             return true;
         if (is_continuing_to_label(l)) {
@@ -13166,7 +13206,7 @@ struct Expander {
         subexpr.expand_function_body(it, label?longdest:Any(func->params[0]));
 
         if (state) {
-            func->scope_label = state;
+            func->body.scope_label = state;
         }
 
         set_active_anchor(_anchor);
@@ -13193,6 +13233,9 @@ struct Expander {
             Parameter *param = Parameter::vararg_from(_anchor,
                 Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
+            if (state) {
+                nextstate->body.scope_label = state;
+            }
             longdest = nextstate;
             result = param;
         } else if (is_parameter_or_label(dest)) {
@@ -13201,6 +13244,9 @@ struct Expander {
             }
             if (!last_expression()) {
                 nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+                if (state) {
+                    nextstate->body.scope_label = state;
+                }
                 longdest = nextstate;
             }
         } else {
@@ -13303,6 +13349,9 @@ struct Expander {
         }
 
         nextstate = Label::continuation_from(_anchor, labelname);
+        if (state) {
+            nextstate->body.scope_label = state;
+        }
         if (labelname != SYM_Unnamed) {
             env->bind(labelname, nextstate);
         }
@@ -13431,6 +13480,9 @@ struct Expander {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
             Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
+            if (state) {
+                nextstate->body.scope_label = state;
+            }
             longdest = nextstate;
             result = param;
         } else if (is_parameter_or_label(dest)) {
@@ -13439,6 +13491,9 @@ struct Expander {
             }
             if (!last_expression()) {
                 nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
+                if (state) {
+                    nextstate->body.scope_label = state;
+                }
                 longdest = nextstate;
             }
         } else {
@@ -13945,7 +14000,7 @@ static Scope *f_import_c(const String *path,
 
 static void f_dump_label(Label *label) {
     StyledStream ss(std::cerr);
-    stream_label(ss, label, StreamLabelFormat());
+    stream_label(ss, label, StreamLabelFormat::debug_all());
 }
 
 typedef struct { Any result; bool ok; } AnyBoolPair;

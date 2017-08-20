@@ -12,9 +12,9 @@
             "showOutput": "always",
             "problemMatcher": {
                 "owner": "cpp",
-                "fileLocation": "absolute",
+                "fileLocation": ["relative", "${workspaceRoot}/build"],
                 "pattern": {
-                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error|fatal error):\\s+(.*)$",
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error|note|fatal error):\\s+(.*)$",
                     "file": 1,
                     "line": 2,
                     "column": 3,
@@ -28,7 +28,7 @@
             "command": "rm -rf ${workspaceRoot}/build && genie gmake",
             "isShellCommand": true,
             "args": [],
-            "showOutput": "always",
+            "showOutput": "always"
         },
         {
             "taskName": "scopes",
@@ -38,9 +38,9 @@
             "showOutput": "always",
             "problemMatcher": {
                 "owner": "scopes",
-                "fileLocation": "absolute",
+                "fileLocation": ["relative", "${workspaceRoot}/build"],
                 "pattern": {
-                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error|fatal error):\\s+(.*)$",
+                    "regexp": "^(.*):(\\d+):(\\d+):\\s+(warning|error|note|fatal error):\\s+(.*)$",
                     "file": 1,
                     "line": 2,
                     "column": 3,
@@ -54,7 +54,7 @@
             "command": "cd ${workspaceRoot}/doc && make html",
             "isShellCommand": true,
             "args": [],
-            "showOutput": "always"        
+            "showOutput": "always"
         }
-    ]    
+    ]
 }
