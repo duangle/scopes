@@ -503,7 +503,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_AllocaOf) T(FN_Malloc) \
     T(FN_AllocaArray) T(FN_MallocArray) T(FN_ReturnLabelType) T(KW_DoIn) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_Sample) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
     T(OP_FCmpOEQ) T(OP_FCmpONE) T(OP_FCmpORD) \
@@ -532,6 +532,57 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_BAnd) T(OP_BOr) T(OP_BXor) \
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
     T(OP_Tertiary) T(KW_SyntaxLog)
+
+#define B_SPIRV_DIM() \
+    T(1D) \
+    T(2D) \
+    T(3D) \
+    T(Cube) \
+    T(Rect) \
+    T(Buffer) \
+    T(SubpassData)
+
+#define B_SPIRV_IMAGE_FORMAT() \
+    T(Unknown) \
+    T(Rgba32f) \
+    T(Rgba16f) \
+    T(R32f) \
+    T(Rgba8) \
+    T(Rgba8Snorm) \
+    T(Rg32f) \
+    T(Rg16f) \
+    T(R11fG11fB10f) \
+    T(R16f) \
+    T(Rgba16) \
+    T(Rgb10A2) \
+    T(Rg16) \
+    T(Rg8) \
+    T(R16) \
+    T(R8) \
+    T(Rgba16Snorm) \
+    T(Rg16Snorm) \
+    T(Rg8Snorm) \
+    T(R16Snorm) \
+    T(R8Snorm) \
+    T(Rgba32i) \
+    T(Rgba16i) \
+    T(Rgba8i) \
+    T(R32i) \
+    T(Rg32i) \
+    T(Rg16i) \
+    T(Rg8i) \
+    T(R16i) \
+    T(R8i) \
+    T(Rgba32ui) \
+    T(Rgba16ui) \
+    T(Rgba8ui) \
+    T(R32ui) \
+    T(Rgb10a2ui) \
+    T(Rg32ui) \
+    T(Rg16ui) \
+    T(Rg8ui) \
+    T(R16ui) \
+    T(R8ui)
 
 #define B_SPIRV_BUILTINS() \
     T(Position) \
@@ -756,6 +807,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
+    T(FN_Sample, "sample") \
     T(OP_ICmpEQ, "icmp==") T(OP_ICmpNE, "icmp!=") \
     T(OP_ICmpUGT, "icmp>u") T(OP_ICmpUGE, "icmp>=u") T(OP_ICmpULT, "icmp<u") T(OP_ICmpULE, "icmp<=u") \
     T(OP_ICmpSGT, "icmp>s") T(OP_ICmpSGE, "icmp>=s") T(OP_ICmpSLT, "icmp<s") T(OP_ICmpSLE, "icmp<=s") \
@@ -809,7 +861,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FunctionTypeIsVariadic, "function-type-variadic?") \
     T(FN_TupleType, "tuple-type") \
     T(FN_ReturnLabelType, "ReturnLabel-type") \
-    T(FN_ArrayType, "array-type") \
+    T(FN_ArrayType, "array-type") T(FN_ImageType, "Image-type") \
+    T(FN_SampledImageType, "SampledImage-type") \
     T(FN_TypenameType, "typename-type") \
     T(FN_Purify, "purify") \
     T(FN_Write, "io-write!") \
@@ -1024,6 +1077,14 @@ enum KnownSymbol {
     B_SPIRV_BUILTINS()
 #undef T
 #define T(NAME) \
+    SYM_SPIRV_Dim ## NAME,
+    B_SPIRV_DIM()
+#undef T
+#define T(NAME) \
+    SYM_SPIRV_ImageFormat ## NAME,
+    B_SPIRV_IMAGE_FORMAT()
+#undef T
+#define T(NAME) \
     SYM_GLSL_std_450_ ## NAME,
     B_GLSL_STD_450_BUILTINS()
 #undef T
@@ -1064,6 +1125,14 @@ static const char *get_known_symbol_name(KnownSymbol sym) {
 #define T(NAME) \
     case SYM_SPIRV_BuiltIn ## NAME: return "SYM_SPIRV_BuiltIn" #NAME;
 B_SPIRV_BUILTINS()
+#undef T
+#define T(NAME) \
+    case SYM_SPIRV_Dim ## NAME: return "SYM_SPIRV_Dim" #NAME;
+B_SPIRV_DIM()
+#undef T
+#define T(NAME) \
+    case SYM_SPIRV_ImageFormat ## NAME: return "SYM_SPIRV_ImageFormat" #NAME;
+B_SPIRV_IMAGE_FORMAT()
 #undef T
 #define T(NAME) \
     case SYM_GLSL_std_450_ ## NAME: return "SYM_GLSL_std_450_" #NAME;
@@ -1611,6 +1680,14 @@ public:
         B_SPIRV_BUILTINS()
     #undef T
     #define T(NAME) \
+        map_known_symbol(SYM_SPIRV_Dim ## NAME, String::from(#NAME));
+        B_SPIRV_DIM()
+    #undef T
+    #define T(NAME) \
+        map_known_symbol(SYM_SPIRV_ImageFormat ## NAME, String::from(#NAME));
+        B_SPIRV_IMAGE_FORMAT()
+    #undef T
+    #define T(NAME) \
         map_known_symbol(SYM_GLSL_std_450_ ## NAME, String::from("glsl.std.450." #NAME));
         B_GLSL_STD_450_BUILTINS()
     #undef T
@@ -1854,7 +1931,9 @@ static void location_error(const String *msg);
     T(TK_Typename, "type-kind-typename") \
     T(TK_ReturnLabel, "type-kind-return-label") \
     T(TK_Function, "type-kind-function") \
-    T(TK_Extern, "type-kind-extern")
+    T(TK_Extern, "type-kind-extern") \
+    T(TK_Image, "type-kind-image") \
+    T(TK_SampledImage, "type-kind-sampled-image")
 
 enum TypeKind {
 #define T(NAME, BNAME) \
@@ -1915,6 +1994,8 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     \
     T(TYPE_USize, "usize") \
     \
+    T(TYPE_Sampler, "Sampler") \
+    \
     /* supertypes */ \
     T(TYPE_Integer, "integer") \
     T(TYPE_Real, "real") \
@@ -1928,6 +2009,8 @@ static StyledStream& operator<<(StyledStream& ost, const Type *type);
     T(TYPE_Function, "function") \
     T(TYPE_Constant, "constant") \
     T(TYPE_Extern, "extern") \
+    T(TYPE_Image, "Image") \
+    T(TYPE_SampledImage, "SampledImage") \
     T(TYPE_CStruct, "CStruct") \
     T(TYPE_CUnion, "CUnion") \
     T(TYPE_CEnum, "CEnum")
@@ -3000,6 +3083,90 @@ static const Type *storage_type(const Type *T) {
 }
 
 //------------------------------------------------------------------------------
+// IMAGE TYPE
+//------------------------------------------------------------------------------
+
+struct ImageType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_Image;
+    }
+
+    ImageType(
+        const Type *_type,
+        Symbol _dim,
+        int _depth,
+        int _arrayed,
+        int _multisampled,
+        int _sampled,
+        Symbol _format,
+        Symbol _access) :
+        Type(TK_Image),
+        type(_type), dim(_dim), depth(_depth), arrayed(_arrayed),
+        multisampled(_multisampled), sampled(_sampled),
+        format(_format), access(_access) {
+        auto ss = StyledString::plain();
+        ss.out << "<Image " <<  _type->name()->data
+            << " " << _dim
+            << " " << _depth
+            << " " << _arrayed
+            << " " << _multisampled
+            << " " << _sampled
+            << " " << _format;
+        if (access != SYM_Unnamed)
+            ss.out << " " << _access;
+        ss.out << ">";
+        _name = ss.str();
+    }
+
+    const Type *type; // sampled type
+    Symbol dim; // resolved to spv::Dim
+    int depth; // 0 = not a depth image, 1 = depth image, 2 = undefined
+    int arrayed; // 1 = array image
+    int multisampled; // 1 = multisampled content
+    int sampled; // 0 = runtime dependent, 1 = sampled, 2 = storage image
+    Symbol format; // resolved to spv::ImageFormat
+    Symbol access; // resolved to spv::AccessQualifier
+};
+
+static const Type *Image(
+    const Type *_type,
+    Symbol _dim,
+    int _depth,
+    int _arrayed,
+    int _multisampled,
+    int _sampled,
+    Symbol _format,
+    Symbol _access) {
+    static TypeFactory<ImageType> images;
+    return images.insert(_type, _dim, _depth, _arrayed,
+        _multisampled, _sampled, _format, _access);
+}
+
+//------------------------------------------------------------------------------
+// IMAGE TYPE
+//------------------------------------------------------------------------------
+
+struct SampledImageType : Type {
+    static bool classof(const Type *T) {
+        return T->kind() == TK_SampledImage;
+    }
+
+    SampledImageType(const Type *_type) :
+        Type(TK_SampledImage), type(_type) {
+        auto ss = StyledString::plain();
+        ss.out << "<SampledImage " <<  _type->name()->data << ">";
+        _name = ss.str();
+    }
+
+    const Type *type; // image type
+};
+
+static const Type *SampledImage(const Type *_type) {
+    static TypeFactory<SampledImageType> sampled_images;
+    return sampled_images.insert(_type);
+}
+
+//------------------------------------------------------------------------------
 // TYPE INQUIRIES
 //------------------------------------------------------------------------------
 
@@ -3019,6 +3186,8 @@ static void verify_kind(const Type *T) {
         case TK_ReturnLabel: ss.out << "return label"; break;
         case TK_Function: ss.out << "function"; break;
         case TK_Extern: ss.out << "extern"; break;
+        case TK_Image: ss.out << "image"; break;
+        case TK_SampledImage: ss.out << "sampled image"; break;
         }
         ss.out << " expected, got " << T;
         location_error(ss.str());
@@ -3196,6 +3365,8 @@ static const Type *superof(const Type *T) {
     case TK_ReturnLabel: return TYPE_ReturnLabel;
     case TK_Function: return TYPE_Function;
     case TK_Extern: return TYPE_Extern;
+    case TK_Image: return TYPE_Image;
+    case TK_SampledImage: return TYPE_SampledImage;
     }
     assert(false && "unhandled type kind; corrupt pointer?");
     return nullptr;
@@ -7381,6 +7552,36 @@ struct SPIRVGenerator {
 
     }
 
+    spv::Dim dim_from_symbol(Symbol sym) {
+        switch(sym.value()) {
+        #define T(NAME) \
+            case SYM_SPIRV_Dim ## NAME: return spv::Dim ## NAME;
+            B_SPIRV_DIM()
+        #undef T
+            default:
+                location_error(
+                    String::from(
+                        "IL->SPIR: unsupported dimensionality"));
+                break;
+        }
+        return spv::DimMax;
+    }
+
+    spv::ImageFormat image_format_from_symbol(Symbol sym) {
+        switch(sym.value()) {
+        #define T(NAME) \
+            case SYM_SPIRV_ImageFormat ## NAME: return spv::ImageFormat ## NAME;
+            B_SPIRV_IMAGE_FORMAT()
+        #undef T
+            default:
+                location_error(
+                    String::from(
+                        "IL->SPIR: unsupported image format"));
+                break;
+        }
+        return spv::ImageFormatMax;
+    }
+
     spv::StorageClass storage_class_from_extern_class(Symbol etc) {
         switch(etc.value()) {
         case SYM_SPIRV_UniformConstant: return spv::StorageClassUniformConstant;
@@ -7589,6 +7790,27 @@ struct SPIRVGenerator {
         spv::Id retvalue = 0;
         if (enter.type == TYPE_Builtin) {
             switch(enter.builtin.value()) {
+            case FN_Sample: {
+                READ_VALUE(sampler);
+                READ_VALUE(coords);
+                spv::Builder::TextureParameters params;
+                memset(&params, 0, sizeof(params));
+                params.sampler = sampler;
+                params.coords = coords;
+                auto ST = _sampler.indirect_type();
+                if (ST->kind() == TK_SampledImage) {
+                    ST = cast<SampledImageType>(ST)->type;
+                }
+                auto resultType = type_to_spirv_type(cast<ImageType>(ST)->type);
+                bool sparse = false;
+                bool fetch = false;
+                bool proj = false;
+                bool gather = false;
+                bool explicitLod = false;
+                retvalue = builder.createTextureCall(
+                    spv::NoPrecision, resultType, sparse, fetch, proj, gather,
+                    explicitLod, params);
+            } break;
             case FN_Branch: {
                 READ_VALUE(cond);
                 READ_LABEL_BLOCK(then_block);
@@ -8168,9 +8390,26 @@ struct SPIRVGenerator {
             auto ty = type_to_spirv_type(et->type);
             return builder.makePointer(sc, ty);
         } break;
+        case TK_Image: {
+            auto it = cast<ImageType>(type);
+            return builder.makeImageType(
+                type_to_spirv_type(it->type),
+                dim_from_symbol(it->dim),
+                (it->depth == 1),
+                (it->arrayed == 1),
+                (it->multisampled == 1),
+                (it->sampled == 1),
+                image_format_from_symbol(it->format));
+        } break;
+        case TK_SampledImage: {
+            auto sit = cast<SampledImageType>(type);
+            return builder.makeSampledImageType(type_to_spirv_type(sit->type));
+        } break;
         case TK_Typename: {
             if (type == TYPE_Void)
                 return builder.makeVoidType();
+            else if (type == TYPE_Sampler)
+                return builder.makeSamplerType();
             auto tn = cast<TypenameType>(type);
             if (tn->finalized()) {
                 return type_to_spirv_type(tn->storage_type);
@@ -8747,6 +8986,10 @@ struct LLVMIRGenerator {
         case TK_Typename: {
             if (type == TYPE_Void)
                 return LLVMVoidType();
+            else if (type == TYPE_Sampler) {
+                location_error(String::from(
+                    "sampler type can not be used for native target"));
+            }
             auto tn = cast<TypenameType>(type);
             if (tn->finalized()) {
                 switch(tn->storage_type->kind()) {
@@ -8791,6 +9034,14 @@ struct LLVMIRGenerator {
             }
             return LLVMFunctionType(rettype,
                 elements, count + offset, fi->vararg());
+        } break;
+        case TK_SampledImage: {
+            location_error(String::from(
+                "sampled image type can not be used for native target"));
+        } break;
+        case TK_Image: {
+            location_error(String::from(
+                "image type can not be used for native target"));
         } break;
         };
 
@@ -10971,6 +11222,7 @@ struct Solver {
         case FN_Store:
         case FN_VolatileLoad:
         case FN_Load:
+        case FN_Sample:
             return true;
         default: return false;
         }
@@ -11007,6 +11259,21 @@ struct Solver {
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
         switch(enter.builtin.value()) {
+        case FN_Sample: {
+            CHECKARGS(2, -1);
+            auto ST = args[1].value.indirect_type();
+            if (ST->kind() == TK_SampledImage) {
+                auto sit = cast<SampledImageType>(ST);
+                ST = sit->type;
+            }
+            verify_kind<TK_Image>(ST);
+            auto it = cast<ImageType>(ST);
+            RETARGTYPES(it->type);
+            //TextureParameters params;
+            //memset(&params, 0, sizeof(params));
+            //Id Builder::createTextureCall(Decoration precision, Id resultType, bool sparse, bool fetch, bool proj, bool gather, bool noImplicitLod, const TextureParameters& parameters)
+
+        } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
             verify(TYPE_Bool, args[1].value.indirect_type());
@@ -13956,6 +14223,8 @@ static void init_types() {
     DEFINE_TYPENAME("void", TYPE_Void);
     DEFINE_TYPENAME("Nothing", TYPE_Nothing);
 
+    DEFINE_TYPENAME("Sampler", TYPE_Sampler);
+
     DEFINE_TYPENAME("integer", TYPE_Integer);
     DEFINE_TYPENAME("real", TYPE_Real);
     DEFINE_TYPENAME("pointer", TYPE_Pointer);
@@ -13967,6 +14236,8 @@ static void init_types() {
     DEFINE_TYPENAME("constant", TYPE_Constant);
     DEFINE_TYPENAME("function", TYPE_Function);
     DEFINE_TYPENAME("extern", TYPE_Extern);
+    DEFINE_TYPENAME("Image", TYPE_Image);
+    DEFINE_TYPENAME("SampledImage", TYPE_SampledImage);
     DEFINE_TYPENAME("CStruct", TYPE_CStruct);
     DEFINE_TYPENAME("CUnion", TYPE_CUnion);
     DEFINE_TYPENAME("CEnum", TYPE_CEnum);
@@ -14543,6 +14814,9 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, Pointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
+    DEFINE_PURE_C_FUNCTION(FN_ImageType, Image, TYPE_Type,
+        TYPE_Type, TYPE_Symbol, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_Symbol, TYPE_Symbol);
+    DEFINE_PURE_C_FUNCTION(FN_SampledImageType, SampledImage, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_VectorType, f_vector_type, TYPE_Type, TYPE_Type, TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_TypeCountOf, f_type_countof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_SymbolToString, f_symbol_to_string, TYPE_String, TYPE_Symbol);

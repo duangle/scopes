@@ -42,6 +42,11 @@ let fragment-code =
         let uv = (extern 'uv vec2 'input 'location 0)
         let out_Color = (extern 'out_Color vec4 'output)
         let phase = (extern 'phase f32 'uniform-constant 'location 0)
+        let tex =
+            extern 'tex
+                SampledImage-type
+                    Image-type vec4 '2D 0 0 0 1 'Unknown unnamed
+                \ 'uniform-constant 'location 1
         fn make-phase ()
             #if ((load phase) < 0.5)
                 unconst 0.0
@@ -50,7 +55,9 @@ let fragment-code =
             (sin phase) * 0.5 + 0.5
         fn fragment-shader ()
             let uv = (load uv)
-            out_Color = (vectorof f32 (uv @ 0) (uv @ 1) (make-phase) 1)
+            let color = (vectorof f32 (uv @ 0) (uv @ 1) (make-phase) 1)
+            let s = (sample (load tex) uv)
+            out_Color = (fmul color s)
             return;
 
         #dump-label (Closure-label fragment-shader)

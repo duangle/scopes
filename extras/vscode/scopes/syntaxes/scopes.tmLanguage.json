@@ -85,14 +85,14 @@
                     "comment": "Integer literal (binary)",
                     "name": "constant.numeric.integer.binary.scopes",
                     "match": "\\b0b[01_]+(\\:[ui](8|16|32|64|128|s|size))?\\b"
-                }                
+                }
             ]
 		},
 		"types": {
             "patterns":[
                 {
                     "name": "support.type.builtin.scopes",
-                    "match": "(void|bool|usize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|integer|real|pointer|array|vector|tuple|union|typename|function|Symbol|Unknown|Label|Closure|Frame|Any|Parameter|Syntax|Nothing|Scope|Anchor|Builtin|Exception|ReturnLabel|extern)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(void|bool|usize|u8|u16|u32|u64|i8|i16|i32|i64|f32|f64|type|list|string|integer|real|pointer|array|vector|tuple|union|typename|function|(Sampled)?Image|Sampler|Symbol|Unknown|Label|Closure|Frame|Any|Parameter|Syntax|Nothing|Scope|Anchor|Builtin|Exception|ReturnLabel|extern)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.type.library.scopes",
@@ -108,7 +108,7 @@
 			"patterns": [
                 {
                     "name": "support.function.builtin.scopes",
-				    "match": "(mutable\\?|type-name|superof|string-match\\?|file\\?|exit|compiler-version|load-library|prompt|countof|malloc(-array)?|free|alloca(-array|of)?|eval|list-load|globals|((mutable-)?pointer|integer|real|function|tuple|ReturnLabel|array|vector|typename|extern)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|storageof|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)(value|element)|shufflevector|unconst|compile|typify|purify|(constant|signed)\\?|va(-keys|-countof|\\@)|type-kind|nullof|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(sample|mutable\\?|type-name|superof|string-match\\?|file\\?|exit|compiler-version|load-library|prompt|countof|malloc(-array)?|free|alloca(-array|of)?|eval|list-load|globals|((mutable-)?pointer|integer|real|function|tuple|ReturnLabel|array|vector|typename|extern|(Sampled)?Image)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|storageof|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)(value|element)|shufflevector|unconst|compile|typify|purify|(constant|signed)\\?|va(-keys|-countof|\\@)|type-kind|nullof|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.library.scopes",
