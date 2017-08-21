@@ -1874,7 +1874,7 @@ syntax-extend
             let expr = (list-load module-path)
             let eval-scope = (Scope (globals))
             set-scope-symbol! eval-scope 'module-path module-path
-            let content = (exec-module expr eval-scope)
+            let content = (exec-module expr (Scope eval-scope))
             set-scope-symbol! modules name content
             return content (unconst true)
         let content ok = (load-module name)
@@ -2881,7 +2881,7 @@ fn run-main (args...)
         let expr = (list-load sourcepath)
         let eval-scope = (Scope (globals))
         set-scope-symbol! eval-scope 'module-path sourcepath
-        let f = (compile (eval expr eval-scope))
+        let f = (compile (eval expr (Scope eval-scope)))
         let ModuleFunctionType = (pointer (function void))
         if (function-pointer-type? ('typeof f))
             call (inttoptr (Any-payload f) ModuleFunctionType)
