@@ -240,6 +240,10 @@ project "scopes"
             "ffi", "uuid", "ole32", "psapi", "version", "stdc++",
         }
 
+        linkoptions {
+            THISDIR .. "/SPIRV-Tools/build/source/libSPIRV-Tools.a",
+            THISDIR .. "/SPIRV-Tools/build/source/opt/libSPIRV-Tools-opt.a",
+        }
         linkoptions(LLVM_LDFLAGS)
         linkoptions {
             "-lclangFrontend",
