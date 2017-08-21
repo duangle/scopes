@@ -30,20 +30,38 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_VERSION_MINOR 9
 #define SCOPES_VERSION_PATCH 0
 
+// trace partial evaluation and code generation
+// produces a firehouse of information
 #define SCOPES_DEBUG_CODEGEN 0
+
+// run LLVM optimization passes
+// turning this on is detrimental to startup time
+// scopes output is typically clean enough to provide fairly good performance
+// on its own.
 #define SCOPES_OPTIMIZE_ASSEMBLY 0
+
+// any exception aborts immediately and can not be caught
 #define SCOPES_EARLY_ABORT 0
+
+// print a list of cumulative timers on program exit
 #define SCOPES_PRINT_TIMERS 0
 
+// maximum number of recursions permitted during partial evaluation
 #define SCOPES_MAX_RECURSIONS 32
 
 // skip labels that directly forward all return arguments
+// except the ones that truncate them
+// improves LLVM optimization time
 #define SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS 1
 
 // inline a function from its template rather than mangling it
+// otherwise the function is mangled, and only re-specialized if it
+// returns closures, which is the faster option.
+// leaving this off improves LLVM optimization time
 #define SCOPES_INLINE_FUNCTION_FROM_TEMPLATE 0
 
 // cleanup useless labels after lower2cff
+// improves LLVM optimization time
 #define SCOPES_CLEANUP_LABELS 1
 
 #ifndef SCOPES_WIN32
