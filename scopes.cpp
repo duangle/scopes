@@ -872,8 +872,11 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Repeat, "repeat") T(FN_Repr, "Any-repr") T(FN_AnyString, "Any-string") \
     T(FN_Require, "require") T(FN_ScopeOf, "scopeof") T(FN_ScopeAt, "Scope@") \
     T(FN_ScopeEq, "Scope==") \
-    T(FN_ScopeNew, "Scope-new") T(FN_ScopeParent, "Scope-parent") \
-    T(FN_ScopeNewSubscope, "Scope-new-subscope") \
+    T(FN_ScopeNew, "Scope-new") \
+    T(FN_ScopeCopy, "Scope-clone") \
+    T(FN_ScopeNewSubscope, "Scope-new-expand") \
+    T(FN_ScopeCopySubscope, "Scope-clone-expand") \
+    T(FN_ScopeParent, "Scope-parent") \
     T(FN_ScopeNext, "Scope-next") T(FN_SizeOf, "sizeof") \
     T(FN_Slice, "slice") T(FN_Store, "store") \
     T(FN_StringAt, "string@") T(FN_StringCmp, "string-compare") \
@@ -3653,15 +3656,27 @@ static void location_error(const String *msg) {
 //------------------------------------------------------------------------------
 
 struct Scope {
+public:
+    typedef std::unordered_map<Any, Any, Any::Hash> Map;
 protected:
-    Scope(Scope *_parent = nullptr) : parent(_parent) {}
+    Scope(Scope *_parent = nullptr, Map *_map = nullptr) :
+        parent(_parent),
+        map(_map?_map:(new Map())),
+        borrowed(_map?true:false) {
+    }
 
 public:
-    std::unordered_map<Any, Any, Any::Hash> map;
+    ~Scope() {
+        if (!borrowed)
+            delete map;
+    }
+
     Scope *parent;
+    Map *map;
+    bool borrowed;
 
     size_t count() const {
-        return map.size();
+        return map->size();
     }
 
     size_t totalcount() const {
@@ -3674,21 +3689,40 @@ public:
         return count;
     }
 
+    size_t levelcount() const {
+        const Scope *self = this;
+        size_t count = 0;
+        while (self) {
+            count += 1;
+            self = self->parent;
+        }
+        return count;
+    }
+
+    void ensure_not_borrowed() {
+        if (!borrowed) return;
+        parent = Scope::from(parent, this);
+        map = new Map();
+        borrowed = false;
+    }
+
     void bind(KnownSymbol name, const Any &value) {
         bind(Symbol(name), value);
     }
 
     void bind(const Any &name, const Any &value) {
-        auto ret = map.insert(std::pair<Any, Any>(name, value));
+        ensure_not_borrowed();
+        auto ret = map->insert(std::pair<Any, Any>(name, value));
         if (!ret.second) {
             ret.first->second = value;
         }
     }
 
     void del(const Any &name) {
-        auto it = map.find(name);
-        if (it != map.end()) {
-            map.erase(it);
+        ensure_not_borrowed();
+        auto it = map->find(name);
+        if (it != map->end()) {
+            map->erase(it);
         }
     }
 
@@ -3699,7 +3733,8 @@ public:
         size_t best_dist = (size_t)-1;
         const Scope *self = this;
         do {
-            for (auto &&k : self->map) {
+            auto &&map = *self->map;
+            for (auto &&k : map) {
                 if (k.first.type != TYPE_Symbol)
                     continue;
                 Symbol sym = k.first.symbol;
@@ -3723,8 +3758,8 @@ public:
     bool lookup(const Any &name, Any &dest) const {
         const Scope *self = this;
         do {
-            auto it = self->map.find(name);
-            if (it != self->map.end()) {
+            auto it = self->map->find(name);
+            if (it != self->map->end()) {
                 dest = it->second;
                 return true;
             }
@@ -3734,8 +3769,8 @@ public:
     }
 
     bool lookup_local(const Any &name, Any &dest) const {
-        auto it = map.find(name);
-        if (it != map.end()) {
+        auto it = map->find(name);
+        if (it != map->end()) {
             dest = it->second;
             return true;
         }
@@ -3745,14 +3780,15 @@ public:
     StyledStream &stream(StyledStream &ss) {
         size_t totalcount = this->totalcount();
         size_t count = this->count();
+        size_t levelcount = this->levelcount();
         ss << Style_Keyword << "Scope" << Style_Comment << "<" << Style_None
-            << format("%i+%i symbols", count, totalcount - count)->data
+            << format("L:%i T:%i in %i levels", count, totalcount, levelcount)->data
             << Style_Comment << ">" << Style_None;
         return ss;
     }
 
-    static Scope *from(Scope *_parent = nullptr) {
-        return new Scope(_parent);
+    static Scope *from(Scope *_parent = nullptr, Scope *_borrow = nullptr) {
+        return new Scope(_parent, _borrow?(_borrow->map):nullptr);
     }
 };
 
@@ -13741,7 +13777,7 @@ struct Expander {
             it = subexp.next;
         }
 
-        for (auto kv = env->map.begin(); kv != env->map.end(); ++kv) {
+        for (auto kv = env->map->begin(); kv != env->map->end(); ++kv) {
             orig_env->bind(kv->first, kv->second);
         }
         delete env;
@@ -14544,8 +14580,14 @@ static const Syntax *f_list_parse(const String *str) {
 static Scope *f_scope_new() {
     return Scope::from();
 }
+static Scope *f_scope_clone(Scope *clone) {
+    return Scope::from(nullptr, clone);
+}
 static Scope *f_scope_new_subscope(Scope *scope) {
     return Scope::from(scope);
+}
+static Scope *f_scope_clone_subscope(Scope *scope, Scope *clone) {
+    return Scope::from(scope, clone);
 }
 static Scope *f_scope_parent(Scope *scope) {
     return scope->parent;
@@ -14677,7 +14719,7 @@ static Symbol f_typename_field_name(const Type *type, int index) {
 
 typedef struct { Any _0; Any _1; } AnyAnyPair;
 static AnyAnyPair f_scope_next(Scope *scope, Any key) {
-    auto &&map = scope->map;
+    auto &&map = *scope->map;
     if (key.type == TYPE_Nothing) {
         if (map.empty()) {
             return { none, none };
@@ -14845,8 +14887,10 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_ListLoad, f_list_load, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListParse, f_list_parse, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ScopeNew, f_scope_new, TYPE_Scope);
-    DEFINE_C_FUNCTION(FN_ScopeParent, f_scope_parent, TYPE_Scope, TYPE_Scope);
+    DEFINE_C_FUNCTION(FN_ScopeCopy, f_scope_clone, TYPE_Scope, TYPE_Scope);
     DEFINE_C_FUNCTION(FN_ScopeNewSubscope, f_scope_new_subscope, TYPE_Scope, TYPE_Scope);
+    DEFINE_C_FUNCTION(FN_ScopeCopySubscope, f_scope_clone_subscope, TYPE_Scope, TYPE_Scope, TYPE_Scope);
+    DEFINE_C_FUNCTION(FN_ScopeParent, f_scope_parent, TYPE_Scope, TYPE_Scope);
     DEFINE_C_FUNCTION(KW_Globals, f_globals, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);

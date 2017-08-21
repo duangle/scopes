@@ -31,6 +31,7 @@ let modules =
         #test_tableof
         #test_tuple_array
         #test_xlet
+        test_using
         test_while
         test_varargs
         test_vector

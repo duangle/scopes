@@ -232,11 +232,18 @@ syntax-extend
         fn (cls value)
             string->Symbol value
     set-type-symbol! Scope 'apply-type
-        fn (cls parent)
+        fn (cls parent clone)
+            let new? = (type== (typeof clone) Nothing)
             if (type== (typeof parent) Nothing)
-                Scope-new;
+                if new?
+                    Scope-new;
+                else
+                    Scope-clone clone
             else
-                Scope-new-subscope parent
+                if new?
+                    Scope-new-expand parent
+                else
+                    Scope-clone-expand parent clone
 
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! Any '== (gen-type-op2 Any==)
@@ -2297,23 +2304,39 @@ set-type-symbol! extern 'call
 #-------------------------------------------------------------------------------
 
 fn merge-scope-symbols (source target filter)
-    let scope-loop (source) = (unconst source)
-    let loop (last-key) = (unconst none)
-    let key value =
-        Scope-next source (Any last-key)
-    if (not (('typeof key) == Nothing))
-        if (('typeof key) == Symbol)
-            let key = (key as Symbol)
-            if
-                or (none? filter)
-                    do
-                        let keystr = (key as string)
-                        string-match? filter keystr
-                set-scope-symbol! target key value
-        loop key
-    let parent = (Scope-parent source)
-    if (parent != null)
-        scope-loop parent
+    fn filter-contents (source target filter)
+        let parent = (Scope-parent source)
+        let target =
+            if (parent == null) target
+            else
+                filter-contents parent target filter
+        let loop (last-key) = (unconst none)
+        let key value =
+            Scope-next source (Any last-key)
+        if (not (('typeof key) == Nothing))
+            if (('typeof key) == Symbol)
+                let key = (key as Symbol)
+                if
+                    or
+                        none? filter
+                        do
+                            let keystr = (key as string)
+                            string-match? filter keystr
+                    set-scope-symbol! target key value
+            loop key
+        else
+            target
+    filter-contents (unconst source) (unconst target) filter
+
+fn clone-scope-symbols (source target)
+    fn clone-contents (source target)
+        let parent = (Scope-parent source)
+        let target =
+            if (parent == null) target
+            else
+                clone-contents parent target
+        Scope target source
+    clone-contents (unconst source) (unconst target)
 
 define-scope-macro using
     let name rest = (decons args)
@@ -2322,8 +2345,8 @@ define-scope-macro using
         let name rest = (decons rest)
         let name = (name as Syntax as Symbol)
         let module = ((require name) as Scope)
-        merge-scope-symbols module syntax-scope
-        return (unconst (list do)) syntax-scope
+        return (unconst (list do))
+            clone-scope-symbols module syntax-scope
     let pattern =
         if (empty? rest) '()
         else
@@ -2336,11 +2359,11 @@ define-scope-macro using
             list pattern
     # attempt to import directly if possible
     label process (src)
-        if (empty? pattern)
-            merge-scope-symbols src syntax-scope
-        else
-            merge-scope-symbols src syntax-scope ((@ pattern 0) as string)
-        return (unconst (list do)) syntax-scope
+        return (unconst (list do))
+            if (empty? pattern)
+                merge-scope-symbols src syntax-scope
+            else
+                merge-scope-symbols src syntax-scope ((@ pattern 0) as string)
     if (('typeof nameval) == Symbol)
         let sym = (nameval as Symbol)
         let src ok = (@ syntax-scope sym)
@@ -2351,7 +2374,6 @@ define-scope-macro using
     return
         list syntax-extend
             cons merge-scope-symbols name 'syntax-scope pattern
-            'syntax-scope
         syntax-scope
 
 #-------------------------------------------------------------------------------
