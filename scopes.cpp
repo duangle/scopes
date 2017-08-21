@@ -27,7 +27,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 */
 
 #define SCOPES_VERSION_MAJOR 0
-#define SCOPES_VERSION_MINOR 9
+#define SCOPES_VERSION_MINOR 10
 #define SCOPES_VERSION_PATCH 0
 
 // trace partial evaluation and code generation
@@ -5187,10 +5187,12 @@ public:
         }
     }
 
-    void build_reachable(std::unordered_set<Label *> &labels) {
+    void build_reachable(std::unordered_set<Label *> &labels,
+        std::vector<Label *> *ordered_labels = nullptr) {
         labels.clear();
-
         labels.insert(this);
+        if (ordered_labels)
+            ordered_labels->push_back(this);
         std::vector<Label *> stack = { this };
         while (!stack.empty()) {
             Label *parent = stack.back();
@@ -5209,6 +5211,8 @@ public:
                     Label *label = arg.label;
                     if (!labels.count(label)) {
                         labels.insert(label);
+                        if (ordered_labels)
+                            ordered_labels->push_back(label);
                         stack.push_back(label);
                     }
                 }
@@ -5273,8 +5277,9 @@ public:
     }
 
     void build_scope(std::vector<Label *> &tempscope) {
-        std::unordered_set<Label *> reachable;
-        build_reachable(reachable);
+        std::unordered_set<Label *> visited;
+        std::vector<Label *> reachable;
+        build_reachable(visited, &reachable);
         UserMap um;
         for (auto it = reachable.begin(); it != reachable.end(); ++it) {
             (*it)->insert_into_usermap(um);
@@ -8331,8 +8336,9 @@ struct SPIRVGenerator {
         }
 
         {
-            std::unordered_set<Label *> labels;
-            entry->build_reachable(labels);
+            std::unordered_set<Label *> visited;
+            std::vector<Label *> labels;
+            entry->build_reachable(visited, &labels);
             for (auto it = labels.begin(); it != labels.end(); ++it) {
                 (*it)->insert_into_usermap(user_map);
             }
@@ -9683,8 +9689,9 @@ struct LLVMIRGenerator {
         assert(!entry->is_basic_block_like());
 
         {
-            std::unordered_set<Label *> labels;
-            entry->build_reachable(labels);
+            std::unordered_set<Label *> visited;
+            std::vector<Label *> labels;
+            entry->build_reachable(visited, &labels);
             for (auto it = labels.begin(); it != labels.end(); ++it) {
                 (*it)->insert_into_usermap(user_map);
             }
@@ -10896,8 +10903,9 @@ struct Solver {
                     }
                     assert(!callargs.empty());
                     callargs[0] = { none };
-                    std::unordered_set<Label *> labels;
-                    newl->build_reachable(labels);
+                    std::unordered_set<Label *> visited;
+                    std::vector<Label *> labels;
+                    newl->build_reachable(visited, &labels);
                     Label::UserMap um;
                     for (auto it = labels.begin(); it != labels.end(); ++it) {
                         (*it)->insert_into_usermap(um);
@@ -12650,8 +12658,9 @@ struct Solver {
         size_t count = 0;
         size_t total_processed = 0;
         while (true) {
-            std::unordered_set<Label *> labels;
-            entry->build_reachable(labels);
+            std::unordered_set<Label *> visited;
+            std::vector<Label *> labels;
+            entry->build_reachable(visited, &labels);
 
             Label::UserMap um;
             for (auto it = labels.begin(); it != labels.end(); ++it) {
@@ -12731,8 +12740,9 @@ struct Solver {
                     "terminated after 256 iterations"));
             }
 
-            std::unordered_set<Label *> labels;
-            entry->build_reachable(labels);
+            std::unordered_set<Label *> visited;
+            std::vector<Label *> labels;
+            entry->build_reachable(visited, &labels);
 
             Label::UserMap um;
             for (auto it = labels.begin(); it != labels.end(); ++it) {
