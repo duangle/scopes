@@ -189,6 +189,7 @@ project "scopes"
             "-std=gnu++11",
             "-fno-exceptions",
             "-fno-rtti",
+            "-fno-strict-aliasing",
             "-D__STDC_CONSTANT_MACROS",
             "-D__STDC_FORMAT_MACROS",
             "-D__STDC_LIMIT_MACROS",
@@ -209,6 +210,7 @@ project "scopes"
             "-Wno-pragmas",
             "-Wno-return-type",
             "-Wno-variadic-macros",
+            "-Wno-int-in-bool-context"
         }
 
         buildoptions_cpp {

@@ -6661,6 +6661,12 @@ public:
         assert(Ty);
 
         switch (Ty->getTypeClass()) {
+        case clang::Type::Attributed: {
+            const AttributedType *at = dyn_cast<AttributedType>(Ty);
+            // we probably want to eventually handle some of the attributes
+            // but for now, ignore any attribute
+            return TranslateType(at->getEquivalentType());
+        } break;
         case clang::Type::Elaborated: {
             const ElaboratedType *et = dyn_cast<ElaboratedType>(Ty);
             return TranslateType(et->getNamedType());
@@ -6772,7 +6778,7 @@ public:
         default:
             break;
         }
-        location_error(format("cannot convert type: %s (%s)\n",
+        location_error(format("clang-bridge: cannot convert type: %s (%s)",
             T.getAsString().c_str(),
             Ty->getTypeClassName()));
         return TYPE_Void;
