@@ -19,18 +19,19 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
 * Beware: Make sure your MSYS2 installation resides in ``C:\msys64``.
 * Install `MSYS2 <http://msys2.github.io>`_ and
   `install <https://github.com/valtron/llvm-stuff/wiki/Build-LLVM-3.8-with-MSYS2>`_
-  clang, LLVM 4.0.x, libffi and make for ``x86_64``. The packages are named
+  clang, LLVM 4.0.x, libffi, cmake and make for ``x86_64``. The packages are named
   ``mingw64/mingw-w64-x86_64-llvm``, ``mingw64/mingw-w64-x86_64-clang``,
-  ``mingw64/mingw-w64-x86_64-libffi`` and ``make``.
+  ``mingw64/mingw-w64-x86_64-libffi``, ``mingw64/mingw-w64-x86_64-cmake``
+  and ``make``.
 * Nice to have: ``mingw-w64-x86_64-gdb``
 * You also need a github checkout of
   `SPIRV-Tools <https://github.com/KhronosGroup/SPIRV-Tools>`_ (into the workspace folder).
 * Lastly, you need a build of `GENie <https://github.com/bkaradzic/GENie>`_ (binaries
   available on the page).
 * Check SPIRV-Tools build instructions to verify that its dependency on SPIRV headers
-  is satisfied. Build SPIRV-Tools using 
+  is satisfied. Build SPIRV-Tools using
   ``mkdir build && cd build && cmake .. -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release && make``
-  in ``scopes-repo/SPIRV-Tools/build``.
+  in ``scopes-repo/SPIRV-Tools``.
 * In the base directory, run ``genie gmake`` once to generate the project Makefiles.
 * To build in debug mode, run ``make -C build``. For release mode, use
   ``make -C build config=release``.
@@ -53,7 +54,7 @@ Building Scopes on Linux
   softlink or copy the generated build folder (e.g. ``x86_64-unknown-linux-gnu``)
   as ``libffi`` in the repo folder.
 * Check SPIRV-Tools build instructions to verify that its dependency on SPIRV headers
-  is satisfied. Build SPIRV-Tools using 
+  is satisfied. Build SPIRV-Tools using
   ``mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make``
   in ``scopes-repo/SPIRV-Tools/build``.
 * In the base directory, run ``genie gmake`` once to generate the project Makefiles.

@@ -41,6 +41,4 @@ fn test2 ()
 #dump-label
     typify test2
 #dump-label (Closure-label test2)
-if (!= operating-system 'windows)
-    test2;
-
+test2;

@@ -49,6 +49,9 @@ BEWARE: If you build this with anything else but a recent enough clang,
 // maximum number of recursions permitted during partial evaluation
 #define SCOPES_MAX_RECURSIONS 32
 
+// compile native code with debug info if not otherwise specified
+#define SCOPES_COMPILE_WITH_DEBUG_INFO 1
+
 // skip labels that directly forward all return arguments
 // except the ones that truncate them
 // improves LLVM optimization time
@@ -10153,9 +10156,9 @@ enum {
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_Compile);
-//#ifdef SCOPES_WIN32
+#ifndef SCOPES_COMPILE_WITH_DEBUG_INFO
     flags |= CF_NoDebugInfo;
-//#endif
+#endif
 
     fn->verify_compilable();
     const Type *functype = Pointer(fn->get_function_type());
