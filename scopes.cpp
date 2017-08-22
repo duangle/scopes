@@ -3669,11 +3669,6 @@ protected:
     }
 
 public:
-    ~Scope() {
-        if (!borrowed)
-            delete map;
-    }
-
     Scope *parent;
     Map *map;
     bool borrowed;
@@ -11746,7 +11741,7 @@ struct Solver {
 
     void print_traceback_entry(Label *l) {
         StyledStream ss(std::cerr);
-        ss << l->body.anchor << " in ";
+        ss << l->anchor << " in ";
         if (l->name == SYM_Unnamed) {
             if (l->is_basic_block_like()) {
                 ss << "unnamed label";
@@ -11757,6 +11752,8 @@ struct Solver {
             ss << l->name.name()->data;
         }
         ss << std::endl;
+        l->anchor->stream_source_line(ss);
+        ss << l->body.anchor << " at" << std::endl;
         l->body.anchor->stream_source_line(ss);
     }
 
@@ -13800,7 +13797,7 @@ struct Expander {
         for (auto kv = env->map->begin(); kv != env->map->end(); ++kv) {
             orig_env->bind(kv->first, kv->second);
         }
-        delete env;
+        //delete env;
         env = orig_env;
 
         set_active_anchor(_anchor);
@@ -14762,17 +14759,23 @@ static AnyAnyPair f_scope_next(Scope *scope, Any key) {
     }
 }
 
+static std::unordered_map<const String *, Reprog *> pattern_cache;
 static bool f_string_match(const String *pattern, const String *text) {
-    const char *error = nullptr;
-    Reprog *m = regcomp(pattern->data, 0, &error);
-    if (error) {
-        const String *err = String::from_cstr(error);
-        regfree(m);
-        location_error(err);
+    auto it = pattern_cache.find(pattern);
+    Reprog *m = nullptr;
+    if (it == pattern_cache.end()) {
+        const char *error = nullptr;
+        m = regcomp(pattern->data, 0, &error);
+        if (error) {
+            const String *err = String::from_cstr(error);
+            regfree(m);
+            location_error(err);
+        }
+        pattern_cache.insert({ pattern, m });
+    } else {
+        m = it->second;
     }
-    bool matches = (regexec(m, text->data, nullptr, 0) == 0);
-    regfree(m);
-    return matches;
+    return (regexec(m, text->data, nullptr, 0) == 0);
 }
 
 static void f_load_library(const String *name) {
