@@ -6409,8 +6409,10 @@ public:
     NamespaceMap typedefs;
 
     CVisitor() : dest(nullptr), Context(NULL) {
-        typedefs.insert({Symbol("__builtin_va_list"),
-            Typename(String::from("__builtin_va_list")) });
+        const Type *T = Typename(String::from("__builtin_va_list"));
+        auto tnt = cast<TypenameType>(const_cast<Type*>(T));
+        tnt->finalize(Array(TYPE_I8, sizeof(va_list)));
+        typedefs.insert({Symbol("__builtin_va_list"), T });
     }
 
     const Anchor *anchorFromLocation(clang::SourceLocation loc) {
