@@ -1777,7 +1777,6 @@ define-macro global
         if (T <: reference)
             element-type (storageof T) 0
         else T
-
     let name token rest = (decons args 2)
     let token = (token as Syntax as Symbol)
     if (token == '=)
@@ -1789,7 +1788,10 @@ define-macro global
             list let T '= (list element-typeof tmp)
             list let name '= (list (list reference T) (list malloc T))
             list (do =) name tmp
-            name
+            # wrapping this prevents a crash on windows.
+                right now, no idea what causes this, difficult to debug.
+            list do name
+            #name
     elseif (token == '@)
         let size token rest = (decons rest 2)
         let token = (token as Syntax as Symbol)

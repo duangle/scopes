@@ -31,7 +31,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_VERSION_PATCH 0
 
 // trace partial evaluation and code generation
-// produces a firehouse of information
+// produces a firehose of information
 #define SCOPES_DEBUG_CODEGEN 0
 
 // run LLVM optimization passes
@@ -8941,9 +8941,9 @@ struct LLVMIRGenerator {
     LLVMValueRef anchor_to_location(const Anchor *anchor) {
         assert(use_debug_info);
 
-        auto old_bb = LLVMGetInsertBlock(builder);
-        LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
-        LLVMValueRef disp = LLVMGetFunctionSubprogram(func);
+        //auto old_bb = LLVMGetInsertBlock(builder);
+        //LLVMValueRef func = LLVMGetBasicBlockParent(old_bb);
+        LLVMValueRef disp = LLVMGetFunctionSubprogram(active_function_value);
 
         LLVMValueRef result = LLVMCreateDebugLocation(
             anchor->lineno, anchor->column, disp, nullptr);
@@ -9389,6 +9389,13 @@ struct LLVMIRGenerator {
         }
     }
 
+    LLVMValueRef set_debug_location(Label *label) {
+        assert(use_debug_info);
+        LLVMValueRef diloc = anchor_to_location(label->body.anchor);
+        LLVMSetCurrentDebugLocation(builder, diloc);
+        return diloc;
+    }
+
     void write_label_body(Label *label) {
     repeat:
         assert(label->body.is_complete());
@@ -9401,8 +9408,7 @@ struct LLVMIRGenerator {
 
         LLVMValueRef diloc = nullptr;
         if (use_debug_info) {
-            diloc = anchor_to_location(label->body.anchor);
-            LLVMSetCurrentDebugLocation(builder, diloc);
+            diloc = set_debug_location(label);
         }
 
         assert(!args.empty());
@@ -9932,13 +9938,12 @@ struct LLVMIRGenerator {
             auto functype = type_to_llvm_type(ilfunctype);
 
             auto func = LLVMAddFunction(module, name, functype);
+            if (use_debug_info) {
+                LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
+            }            
             LLVMSetLinkage(func, LLVMPrivateLinkage);
             label2func[label] = func;
             set_active_function(label);
-
-            if (use_debug_info) {
-                LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
-            }
 
             auto bb = LLVMAppendBasicBlock(func, "");
             LLVMPositionBuilderAtEnd(builder, bb);
@@ -9953,10 +9958,14 @@ struct LLVMIRGenerator {
 
             size_t paramcount = params.size() - 1;
 
+            LLVMValueRef diloc = nullptr;
             for (size_t i = 0; i < paramcount; ++i) {
                 Parameter *param = params[i + 1];
                 LLVMValueRef val = LLVMGetParam(func, i + offset);
                 if (is_memory_class(param->type)) {
+                    if (use_debug_info && !diloc) {
+                        diloc = set_debug_location(label);
+                    }                            
                     val = LLVMBuildLoad(builder, val, "");
                 }
                 param2value[{active_function_value,param}] = val;
