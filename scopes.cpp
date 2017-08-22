@@ -14783,7 +14783,13 @@ static void f_load_library(const String *name) {
     void *handle = dlopen(name->data, RTLD_LAZY|RTLD_DEEPBIND);
 #endif
     if (!handle) {
-        location_error(String::from_cstr(dlerror()));
+        StyledString ss;
+        ss.out << "error loading library " << name;    
+        char *err = dlerror();
+        if (err) {
+            ss.out << ": " << err;
+        }
+        location_error(ss.str());
     }
     loaded_libs.push_back(handle);
 }

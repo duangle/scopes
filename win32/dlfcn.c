@@ -139,7 +139,7 @@ static void global_rem( global_object *start, HMODULE hModule )
  * the limit.
  */
 static CHAR error_buffer[65535];
-static CHAR *current_error;
+static CHAR *current_error = NULL;
 static char dlerror_buffer[65536];
 
 static int copy_string( CHAR *dest, int dest_size, const CHAR *src )
@@ -430,6 +430,7 @@ end:
 
 char *dlerror( void )
 {
+    if (!current_error) return NULL;
     char *error_pointer = dlerror_buffer;
 
 #ifdef UNICODE
