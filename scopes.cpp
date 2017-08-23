@@ -1017,7 +1017,10 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_DumpModule, "compile-flag-dump-module") \
     T(SYM_DumpFunction, "compile-flag-dump-function") \
     T(SYM_DumpTime, "compile-flag-dump-time") \
-    T(SYM_NoOpts, "compile-flag-no-opts") \
+    T(SYM_NoDebugInfo, "compile-flag-no-debug-info") \
+    T(SYM_O1, "compile-flag-O1") \
+    T(SYM_O2, "compile-flag-O2") \
+    T(SYM_O3, "compile-flag-O3") \
     \
     /* function flags */ \
     T(SYM_Variadic, "variadic") \
@@ -8685,13 +8688,15 @@ struct SPIRVGenerator {
 // IL->LLVM IR GENERATOR
 //------------------------------------------------------------------------------
 
-static void build_and_run_opt_passes(LLVMModuleRef module) {
+static void build_and_run_opt_passes(LLVMModuleRef module, int opt_level) {
     LLVMPassManagerBuilderRef passBuilder;
 
     passBuilder = LLVMPassManagerBuilderCreate();
-    LLVMPassManagerBuilderSetOptLevel(passBuilder, 3);
+    LLVMPassManagerBuilderSetOptLevel(passBuilder, opt_level);
     LLVMPassManagerBuilderSetSizeLevel(passBuilder, 0);
-    LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
+    if (opt_level >= 2) {
+        LLVMPassManagerBuilderUseInlinerWithThreshold(passBuilder, 225);
+    }
 
     LLVMPassManagerRef functionPasses =
       LLVMCreateFunctionPassManagerForModule(module);
@@ -10160,17 +10165,22 @@ public:
 enum {
     CF_DumpDisassembly  = (1 << 0),
     CF_DumpModule       = (1 << 1),
-    CF_NoOpts           = (1 << 2),
-    CF_DumpFunction     = (1 << 3),
-    CF_DumpTime         = (1 << 4),
-    CF_NoDebugInfo      = (1 << 5),
+    CF_DumpFunction     = (1 << 2),
+    CF_DumpTime         = (1 << 3),
+    CF_NoDebugInfo      = (1 << 4),
+    CF_O1               = (1 << 5),
+    CF_O2               = (1 << 6),
+    CF_O3               = CF_O1 | CF_O2,
 };
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_Compile);
-#ifndef SCOPES_COMPILE_WITH_DEBUG_INFO
+#if !SCOPES_COMPILE_WITH_DEBUG_INFO
     flags |= CF_NoDebugInfo;
+#endif
+#if SCOPES_OPTIMIZE_ASSEMBLY
+    flags |= CF_O3;
 #endif
 
     fn->verify_compilable();
@@ -10213,12 +10223,17 @@ static Any compile(Label *fn, uint64_t flags) {
         pEE->RegisterJITEventListener(disassembly_listener);
     }
 
-#if SCOPES_OPTIMIZE_ASSEMBLY
-    if (!(flags & CF_NoOpts)) {
+    if (flags & CF_O3) {
         Timer optimize_timer(TIMER_Optimize);
-        build_and_run_opt_passes(module);
+        int level = 0;
+        if ((flags & CF_O3) == CF_O1)
+            level = 1;
+        else if ((flags & CF_O3) == CF_O2)
+            level = 2;
+        else if ((flags & CF_O3) == CF_O3)
+            level = 3;
+        build_and_run_opt_passes(module, level);
     }
-#endif
     if (flags & CF_DumpModule) {
         LLVMDumpModule(module);
     } else if (flags & CF_DumpFunction) {
@@ -10246,7 +10261,7 @@ static Any compile(Label *fn, uint64_t flags) {
     return Any::from_pointer(functype, pfunc);
 }
 
-static void optimize_spirv(std::vector<unsigned int> &result) {
+static void optimize_spirv(std::vector<unsigned int> &result, int opt_level) {
     spvtools::Optimizer optimizer(SPV_ENV_UNIVERSAL_1_2);
     /*
     optimizer.SetMessageConsumer([](spv_message_level_t level, const char* source,
@@ -10279,11 +10294,14 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
         }
     });
 
-    //optimizer.RegisterPass(spvtools::CreateStripDebugInfoPass());
+    if (opt_level == 3) {
+        optimizer.RegisterPass(spvtools::CreateStripDebugInfoPass());
+        optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
+    }
 
-    //optimizer.RegisterPass(spvtools::CreateFreezeSpecConstantValuePass());
-
-    optimizer.RegisterPass(spvtools::CreateInlineExhaustivePass());
+    if (opt_level == 3) {
+        optimizer.RegisterPass(spvtools::CreateInlineExhaustivePass());
+    }
     optimizer.RegisterPass(spvtools::CreateLocalAccessChainConvertPass());
     optimizer.RegisterPass(spvtools::CreateInsertExtractElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalSingleBlockLoadStoreElimPass());
@@ -10295,10 +10313,12 @@ static void optimize_spirv(std::vector<unsigned int> &result) {
 
     optimizer.RegisterPass(spvtools::CreateDeadBranchElimPass());
     optimizer.RegisterPass(spvtools::CreateLocalMultiStoreElimPass());
-    optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
+    if (opt_level == 3) {
+        optimizer.RegisterPass(spvtools::CreateAggressiveDCEPass());
+    }
     optimizer.RegisterPass(spvtools::CreateCommonUniformElimPass());
 
-    //optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
+    optimizer.RegisterPass(spvtools::CreateFlattenDecorationPass());
     //optimizer.RegisterPass(spvtools::CreateCompactIdsPass());
 
     std::vector<unsigned int> oldresult = result;
@@ -10330,8 +10350,15 @@ static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
         ctx.generate(result, target, fn);
     }
 
-    if (!(flags & CF_NoOpts)) {
-        optimize_spirv(result);
+    if (flags & CF_O3) {
+        int level = 0;
+        if ((flags & CF_O3) == CF_O1)
+            level = 1;
+        else if ((flags & CF_O3) == CF_O2)
+            level = 2;
+        else if ((flags & CF_O3) == CF_O3)
+            level = 3;
+        optimize_spirv(result, level);
     }
 
     if (flags & CF_DumpModule) {
@@ -10365,8 +10392,15 @@ static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
         ctx.generate(result, target, fn);
     }
 
-    if (!(flags & CF_NoOpts)) {
-        optimize_spirv(result);
+    if (flags & CF_O3) {
+        int level = 0;
+        if ((flags & CF_O3) == CF_O1)
+            level = 1;
+        else if ((flags & CF_O3) == CF_O2)
+            level = 2;
+        else if ((flags & CF_O3) == CF_O3)
+            level = 3;
+        optimize_spirv(result, level);
     }
 
     if (flags & CF_DumpModule) {
@@ -15020,7 +15054,10 @@ B_TYPES()
     globals->bind(Symbol(SYM_DumpModule), (uint64_t)CF_DumpModule);
     globals->bind(Symbol(SYM_DumpFunction), (uint64_t)CF_DumpFunction);
     globals->bind(Symbol(SYM_DumpTime), (uint64_t)CF_DumpTime);
-    globals->bind(Symbol(SYM_NoOpts), (uint64_t)CF_NoOpts);
+    globals->bind(Symbol(SYM_NoDebugInfo), (uint64_t)CF_NoDebugInfo);
+    globals->bind(Symbol(SYM_O1), (uint64_t)CF_O1);
+    globals->bind(Symbol(SYM_O2), (uint64_t)CF_O2);
+    globals->bind(Symbol(SYM_O3), (uint64_t)CF_O3);
 
 #define T(NAME) globals->bind(NAME, Builtin(NAME));
 #define T0(NAME, STR) globals->bind(NAME, Builtin(NAME));
@@ -15257,7 +15294,7 @@ skip_regular_load:
 #endif
 
     typedef void (*MainFuncType)();
-    MainFuncType fptr = (MainFuncType)compile(fn, CF_NoOpts).pointer;
+    MainFuncType fptr = (MainFuncType)compile(fn, 0).pointer;
     fptr();
 #if SCOPES_PRINT_TIMERS
     Timer::print_timers();
