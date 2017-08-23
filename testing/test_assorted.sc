@@ -1,8 +1,8 @@
 
 assert
     ==
-        require 'test_module2
-        require 'test_module2
+        require-from module-dir '.test_module2
+        require-from module-dir '.test_module2
 
 assert ((min integer i8) == i8)
 assert ((max 3 4 5) == 5)

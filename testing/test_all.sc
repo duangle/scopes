@@ -1,40 +1,34 @@
 
-set-scope-symbol! package 'path
-    cons
-        .. compiler-dir "/testing/?.sc"
-        .. compiler-dir "/testing/?/init.sc"
-        package.path
-
 let modules =
     quote
-        test_assorted
-        test_call_override
-        test_clang
-        test_closure
-        test_dots
-        test_extraparams
-        test_folding
-        test_fwdecl
-        test_glsl
-        test_iter2
-        #test_iterator
-        test_let
-        test_locals
-        test_loop
-        test_reference
-        test_regexp
-        test_scope
-        test_scope_iter
-        test_submod
-        test_semicolon
-        #test_structof
-        #test_tableof
-        #test_tuple_array
-        #test_xlet
-        test_using
-        test_while
-        test_varargs
-        test_vector
+        .test_assorted
+        .test_call_override
+        .test_clang
+        .test_closure
+        .test_dots
+        .test_extraparams
+        .test_folding
+        .test_fwdecl
+        .test_glsl
+        .test_iter2
+        #.test_iterator
+        .test_let
+        .test_locals
+        .test_loop
+        .test_reference
+        .test_regexp
+        .test_scope
+        .test_scope_iter
+        .test_submod
+        .test_semicolon
+        #.test_structof
+        #.test_tableof
+        #.test_tuple_array
+        #.test_xlet
+        .test_using
+        .test_while
+        .test_varargs
+        .test_vector
 
 fn run-tests ()
     let total =
@@ -55,7 +49,7 @@ fn run-tests ()
     let ok =
         xpcall
             fn ()
-                require module
+                require-from module-dir module
                 unconst true
             fn (exc)
                 io-write!

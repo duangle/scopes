@@ -1803,15 +1803,14 @@ define-macro global
 define package
     let package = (Scope)
     set-scope-symbol! package 'path
-        list "./?.sc"
-            "./?/init.sc"
-            .. compiler-dir "/?.sc"
-            .. compiler-dir "/?/init.sc"
+        list
+            .. compiler-dir "/lib/scopes/?.sc"
+            .. compiler-dir "/lib/scopes/?/init.sc"
     set-scope-symbol! package 'modules (Scope)
     package
 
 syntax-extend
-    fn make-module-path (pattern name)
+    fn make-module-path (base-dir pattern name)
         let sz = (countof pattern)
         let loop (i start result) =
             unconst 0:usize
@@ -1845,48 +1844,98 @@ syntax-extend
                 f as ModuleFunctionType
         fptr;
 
-    fn require (name)
+    fn dots-to-slashes (pattern)
+        let sz = (countof pattern)
+        let loop (i start result) =
+            unconst 0:usize
+            unconst 0:usize
+            unconst ""
+        if (i == sz)
+            return (.. result (slice pattern start))
+        let c = (@ pattern i)
+        if (c == (char "/"))
+            error!
+                .. "no slashes permitted in module name: " pattern
+        elseif (c == (char "\\"))
+            error!
+                .. "no slashes permitted in module name: " pattern
+        elseif (c != (char "."))
+            loop (i + 1:usize) start result
+        elseif (icmp== (i + 1:usize) sz)
+            error!
+                .. "invalid dot at ending of module '" pattern "'"
+        else
+            loop (i + 1:usize) (i + 1:usize)
+                .. result (slice pattern start i) "/"
+
+    fn load-module (module-path)
+        if (not (file? module-path))
+            error!
+                .. "no such module: " module-path
+        let module-path = (realpath module-path)
+        let module-dir = (dirname module-path)
+        let expr = (list-load module-path)
+        let eval-scope = (Scope (globals))
+        set-scope-symbol! eval-scope 'module-path module-path
+        set-scope-symbol! eval-scope 'module-dir module-dir
+        let content = (exec-module expr (Scope eval-scope))
+        return content (unconst true)
+
+    fn patterns-from-namestr (base-dir namestr)
+        # if namestr starts with a slash (because it started with a dot),
+            we only search base-dir
+        if ((@ namestr 0) == (char "/"))
+            unconst
+                list
+                    .. base-dir "?.sc"
+                    .. base-dir "?/init.sc"
+        else
+            let package = (unconst package)
+            package.path as list
+
+    fn require-from (base-dir name)
+        let name = (unconst name)
         let package = (unconst package)
         assert-typeof name Symbol
         let namestr = (Symbol->string name)
-        fn load-module (name)
+        let namestr = (dots-to-slashes namestr)
+        fn load-module-from-symbol (name)
             let modules = (package.modules as Scope)
-            let content ok = (@ modules name)
-            if ok
-                return content (unconst true)
-            let loop (patterns) = (package.path as list)
+            let loop (patterns) = (patterns-from-namestr base-dir namestr)
             if (empty? patterns)
                 return (unconst (Any none)) (unconst false)
             let pattern patterns = (decons patterns)
             let pattern = (pattern as string)
-            let module-path = (make-module-path pattern namestr)
+            let module-path = (make-module-path base-dir pattern namestr)
+            let module-path-sym = (Symbol module-path)
+            let content ok = (@ modules module-path-sym)
+            if ok
+                return content (unconst true)
             if (not (file? module-path))
                 loop patterns
-            let expr = (list-load module-path)
-            let eval-scope = (Scope (globals))
-            set-scope-symbol! eval-scope 'module-path module-path
-            let content = (exec-module expr (Scope eval-scope))
-            set-scope-symbol! modules name content
-            return content (unconst true)
-        let content ok = (load-module name)
+            let content ok = (load-module module-path)
+            set-scope-symbol! modules module-path-sym content
+            return content ok
+        let content ok = (load-module-from-symbol name)
         if ok
             return content
         io-write! "no such module '"
         io-write! (Symbol->string name)
         io-write! "' in paths:\n"
-        let loop (patterns) = (package.path as list)
+        let loop (patterns) = (patterns-from-namestr base-dir namestr)
         if (empty? patterns)
             abort!;
             unreachable!;
         let pattern patterns = (decons patterns)
         let pattern = (pattern as string)
-        let module-path = (make-module-path pattern namestr)
+        let module-path = (make-module-path base-dir pattern namestr)
         io-write! "    "
         io-write! module-path
         io-write! "\n"
         loop patterns
 
-    set-scope-symbol! syntax-scope 'require require
+    set-scope-symbol! syntax-scope 'require-from require-from
+    set-scope-symbol! syntax-scope 'load-module load-module
     syntax-scope
 
 define-scope-macro locals
@@ -1921,11 +1970,26 @@ define-scope-macro locals
                 result
 
 define-macro import
-    let name = (decons args)
-    let name = (name as Syntax as Symbol)
-    list define name
-        list require
-            list quote name
+    fn resolve-scope (scope namestr start)
+        let sz = (countof namestr)
+        let loop (i start scope) = (unconst start) (unconst start) (unconst scope)
+        if (i == sz)
+            return scope (Symbol (slice namestr start i))
+        if ((@ namestr i) == (char "."))
+            if (i == start)
+                loop (add i 1:usize) (add i 1:usize) scope
+        loop (add i 1:usize) start scope
+
+    let sxname rest = (decons args)
+    let name = (sxname as Syntax as Symbol)
+    let namestr = (name as string)
+    list syntax-extend
+        list let 'scope 'key '=
+            list resolve-scope 'syntax-scope namestr 0:usize
+        list set-scope-symbol! 'scope 'key
+            list 'require-from 'module-dir
+                list quote name
+        'syntax-scope
 
 #define llvm_eh_sjlj_setjmp
     extern 'llvm.eh.sjlj.setjmp (function i32 (pointer i8))
@@ -2333,9 +2397,13 @@ define-scope-macro using
     let name rest = (decons args)
     let nameval = (name as Syntax as Any)
     if ((('typeof nameval) == Symbol) and ((nameval as Symbol) == 'import))
+        let module-dir ok = (@ syntax-scope 'module-dir)
+        if (not ok)
+            error! "using import requires module-dir symbol in scope"
+        let module-dir = (module-dir as string)
         let name rest = (decons rest)
         let name = (name as Syntax as Symbol)
-        let module = ((require name) as Scope)
+        let module = ((require-from module-dir name) as Scope)
         return (unconst (list do))
             clone-scope-symbols module syntax-scope
     let pattern =
@@ -2869,15 +2937,7 @@ fn run-main (args...)
     if (sourcepath == none)
         read-eval-print-loop;
     else
-        let expr = (list-load sourcepath)
-        let eval-scope = (Scope (globals))
-        set-scope-symbol! eval-scope 'module-path sourcepath
-        let f = (compile (eval expr (Scope eval-scope)))
-        let ModuleFunctionType = (pointer (function void))
-        if (function-pointer-type? ('typeof f))
-            call (inttoptr (Any-payload f) ModuleFunctionType)
-        else
-            error! "function pointer expected"
+        load-module sourcepath
         exit 0
         unreachable!;
 

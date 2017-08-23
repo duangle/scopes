@@ -1,3 +1,3 @@
 
-import submod
+import .submod
 assert (submod == true)

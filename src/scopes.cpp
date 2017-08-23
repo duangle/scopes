@@ -811,7 +811,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
-    T(FN_Sample, "sample") \
+    T(FN_Sample, "sample") T(FN_RealPath, "realpath") \
+    T(FN_DirName, "dirname") T(FN_BaseName, "basename") \
     T(OP_ICmpEQ, "icmp==") T(OP_ICmpNE, "icmp!=") \
     T(OP_ICmpUGT, "icmp>u") T(OP_ICmpUGE, "icmp>=u") T(OP_ICmpULT, "icmp<u") T(OP_ICmpULE, "icmp<=u") \
     T(OP_ICmpSGT, "icmp>s") T(OP_ICmpSGE, "icmp>=s") T(OP_ICmpSLT, "icmp<s") T(OP_ICmpSLE, "icmp<=s") \
@@ -11776,7 +11777,7 @@ struct Solver {
 
     void print_traceback_entry(Label *l) {
         StyledStream ss(std::cerr);
-        ss << l->anchor << " in ";
+        ss << l->body.anchor << " in ";
         if (l->name == SYM_Unnamed) {
             if (l->is_basic_block_like()) {
                 ss << "unnamed label";
@@ -11787,9 +11788,9 @@ struct Solver {
             ss << l->name.name()->data;
         }
         ss << std::endl;
-        l->anchor->stream_source_line(ss);
-        ss << l->body.anchor << " at" << std::endl;
         l->body.anchor->stream_source_line(ss);
+        //ss << l->body.anchor << " at" << std::endl;
+        //l->body.anchor->stream_source_line(ss);
     }
 
     void print_traceback() {
@@ -14598,6 +14599,30 @@ static Parameter *f_parameter_new(const Anchor *anchor, Symbol symbol, const Typ
     return Parameter::from(anchor, symbol, type);
 }
 
+static const String *f_realpath(const String *path) {
+    char buf[PATH_MAX];
+    auto result = realpath(path->data, buf);
+    if (!result) {
+        return Symbol(SYM_Unnamed).name();
+    } else {
+        return String::from_cstr(result);
+    }
+}
+
+static const String *f_dirname(const String *path) {
+    auto pathcopy = strdup(path->data);
+    auto result = String::from_cstr(dirname(pathcopy));
+    free(pathcopy);
+    return result;
+}
+
+static const String *f_basename(const String *path) {
+    auto pathcopy = strdup(path->data);
+    auto result = String::from_cstr(basename(pathcopy));
+    free(pathcopy);
+    return result;
+}
+
 static int f_parameter_index(const Parameter *param) {
     return param->index;
 }
@@ -14959,7 +14984,9 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_SetGlobals, f_set_globals, TYPE_Void, TYPE_Scope);
     DEFINE_C_FUNCTION(SFXFN_SetScopeSymbol, f_set_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_DelScopeSymbol, f_del_scope_symbol, TYPE_Void, TYPE_Scope, TYPE_Symbol);
-
+    DEFINE_C_FUNCTION(FN_RealPath, f_realpath, TYPE_String, TYPE_String);
+    DEFINE_C_FUNCTION(FN_DirName, f_dirname, TYPE_String, TYPE_String);
+    DEFINE_C_FUNCTION(FN_BaseName, f_basename, TYPE_String, TYPE_String);
     DEFINE_C_FUNCTION(FN_FormatMessage, f_format_message, TYPE_String, TYPE_Anchor, TYPE_String);
     DEFINE_C_FUNCTION(FN_ActiveAnchor, get_active_anchor, TYPE_Anchor);
     DEFINE_C_FUNCTION(FN_Write, f_write, TYPE_Void, TYPE_String);
