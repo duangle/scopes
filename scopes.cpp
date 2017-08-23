@@ -97,6 +97,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #include <stdlib.h>
 #include <errno.h>
 #define STB_SPRINTF_DECORATE(name) stb_##name
+#define STB_SPRINTF_NOUNALIGNED
 #include "external/stb_sprintf.h"
 #include "external/cityhash/city.h"
 
@@ -6253,7 +6254,7 @@ static void map_constant_arguments(Frame *frame, Label *label, const Args &args)
 static Label *fold_type_label_single(const Frame *parent, Label *label, const Args &args) {
     assert(!label->body.is_complete());
     size_t loop_count = 0;
-    {
+    if (parent) {
         const Frame *top = parent->find_frame(label);
         if (top) {
             parent = top->parent;
@@ -6266,15 +6267,15 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
                 location_error(ss.str());
             }
         }
-    }
 
-    if (label->body.scope_label) {
-        const Frame *top = parent->find_frame(label->body.scope_label);
-        if (top) {
-            parent = top;
-        } else {
-            // the scope label isn't even part of this frame, truncate all of it
-            // parent = nullptr;
+        if (label->body.scope_label) {
+            const Frame *top = parent->find_frame(label->body.scope_label);
+            if (top) {
+                parent = top;
+            } else {
+                // the scope label isn't even part of this frame, truncate all of it
+                // parent = nullptr;
+            }
         }
     }
 
@@ -9943,7 +9944,7 @@ struct LLVMIRGenerator {
             auto func = LLVMAddFunction(module, name, functype);
             if (use_debug_info) {
                 LLVMSetFunctionSubprogram(func, label_to_subprogram(label));
-            }            
+            }
             LLVMSetLinkage(func, LLVMPrivateLinkage);
             label2func[label] = func;
             set_active_function(label);
@@ -9968,7 +9969,7 @@ struct LLVMIRGenerator {
                 if (is_memory_class(param->type)) {
                     if (use_debug_info && !diloc) {
                         diloc = set_debug_location(label);
-                    }                            
+                    }
                     val = LLVMBuildLoad(builder, val, "");
                 }
                 param2value[{active_function_value,param}] = val;
@@ -14787,7 +14788,7 @@ static void f_load_library(const String *name) {
 #endif
     if (!handle) {
         StyledString ss;
-        ss.out << "error loading library " << name;    
+        ss.out << "error loading library " << name;
         char *err = dlerror();
         if (err) {
             ss.out << ": " << err;

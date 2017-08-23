@@ -12,6 +12,8 @@ else
     error("unsupported os")
 end
 
+local USE_ASAN_UBSAN = false
+
 local function flatten(t)
     local result = {}
     local function iterate(t)
@@ -133,6 +135,19 @@ project "scopes"
             "-Wno-keyword-macro",
             "-Wno-gnu-redeclared-enum",
         }
+
+        if USE_ASAN_UBSAN then
+            local opts = {
+                "-fsanitize=address",
+                "-fsanitize-address-use-after-scope",
+                "-fno-omit-frame-pointer",
+                "-fsanitize=undefined",
+                "-fno-common",
+            }
+            buildoptions_cpp(opts)
+            buildoptions_c(opts)
+            linkoptions(opts)
+        end
 
         files {
             "external/minilibs/regexp.c"
