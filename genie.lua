@@ -271,8 +271,12 @@ project "scopes"
                 CP .. " -v " .. dllpath("libgcc_s_seh-1") .. " " .. THISDIR,
                 CP .. " -v " .. dllpath("libstdc++-6") .. " " .. THISDIR,
                 CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. THISDIR,
-            }
+            }            
         end
+
+        postbuildcommands {
+            THISDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
+        }
 
     configuration "debug"
         defines { "SCOPES_DEBUG" }
