@@ -827,7 +827,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_SRem, "srem") T(OP_URem, "urem") \
     T(OP_Shl, "shl") T(OP_LShr, "lshr") T(OP_AShr, "ashr") \
     T(OP_BAnd, "band") T(OP_BOr, "bor") T(OP_BXor, "bxor") \
-    T(FN_IsFile, "file?") \
+    T(FN_IsFile, "file?") T(FN_IsDirectory, "directory?") \
     T(OP_FAdd, "fadd") T(OP_FSub, "fsub") T(OP_FMul, "fmul") T(OP_FDiv, "fdiv") T(OP_FRem, "frem") \
     T(FN_FPTrunc, "fptrunc") T(FN_FPExt, "fpext") \
     T(FN_FPToUI, "fptoui") T(FN_FPToSI, "fptosi") \
@@ -6732,7 +6732,12 @@ public:
                 break;
             }
         case clang::Type::Complex:
-        case clang::Type::LValueReference:
+        case clang::Type::LValueReference: {
+            const clang::LValueReferenceType *PTy =
+                cast<clang::LValueReferenceType>(Ty);
+            QualType ETy = PTy->getPointeeType();
+            return Pointer(TranslateType(ETy));
+        } break;
         case clang::Type::RValueReference:
             break;
         case clang::Type::Decayed: {
@@ -6860,6 +6865,16 @@ public:
         return true;
     }
 
+    bool TraverseLinkageSpecDecl(clang::LinkageSpecDecl *ct) {
+        if (ct->getLanguage() == clang::LinkageSpecDecl::lang_cxx)
+            return false;
+        return true;
+    }
+
+    bool TraverseClassTemplateDecl(clang::ClassTemplateDecl *ct) {
+        return false;
+    }
+
     bool TraverseFunctionDecl(clang::FunctionDecl *f) {
         clang::DeclarationName DeclName = f->getNameInfo().getName();
         std::string FuncName = DeclName.getAsString();
@@ -6890,6 +6905,7 @@ public:
 
         return true;
     }
+
 };
 
 class CodeGenProxy : public clang::ASTConsumer {
@@ -14632,8 +14648,24 @@ static const String *f_string_new(const char *ptr, size_t count) {
 }
 
 static bool f_is_file(const String *path) {
-    auto sf = SourceFile::from_file(path);
-    return sf != nullptr;
+    struct stat s;
+    if( stat(path->data,&s) == 0 ) {
+        if( s.st_mode & S_IFDIR ) {
+        } else if ( s.st_mode & S_IFREG ) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool f_is_directory(const String *path) {
+    struct stat s;
+    if( stat(path->data,&s) == 0 ) {
+        if( s.st_mode & S_IFDIR ) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static const Syntax *f_list_load(const String *path) {
@@ -14973,6 +15005,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_LoadLibrary, f_load_library, TYPE_Void, TYPE_String);
 
     DEFINE_C_FUNCTION(FN_IsFile, f_is_file, TYPE_Bool, TYPE_String);
+    DEFINE_C_FUNCTION(FN_IsDirectory, f_is_directory, TYPE_Bool, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListLoad, f_list_load, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ListParse, f_list_parse, TYPE_Syntax, TYPE_String);
     DEFINE_C_FUNCTION(FN_ScopeNew, f_scope_new, TYPE_Scope);
