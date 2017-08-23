@@ -11,6 +11,7 @@ elseif os.is("windows") then
 else
     error("unsupported os")
 end
+local BINDIR = THISDIR .. "/bin"
 
 local USE_ASAN_UBSAN = false
 
@@ -90,7 +91,7 @@ project "scopes"
     kind "ConsoleApp"
     language "C++"
     files {
-        "scopes.cpp",
+        "src/scopes.cpp",
         "external/linenoise-ng/src/linenoise.cpp",
         "external/linenoise-ng/src/ConvertUTF.cpp",
         "external/linenoise-ng/src/wcwidth.cpp",
@@ -105,8 +106,9 @@ project "scopes"
     }
     includedirs {
         "external/linenoise-ng/include",
+        "external",
         "libffi/include",
-        "SPIRV-Tools/include"
+        "SPIRV-Tools/include",
     }
     libdirs {
         --"bin",
@@ -193,8 +195,7 @@ project "scopes"
         --linkoptions { "-Wl,--no-whole-archive" }
 
         postbuildcommands {
-            "cp -v " .. THISDIR .. "/bin/scopes " .. THISDIR,
-            THISDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
+            BINDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
         }
 
     configuration { "windows" }
@@ -234,15 +235,15 @@ project "scopes"
         }
 
         includedirs {
-            "win32",
+            "src/win32",
             MINGW_BASE_PATH .. "/lib/libffi-3.2.1/include"
         }
 
         files {
             "external/minilibs/regexp.c",
-            "win32/mman.c",
-            "win32/realpath.c",
-            "win32/dlfcn.c",
+            "src/win32/mman.c",
+            "src/win32/realpath.c",
+            "src/win32/dlfcn.c",
         }
 
         defines {
@@ -281,16 +282,15 @@ project "scopes"
             local CP = toolpath("cp", MSYS_BIN_PATH)
 
             postbuildcommands {
-                CP .. " -v " .. THISDIR .. "/bin/scopes " .. THISDIR,
-                CP .. " -v " .. dllpath("libffi-6") .. " " .. THISDIR,
-                CP .. " -v " .. dllpath("libgcc_s_seh-1") .. " " .. THISDIR,
-                CP .. " -v " .. dllpath("libstdc++-6") .. " " .. THISDIR,
-                CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. THISDIR,
-            }            
+                CP .. " -v " .. dllpath("libffi-6") .. " " .. BINDIR,
+                CP .. " -v " .. dllpath("libgcc_s_seh-1") .. " " .. BINDIR,
+                CP .. " -v " .. dllpath("libstdc++-6") .. " " .. BINDIR,
+                CP .. " -v " .. dllpath("libwinpthread-1") .. " " .. BINDIR,
+            }
         end
 
         postbuildcommands {
-            THISDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
+            BINDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
         }
 
     configuration "debug"

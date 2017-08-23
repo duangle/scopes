@@ -88,7 +88,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
-#include "external/linenoise-ng/include/linenoise.h"
+#include "linenoise-ng/include/linenoise.h"
 #include <ctype.h>
 #include <stdint.h>
 #include <fcntl.h>
@@ -98,8 +98,8 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #include <errno.h>
 #define STB_SPRINTF_DECORATE(name) stb_##name
 #define STB_SPRINTF_NOUNALIGNED
-#include "external/stb_sprintf.h"
-#include "external/cityhash/city.h"
+#include "stb_sprintf.h"
+#include "cityhash/city.h"
 
 #include <ffi.h>
 
@@ -208,17 +208,17 @@ const char *scopes_compile_time_date();
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Lex/LiteralSupport.h"
 
-#include "external/glslang/SpvBuilder.h"
-#include "external/glslang/disassemble.h"
-#include "external/glslang/GLSL.std.450.h"
-#include "external/spirv-cross/spirv_glsl.hpp"
+#include "glslang/SpvBuilder.h"
+#include "glslang/disassemble.h"
+#include "glslang/GLSL.std.450.h"
+#include "spirv-cross/spirv_glsl.hpp"
 #include "spirv-tools/libspirv.hpp"
 #include "spirv-tools/optimizer.hpp"
 
 #define STB_SPRINTF_IMPLEMENTATION
-#include "external/stb_sprintf.h"
+#include "stb_sprintf.h"
 extern "C" {
-#include "external/minilibs/regexp.h"
+#include "minilibs/regexp.h"
 }
 
 #pragma GCC diagnostic ignored "-Wvla-extension"
@@ -239,7 +239,7 @@ extern "C" {
 #include <setjmp.h>
 #endif
 
-#include "external/cityhash/city.cpp"
+#include "cityhash/city.cpp"
 
 //------------------------------------------------------------------------------
 // UTILITIES
@@ -15250,7 +15250,9 @@ int main(int argc, char *argv[]) {
             scopes_compiler_path = strdup("");
         }
 
-        scopes_compiler_dir = dirname(strdup(scopes_compiler_path));
+        char *compilerdir = dirname(strdup(scopes_compiler_path));
+        scopes_compiler_dir = format("%s/..", compilerdir)->data;
+        free(compilerdir);
     }
 
     init_types();
@@ -15263,10 +15265,16 @@ int main(int argc, char *argv[]) {
 
     {
         SourceFile *sf = nullptr;
-        char sourcepath[1024];
-        strncpy(sourcepath, scopes_compiler_dir, 1024);
-        strncat(sourcepath, "/core.sc", 1024);
-        Symbol name = String::from_cstr(sourcepath);
+#if 0
+        Symbol name = format("%s/lib/scopes/%i.%i.%i/core.sc",
+            scopes_compiler_dir,
+            SCOPES_VERSION_MAJOR,
+            SCOPES_VERSION_MINOR,
+            SCOPES_VERSION_PATCH);
+#else
+        Symbol name = format("%s/lib/scopes/core.sc",
+            scopes_compiler_dir);
+#endif
         sf = SourceFile::from_file(name);
         if (!sf) {
             location_error(String::from("core missing\n"));
