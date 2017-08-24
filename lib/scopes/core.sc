@@ -160,6 +160,15 @@ fn raise! (value)
 fn va-empty? (...)
     icmp== (va-countof ...) 0
 
+fn va-types (params...)
+    let sz = (va-countof params...)
+    let loop (i result...) = sz
+    if (icmp== i 0)
+        return result...
+    let i = (sub i 1)
+    let arg = (va@ i params...)
+    loop i (typeof arg) result...
+
 fn cons (...)
     let i = (va-countof ...)
     if (icmp<s i 2)
@@ -2308,6 +2317,12 @@ set-type-symbol! CStruct 'getattr&
             # cast result to reference
             let val = (getelementptr self 0 idx)
             (reference (element-type (typeof val) 0)) val
+
+set-type-symbol! CStruct 'getattr
+    fn (self name)
+        let idx = (typename-field-index (typeof self) name)
+        if (icmp>=s idx 0)
+            extractvalue self idx
 
 # support for basic C union initializer
 set-type-symbol! CUnion 'apply-type
