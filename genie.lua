@@ -195,7 +195,7 @@ project "scopes"
         --linkoptions { "-Wl,--no-whole-archive" }
 
         postbuildcommands {
-            BINDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
+            -- BINDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
         }
 
     configuration { "windows" }
@@ -290,7 +290,7 @@ project "scopes"
         end
 
         postbuildcommands {
-            BINDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
+            -- BINDIR .. "/scopes " .. THISDIR .. "/testing/test_all.sc"
         }
 
     configuration "debug"

@@ -2494,6 +2494,34 @@ fn arrayof (T ...)
 # iterators
 #-------------------------------------------------------------------------------
 
+define Generator
+    typename "Generator"
+set-typename-storage! Generator (storageof Closure)
+set-type-symbol! Generator 'apply-type
+    fn (cls iter init)
+        fn get-iter-init ()
+            return iter init
+        bitcast get-iter-init Generator
+set-type-symbol! Generator 'call
+    fn (self)
+        if (not (constant? self))
+            compiler-error! "Generator must be constant"
+        let f = (bitcast self Closure)
+        call f
+
+set-type-symbol! Scope 'as
+    fn (self destT)
+        if (destT == Generator)
+            Generator
+                label (fret fdone key)
+                    let key value =
+                        Scope-next self key
+                    if (('typeof key) == Nothing)
+                        fdone;
+                    else
+                        fret key key value
+                unconst (Any none)
+
 fn range (a b c)
     let num-type = (typeof a)
     let step =
@@ -2507,33 +2535,31 @@ fn range (a b c)
     let to =
         if (b == none) a
         else b
-    fn ()
-        return
-            label (f fdone x)
-                if (x < to)
-                    f (x + step) x
-                else
-                    fdone;
-            unconst from
+    Generator
+        label (f fdone x)
+            if (x < to)
+                f (x + step) x
+            else
+                fdone;
+        unconst from
 
 fn zip (a b)
-    let iter-a init-a = (a)
-    let iter-b init-b = (b)
-    fn ()
-        return
-            fn (fret fdone t)
-                let a = (@ t 0)
-                let b = (@ t 1)
-                iter-a
-                    label (next-a at-a...)
-                        iter-b
-                            label (next-b at-b...)
-                                fret
-                                    tupleof next-a next-b
-                                    \ at-a... at-b...
-                            \ fdone b
-                    \ fdone a
-            tupleof init-a init-b
+    let iter-a init-a = ((a as Generator))
+    let iter-b init-b = ((b as Generator))
+    Generator
+        label (fret fdone t)
+            let a = (@ t 0)
+            let b = (@ t 1)
+            iter-a
+                label (next-a at-a...)
+                    iter-b
+                        label (next-b at-b...)
+                            fret
+                                tupleof next-a next-b
+                                \ at-a... at-b...
+                        \ fdone b
+                \ fdone a
+        tupleof init-a init-b
 
 define-macro for
     let loop (it params) = args (unconst '())
@@ -2550,7 +2576,7 @@ define-macro for
     let next = (Parameter 'next)
     let loop = (Symbol "#loop")
     list do
-        list let iter start '= (list generator-expr)
+        list let iter start '= (list (list (do as) generator-expr Generator))
         list label 'break '()
         list iter
             list label loop (cons next params)

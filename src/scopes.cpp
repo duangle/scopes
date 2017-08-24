@@ -2864,33 +2864,35 @@ struct ReturnLabelType : Type {
         ss.out << ")";
         _name = ss.str();
 
-        return_type = get_return_type(this);
+        {
+            std::vector<const Type *> rettypes;
+            // prune constants
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (is_unknown(values[i])) {
+                    rettypes.push_back(values[i].typeref);
+                }
+            }
+
+            if (rettypes.size() == 1) {
+                return_type = rettypes[0];
+                has_mrv = false;
+            } else if (!rettypes.empty()) {
+                return_type = Tuple(rettypes);
+                has_mrv = true;
+            } else {
+                return_type = TYPE_Void;
+                has_mrv = false;
+            }
+        }
     }
 
     bool has_multiple_return_values() const {
-        return return_type->kind() == TK_Tuple;
-    }
-
-    static const Type *get_return_type(const ReturnLabelType *lt) {
-        std::vector<const Type *> rettypes;
-        // prune constants
-        for (size_t i = 0; i < lt->values.size(); ++i) {
-            if (is_unknown(lt->values[i])) {
-                rettypes.push_back(lt->values[i].typeref);
-            }
-        }
-
-        const Type *rtype = TYPE_Void;
-        if (rettypes.size() == 1) {
-            rtype = rettypes[0];
-        } else if (!rettypes.empty()) {
-            rtype = Tuple(rettypes);
-        }
-        return rtype;
+        return has_mrv;
     }
 
     std::vector<Any> values;
     const Type *return_type;
+    bool has_mrv;
 };
 
 static const Type *ReturnLabel(const std::vector<Any> &values) {
@@ -11282,6 +11284,16 @@ struct Solver {
         args = newargs;
     }
 
+    bool is_indirect_closure_type(const Type *T) {
+        if (is_opaque(T)) return false;
+        if (T == TYPE_Closure) return true;
+        T = storage_type(T);
+        const Type *ST = storage_type(TYPE_Closure);
+        if (T == ST) return true;
+        // TODO: detect closures in aggregate types
+        return false;
+    }
+
     bool label_returns_closures(Label *l) {
         if (l->is_basic_block_like())
             return false;
@@ -11290,7 +11302,7 @@ struct Solver {
         const ReturnLabelType *rlt = cast<ReturnLabelType>(l->params[0]->type);
         for (size_t i = 0; i < rlt->values.size(); ++i) {
             auto &&val = rlt->values[i];
-            if (val.type == TYPE_Closure)
+            if (is_indirect_closure_type(val.type))
                 return true;
         }
         return false;
