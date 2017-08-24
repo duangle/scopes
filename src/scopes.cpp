@@ -1217,14 +1217,14 @@ static void ansi_from_style(std::ostream &ost, Style style) {
 #ifdef RGBCOLORS
     case Style_None: ost << ANSI::RESET; break;
     case Style_Symbol: ANSI::COLOR_RGB_FG(ost, 0xCCCCCC); break;
-    case Style_String: ANSI::COLOR_RGB_FG(ost, 0xCC99CC); break;
-    case Style_Number: ANSI::COLOR_RGB_FG(ost, 0x99CC99); break;
-    case Style_Keyword: ANSI::COLOR_RGB_FG(ost, 0x6699CC); break;
-    case Style_Function: ANSI::COLOR_RGB_FG(ost, 0xFFCC66); break;
+    case Style_String: ANSI::COLOR_RGB_FG(ost, 0x99CC99); break;
+    case Style_Number: ANSI::COLOR_RGB_FG(ost, 0xF99157); break;
+    case Style_Keyword: ANSI::COLOR_RGB_FG(ost, 0xCC99CC); break;
+    case Style_Function: ANSI::COLOR_RGB_FG(ost, 0x6699CC); break;
     case Style_SfxFunction: ANSI::COLOR_RGB_FG(ost, 0xCC6666); break;
     case Style_Operator: ANSI::COLOR_RGB_FG(ost, 0x66CCCC); break;
     case Style_Instruction: ost << ANSI::COLOR_YELLOW; break;
-    case Style_Type: ANSI::COLOR_RGB_FG(ost, 0xF99157); break;
+    case Style_Type: ANSI::COLOR_RGB_FG(ost, 0xFFCC66); break;
     case Style_Comment: ANSI::COLOR_RGB_FG(ost, 0x999999); break;
     case Style_Error: ost << ANSI::COLOR_XRED; break;
     case Style_Warning: ost << ANSI::COLOR_XYELLOW; break;

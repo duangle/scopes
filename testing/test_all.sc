@@ -1,6 +1,7 @@
 
 let modules =
     quote
+        .test_ansi_colors
         .test_assorted
         .test_call_override
         .test_clang
