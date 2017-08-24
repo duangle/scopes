@@ -6623,6 +6623,14 @@ public:
             }
 
             GetFields(tni, defn);
+
+            if (name != SYM_Unnamed) {
+                Any target = none;
+                // don't overwrite names already bound
+                if (!dest->lookup(name, target)) {
+                    dest->bind(name, struct_type);
+                }
+            }
         }
 
         return struct_type;
