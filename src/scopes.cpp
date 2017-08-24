@@ -41,7 +41,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_OPTIMIZE_ASSEMBLY 0
 
 // any exception aborts immediately and can not be caught
-#define SCOPES_EARLY_ABORT 0
+#define SCOPES_EARLY_ABORT 1
 
 // print a list of cumulative timers on program exit
 #define SCOPES_PRINT_TIMERS 0
@@ -2660,11 +2660,16 @@ struct TupleType : StorageType {
 
     TupleType(const std::vector<Any> &_types)
         : StorageType(TK_Tuple) {
-        types.reserve(_types.size());
-        for (auto &&arg : _types) {
-            types.push_back(arg);
+        packed = _types.back().i1;
+        size_t tcount = _types.size() - 1;
+        types.reserve(tcount);
+        for (size_t i = 0; i < tcount; ++i) {
+            types.push_back(_types[i]);
         }
         std::stringstream ss;
+        if (packed) {
+            ss << "<";
+        }
         ss << "{";
         for (size_t i = 0; i < types.size(); ++i) {
             if (i > 0) {
@@ -2673,21 +2678,35 @@ struct TupleType : StorageType {
             ss << types[i]->name()->data;
         }
         ss << "}";
+        if (packed) {
+            ss << ">";
+        }
         _name = String::from_stdstring(ss.str());
 
         offsets.resize(types.size());
-        size_t sz = 0;
-        size_t al = 1;
-        for (size_t i = 0; i < types.size(); ++i) {
-            const Type *ET = types[i];
-            size_t etal = align_of(ET);
-            sz = ::align(sz, etal);
-            offsets[i] = sz;
-            al = std::max(al, etal);
-            sz += size_of(ET);
+        if (packed) {
+            size_t sz = 0;
+            for (size_t i = 0; i < types.size(); ++i) {
+                const Type *ET = types[i];
+                offsets[i] = sz;
+                sz += size_of(ET);
+            }
+            size = sz;
+            align = 1;
+        } else {
+            size_t sz = 0;
+            size_t al = 1;
+            for (size_t i = 0; i < types.size(); ++i) {
+                const Type *ET = types[i];
+                size_t etal = align_of(ET);
+                sz = ::align(sz, etal);
+                offsets[i] = sz;
+                al = std::max(al, etal);
+                sz += size_of(ET);
+            }
+            size = ::align(sz, al);
+            align = al;
         }
-        size = ::align(sz, al);
-        align = al;
     }
 
     void *getelementptr(void *src, size_t i) const {
@@ -2706,15 +2725,17 @@ struct TupleType : StorageType {
 
     std::vector<const Type *> types;
     std::vector<size_t> offsets;
+    bool packed;
 };
 
-static const Type *Tuple(const std::vector<const Type *> &types) {
+static const Type *Tuple(const std::vector<const Type *> &types, bool packed = false) {
     static TypeFactory<TupleType> tuples;
     std::vector<Any> atypes;
-    atypes.reserve(types.size());
+    atypes.reserve(types.size() + 1);
     for (auto &&arg : types) {
         atypes.push_back(arg);
     }
+    atypes.push_back(packed);
     return tuples.insert(atypes);
 }
 
@@ -3270,7 +3291,13 @@ static size_t align_of(const Type *T) {
     }
     case TK_Real: {
         const RealType *rt = cast<RealType>(T);
-        return (rt->width + 7) / 8;
+        switch(rt->width) {
+        case 16: return 2;
+        case 32: return 4;
+        case 64: return 8;
+        case 80: return 16;
+        default: break;
+        }
     }
     case TK_Extern:
     case TK_Pointer: return PointerType::size();
@@ -6404,6 +6431,7 @@ public:
     std::unordered_map<clang::RecordDecl *, bool> record_defined;
     std::unordered_map<clang::EnumDecl *, bool> enum_defined;
     NamespaceMap named_structs;
+    NamespaceMap named_classes;
     NamespaceMap named_unions;
     NamespaceMap named_enums;
     NamespaceMap typedefs;
@@ -6428,7 +6456,8 @@ public:
             if (!sf) {
                 sf = SourceFile::from_string(key, Symbol(SYM_Unnamed).name());
             }
-            return Anchor::from(sf, PLoc.getLine(), PLoc.getColumn(), 0);
+            return Anchor::from(sf, PLoc.getLine(), PLoc.getColumn(),
+                SM.getFileOffset(loc));
         }
 
         return get_active_anchor();
@@ -6440,40 +6469,103 @@ public:
     }
 
     void GetFields(TypenameType *tni, clang::RecordDecl * rd) {
-        //auto &rl = Context->getASTRecordLayout(rd);
+        auto &rl = Context->getASTRecordLayout(rd);
 
-        if (rd->isStruct()) {
-            tni->super_type = TYPE_CStruct;
-        } else if (rd->isUnion()) {
+        bool is_union = rd->isUnion();
+
+        if (is_union) {
             tni->super_type = TYPE_CUnion;
+        } else {
+            tni->super_type = TYPE_CStruct;
         }
 
         std::vector<Symbol> names;
         std::vector<const Type *> types;
         //auto anchors = new std::vector<Anchor>();
+        //StyledStream ss;
+        const Type *ST = tni;
 
+        size_t sz = 0;
+        size_t al = 1;
+        bool packed = false;
+        bool has_bitfield = false;
         for(clang::RecordDecl::field_iterator it = rd->field_begin(), end = rd->field_end(); it != end; ++it) {
             clang::DeclarationName declname = it->getDeclName();
 
-            //unsigned idx = it->getFieldIndex();
-            //auto offset = rl.getFieldOffset(idx);
-            //unsigned width = it->getBitWidthValue(*Context);
-
-            if(it->isBitField() || (!it->isAnonymousStructOrUnion() && !declname)) {
-                break;
+            if (!it->isAnonymousStructOrUnion() && !declname) {
+                continue;
             }
+
             clang::QualType FT = it->getType();
             const Type *fieldtype = TranslateType(FT);
 
-            // todo: work offset into structure
-            names.push_back(
-                it->isAnonymousStructOrUnion()?
-                    Symbol("") : Symbol(
-                        String::from_stdstring(declname.getAsString())));
+            if(it->isBitField()) {
+                has_bitfield = true;
+                break;
+            }
+
+            //unsigned width = it->getBitWidthValue(*Context);
+
+            Symbol name = it->isAnonymousStructOrUnion() ?
+                Symbol("") : Symbol(String::from_stdstring(declname.getAsString()));
+
+            if (!is_union) {
+                //ss << "type " << ST << " field " << name << " : " << fieldtype << std::endl;
+
+                unsigned idx = it->getFieldIndex();
+                auto offset = rl.getFieldOffset(idx) / 8;
+                size_t newsz = sz;
+                if (!packed) {
+                    size_t etal = align_of(fieldtype);
+                    newsz = ::align(sz, etal);
+                    al = std::max(al, etal);
+                }
+                if (newsz != offset) {
+                    //ss << "offset mismatch " << newsz << " != " << offset << std::endl;
+                    if (newsz < offset) {
+                        size_t pad = offset - newsz;
+                        names.push_back(Symbol("#"));
+                        types.push_back(Array(TYPE_U8, pad));
+                    } else {
+                        // our computed offset is later than the real one
+                        // structure is likely packed
+                        packed = true;
+                    }
+                }
+                sz = offset + size_of(fieldtype);
+            } else {
+                sz = std::max(sz, size_of(fieldtype));
+                al = std::max(al, align_of(fieldtype));
+            }
+
+            names.push_back(name);
             types.push_back(fieldtype);
         }
+        if (packed) {
+            al = 1;
+        }
+        if (has_bitfield) {
+            // ignore for now and hope that an underlying union fixes the problem
+        } else {
+            sz = ::align(sz, al);
+            size_t needalign = rl.getAlignment().getQuantity();
+            size_t needsize = rl.getSize().getQuantity();
+            bool align_ok = (al == needalign);
+            bool size_ok = (sz == needsize);
+            if (!(align_ok && size_ok)) {
+                StyledStream ss;
+                if (al != needalign) {
+                    ss << "type " << ST << " alignment mismatch: " << al << " != " << needalign << std::endl;
+                }
+                if (sz != needsize) {
+                    ss << "type " << ST << " size mismatch: " << sz << " != " << needsize << std::endl;
+                }
+                set_active_anchor(anchorFromLocation(rd->getSourceRange().getBegin()));
+                location_error(String::from("clang-bridge: imported record doesn't fit"));
+            }
+        }
 
-        tni->finalize(rd->isUnion()?Union(types):Tuple(types));
+        tni->finalize(is_union?Union(types):Tuple(types, packed));
         tni->field_names = names;
     }
 
@@ -6492,24 +6584,43 @@ public:
     }
 
     const Type *TranslateRecord(clang::RecordDecl *rd) {
-        if (!rd->isStruct() && !rd->isUnion())
-            location_error(String::from("can not translate record: is neither struct nor union"));
+        Symbol name = SYM_Unnamed;
+        if (rd->isAnonymousStructOrUnion()) {
+            auto tdn = rd->getTypedefNameForAnonDecl();
+            if (tdn) {
+                name = Symbol(String::from_stdstring(tdn->getName().data()));
+            }
+        } else {
+            name = Symbol(String::from_stdstring(rd->getName().data()));
+        }
 
-        Symbol name(String::from_stdstring(rd->getName().data()));
-
-        const Type *struct_type = get_typename(name,
-            rd->isUnion()?named_unions:named_structs);
-
-        //const Anchor *anchor = anchorFromLocation(rd->getSourceRange().getBegin());
+        const Type *struct_type = nullptr;
+        if (rd->isUnion()) {
+            struct_type = get_typename(name, named_unions);
+        } else if (rd->isStruct()) {
+            struct_type = get_typename(name, named_structs);
+        } else if (rd->isClass()) {
+            struct_type = get_typename(name, named_classes);
+        } else {
+            set_active_anchor(anchorFromLocation(rd->getSourceRange().getBegin()));
+            StyledString ss;
+            ss.out << "clang-bridge: can't translate record of unuspported type " << name;
+            location_error(ss.str());
+        }
 
         clang::RecordDecl * defn = rd->getDefinition();
         if (defn && !record_defined[rd]) {
             record_defined[rd] = true;
 
-            GetFields(
-                cast<TypenameType>(const_cast<Type *>(struct_type)),
-                defn);
+            auto tni = cast<TypenameType>(const_cast<Type *>(struct_type));
+            if (tni->finalized()) {
+                set_active_anchor(anchorFromLocation(rd->getSourceRange().getBegin()));
+                StyledString ss;
+                ss.out << "clang-bridge: duplicate body defined for type " << struct_type;
+                location_error(ss.str());
+            }
 
+            GetFields(tni, defn);
         }
 
         return struct_type;
@@ -6654,6 +6765,26 @@ public:
         return flags;
     }
 
+    // generate a storage type that matches alignment and size of the
+    // original type; used for types that we can't translate
+    const Type *TranslateStorage(clang::QualType T) {
+        // retype as a tuple of aligned integer and padding byte array
+        size_t sz = Context->getTypeSize(T);
+        size_t al = Context->getTypeAlign(T);
+        assert (sz % 8 == 0);
+        assert (al % 8 == 0);
+        sz = (sz + 7) / 8;
+        al = (al + 7) / 8;
+        assert (sz > al);
+        std::vector<const Type *> fields;
+        const Type *TB = Integer(al * 8, false);
+        fields.push_back(TB);
+        size_t pad = sz - al;
+        if (pad)
+            fields.push_back(Array(TYPE_U8, pad));
+        return Tuple(fields);
+    }
+
     const Type *TranslateType(clang::QualType T) {
         using namespace clang;
 
@@ -6681,7 +6812,7 @@ public:
             auto it = typedefs.find(
                 Symbol(String::from_stdstring(td->getName().data())));
             if (it == typedefs.end()) {
-                break;
+                return TYPE_Void;
             }
             return it->second;
         } break;
@@ -6694,6 +6825,12 @@ public:
             const clang::EnumType *ET = dyn_cast<clang::EnumType>(Ty);
             EnumDecl * ed = ET->getDecl();
             return TranslateEnum(ed);
+        } break;
+        case clang::Type::SubstTemplateTypeParm: {
+            return TranslateType(T.getCanonicalType());
+        } break;
+        case clang::Type::TemplateSpecialization: {
+            return TranslateStorage(T);
         } break;
         case clang::Type::Builtin:
             switch (cast<BuiltinType>(Ty)->getKind()) {
@@ -6866,9 +7003,10 @@ public:
     }
 
     bool TraverseLinkageSpecDecl(clang::LinkageSpecDecl *ct) {
-        if (ct->getLanguage() == clang::LinkageSpecDecl::lang_cxx)
-            return false;
-        return true;
+        if (ct->getLanguage() == clang::LinkageSpecDecl::lang_c) {
+            return clang::RecursiveASTVisitor<CVisitor>::TraverseLinkageSpecDecl(ct);
+        }
+        return false;
     }
 
     bool TraverseClassTemplateDecl(clang::ClassTemplateDecl *ct) {
@@ -7437,7 +7575,8 @@ static size_t classify(const Type *T, ABIClass *classes, size_t offset) {
         ABIClass subclasses[MAX_ABI_CLASSES];
         for (size_t i = 0; i < tt->types.size(); ++i) {
             auto ET = tt->types[i];
-            offset = align(offset, align_of(ET));
+            if (!tt->packed)
+                offset = align(offset, align_of(ET));
             size_t num = classify (ET, subclasses, offset % 8);
             if (!num) return 0;
             for (size_t k = 0; k < num; ++k) {
@@ -8434,6 +8573,7 @@ struct SPIRVGenerator {
                 vi->count);
         } break;
         case TK_Tuple: {
+            // todo: packed tuples
             auto ti = cast<TupleType>(type);
             size_t count = ti->types.size();
             std::vector<spv::Id> members;
@@ -9042,7 +9182,7 @@ struct LLVMIRGenerator {
             for (size_t i = 0; i < count; ++i) {
                 elements[i] = _type_to_llvm_type(ti->types[i]);
             }
-            return LLVMStructType(elements, count, false);
+            return LLVMStructType(elements, count, ti->packed);
         } break;
         case TK_Union: {
             auto ui = cast<UnionType>(type);
