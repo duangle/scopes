@@ -1865,6 +1865,10 @@ syntax-extend
             error!
                 .. "invalid dot at ending of module '" pattern "'"
         else
+            if (icmp== i start)
+                if (icmp>u start 0:usize)
+                    loop (i + 1:usize) (i + 1:usize)
+                        .. result (slice pattern start i) "../"
             loop (i + 1:usize) (i + 1:usize)
                 .. result (slice pattern start i) "/"
 
@@ -1906,7 +1910,9 @@ syntax-extend
                 return (unconst (Any none)) (unconst false)
             let pattern patterns = (decons patterns)
             let pattern = (pattern as string)
-            let module-path = (make-module-path base-dir pattern namestr)
+            let module-path = (realpath (make-module-path base-dir pattern namestr))
+            if (empty? module-path)
+                loop patterns
             let module-path-sym = (Symbol module-path)
             let content ok = (@ modules module-path-sym)
             if ok
