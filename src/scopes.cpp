@@ -41,7 +41,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_OPTIMIZE_ASSEMBLY 0
 
 // any exception aborts immediately and can not be caught
-#define SCOPES_EARLY_ABORT 1
+#define SCOPES_EARLY_ABORT 0
 
 // print a list of cumulative timers on program exit
 #define SCOPES_PRINT_TIMERS 0
@@ -10333,7 +10333,8 @@ enum {
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_Compile);
-#if !SCOPES_COMPILE_WITH_DEBUG_INFO
+#if SCOPES_COMPILE_WITH_DEBUG_INFO
+#else
     flags |= CF_NoDebugInfo;
 #endif
 #if SCOPES_OPTIMIZE_ASSEMBLY

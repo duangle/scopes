@@ -2426,7 +2426,7 @@ define-scope-macro using
     if (('typeof nameval) == Symbol)
         let sym = (nameval as Symbol)
         let src ok = (@ syntax-scope sym)
-        if ok and (('typeof src) == Scope)
+        if (ok and (('typeof src) == Scope))
             process (src as Scope)
     elseif (('typeof nameval) == Scope)
         process (nameval as Scope)
