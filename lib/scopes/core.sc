@@ -1976,8 +1976,7 @@ syntax-extend
         io-write! "' in paths:\n"
         let loop (patterns) = (patterns-from-namestr base-dir namestr)
         if (empty? patterns)
-            abort!;
-            unreachable!;
+            error! "failed to import module"
         let pattern patterns = (decons patterns)
         let pattern = (pattern as string)
         let module-path = (make-module-path base-dir pattern namestr)
@@ -2863,12 +2862,16 @@ fn read-eval-print-loop ()
             return (unconst false)
         loop (i + 1)
 
+    let cwd =
+        realpath "."
+
     print-logo;
     print " "
         compiler-version-string;
 
     let global-scope = (globals)
     let eval-scope = (Scope global-scope)
+    set-scope-symbol! eval-scope 'module-dir cwd
     let loop (preload cmdlist counter) =
         unconst ""
         unconst ""
