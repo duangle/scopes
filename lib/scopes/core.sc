@@ -2310,6 +2310,8 @@ do
         let ST = (storageof (typeof self))
         if (type== destT ST)
             bitcast self ST
+        elseif (type== destT i32)
+            bitcast self i32
 
     typefn CEnum 'as (self destT)
         let ST = (storageof (typeof self))
