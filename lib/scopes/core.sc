@@ -1699,7 +1699,11 @@ do
             if (type== destT ptrtype)
                 bitcast self ptrtype
             else
-                (load (bitcast self ptrtype)) as destT
+                let imptrtype = (pointer (element-type ptrtype 0))
+                if (type== destT imptrtype)
+                    bitcast self imptrtype
+                else
+                    (load (bitcast self ptrtype)) as destT
 
     set-type-symbol! reference '=
         fn (self value)
