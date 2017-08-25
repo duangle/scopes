@@ -1689,6 +1689,18 @@ do
         fn "reference-getattr" (self name)
             getattr (bitcast self (storageof (typeof self))) name
 
+    set-type-symbol! reference '@
+        fn "reference-@" (self key)
+            let T = (storageof (typeof self))
+            let ET = (element-type T 0)
+            let op success = (type@ ET '@&)
+            if success
+                let result... = (op (bitcast self T) key)
+                if (icmp== (va-countof result...) 0)
+                else
+                    return result...
+            @ (load (bitcast self T)) key
+
     set-type-symbol! reference 'repr
         fn (self)
             forward-repr (load self)
@@ -1697,13 +1709,17 @@ do
         fn (self destT)
             let ptrtype = (storageof (typeof self))
             if (type== destT ptrtype)
-                bitcast self ptrtype
-            else
-                let imptrtype = (pointer (element-type ptrtype 0))
-                if (type== destT imptrtype)
-                    bitcast self imptrtype
-                else
-                    (load (bitcast self ptrtype)) as destT
+                return (bitcast self ptrtype)
+            let ET = (element-type ptrtype 0)
+            let imptrtype = (pointer ET)
+            if (type== destT imptrtype)
+                return (bitcast self imptrtype)
+            if (array-type? ET)
+                let ET = (element-type ET 0)
+                let aptrtype = (pointer ET)
+                if (type== destT aptrtype)
+                    return (bitcast self aptrtype)
+            (load (bitcast self ptrtype)) as destT
 
     set-type-symbol! reference '=
         fn (self value)
@@ -1830,14 +1846,14 @@ typefn fnchain 'apply-type (cls name)
         let oldfn = self.apply-type
         typefn self 'apply-type (self args...)
             oldfn self args...
-            f self args...
+            f args...
         self
     typefn T 'prepend (self f)
         assert (constant? f)
         assert (constant? self)
         let oldfn = self.apply-type
         typefn self 'apply-type (self args...)
-            f self args...
+            f args...
             oldfn self args...
         self
     T
@@ -2295,6 +2311,11 @@ do
         if (type== destT ST)
             bitcast self ST
 
+    typefn CEnum 'as (self destT)
+        let ST = (storageof (typeof self))
+        if (type== destT integer)
+            bitcast self ST
+
     fn passthru-overload (sym func)
         set-type-symbol! CEnum sym (fn (a b flipped) (func (unenum a) (unenum b)))
 
@@ -2520,11 +2541,16 @@ typefn array 'countof (self)
     countof (typeof self)
 
 typefn array '@ (self at)
-    let val = (i32 at)
+    let val = (at as integer)
     if (constant? val)
         extractvalue self val
     else
         load (getelementptr (allocaof self) 0 val)
+
+typefn array '@& (self at)
+    let val = (at as integer)
+    let ET = (element-type (element-type (typeof self) 0) 0)
+    (reference ET) (getelementptr self 0 val)
 
 fn arrayof (T ...)
     let count = (va-countof ...)
