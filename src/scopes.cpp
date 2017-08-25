@@ -522,7 +522,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_VaKeys) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
-    T(SFXFN_SetTypenameStorage) T(FN_ExternNew) \
+    T(SFXFN_SetTypenameStorage) T(SFXFN_SetTypenameFields) T(FN_ExternNew) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
     T(FN_FPTrunc) T(FN_FPExt) \
     T(FN_FPToUI) T(FN_FPToSI) \
@@ -941,6 +941,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_SetTypeSymbol, "set-type-symbol!") \
     T(SFXFN_DelTypeSymbol, "delete-type-symbol!") \
     T(SFXFN_SetTypenameStorage, "set-typename-storage!") \
+    T(SFXFN_SetTypenameFields, "set-typename-fields!") \
     T(SFXFN_TranslateLabelBody, "translate-label-body!") \
     \
     /* builtin operator functions that can also be used as infix */ \
@@ -12191,6 +12192,19 @@ struct Solver {
             const Type *T2 = args[2].value;
             verify_kind<TK_Typename>(T);
             cast<TypenameType>(const_cast<Type *>(T))->finalize(T2);
+            RETARGS();
+        } break;
+        case SFXFN_SetTypenameFields: {
+            CHECKARGS(2, -1);
+            const Type *T = args[1].value;
+            std::vector<Symbol> fields;
+            for (size_t i = 2; i < args.size(); ++i) {
+                auto &&arg = args[i].value;
+                arg.verify(TYPE_Symbol);
+                fields.push_back(arg.symbol);
+            }
+            verify_kind<TK_Typename>(T);
+            cast<TypenameType>(const_cast<Type *>(T))->field_names = fields;
             RETARGS();
         } break;
         case SFXFN_SetTypeSymbol: {
