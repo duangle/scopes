@@ -96,7 +96,7 @@
                 },
                 {
                     "name": "support.type.library.scopes",
-                    "match": "(Generator|Macro|rawstring|reference)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(Generator|Macro|rawstring|reference|fnchain)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.type.glm.scopes",

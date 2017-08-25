@@ -1812,6 +1812,33 @@ define-macro typefn
         cons fn params body
 
 #-------------------------------------------------------------------------------
+# compile time function chaining
+#-------------------------------------------------------------------------------
+
+define fnchain (typename "fnchain")
+typefn fnchain 'apply-type (cls name)
+    let T = (typename name)
+    set-typename-super! T cls
+    typefn T 'apply-type (cls args...)
+    typefn T 'append (self f)
+        assert (constant? f)
+        assert (constant? self)
+        let oldfn = self.apply-type
+        typefn self 'apply-type (self args...)
+            oldfn self args...
+            f self args...
+        self
+    typefn T 'prepend (self f)
+        assert (constant? f)
+        assert (constant? self)
+        let oldfn = self.apply-type
+        typefn self 'apply-type (self args...)
+            f self args...
+            oldfn self args...
+        self
+    T
+
+#-------------------------------------------------------------------------------
 # module loading
 #-------------------------------------------------------------------------------
 
