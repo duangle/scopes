@@ -8,6 +8,10 @@ This is an early release. Right now, only basic syntax highlighting is available
 
 ## Release Notes
 
+### 0.24.0
+
+* Added more keywords.
+
 ### 0.23.0
 
 * Added more keywords.
@@ -43,7 +47,7 @@ This is an early release. Right now, only basic syntax highlighting is available
 ### 0.13.0
 
 * Added more keywords.
-* Added icon theme for scope source files. Unfortunately there seems to be no 
+* Added icon theme for scope source files. Unfortunately there seems to be no
   way to extend the current theme with new icons, so this is more of a reference
   for theme creators rather than anything else.
 

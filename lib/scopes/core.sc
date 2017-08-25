@@ -1805,6 +1805,12 @@ define-macro global
         syntax-error! (active-anchor)
             "syntax: global <name> = <value> | <name> @ <size> : <type>"
 
+# (typefn type 'symbol (params) body ...)
+define-macro typefn
+    let ty name params body = (decons args 3)
+    list set-type-symbol! ty name
+        cons fn params body
+
 #-------------------------------------------------------------------------------
 # module loading
 #-------------------------------------------------------------------------------
@@ -2143,25 +2149,24 @@ define-macro match
 #-------------------------------------------------------------------------------
 
 # labels safecast to function pointers
-set-type-symbol! Closure 'imply
-    fn (self destT)
-        if (function-pointer-type? destT)
-            let ET = (rawcall element-type destT 0)
-            let sz = (trunc (rawcall type-countof ET) i32)
-            if (rawcall function-type-variadic? ET)
-                compiler-error! "cannot typify to variadic function"
-            let loop (i args...) = sz
-            if (icmp== i 1)
-                let result =
-                    compile (typify self args...)
-                if (destT != ('typeof result))
-                    syntax-error! (Label-anchor (Closure-label self))
-                        .. "function does not compile to type " (repr destT)
-                            \ " but has type " (repr ('typeof result))
-                return (imply result destT)
-            else
-                let i-1 = (sub i 1)
-                loop i-1 (rawcall element-type ET i-1) args...
+typefn Closure 'imply (self destT)
+    if (function-pointer-type? destT)
+        let ET = (rawcall element-type destT 0)
+        let sz = (trunc (rawcall type-countof ET) i32)
+        if (rawcall function-type-variadic? ET)
+            compiler-error! "cannot typify to variadic function"
+        let loop (i args...) = sz
+        if (icmp== i 1)
+            let result =
+                compile (typify self args...)
+            if (destT != ('typeof result))
+                syntax-error! (Label-anchor (Closure-label self))
+                    .. "function does not compile to type " (repr destT)
+                        \ " but has type " (repr ('typeof result))
+            return (imply result destT)
+        else
+            let i-1 = (sub i 1)
+            loop i-1 (rawcall element-type ET i-1) args...
 
 # a nullptr type that casts to whatever null pointer is required
 syntax-extend
@@ -2185,77 +2190,67 @@ syntax-extend
     syntax-scope
 
 # support assignment syntax
-set-type-symbol! pointer '=
-    fn (self value)
-        store
-            value as (element-type (typeof self) 0)
-            self
-        true
+typefn pointer '= (self value)
+    store
+        value as (element-type (typeof self) 0)
+        self
+    true
 
 # pointer comparisons
-set-type-symbol! pointer '==
-    fn (a b flipped)
-        if flipped
-            icmp== (ptrtoint (a as (typeof b)) usize) (ptrtoint b usize)
-        else
-            icmp== (ptrtoint a usize) (ptrtoint (b as (typeof a)) usize)
+typefn pointer '== (a b flipped)
+    if flipped
+        icmp== (ptrtoint (a as (typeof b)) usize) (ptrtoint b usize)
+    else
+        icmp== (ptrtoint a usize) (ptrtoint (b as (typeof a)) usize)
 
 # pointer cast to element type executes load
-set-type-symbol! pointer 'as
-    fn (self destT)
-        if (type== destT (element-type (typeof self) 0))
-            load self
+typefn pointer 'as (self destT)
+    if (type== destT (element-type (typeof self) 0))
+        load self
 # also supports mutable pointer safecast to immutable pointer
-set-type-symbol! pointer 'imply
-    fn (self destT)
-        if (type== destT (pointer-type (element-type (typeof self) 0)))
-            bitcast self destT
+typefn pointer 'imply (self destT)
+    if (type== destT (pointer-type (element-type (typeof self) 0)))
+        bitcast self destT
 
 # support getattr syntax
-set-type-symbol! pointer 'getattr
-    fn (self name)
-        let ET = (element-type (typeof self) 0)
-        let op success = (type@ ET 'getattr&)
-        if success
-            let result... = (op self name)
-            if (icmp== (va-countof result...) 0)
-            else
-                return result...
-        getattr (load self) name
+typefn pointer 'getattr (self name)
+    let ET = (element-type (typeof self) 0)
+    let op success = (type@ ET 'getattr&)
+    if success
+        let result... = (op self name)
+        if (icmp== (va-countof result...) 0)
+        else
+            return result...
+    getattr (load self) name
 
 # support @
-set-type-symbol! pointer '@
-    fn (self index)
-        let index =
-            if (none? index) 0:usize # simple dereference
-            else index
-        let ET = (element-type (typeof self) 0)
-        (reference ET) (getelementptr self (usize index))
+typefn pointer '@ (self index)
+    let index =
+        if (none? index) 0:usize # simple dereference
+        else index
+    let ET = (element-type (typeof self) 0)
+    (reference ET) (getelementptr self (usize index))
 
 # extern cast to element type/pointer executes load/unconst
-set-type-symbol! extern 'imply
-    fn (self destT)
-        let ET = (element-type (typeof self) 0)
-        if (type== destT (pointer ET))
-            unconst self
-        else
-            forward-imply (load self) destT
+typefn extern 'imply (self destT)
+    let ET = (element-type (typeof self) 0)
+    if (type== destT (pointer ET))
+        unconst self
+    else
+        forward-imply (load self) destT
 
-set-type-symbol! extern 'as
-    fn (self destT)
-        forward-as (load self) destT
+typefn extern 'as (self destT)
+    forward-as (load self) destT
 
 # support assignment syntax for extern
-set-type-symbol! extern '=
-    fn (self value)
-        let ET = (element-type (typeof self) 0)
-        store (imply value ET) self
-        true
+typefn extern '= (self value)
+    let ET = (element-type (typeof self) 0)
+    store (imply value ET) self
+    true
 
 # support @ for extern
-set-type-symbol! extern '@
-    fn (self value)
-        @ (unconst self) value
+typefn extern '@ (self value)
+    @ (unconst self) value
 
 do
     fn unenum (val)
@@ -2265,11 +2260,10 @@ do
         else val
 
     # support for downcast
-    set-type-symbol! CEnum 'imply
-        fn (self destT)
-            let ST = (storageof (typeof self))
-            if (type== destT ST)
-                bitcast self ST
+    typefn CEnum 'imply (self destT)
+        let ST = (storageof (typeof self))
+        if (type== destT ST)
+            bitcast self ST
 
     fn passthru-overload (sym func)
         set-type-symbol! CEnum sym (fn (a b flipped) (func (unenum a) (unenum b)))
@@ -2286,63 +2280,58 @@ do
     passthru-overload '& &
 
 # support for C struct initializers
-set-type-symbol! CStruct 'apply-type
-    fn (cls args...)
-        let sz = (va-countof args...)
-        if (icmp== sz 0)
-            nullof cls
+typefn CStruct 'apply-type (cls args...)
+    let sz = (va-countof args...)
+    if (icmp== sz 0)
+        nullof cls
+    else
+        let T = (storageof cls)
+        let keys... = (va-keys args...)
+        let loop (i instance) = 0 (nullof cls)
+        if (icmp<s i sz)
+            let key = (va@ i keys...)
+            let arg = (va@ i args...)
+            let k =
+                if (key == unnamed) i
+                else
+                    typename-field-index cls key
+            let ET = (element-type T k)
+            loop (add i 1)
+                insertvalue instance (imply arg ET) k
         else
-            let T = (storageof cls)
-            let keys... = (va-keys args...)
-            let loop (i instance) = 0 (nullof cls)
-            if (icmp<s i sz)
-                let key = (va@ i keys...)
-                let arg = (va@ i args...)
-                let k =
-                    if (key == unnamed) i
-                    else
-                        typename-field-index cls key
-                let ET = (element-type T k)
-                loop (add i 1)
-                    insertvalue instance (imply arg ET) k
-            else
-                instance
+            instance
 
 # access reference to struct element from pointer/reference
-set-type-symbol! CStruct 'getattr&
-    fn (self name)
-        let ET = (element-type (typeof self) 0)
-        let idx = (typename-field-index ET name)
-        if (icmp>=s idx 0)
-            # cast result to reference
-            let val = (getelementptr self 0 idx)
-            (reference (element-type (typeof val) 0)) val
+typefn CStruct 'getattr& (self name)
+    let ET = (element-type (typeof self) 0)
+    let idx = (typename-field-index ET name)
+    if (icmp>=s idx 0)
+        # cast result to reference
+        let val = (getelementptr self 0 idx)
+        (reference (element-type (typeof val) 0)) val
 
-set-type-symbol! CStruct 'getattr
-    fn (self name)
-        let idx = (typename-field-index (typeof self) name)
-        if (icmp>=s idx 0)
-            extractvalue self idx
+typefn CStruct 'getattr (self name)
+    let idx = (typename-field-index (typeof self) name)
+    if (icmp>=s idx 0)
+        extractvalue self idx
 
 # support for basic C union initializer
-set-type-symbol! CUnion 'apply-type
-    fn (cls)
-        nullof cls
+typefn CUnion 'apply-type (cls)
+    nullof cls
 
 # access reference to union element from pointer/reference
-set-type-symbol! CUnion 'getattr&
-    fn (self name)
-        let ET = (element-type (typeof self) 0)
-        let idx = (typename-field-index ET name)
-        if (icmp>=s idx 0)
-            let FT = (element-type ET idx)
-            # cast pointer to reference to alternative type
-            (reference FT)
-                bitcast self
-                    if (mutable? (typeof self))
-                        pointer FT 'mutable
-                    else
-                        pointer FT
+typefn CUnion 'getattr& (self name)
+    let ET = (element-type (typeof self) 0)
+    let idx = (typename-field-index ET name)
+    if (icmp>=s idx 0)
+        let FT = (element-type ET idx)
+        # cast pointer to reference to alternative type
+        (reference FT)
+            bitcast self
+                if (mutable? (typeof self))
+                    pointer FT 'mutable
+                else
+                    pointer FT
 
 fn pointer-call (self ...)
     label docall (dest ET)
@@ -2371,9 +2360,8 @@ fn pointer-call (self ...)
         (load self) ...
 
 # extern call attempts to cast arguments to correct type
-set-type-symbol! extern 'call
-    fn (self ...)
-        pointer-call self ...
+typefn extern 'call (self ...)
+    pointer-call self ...
 
 #-------------------------------------------------------------------------------
 # using
@@ -2460,13 +2448,11 @@ define-scope-macro using
 # tuples
 #-------------------------------------------------------------------------------
 
-set-type-symbol! tuple 'countof
-    fn (self)
-        countof (typeof self)
+typefn tuple 'countof (self)
+    countof (typeof self)
 
-set-type-symbol! tuple '@
-    fn (self at)
-        extractvalue self (usize at)
+typefn tuple '@ (self at)
+    extractvalue self (usize at)
 
 fn tupleof (...)
     let sz = (va-countof ...)
@@ -2490,17 +2476,15 @@ fn tupleof (...)
 # arrays
 #-------------------------------------------------------------------------------
 
-set-type-symbol! array 'countof
-    fn (self)
-        countof (typeof self)
+typefn array 'countof (self)
+    countof (typeof self)
 
-set-type-symbol! array '@
-    fn (self at)
-        let val = (i32 at)
-        if (constant? val)
-            extractvalue self val
-        else
-            load (getelementptr (allocaof self) 0 val)
+typefn array '@ (self at)
+    let val = (i32 at)
+    if (constant? val)
+        extractvalue self val
+    else
+        load (getelementptr (allocaof self) 0 val)
 
 fn arrayof (T ...)
     let count = (va-countof ...)
@@ -2518,30 +2502,27 @@ fn arrayof (T ...)
 define Generator
     typename "Generator"
 set-typename-storage! Generator (storageof Closure)
-set-type-symbol! Generator 'apply-type
-    fn (cls iter init)
-        fn get-iter-init ()
-            return iter init
-        bitcast get-iter-init Generator
-set-type-symbol! Generator 'call
-    fn (self)
-        if (not (constant? self))
-            compiler-error! "Generator must be constant"
-        let f = (bitcast self Closure)
-        call f
+typefn Generator 'apply-type (cls iter init)
+    fn get-iter-init ()
+        return iter init
+    bitcast get-iter-init Generator
+typefn Generator 'call (self)
+    if (not (constant? self))
+        compiler-error! "Generator must be constant"
+    let f = (bitcast self Closure)
+    call f
 
-set-type-symbol! Scope 'as
-    fn (self destT)
-        if (destT == Generator)
-            Generator
-                label (fret fdone key)
-                    let key value =
-                        Scope-next self key
-                    if (('typeof key) == Nothing)
-                        fdone;
-                    else
-                        fret key key value
-                unconst (Any none)
+typefn Scope 'as (self destT)
+    if (destT == Generator)
+        Generator
+            label (fret fdone key)
+                let key value =
+                    Scope-next self key
+                if (('typeof key) == Nothing)
+                    fdone;
+                else
+                    fret key key value
+            unconst (Any none)
 
 fn range (a b c)
     let num-type = (typeof a)
@@ -2692,37 +2673,33 @@ set-type-symbol! vector '>= (vector-op2-dispatch 'vector>=)
 set-type-symbol! vector '< (vector-op2-dispatch 'vector<)
 set-type-symbol! vector '<= (vector-op2-dispatch 'vector<=)
 
-set-type-symbol! vector 'countof
-    fn (self)
-        type-countof (typeof self)
+typefn vector 'countof (self)
+    type-countof (typeof self)
 
-set-type-symbol! vector 'unpack
-    fn "vector-unpack" (v)
-        let count = (type-countof (typeof v))
-        let loop (i result...) = count
-        if (i == 0:usize) result...
+typefn vector 'unpack (v)
+    let count = (type-countof (typeof v))
+    let loop (i result...) = count
+    if (i == 0:usize) result...
+    else
+        let i = (sub i 1:usize)
+        loop i
+            extractelement v i
+            result...
+
+typefn vector '@ (self x)
+    if (integer? x)
+        extractelement self x
+
+typefn vector 'slice (self i0 i1)
+    if ((constant? i0) and (constant? i1))
+        let usz = (sub i1 i0)
+        let loop (i mask) = i0 (nullof (vector i32 usz))
+        if (icmp<u i i1)
+            loop (add i 1:usize) (insertelement mask (i32 i) (sub i i0))
         else
-            let i = (sub i 1:usize)
-            loop i
-                extractelement v i
-                result...
-
-set-type-symbol! vector '@
-    fn (self x)
-        if (integer? x)
-            extractelement self x
-
-set-type-symbol! vector 'slice
-    fn (self i0 i1)
-        if ((constant? i0) and (constant? i1))
-            let usz = (sub i1 i0)
-            let loop (i mask) = i0 (nullof (vector i32 usz))
-            if (icmp<u i i1)
-                loop (add i 1:usize) (insertelement mask (i32 i) (sub i i0))
-            else
-                shufflevector self self mask
-        else
-            compiler-error! "slice indices must be constant"
+            shufflevector self self mask
+    else
+        compiler-error! "slice indices must be constant"
 
 fn vector-reduce (f v)
     let loop (v) = v
@@ -2762,36 +2739,35 @@ fn any? (v)
 fn all? (v)
     vector-reduce band v
 
-set-type-symbol! vector '..
-    fn (a b flipped)
-        let Ta Tb = (typeof a) (typeof b)
-        if (not (vector-type? Ta))
-            return;
-        if (not (vector-type? Tb))
-            return;
-        let ET = (element-type Ta 0)
-        if (not (type== ET (element-type Tb 0)))
-            return;
-        if (type== Ta Tb)
-            let usz = (mul (type-countof (typeof a)) 2:usize)
-            let sz = (trunc usz i32)
-            let loop (i mask) = 0 (nullof (vector i32 usz))
-            if (icmp<u i sz)
-                loop (add i 1) (insertelement mask i i)
-            else
-                shufflevector a b mask
+typefn vector '.. (a b flipped)
+    let Ta Tb = (typeof a) (typeof b)
+    if (not (vector-type? Ta))
+        return;
+    if (not (vector-type? Tb))
+        return;
+    let ET = (element-type Ta 0)
+    if (not (type== ET (element-type Tb 0)))
+        return;
+    if (type== Ta Tb)
+        let usz = (mul (type-countof (typeof a)) 2:usize)
+        let sz = (trunc usz i32)
+        let loop (i mask) = 0 (nullof (vector i32 usz))
+        if (icmp<u i sz)
+            loop (add i 1) (insertelement mask i i)
         else
-            let asz = (type-countof (typeof a))
-            let bsz = (type-countof (typeof b))
-            let count = (add asz bsz)
-            let loop (i result) = 0:usize (nullof (vector ET count))
-            if (icmp<u i asz)
-                loop (add i 1:usize)
-                    insertelement result (extractelement a i) i
-            elseif (icmp<u i count)
-                loop (add i 1:usize)
-                    insertelement result (extractelement b (sub i asz)) i
-            else result
+            shufflevector a b mask
+    else
+        let asz = (type-countof (typeof a))
+        let bsz = (type-countof (typeof b))
+        let count = (add asz bsz)
+        let loop (i result) = 0:usize (nullof (vector ET count))
+        if (icmp<u i asz)
+            loop (add i 1:usize)
+                insertelement result (extractelement a i) i
+        elseif (icmp<u i count)
+            loop (add i 1:usize)
+                insertelement result (extractelement b (sub i asz)) i
+        else result
 
 #-------------------------------------------------------------------------------
 # REPL
@@ -2809,12 +2785,12 @@ fn compiler-version-string ()
         \ compiler-timestamp ")"
 
 fn print-logo ()
-    io-write! "  "; io-write! (default-styler style-number "\\\\\\"); io-write! "\n"
-    io-write! "   "; io-write! (default-styler style-type "\\\\\\"); io-write! "\n"
+    io-write! "  "; io-write! (default-styler style-string "\\\\\\"); io-write! "\n"
+    io-write! "   "; io-write! (default-styler style-number "\\\\\\"); io-write! "\n"
     io-write! " "; io-write! (default-styler style-comment "///")
     io-write! (default-styler style-sfxfunction "\\\\\\"); io-write! "\n"
     io-write! (default-styler style-comment "///"); io-write! "  "
-    io-write! (default-styler style-keyword "\\\\\\")
+    io-write! (default-styler style-function "\\\\\\")
 
 fn read-eval-print-loop ()
     fn repeat-string (n c)
