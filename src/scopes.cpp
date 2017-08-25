@@ -520,7 +520,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExtractElement) T(FN_InsertElement) T(FN_ShuffleVector) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
-    T(FN_VaKeys) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
+    T(FN_VaKeys) T(FN_VaValues) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
     T(SFXFN_SetTypenameStorage) T(SFXFN_SetTypenameFields) T(FN_ExternNew) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
@@ -916,7 +916,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_AllocaArray, "alloca-array") \
     T(FN_Location, "compiler-anchor") \
     T(FN_ExternNew, "extern-new") \
-    T(FN_VaCountOf, "va-countof") T(FN_VaKeys, "va-keys") T(FN_VaAt, "va@") \
+    T(FN_VaCountOf, "va-countof") T(FN_VaKeys, "va-keys") \
+    T(FN_VaValues, "va-values") T(FN_VaAt, "va@") \
     T(FN_VectorOf, "vectorof") T(FN_XPCall, "xpcall") T(FN_Zip, "zip") \
     T(FN_VectorType, "vector-type") \
     T(FN_ZipFill, "zip-fill") \
@@ -11452,6 +11453,7 @@ struct Solver {
         case FN_IsConstant:
         case FN_VaCountOf:
         case FN_VaKeys:
+        case FN_VaValues:
         case FN_VaAt:
         case FN_Location:
         case FN_Dump:
@@ -11467,6 +11469,7 @@ struct Solver {
         switch(builtin.value()) {
         case FN_VaCountOf:
         case FN_VaKeys:
+        case FN_VaValues:
         case FN_VaAt:
         case FN_Dump:
             return true;
@@ -12244,6 +12247,15 @@ struct Solver {
             Args result = { none };
             for (size_t i = 1; i < args.size(); ++i) {
                 result.push_back(args[i].key);
+            }
+            enter = args[0].value;
+            args = result;
+        } break;
+        case FN_VaValues: {
+            CHECKARGS(0, -1);
+            Args result = { none };
+            for (size_t i = 1; i < args.size(); ++i) {
+                result.push_back(args[i].value);
             }
             enter = args[0].value;
             args = result;

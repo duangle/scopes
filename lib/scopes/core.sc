@@ -2281,25 +2281,35 @@ do
 
 # support for C struct initializers
 typefn CStruct 'apply-type (cls args...)
-    let sz = (va-countof args...)
-    if (icmp== sz 0)
-        nullof cls
+    if (cls == CStruct)
+        let name fields... = args...
+        let T = (typename name)
+        set-typename-super! T CStruct
+        set-typename-storage! T (tuple (va-values fields...))
+        let types... = (va-keys fields...)
+        if (not (va-empty? types...))
+            set-typename-fields! T types...
+        T
     else
-        let T = (storageof cls)
-        let keys... = (va-keys args...)
-        let loop (i instance) = 0 (nullof cls)
-        if (icmp<s i sz)
-            let key = (va@ i keys...)
-            let arg = (va@ i args...)
-            let k =
-                if (key == unnamed) i
-                else
-                    typename-field-index cls key
-            let ET = (element-type T k)
-            loop (add i 1)
-                insertvalue instance (imply arg ET) k
+        let sz = (va-countof args...)
+        if (icmp== sz 0)
+            nullof cls
         else
-            instance
+            let T = (storageof cls)
+            let keys... = (va-keys args...)
+            let loop (i instance) = 0 (nullof cls)
+            if (icmp<s i sz)
+                let key = (va@ i keys...)
+                let arg = (va@ i args...)
+                let k =
+                    if (key == unnamed) i
+                    else
+                        typename-field-index cls key
+                let ET = (element-type T k)
+                loop (add i 1)
+                    insertvalue instance (imply arg ET) k
+            else
+                instance
 
 # access reference to struct element from pointer/reference
 typefn CStruct 'getattr& (self name)

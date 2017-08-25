@@ -21,6 +21,7 @@ let modules =
         .test_regexp
         .test_scope
         .test_scope_iter
+        .test_struct
         .test_submod
         .test_semicolon
         #.test_structof
