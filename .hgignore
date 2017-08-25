@@ -24,4 +24,5 @@ syntax: regexp
 ^Makefile$
 ^scopes[.]make$
 ^build/
+^lib/clang/
 

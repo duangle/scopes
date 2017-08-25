@@ -134,6 +134,8 @@ EXPORT_DEFINES
 
 const char *scopes_compiler_path;
 const char *scopes_compiler_dir;
+const char *scopes_clang_include_dir;
+const char *scopes_include_dir;
 size_t scopes_argc;
 char **scopes_argv;
 
@@ -7191,6 +7193,10 @@ static Scope *import_c_module (
     std::vector<const char *> aargs;
     aargs.push_back("clang");
     aargs.push_back(path.c_str());
+    aargs.push_back("-I");
+    aargs.push_back(scopes_clang_include_dir);
+    aargs.push_back("-I");
+    aargs.push_back(scopes_include_dir);
     for (size_t i = 0; i < args.size(); ++i) {
         aargs.push_back(args[i].c_str());
     }
@@ -15500,6 +15506,8 @@ int main(int argc, char *argv[]) {
         char *compilerdir = dirname(strdup(scopes_compiler_path));
         scopes_compiler_dir = format("%s/..", compilerdir)->data;
         free(compilerdir);
+        scopes_clang_include_dir = format("%s/lib/clang/include", scopes_compiler_dir)->data;
+        scopes_include_dir = format("%s/include", scopes_compiler_dir)->data;
     }
 
     init_types();

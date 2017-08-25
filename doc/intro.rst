@@ -36,6 +36,8 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
 * To build in debug mode, run ``make -C build``. For release mode, use
   ``make -C build config=release``.
 * There should now be a ``scopes.exe`` executable in the repo root folder.
+* For the clang bridge to work properly, copy or link `clang/lib/clang/4.0.x/include`
+  to `scopes-repo/lib/clang/include`.
 * For a fresh rebuild, just remove the ``build`` directory before running make.
 
 Building Scopes on Linux
@@ -61,4 +63,6 @@ Building Scopes on Linux
 * To build in debug mode, run ``make -C build``. For release mode, use
   ``make -C build config=release``.
 * There should now be a ``scopes`` executable in the repo root folder.
+* For the clang bridge to work properly, copy or link `clang/lib/clang/4.0.x/include`
+  to `scopes-repo/lib/clang/include`.
 * For a fresh rebuild, just remove the ``build`` directory before running make.
