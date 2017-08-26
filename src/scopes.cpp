@@ -12204,7 +12204,7 @@ struct Solver {
             RETARGS();
         } break;
         case SFXFN_SetTypenameFields: {
-            CHECKARGS(2, -1);
+            CHECKARGS(1, -1);
             const Type *T = args[1].value;
             std::vector<Symbol> fields;
             for (size_t i = 2; i < args.size(); ++i) {

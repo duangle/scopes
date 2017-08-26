@@ -2332,6 +2332,27 @@ do
     passthru-overload '^ ^
     passthru-overload '& &
 
+typefn CStruct 'structof (cls args...)
+    let sz = (va-countof args...)
+    if (icmp== sz 0)
+        nullof cls
+    else
+        let T = (storageof cls)
+        let keys... = (va-keys args...)
+        let loop (i instance) = 0 (nullof cls)
+        if (icmp<s i sz)
+            let key = (va@ i keys...)
+            let arg = (va@ i args...)
+            let k =
+                if (key == unnamed) i
+                else
+                    typename-field-index cls key
+            let ET = (element-type T k)
+            loop (add i 1)
+                insertvalue instance (imply arg ET) k
+        else
+            instance
+
 # support for C struct initializers
 typefn CStruct 'apply-type (cls args...)
     if (cls == CStruct)
@@ -2344,25 +2365,7 @@ typefn CStruct 'apply-type (cls args...)
             set-typename-fields! T types...
         T
     else
-        let sz = (va-countof args...)
-        if (icmp== sz 0)
-            nullof cls
-        else
-            let T = (storageof cls)
-            let keys... = (va-keys args...)
-            let loop (i instance) = 0 (nullof cls)
-            if (icmp<s i sz)
-                let key = (va@ i keys...)
-                let arg = (va@ i args...)
-                let k =
-                    if (key == unnamed) i
-                    else
-                        typename-field-index cls key
-                let ET = (element-type T k)
-                loop (add i 1)
-                    insertvalue instance (imply arg ET) k
-            else
-                instance
+        'structof cls args...
 
 # access reference to struct element from pointer/reference
 typefn CStruct 'getattr& (self name)
@@ -2505,6 +2508,62 @@ define-scope-macro using
     return
         list syntax-extend
             cons merge-scope-symbols name 'syntax-scope pattern
+        syntax-scope
+
+#-------------------------------------------------------------------------------
+# struct declaration
+#-------------------------------------------------------------------------------
+
+define-scope-macro struct
+    fn begin-arg ()
+    fn end-args (f) (f)
+    fn append-arg (prevf x)
+        fn (f)
+            prevf
+                fn ()
+                    return x (f)
+
+    define struct-dsl
+        define-block-scope-macro :
+            let args = (list-next expr)
+            let lhs rhs = (decons args 2)
+            let lhs = (lhs as Syntax as Symbol)
+            return
+                cons
+                    list let 'field-names '=
+                        list append-arg 'field-names (list quote lhs)
+                    list let 'field-types '=
+                        list append-arg 'field-types rhs
+                    next-expr
+                syntax-scope
+        define-macro method
+            let name params body = (decons args 2)
+            list set-type-symbol! 'this-struct name
+                cons fn params body
+
+        define-infix> 70 :
+        locals;
+
+    fn finalize-struct (T field-names field-types)
+        set-typename-storage! T (tuple (field-types begin-arg))
+        set-typename-fields! T (field-names begin-arg)
+        T
+
+    let name body = (decons args)
+    let name = (name as Syntax as Symbol)
+    let T = (typename (name as string))
+    set-typename-super! T CStruct
+    set-scope-symbol! syntax-scope name T
+    return
+        cons do
+            list using struct-dsl
+            list define 'this-struct T
+            list let 'field-names '= end-args
+            list let 'field-types '= end-args
+            ..
+                cons do body
+                list
+                    list finalize-struct T 'field-names 'field-types
         syntax-scope
 
 #-------------------------------------------------------------------------------
