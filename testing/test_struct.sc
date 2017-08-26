@@ -35,11 +35,13 @@ struct AnotherStruct
     x : i32
     y : i32
     z : i32
+
     method 'apply-type (cls x y z)
         'structof cls
             x = x
             y = y
             z = z
+
     method 'sum (self)
         + self.x self.y self.z
 

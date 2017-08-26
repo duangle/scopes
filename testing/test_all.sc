@@ -16,6 +16,7 @@ let modules =
         .test_let
         .test_locals
         .test_loop
+        .test_memoization
         .test_overload
         .test_reference
         .test_regexp

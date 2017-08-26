@@ -36,9 +36,20 @@ fn test2 ()
             mainloop;
     mainloop;
 
-# this function crashes on windows for reasons that are not clear yet
-# skip the test for now
+#fn test3 ()
+    fn handle_events ()
+        if (unconst true)
+            io-write! "\n"
+        else
+            handle_events;
+    handle_events;
+
 #dump-label
-    typify test2
-#dump-label (Closure-label test2)
+    Closure-label test3
+
+#dump-label
+    typify test3
+#compile
+    typify test3
+
 test2;

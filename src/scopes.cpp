@@ -49,6 +49,9 @@ BEWARE: If you build this with anything else but a recent enough clang,
 // maximum number of recursions permitted during partial evaluation
 #define SCOPES_MAX_RECURSIONS 32
 
+// maximum number of jump skips permitted
+#define SCOPES_MAX_SKIP_JUMPS 8192
+
 // compile native code with debug info if not otherwise specified
 #define SCOPES_COMPILE_WITH_DEBUG_INFO 1
 
@@ -2918,6 +2921,8 @@ enum {
     FF_Variadic = (1 << 0),
     // can be evaluated at compile time
     FF_Pure = (1 << 1),
+    // never returns
+    FF_Singularity = (1 << 2),
 };
 
 struct FunctionType : Type {
@@ -2932,12 +2937,18 @@ struct FunctionType : Type {
         argument_types(llvm::cast<TupleType>(_argument_types)->types),
         flags(_flags) {
 
+        assert(!(flags & FF_Singularity) || argument_types.empty());
+
         std::stringstream ss;
-        ss <<  return_type->name()->data;
-        if (flags & FF_Pure) {
-            ss << "<~";
+        if (singularity()) {
+            ss << "?<-";
         } else {
-            ss << "<-";
+            ss <<  return_type->name()->data;
+            if (pure()) {
+                ss << "<~";
+            } else {
+                ss << "<-";
+            }
         }
         ss << "(";
         for (size_t i = 0; i < argument_types.size(); ++i) {
@@ -2946,7 +2957,7 @@ struct FunctionType : Type {
             }
             ss << argument_types[i]->name()->data;
         }
-        if (flags & FF_Variadic) {
+        if (vararg()) {
             ss << " ...";
         }
         ss << ")";
@@ -2958,6 +2969,9 @@ struct FunctionType : Type {
     }
     bool pure() const {
         return flags & FF_Pure;
+    }
+    bool singularity() const {
+        return flags & FF_Singularity;
     }
 
     const Type *type_at_index(size_t i) const {
@@ -5140,6 +5154,8 @@ typedef Tag<Label> LabelTag;
 
 enum LabelFlags {
     LF_Template = (1 << 0),
+    // label has been discovered to be reentrant; should not be inlined
+    LF_Reentrant = (1 << 1),
 };
 
 struct Label {
@@ -5147,24 +5163,32 @@ protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name, uint64_t _flags) :
-        uid(++next_uid), original(nullptr), anchor(_anchor), name(_name),
-        paired(nullptr), num_instances(0), flags(_flags)
+        original(nullptr), uid(0), next_instanceid(1), anchor(_anchor), name(_name),
+        paired(nullptr), flags(_flags)
         {}
 
 public:
-    size_t uid;
     Label *original;
+    size_t uid;
+    size_t next_instanceid;
     const Anchor *anchor;
     Symbol name;
     std::vector<Parameter *> params;
     Body body;
     LabelTag tag;
     Label *paired;
-    uint64_t num_instances;
     uint64_t flags;
     // if return_constants are specified, the continuation must be inlined
     // with these arguments
     std::vector<Any> return_constants;
+
+    void set_reentrant() {
+        flags |= LF_Reentrant;
+    }
+
+    bool is_reentrant() const {
+        return flags & LF_Reentrant;
+    }
 
     bool is_template() const {
         return flags & LF_Template;
@@ -5180,7 +5204,7 @@ public:
         return nullptr;
     }
 
-    bool is_basic_block_like() {
+    bool is_basic_block_like() const {
         if (params.empty())
             return true;
         if (params[0]->type == TYPE_Nothing)
@@ -5188,14 +5212,19 @@ public:
         return false;
     }
 
-    bool is_complete() {
+    bool is_return_param_typed() const {
+        assert(!params.empty());
+        return params[0]->is_typed();
+    }
+
+    bool is_valid() const {
         return !params.empty() && body.anchor && !body.args.empty();
     }
 
-    void verify_complete () {
-        if (!is_complete()) {
+    void verify_valid () {
+        if (!is_valid()) {
             set_active_anchor(anchor);
-            location_error(String::from("incomplete function/label"));
+            location_error(String::from("function/label without valid body or parameters"));
         }
     }
 
@@ -5313,8 +5342,10 @@ public:
     const ReturnLabelType *verify_return_label();
 
     const Type *get_return_type() const {
+        assert(params.size());
+        assert(!is_basic_block_like());
         if (!params[0]->is_typed())
-            return TYPE_Unknown;
+            return TYPE_Void;
         // verify that the return type is the one we expect
         cast<ReturnLabelType>(params[0]->type);
         return params[0]->type;
@@ -5376,8 +5407,12 @@ public:
         for (size_t i = 1; i < params.size(); ++i) {
             argtypes.push_back(params[i]->type);
         }
-
-        return Function(get_return_type(), argtypes);
+        uint64_t flags = 0;
+        assert(params.size());
+        if (!params[0]->is_typed()) {
+            flags |= FF_Singularity;
+        }
+        return Function(get_return_type(), argtypes, flags);
     }
 
     void use(UserMap &um, const Any &arg, int i) {
@@ -5531,18 +5566,35 @@ public:
         build_scope(um, tempscope);
     }
 
+    StyledStream &stream_id(StyledStream &ss) const {
+        if (original) {
+            original->stream_id(ss);
+        }
+        ss << uid;
+        if (uid >= 10) {
+            ss << "x";
+        }
+        return ss;
+    }
+
     StyledStream &stream_short(StyledStream &ss) const {
 #if SCOPES_DEBUG_CODEGEN
         if (is_template()) {
             ss << Style_Keyword << "T:" << Style_None;
         }
 #endif
-        if (name == SYM_Unnamed) {
-            ss << Style_Keyword << "λ" << Style_Symbol << uid;
-        } else {
+        if (name != SYM_Unnamed) {
             ss << Style_Symbol;
             name.name()->stream(ss, SYMBOL_ESCAPE_CHARS);
-            ss << Style_Keyword << "λ" << Style_Symbol << uid;
+        }
+        ss << Style_Keyword << "λ" << Style_Symbol;
+        {
+            StyledStream ps = StyledStream::plain(ss);
+            if (!original) {
+                ps << uid;
+            } else {
+                stream_id(ps);
+            }
         }
         ss << Style_None;
         return ss;
@@ -5575,14 +5627,15 @@ public:
 
     static Label *from(const Anchor *_anchor, Symbol _name) {
         assert(_anchor);
-        return new Label(_anchor, _name, LF_Template);
+        Label *result = new Label(_anchor, _name, LF_Template);
+        result->uid = next_uid++;
+        return result;
     }
     // only inherits name and anchor
     static Label *from(Label *label) {
         Label *result = new Label(label->anchor, label->name, 0);
-        label->num_instances++;
-        result->original = label->original?label->original:label;
-        result->num_instances = label->num_instances;
+        result->original = label;
+        result->uid = label->next_instanceid++;
         return result;
     }
 
@@ -5666,14 +5719,15 @@ static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
 //------------------------------------------------------------------------------
 
 struct Frame {
-    Frame(const Frame *_parent, Label *_label, size_t _loop_count = 0) :
-        parent(_parent), label(_label), loop_count(_loop_count) {
+    Frame(const Frame *_parent, Label *_label, Label *_instance, size_t _loop_count = 0) :
+        parent(_parent), label(_label), instance(_instance), loop_count(_loop_count) {
         args.reserve(_label->params.size());
     }
 
+    Args args;
     const Frame *parent;
     Label *label;
-    Args args;
+    Label *instance;
     size_t loop_count;
 
     const Frame *find_frame(Label *label) const {
@@ -5687,8 +5741,8 @@ struct Frame {
         return nullptr;
     }
 
-    static Frame *from(const Frame *parent, Label *label, size_t loop_count) {
-        return new Frame(parent, label, loop_count);
+    static Frame *from(const Frame *parent, Label *label, Label *instance, size_t loop_count) {
+        return new Frame(parent, label, instance, loop_count);
     }
 
     bool all_args_constant() const {
@@ -6303,9 +6357,7 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
                 " Use 'unconst' to prevent constant propagation.";
                 location_error(ss.str());
             }
-        }
-
-        if (label->body.scope_label) {
+        } else if (label->body.scope_label) {
             const Frame *top = parent->find_frame(label->body.scope_label);
             if (top) {
                 parent = top;
@@ -6335,7 +6387,7 @@ static Label *fold_type_label_single(const Frame *parent, Label *label, const Ar
 #endif
     instances.insert({la, newlabel});
 
-    Frame *frame = Frame::from(parent, label, loop_count);
+    Frame *frame = Frame::from(parent, label, newlabel, loop_count);
 
     size_t lasti = label->params.size() - 1;
     size_t srci = 0;
@@ -9582,7 +9634,10 @@ struct LLVMIRGenerator {
 
     void write_label_body(Label *label) {
     repeat:
-        assert(label->body.is_complete());
+        if (!label->body.is_complete()) {
+            set_active_anchor(label->body.anchor);
+            location_error(String::from("IL->IR: incomplete label body encountered"));
+        }
         bool terminated = false;
         auto &&body = label->body;
         auto &&enter = body.enter;
@@ -11085,12 +11140,6 @@ struct Solver {
         return is_pure_function_pointer(enter.type);
     }
 
-    static bool is_return_param_typed(Label *l) {
-        auto &&params = l->params;
-        assert(!params.empty());
-        return params[0]->is_typed();
-    }
-
     static bool all_params_typed(Label *l) {
         auto &&params = l->params;
         for (size_t i = 1; i < params.size(); ++i) {
@@ -11313,7 +11362,7 @@ struct Solver {
     bool label_returns_closures(Label *l) {
         if (l->is_basic_block_like())
             return false;
-        if (!is_return_param_typed(l))
+        if (!l->is_return_param_typed())
             return false;
         const ReturnLabelType *rlt = cast<ReturnLabelType>(l->params[0]->type);
         for (size_t i = 0; i < rlt->values.size(); ++i) {
@@ -11340,7 +11389,13 @@ struct Solver {
         return true;
     }
 
-    std::pair<Label *, bool> fold_type_label_arguments(Label *l) {
+    enum FoldResult {
+        FR_Pass,
+        FR_Continue,
+        FR_Break,
+    };
+
+    FoldResult fold_type_label_arguments(Label *&l) {
 #if SCOPES_DEBUG_CODEGEN
         ss_cout << "folding & typing arguments in " << l << std::endl;
 #endif
@@ -11354,7 +11409,6 @@ struct Solver {
         Args callargs;
         Args keys;
         auto &&args = l->body.args;
-        bool is_bb = enter_label->is_basic_block_like();
         {
             callargs.push_back(args[0]);
             keys.push_back(KeyAny(untyped()));
@@ -11371,9 +11425,12 @@ struct Solver {
                 }
             }
 
-            #if 1
-            // generated function will have only constant arguments, inline
+            // we can't perform this optimization because it breaks memoization
+            // of non-closure returning functions
+            #if 0
+            bool is_bb = enter_label->is_basic_block_like();
             if (!is_bb /* && !recursive */ && (callargs.size() == 1)) {
+                // generated function will have only constant arguments, inline
                 callargs[0] = none;
                 keys[0] = args[0];
             }
@@ -11382,72 +11439,134 @@ struct Solver {
 
         Label *newl = fold_type_label_single(
             enter_frame, enter_label, keys);
-        if (!newl->is_basic_block_like()) {
-            if (!newl->body.is_complete()) {
-                // we need to solve the return type asap for the next test
-                normalize_label(newl);
+        if (newl->is_basic_block_like()) {
+            enter = newl;
+            args = callargs;
+            clear_continuation_arg(l);
+            return FR_Pass;
+        }
+        if (!newl->body.is_complete()) {
+            if (newl == l) {
+                location_error(String::from("label or function forms an infinite but empty loop"));
             }
-            bool returns_closures = label_returns_closures(newl);
-            if (
-                !newl->is_basic_block_like() && (
-                returns_closures
-                || is_trivial_function(newl)
-                )
-                ) {
-                // need to inline the function
-                if (SCOPES_INLINE_FUNCTION_FROM_TEMPLATE || returns_closures /* && !recursive */) {
-                    callargs.clear();
-                    keys.clear();
-                    callargs.push_back(none);
-                    keys.push_back(args[0]);
-                    for (size_t i = 1; i < args.size(); ++i) {
-                        keys.push_back(args[i]);
-                    }
-                    newl = fold_type_label_single(
-                        enter_frame, enter_label, keys);
-                } else {
-                    /*
-                    problem with this method:
-                    if closures escape the function, the closure's frames
-                    still map template parameters to labels used before the mangling.
-
-                    so for those cases, we fold the function again (see branch above)
-                    */
-                    Parameter *cont_param = newl->params[0];
-                    const Type *cont_type = cont_param->type;
-                    assert(isa<ReturnLabelType>(cont_type));
-                    auto tli = cast<ReturnLabelType>(cont_type);
-                    Any cont = fold_type_return(args[0].value, tli->values);
-                    assert(cont.type != TYPE_Closure);
-                    keys.clear();
-                    keys.push_back(cont);
-                    for (size_t i = 1; i < callargs.size(); ++i) {
-                        keys.push_back(callargs[i]);
-                    }
-                    assert(!callargs.empty());
-                    callargs[0] = { none };
-                    std::unordered_set<Label *> visited;
-                    std::vector<Label *> labels;
-                    newl->build_reachable(visited, &labels);
-                    Label::UserMap um;
-                    for (auto it = labels.begin(); it != labels.end(); ++it) {
-                        (*it)->insert_into_usermap(um);
-                    }
-                    Label *newll = fold_type_label(um, newl, keys);
-                    enter = newll;
-                    args = callargs;
-                    l->body.set_complete();
-                    if (cont.type == TYPE_Label
-                        /*&& !cont.label->body.is_complete()*/)
-                        return { cont.label, true };
-                    return { nullptr, false };
-                }
+            // we need to solve the return type asap for the next test
+            normalize_label(newl);
+            if (newl->is_basic_block_like()) {
+                enter = newl;
+                args = callargs;
+                clear_continuation_arg(l);
+                return FR_Pass;
             }
         }
-        enter = newl;
-        args = callargs;
-        complete_label_continuation(l);
-        return { nullptr, true };
+        bool reentrant = newl->is_reentrant();
+        if (!reentrant) {
+            // has this instance been used earlier in the stack?
+            const Frame *top_frame = enter_frame->find_frame(enter_label);
+            reentrant = (top_frame && top_frame->instance == newl);
+            // mark this function as reentrant for the solver further up in the stack
+            if (reentrant) {
+                newl->set_reentrant();
+            }
+        }
+
+        assert(!newl->params.empty());
+        bool has_return_type = newl->is_return_param_typed();
+        bool returns_closures = label_returns_closures(newl);
+
+        if (has_return_type
+            && (returns_closures
+                || (!reentrant
+                    && is_trivial_function(newl)))) {
+            // need to inline the function
+            if (SCOPES_INLINE_FUNCTION_FROM_TEMPLATE
+                || returns_closures /* && !recursive */) {
+                callargs.clear();
+                keys.clear();
+                callargs.push_back(none);
+                keys.push_back(args[0]);
+                for (size_t i = 1; i < args.size(); ++i) {
+                    keys.push_back(args[i]);
+                }
+                newl = fold_type_label_single(
+                    enter_frame, enter_label, keys);
+                enter = newl;
+                args = callargs;
+                return FR_Pass;
+            } else {
+                /*
+                mangle solved function to include explicit return continuation.
+
+                problem with this method:
+                if closures escape the function, the closure's frames
+                still map template parameters to labels used before the mangling.
+
+                so for those cases, we fold the function again (see branch above)
+                */
+                Parameter *cont_param = newl->params[0];
+                const Type *cont_type = cont_param->type;
+                assert(isa<ReturnLabelType>(cont_type));
+                auto tli = cast<ReturnLabelType>(cont_type);
+                Any cont = fold_type_return(args[0].value, tli->values);
+                assert(cont.type != TYPE_Closure);
+                keys.clear();
+                keys.push_back(cont);
+                for (size_t i = 1; i < callargs.size(); ++i) {
+                    keys.push_back(callargs[i]);
+                }
+                assert(!callargs.empty());
+                callargs[0] = { none };
+                std::unordered_set<Label *> visited;
+                std::vector<Label *> labels;
+                newl->build_reachable(visited, &labels);
+                Label::UserMap um;
+                for (auto it = labels.begin(); it != labels.end(); ++it) {
+                    (*it)->insert_into_usermap(um);
+                }
+                Label *newll = fold_type_label(um, newl, keys);
+                enter = newll;
+                args = callargs;
+                l->body.set_complete();
+                if (cont.type == TYPE_Label
+                    /*&& !cont.label->body.is_complete()*/) {
+                    l = cont.label;
+                    assert(all_params_typed(l));
+                    return FR_Continue;
+                }
+                return FR_Break;
+            }
+        } else {
+            enter = newl;
+            args = callargs;
+
+            assert(newl->body.is_complete());
+            if (has_return_type) {
+                // function is now typed
+                type_continuation_from_label_return_type(l);
+            } else {
+                if (reentrant) {
+                    // possible recursion - entry label has already been
+                    // processed, but not exited yet, so we don't have the
+                    // continuation type yet.
+
+                    // as long as we don't have to pass on the result,
+                    // that's not a problem though
+                    if (is_continuing_to_label(l)) {
+                        location_error(String::from(
+                            "attempt to use return value of recursive function"
+                            " before it has been typed; place exit condition before recursive call"));
+                    }
+                } else {
+                    // apparently we returned from this label, but
+                    // its continuation has not been typed,
+                    // which means that it's functioning more like
+                    // a basic block
+                    // cut it
+                    delete_continuation(newl);
+                    clear_continuation_arg(l);
+                }
+            }
+            return FR_Pass;
+        }
     }
 
     // returns true if the builtin folds regardless of whether the arguments are
@@ -12867,23 +12986,36 @@ struct Solver {
 #undef CHECKARGS
 #undef RETARGS
 
+    /*
     void inline_single_label(Label *dest, Label *source) {
         Frame frame(nullptr, source);
         map_constant_arguments(&frame, source, dest->body.args);
         evaluate_body(&frame, dest, source);
-    }
+    }*/
 
     static Label *skip_jumps(Label *l) {
         size_t counter = 0;
         while (jumps_immediately(l)) {
             l = l->body.enter.label;
             counter++;
-            assert(counter < 256);
+            if (counter == SCOPES_MAX_SKIP_JUMPS) {
+                std::cerr
+                    << "internal warning: max iterations exceeded"
+                        " during jump skip check" << std::endl;
+                break;
+            }
         }
         return l;
     }
 
     static bool is_trivial_function(Label *l) {
+        assert(!l->params.empty());
+        if (!isa<ReturnLabelType>(l->params[0]->type))
+            return false;
+        if (l->params.size() == 1) {
+            // doesn't take any arguments
+            return true;
+        }
         assert(!l->params.empty());
         l = skip_jumps(l);
         if (is_calling_continuation(l))
@@ -13015,8 +13147,8 @@ struct Solver {
         const FunctionType *fi = extract_function_type(enter.indirect_type());
         verify_function_argument_signature(fi, l);
         auto &&args = l->body.args;
-        args[0] = fold_type_return(args[0].value,
-            cast<ReturnLabelType>(fi->return_type)->values);
+        auto rlt = cast<ReturnLabelType>(fi->return_type);
+        args[0] = fold_type_return(args[0].value, rlt->values);
     }
 
     void type_continuation_call(Label *l) {
@@ -13058,37 +13190,12 @@ struct Solver {
         return entry;
     }
 
-    void complete_label_continuation (Label *l) {
+    void complete_existing_label_continuation (Label *l) {
         Label *enter_label = l->get_label_enter();
-        if (enter_label->is_basic_block_like()) {
-            // we deal with this on loop exit further down
-        } else {
-            if (is_return_param_typed(enter_label)) {
-                // function is now typed
-                assert(enter_label->body.is_complete());
-                type_continuation_from_label_return_type(l);
-            } else {
-                // function with untyped continuation
-                assert(enter_label->body.is_complete());
-                SCCBuilder scc(enter_label);
-                if (scc.is_recursive(enter_label)) {
-                    // possible recursion - entry label has already been
-                    // processed, but not exited yet, so we don't have the
-                    // continuation type yet.
-
-                    // as long as we don't have to pass on the result,
-                    // that's not a problem though
-                    assert(!is_continuing_to_label(l));
-                } else {
-                    // apparently we returned from this label, but
-                    // its continuation has not been typed,
-                    // which means that it's functioning more like
-                    // a basic block
-                    // cut it
-                    assert(!is_return_param_typed(enter_label));
-                    delete_continuation(enter_label);
-                }
-            }
+        if (!enter_label->is_basic_block_like()) {
+            assert(enter_label->body.is_complete());
+            assert(enter_label->is_return_param_typed());
+            type_continuation_from_label_return_type(l);
         }
     }
 
@@ -13101,7 +13208,7 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "processing " << l << std::endl;
 #endif
-            l->verify_complete();
+            l->verify_valid();
 
 #if SCOPES_DEBUG_CODEGEN
             stream_label(ss_cout, l, StreamLabelFormat::debug_single());
@@ -13155,20 +13262,15 @@ struct Solver {
                 }
 
                 auto result = fold_type_label_arguments(l);
-                if (result.first) {
-                    assert(result.second);
-                    l = result.first;
+                if (result == FR_Continue)
                     continue;
-                } else {
-                    if (!result.second) {
-                        break;
-                    }
-                }
+                else if (result == FR_Break)
+                    break;
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
             } else if (is_calling_label(l)
                 && l->get_label_enter()->body.is_complete()) {
-                complete_label_continuation(l);
+                complete_existing_label_continuation(l);
             } else {
                 StyledString ss;
                 auto &&enter = l->body.enter;
@@ -13199,9 +13301,16 @@ struct Solver {
                         clear_continuation_arg(l);
                     }
                     l = enter_label;
+                    assert(all_params_typed(l));
                 }
             } else if (is_continuing_to_label(l)) {
-                l = l->body.args[0].value.label;
+                Label *nextl = l->body.args[0].value.label;
+                if (!all_params_typed(nextl)) {
+                    StyledStream ss(std::cerr);
+                    stream_label(ss, l, StreamLabelFormat::debug_single());
+                    location_error(String::from("failed to type continuation"));
+                }
+                l = nextl;
             }
 #if SCOPES_DEBUG_CODEGEN
             ss_cout << "done: ";
@@ -13803,7 +13912,7 @@ struct Expander {
             Any result = none;
             if (env->lookup_local(tryfunc_name.symbol, result)
                 && (result.type == TYPE_Label)
-                && !result.label->is_complete()) {
+                && !result.label->is_valid()) {
                 func = result.label;
                 continuing = true;
             } else {
