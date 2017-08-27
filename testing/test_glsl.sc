@@ -2,10 +2,15 @@
 let vec2 = (vector f32 2:usize)
 let vec4 = (vector f32 4:usize)
 
-let gl_Position = (extern 'spirv.Position vec4 'Output)
-let gl_VertexID = (extern 'spirv.VertexId i32 'Input)
+let gl_Position =
+    extern 'spirv.Position vec4
+        storage = 'Output
+let gl_VertexID =
+    extern 'spirv.VertexId i32
+        storage = 'Input
 
-let sin = (extern 'glsl.std.450.Sin (function f32 f32))
+let sin =
+    extern 'glsl.std.450.Sin (function f32 f32)
 
 fn set-vertex-position ()
     let screen-tri-vertices =
@@ -19,7 +24,10 @@ fn set-vertex-position ()
 
 let vertex-code =
     do
-        let uv = (extern 'uv vec2 'Output 'location 0)
+        let uv =
+            extern 'uv vec2
+                storage = 'Output
+                index = 0
         fn vertex-shader ()
             let half = (vectorof f32 0.5 0.5)
             uv =
@@ -39,14 +47,23 @@ let vertex-code =
 
 let fragment-code =
     do
-        let uv = (extern 'uv vec2 'Input 'location 0)
-        let out_Color = (extern 'out_Color vec4 'Output)
-        let phase = (extern 'phase f32 'UniformConstant 'location 0)
+        let uv =
+            extern 'uv vec2
+                storage = 'Input
+                index = 0
+        let out_Color =
+            extern 'out_Color vec4
+                storage = 'Output
+        let phase =
+            extern 'phase f32
+                storage = 'UniformConstant
+                index = 0
         let tex =
             extern 'tex
                 SampledImage-type
                     Image-type vec4 '2D 0 0 0 1 'Unknown unnamed
-                \ 'UniformConstant 'location 1
+                storage = 'UniformConstant
+                index = 1
         fn make-phase ()
             #if ((load phase) < 0.5)
                 unconst 0.0

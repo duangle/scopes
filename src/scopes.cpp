@@ -1085,13 +1085,15 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Variadic, "variadic") \
     T(SYM_Pure, "pure") \
     \
-    T(SYM_Location, "location") \
-    \
     /* compile targets */ \
     T(SYM_TargetVertex, "vertex-stage") \
     T(SYM_TargetFragment, "fragment-stage") \
     T(SYM_TargetGeometry, "geometry-stage") \
     T(SYM_TargetCompute, "compute-stage") \
+    \
+    /* extern attributes */ \
+    T(SYM_Index, "index") \
+    T(SYM_Storage, "storage") \
     \
     /* timer names */ \
     T(TIMER_Compile, "compile()") \
@@ -2886,24 +2888,26 @@ struct ExternType : Type {
         return T->kind() == TK_Extern;
     }
 
-    ExternType(const Type *_type, Symbol _storage_class, int _location) :
+    ExternType(const Type *_type, Symbol _storage_class, int _index) :
         Type(TK_Extern),
         type(_type) {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
         storage_class = _storage_class;
-        location = _location;
+        index = _index;
     }
 
     const Type *type;
     Symbol storage_class;
-    int location;
+    int index;
 };
 
-static const Type *Extern(const Type *type, Symbol storage_class = SYM_Unnamed, int location = -1) {
+static const Type *Extern(const Type *type,
+    Symbol storage_class = SYM_Unnamed,
+    int index = -1) {
     static TypeFactory<ExternType> externs;
-    return externs.insert(type, storage_class, location);
+    return externs.insert(type, storage_class, index);
 }
 
 //------------------------------------------------------------------------------
@@ -8047,8 +8051,8 @@ struct SPIRVGenerator {
             if (builtin != spv::BuiltInMax) {
                 builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
             }
-            if (et->location >= 0) {
-                builder.addDecoration(id, spv::DecorationLocation, et->location);
+            if (et->index >= 0) {
+                builder.addDecoration(id, spv::DecorationLocation, et->index);
             }
             return id;
         } break;
@@ -11710,6 +11714,7 @@ struct Solver {
         case FN_VaValues:
         case FN_VaAt:
         case FN_Dump:
+        case FN_ExternNew:
             return true;
         default: return false;
         }
@@ -12335,46 +12340,49 @@ struct Solver {
             const Type *T = args[2].value;
             Any value(args[1].value.symbol);
             Symbol extern_storage_class = SYM_Unnamed;
-            int location = -1;
+            int index = -1;
             if (args.size() > 3) {
                 size_t i = 3;
                 while (i < args.size()) {
-                    bool found = false;
 
-                    args[i].value.verify(TYPE_Symbol);
-
-                    if (args[i].value.symbol == SYM_Location) {
-                        i++;
-                        if (i == args.size()) {
-                            location_error(String::from("index expected after location tag"));
+                    auto &&arg = args[i];
+                    switch(arg.key.value()) {
+                    case SYM_Index: {
+                        if (index == -1) {
+                            index = cast_number<int>(arg.value);
+                        } else {
+                            location_error(String::from("duplicate index"));
                         }
-                        args[i].value.verify(TYPE_I32);
-                        location = args[i].value.i32;
-                        found = true;
-                    }
+                    } break;
+                    case SYM_Storage: {
+                        arg.value.verify(TYPE_Symbol);
 
-                    if (!found && (extern_storage_class == SYM_Unnamed)) {
-                        switch(args[i].value.symbol.value()) {
-                        #define T(NAME) \
-                            case SYM_SPIRV_StorageClass ## NAME:
-                            B_SPIRV_STORAGE_CLASS()
-                        #undef T
-                            found = true;
-                            extern_storage_class = args[i].value.symbol; break;
-                        default: break;
+                        if (extern_storage_class == SYM_Unnamed) {
+                            switch(arg.value.symbol.value()) {
+                            #define T(NAME) \
+                                case SYM_SPIRV_StorageClass ## NAME:
+                                B_SPIRV_STORAGE_CLASS()
+                            #undef T
+                                extern_storage_class = arg.value.symbol; break;
+                            default: {
+                                location_error(String::from("illegal storage class"));
+                            } break;
+                            }
+                        } else {
+                            location_error(String::from("duplicate storage class"));
                         }
-                    }
-
-                    if (!found) {
+                    } break;
+                    default: {
                         StyledString ss;
-                        ss.out << "can't parse symbol: " << args[i].value.symbol;
+                        ss.out << "unexpected key: " << arg.key;
                         location_error(ss.str());
+                    } break;
                     }
 
                     i++;
                 }
             }
-            value.type = Extern(T, extern_storage_class, location);
+            value.type = Extern(T, extern_storage_class, index);
             RETARGS(value);
         } break;
         case FN_FunctionType: {
