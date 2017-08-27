@@ -6132,6 +6132,7 @@ static void mangle_remap_body(Label::UserMap &um, Label *ll, Label *entry, Mangl
             enter = first(it->second).value;
         }
     }
+    ll->flags = entry->flags & LF_Reentrant;
     ll->body.flags = entry->body.flags;
     ll->body.anchor = entry->body.anchor;
     ll->body.enter = enter;
@@ -11397,6 +11398,25 @@ struct Solver {
         return true;
     }
 
+    static void fold_useless_labels(Label *l) {
+        auto &&enter = l->body.enter;
+        if (enter.type != TYPE_Label)
+            return;
+        if (!enter.label->is_basic_block_like())
+            return;
+        Label *newl = enter.label;
+        // eat as many useless labels as we can
+        while (newl->body.is_complete() &&
+            !newl->is_reentrant() && !has_params(newl)) {
+            l->body = newl->body;
+            if (enter.type != TYPE_Label)
+                break;
+            if (!enter.label->is_basic_block_like())
+                break;
+            newl = enter.label;
+        }
+    }
+
     enum FoldResult {
         FR_Pass,
         FR_Continue,
@@ -11458,28 +11478,17 @@ struct Solver {
             }
         }
 
-        if (!newl->body.is_complete()) {
-            if (newl == l) {
-                location_error(String::from("label or function forms an infinite but empty loop"));
-            }
-            // we need to solve body, return type and reentrant flags for the
-            // section that follows
-            normalize_label(newl);
+        if (newl == l) {
+            location_error(String::from("label or function forms an infinite but empty loop"));
         }
+        // we need to solve body, return type and reentrant flags for the
+        // section that follows
+        normalize_label(newl);
         if (newl->is_basic_block_like()) {
             enter = newl;
             args = callargs;
             clear_continuation_arg(l);
-            // eat as many useless labels as we can
-            while (!newl->is_reentrant() && !has_params(newl)) {
-                assert(newl->body.is_complete());
-                l->body = newl->body;
-                if (enter.type != TYPE_Label)
-                    break;
-                if (!enter.label->is_basic_block_like())
-                    break;
-                newl = enter.label;
-            }
+            fold_useless_labels(l);
             l->body.set_complete();
             return FR_Break;
         }
@@ -11540,6 +11549,7 @@ struct Solver {
                 Label *newll = fold_type_label(um, newl, keys);
                 enter = newll;
                 args = callargs;
+                fold_useless_labels(l);
                 l->body.set_complete();
                 if (cont.type == TYPE_Label
                     /*&& !cont.label->body.is_complete()*/) {
@@ -11578,6 +11588,7 @@ struct Solver {
                     // cut it
                     delete_continuation(newl);
                     clear_continuation_arg(l);
+                    fold_useless_labels(l);
                 }
             }
             return FR_Pass;
@@ -13023,6 +13034,10 @@ struct Solver {
         return l;
     }
 
+    static bool is_exiting(Label *l) {
+        return is_calling_continuation(l) || is_continuing_to_parameter(l);
+    }
+
     static bool is_trivial_function(Label *l) {
         assert(!l->params.empty());
         if (!isa<ReturnLabelType>(l->params[0]->type))
@@ -13033,14 +13048,12 @@ struct Solver {
         }
         assert(!l->params.empty());
         l = skip_jumps(l);
-        if (is_calling_continuation(l))
-            return true;
-        if (is_continuing_to_parameter(l))
+        if (is_exiting(l))
             return true;
         if (is_continuing_to_label(l)) {
             l = l->body.args[0].value.label;
             l = skip_jumps(l);
-            if (is_calling_continuation(l))
+            if (is_exiting(l))
                 return true;
         }
         return false;
@@ -13232,6 +13245,8 @@ struct Solver {
     }
 
     void normalize_label(Label *l) {
+        if (l->body.is_complete())
+            return;
 
         SCOPES_TRY()
 
