@@ -2,8 +2,8 @@
 let vec2 = (vector f32 2:usize)
 let vec4 = (vector f32 4:usize)
 
-let gl_Position = (extern 'spirv.Position vec4 'output)
-let gl_VertexID = (extern 'spirv.VertexId i32 'input)
+let gl_Position = (extern 'spirv.Position vec4 'Output)
+let gl_VertexID = (extern 'spirv.VertexId i32 'Input)
 
 let sin = (extern 'glsl.std.450.Sin (function f32 f32))
 
@@ -19,7 +19,7 @@ fn set-vertex-position ()
 
 let vertex-code =
     do
-        let uv = (extern 'uv vec2 'output 'location 0)
+        let uv = (extern 'uv vec2 'Output 'location 0)
         fn vertex-shader ()
             let half = (vectorof f32 0.5 0.5)
             uv =
@@ -39,14 +39,14 @@ let vertex-code =
 
 let fragment-code =
     do
-        let uv = (extern 'uv vec2 'input 'location 0)
-        let out_Color = (extern 'out_Color vec4 'output)
-        let phase = (extern 'phase f32 'uniform-constant 'location 0)
+        let uv = (extern 'uv vec2 'Input 'location 0)
+        let out_Color = (extern 'out_Color vec4 'Output)
+        let phase = (extern 'phase f32 'UniformConstant 'location 0)
         let tex =
             extern 'tex
                 SampledImage-type
                     Image-type vec4 '2D 0 0 0 1 'Unknown unnamed
-                \ 'uniform-constant 'location 1
+                \ 'UniformConstant 'location 1
         fn make-phase ()
             #if ((load phase) < 0.5)
                 unconst 0.0

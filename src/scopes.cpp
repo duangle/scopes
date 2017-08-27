@@ -542,6 +542,21 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
     T(OP_Tertiary) T(KW_SyntaxLog)
 
+#define B_SPIRV_STORAGE_CLASS() \
+    T(UniformConstant) \
+    T(Input) \
+    T(Uniform) \
+    T(Output) \
+    T(Workgroup) \
+    T(CrossWorkgroup) \
+    T(Private) \
+    T(Function) \
+    T(Generic) \
+    T(PushConstant) \
+    T(AtomicCounter) \
+    T(Image) \
+    T(StorageBuffer)
+
 #define B_SPIRV_DIM() \
     T(1D) \
     T(2D) \
@@ -1035,18 +1050,6 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Variadic, "variadic") \
     T(SYM_Pure, "pure") \
     \
-    /* extern classes */ \
-    T(SYM_SPIRV_UniformConstant, "uniform-constant") \
-    T(SYM_SPIRV_Input, "input") \
-    T(SYM_SPIRV_Uniform, "uniform") \
-    T(SYM_SPIRV_Output, "output") \
-    T(SYM_SPIRV_Workgroup, "workgroup") \
-    T(SYM_SPIRV_CrossWorkgroup, "cross-workgroup") \
-    T(SYM_SPIRV_PushConstant, "push-constant") \
-    T(SYM_SPIRV_AtomicCounter, "atomic-counter") \
-    T(SYM_SPIRV_Image, "image") \
-    T(SYM_SPIRV_StorageBuffer, "storage-buffer") \
-    \
     T(SYM_Location, "location") \
     \
     /* compile targets */ \
@@ -1091,6 +1094,10 @@ enum KnownSymbol {
 #undef T1
 #undef T2
 #undef T2T
+#define T(NAME) \
+SYM_SPIRV_StorageClass ## NAME,
+    B_SPIRV_STORAGE_CLASS()
+#undef T
 #define T(NAME) \
     SYM_SPIRV_BuiltIn ## NAME,
     B_SPIRV_BUILTINS()
@@ -1141,6 +1148,11 @@ static const char *get_known_symbol_name(KnownSymbol sym) {
 #undef T1
 #undef T2
 #undef T2T
+
+#define T(NAME) \
+case SYM_SPIRV_StorageClass ## NAME: return "SYM_SPIRV_StorageClass" #NAME;
+B_SPIRV_STORAGE_CLASS()
+#undef T
 #define T(NAME) \
     case SYM_SPIRV_BuiltIn ## NAME: return "SYM_SPIRV_BuiltIn" #NAME;
 B_SPIRV_BUILTINS()
@@ -1694,6 +1706,10 @@ public:
     #undef T1
     #undef T2
     #undef T2T
+    #define T(NAME) \
+        map_known_symbol(SYM_SPIRV_StorageClass ## NAME, String::from(#NAME));
+        B_SPIRV_STORAGE_CLASS()
+    #undef T
     #define T(NAME) \
         map_known_symbol(SYM_SPIRV_BuiltIn ## NAME, String::from("spirv." #NAME));
         B_SPIRV_BUILTINS()
@@ -7883,29 +7899,23 @@ struct SPIRVGenerator {
         return spv::ImageFormatMax;
     }
 
-    spv::StorageClass storage_class_from_extern_class(Symbol etc) {
-        switch(etc.value()) {
-        case SYM_SPIRV_UniformConstant: return spv::StorageClassUniformConstant;
-        case SYM_SPIRV_Input: return spv::StorageClassInput;
-        case SYM_SPIRV_Uniform: return spv::StorageClassUniform;
-        case SYM_SPIRV_Output: return spv::StorageClassOutput;
-        case SYM_SPIRV_Workgroup: return spv::StorageClassWorkgroup;
-        case SYM_SPIRV_CrossWorkgroup: return spv::StorageClassCrossWorkgroup;
-        case SYM_SPIRV_PushConstant: return spv::StorageClassPushConstant;
-        case SYM_SPIRV_AtomicCounter: return spv::StorageClassAtomicCounter;
-        case SYM_SPIRV_Image: return spv::StorageClassImage;
-        case SYM_SPIRV_StorageBuffer: return spv::StorageClassStorageBuffer;
-        case SYM_Unnamed: {
-            location_error(
-                String::from(
-                    "IL->SPIR: extern values with C storage class"
-                    " are unsupported"));
-        } break;
-        default: {
-            location_error(
-                String::from(
-                    "IL->SPIR: unsupported storage class for extern value"));
-        } break;
+    spv::StorageClass storage_class_from_extern_class(Symbol sym) {
+        switch(sym.value()) {
+        #define T(NAME) \
+            case SYM_SPIRV_StorageClass ## NAME: return spv::StorageClass ## NAME;
+            B_SPIRV_STORAGE_CLASS()
+        #undef T
+            case SYM_Unnamed:
+                location_error(
+                    String::from(
+                        "IL->SPIR: extern values with C storage class"
+                        " are unsupported"));
+                break;
+            default:
+                location_error(
+                    String::from(
+                        "IL->SPIR: unsupported storage class for extern value"));
+                break;
         }
         return spv::StorageClassMax;
     }
@@ -10663,9 +10673,6 @@ static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
         optimize_spirv(result, level);
     }
 
-    if (flags & CF_DumpModule) {
-    } else if (flags & CF_DumpFunction) {
-    }
     if (flags & CF_DumpDisassembly) {
         disassemble_spirv(result);
     }
@@ -10698,6 +10705,10 @@ static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
 
     // Compile to GLSL, ready to give to GL driver.
     std::string source = glsl.compile();
+
+    if (flags & (CF_DumpModule|CF_DumpFunction)) {
+        std::cout << source << std::endl;
+    }
 
     return String::from_stdstring(source);
 }
@@ -12258,16 +12269,10 @@ struct Solver {
 
                     if (!found && (extern_storage_class == SYM_Unnamed)) {
                         switch(args[i].value.symbol.value()) {
-                        case SYM_SPIRV_UniformConstant:
-                        case SYM_SPIRV_Input:
-                        case SYM_SPIRV_Uniform:
-                        case SYM_SPIRV_Output:
-                        case SYM_SPIRV_Workgroup:
-                        case SYM_SPIRV_CrossWorkgroup:
-                        case SYM_SPIRV_PushConstant:
-                        case SYM_SPIRV_AtomicCounter:
-                        case SYM_SPIRV_Image:
-                        case SYM_SPIRV_StorageBuffer:
+                        #define T(NAME) \
+                            case SYM_SPIRV_StorageClass ## NAME:
+                            B_SPIRV_STORAGE_CLASS()
+                        #undef T
                             found = true;
                             extern_storage_class = args[i].value.symbol; break;
                         default: break;
