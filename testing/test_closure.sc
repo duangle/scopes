@@ -36,7 +36,7 @@ fn test2 ()
             mainloop;
     mainloop;
 
-#fn test3 ()
+fn test3 ()
     fn handle_events ()
         if (unconst true)
             io-write! "\n"
@@ -47,7 +47,7 @@ fn test2 ()
 #dump-label
     Closure-label test3
 
-#dump-label
+dump-label
     typify test3
 #compile
     typify test3

@@ -50,7 +50,7 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #define SCOPES_MAX_RECURSIONS 32
 
 // maximum number of jump skips permitted
-#define SCOPES_MAX_SKIP_JUMPS 8192
+#define SCOPES_MAX_SKIP_JUMPS 256
 
 // compile native code with debug info if not otherwise specified
 #define SCOPES_COMPILE_WITH_DEBUG_INFO 1
@@ -852,6 +852,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_LoadLibrary, "load-library") \
     T(FN_VolatileLoad, "volatile-load") \
     T(FN_VolatileStore, "volatile-store") \
+    T(FN_LabelCountOfReachable, "Label-countof-reachable") \
     T(FN_ListAt, "list-at") T(FN_ListNext, "list-next") T(FN_ListCons, "list-cons") \
     T(FN_IsListEmpty, "list-empty?") \
     T(FN_Malloc, "malloc") T(FN_MallocArray, "malloc-array") T(FN_Unconst, "unconst") \
@@ -2922,7 +2923,7 @@ enum {
     // can be evaluated at compile time
     FF_Pure = (1 << 1),
     // never returns
-    FF_Singularity = (1 << 2),
+    FF_Divergent = (1 << 2),
 };
 
 struct FunctionType : Type {
@@ -2937,10 +2938,10 @@ struct FunctionType : Type {
         argument_types(llvm::cast<TupleType>(_argument_types)->types),
         flags(_flags) {
 
-        assert(!(flags & FF_Singularity) || argument_types.empty());
+        assert(!(flags & FF_Divergent) || argument_types.empty());
 
         std::stringstream ss;
-        if (singularity()) {
+        if (divergent()) {
             ss << "?<-";
         } else {
             ss <<  return_type->name()->data;
@@ -2970,8 +2971,8 @@ struct FunctionType : Type {
     bool pure() const {
         return flags & FF_Pure;
     }
-    bool singularity() const {
-        return flags & FF_Singularity;
+    bool divergent() const {
+        return flags & FF_Divergent;
     }
 
     const Type *type_at_index(size_t i) const {
@@ -5410,7 +5411,7 @@ public:
         uint64_t flags = 0;
         assert(params.size());
         if (!params[0]->is_typed()) {
-            flags |= FF_Singularity;
+            flags |= FF_Divergent;
         }
         return Function(get_return_type(), argtypes, flags);
     }
@@ -5918,6 +5919,10 @@ struct StreamLabel : StreamAnchors {
         visited.insert(alabel);
         if (line_anchors) {
             stream_anchor(alabel->anchor);
+        }
+        if (alabel->is_reentrant()) {
+            ss << Style_Keyword << "R" << Style_None;
+            ss << " ";
         }
         alabel->stream(ss, fmt.show_users);
         ss << Style_Operator << ":" << Style_None;
@@ -11439,6 +11444,17 @@ struct Solver {
 
         Label *newl = fold_type_label_single(
             enter_frame, enter_label, keys);
+        bool reentrant = newl->is_reentrant();
+        if (!reentrant) {
+            // has this instance been used earlier in the stack?
+            const Frame *top_frame = enter_frame->find_frame(enter_label);
+            reentrant = (top_frame && top_frame->instance == newl);
+            // mark this function as reentrant for the solver further up in the stack
+            if (reentrant) {
+                newl->set_reentrant();
+            }
+        }
+
         if (newl->is_basic_block_like()) {
             enter = newl;
             args = callargs;
@@ -11456,16 +11472,6 @@ struct Solver {
                 args = callargs;
                 clear_continuation_arg(l);
                 return FR_Pass;
-            }
-        }
-        bool reentrant = newl->is_reentrant();
-        if (!reentrant) {
-            // has this instance been used earlier in the stack?
-            const Frame *top_frame = enter_frame->find_frame(enter_label);
-            reentrant = (top_frame && top_frame->instance == newl);
-            // mark this function as reentrant for the solver further up in the stack
-            if (reentrant) {
-                newl->set_reentrant();
             }
         }
 
@@ -13200,6 +13206,7 @@ struct Solver {
     }
 
     void normalize_label(Label *l) {
+
         SCOPES_TRY()
 
         while (!l->body.is_complete()) {
@@ -15232,6 +15239,12 @@ static const Frame *f_closure_frame(const Closure *closure) {
     return closure->frame;
 }
 
+size_t f_label_countof_reachable(Label *label) {
+    std::unordered_set<Label *> labels;
+    label->build_reachable(labels);
+    return labels.size();
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -15297,6 +15310,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_ClosureLabel, f_closure_label, TYPE_Label, TYPE_Closure);
     DEFINE_PURE_C_FUNCTION(FN_ClosureFrame, f_closure_frame, TYPE_Frame, TYPE_Frame);
+    DEFINE_PURE_C_FUNCTION(FN_LabelCountOfReachable, f_label_countof_reachable, TYPE_USize, TYPE_Label);
 
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);
 

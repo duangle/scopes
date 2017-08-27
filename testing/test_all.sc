@@ -18,6 +18,7 @@ let modules =
         .test_loop
         .test_memoization
         .test_overload
+        .test_quality
         .test_reference
         .test_regexp
         .test_scope
