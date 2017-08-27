@@ -10961,6 +10961,9 @@ struct Solver {
 #if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
 #endif
+    static std::vector<Label *> traceback;
+    static int solve_refs;
+
     Solver()
 #if SCOPES_DEBUG_CODEGEN
         : ss_cout(std::cout)
@@ -11455,24 +11458,30 @@ struct Solver {
             }
         }
 
-        if (newl->is_basic_block_like()) {
-            enter = newl;
-            args = callargs;
-            clear_continuation_arg(l);
-            return FR_Pass;
-        }
         if (!newl->body.is_complete()) {
             if (newl == l) {
                 location_error(String::from("label or function forms an infinite but empty loop"));
             }
-            // we need to solve the return type asap for the next test
+            // we need to solve body, return type and reentrant flags for the
+            // section that follows
             normalize_label(newl);
-            if (newl->is_basic_block_like()) {
-                enter = newl;
-                args = callargs;
-                clear_continuation_arg(l);
-                return FR_Pass;
+        }
+        if (newl->is_basic_block_like()) {
+            enter = newl;
+            args = callargs;
+            clear_continuation_arg(l);
+            // eat as many useless labels as we can
+            while (!newl->is_reentrant() && !has_params(newl)) {
+                assert(newl->body.is_complete());
+                l->body = newl->body;
+                if (enter.type != TYPE_Label)
+                    break;
+                if (!enter.label->is_basic_block_like())
+                    break;
+                newl = enter.label;
             }
+            l->body.set_complete();
+            return FR_Break;
         }
 
         assert(!newl->params.empty());
@@ -12085,10 +12094,10 @@ struct Solver {
     enter = args[0].value; \
     args = { none, __VA_ARGS__ };
 
-    std::vector<Label *> traceback;
-
-    void print_traceback_entry(Label *l) {
+    static void print_traceback_entry(Label *l) {
         StyledStream ss(std::cerr);
+        if (l->is_basic_block_like())
+            return;
         ss << l->body.anchor << " in ";
         if (l->name == SYM_Unnamed) {
             if (l->is_basic_block_like()) {
@@ -12105,7 +12114,7 @@ struct Solver {
         //l->body.anchor->stream_source_line(ss);
     }
 
-    void print_traceback() {
+    static void print_traceback() {
         size_t i = traceback.size();
         while (i-- > 1) {
             Label *l = traceback[i];
@@ -13179,16 +13188,33 @@ struct Solver {
         args = newargs;
     }
 
+    static void inc_solve_ref() {
+        solve_refs++;
+    }
+
+    static bool dec_solve_ref() {
+        solve_refs--;
+        assert(solve_refs >= 0);
+        return solve_refs == 0;
+    }
+
     Label *solve(Label *entry) {
+        inc_solve_ref();
         SCOPES_TRY()
 
         normalize_label(entry);
 
         SCOPES_CATCH(exc)
-            print_traceback();
+            if (dec_solve_ref()) {
+                print_traceback();
+                traceback.clear();
+            }
             error(exc);
         SCOPES_TRY_END()
 
+        if (dec_solve_ref()) {
+            traceback.clear();
+        }
         lower2cff(entry);
 #if SCOPES_CLEANUP_LABELS
         cleanup_labels(entry);
@@ -13275,8 +13301,10 @@ struct Solver {
                     break;
             } else if (is_calling_continuation(l)) {
                 type_continuation_call(l);
-            } else if (is_calling_label(l)
-                && l->get_label_enter()->body.is_complete()) {
+            } else if (is_calling_label(l)) {
+                if (!l->get_label_enter()->body.is_complete()) {
+                    location_error(String::from("failed to propagate return type from untyped label"));
+                }
                 complete_existing_label_continuation(l);
             } else {
                 StyledString ss;
@@ -13709,6 +13737,9 @@ struct Solver {
     }
 
 };
+
+std::vector<Label *> Solver::traceback;
+int Solver::solve_refs = 0;
 
 //------------------------------------------------------------------------------
 // MACRO EXPANDER
