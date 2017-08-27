@@ -1094,6 +1094,12 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     /* extern attributes */ \
     T(SYM_Index, "index") \
     T(SYM_Storage, "storage") \
+    T(SYM_Buffer, "buffer") \
+    T(SYM_Coherent, "coherent") \
+    T(SYM_Volatile, "volatile") \
+    T(SYM_Restrict, "restrict") \
+    T(SYM_ReadOnly, "readonly") \
+    T(SYM_WriteOnly, "writeonly") \
     \
     /* timer names */ \
     T(TIMER_Compile, "compile()") \
@@ -2883,31 +2889,44 @@ static const Type *Union(const std::vector<const Type *> &types) {
 // EXTERN TYPE
 //------------------------------------------------------------------------------
 
+enum ExternFlags {
+    // if storage class is 'Uniform, the value is a SSBO, not a UBO
+    EF_BufferBlock = (1 << 0),
+    EF_NonWritable = (1 << 1),
+    EF_NonReadable = (1 << 2),
+    EF_Volatile = (1 << 3),
+    EF_Coherent = (1 << 4),
+};
+
 struct ExternType : Type {
     static bool classof(const Type *T) {
         return T->kind() == TK_Extern;
     }
 
-    ExternType(const Type *_type, Symbol _storage_class, int _index) :
+    ExternType(const Type *_type,
+        size_t _flags, Symbol _storage_class, int _index) :
         Type(TK_Extern),
-        type(_type) {
+        type(_type),
+        flags(_flags),
+        storage_class(_storage_class),
+        index(_index) {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
-        storage_class = _storage_class;
-        index = _index;
     }
 
     const Type *type;
+    size_t flags;
     Symbol storage_class;
     int index;
 };
 
 static const Type *Extern(const Type *type,
+    size_t flags = 0,
     Symbol storage_class = SYM_Unnamed,
     int index = -1) {
     static TypeFactory<ExternType> externs;
-    return externs.insert(type, storage_class, index);
+    return externs.insert(type, flags, storage_class, index);
 }
 
 //------------------------------------------------------------------------------
@@ -8051,8 +8070,34 @@ struct SPIRVGenerator {
             if (builtin != spv::BuiltInMax) {
                 builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
             }
-            if (et->index >= 0) {
-                builder.addDecoration(id, spv::DecorationLocation, et->index);
+            switch(sc) {
+            case spv::StorageClassUniform: {
+                builder.addDecoration(id, spv::DecorationDescriptorSet, 0);
+                if (et->flags & EF_BufferBlock) {
+                    builder.addDecoration(id, spv::DecorationBufferBlock);
+
+                    if (et->flags & EF_NonWritable) {
+                        builder.addDecoration(id, spv::DecorationNonWritable);
+                    } else if (et->flags & EF_NonReadable) {
+                        builder.addDecoration(id, spv::DecorationNonReadable);
+                    }
+                    if (et->flags & EF_Volatile) {
+                        builder.addDecoration(id, spv::DecorationVolatile);
+                    } else if (et->flags & EF_Coherent) {
+                        builder.addDecoration(id, spv::DecorationCoherent);
+                    }
+                } else {
+                    builder.addDecoration(id, spv::DecorationBlock);
+                }
+                if (et->index >= 0) {
+                    builder.addDecoration(id, spv::DecorationBinding, et->index);
+                }
+            } break;
+            default: {
+                if (et->index >= 0) {
+                    builder.addDecoration(id, spv::DecorationLocation, et->index);
+                }
+            } break;
             }
             return id;
         } break;
@@ -8769,7 +8814,11 @@ struct SPIRVGenerator {
             for (size_t i = 0; i < count; ++i) {
                 members.push_back(type_to_spirv_type(ti->types[i]));
             }
-            return builder.makeStructType(members, "tuple");
+            auto id = builder.makeStructType(members, "tuple");
+            for (size_t i = 0; i < count; ++i) {
+                builder.addMemberDecoration(id, i, spv::DecorationOffset, ti->offsets[i]);
+            }
+            return id;
         } break;
         case TK_Union: {
             auto ui = cast<UnionType>(type);
@@ -12058,6 +12107,10 @@ struct Solver {
         case FN_GetElementPtr: {
             CHECKARGS(2, -1);
             const Type *T = storage_type(args[1].value.indirect_type());
+            bool is_extern = (T->kind() == TK_Extern);
+            if (is_extern) {
+                T = MutPointer(cast<ExternType>(T)->type);
+            }
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             T = pi->element_type;
@@ -12340,11 +12393,11 @@ struct Solver {
             const Type *T = args[2].value;
             Any value(args[1].value.symbol);
             Symbol extern_storage_class = SYM_Unnamed;
+            size_t flags = 0;
             int index = -1;
             if (args.size() > 3) {
                 size_t i = 3;
                 while (i < args.size()) {
-
                     auto &&arg = args[i];
                     switch(arg.key.value()) {
                     case SYM_Index: {
@@ -12372,6 +12425,20 @@ struct Solver {
                             location_error(String::from("duplicate storage class"));
                         }
                     } break;
+                    case SYM_Unnamed: {
+                        arg.value.verify(TYPE_Symbol);
+
+                        switch(arg.value.symbol.value()) {
+                        case SYM_Buffer: flags |= EF_BufferBlock; break;
+                        case SYM_ReadOnly: flags |= EF_NonWritable; break;
+                        case SYM_WriteOnly: flags |= EF_NonReadable; break;
+                        case SYM_Coherent: flags |= EF_Coherent; break;
+                        case SYM_Volatile: flags |= EF_Volatile; break;
+                        default: {
+                            location_error(String::from("unknown flag"));
+                        } break;
+                        }
+                    } break;
                     default: {
                         StyledString ss;
                         ss.out << "unexpected key: " << arg.key;
@@ -12382,7 +12449,7 @@ struct Solver {
                     i++;
                 }
             }
-            value.type = Extern(T, extern_storage_class, index);
+            value.type = Extern(T, flags, extern_storage_class, index);
             RETARGS(value);
         } break;
         case FN_FunctionType: {
