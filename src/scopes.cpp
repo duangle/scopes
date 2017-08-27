@@ -521,7 +521,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_FCmpUGT) T(OP_FCmpUGE) T(OP_FCmpULT) T(OP_FCmpULE) \
     T(FN_Purify) T(FN_Unconst) T(FN_TypeOf) T(FN_Bitcast) \
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
-    T(FN_VolatileLoad) T(FN_VolatileStore) \
+    T(FN_VolatileLoad) T(FN_VolatileStore) T(SFXFN_ExecutionMode) \
     T(FN_ExtractElement) T(FN_InsertElement) T(FN_ShuffleVector) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
@@ -672,6 +672,40 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SecondaryViewportMaskNV) \
     T(PositionPerViewNV) \
     T(ViewportMaskPerViewNV)
+
+#define B_SPIRV_EXECUTION_MODE() \
+    T(Invocations) \
+    T(SpacingEqual) \
+    T(SpacingFractionalEven) \
+    T(SpacingFractionalOdd) \
+    T(VertexOrderCw) \
+    T(VertexOrderCcw) \
+    T(PixelCenterInteger) \
+    T(OriginUpperLeft) \
+    T(OriginLowerLeft) \
+    T(EarlyFragmentTests) \
+    T(PointMode) \
+    T(Xfb) \
+    T(DepthReplacing) \
+    T(DepthGreater) \
+    T(DepthLess) \
+    T(DepthUnchanged) \
+    T(LocalSize) \
+    T(LocalSizeHint) \
+    T(InputPoints) \
+    T(InputLines) \
+    T(InputLinesAdjacency) \
+    T(Triangles) \
+    T(InputTrianglesAdjacency) \
+    T(Quads) \
+    T(Isolines) \
+    T(OutputVertices) \
+    T(OutputPoints) \
+    T(OutputLineStrip) \
+    T(OutputTriangleStrip) \
+    T(VecTypeHint) \
+    T(ContractionOff) \
+    T(PostDepthCoverage)
 
 #define B_GLSL_STD_450_BUILTINS() \
     T(Round) \
@@ -964,6 +998,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SFXFN_DelTypeSymbol, "delete-type-symbol!") \
     T(SFXFN_SetTypenameStorage, "set-typename-storage!") \
     T(SFXFN_SetTypenameFields, "set-typename-fields!") \
+    T(SFXFN_ExecutionMode, "set-execution-mode!") \
     T(SFXFN_TranslateLabelBody, "translate-label-body!") \
     \
     /* builtin operator functions that can also be used as infix */ \
@@ -1103,6 +1138,10 @@ SYM_SPIRV_StorageClass ## NAME,
     B_SPIRV_BUILTINS()
 #undef T
 #define T(NAME) \
+    SYM_SPIRV_ExecutionMode ## NAME,
+    B_SPIRV_EXECUTION_MODE()
+#undef T
+#define T(NAME) \
     SYM_SPIRV_Dim ## NAME,
     B_SPIRV_DIM()
 #undef T
@@ -1156,6 +1195,10 @@ B_SPIRV_STORAGE_CLASS()
 #define T(NAME) \
     case SYM_SPIRV_BuiltIn ## NAME: return "SYM_SPIRV_BuiltIn" #NAME;
 B_SPIRV_BUILTINS()
+#undef T
+#define T(NAME) \
+case SYM_SPIRV_ExecutionMode ## NAME: return "SYM_SPIRV_ExecutionMode" #NAME;
+B_SPIRV_EXECUTION_MODE()
 #undef T
 #define T(NAME) \
     case SYM_SPIRV_Dim ## NAME: return "SYM_SPIRV_Dim" #NAME;
@@ -1713,6 +1756,10 @@ public:
     #define T(NAME) \
         map_known_symbol(SYM_SPIRV_BuiltIn ## NAME, String::from("spirv." #NAME));
         B_SPIRV_BUILTINS()
+    #undef T
+    #define T(NAME) \
+        map_known_symbol(SYM_SPIRV_ExecutionMode ## NAME, String::from(#NAME));
+        B_SPIRV_EXECUTION_MODE()
     #undef T
     #define T(NAME) \
         map_known_symbol(SYM_SPIRV_Dim ## NAME, String::from(#NAME));
@@ -7899,6 +7946,21 @@ struct SPIRVGenerator {
         return spv::ImageFormatMax;
     }
 
+    static spv::ExecutionMode execution_mode_from_symbol(Symbol sym) {
+        switch(sym.value()) {
+        #define T(NAME) \
+            case SYM_SPIRV_ExecutionMode ## NAME: return spv::ExecutionMode ## NAME;
+            B_SPIRV_EXECUTION_MODE()
+        #undef T
+            default:
+                location_error(
+                    String::from(
+                        "IL->SPIR: unsupported execution mode"));
+                break;
+        }
+        return spv::ExecutionModeMax;
+    }
+
     spv::StorageClass storage_class_from_extern_class(Symbol sym) {
         switch(sym.value()) {
         #define T(NAME) \
@@ -8226,6 +8288,20 @@ struct SPIRVGenerator {
             case FN_Free: { READ_VALUE(val);
                 retvalue = LLVMBuildFree(builder, val); } break;
             */
+            case SFXFN_ExecutionMode: {
+                assert(active_function_value);
+                READ_ANY(mode);
+                auto em = execution_mode_from_symbol(mode.symbol);
+                int values[3] = { -1, -1, -1 };
+                int c = 0;
+                while ((c < 3) && (argn <= argcount)) {
+                    READ_ANY(val);
+                    values[c] = cast_number<int>(val);
+                    c++;
+                }
+                builder.addExecutionMode(active_function_value, em,
+                    values[0], values[1], values[2]);
+            } break;
             case FN_GetElementPtr: {
                 READ_VALUE(pointer);
                 assert(argcount > 1);
@@ -11653,6 +11729,7 @@ struct Solver {
         case FN_VolatileLoad:
         case FN_Load:
         case FN_Sample:
+        case SFXFN_ExecutionMode:
             return true;
         default: return false;
         }
@@ -11703,6 +11780,15 @@ struct Solver {
             //memset(&params, 0, sizeof(params));
             //Id Builder::createTextureCall(Decoration precision, Id resultType, bool sparse, bool fetch, bool proj, bool gather, bool noImplicitLod, const TextureParameters& parameters)
 
+        } break;
+        case SFXFN_ExecutionMode: {
+            CHECKARGS(1, 4);
+            args[1].value.verify(TYPE_Symbol);
+            SPIRVGenerator::execution_mode_from_symbol(args[1].value.symbol);
+            for (size_t i = 2; i < args.size(); ++i) {
+                cast_number<int>(args[i].value);
+            }
+            RETARGTYPES();
         } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
