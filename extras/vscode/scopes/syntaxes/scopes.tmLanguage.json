@@ -33,7 +33,7 @@
                 },
                 {
                     "name": "constant.language.library.scopes",
-                    "match": "(package|module-(dir|path))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(package|main-module\\?|module-(dir|path))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
