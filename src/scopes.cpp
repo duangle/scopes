@@ -5218,6 +5218,10 @@ public:
         return params[0]->is_typed();
     }
 
+    bool has_params() const {
+        return params.size() > 1;
+    }
+
     bool is_valid() const {
         return !params.empty() && body.anchor && !body.args.empty();
     }
@@ -6233,6 +6237,25 @@ static Label *mangle(Label::UserMap &um, Label *entry,
     }
 
     return le;
+}
+
+static void fold_useless_labels(Label *l) {
+    auto &&enter = l->body.enter;
+    if (enter.type != TYPE_Label)
+        return;
+    if (!enter.label->is_basic_block_like())
+        return;
+    Label *newl = enter.label;
+    // eat as many useless labels as we can
+    while (newl->body.is_complete() &&
+        !newl->is_reentrant() && !newl->has_params()) {
+        l->body = newl->body;
+        if (enter.type != TYPE_Label)
+            break;
+        if (!enter.label->is_basic_block_like())
+            break;
+        newl = enter.label;
+    }
 }
 
 // inlining the arguments of an untyped scope (including continuation)
@@ -11059,10 +11082,6 @@ struct Solver {
         verify(a.indirect_type(), b.indirect_type());
     }
 
-    static bool has_params(Label *l) {
-        return l->params.size() > 1;
-    }
-
     static bool has_keyed_args(Label *l) {
         auto &&args = l->body.args;
         for (size_t i = 1; i < args.size(); ++i) {
@@ -11396,25 +11415,6 @@ struct Solver {
                 return false;
         }
         return true;
-    }
-
-    static void fold_useless_labels(Label *l) {
-        auto &&enter = l->body.enter;
-        if (enter.type != TYPE_Label)
-            return;
-        if (!enter.label->is_basic_block_like())
-            return;
-        Label *newl = enter.label;
-        // eat as many useless labels as we can
-        while (newl->body.is_complete() &&
-            !newl->is_reentrant() && !has_params(newl)) {
-            l->body = newl->body;
-            if (enter.type != TYPE_Label)
-                break;
-            if (!enter.label->is_basic_block_like())
-                break;
-            newl = enter.label;
-        }
     }
 
     enum FoldResult {
@@ -13038,6 +13038,39 @@ struct Solver {
         return is_calling_continuation(l) || is_continuing_to_parameter(l);
     }
 
+    // label targets count as calls, all other as ops
+    static void count_instructions(Label *l, int &callcount, int &opcount) {
+        callcount = 0;
+        opcount = 0;
+        assert(!l->params.empty());
+        std::unordered_set<Label *> visited;
+        while (!is_exiting(l) && !visited.count(l)) {
+            visited.insert(l);
+            if (jumps_immediately(l)) {
+                l = l->body.enter.label;
+                continue;
+            }
+            if (is_calling_label(l) || is_calling_closure(l)) {
+                callcount++;
+            } else {
+                opcount++;
+            }
+            if (is_continuing_to_label(l)) {
+                l = l->body.args[0].value.label;
+                continue;
+            } else if (l->body.args[0].value.type == TYPE_Nothing) {
+                // branch, unreachable, etc.
+                break;
+            } else {
+                StyledStream ss(std::cerr);
+                ss << "internal warning: unexpected continuation type "
+                    << l->body.args[0].value.type
+                    << " encountered while counting instructions" << std::endl;
+                break;
+            }
+        }
+    }
+
     static bool is_trivial_function(Label *l) {
         assert(!l->params.empty());
         if (!isa<ReturnLabelType>(l->params[0]->type))
@@ -13046,6 +13079,11 @@ struct Solver {
             // doesn't take any arguments
             return true;
         }
+#if 1
+        int callcount, opcount;
+        count_instructions(l, callcount, opcount);
+        return (callcount <= 4) && (opcount <= 1);
+#else
         assert(!l->params.empty());
         l = skip_jumps(l);
         if (is_exiting(l))
@@ -13056,6 +13094,7 @@ struct Solver {
             if (is_exiting(l))
                 return true;
         }
+#endif
         return false;
     }
 
@@ -13338,7 +13377,7 @@ struct Solver {
             l->body.set_complete();
             if (jumps_immediately(l)) {
                 Label *enter_label = l->get_label_enter();
-                if (!has_params(enter_label)) {
+                if (!enter_label->has_params()) {
 #if SCOPES_DEBUG_CODEGEN
                     stream_label(ss_cout, l, StreamLabelFormat::debug_single());
                     stream_label(ss_cout, enter_label, StreamLabelFormat::debug_single());
