@@ -1727,15 +1727,28 @@ do
             store (imply value ET) self
             true
 
+    fn make-reference-type (PT)
+        #let ET = (element-type PT 0)
+        let T = (typename (.. "&" (type-name PT)))
+        set-typename-super! T reference
+        set-typename-storage! T PT
+        T
+
+    set-type-symbol! reference 'from-pointer-type
+        fn "reference-apply-type" (cls PT)
+            # due to auto-memoization, we'll always get the same type back
+                provided the element type is a constant
+            assert (constant? PT)
+            assert-typeof PT type
+            if (PT <: reference)
+                compiler-error!
+                    .. "cannot create reference type of reference type "
+                        repr PT
+            make-reference-type PT
+
     set-type-symbol! reference 'apply-type
         fn "reference-apply-type" (cls element)
             if (type== cls reference)
-                fn make-reference-type (ET)
-                    let T = (typename (.. "&" (type-name ET)))
-                    set-typename-super! T reference
-                    set-typename-storage! T (mutable-pointer-type ET)
-                    T
-
                 # due to auto-memoization, we'll always get the same type back
                     provided the element type is a constant
                 assert (constant? element)
@@ -1744,7 +1757,7 @@ do
                     compiler-error!
                         .. "cannot create reference type of reference type "
                             repr element
-                make-reference-type element
+                make-reference-type (mutable-pointer-type element)
             else
                 let ET = (storageof cls)
                 bitcast (imply element ET) cls
@@ -2277,23 +2290,33 @@ typefn pointer '@ (self index)
     let index =
         if (none? index) 0:usize # simple dereference
         else index
-    let ET = (element-type (typeof self) 0)
-    (reference ET) (getelementptr self (usize index))
+    ('from-pointer-type reference (typeof self)) (getelementptr self (usize index))
 
 # extern cast to element type/pointer executes load/unconst
 typefn extern 'imply (self destT)
     let ET = (element-type (typeof self) 0)
-    if (type== destT (pointer ET))
+    if (type== destT ET)
         unconst self
     else
         forward-imply (load self) destT
+
+typefn extern 'getattr (self name)
+    let pET = (element-type (typeof self) 0)
+    let ET = (element-type pET 0)
+    let op success = (type@ ET 'getattr&)
+    if success
+        let result... = (op (unconst self) name)
+        if (icmp== (va-countof result...) 0)
+        else
+            return result...
+    getattr (load self) name
 
 typefn extern 'as (self destT)
     forward-as (load self) destT
 
 # support assignment syntax for extern
 typefn extern '= (self value)
-    let ET = (element-type (typeof self) 0)
+    let ET = (element-type (element-type (typeof self) 0) 0)
     store (imply value ET) self
     true
 
@@ -2377,7 +2400,7 @@ typefn CStruct 'getattr& (self name)
     if (icmp>=s idx 0)
         # cast result to reference
         let val = (getelementptr self 0 idx)
-        (reference (element-type (typeof val) 0)) val
+        ('from-pointer-type reference (typeof val)) val
 
 typefn CStruct 'getattr (self name)
     let idx = (typename-field-index (typeof self) name)
@@ -2402,7 +2425,8 @@ typefn CUnion 'getattr& (self name)
                 else
                     pointer FT
 
-fn pointer-call (self ...)
+# extern call attempts to cast arguments to correct type
+typefn extern 'call (self ...)
     label docall (dest ET)
         let sz = (va-countof ...)
         let count = (trunc (rawcall type-countof ET) i32)
@@ -2419,7 +2443,8 @@ fn pointer-call (self ...)
             else
                 loop i-1 arg args...
 
-    let ET = (rawcall element-type (typeof self) 0)
+    let pET = (rawcall element-type (typeof self) 0)
+    let ET = (rawcall element-type pET 0)
     let ST = (rawcall superof ET)
     if (type== ST function)
         docall self ET
@@ -2427,10 +2452,6 @@ fn pointer-call (self ...)
         docall (load self) (rawcall element-type ET 0)
     else
         (load self) ...
-
-# extern call attempts to cast arguments to correct type
-typefn extern 'call (self ...)
-    pointer-call self ...
 
 #-------------------------------------------------------------------------------
 # using

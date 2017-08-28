@@ -2582,12 +2582,19 @@ struct PointerType : Type {
         return T->kind() == TK_Pointer;
     }
 
-    PointerType(const Type *_element_type, uint64_t _flags)
+    PointerType(const Type *_element_type,
+        uint64_t _flags, Symbol _storage_class)
         : Type(TK_Pointer),
             element_type(_element_type),
-            flags(_flags) {
+            flags(_flags),
+            storage_class(_storage_class) {
         std::stringstream ss;
-        ss << element_type->name()->data;
+        if (storage_class != SYM_Unnamed) {
+            ss << storage_class.name()->data;
+            ss << "<" << element_type->name()->data << ">";
+        } else {
+            ss << element_type->name()->data;
+        }
         if (is_mutable()) {
             ss << "*";
         } else {
@@ -2614,16 +2621,19 @@ struct PointerType : Type {
 
     const Type *element_type;
     uint64_t flags;
+    Symbol storage_class;
 };
 
-static const Type *Pointer(const Type *element_type, uint64_t flags = 0) {
+static const Type *Pointer(const Type *element_type, uint64_t flags = 0,
+    Symbol storage_class = SYM_Unnamed) {
     static TypeFactory<PointerType> pointers;
     assert(element_type->kind() != TK_ReturnLabel);
-    return pointers.insert(element_type, flags);
+    return pointers.insert(element_type, flags, storage_class);
 }
 
-static const Type *MutPointer(const Type *element_type) {
-    return Pointer(element_type, PTF_Mutable);
+static const Type *MutPointer(const Type *element_type,
+    Symbol storage_class = SYM_Unnamed) {
+    return Pointer(element_type, PTF_Mutable, storage_class);
 }
 
 //------------------------------------------------------------------------------
@@ -2913,12 +2923,14 @@ struct ExternType : Type {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
+        pointer_type = MutPointer(type, storage_class);
     }
 
     const Type *type;
     size_t flags;
     Symbol storage_class;
     int index;
+    const Type *pointer_type;
 };
 
 static const Type *Extern(const Type *type,
@@ -7908,6 +7920,15 @@ struct SPIRVGenerator {
         }
     };
 
+    typedef std::pair<const Type *, uint64_t> TypeKey;
+    struct HashTypeFlagsPair {
+        size_t operator ()(const TypeKey &value) const {
+            return
+                HashLen16(std::hash<const Type *>{}(value.first),
+                    std::hash<uint64_t>{}(value.second));
+        }
+    };
+
     spv::SpvBuildLogger logger;
     spv::Builder builder;
 
@@ -7926,7 +7947,10 @@ struct SPIRVGenerator {
     //std::unordered_map<SourceFile *, LLVMValueRef> file2value;
     std::unordered_map< ParamKey, spv::Id, HashFuncParamPair> param2value;
 
-    std::unordered_map<const Type *, spv::Id> type_cache;
+    std::unordered_map<std::pair<const Type *, uint64_t>,
+        spv::Id, HashTypeFlagsPair> type_cache;
+
+    std::unordered_map<Any, spv::Id, Any::Hash> const_cache;
 
     Label::UserMap user_map;
 
@@ -8016,7 +8040,6 @@ struct SPIRVGenerator {
             }
             return it->second;
         }
-
         switch(value.type->kind()) {
         case TK_Integer: {
             auto it = cast<IntegerType>(value.type);
@@ -8048,58 +8071,6 @@ struct SPIRVGenerator {
             StyledString ss;
             ss.out << "IL->SPIR: unsupported real constant type";
             location_error(ss.str());
-        } break;
-        case TK_Extern: {
-            auto et = cast<ExternType>(value.type);
-            spv::StorageClass sc = storage_class_from_extern_class(
-                et->storage_class);
-            const char *name = nullptr;
-            spv::BuiltIn builtin = spv::BuiltInMax;
-            switch(value.symbol.value()) {
-            #define T(NAME) \
-            case SYM_SPIRV_BuiltIn ## NAME: \
-                builtin = spv::BuiltIn ## NAME; break;
-                B_SPIRV_BUILTINS()
-            #undef T
-                default:
-                    name = value.symbol.name()->data;
-                    break;
-            }
-            auto ty = type_to_spirv_type(et->type);
-            auto id = builder.createVariable(sc, ty, name);
-            if (builtin != spv::BuiltInMax) {
-                builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
-            }
-            switch(sc) {
-            case spv::StorageClassUniform: {
-                builder.addDecoration(id, spv::DecorationDescriptorSet, 0);
-                if (et->flags & EF_BufferBlock) {
-                    builder.addDecoration(id, spv::DecorationBufferBlock);
-
-                    if (et->flags & EF_NonWritable) {
-                        builder.addDecoration(id, spv::DecorationNonWritable);
-                    } else if (et->flags & EF_NonReadable) {
-                        builder.addDecoration(id, spv::DecorationNonReadable);
-                    }
-                    if (et->flags & EF_Volatile) {
-                        builder.addDecoration(id, spv::DecorationVolatile);
-                    } else if (et->flags & EF_Coherent) {
-                        builder.addDecoration(id, spv::DecorationCoherent);
-                    }
-                } else {
-                    builder.addDecoration(id, spv::DecorationBlock);
-                }
-                if (et->index >= 0) {
-                    builder.addDecoration(id, spv::DecorationBinding, et->index);
-                }
-            } break;
-            default: {
-                if (et->index >= 0) {
-                    builder.addDecoration(id, spv::DecorationLocation, et->index);
-                }
-            } break;
-            }
-            return id;
         } break;
         case TK_Pointer: {
             if (is_function_pointer(value.type)) {
@@ -8155,6 +8126,57 @@ struct SPIRVGenerator {
             auto ui = cast<UnionType>(value.type);
             value.type = ui->tuple_type;
             return argument_to_value(value);
+        } break;
+        default: {
+        } break;
+        }
+
+        auto it = const_cache.find(value);
+        if (it != const_cache.end()) {
+            return it->second;
+        }
+        auto id = create_spirv_value(value);
+        const_cache.insert({ value, id });
+        return id;
+    }
+
+    spv::Id create_spirv_value(Any value) {
+        switch(value.type->kind()) {
+        case TK_Extern: {
+            auto et = cast<ExternType>(value.type);
+            spv::StorageClass sc = storage_class_from_extern_class(
+                et->storage_class);
+            const char *name = nullptr;
+            spv::BuiltIn builtin = spv::BuiltInMax;
+            switch(value.symbol.value()) {
+            #define T(NAME) \
+            case SYM_SPIRV_BuiltIn ## NAME: \
+                builtin = spv::BuiltIn ## NAME; break;
+                B_SPIRV_BUILTINS()
+            #undef T
+                default:
+                    name = value.symbol.name()->data;
+                    break;
+            }
+            auto ty = type_to_spirv_type(et->type, et->flags);
+            auto id = builder.createVariable(sc, ty, name);
+            if (builtin != spv::BuiltInMax) {
+                builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
+            }
+            switch(sc) {
+            case spv::StorageClassUniform: {
+                builder.addDecoration(id, spv::DecorationDescriptorSet, 0);
+                if (et->index >= 0) {
+                    builder.addDecoration(id, spv::DecorationBinding, et->index);
+                }
+            } break;
+            default: {
+                if (et->index >= 0) {
+                    builder.addDecoration(id, spv::DecorationLocation, et->index);
+                }
+            } break;
+            }
+            return id;
         } break;
         default: break;
         };
@@ -8380,7 +8402,14 @@ struct SPIRVGenerator {
                 READ_VALUE(val); READ_TYPE(ty);
                 spv::Op op = spv::OpMax;
                 switch(enter.builtin.value()) {
-                case FN_Bitcast: op = spv::OpBitcast; break;
+                case FN_Bitcast:
+                    if (builder.getTypeId(val) == ty) {
+                        // do nothing
+                        retvalue = val;
+                    } else {
+                        op = spv::OpBitcast;
+                    }
+                    break;
                 case FN_IntToPtr: op = spv::OpConvertUToPtr; break;
                 case FN_PtrToInt: op = spv::OpConvertPtrToU; break;
                 case FN_SExt: op = spv::OpSConvert; break;
@@ -8394,7 +8423,9 @@ struct SPIRVGenerator {
                 case FN_SIToFP: op = spv::OpConvertSToF; break;
                 default: break;
                 }
-                retvalue = builder.createUnaryOp(op, ty, val);
+                if (op != spv::OpMax) {
+                    retvalue = builder.createUnaryOp(op, ty, val);
+                }
             } break;
             case FN_VolatileLoad:
             case FN_Load: {
@@ -8777,7 +8808,45 @@ struct SPIRVGenerator {
         return false;
     }
 
-    spv::Id create_spirv_type(const Type *type) {
+    spv::Id create_struct_type(const Type *type, uint64_t flags,
+        const TypenameType *tname = nullptr) {
+        // todo: packed tuples
+        auto ti = cast<TupleType>(type);
+        size_t count = ti->types.size();
+        std::vector<spv::Id> members;
+        for (size_t i = 0; i < count; ++i) {
+            members.push_back(type_to_spirv_type(ti->types[i]));
+        }
+        const char *name = "tuple";
+        if (tname) {
+            name = tname->name()->data;
+        }
+        auto id = builder.makeStructType(members, name);
+        if (flags & EF_BufferBlock) {
+            builder.addDecoration(id, spv::DecorationBufferBlock);
+        } else {
+            builder.addDecoration(id, spv::DecorationBlock);
+        }
+        for (size_t i = 0; i < count; ++i) {
+            if (tname) {
+                builder.addMemberName(id, i, tname->field_name(i).name()->data);
+            }
+            if (flags & EF_Volatile) {
+                builder.addMemberDecoration(id, i, spv::DecorationVolatile);
+            } else if (flags & EF_Coherent) {
+                builder.addMemberDecoration(id, i, spv::DecorationCoherent);
+            }
+            if (flags & EF_NonWritable) {
+                builder.addMemberDecoration(id, i, spv::DecorationNonWritable);
+            } else if (flags & EF_NonReadable) {
+                builder.addMemberDecoration(id, i, spv::DecorationNonReadable);
+            }
+            builder.addMemberDecoration(id, i, spv::DecorationOffset, ti->offsets[i]);
+        }
+        return id;
+    }
+
+    spv::Id create_spirv_type(const Type *type, uint64_t flags) {
         switch(type->kind()) {
         case TK_Integer: {
             if (type == TYPE_Bool)
@@ -8791,8 +8860,11 @@ struct SPIRVGenerator {
         } break;
         case TK_Pointer: {
             auto pt = cast<PointerType>(type);
-            return builder.makePointer(spv::StorageClassFunction,
-                type_to_spirv_type(pt->element_type));
+            auto cls = spv::StorageClassFunction;
+            if (pt->storage_class != SYM_Unnamed) {
+                cls = storage_class_from_extern_class(pt->storage_class);
+            }
+            return builder.makePointer(cls, type_to_spirv_type(pt->element_type));
         } break;
         case TK_Array: {
             auto ai = cast<ArrayType>(type);
@@ -8807,18 +8879,7 @@ struct SPIRVGenerator {
                 vi->count);
         } break;
         case TK_Tuple: {
-            // todo: packed tuples
-            auto ti = cast<TupleType>(type);
-            size_t count = ti->types.size();
-            std::vector<spv::Id> members;
-            for (size_t i = 0; i < count; ++i) {
-                members.push_back(type_to_spirv_type(ti->types[i]));
-            }
-            auto id = builder.makeStructType(members, "tuple");
-            for (size_t i = 0; i < count; ++i) {
-                builder.addMemberDecoration(id, i, spv::DecorationOffset, ti->offsets[i]);
-            }
-            return id;
+            return create_struct_type(type, flags);
         } break;
         case TK_Union: {
             auto ui = cast<UnionType>(type);
@@ -8828,7 +8889,7 @@ struct SPIRVGenerator {
             auto et = cast<ExternType>(type);
             spv::StorageClass sc = storage_class_from_extern_class(
                 et->storage_class);
-            auto ty = type_to_spirv_type(et->type);
+            auto ty = type_to_spirv_type(et->type, et->flags);
             return builder.makePointer(sc, ty);
         } break;
         case TK_Image: {
@@ -8853,7 +8914,11 @@ struct SPIRVGenerator {
                 return builder.makeSamplerType();
             auto tn = cast<TypenameType>(type);
             if (tn->finalized()) {
-                return type_to_spirv_type(tn->storage_type);
+                if (tn->storage_type->kind() == TK_Tuple) {
+                    return create_struct_type(tn->storage_type, flags, tn);
+                } else {
+                    return type_to_spirv_type(tn->storage_type, flags);
+                }
             } else {
                 location_error(String::from("IL->SPIR: opaque types are not supported"));
                 return 0;
@@ -8885,11 +8950,11 @@ struct SPIRVGenerator {
         return 0;
     }
 
-    spv::Id type_to_spirv_type(const Type *type) {
-        auto it = type_cache.find(type);
+    spv::Id type_to_spirv_type(const Type *type, uint64_t flags = 0) {
+        auto it = type_cache.find({type, flags});
         if (it == type_cache.end()) {
-            spv::Id result = create_spirv_type(type);
-            type_cache.insert({type, result});
+            spv::Id result = create_spirv_type(type, flags);
+            type_cache.insert({ { type, flags }, result});
             return result;
         } else {
             return it->second;
@@ -9003,6 +9068,7 @@ struct SPIRVGenerator {
         //assert(all_parameters_lowered(entry));
         assert(!entry->is_basic_block_like());
 
+        builder.setSource(spv::SourceLanguageGLSL, 450);
         glsl_ext_inst = builder.import("GLSL.std.450");
 
         auto needfi = Function(TYPE_Void, {}, 0);
@@ -11771,6 +11837,7 @@ struct Solver {
 
     bool builtin_never_folds(Builtin builtin) {
         switch(builtin.value()) {
+        case FN_Bitcast:
         case FN_Unconst:
         case FN_Undef:
         case FN_Alloca:
@@ -11783,6 +11850,7 @@ struct Solver {
         case FN_VolatileLoad:
         case FN_Load:
         case FN_Sample:
+        case FN_GetElementPtr:
         case SFXFN_ExecutionMode:
             return true;
         default: return false;
@@ -11855,7 +11923,7 @@ struct Solver {
             auto T = args[1].value.indirect_type();
             auto et = dyn_cast<ExternType>(T);
             if (et) {
-                RETARGTYPES(MutPointer(et->type));
+                RETARGTYPES(et->pointer_type);
             } else {
                 RETARGTYPES(T);
             }
@@ -11866,7 +11934,13 @@ struct Solver {
             // also, both must be of same category
             args[2].value.verify(TYPE_Type);
             const Type *DestT = args[2].value.typeref;
-            RETARGTYPES(DestT);
+            if (args[1].value.is_const()) {
+                Any result = args[1].value;
+                result.type = DestT;
+                RETARGS(result);
+            } else {
+                RETARGTYPES(DestT);
+            }
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
@@ -12109,48 +12183,101 @@ struct Solver {
             const Type *T = storage_type(args[1].value.indirect_type());
             bool is_extern = (T->kind() == TK_Extern);
             if (is_extern) {
-                T = MutPointer(cast<ExternType>(T)->type);
+                T = cast<ExternType>(T)->pointer_type;
             }
             verify_kind<TK_Pointer>(T);
             auto pi = cast<PointerType>(T);
             T = pi->element_type;
-            verify_integer(storage_type(args[2].value.indirect_type()));
-            for (size_t i = 3; i < args.size(); ++i) {
-
-                const Type *ST = storage_type(T);
-                auto &&arg = args[i];
-                switch(ST->kind()) {
-                case TK_Array: {
-                    auto ai = cast<ArrayType>(ST);
-                    T = ai->element_type;
-                    verify_integer(storage_type(arg.value.indirect_type()));
-                } break;
-                case TK_Tuple: {
-                    auto ti = cast<TupleType>(ST);
-                    size_t idx = 0;
-                    if ((T->kind() == TK_Typename) && (arg.value.type == TYPE_Symbol)) {
-                        idx = cast<TypenameType>(T)->field_index(arg.value.symbol);
-                        if (idx == (size_t)-1) {
-                            StyledString ss;
-                            ss.out << "no such field " << arg.value.symbol << " in typename " << T;
-                            location_error(ss.str());
-                        }
-                        // rewrite field
-                        arg = KeyAny(arg.key, Any((int)idx));
-                    } else {
-                        idx = cast_number<size_t>(arg.value);
+            bool all_const = args[1].value.is_const();
+            if (all_const) {
+                for (size_t i = 2; i < args.size(); ++i) {
+                    if (!args[i].value.is_const()) {
+                        all_const = false;
+                        break;
                     }
-                    T = ti->type_at_index(idx);
-                } break;
-                default: {
-                    StyledString ss;
-                    ss.out << "can not get element pointer from type " << T;
-                    location_error(ss.str());
-                } break;
                 }
             }
-            T = Pointer(T, pi->flags);
-            RETARGTYPES(T);
+            if (!is_extern && all_const) {
+                void *ptr = args[1].value.pointer;
+                size_t idx = cast_number<size_t>(args[2].value);
+                ptr = pi->getelementptr(ptr, idx);
+
+                for (size_t i = 3; i < args.size(); ++i) {
+                    const Type *ST = storage_type(T);
+                    auto &&arg = args[i].value;
+                    switch(ST->kind()) {
+                    case TK_Array: {
+                        auto ai = cast<ArrayType>(ST);
+                        T = ai->element_type;
+                        size_t idx = cast_number<size_t>(arg);
+                        ptr = ai->getelementptr(ptr, idx);
+                    } break;
+                    case TK_Tuple: {
+                        auto ti = cast<TupleType>(ST);
+                        size_t idx = 0;
+                        if ((T->kind() == TK_Typename) && (arg.type == TYPE_Symbol)) {
+                            idx = cast<TypenameType>(T)->field_index(arg.symbol);
+                            if (idx == (size_t)-1) {
+                                StyledString ss;
+                                ss.out << "no such field " << arg.symbol << " in typename " << T;
+                                location_error(ss.str());
+                            }
+                            // rewrite field
+                            arg = (int)idx;
+                        } else {
+                            idx = cast_number<size_t>(arg);
+                        }
+                        T = ti->type_at_index(idx);
+                        ptr = ti->getelementptr(ptr, idx);
+                    } break;
+                    default: {
+                        StyledString ss;
+                        ss.out << "can not get element pointer from type " << T;
+                        location_error(ss.str());
+                    } break;
+                    }
+                }
+                T = Pointer(T, pi->flags, pi->storage_class);
+                RETARGS(Any::from_pointer(T, ptr));
+            } else {
+                verify_integer(storage_type(args[2].value.indirect_type()));
+                for (size_t i = 3; i < args.size(); ++i) {
+
+                    const Type *ST = storage_type(T);
+                    auto &&arg = args[i];
+                    switch(ST->kind()) {
+                    case TK_Array: {
+                        auto ai = cast<ArrayType>(ST);
+                        T = ai->element_type;
+                        verify_integer(storage_type(arg.value.indirect_type()));
+                    } break;
+                    case TK_Tuple: {
+                        auto ti = cast<TupleType>(ST);
+                        size_t idx = 0;
+                        if ((T->kind() == TK_Typename) && (arg.value.type == TYPE_Symbol)) {
+                            idx = cast<TypenameType>(T)->field_index(arg.value.symbol);
+                            if (idx == (size_t)-1) {
+                                StyledString ss;
+                                ss.out << "no such field " << arg.value.symbol << " in typename " << T;
+                                location_error(ss.str());
+                            }
+                            // rewrite field
+                            arg = KeyAny(arg.key, Any((int)idx));
+                        } else {
+                            idx = cast_number<size_t>(arg.value);
+                        }
+                        T = ti->type_at_index(idx);
+                    } break;
+                    default: {
+                        StyledString ss;
+                        ss.out << "can not get element pointer from type " << T;
+                        location_error(ss.str());
+                    } break;
+                    }
+                }
+                T = Pointer(T, pi->flags, pi->storage_class);
+                RETARGTYPES(T);
+            }
         } break;
         case FN_VolatileLoad:
         case FN_Load: {
@@ -12262,8 +12389,8 @@ struct Solver {
 
     static void print_traceback_entry(Label *l) {
         StyledStream ss(std::cerr);
-        if (l->is_basic_block_like())
-            return;
+        //if (l->is_basic_block_like())
+        //    return;
         ss << l->body.anchor << " in ";
         if (l->name == SYM_Unnamed) {
             if (l->is_basic_block_like()) {
@@ -12620,16 +12747,6 @@ struct Solver {
                 RETARGS(args[3]);
             }
         } break;
-        case FN_Bitcast: {
-            CHECKARGS(2, 2);
-            // todo: verify source and dest type are non-aggregate
-            // also, both must be of same category
-            args[2].value.verify(TYPE_Type);
-            const Type *DestT = args[2].value.typeref;
-            Any result = args[1].value;
-            result.type = DestT;
-            RETARGS(result);
-        } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);
             verify_integer(storage_type(args[1].value.type));
@@ -12934,54 +13051,6 @@ struct Solver {
             memcpy(destptr, srcptr, size_of(ET));
             RETARGS();
         } break;*/
-        case FN_GetElementPtr: {
-            CHECKARGS(2, -1);
-            const Type *T = storage_type(args[1].value.type);
-            verify_kind<TK_Pointer>(T);
-            auto pi = cast<PointerType>(T);
-            T = pi->element_type;
-            void *ptr = args[1].value.pointer;
-            size_t idx = cast_number<size_t>(args[2].value);
-            ptr = pi->getelementptr(ptr, idx);
-
-            for (size_t i = 3; i < args.size(); ++i) {
-                const Type *ST = storage_type(T);
-                auto &&arg = args[i].value;
-                switch(ST->kind()) {
-                case TK_Array: {
-                    auto ai = cast<ArrayType>(ST);
-                    T = ai->element_type;
-                    size_t idx = cast_number<size_t>(arg);
-                    ptr = ai->getelementptr(ptr, idx);
-                } break;
-                case TK_Tuple: {
-                    auto ti = cast<TupleType>(ST);
-                    size_t idx = 0;
-                    if ((T->kind() == TK_Typename) && (arg.type == TYPE_Symbol)) {
-                        idx = cast<TypenameType>(T)->field_index(arg.symbol);
-                        if (idx == (size_t)-1) {
-                            StyledString ss;
-                            ss.out << "no such field " << arg.symbol << " in typename " << T;
-                            location_error(ss.str());
-                        }
-                        // rewrite field
-                        arg = (int)idx;
-                    } else {
-                        idx = cast_number<size_t>(arg);
-                    }
-                    T = ti->type_at_index(idx);
-                    ptr = ti->getelementptr(ptr, idx);
-                } break;
-                default: {
-                    StyledString ss;
-                    ss.out << "can not get element pointer from type " << T;
-                    location_error(ss.str());
-                } break;
-                }
-            }
-            T = Pointer(T, pi->flags);
-            RETARGS(Any::from_pointer(T, ptr));
-        } break;
         case FN_AnyExtract: {
             CHECKARGS(1, 1);
             args[1].value.verify(TYPE_Any);
@@ -15078,7 +15147,7 @@ static const Type *f_elementtype(const Type *T, int i) {
     case TK_Tuple: return cast<TupleType>(T)->type_at_index(i);
     case TK_Union: return cast<UnionType>(T)->type_at_index(i);
     case TK_Function:  return cast<FunctionType>(T)->type_at_index(i);
-    case TK_Extern: return cast<ExternType>(T)->type;
+    case TK_Extern: return cast<ExternType>(T)->pointer_type;
     default: {
         StyledString ss;
         ss.out << "type " << T << " has no elements" << std::endl;
