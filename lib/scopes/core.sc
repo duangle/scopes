@@ -905,13 +905,27 @@ syntax-extend
     #set-type-symbol! real 'apply-type
         fn (cls ...)
             real-type ...
+    set-type-symbol! pointer 'set-element-type
+        fn (cls ET)
+            pointer-type-set-element-type cls ET
+    set-type-symbol! pointer 'immutable
+        fn (cls ET)
+            pointer-type-set-flags cls
+                bor (pointer-type-flags cls) pointer-flag-non-writable
+    set-type-symbol! pointer 'readable?
+        fn (cls)
+            ((pointer-type-flags cls) & pointer-flag-non-readable) == 0:u64
+    set-type-symbol! pointer 'writable?
+        fn (cls)
+            ((pointer-type-flags cls) & pointer-flag-non-writable) == 0:u64
     set-type-symbol! pointer 'apply-type
         fn (cls T opt)
-            let ptypefunc =
-                if (none? opt) pointer-type
+            let flags =
+                if (none? opt)
+                    pointer-flag-non-writable
                 else
                     assert-typeof opt Symbol
-                    if (icmp== opt 'mutable) mutable-pointer-type
+                    if (icmp== opt 'mutable) 0:u64
                     else
                         compiler-error! "invalid option passed to pointer type constructor"
             if (none? T)
@@ -920,7 +934,7 @@ syntax-extend
                 else
                     nullof cls
             else
-                ptypefunc T
+                pointer-type T flags unnamed
     set-type-symbol! array 'apply-type
         fn (cls ...)
             array-type ...
@@ -1749,15 +1763,7 @@ do
     set-type-symbol! reference 'apply-type
         fn "reference-apply-type" (cls element)
             if (type== cls reference)
-                # due to auto-memoization, we'll always get the same type back
-                    provided the element type is a constant
-                assert (constant? element)
-                assert-typeof element type
-                if (element <: reference)
-                    compiler-error!
-                        .. "cannot create reference type of reference type "
-                            repr element
-                make-reference-type (mutable-pointer-type element)
+                compiler-error! "reference constructor deleted; use 'from-pointer-type"
             else
                 let ET = (storageof cls)
                 bitcast (imply element ET) cls
@@ -1768,6 +1774,15 @@ define-block-scope-macro var
         if (T <: reference)
             element-type (storageof T) 0
         else T
+    fn make-reference (dest value)
+        let T = (typeof value)
+        let PT =
+            if (T <: reference)
+                storageof T
+            else (pointer T 'mutable)
+        let ref = (('from-pointer-type reference PT) dest)
+        = ref value
+        ref
 
     let args = (list-next expr)
     let name token rest = (decons args 2)
@@ -1775,14 +1790,10 @@ define-block-scope-macro var
     if (token == '=)
         let value rest = (decons rest)
         let tmp = (Parameter 'tmp)
-        let T = (Parameter 'T)
         return
             cons
                 list let tmp '= value
-                list let T '= (list element-typeof tmp)
-                list let name '= (list (list reference T) (list alloca T))
-                #list let name '= (list alloca T)
-                list (do =) name tmp
+                list let name '= (list make-reference (list alloca (list element-typeof tmp)) tmp)
                 next-expr
             syntax-scope
     elseif (token == '@)
@@ -1808,17 +1819,24 @@ define-macro global
         if (T <: reference)
             element-type (storageof T) 0
         else T
+    fn make-reference (dest value)
+        let T = (typeof value)
+        let PT =
+            if (T <: reference)
+                storageof T
+            else (pointer T 'mutable)
+        let ref = (('from-pointer-type reference PT) dest)
+        = ref value
+        ref
+
     let name token rest = (decons args 2)
     let token = (token as Syntax as Symbol)
     if (token == '=)
         let value rest = (decons rest)
         let tmp = (Parameter 'tmp)
-        let T = (Parameter 'T)
         list define name
             list let tmp '= value
-            list let T '= (list element-typeof tmp)
-            list let name '= (list (list reference T) (list malloc T))
-            list (do =) name tmp
+            list let name '= (list make-reference (list malloc (list element-typeof tmp)) tmp)
             # wrapping this prevents a crash on windows.
                 right now, no idea what causes this, difficult to debug.
             list do name
@@ -2271,7 +2289,7 @@ typefn pointer 'as (self destT)
         load self
 # also supports mutable pointer safecast to immutable pointer
 typefn pointer 'imply (self destT)
-    if (type== destT (pointer-type (element-type (typeof self) 0)))
+    if (type== destT ('immutable (typeof self)))
         bitcast self destT
 
 # support getattr syntax
@@ -2417,13 +2435,11 @@ typefn CUnion 'getattr& (self name)
     let idx = (typename-field-index ET name)
     if (icmp>=s idx 0)
         let FT = (element-type ET idx)
+        let newPT =
+            'set-element-type (typeof self) FT
         # cast pointer to reference to alternative type
-        (reference FT)
-            bitcast self
-                if (mutable? (typeof self))
-                    pointer FT 'mutable
-                else
-                    pointer FT
+        ('from-pointer-type reference newPT)
+            bitcast self newPT
 
 # extern call attempts to cast arguments to correct type
 typefn extern 'call (self ...)
@@ -2634,8 +2650,8 @@ typefn array '@ (self at)
 
 typefn array '@& (self at)
     let val = (at as integer)
-    let ET = (element-type (element-type (typeof self) 0) 0)
-    (reference ET) (getelementptr self 0 val)
+    let newptr = (getelementptr self 0 val)
+    ('from-pointer-type reference (typeof newptr)) newptr
 
 fn arrayof (T ...)
     let count = (va-countof ...)

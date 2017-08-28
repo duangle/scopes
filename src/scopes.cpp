@@ -916,7 +916,11 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ParameterIndex, "Parameter-index") \
     T(FN_ParseC, "parse-c") T(FN_PointerOf, "pointerof") \
     T(FN_PointerType, "pointer-type") \
-    T(FN_MutablePointerType, "mutable-pointer-type") \
+    T(FN_PointerFlags, "pointer-type-flags") \
+    T(FN_PointerSetFlags, "pointer-type-set-flags") \
+    T(FN_PointerStorageClass, "pointer-type-storage-class") \
+    T(FN_PointerSetStorageClass, "pointer-type-set-storage-class") \
+    T(FN_PointerSetElementType, "pointer-type-set-element-type") \
     T(FN_FunctionType, "function-type") \
     T(FN_FunctionTypeIsVariadic, "function-type-variadic?") \
     T(FN_TupleType, "tuple-type") \
@@ -2574,7 +2578,8 @@ static auto Real = memoize(_Real);
 //------------------------------------------------------------------------------
 
 enum PointerTypeFlags {
-    PTF_Mutable = (1 << 0),
+    PTF_NonWritable = (1 << 1),
+    PTF_NonReadable = (1 << 2),
 };
 
 struct PointerType : Type {
@@ -2595,10 +2600,12 @@ struct PointerType : Type {
         } else {
             ss << element_type->name()->data;
         }
-        if (is_mutable()) {
+        if (is_writable() && is_readable()) {
             ss << "*";
-        } else {
+        } else if (is_readable()) {
             ss << "(*)";
+        } else {
+            ss << "*!";
         }
         _name = String::from_stdstring(ss.str());
     }
@@ -2615,8 +2622,12 @@ struct PointerType : Type {
         return sizeof(uint64_t);
     }
 
-    bool is_mutable() const {
-        return flags & PTF_Mutable;
+    bool is_readable() const {
+        return !(flags & PTF_NonReadable);
+    }
+
+    bool is_writable() const {
+        return !(flags & PTF_NonWritable);
     }
 
     const Type *element_type;
@@ -2624,16 +2635,19 @@ struct PointerType : Type {
     Symbol storage_class;
 };
 
-static const Type *Pointer(const Type *element_type, uint64_t flags = 0,
-    Symbol storage_class = SYM_Unnamed) {
+static const Type *Pointer(const Type *element_type, uint64_t flags,
+    Symbol storage_class) {
     static TypeFactory<PointerType> pointers;
     assert(element_type->kind() != TK_ReturnLabel);
     return pointers.insert(element_type, flags, storage_class);
 }
 
-static const Type *MutPointer(const Type *element_type,
-    Symbol storage_class = SYM_Unnamed) {
-    return Pointer(element_type, PTF_Mutable, storage_class);
+static const Type *NativeROPointer(const Type *element_type) {
+    return Pointer(element_type, PTF_NonWritable, SYM_Unnamed);
+}
+
+static const Type *NativePointer(const Type *element_type) {
+    return Pointer(element_type, 0, SYM_Unnamed);
 }
 
 //------------------------------------------------------------------------------
@@ -2923,7 +2937,12 @@ struct ExternType : Type {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
-        pointer_type = MutPointer(type, storage_class);
+        size_t ptrflags = 0;
+        if (flags & EF_NonWritable)
+            ptrflags |= PTF_NonWritable;
+        else if (flags & EF_NonReadable)
+            ptrflags |= PTF_NonReadable;
+        pointer_type = Pointer(type, ptrflags, storage_class);
     }
 
     const Type *type;
@@ -3169,16 +3188,12 @@ struct TypenameType : Type {
 
     TypenameType(const String *name)
         : Type(TK_Typename), storage_type(nullptr), super_type(nullptr) {
-        auto ss = StyledString::plain();
-        name->stream(ss.out, " *");
-        const String *newstr = ss.str();
-
-        auto newname = Symbol(newstr);
+        auto newname = Symbol(name);
         size_t idx = 2;
         while (used_names.count(newname)) {
             // keep testing until we hit a name that's free
             auto ss = StyledString::plain();
-            ss.out << newstr->data << "$" << idx++;
+            ss.out << name->data << "$" << idx++;
             newname = Symbol(ss.str());
         }
         used_names.insert(newname);
@@ -6953,8 +6968,8 @@ public:
 
     uint64_t PointerFlags(clang::QualType T) {
         uint64_t flags = 0;
-        if (!always_immutable(T))
-            flags |= PTF_Mutable;
+        if (always_immutable(T))
+            flags |= PTF_NonWritable;
         return flags;
     }
 
@@ -7066,7 +7081,7 @@ public:
             const clang::LValueReferenceType *PTy =
                 cast<clang::LValueReferenceType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            return Pointer(TranslateType(ETy));
+            return Pointer(TranslateType(ETy), PointerFlags(ETy), SYM_Unnamed);
         } break;
         case clang::Type::RValueReference:
             break;
@@ -7077,14 +7092,14 @@ public:
         case clang::Type::Pointer: {
             const clang::PointerType *PTy = cast<clang::PointerType>(Ty);
             QualType ETy = PTy->getPointeeType();
-            return Pointer(TranslateType(ETy), PointerFlags(ETy));
+            return Pointer(TranslateType(ETy), PointerFlags(ETy), SYM_Unnamed);
         } break;
         case clang::Type::VariableArray:
             break;
         case clang::Type::IncompleteArray: {
             const IncompleteArrayType *ATy = cast<IncompleteArrayType>(Ty);
             QualType ETy = ATy->getElementType();
-            return Pointer(TranslateType(ETy), PointerFlags(ETy));
+            return Pointer(TranslateType(ETy), PointerFlags(ETy), SYM_Unnamed);
         } break;
         case clang::Type::ConstantArray: {
             const ConstantArrayType *ATy = cast<ConstantArrayType>(Ty);
@@ -9537,7 +9552,7 @@ struct LLVMIRGenerator {
             for (size_t i = 0; i < count; ++i) {
                 auto AT = fi->argument_types[i];
                 if (is_memory_class(AT)) {
-                    AT = Pointer(AT);
+                    AT = Pointer(AT, PTF_NonWritable, SYM_Unnamed);
                 }
                 elements[i + offset] = _type_to_llvm_type(AT);
             }
@@ -10649,7 +10664,8 @@ static Any compile(Label *fn, uint64_t flags) {
 #endif
 
     fn->verify_compilable();
-    const Type *functype = Pointer(fn->get_function_type());
+    const Type *functype = Pointer(
+        fn->get_function_type(), PTF_NonWritable, SYM_Unnamed);
 
     LLVMIRGenerator ctx;
     if (flags & CF_NoDebugInfo) {
@@ -11857,12 +11873,22 @@ struct Solver {
         }
     }
 
-    void verify_mutable(const Type *T) {
+    void verify_readable(const Type *T) {
         auto pi = cast<PointerType>(T);
-        if (!pi->is_mutable()) {
+        if (!pi->is_readable()) {
+            StyledString ss;
+            ss.out << "can not load value from address of type " << T
+                << " because the target is non-readable";
+            location_error(ss.str());
+        }
+    }
+
+    void verify_writable(const Type *T) {
+        auto pi = cast<PointerType>(T);
+        if (!pi->is_writable()) {
             StyledString ss;
             ss.out << "can not store value at address of type " << T
-                << " because the target is immutable";
+                << " because the target is non-writable";
             location_error(ss.str());
         }
     }
@@ -12158,24 +12184,24 @@ struct Solver {
         case FN_Alloca: {
             CHECKARGS(1, 1);
             args[1].value.verify(TYPE_Type);
-            RETARGTYPES(Pointer(args[1].value.typeref, PTF_Mutable));
+            RETARGTYPES(NativePointer(args[1].value.typeref));
         } break;
         case FN_AllocaOf: {
             CHECKARGS(1, 1);
-            RETARGTYPES(Pointer(args[1].value.indirect_type(), PTF_Mutable));
+            RETARGTYPES(NativeROPointer(args[1].value.indirect_type()));
         } break;
         case FN_MallocArray:
         case FN_AllocaArray: {
             CHECKARGS(2, 2);
             args[1].value.verify(TYPE_Type);
             verify_integer(storage_type(args[2].value.indirect_type()));
-            RETARGTYPES(Pointer(args[1].value.typeref, PTF_Mutable));
+            RETARGTYPES(NativePointer(args[1].value.typeref));
         } break;
         case FN_Free: {
             CHECKARGS(1, 1);
             const Type *T = args[1].value.indirect_type();
             verify_kind<TK_Pointer>(T);
-            verify_mutable(T);
+            verify_writable(T);
             RETARGTYPES();
         } break;
         case FN_GetElementPtr: {
@@ -12285,12 +12311,13 @@ struct Solver {
             const Type *T = storage_type(args[1].value.indirect_type());
             bool is_extern = (T->kind() == TK_Extern);
             if (is_extern) {
-                T = MutPointer(cast<ExternType>(T)->type);
+                T = cast<ExternType>(T)->pointer_type;
             }
             verify_kind<TK_Pointer>(T);
+            verify_readable(T);
             auto pi = cast<PointerType>(T);
             if (!is_extern && args[1].value.is_const()
-                && !pi->is_mutable()) {
+                && !pi->is_writable()) {
                 RETARGS(pi->unpack(args[1].value.pointer));
                 return true;
             } else {
@@ -12303,10 +12330,10 @@ struct Solver {
             const Type *T = storage_type(args[2].value.indirect_type());
             bool is_extern = (T->kind() == TK_Extern);
             if (is_extern) {
-                T = MutPointer(cast<ExternType>(T)->type);
+                T = cast<ExternType>(T)->pointer_type;
             }
             verify_kind<TK_Pointer>(T);
-            verify_mutable(T);
+            verify_writable(T);
             auto pi = cast<PointerType>(T);
             verify(storage_type(pi->element_type),
                 storage_type(args[1].value.indirect_type()));
@@ -12498,7 +12525,7 @@ struct Solver {
             void *src = get_pointer(T, args[1].value);
             void *dst = malloc(size_of(T));
             memcpy(dst, src, size_of(T));
-            RETARGS(Any::from_pointer(Pointer(T), dst));
+            RETARGS(Any::from_pointer(NativeROPointer(T), dst));
         } break;
         case FN_NullOf: {
             CHECKARGS(1, 1);
@@ -13037,20 +13064,6 @@ struct Solver {
             memcpy(offsetptr, srcptr, size_of(ET));
             RETARGS(Any::from_pointer(args[1].value.type, destptr));
         } break;
-        /*
-        case FN_VolatileStore:
-        case FN_Store: {
-            CHECKARGS(2, 2);
-            const Type *T = storage_type(args[2].value.type);
-            verify_kind<TK_Pointer>(T);
-            auto pi = cast<PointerType>(T);
-            verify(storage_type(pi->element_type), storage_type(args[1].value.type));
-            void *destptr = args[2].value.pointer;
-            auto ET = args[1].value.type;
-            void *srcptr = get_pointer(ET, args[1].value);
-            memcpy(destptr, srcptr, size_of(ET));
-            RETARGS();
-        } break;*/
         case FN_AnyExtract: {
             CHECKARGS(1, 1);
             args[1].value.verify(TYPE_Any);
@@ -13071,7 +13084,8 @@ struct Solver {
                 RETARGS(args[1]);
             } else {
                 arg.type = Pointer(Function(
-                    fi->return_type, fi->argument_types, fi->flags | FF_Pure));
+                    fi->return_type, fi->argument_types, fi->flags | FF_Pure),
+                    pi->flags, pi->storage_class);
                 RETARGS(arg);
             }
         } break;
@@ -14077,7 +14091,7 @@ struct Expander {
         list_expander_func_type(nullptr) {
         list_expander_func_type = Pointer(Function(
             ReturnLabel({unknown_of(TYPE_List), unknown_of(TYPE_Scope)}),
-            {TYPE_List, TYPE_Scope}));
+            {TYPE_List, TYPE_Scope}), PTF_NonWritable, SYM_Unnamed);
     }
 
     ~Expander() {}
@@ -14942,13 +14956,13 @@ static Label *expand_module(Any expr, Scope *scope) {
         auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
         auto ET = Tuple({ __VA_ARGS__ }); \
         assert(sizeof(CT) == size_of(ET)); \
-        tn->finalize(Pointer(ET)); \
+        tn->finalize(NativeROPointer(ET)); \
     }
 
 #define DEFINE_OPAQUE_HANDLE_TYPE(NAME, CT, T) { \
         T = Typename(String::from(NAME)); \
         auto tn = cast<TypenameType>(const_cast<Type *>(T)); \
-        tn->finalize(Pointer(Typename(String::from("_" NAME)))); \
+        tn->finalize(NativeROPointer(Typename(String::from("_" NAME)))); \
     }
 
 static void init_types() {
@@ -14997,7 +15011,7 @@ static void init_types() {
 
     TYPE_Type = Typename(String::from("type"));
     TYPE_Unknown = Typename(String::from("Unknown"));
-    const Type *_TypePtr = Pointer(Typename(String::from("_type")));
+    const Type *_TypePtr = NativeROPointer(Typename(String::from("_type")));
     cast<TypenameType>(const_cast<Type *>(TYPE_Type))->finalize(_TypePtr);
     cast<TypenameType>(const_cast<Type *>(TYPE_Unknown))->finalize(_TypePtr);
 
@@ -15019,7 +15033,7 @@ static void init_types() {
     DEFINE_OPAQUE_HANDLE_TYPE("Closure", Closure, TYPE_Closure);
 
     DEFINE_STRUCT_HANDLE_TYPE("Anchor", Anchor, TYPE_Anchor,
-        Pointer(TYPE_SourceFile),
+        NativeROPointer(TYPE_SourceFile),
         TYPE_I32,
         TYPE_I32,
         TYPE_I32
@@ -15030,12 +15044,13 @@ static void init_types() {
 
         const Type *cellT = Typename(String::from("_list"));
         auto tn = cast<TypenameType>(const_cast<Type *>(cellT));
-        auto ET = Tuple({ TYPE_Any, Pointer(cellT), TYPE_USize });
+        auto ET = Tuple({ TYPE_Any,
+            NativeROPointer(cellT), TYPE_USize });
         assert(sizeof(List) == size_of(ET));
         tn->finalize(ET);
 
         cast<TypenameType>(const_cast<Type *>(TYPE_List))
-            ->finalize(Pointer(cellT));
+            ->finalize(NativeROPointer(cellT));
     }
 
     DEFINE_STRUCT_HANDLE_TYPE("Syntax", Syntax, TYPE_Syntax,
@@ -15157,17 +15172,36 @@ static const Type *f_elementtype(const Type *T, int i) {
     return nullptr;
 }
 
-static const Type *f_pointertype(const Type *T) {
-    return Pointer(T);
+static const Type *f_pointertype(const Type *T, uint64_t flags, Symbol storage_class) {
+    return Pointer(T, flags, storage_class);
 }
 
-static const Type *f_mutpointertype(const Type *T) {
-    return Pointer(T, PTF_Mutable);
-}
-
-static bool f_is_mutable(const Type *T) {
+static uint64_t f_pointer_type_flags(const Type *T) {
     verify_kind<TK_Pointer>(T);
-    return cast<PointerType>(T)->is_mutable();
+    return cast<PointerType>(T)->flags;
+}
+
+static const Type *f_pointer_type_set_flags(const Type *T, uint64_t flags) {
+    verify_kind<TK_Pointer>(T);
+    auto pt = cast<PointerType>(T);
+    return Pointer(pt->element_type, flags, pt->storage_class);
+}
+
+static const Symbol f_pointer_type_storage_class(const Type *T) {
+    verify_kind<TK_Pointer>(T);
+    return cast<PointerType>(T)->storage_class;
+}
+
+static const Type *f_pointer_type_set_storage_class(const Type *T, Symbol storage_class) {
+    verify_kind<TK_Pointer>(T);
+    auto pt = cast<PointerType>(T);
+    return Pointer(pt->element_type, pt->flags, storage_class);
+}
+
+static const Type *f_pointer_type_set_element_type(const Type *T, const Type *ET) {
+    verify_kind<TK_Pointer>(T);
+    auto pt = cast<PointerType>(T);
+    return Pointer(ET, pt->flags, pt->storage_class);
 }
 
 static const List *f_list_cons(Any at, const List *next) {
@@ -15569,16 +15603,16 @@ static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
     globals->bind(SYMBOL, \
-        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ })), \
-            (void *)FUNC));
+        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }), \
+            PTF_NonWritable, SYM_Unnamed), (void *)FUNC));
 #define DEFINE_C_VARARG_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
     globals->bind(SYMBOL, \
-        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Variadic)), \
-            (void *)FUNC));
+        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Variadic), \
+            PTF_NonWritable, SYM_Unnamed), (void *)FUNC));
 #define DEFINE_PURE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
     globals->bind(SYMBOL, \
-        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Pure)), \
-            (void *)FUNC));
+        Any::from_pointer(Pointer(Function(RETTYPE, { __VA_ARGS__ }, FF_Pure), \
+            PTF_NonWritable, SYM_Unnamed), (void *)FUNC));
 
     //const Type *rawstring = Pointer(TYPE_I8);
 
@@ -15590,9 +15624,12 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
     DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_USize, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_PointerType, f_pointertype, TYPE_Type, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_MutablePointerType, f_mutpointertype, TYPE_Type, TYPE_Type);
-    DEFINE_PURE_C_FUNCTION(FN_IsMutable, f_is_mutable, TYPE_Bool, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_PointerType, f_pointertype, TYPE_Type, TYPE_Type, TYPE_U64, TYPE_Symbol);
+    DEFINE_PURE_C_FUNCTION(FN_PointerFlags, f_pointer_type_flags, TYPE_U64, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_PointerSetFlags, f_pointer_type_set_flags, TYPE_Type, TYPE_Type, TYPE_U64);
+    DEFINE_PURE_C_FUNCTION(FN_PointerStorageClass, f_pointer_type_storage_class, TYPE_Symbol, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_PointerSetStorageClass, f_pointer_type_set_storage_class, TYPE_Type, TYPE_Type, TYPE_Symbol);
+    DEFINE_PURE_C_FUNCTION(FN_PointerSetElementType, f_pointer_type_set_element_type, TYPE_Type, TYPE_Type, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_ListCons, f_list_cons, TYPE_List, TYPE_Any, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_TypeKind, f_type_kind, TYPE_I32, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_BitCountOf, f_bitcountof, TYPE_I32, TYPE_Type);
@@ -15607,10 +15644,10 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_SyntaxStrip, strip_syntax, TYPE_Any, TYPE_Any);
     DEFINE_PURE_C_FUNCTION(FN_ParameterNew, f_parameter_new, TYPE_Parameter, TYPE_Anchor, TYPE_Symbol, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_ParameterIndex, f_parameter_index, TYPE_I32, TYPE_Parameter);
-    DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, Pointer(TYPE_I8), TYPE_USize);
+    DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, NativeROPointer(TYPE_I8), TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
-    DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, Pointer(TYPE_Type));
+    DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, NativeROPointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_ImageType, Image, TYPE_Type,
         TYPE_Type, TYPE_Symbol, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_I32, TYPE_Symbol, TYPE_Symbol);
@@ -15665,16 +15702,16 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(SFXFN_Raise, f_raise, TYPE_Void, TYPE_Any);
     DEFINE_C_FUNCTION(SFXFN_Abort, f_abort, TYPE_Void);
     DEFINE_C_FUNCTION(FN_Exit, f_exit, TYPE_Void, TYPE_I32);
-    //DEFINE_C_FUNCTION(FN_Malloc, malloc, Pointer(TYPE_I8), TYPE_USize);
+    //DEFINE_C_FUNCTION(FN_Malloc, malloc, NativePointer(TYPE_I8), TYPE_USize);
 
     const Type *exception_pad_type = Array(TYPE_U8, sizeof(ExceptionPad));
-    const Type *p_exception_pad_type = MutPointer(exception_pad_type);
+    const Type *p_exception_pad_type = NativePointer(exception_pad_type);
 
     DEFINE_C_FUNCTION(Symbol("set-exception-pad"), f_set_exception_pad,
         p_exception_pad_type, p_exception_pad_type);
     #if SCOPES_WIN32
     DEFINE_C_FUNCTION(Symbol("catch-exception"), _setjmpex, TYPE_I32,
-        p_exception_pad_type, Pointer(TYPE_I8));
+        p_exception_pad_type, NativeROPointer(TYPE_I8));
     #else
     DEFINE_C_FUNCTION(Symbol("catch-exception"), setjmp, TYPE_I32,
         p_exception_pad_type);
@@ -15745,6 +15782,9 @@ B_TYPES()
     globals->bind(Symbol(BNAME), (int32_t)NAME);
     B_TYPE_KIND()
 #undef T
+
+    globals->bind(Symbol("pointer-flag-non-readable"), (uint64_t)PTF_NonReadable);
+    globals->bind(Symbol("pointer-flag-non-writable"), (uint64_t)PTF_NonWritable);
 
     globals->bind(Symbol(SYM_DumpDisassembly), (uint64_t)CF_DumpDisassembly);
     globals->bind(Symbol(SYM_DumpModule), (uint64_t)CF_DumpModule);
