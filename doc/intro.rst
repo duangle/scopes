@@ -24,14 +24,16 @@ Scopes only supports the mingw64 toolchain for the foreseeable future.
   ``mingw64/mingw-w64-x86_64-libffi``, ``mingw64/mingw-w64-x86_64-cmake``
   and ``make``.
 * Nice to have: ``mingw-w64-x86_64-gdb``
-* You also need a github checkout of
-  `SPIRV-Tools <https://github.com/KhronosGroup/SPIRV-Tools>`_ (into the workspace folder).
+* You also need github checkouts of
+  `SPIRV-Tools <https://github.com/KhronosGroup/SPIRV-Tools>`_ and
+  `SPIRV-Cross <https://github.com/KhronosGroup/SPIRV-Cross>`_ (into the workspace folder).
 * Lastly, you need a build of `GENie <https://github.com/bkaradzic/GENie>`_ (binaries
   available on the page).
 * Check SPIRV-Tools build instructions to verify that its dependency on SPIRV headers
   is satisfied. Build SPIRV-Tools using
   ``mkdir build && cd build && cmake .. -G "MSYS Makefiles" -DCMAKE_BUILD_TYPE=Release && make``
   in ``scopes-repo/SPIRV-Tools``.
+* SPIRV-Cross does not have to be built.
 * In the base directory, run ``genie gmake`` once to generate the project Makefiles.
 * To build in debug mode, run ``make -C build``. For release mode, use
   ``make -C build config=release``.
@@ -48,8 +50,9 @@ Building Scopes on Linux
 * Put ``clang++`` and ``llvm-config`` in your path **OR** extract the clang distro into
   the repo folder and rename it to ``clang``.
 * You also need the latest source distributions of
-  `libffi <https://sourceware.org/libffi/>`_ and a github checkout of
-  `SPIRV-Tools <https://github.com/KhronosGroup/SPIRV-Tools>`_ (into the workspace folder).
+  `libffi <https://sourceware.org/libffi/>`_ and github checkouts of
+  `SPIRV-Tools <https://github.com/KhronosGroup/SPIRV-Tools>`_ and
+  `SPIRV-Cross <https://github.com/KhronosGroup/SPIRV-Cross>`_ (into the workspace folder).
 * Lastly, you need a build of `GENie <https://github.com/bkaradzic/GENie>`_ (binaries
   available on the page).
 * Build libffi using ``./configure --enable-shared=no --enable-static=yes && make`` and
@@ -59,6 +62,7 @@ Building Scopes on Linux
   is satisfied. Build SPIRV-Tools using
   ``mkdir build && cd build && cmake .. -DCMAKE_BUILD_TYPE=Release && make``
   in ``scopes-repo/SPIRV-Tools/build``.
+* SPIRV-Cross does not have to be built.
 * In the base directory, run ``genie gmake`` once to generate the project Makefiles.
 * To build in debug mode, run ``make -C build``. For release mode, use
   ``make -C build config=release``.

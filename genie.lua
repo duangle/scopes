@@ -100,15 +100,16 @@ project "scopes"
         "external/glslang/InReadableOrder.cpp",
         "external/glslang/disassemble.cpp",
         "external/glslang/doc.cpp",
-        "external/spirv-cross/spirv_glsl.cpp",
-        "external/spirv-cross/spirv_cross.cpp",
-        "external/spirv-cross/spirv_cfg.cpp",
+        "SPIRV-Cross/spirv_glsl.cpp",
+        "SPIRV-Cross/spirv_cross.cpp",
+        "SPIRV-Cross/spirv_cfg.cpp",
     }
     includedirs {
         "external/linenoise-ng/include",
         "external",
         "libffi/include",
         "SPIRV-Tools/include",
+        "."
     }
     libdirs {
         --"bin",

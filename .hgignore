@@ -15,6 +15,7 @@ syntax: regexp
 
 ^clang
 ^SPIRV-Tools
+^SPIRV-Cross
 ^libffi
 ^scopes$
 ^testing/myscopes$

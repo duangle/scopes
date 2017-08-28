@@ -216,7 +216,7 @@ const char *scopes_compile_time_date();
 #include "glslang/SpvBuilder.h"
 #include "glslang/disassemble.h"
 #include "glslang/GLSL.std.450.h"
-#include "spirv-cross/spirv_glsl.hpp"
+#include "SPIRV-Cross/spirv_glsl.hpp"
 #include "spirv-tools/libspirv.hpp"
 #include "spirv-tools/optimizer.hpp"
 
