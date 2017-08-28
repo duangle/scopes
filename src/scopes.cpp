@@ -5049,7 +5049,7 @@ static StyledStream& operator<<(StyledStream& ost, const List *list) {
 // IL OBJECTS
 //------------------------------------------------------------------------------
 
-// CFF form implemented after
+// IL form inspired by and partially implemented after
 // Leissa et al., Graph-Based Higher-Order Intermediate Representation
 // http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
 
