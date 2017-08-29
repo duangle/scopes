@@ -123,16 +123,16 @@
 				    "match": "(unpack|(tuple|vector|array)of|unknownof|va-(empty\\?|types)|imply|forward-imply|forward-as|xpcall|require-from|char|getattr|(de)?cons|slice|(scope-|block-scope-)?macro|print|min|max|clamp|(tie|cond)-const|repr|(none|symbol|list|empty|type|integer|real|pointer|array|tuple|typename|Symbol|function-pointer)\\?|(integer|real|pointer|function|array|tuple|function-pointer|typename)-type\\?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
-                    "name": "support.function.glsl.scopes",
-				    "match": "(imageLoad|imageStore|(i|u)?image(1D|2D|3D|Cube|2DRect|(1D|2D|Cube)Array|Buffer|2DMS(Array)?))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
-                },
-                {
                     "name": "support.function.sfx.builtin.scopes",
 				    "match": "((set-execution-mode|io-write|set-anchor|set-globals|set-typename(-storage|-super|-fields)|compiler-error|abort|unreachable|set-signal-abort|(set|delete)-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.library.scopes",
 				    "match": "(((syntax-)?error|todo|raise)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "support.function.glsl.scopes",
+				    "match": "(local_size|imageLoad|imageStore|(i|u)?image(1D|2D|3D|Cube|2DRect|(1D|2D|Cube)Array|Buffer|2DMS(Array)?))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},

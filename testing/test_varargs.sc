@@ -26,13 +26,13 @@ fn test-kwva-keys (x y args...)
     assert ((va@ 1 args...) == 2)
     assert ((va@ 2 args...) == 3)
     assert ((va@ 3 args...) == 4)
-    
+
     assert ((va@ 'z args...) == 1)
     assert ((va@ 'w args...) == 4)
     assert (x == 5)
     assert (y == 0)
 
-#test-kwva-keys
+test-kwva-keys
     call
         fn () # pass-through
             return (x = 5) (y = 0) (z = 1) 2 3 (w = 4)

@@ -12380,39 +12380,54 @@ struct Solver {
     enter = args[0].value; \
     args = { none, __VA_ARGS__ };
 
-    static void print_traceback_entry(Label *l) {
-        StyledStream ss(std::cerr);
-        //if (l->is_basic_block_like())
-        //    return;
-        ss << l->body.anchor << " in ";
-        if (l->name == SYM_Unnamed) {
-            if (l->is_basic_block_like()) {
+    static void print_traceback_entry(StyledStream &ss, Label *last_head, Label *last_loc) {
+        assert(last_head);
+        assert(last_loc);
+        ss << last_loc->body.anchor << " in ";
+        if (last_head->name == SYM_Unnamed) {
+            if (last_head->is_basic_block_like()) {
                 ss << "unnamed label";
             } else {
                 ss << "unnamed function";
             }
         } else {
-            ss << l->name.name()->data;
+            ss << last_head->name.name()->data;
         }
         ss << std::endl;
-        l->body.anchor->stream_source_line(ss);
-        //ss << l->body.anchor << " at" << std::endl;
-        //l->body.anchor->stream_source_line(ss);
+        last_loc->body.anchor->stream_source_line(ss);
+    }
+
+    static bool template_was_function(Label *l) {
+        while (l) {
+            if (!l->is_basic_block_like()) {
+                return true;
+            }
+            l = l->original;
+        }
+        return false;
     }
 
     static void print_traceback() {
-        size_t i = traceback.size();
-        while (i-- > 1) {
-            Label *l = traceback[i];
-            /*
-            if (i > 0) {
-                Label *lnext = traceback[i - 1];
-                if ((l->name == SYM_Unnamed) && (lnext->name == SYM_Unnamed)) {
-                    continue;
-                }
-            }*/
-            print_traceback_entry(l);
+        if (traceback.empty()) return;
+        StyledStream ss(std::cerr);
+        ss << "Traceback (most recent call last):" << std::endl;
+
+        size_t sz = traceback.size();
+        size_t lasti = sz - 1;
+        size_t i = 0;
+        Label *l = traceback[lasti - i];
+        Label *last_head = l;
+        Label *last_loc = l;
+        i++;
+        while (i < sz) {
+            l = traceback[lasti - i++];
+            if (template_was_function(l)) {
+                print_traceback_entry(ss, last_head, last_loc);
+                last_head = l;
+            }
+            last_loc = l;
         }
+        print_traceback_entry(ss, last_head, last_loc);
     }
 
     void fold_callable_call(Label *l) {
