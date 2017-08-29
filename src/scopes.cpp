@@ -76,6 +76,15 @@ BEWARE: If you build this with anything else but a recent enough clang,
 #   endif
 #endif
 
+// maximum size of process stack
+#ifdef SCOPES_WIN32
+// on windows, we only get 1 MB of stack
+#define SCOPES_MAX_STACK_SIZE ((1 << 10) * 768)
+#else
+// on linux, the system typically gives us 8 MB
+#define SCOPES_MAX_STACK_SIZE ((1 << 20) * 7)
+#endif
+
 #ifndef SCOPES_CPP
 #define SCOPES_CPP
 
@@ -480,6 +489,16 @@ static int stb_fprintf(FILE *out, const char *fmt, ...) {
 }
 
 namespace scopes {
+
+static char *g_stack_start;
+static size_t g_largest_stack_size = 0;
+
+static size_t memory_stack_size() {
+    char c; char *_stack_addr = &c;
+    size_t ss = (size_t)(g_stack_start - _stack_addr);
+    g_largest_stack_size = std::max(ss, g_largest_stack_size);
+    return ss;
+}
 
 using llvm::isa;
 using llvm::cast;
@@ -1834,6 +1853,8 @@ struct Timer {
 };
 
 std::unordered_map<Symbol, double, Symbol::Hash> Timer::timers;
+
+static void on_shutdown();
 
 //------------------------------------------------------------------------------
 // SOURCE FILE
@@ -7402,9 +7423,7 @@ static void *global_c_namespace = nullptr;
 
 static bool signal_abort = false;
 void f_abort() {
-#if SCOPES_PRINT_TIMERS
-    Timer::print_timers();
-#endif
+    on_shutdown();
     if (SCOPES_EARLY_ABORT || signal_abort) {
         std::abort();
     } else {
@@ -7414,9 +7433,7 @@ void f_abort() {
 
 
 void f_exit(int c) {
-#if SCOPES_PRINT_TIMERS
-    Timer::print_timers();
-#endif
+    on_shutdown();
     exit(c);
 }
 
@@ -12391,7 +12408,7 @@ struct Solver {
                 ss << "unnamed function";
             }
         } else {
-            ss << last_head->name.name()->data;
+            ss << Style_Function << last_head->name.name()->data << Style_None;
         }
         ss << std::endl;
         last_loc->body.anchor->stream_source_line(ss);
@@ -13548,8 +13565,12 @@ struct Solver {
     void normalize_label(Label *l) {
         if (l->body.is_complete())
             return;
-
         SCOPES_TRY()
+
+        size_t ssz = memory_stack_size();
+        if (ssz >= SCOPES_MAX_STACK_SIZE) {
+            location_error(String::from("stack overflow during partial evaluation"));
+        }
 
         while (!l->body.is_complete()) {
             assert(!l->is_template());
@@ -15965,6 +15986,13 @@ static void setup_stdio() {
     }
 }
 
+static void on_shutdown() {
+#if SCOPES_PRINT_TIMERS
+    Timer::print_timers();
+    std::cerr << "largest recorded stack size: " << g_largest_stack_size << std::endl;
+#endif
+}
+
 } // namespace scopes
 
 #ifndef SCOPES_WIN32
@@ -15984,6 +16012,9 @@ static void crash_handler(int sig) {
 
 int main(int argc, char *argv[]) {
     using namespace scopes;
+    uint64_t c = 0;
+    g_stack_start = (char *)&c;
+
     Symbol::_init_symbols();
     init_llvm();
 
@@ -16060,9 +16091,6 @@ skip_regular_load:
     typedef void (*MainFuncType)();
     MainFuncType fptr = (MainFuncType)compile(fn, 0).pointer;
     fptr();
-#if SCOPES_PRINT_TIMERS
-    Timer::print_timers();
-#endif
 
     return 0;
 }
