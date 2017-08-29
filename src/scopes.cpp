@@ -2992,12 +2992,61 @@ static const Type *Extern(const Type *type,
 // TYPED LABEL TYPE
 //------------------------------------------------------------------------------
 
+struct KeyAny {
+    Symbol key;
+    Any value;
+
+    KeyAny() : key(SYM_Unnamed), value(none) {}
+    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
+    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
+    template<typename T>
+    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
+
+    bool operator ==(const KeyAny &other) const {
+        return (key == other.key) && (value == other.value);
+    }
+
+    bool operator !=(const KeyAny &other) const {
+        return (key != other.key) || (value != other.value);
+    }
+
+    uint64_t hash() const {
+        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
+    }
+};
+
+static StyledStream& operator<<(StyledStream& ost, KeyAny value) {
+    if (value.key != SYM_Unnamed) {
+        ost << value.key << Style_Operator << "=" << Style_None;
+    }
+    ost << value.value;
+    return ost;
+}
+
+typedef std::vector<KeyAny> Args;
+
+static void stream_args(StyledStream &ss, const Args &args, size_t start = 1) {
+    for (size_t i = start; i < args.size(); ++i) {
+        ss << " ";
+        if (is_unknown(args[i].value)) {
+            ss << "<unknown>:" << args[i].value.typeref;
+        } else {
+            ss << args[i].value;
+        }
+    }
+    ss << std::endl;
+}
+
+static KeyAny first(const Args &values) {
+    return values.empty()?KeyAny():values.front();
+}
+
 struct ReturnLabelType : Type {
     static bool classof(const Type *T) {
         return T->kind() == TK_ReturnLabel;
     }
 
-    ReturnLabelType(const std::vector<Any> &_values)
+    ReturnLabelType(const Args &_values)
         : Type(TK_ReturnLabel) {
         values = _values;
 
@@ -3007,11 +3056,13 @@ struct ReturnLabelType : Type {
             if (i > 0) {
                 ss.out << " ";
             }
-            if (is_unknown(values[i])) {
-                ss.out << values[i].typeref->name()->data;
+            if (values[i].key != SYM_Unnamed) {
+                ss.out << values[i].key.name()->data << "=";
+            }
+            if (is_unknown(values[i].value)) {
+                ss.out << values[i].value.typeref->name()->data;
             } else {
-                ss.out << "!" << values[i].type;
-                // ss.out << "!" << values[i];
+                ss.out << "!" << values[i].value.type;
             }
         }
         ss.out << ")";
@@ -3021,8 +3072,8 @@ struct ReturnLabelType : Type {
             std::vector<const Type *> rettypes;
             // prune constants
             for (size_t i = 0; i < values.size(); ++i) {
-                if (is_unknown(values[i])) {
-                    rettypes.push_back(values[i].typeref);
+                if (is_unknown(values[i].value)) {
+                    rettypes.push_back(values[i].value.typeref);
                 }
             }
 
@@ -3043,19 +3094,59 @@ struct ReturnLabelType : Type {
         return has_mrv;
     }
 
-    std::vector<Any> values;
+    Args values;
     const Type *return_type;
     bool has_mrv;
 };
 
-static const Type *ReturnLabel(const std::vector<Any> &values) {
-    static TypeFactory<ReturnLabelType> return_labels;
+static const Type *ReturnLabel(const Args &values) {
+    struct TypeArgs {
+        Args args;
+
+        TypeArgs() {}
+        TypeArgs(const Args &_args) : args(_args) {}
+
+        bool operator==(const TypeArgs &other) const {
+            if (args.size() != other.args.size()) return false;
+            for (size_t i = 0; i < args.size(); ++i) {
+                auto &&a = args[i];
+                auto &&b = other.args[i];
+                if (a != b)
+                    return false;
+            }
+            return true;
+        }
+
+        struct Hash {
+            std::size_t operator()(const TypeArgs& s) const {
+                std::size_t h = 0;
+                for (auto &&arg : s.args) {
+                    h = HashLen16(h, arg.hash());
+                }
+                return h;
+            }
+        };
+    };
+
+    typedef std::unordered_map<TypeArgs, ReturnLabelType *, typename TypeArgs::Hash> ArgMap;
+
+    static ArgMap map;
+
 #ifdef SCOPES_DEBUG
     for (size_t i = 0; i < values.size(); ++i) {
-        assert(values[i].is_const());
+        assert(values[i].value.is_const());
     }
 #endif
-    return return_labels.insert(values);
+
+    TypeArgs ta(values);
+    typename ArgMap::iterator it = map.find(ta);
+    if (it == map.end()) {
+        ReturnLabelType *t = new ReturnLabelType(values);
+        map.insert({ta, t});
+        return t;
+    } else {
+        return it->second;
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -3141,7 +3232,7 @@ static const Type *Function(const Type *return_type,
             return_type = ReturnLabel({});
         } else if (return_type->kind() == TK_Tuple) {
             auto &&types = cast<TupleType>(return_type)->types;
-            std::vector<Any> values;
+            Args values;
             for (auto it = types.begin(); it != types.end(); ++it) {
                 values.push_back(unknown_of(*it));
             }
@@ -5081,56 +5172,6 @@ static StyledStream& operator<<(StyledStream& ost, const List *list) {
 // Leissa et al., Graph-Based Higher-Order Intermediate Representation
 // http://compilers.cs.uni-saarland.de/papers/lkh15_cgo.pdf
 
-struct KeyAny {
-    Symbol key;
-    Any value;
-
-    KeyAny() : key(SYM_Unnamed), value(none) {}
-    KeyAny(Any _value) : key(SYM_Unnamed), value(_value) {}
-    KeyAny(Symbol _key, Any _value) : key(_key), value(_value) {}
-    template<typename T>
-    KeyAny(const T &x) : key(SYM_Unnamed), value(x) {}
-
-    bool operator ==(const KeyAny &other) const {
-        return (key == other.key) && (value == other.value);
-    }
-
-    bool operator !=(const KeyAny &other) const {
-        return (key != other.key) || (value != other.value);
-    }
-
-    uint64_t hash() const {
-        return HashLen16(std::hash<uint64_t>{}(key.value()), value.hash());
-    }
-};
-
-static StyledStream& operator<<(StyledStream& ost, KeyAny value) {
-    if (value.key != SYM_Unnamed) {
-        ost << value.key << Style_Operator << "=" << Style_None;
-    }
-    ost << value.value;
-    return ost;
-}
-
-typedef std::vector<KeyAny> Args;
-
-static void stream_args(StyledStream &ss, const Args &args, size_t start = 1) {
-    for (size_t i = start; i < args.size(); ++i) {
-        ss << " ";
-        if (is_unknown(args[i].value)) {
-            ss << "<unknown>:" << args[i].value.typeref;
-        } else {
-            ss << args[i].value;
-        }
-    }
-    ss << std::endl;
-}
-
-static KeyAny first(const Args &values) {
-    return values.empty()?KeyAny():values.front();
-}
-
-//------------------------------------------------------------------------------
 
 enum {
     ARG_Cont = 0,
@@ -5509,7 +5550,7 @@ public:
                 location_error(ss.str());
             }
             for (size_t i = 0; i < tl->values.size(); ++i) {
-                auto &&val = tl->values[i];
+                auto &&val = tl->values[i].value;
                 if (is_unknown(val)) {
                     auto T = val.typeref;
                     if (is_opaque(T)) {
@@ -5540,7 +5581,7 @@ public:
     }
 
     const Type *get_params_as_return_label_type() const {
-        std::vector<Any> values;
+        scopes::Args values;
         for (size_t i = 1; i < params.size(); ++i) {
             values.push_back(unknown_of(params[i]->type));
         }
@@ -6520,7 +6561,7 @@ static Label *typify_single(const Frame *frame, Label *label, const ArgTypes &ar
     assert(!label->params.empty());
 
     Args args;
-    args.reserve(argtypes.size());
+    args.reserve(argtypes.size() + 1);
     args = { KeyAny(untyped()) };
     for (size_t i = 0; i < argtypes.size(); ++i) {
         args.push_back(KeyAny(unknown_of(argtypes[i])));
@@ -6529,14 +6570,14 @@ static Label *typify_single(const Frame *frame, Label *label, const ArgTypes &ar
     return fold_type_label_single(frame, label, args);
 }
 
-static Label *fold_typify_single(const Frame *frame, Label *label, const std::vector<Any> &values) {
+static Label *fold_typify_single(const Frame *frame, Label *label, const Args &values) {
     assert(!label->params.empty());
 
     Args args;
-    args.reserve(values.size());
+    args.reserve(values.size() + 1);
     args = { KeyAny(untyped()) };
     for (size_t i = 0; i < values.size(); ++i) {
-        args.push_back(KeyAny(values[i]));
+        args.push_back(values[i]);
     }
 
     return fold_type_label_single(frame, label, args);
@@ -11204,7 +11245,7 @@ struct Solver {
         }
     }
 
-    Any fold_type_return(Any dest, const std::vector<Any> &values) {
+    Any fold_type_return(Any dest, const Args &values) {
         //ss_cout << "type_return: " << dest << std::endl;
 #if SCOPES_TRUNCATE_FORWARDING_CONTINUATIONS
     repeat:
@@ -11263,7 +11304,7 @@ struct Solver {
                 }
                 {
                     StyledString ss;
-                    ss.out << "return continuation retyped as " << TL;
+                    ss.out << "label retyped as " << TL;
                     location_error(ss.str());
                 }
             }
@@ -11596,7 +11637,7 @@ struct Solver {
         const ReturnLabelType *rlt = cast<ReturnLabelType>(l->params[0]->type);
         for (size_t i = 0; i < rlt->values.size(); ++i) {
             auto &&val = rlt->values[i];
-            if (is_indirect_closure_type(val.type))
+            if (is_indirect_closure_type(val.value.type))
                 return true;
         }
         return false;
@@ -11825,6 +11866,7 @@ struct Solver {
         case FN_VaAt:
         case FN_Dump:
         case FN_ExternNew:
+        case FN_ReturnLabelType:
             return true;
         default: return false;
         }
@@ -11890,7 +11932,7 @@ struct Solver {
     return true;
 
     // returns true if the call can be eliminated
-    bool values_from_builtin_call(Label *l, std::vector<Any> &retvalues) {
+    bool values_from_builtin_call(Label *l, Args &retvalues) {
         auto &&enter = l->body.enter;
         auto &&args = l->body.args;
         assert(enter.type == TYPE_Builtin);
@@ -12488,14 +12530,14 @@ struct Solver {
             {
                 Scope *scope = nullptr;
                 Any compiled = compile(metafunc, 0);
-                if (rlt->values[0].type == TYPE_Scope) {
+                if (rlt->values[0].value.type == TYPE_Scope) {
                     // returns a constant scope
                     typedef void (*FuncType)();
                     FuncType fptr = (FuncType)compiled.pointer;
                     fptr();
-                    scope = rlt->values[0].scope;
-                } else if ((rlt->values[0].type == TYPE_Unknown)
-                    && (rlt->values[0].typeref == TYPE_Scope)) {
+                    scope = rlt->values[0].value.scope;
+                } else if ((rlt->values[0].value.type == TYPE_Unknown)
+                    && (rlt->values[0].value.typeref == TYPE_Scope)) {
                     // returns a variable scope
                     typedef Scope *(*FuncType)();
                     FuncType fptr = (FuncType)compiled.pointer;
@@ -12653,12 +12695,14 @@ struct Solver {
         } break;
         case FN_ReturnLabelType: {
             CHECKARGS(0, -1);
-            std::vector<Any> values;
+            Args values;
             for (size_t i = 1; i < args.size(); ++i) {
                 if (args[i].value.is_const()) {
-                    values.push_back(args[i].value);
+                    values.push_back(args[i]);
                 } else {
-                    values.push_back(unknown_of(args[i].value.indirect_type()));
+                    values.push_back(
+                        KeyAny(args[i].key,
+                            unknown_of(args[i].value.indirect_type())));
                 }
             }
             RETARGS(ReturnLabel(values));
@@ -13467,7 +13511,7 @@ struct Solver {
         if (enter.builtin == SFXFN_Unreachable) {
             args[0] = none;
         } else {
-            std::vector<Any> values;
+            Args values;
             bool fold = values_from_builtin_call(l, values);
             if (fold) {
                 enter = args[0].value;
@@ -13503,15 +13547,17 @@ struct Solver {
 #endif
         auto &&args = l->body.args;
         Args newargs;
-        std::vector<Any> values;
+        Args values;
         values.reserve(args.size());
         newargs.reserve(args.size());
         newargs.push_back(none);
         for (size_t i = 1; i < args.size(); ++i) {
             if (args[i].value.is_const()) {
-                values.push_back(args[i].value);
+                values.push_back(args[i]);
             } else {
-                values.push_back(unknown_of(args[i].value.indirect_type()));
+                values.push_back(KeyAny(
+                    args[i].key,
+                    unknown_of(args[i].value.indirect_type())));
                 newargs.push_back(args[i]);
             }
         }
