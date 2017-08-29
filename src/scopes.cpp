@@ -7964,6 +7964,10 @@ struct SPIRVGenerator {
             auto it = cast<IntegerType>(value.type);
             if (it->issigned) {
                 switch(it->width) {
+                case 8: return builder.makeIntConstant(
+                    builder.makeIntegerType(8, true), value.i8);
+                case 16: return builder.makeIntConstant(
+                    builder.makeIntegerType(16, true), value.i16);
                 case 32: return builder.makeIntConstant(value.i32);
                 case 64: return builder.makeInt64Constant(value.i64);
                 default: break;
@@ -7971,6 +7975,10 @@ struct SPIRVGenerator {
             } else {
                 switch(it->width) {
                 case 1: return builder.makeBoolConstant(value.i1);
+                case 8: return builder.makeIntConstant(
+                    builder.makeIntegerType(8, false), value.i8);
+                case 16: return builder.makeIntConstant(
+                    builder.makeIntegerType(16, false), value.i16);
                 case 32: return builder.makeUintConstant(value.u32);
                 case 64: return builder.makeUint64Constant(value.u64);
                 default: break;
@@ -11861,7 +11869,8 @@ struct Solver {
         } \
     }
 #define RETARGS(...) \
-    retvalues = { __VA_ARGS__ };
+    retvalues = { __VA_ARGS__ }; \
+    return true;
 
     // returns true if the call can be eliminated
     bool values_from_builtin_call(Label *l, std::vector<Any> &retvalues) {
@@ -12277,7 +12286,6 @@ struct Solver {
             if (!is_extern && args[1].value.is_const()
                 && !pi->is_writable()) {
                 RETARGS(pi->unpack(args[1].value.pointer));
-                return true;
             } else {
                 RETARGTYPES(pi->element_type);
             }

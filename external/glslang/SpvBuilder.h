@@ -573,8 +573,8 @@ public:
 
     Instruction *getInstruction(Id resultId) const;
 
- protected:
     Id makeIntConstant(Id typeId, unsigned value, bool specConstant);
+protected:
     Id makeInt64Constant(Id typeId, unsigned long long value, bool specConstant);
     Id findScalarConstant(Op typeClass, Op opcode, Id typeId, unsigned value) const;
     Id findScalarConstant(Op typeClass, Op opcode, Id typeId, unsigned v1, unsigned v2) const;
