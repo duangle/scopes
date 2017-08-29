@@ -888,6 +888,25 @@ fn list-reverse (l tail)
 fn set-scope-symbol! (scope sym value)
     __set-scope-symbol! scope sym (Any value)
 
+fn syntax-error! (anchor msg)
+    let T = (typeof anchor)
+    if (== T string)
+        if (none? msg)
+            __error! anchor
+            unreachable!;
+    set-anchor!
+        if (== T Any)
+            let T = (Any-typeof anchor)
+            if (== T Syntax)
+                Syntax-anchor (as anchor Syntax)
+            else
+                as anchor Anchor
+        elseif (== T Syntax)
+            Syntax-anchor anchor
+        else anchor
+    __anchor-error! msg
+    unreachable!;
+
 syntax-extend
     # a supertype to be used for conversions
     let immutable = (typename-type "immutable")
@@ -970,7 +989,13 @@ syntax-extend
             elseif (type== destT Anchor)
                 Syntax-anchor src
             else
-                Any-extract (Syntax->datum src) destT
+                let anyval = (Syntax->datum src)
+                let anyT = (Any-typeof anyval)
+                if (type== anyT destT)
+                    Any-extract anyval destT
+                else
+                    syntax-error! (Syntax-anchor src)
+                        .. (repr destT) " expected, not " (repr anyT)
 
     set-type-symbol! type '@
         fn (self key)
@@ -1246,25 +1271,6 @@ fn compile (f opts...)
 fn compile-glsl (f target opts...)
     __compile-glsl f target
         compile-flags opts...
-
-fn syntax-error! (anchor msg)
-    let T = (typeof anchor)
-    if (== T string)
-        if (none? msg)
-            __error! anchor
-            unreachable!;
-    set-anchor!
-        if (== T Any)
-            let T = ('typeof anchor)
-            if (== T Syntax)
-                Syntax-anchor (as anchor Syntax)
-            else
-                as anchor Anchor
-        elseif (== T Syntax)
-            Syntax-anchor anchor
-        else anchor
-    __anchor-error! msg
-    unreachable!;
 
 syntax-extend
     fn gen-type-op2 (op)
