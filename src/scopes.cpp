@@ -512,7 +512,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FunctionType) T(FN_TupleType) T(FN_Alloca) T(FN_AllocaOf) T(FN_Malloc) \
     T(FN_AllocaArray) T(FN_MallocArray) T(FN_ReturnLabelType) T(KW_DoIn) \
     T(FN_AnyExtract) T(FN_AnyWrap) T(FN_IsConstant) T(FN_Free) \
-    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_Sample) \
+    T(OP_ICmpEQ) T(OP_ICmpNE) T(FN_Sample) T(FN_ImageRead) T(FN_ImageWrite) \
     T(OP_ICmpUGT) T(OP_ICmpUGE) T(OP_ICmpULT) T(OP_ICmpULE) \
     T(OP_ICmpSGT) T(OP_ICmpSGE) T(OP_ICmpSLT) T(OP_ICmpSLE) \
     T(OP_FCmpOEQ) T(OP_FCmpONE) T(OP_FCmpORD) \
@@ -865,7 +865,9 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_FrameEq, "Frame==") T(FN_Free, "free") \
     T(FN_GetExceptionHandler, "get-exception-handler") \
     T(FN_GetScopeSymbol, "get-scope-symbol") T(FN_Hash, "hash") \
-    T(FN_Sample, "sample") T(FN_RealPath, "realpath") \
+    T(FN_Sample, "sample") \
+    T(FN_ImageRead, "Image-read") T(FN_ImageWrite, "Image-write") \
+    T(FN_RealPath, "realpath") \
     T(FN_DirName, "dirname") T(FN_BaseName, "basename") \
     T(OP_ICmpEQ, "icmp==") T(OP_ICmpNE, "icmp!=") \
     T(OP_ICmpUGT, "icmp>u") T(OP_ICmpUGE, "icmp>=u") T(OP_ICmpULT, "icmp<u") T(OP_ICmpULE, "icmp<=u") \
@@ -1096,7 +1098,8 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_TargetCompute, "compute-stage") \
     \
     /* extern attributes */ \
-    T(SYM_Index, "index") \
+    T(SYM_Location, "location") \
+    T(SYM_Binding, "binding") \
     T(SYM_Storage, "storage") \
     T(SYM_Buffer, "buffer") \
     T(SYM_Coherent, "coherent") \
@@ -2920,6 +2923,7 @@ enum ExternFlags {
     EF_NonReadable = (1 << 2),
     EF_Volatile = (1 << 3),
     EF_Coherent = (1 << 4),
+    EF_Restrict = (1 << 5),
 };
 
 struct ExternType : Type {
@@ -2928,12 +2932,13 @@ struct ExternType : Type {
     }
 
     ExternType(const Type *_type,
-        size_t _flags, Symbol _storage_class, int _index) :
+        size_t _flags, Symbol _storage_class, int _location, int _binding) :
         Type(TK_Extern),
         type(_type),
         flags(_flags),
         storage_class(_storage_class),
-        index(_index) {
+        location(_location),
+        binding(_binding) {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
@@ -2948,16 +2953,18 @@ struct ExternType : Type {
     const Type *type;
     size_t flags;
     Symbol storage_class;
-    int index;
+    int location;
+    int binding;
     const Type *pointer_type;
 };
 
 static const Type *Extern(const Type *type,
     size_t flags = 0,
     Symbol storage_class = SYM_Unnamed,
-    int index = -1) {
+    int location = -1,
+    int binding = -1) {
     static TypeFactory<ExternType> externs;
-    return externs.insert(type, flags, storage_class, index);
+    return externs.insert(type, flags, storage_class, location, binding);
 }
 
 //------------------------------------------------------------------------------
@@ -6128,109 +6135,6 @@ const ReturnLabelType *Label::verify_return_label() {
 }
 
 //------------------------------------------------------------------------------
-// SCC
-//------------------------------------------------------------------------------
-
-// build strongly connected component map of label graph
-// uses Dijkstra's Path-based strong component algorithm
-struct SCCBuilder {
-    struct Group {
-        size_t index;
-        std::vector<Label *> labels;
-    };
-
-    std::vector<Label *> S;
-    std::vector<Label *> P;
-    std::unordered_map<Label *, size_t> Cmap;
-    std::vector<Group> groups;
-    std::unordered_map<Label *, size_t> SCCmap;
-    size_t C;
-
-    SCCBuilder(Label *top) :
-        C(0) {
-        walk(top);
-    }
-
-    void stream_group(StyledStream &ss, const Group &group) {
-        ss << "group #" << group.index << " (" << group.labels.size() << " labels):" << std::endl;
-        for (size_t k = 0; k < group.labels.size(); ++k) {
-            stream_label(ss, group.labels[k], StreamLabelFormat::single());
-        }
-    }
-
-    bool is_recursive(Label *l) {
-        return group(l).labels.size() > 1;
-    }
-
-    bool contains(Label *l) {
-        auto it = SCCmap.find(l);
-        return it != SCCmap.end();
-    }
-
-    size_t group_id(Label *l) {
-        auto it = SCCmap.find(l);
-        assert(it != SCCmap.end());
-        return it->second;
-    }
-
-    Group &group(Label *l) {
-        return groups[group_id(l)];
-    }
-
-    void walk(Label *obj) {
-        Cmap[obj] = C++;
-        S.push_back(obj);
-        P.push_back(obj);
-
-        int size = (int)obj->body.args.size();
-        for (int i = -1; i < size; ++i) {
-            Any arg = none;
-            if (i == -1) {
-                arg = obj->body.enter;
-            } else {
-                arg = obj->body.args[i].value;
-            }
-
-            if (arg.type == TYPE_Label) {
-                Label *label = arg.label;
-
-                auto it = Cmap.find(label);
-                if (it == Cmap.end()) {
-                    walk(label);
-                } else if (!SCCmap.count(label)) {
-                    size_t Cw = it->second;
-                    while (true) {
-                        assert(!P.empty());
-                        auto it = Cmap.find(P.back());
-                        assert(it != Cmap.end());
-                        if (it->second <= Cw) break;
-                        P.pop_back();
-                    }
-                }
-            }
-        }
-
-        assert(!P.empty());
-        if (P.back() == obj) {
-            groups.emplace_back();
-            Group &scc = groups.back();
-            scc.index = groups.size() - 1;
-            while (true) {
-                assert(!S.empty());
-                Label *q = S.back();
-                scc.labels.push_back(q);
-                SCCmap[q] = groups.size() - 1;
-                S.pop_back();
-                if (q == obj) {
-                    break;
-                }
-            }
-            P.pop_back();
-        }
-    }
-};
-
-//------------------------------------------------------------------------------
 // IL MANGLING
 //------------------------------------------------------------------------------
 
@@ -8073,7 +7977,7 @@ struct SPIRVGenerator {
                 }
             }
             StyledString ss;
-            ss.out << "IL->SPIR: unsupported integer constant type";
+            ss.out << "IL->SPIR: unsupported integer constant type " << value.type;
             location_error(ss.str());
         } break;
         case TK_Real: {
@@ -8084,7 +7988,7 @@ struct SPIRVGenerator {
             default: break;
             }
             StyledString ss;
-            ss.out << "IL->SPIR: unsupported real constant type";
+            ss.out << "IL->SPIR: unsupported real constant type " << value.type;
             location_error(ss.str());
         } break;
         case TK_Pointer: {
@@ -8179,15 +8083,37 @@ struct SPIRVGenerator {
                 builder.addDecoration(id, spv::DecorationBuiltIn, builtin);
             }
             switch(sc) {
+            case spv::StorageClassUniformConstant:
             case spv::StorageClassUniform: {
-                builder.addDecoration(id, spv::DecorationDescriptorSet, 0);
-                if (et->index >= 0) {
-                    builder.addDecoration(id, spv::DecorationBinding, et->index);
+                //builder.addDecoration(id, spv::DecorationDescriptorSet, 0);
+                if (et->binding >= 0) {
+                    builder.addDecoration(id, spv::DecorationBinding, et->binding);
+                }
+                if (et->location >= 0) {
+                    builder.addDecoration(id, spv::DecorationLocation, et->location);
+                }
+                if (builder.isImageType(ty)) {
+                    auto flags = et->flags;
+                    if (flags & EF_Volatile) {
+                        builder.addDecoration(id, spv::DecorationVolatile);
+                    }
+                    if (flags & EF_Coherent) {
+                        builder.addDecoration(id, spv::DecorationCoherent);
+                    }
+                    if (flags & EF_Restrict) {
+                        builder.addDecoration(id, spv::DecorationRestrict);
+                    }
+                    if (flags & EF_NonWritable) {
+                        builder.addDecoration(id, spv::DecorationNonWritable);
+                    }
+                    if (flags & EF_NonReadable) {
+                        builder.addDecoration(id, spv::DecorationNonReadable);
+                    }
                 }
             } break;
             default: {
-                if (et->index >= 0) {
-                    builder.addDecoration(id, spv::DecorationLocation, et->index);
+                if (et->location >= 0) {
+                    builder.addDecoration(id, spv::DecorationLocation, et->location);
                 }
             } break;
             }
@@ -8269,6 +8195,20 @@ struct SPIRVGenerator {
                 retvalue = builder.createTextureCall(
                     spv::NoPrecision, resultType, sparse, fetch, proj, gather,
                     explicitLod, params);
+            } break;
+            case FN_ImageRead: {
+                READ_VALUE(image);
+                READ_VALUE(coords);
+                auto ST = _image.indirect_type();
+                auto resultType = type_to_spirv_type(cast<ImageType>(ST)->type);
+                retvalue = builder.createBinOp(spv::OpImageRead,
+                    resultType, image, coords);
+            } break;
+            case FN_ImageWrite: {
+                READ_VALUE(image);
+                READ_VALUE(coords);
+                READ_VALUE(texel);
+                builder.createNoResultOp(spv::OpImageWrite, { image, coords, texel });
             } break;
             case FN_Branch: {
                 READ_VALUE(cond);
@@ -8848,12 +8788,17 @@ struct SPIRVGenerator {
             }
             if (flags & EF_Volatile) {
                 builder.addMemberDecoration(id, i, spv::DecorationVolatile);
-            } else if (flags & EF_Coherent) {
+            }
+            if (flags & EF_Coherent) {
                 builder.addMemberDecoration(id, i, spv::DecorationCoherent);
+            }
+            if (flags & EF_Restrict) {
+                builder.addMemberDecoration(id, i, spv::DecorationRestrict);
             }
             if (flags & EF_NonWritable) {
                 builder.addMemberDecoration(id, i, spv::DecorationNonWritable);
-            } else if (flags & EF_NonReadable) {
+            }
+            if (flags & EF_NonReadable) {
                 builder.addMemberDecoration(id, i, spv::DecorationNonReadable);
             }
             builder.addMemberDecoration(id, i, spv::DecorationOffset, ti->offsets[i]);
@@ -8883,9 +8828,18 @@ struct SPIRVGenerator {
         } break;
         case TK_Array: {
             auto ai = cast<ArrayType>(type);
-            return builder.makeArrayType(
-                type_to_spirv_type(ai->element_type),
-                builder.makeUintConstant(ai->count), 0);
+            auto etype = type_to_spirv_type(ai->element_type);
+            spv::Id ty;
+            if (!ai->count) {
+                ty = builder.makeRuntimeArray(etype);
+            } else {
+                ty = builder.makeArrayType(etype,
+                    builder.makeUintConstant(ai->count), 0);
+            }
+            builder.addDecoration(ty,
+                spv::DecorationArrayStride,
+                size_of(ai->element_type));
+            return ty;
         } break;
         case TK_Vector: {
             auto vi = cast<VectorType>(type);
@@ -8915,7 +8869,7 @@ struct SPIRVGenerator {
                 (it->depth == 1),
                 (it->arrayed == 1),
                 (it->multisampled == 1),
-                (it->sampled == 1),
+                it->sampled,
                 image_format_from_symbol(it->format));
         } break;
         case TK_SampledImage: {
@@ -11866,6 +11820,7 @@ struct Solver {
         case FN_VolatileLoad:
         case FN_Load:
         case FN_Sample:
+        case FN_ImageRead:
         case FN_GetElementPtr:
         case SFXFN_ExecutionMode:
             return true;
@@ -11924,10 +11879,13 @@ struct Solver {
             verify_kind<TK_Image>(ST);
             auto it = cast<ImageType>(ST);
             RETARGTYPES(it->type);
-            //TextureParameters params;
-            //memset(&params, 0, sizeof(params));
-            //Id Builder::createTextureCall(Decoration precision, Id resultType, bool sparse, bool fetch, bool proj, bool gather, bool noImplicitLod, const TextureParameters& parameters)
-
+        } break;
+        case FN_ImageRead: {
+            CHECKARGS(2, 2);
+            auto ST = args[1].value.indirect_type();
+            verify_kind<TK_Image>(ST);
+            auto it = cast<ImageType>(ST);
+            RETARGTYPES(it->type);
         } break;
         case SFXFN_ExecutionMode: {
             CHECKARGS(1, 4);
@@ -12548,17 +12506,25 @@ struct Solver {
             Any value(args[1].value.symbol);
             Symbol extern_storage_class = SYM_Unnamed;
             size_t flags = 0;
-            int index = -1;
+            int location = -1;
+            int binding = -1;
             if (args.size() > 3) {
                 size_t i = 3;
                 while (i < args.size()) {
                     auto &&arg = args[i];
                     switch(arg.key.value()) {
-                    case SYM_Index: {
-                        if (index == -1) {
-                            index = cast_number<int>(arg.value);
+                    case SYM_Location: {
+                        if (location == -1) {
+                            location = cast_number<int>(arg.value);
                         } else {
-                            location_error(String::from("duplicate index"));
+                            location_error(String::from("duplicate location"));
+                        }
+                    } break;
+                    case SYM_Binding: {
+                        if (binding == -1) {
+                            binding = cast_number<int>(arg.value);
+                        } else {
+                            location_error(String::from("duplicate binding"));
                         }
                     } break;
                     case SYM_Storage: {
@@ -12587,6 +12553,7 @@ struct Solver {
                         case SYM_ReadOnly: flags |= EF_NonWritable; break;
                         case SYM_WriteOnly: flags |= EF_NonReadable; break;
                         case SYM_Coherent: flags |= EF_Coherent; break;
+                        case SYM_Restrict: flags |= EF_Restrict; break;
                         case SYM_Volatile: flags |= EF_Volatile; break;
                         default: {
                             location_error(String::from("unknown flag"));
@@ -12603,7 +12570,7 @@ struct Solver {
                     i++;
                 }
             }
-            value.type = Extern(T, flags, extern_storage_class, index);
+            value.type = Extern(T, flags, extern_storage_class, location, binding);
             RETARGS(value);
         } break;
         case FN_FunctionType: {
@@ -15136,6 +15103,10 @@ static size_t f_sizeof(const Type *T) {
     return size_of(T);
 }
 
+static size_t f_alignof(const Type *T) {
+    return align_of(T);
+}
+
 size_t f_type_countof(const Type *T) {
     T = storage_type(T);
     switch(T->kind()) {
@@ -15624,6 +15595,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_StringJoin, f_string_join, TYPE_String, TYPE_String, TYPE_String);
     DEFINE_PURE_C_FUNCTION(FN_ElementType, f_elementtype, TYPE_Type, TYPE_Type, TYPE_I32);
     DEFINE_PURE_C_FUNCTION(FN_SizeOf, f_sizeof, TYPE_USize, TYPE_Type);
+    DEFINE_PURE_C_FUNCTION(FN_Alignof, f_alignof, TYPE_USize, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_PointerType, f_pointertype, TYPE_Type, TYPE_Type, TYPE_U64, TYPE_Symbol);
     DEFINE_PURE_C_FUNCTION(FN_PointerFlags, f_pointer_type_flags, TYPE_U64, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_PointerSetFlags, f_pointer_type_set_flags, TYPE_Type, TYPE_Type, TYPE_U64);

@@ -27,7 +27,7 @@ let vertex-code =
         let uv =
             extern 'uv vec2
                 storage = 'Output
-                index = 0
+                location = 0
         fn vertex-shader ()
             let half = (vectorof f32 0.5 0.5)
             uv =
@@ -50,20 +50,20 @@ let fragment-code =
         let uv =
             extern 'uv vec2
                 storage = 'Input
-                index = 0
+                location = 0
         let out_Color =
             extern 'out_Color vec4
                 storage = 'Output
         let phase =
             extern 'phase f32
                 storage = 'UniformConstant
-                index = 0
+                location = 0
         let tex =
             extern 'tex
                 SampledImage-type
                     Image-type vec4 '2D 0 0 0 1 'Unknown unnamed
                 storage = 'UniformConstant
-                index = 1
+                location = 1
         fn make-phase ()
             #if ((load phase) < 0.5)
                 unconst 0.0
