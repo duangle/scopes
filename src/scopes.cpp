@@ -524,7 +524,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_VolatileLoad) T(FN_VolatileStore) T(SFXFN_ExecutionMode) \
     T(FN_ExtractElement) T(FN_InsertElement) T(FN_ShuffleVector) \
     T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
-    T(FN_GetElementPtr) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
+    T(FN_GetElementPtr) T(FN_OffsetOf) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_VaKeys) T(FN_VaValues) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
     T(SFXFN_SetTypenameStorage) T(SFXFN_SetTypenameFields) T(FN_ExternNew) \
@@ -823,7 +823,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(KW_With, "with") T(KW_XFn, "xfn") T(KW_XLet, "xlet") T(KW_Yield, "yield") \
     \
     /* builtin and global functions */ \
-    T(FN_Alignof, "alignof") \
+    T(FN_Alignof, "alignof") T(FN_OffsetOf, "offsetof") \
     T(FN_Args, "args") T(FN_Alloc, "alloc") T(FN_Arrayof, "arrayof") \
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
@@ -12724,6 +12724,29 @@ struct Solver {
             }
             enter = args[0].value;
             args = result;
+        } break;
+        case FN_OffsetOf: {
+            CHECKARGS(2, 2);
+            const Type *T = args[1].value;
+            auto &&arg = args[2].value;
+            size_t idx = 0;
+            if ((T->kind() == TK_Typename) && (arg.type == TYPE_Symbol)) {
+                idx = cast<TypenameType>(T)->field_index(arg.symbol);
+                if (idx == (size_t)-1) {
+                    StyledString ss;
+                    ss.out << "no such field " << arg.symbol << " in typename " << T;
+                    location_error(ss.str());
+                }
+                // rewrite field
+                arg = (int)idx;
+            } else {
+                idx = cast_number<size_t>(arg);
+            }
+            T = storage_type(T);
+            verify_kind<TK_Tuple>(T);
+            auto ti = cast<TupleType>(T);
+            verify_range(idx, ti->offsets.size());
+            RETARGS(ti->offsets[idx]);
         } break;
         case FN_Branch: {
             CHECKARGS(3, 3);
