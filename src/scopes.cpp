@@ -15223,6 +15223,11 @@ static size_t f_alignof(const Type *T) {
 size_t f_type_countof(const Type *T) {
     T = storage_type(T);
     switch(T->kind()) {
+    case TK_Pointer:
+    case TK_Extern:
+    case TK_Image:
+    case TK_SampledImage:
+        return 1;
     case TK_Array: return cast<ArrayType>(T)->count;
     case TK_Vector: return cast<VectorType>(T)->count;
     case TK_Tuple: return cast<TupleType>(T)->types.size();
@@ -15247,6 +15252,8 @@ static const Type *f_elementtype(const Type *T, int i) {
     case TK_Union: return cast<UnionType>(T)->type_at_index(i);
     case TK_Function:  return cast<FunctionType>(T)->type_at_index(i);
     case TK_Extern: return cast<ExternType>(T)->pointer_type;
+    case TK_Image: return cast<ImageType>(T)->type;
+    case TK_SampledImage: return cast<SampledImageType>(T)->type;
     default: {
         StyledString ss;
         ss.out << "type " << T << " has no elements" << std::endl;
