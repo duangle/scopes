@@ -25,7 +25,7 @@
                 },
                 {
                     "name": "keyword.control.glsl.scopes",
-                    "match": "(uniform|buffer|in|out|xvar|coherent|volatile|restrict|readonly|writeonly)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(uniform|buffer|in|out|varying|xvar|coherent|volatile|restrict|readonly|writeonly)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -109,6 +109,10 @@
                 {
                     "name": "support.type.glm.scopes",
                     "match": "((i|u|d|b)?vec(2|3|4)|(i|u|d|b)?mat(2|3|4))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                },
+                {
+                    "name": "support.type.glsl.scopes",
+                    "match": "((i|u)?sampler(1D|2D|3D|Cube|2DRect|(1D|2D|Cube)Array|Buffer|2DMS(Array)?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},
@@ -116,7 +120,7 @@
 			"patterns": [
                 {
                     "name": "support.function.builtin.scopes",
-				    "match": "(offsetof|Image-(read|write)|sizeof|sample|mutable\\?|type-name|superof|string-match\\?|(file|directory)\\?|exit|compiler-version|load-library|prompt|countof|malloc(-array)?|free|alloca(-array|of)?|eval|list-load|globals|((mutable-)?pointer|integer|real|function|tuple|ReturnLabel|array|vector|typename|extern|(Sampled)?Image)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|storageof|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)(value|element)|shufflevector|unconst|compile|typify|purify|(constant|signed)\\?|va(-keys|-values|-countof|\\@)|type-kind|nullof|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "(scopeof|offsetof|Image-(read|write)|sizeof|sample|mutable\\?|type-name|superof|string-match\\?|(file|directory)\\?|exit|compiler-version|load-library|prompt|countof|malloc(-array)?|free|alloca(-array|of)?|eval|list-load|globals|((mutable-)?pointer|integer|real|function|tuple|ReturnLabel|array|vector|typename|extern|(Sampled)?Image)-type|dump|dump-label|Any-(extract-constant|repr|wrap)|branch|string-join|getelementptr|(volatile-)?(load|store)|storageof|import-c|(type|Scope)\\@|ptrtoint|inttoptr|(insert|extract)(value|element)|shufflevector|unconst|compile|typify|purify|(constant|signed)\\?|va(-keys|-values|-countof|\\@)|type-kind|nullof|undef|(type|bitcount)of|icmp[\\=\\!]\\=|icmp[\\<\\>]\\=?[su]|fcmp[\\=\\!]\\=[ou]|fcmp[\\<\\>]\\=?[ou]|bitcast|(fp)?trunc|([sz]|fp)ext|fpto[su]i|[su]itofp|b(and|x?or)|f?add|f?sub|f?mul|[suf](div|rem)|shl|[al]shr)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.library.scopes",

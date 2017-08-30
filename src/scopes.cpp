@@ -548,7 +548,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
     T(SFXFN_SetTypenameStorage) T(SFXFN_SetTypenameFields) T(FN_ExternNew) \
     T(FN_TypeAt) T(KW_SyntaxExtend) T(FN_Location) T(SFXFN_Unreachable) \
-    T(FN_FPTrunc) T(FN_FPExt) \
+    T(FN_FPTrunc) T(FN_FPExt) T(FN_ScopeOf) \
     T(FN_FPToUI) T(FN_FPToSI) \
     T(FN_UIToFP) T(FN_SIToFP) \
     T(OP_Add) T(OP_AddNUW) T(OP_AddNSW) \
@@ -3391,12 +3391,20 @@ struct ImageType : Type {
         format(_format), access(_access) {
         auto ss = StyledString::plain();
         ss.out << "<Image " <<  _type->name()->data
-            << " " << _dim
-            << " " << _depth
-            << " " << _arrayed
-            << " " << _multisampled
-            << " " << _sampled
-            << " " << _format;
+            << " " << _dim;
+        if (_depth == 1)
+            ss.out << " depth";
+        else if (_depth == 2)
+            ss.out << " ?depth?";
+        if (_arrayed)
+            ss.out << " array";
+        if (_multisampled)
+            ss.out << " ms";
+        if (_sampled == 0)
+            ss.out << " ?sampled?";
+        else if (_sampled == 1)
+            ss.out << " sampled";
+        ss.out << " " << _format;
         if (access != SYM_Unnamed)
             ss.out << " " << _access;
         ss.out << ">";
@@ -8929,8 +8937,11 @@ struct SPIRVGenerator {
         } break;
         case TK_Image: {
             auto it = cast<ImageType>(type);
-            return builder.makeImageType(
-                type_to_spirv_type(it->type),
+            auto ty = type_to_spirv_type(it->type);
+            if (builder.isVectorType(ty)) {
+                ty = builder.getContainedTypeId(ty);
+            }
+            return builder.makeImageType(ty,
                 dim_from_symbol(it->dim),
                 (it->depth == 1),
                 (it->arrayed == 1),
@@ -11867,6 +11878,7 @@ struct Solver {
         case FN_Dump:
         case FN_ExternNew:
         case FN_ReturnLabelType:
+        case FN_ScopeOf:
             return true;
         default: return false;
         }
@@ -12558,6 +12570,26 @@ struct Solver {
                 << ReturnLabel({unknown_of(TYPE_Scope)}) << ", got "
                 << T << ")";
             location_error(ss.str());
+        } break;
+        case FN_ScopeOf: {
+            CHECKARGS(0, -1);
+            Scope *scope = nullptr;
+            size_t start = 1;
+            if ((args.size() > 1) && (args[1].key == SYM_Unnamed)) {
+                start = 2;
+                scope = Scope::from(args[1].value);
+            } else {
+                scope = Scope::from();
+            }
+            for (size_t i = start; i < args.size(); ++i) {
+                auto &&arg = args[i];
+                if (arg.key == SYM_Unnamed) {
+                    scope = Scope::from(scope, arg.value);
+                } else {
+                    scope->bind(arg.key, arg.value);
+                }
+            }
+            RETARGS(scope);
         } break;
         case FN_AllocaOf: {
             CHECKARGS(1, 1);
