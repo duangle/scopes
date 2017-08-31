@@ -5395,6 +5395,23 @@ public:
         return nullptr;
     }
 
+    bool is_jumping() const {
+        auto &&args = body.args;
+        assert(!args.empty());
+        return args[0].value.type == TYPE_Nothing;
+    }
+
+    bool is_calling(Label *callee) const {
+        auto &&enter = body.enter;
+        return (enter.type == TYPE_Label) && (enter.label == callee);
+    }
+
+    bool is_continuing_to(Label *callee) const {
+        auto &&args = body.args;
+        assert(!args.empty());
+        return (args[0].value.type == TYPE_Label) && (args[0].value.label == callee);
+    }
+
     bool is_basic_block_like() const {
         if (params.empty())
             return true;
@@ -7831,6 +7848,111 @@ static bool is_memory_class(const Type *T) {
 }
 
 //------------------------------------------------------------------------------
+// SCC
+//------------------------------------------------------------------------------
+
+// build strongly connected component map of label graph
+// uses Dijkstra's Path-based strong component algorithm
+struct SCCBuilder {
+    struct Group {
+        size_t index;
+        std::vector<Label *> labels;
+    };
+
+    std::vector<Label *> S;
+    std::vector<Label *> P;
+    std::unordered_map<Label *, size_t> Cmap;
+    std::vector<Group> groups;
+    std::unordered_map<Label *, size_t> SCCmap;
+    size_t C;
+
+    SCCBuilder() : C(0) {}
+
+    SCCBuilder(Label *top) :
+        C(0) {
+        walk(top);
+    }
+
+    void stream_group(StyledStream &ss, const Group &group) {
+        ss << "group #" << group.index << " (" << group.labels.size() << " labels):" << std::endl;
+        for (size_t k = 0; k < group.labels.size(); ++k) {
+            stream_label(ss, group.labels[k], StreamLabelFormat::single());
+        }
+    }
+
+    bool is_recursive(Label *l) {
+        return group(l).labels.size() > 1;
+    }
+
+    bool contains(Label *l) {
+        auto it = SCCmap.find(l);
+        return it != SCCmap.end();
+    }
+
+    size_t group_id(Label *l) {
+        auto it = SCCmap.find(l);
+        assert(it != SCCmap.end());
+        return it->second;
+    }
+
+    Group &group(Label *l) {
+        return groups[group_id(l)];
+    }
+
+    void walk(Label *obj) {
+        Cmap[obj] = C++;
+        S.push_back(obj);
+        P.push_back(obj);
+
+        int size = (int)obj->body.args.size();
+        for (int i = -1; i < size; ++i) {
+            Any arg = none;
+            if (i == -1) {
+                arg = obj->body.enter;
+            } else {
+                arg = obj->body.args[i].value;
+            }
+
+            if (arg.type == TYPE_Label) {
+                Label *label = arg.label;
+
+                auto it = Cmap.find(label);
+                if (it == Cmap.end()) {
+                    walk(label);
+                } else if (!SCCmap.count(label)) {
+                    size_t Cw = it->second;
+                    while (true) {
+                        assert(!P.empty());
+                        auto it = Cmap.find(P.back());
+                        assert(it != Cmap.end());
+                        if (it->second <= Cw) break;
+                        P.pop_back();
+                    }
+                }
+            }
+        }
+
+        assert(!P.empty());
+        if (P.back() == obj) {
+            groups.emplace_back();
+            Group &scc = groups.back();
+            scc.index = groups.size() - 1;
+            while (true) {
+                assert(!S.empty());
+                Label *q = S.back();
+                scc.labels.push_back(q);
+                SCCmap[q] = groups.size() - 1;
+                S.pop_back();
+                if (q == obj) {
+                    break;
+                }
+            }
+            P.pop_back();
+        }
+    }
+};
+
+//------------------------------------------------------------------------------
 // IL->SPIR-V GENERATOR
 //------------------------------------------------------------------------------
 
@@ -7857,29 +7979,43 @@ static void disassemble_spirv(std::vector<unsigned int> &contents) {
     }
 }
 
+static void format_spv_location(StyledStream &ss, const char* source,
+    const spv_position_t& position) {
+    ss << Style_Location;
+    StyledStream ps = StyledStream::plain(ss);
+    if (source) {
+        ps << source << ":";
+    }
+    ps << position.line << ":" << position.column;
+    ss << ":" << Style_None << " ";
+}
+
 static void verify_spirv(std::vector<unsigned int> &contents) {
     spv_target_env target_env = SPV_ENV_UNIVERSAL_1_2;
     //spvtools::ValidatorOptions options;
 
     StyledString ss;
     spvtools::SpirvTools tools(target_env);
-    tools.SetMessageConsumer([&ss](spv_message_level_t level, const char*,
+    tools.SetMessageConsumer([&ss](spv_message_level_t level, const char* source,
                                 const spv_position_t& position,
                                 const char* message) {
         switch (level) {
         case SPV_MSG_FATAL:
         case SPV_MSG_INTERNAL_ERROR:
         case SPV_MSG_ERROR:
+            format_spv_location(ss.out, source, position);
             ss.out << Style_Error << "error: " << Style_None
-                << position.index << ": " << message << std::endl;
+                << message << std::endl;
             break;
         case SPV_MSG_WARNING:
+            format_spv_location(ss.out, source, position);
             ss.out << Style_Warning << "warning: " << Style_None
-                << position.index << ": " << message << std::endl;
+                << message << std::endl;
             break;
         case SPV_MSG_INFO:
+            format_spv_location(ss.out, source, position);
             ss.out << Style_Comment << "info: " << Style_None
-                << position.index << ": " << message << std::endl;
+                << message << std::endl;
             break;
         default:
             break;
@@ -7893,6 +8029,7 @@ static void verify_spirv(std::vector<unsigned int> &contents) {
         location_error(String::from("SPIR-V validation found errors"));
     }
 }
+
 
 struct SPIRVGenerator {
     struct HashFuncLabelPair {
@@ -7923,6 +8060,7 @@ struct SPIRVGenerator {
 
     spv::SpvBuildLogger logger;
     spv::Builder builder;
+    SCCBuilder scc;
 
     Label *active_function;
     spv::Function *active_function_value;
@@ -8231,6 +8369,96 @@ struct SPIRVGenerator {
         }
     }
 
+    // set of processed SCC groups
+    std::unordered_set<size_t> handled_loops;
+
+    bool handle_loop_label (Label *label,
+        Label *&continue_label,
+        Label *&break_label) {
+        auto &&group = scc.group(label);
+        if (group.labels.size() <= 1)
+            return false;
+        if (handled_loops.count(group.index))
+            return false;
+        handled_loops.insert(group.index);
+        if (!label->is_basic_block_like()) {
+
+        }
+        auto &&labels = group.labels;
+        Label *header_label = label;
+        continue_label = nullptr;
+        break_label = nullptr;
+        size_t count = labels.size();
+        for (size_t i = 0; i < count; ++i) {
+            Label *l = labels[i];
+            if (l->is_calling(header_label)
+                || l->is_continuing_to(header_label)) {
+                if (continue_label) {
+                    StyledStream ss;
+                    ss << header_label->anchor << " for this loop" << std::endl;
+                    ss << continue_label->body.anchor << " previous continue is here" << std::endl;
+                    //stream_label(ss, continue_label, StreamLabelFormat::debug_single());
+                    //stream_label(ss, l, StreamLabelFormat::debug_single());
+                    set_active_anchor(l->body.anchor);
+                    location_error(String::from(
+                        "IL->SPIR: duplicate continue label found. only one continue label is permitted per loop."));
+                }
+                continue_label = l;
+            }
+            auto &&enter = l->body.enter;
+            if ((enter.type == TYPE_Builtin)
+                && (enter.builtin.value() == FN_Branch)) {
+                auto &&args = l->body.args;
+                assert(args.size() >= 4);
+                Label *then_label = args[2].value;
+                Label *else_label = args[3].value;
+                Label *result = nullptr;
+                if (scc.group_id(then_label) != group.index) {
+                    result = then_label;
+                } else if (scc.group_id(else_label) != group.index) {
+                    result = else_label;
+                }
+                if (result) {
+                    if (break_label && (break_label != result)) {
+                        StyledStream ss;
+                        ss << header_label->anchor << " for this loop" << std::endl;
+                        ss << break_label->anchor << " previous break is here" << std::endl;
+                        //stream_label(ss, break_label, StreamLabelFormat::debug_single());
+                        //stream_label(ss, result, StreamLabelFormat::debug_single());
+                        set_active_anchor(result->anchor);
+                        location_error(String::from(
+                            "IL->SPIR: duplicate break label found. only one break label is permitted per loop"));
+                    }
+                    break_label = result;
+                }
+            }
+        }
+        assert(continue_label);
+        assert(continue_label->is_basic_block_like());
+        if (!break_label) {
+            location_error(String::from(
+                "IL->SPIR: loop is infinite"));
+        }
+        assert(break_label->is_basic_block_like());
+        #if 0
+        StyledStream ss;
+        ss << "loop found:" << std::endl;
+        ss << "    labels in group:";
+        for (size_t i = 0; i < count; ++i) {
+            ss << " " << labels[i];
+        }
+        ss << std::endl;
+        ss << "    entry: " << label << std::endl;
+        if (continue_label) {
+            ss << "    continue: " << continue_label << std::endl;
+        }
+        if (break_label) {
+            ss << "    break: " << break_label << std::endl;
+        }
+        #endif
+        return true;
+    }
+
     void write_label_body(Label *label) {
     repeat:
         assert(label->body.is_complete());
@@ -8243,6 +8471,21 @@ struct SPIRVGenerator {
 
         write_anchor(label->body.anchor);
 
+        Label *continue_label = nullptr;
+        Label *break_label = nullptr;
+        bool is_loop_header = handle_loop_label(label, continue_label, break_label);
+        spv::Block *bb_continue = nullptr;
+        spv::Block *bb_merge = nullptr;
+        unsigned int control = spv::LoopControlMaskNone;
+        if (is_loop_header) {
+            bb_continue = label_to_basic_block(continue_label, true);
+            bb_merge = label_to_basic_block(break_label, true);
+        }
+
+#define HANDLE_LOOP_MERGE() \
+    if (is_loop_header) { \
+        builder.createLoopMerge(bb_merge, bb_continue, control); \
+    }
         assert(!args.empty());
         size_t argcount = args.size() - 1;
         size_t argn = 1;
@@ -8255,7 +8498,7 @@ struct SPIRVGenerator {
         spv::Id NAME = argument_to_value(_ ## NAME);
 #define READ_LABEL_BLOCK(NAME) \
         assert(argn <= argcount); \
-        spv::Block *NAME = label_to_basic_block(args[argn++].value); \
+        spv::Block *NAME = label_to_basic_block(args[argn++].value, is_loop_header); \
         assert(NAME);
 #define READ_TYPE(NAME) \
         assert(argn <= argcount); \
@@ -8304,6 +8547,7 @@ struct SPIRVGenerator {
                 READ_VALUE(cond);
                 READ_LABEL_BLOCK(then_block);
                 READ_LABEL_BLOCK(else_block);
+                HANDLE_LOOP_MERGE();
                 builder.createConditionalBranch(cond, then_block, else_block);
                 terminated = true;
             } break;
@@ -8642,7 +8886,7 @@ struct SPIRVGenerator {
             retvalue = builder.createBuiltinCall(T, glsl_ext_inst, builtin, values);
         } else if (enter.type == TYPE_Label) {
             if (enter.label->is_basic_block_like()) {
-                auto block = label_to_basic_block(enter.label);
+                auto block = label_to_basic_block(enter.label, is_loop_header);
                 if (!block) {
                     // no basic block was generated - just generate assignments
                     auto &&params = enter.label->params;
@@ -8665,6 +8909,7 @@ struct SPIRVGenerator {
                         op->addIdOperand(value);
                         op->addIdOperand(bbfrom->getId());
                     }
+                    HANDLE_LOOP_MERGE();
                     builder.createBranch(block);
                     terminated = true;
                 }
@@ -8722,7 +8967,7 @@ struct SPIRVGenerator {
                 builder.makeReturn(true, 0);
             }
         } else if (contarg.type == TYPE_Label) {
-            auto bb = label_to_basic_block(contarg.label);
+            auto bb = label_to_basic_block(contarg.label, is_loop_header);
             if (bb) {
                 if (retvalue) {
                     auto bbfrom = builder.getBuildPoint();
@@ -8748,7 +8993,7 @@ struct SPIRVGenerator {
                         op->addIdOperand(bbfrom->getId());
                     }
                 }
-
+                HANDLE_LOOP_MERGE();
                 builder.createBranch(bb);
             } else {
                 if (retvalue) {
@@ -8784,6 +9029,7 @@ struct SPIRVGenerator {
     #undef READ_VALUE
     #undef READ_TYPE
     #undef READ_LABEL_BLOCK
+    #undef HANDLE_LOOP_MERGE
 
     spv::Id build_call(const Type *functype, spv::Function* func, Args &args) {
         size_t argcount = args.size() - 1;
@@ -9023,14 +9269,13 @@ struct SPIRVGenerator {
         }
     }
 
-    spv::Block *label_to_basic_block(Label *label) {
+    spv::Block *label_to_basic_block(Label *label, bool force = false) {
         auto old_bb = builder.getBuildPoint();
         auto func = &old_bb->getParent();
         auto it = label2bb.find({func, label});
         if (it == label2bb.end()) {
-            if (has_single_caller(label)) {
+            if (has_single_caller(label) && !force) {
                 // not generating basic blocks for single user labels
-                label2bb.insert({{func, label}, nullptr});
                 return nullptr;
             }
             //const char *name = label->name.name()->data;
@@ -9152,6 +9397,8 @@ struct SPIRVGenerator {
                 (*it)->insert_into_usermap(user_map);
             }
         }
+
+        scc.walk(entry);
 
         //const char *name = entry->name.name()->data;
         //module = LLVMModuleCreateWithName(name);
@@ -11651,6 +11898,32 @@ struct Solver {
         return false;
     }
 
+    bool label_returns_unreturnable_types(Label *l) {
+        if (l->is_basic_block_like())
+            return false;
+        if (!l->is_return_param_typed())
+            return false;
+        const ReturnLabelType *rlt = cast<ReturnLabelType>(l->params[0]->type);
+        for (size_t i = 0; i < rlt->values.size(); ++i) {
+            auto &&val = rlt->values[i].value;
+            if (is_unknown(val)) {
+                auto T = val.typeref;
+                if (!is_opaque(T)) {
+                    T = storage_type(T);
+                    if (T->kind() == TK_Pointer) {
+                        auto pt = cast<PointerType>(T);
+                        if (pt->storage_class != SYM_Unnamed) {
+                            StyledStream ss;
+                            ss << "found one: " << l << std::endl;
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     bool label_returns_closures(Label *l) {
         if (l->is_basic_block_like())
             return false;
@@ -11760,9 +12033,11 @@ struct Solver {
         assert(!newl->params.empty());
         bool has_return_type = newl->is_return_param_typed();
         bool returns_closures = label_returns_closures(newl);
+        bool returns_unreturnable_types = label_returns_unreturnable_types(newl);
 
         if (has_return_type
             && (returns_closures
+                || returns_unreturnable_types
                 || (!reentrant
                     && is_trivial_function(newl)))) {
             // need to inline the function
