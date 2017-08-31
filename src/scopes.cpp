@@ -5761,6 +5761,13 @@ public:
         build_scope(um, tempscope);
     }
 
+    Label *get_original() {
+        Label *l = this;
+        while (l->original)
+            l = l->original;
+        return l;
+    }
+
     StyledStream &stream_id(StyledStream &ss) const {
         if (original) {
             original->stream_id(ss);
@@ -8025,105 +8032,106 @@ struct SPIRVGenerator {
             }
             return it->second;
         }
-        switch(value.type->kind()) {
-        case TK_Integer: {
-            auto it = cast<IntegerType>(value.type);
-            if (it->issigned) {
-                switch(it->width) {
-                case 8: return builder.makeIntConstant(
-                    builder.makeIntegerType(8, true), value.i8);
-                case 16: return builder.makeIntConstant(
-                    builder.makeIntegerType(16, true), value.i16);
-                case 32: return builder.makeIntConstant(value.i32);
-                case 64: return builder.makeInt64Constant(value.i64);
-                default: break;
+        if (value.type != TYPE_String) {
+            switch(value.type->kind()) {
+            case TK_Integer: {
+                auto it = cast<IntegerType>(value.type);
+                if (it->issigned) {
+                    switch(it->width) {
+                    case 8: return builder.makeIntConstant(
+                        builder.makeIntegerType(8, true), value.i8);
+                    case 16: return builder.makeIntConstant(
+                        builder.makeIntegerType(16, true), value.i16);
+                    case 32: return builder.makeIntConstant(value.i32);
+                    case 64: return builder.makeInt64Constant(value.i64);
+                    default: break;
+                    }
+                } else {
+                    switch(it->width) {
+                    case 1: return builder.makeBoolConstant(value.i1);
+                    case 8: return builder.makeIntConstant(
+                        builder.makeIntegerType(8, false), value.i8);
+                    case 16: return builder.makeIntConstant(
+                        builder.makeIntegerType(16, false), value.i16);
+                    case 32: return builder.makeUintConstant(value.u32);
+                    case 64: return builder.makeUint64Constant(value.u64);
+                    default: break;
+                    }
                 }
-            } else {
-                switch(it->width) {
-                case 1: return builder.makeBoolConstant(value.i1);
-                case 8: return builder.makeIntConstant(
-                    builder.makeIntegerType(8, false), value.i8);
-                case 16: return builder.makeIntConstant(
-                    builder.makeIntegerType(16, false), value.i16);
-                case 32: return builder.makeUintConstant(value.u32);
-                case 64: return builder.makeUint64Constant(value.u64);
-                default: break;
-                }
-            }
-            StyledString ss;
-            ss.out << "IL->SPIR: unsupported integer constant type " << value.type;
-            location_error(ss.str());
-        } break;
-        case TK_Real: {
-            auto rt = cast<RealType>(value.type);
-            switch(rt->width) {
-            case 32: return builder.makeFloatConstant(value.f32);
-            case 64: return builder.makeDoubleConstant(value.f64);
-            default: break;
-            }
-            StyledString ss;
-            ss.out << "IL->SPIR: unsupported real constant type " << value.type;
-            location_error(ss.str());
-        } break;
-        case TK_Pointer: {
-            if (is_function_pointer(value.type)) {
                 StyledString ss;
-                ss.out << "IL->SPIR: function pointer constants are unsupported";
+                ss.out << "IL->SPIR: unsupported integer constant type " << value.type;
                 location_error(ss.str());
+            } break;
+            case TK_Real: {
+                auto rt = cast<RealType>(value.type);
+                switch(rt->width) {
+                case 32: return builder.makeFloatConstant(value.f32);
+                case 64: return builder.makeDoubleConstant(value.f64);
+                default: break;
+                }
+                StyledString ss;
+                ss.out << "IL->SPIR: unsupported real constant type " << value.type;
+                location_error(ss.str());
+            } break;
+            case TK_Pointer: {
+                if (is_function_pointer(value.type)) {
+                    StyledString ss;
+                    ss.out << "IL->SPIR: function pointer constants are unsupported";
+                    location_error(ss.str());
+                }
+                auto pt = cast<PointerType>(value.type);
+                auto val = argument_to_value(pt->unpack(value.pointer));
+                auto id = builder.createVariable(spv::StorageClassFunction,
+                    builder.getTypeId(val), nullptr);
+                builder.getInstruction(id)->addIdOperand(val);
+                return id;
+            } break;
+            case TK_Typename: {
+                auto tn = cast<TypenameType>(value.type);
+                assert(tn->finalized());
+                Any storage_value = value;
+                storage_value.type = tn->storage_type;
+                return argument_to_value(storage_value);
+            } break;
+            case TK_Array: {
+                auto ai = cast<ArrayType>(value.type);
+                size_t count = ai->count;
+                std::vector<spv::Id> values;
+                for (size_t i = 0; i < count; ++i) {
+                    values.push_back(argument_to_value(ai->unpack(value.pointer, i)));
+                }
+                return builder.makeCompositeConstant(
+                    type_to_spirv_type(value.type), values);
+            } break;
+            case TK_Vector: {
+                auto vi = cast<VectorType>(value.type);
+                size_t count = vi->count;
+                std::vector<spv::Id> values;
+                for (size_t i = 0; i < count; ++i) {
+                    values.push_back(argument_to_value(vi->unpack(value.pointer, i)));
+                }
+                return builder.makeCompositeConstant(
+                    type_to_spirv_type(value.type), values);
+            } break;
+            case TK_Tuple: {
+                auto ti = cast<TupleType>(value.type);
+                size_t count = ti->types.size();
+                std::vector<spv::Id> values;
+                for (size_t i = 0; i < count; ++i) {
+                    values.push_back(argument_to_value(ti->unpack(value.pointer, i)));
+                }
+                return builder.makeCompositeConstant(
+                    type_to_spirv_type(value.type), values);
+            } break;
+            case TK_Union: {
+                auto ui = cast<UnionType>(value.type);
+                value.type = ui->tuple_type;
+                return argument_to_value(value);
+            } break;
+            default: {
+            } break;
             }
-            auto pt = cast<PointerType>(value.type);
-            auto val = argument_to_value(pt->unpack(value.pointer));
-            auto id = builder.createVariable(spv::StorageClassFunction,
-                builder.getTypeId(val), nullptr);
-            builder.getInstruction(id)->addIdOperand(val);
-            return id;
-        } break;
-        case TK_Typename: {
-            auto tn = cast<TypenameType>(value.type);
-            assert(tn->finalized());
-            Any storage_value = value;
-            storage_value.type = tn->storage_type;
-            return argument_to_value(storage_value);
-        } break;
-        case TK_Array: {
-            auto ai = cast<ArrayType>(value.type);
-            size_t count = ai->count;
-            std::vector<spv::Id> values;
-            for (size_t i = 0; i < count; ++i) {
-                values.push_back(argument_to_value(ai->unpack(value.pointer, i)));
-            }
-            return builder.makeCompositeConstant(
-                type_to_spirv_type(value.type), values);
-        } break;
-        case TK_Vector: {
-            auto vi = cast<VectorType>(value.type);
-            size_t count = vi->count;
-            std::vector<spv::Id> values;
-            for (size_t i = 0; i < count; ++i) {
-                values.push_back(argument_to_value(vi->unpack(value.pointer, i)));
-            }
-            return builder.makeCompositeConstant(
-                type_to_spirv_type(value.type), values);
-        } break;
-        case TK_Tuple: {
-            auto ti = cast<TupleType>(value.type);
-            size_t count = ti->types.size();
-            std::vector<spv::Id> values;
-            for (size_t i = 0; i < count; ++i) {
-                values.push_back(argument_to_value(ti->unpack(value.pointer, i)));
-            }
-            return builder.makeCompositeConstant(
-                type_to_spirv_type(value.type), values);
-        } break;
-        case TK_Union: {
-            auto ui = cast<UnionType>(value.type);
-            value.type = ui->tuple_type;
-            return argument_to_value(value);
-        } break;
-        default: {
-        } break;
         }
-
         auto it = const_cache.find(value);
         if (it != const_cache.end()) {
             return it->second;
@@ -8134,6 +8142,9 @@ struct SPIRVGenerator {
     }
 
     spv::Id create_spirv_value(Any value) {
+        if (value.type == TYPE_String) {
+            return builder.createString(value.string->data);
+        }
         switch(value.type->kind()) {
         case TK_Extern: {
             auto et = cast<ExternType>(value.type);
@@ -8210,6 +8221,16 @@ struct SPIRVGenerator {
             || builder.isBoolType(T);
     }
 
+    void write_anchor(const Anchor *anchor) {
+        assert(anchor);
+        assert(anchor->file);
+        if (use_debug_info) {
+            builder.addLine(
+                argument_to_value(anchor->path().name()),
+                anchor->lineno, anchor->column);
+        }
+    }
+
     void write_label_body(Label *label) {
     repeat:
         assert(label->body.is_complete());
@@ -8220,12 +8241,7 @@ struct SPIRVGenerator {
 
         set_active_anchor(label->body.anchor);
 
-        /*
-        LLVMValueRef diloc = nullptr;
-        if (use_debug_info) {
-            diloc = anchor_to_location(label->body.anchor);
-            LLVMSetCurrentDebugLocation(builder, diloc);
-        }*/
+        write_anchor(label->body.anchor);
 
         assert(!args.empty());
         size_t argcount = args.size() - 1;
@@ -9089,6 +9105,7 @@ struct SPIRVGenerator {
             }
 
             builder.setBuildPoint(bb);
+            write_anchor(label->anchor);
 
             auto &&params = label->params;
             size_t paramcount = params.size() - 1;
@@ -10845,9 +10862,6 @@ static void optimize_spirv(std::vector<unsigned int> &result, int opt_level) {
 
 static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_CompileSPIRV);
-//#ifdef SCOPES_WIN32
-    flags |= CF_NoDebugInfo;
-//#endif
 
     fn->verify_compilable();
 
@@ -10887,9 +10901,6 @@ static const String *compile_spirv(Symbol target, Label *fn, uint64_t flags) {
 
 static const String *compile_glsl(Symbol target, Label *fn, uint64_t flags) {
     Timer sum_compile_time(TIMER_CompileSPIRV);
-//#ifdef SCOPES_WIN32
-    flags |= CF_NoDebugInfo;
-//#endif
 
     fn->verify_compilable();
 
@@ -12452,7 +12463,7 @@ struct Solver {
     args = { none, __VA_ARGS__ };
 
     static void print_traceback_entry(StyledStream &ss, Label *last_head, Label *last_loc) {
-        assert(last_head);
+        if (!last_head) return;
         assert(last_loc);
         ss << last_loc->body.anchor << " in ";
         if (last_head->name == SYM_Unnamed) {
@@ -12466,16 +12477,8 @@ struct Solver {
         }
         ss << std::endl;
         last_loc->body.anchor->stream_source_line(ss);
-    }
-
-    static bool template_was_function(Label *l) {
-        while (l) {
-            if (!l->is_basic_block_like()) {
-                return true;
-            }
-            l = l->original;
-        }
-        return false;
+        //stream_label(ss, last_head->get_original(), StreamLabelFormat::debug_single());
+        //stream_label(ss, last_loc->get_original(), StreamLabelFormat::debug_single());
     }
 
     static void print_traceback() {
@@ -12492,11 +12495,19 @@ struct Solver {
         i++;
         while (i < sz) {
             l = traceback[lasti - i++];
-            if (template_was_function(l)) {
+            Label *orig = l->get_original();
+            if (!orig->is_basic_block_like()) {
                 print_traceback_entry(ss, last_head, last_loc);
                 last_head = l;
             }
             last_loc = l;
+            if (is_calling_label(orig)
+                && !orig->get_label_enter()->is_basic_block_like()) {
+                if (!last_head)
+                    last_head = last_loc;
+                print_traceback_entry(ss, last_head, last_loc);
+                last_head = nullptr;
+            }
         }
         print_traceback_entry(ss, last_head, last_loc);
     }

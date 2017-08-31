@@ -77,6 +77,12 @@ public:
         sourceFileStringId = fileString->getResultId();
         strings.push_back(std::unique_ptr<Instruction>(fileString));
     }
+    Id createString(const char *data) {
+        Instruction* str = new Instruction(getUniqueId(), NoType, OpString);
+        str->addStringOperand(data);
+        strings.push_back(std::unique_ptr<Instruction>(str));
+        return str->getResultId();
+    }
     void setSourceText(const std::string& text) { sourceText = text; }
     void addSourceExtension(const char* ext) { sourceExtensions.push_back(ext); }
     void setEmitOpLines() { emitOpLines = true; }
