@@ -931,6 +931,9 @@ syntax-extend
         fn (cls ET)
             pointer-type-set-flags cls
                 bor (pointer-type-flags cls) pointer-flag-non-writable
+    set-type-symbol! pointer 'strip-storage
+        fn (cls ET)
+            pointer-type-set-storage-class cls unnamed
     set-type-symbol! pointer 'readable?
         fn (cls)
             ((pointer-type-flags cls) & pointer-flag-non-readable) == 0:u64
@@ -1686,6 +1689,12 @@ define-infix> 800 @
 define reference
     typename "reference"
 
+fn pointer-type-imply? (src dest)
+    or
+        type== dest ('strip-storage src)
+        type== dest ('immutable src)
+        type== dest ('strip-storage ('immutable src))
+
 do
     fn deref (val)
         let T = (typeof val)
@@ -1730,10 +1739,9 @@ do
             let ptrtype = (storageof (typeof self))
             if (type== destT ptrtype)
                 return (bitcast self ptrtype)
+            if (pointer-type-imply? ptrtype destT)
+                return (bitcast self destT)
             let ET = (element-type ptrtype 0)
-            let imptrtype = (pointer ET)
-            if (type== destT imptrtype)
-                return (bitcast self imptrtype)
             if (array-type? ET)
                 let ET = (element-type ET 0)
                 let aptrtype = (pointer ET)
@@ -1785,7 +1793,7 @@ define-block-scope-macro var
         let PT =
             if (T <: reference)
                 storageof T
-            else (pointer T 'mutable)
+            else (typeof dest)
         let ref = (('from-pointer-type reference PT) dest)
         = ref value
         ref
@@ -1830,7 +1838,7 @@ define-macro global
         let PT =
             if (T <: reference)
                 storageof T
-            else (pointer T 'mutable)
+            else (typeof dest)
         let ref = (('from-pointer-type reference PT) dest)
         = ref value
         ref
@@ -2293,9 +2301,10 @@ typefn pointer '== (a b flipped)
 typefn pointer 'as (self destT)
     if (type== destT (element-type (typeof self) 0))
         load self
+
 # also supports mutable pointer safecast to immutable pointer
 typefn pointer 'imply (self destT)
-    if (type== destT ('immutable (typeof self)))
+    if (pointer-type-imply? (typeof self) destT)
         bitcast self destT
 
 # support getattr syntax

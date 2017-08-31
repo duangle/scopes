@@ -2619,11 +2619,9 @@ struct PointerType : Type {
             storage_class(_storage_class) {
         std::stringstream ss;
         if (storage_class != SYM_Unnamed) {
-            ss << storage_class.name()->data;
-            ss << "<" << element_type->name()->data << ">";
-        } else {
-            ss << element_type->name()->data;
+            ss << "<storage=" << storage_class.name()->data << ">";
         }
+        ss << element_type->name()->data;
         if (is_writable() && is_readable()) {
             ss << "*";
         } else if (is_readable()) {
@@ -2672,6 +2670,14 @@ static const Type *NativeROPointer(const Type *element_type) {
 
 static const Type *NativePointer(const Type *element_type) {
     return Pointer(element_type, 0, SYM_Unnamed);
+}
+
+static const Type *LocalROPointer(const Type *element_type) {
+    return Pointer(element_type, PTF_NonWritable, SYM_SPIRV_StorageClassFunction);
+}
+
+static const Type *LocalPointer(const Type *element_type) {
+    return Pointer(element_type, 0, SYM_SPIRV_StorageClassFunction);
 }
 
 //------------------------------------------------------------------------------
@@ -2938,13 +2944,15 @@ static const Type *Union(const std::vector<const Type *> &types) {
 //------------------------------------------------------------------------------
 
 enum ExternFlags {
-    // if storage class is 'Uniform, the value is a SSBO, not a UBO
+    // if storage class is 'Uniform, the value is a SSBO
     EF_BufferBlock = (1 << 0),
     EF_NonWritable = (1 << 1),
     EF_NonReadable = (1 << 2),
     EF_Volatile = (1 << 3),
     EF_Coherent = (1 << 4),
     EF_Restrict = (1 << 5),
+    // if storage class is 'Uniform, the value is a UBO
+    EF_Block = (1 << 6),
 };
 
 struct ExternType : Type {
@@ -2963,6 +2971,10 @@ struct ExternType : Type {
         std::stringstream ss;
         ss << "<extern " <<  _type->name()->data << ">";
         _name = String::from_stdstring(ss.str());
+        if ((_storage_class == SYM_SPIRV_StorageClassUniform)
+            && !(flags & EF_BufferBlock)) {
+            flags |= EF_Block;
+        }
         size_t ptrflags = 0;
         if (flags & EF_NonWritable)
             ptrflags |= PTF_NonWritable;
@@ -8147,13 +8159,13 @@ struct SPIRVGenerator {
             case SYM_Unnamed:
                 location_error(
                     String::from(
-                        "IL->SPIR: extern values with C storage class"
+                        "IL->SPIR: pointers with C storage class"
                         " are unsupported"));
                 break;
             default:
                 location_error(
                     String::from(
-                        "IL->SPIR: unsupported storage class for extern value"));
+                        "IL->SPIR: unsupported storage class for pointer"));
                 break;
         }
         return spv::StorageClassMax;
@@ -9115,7 +9127,7 @@ struct SPIRVGenerator {
         auto id = builder.makeStructType(members, name);
         if (flags & EF_BufferBlock) {
             builder.addDecoration(id, spv::DecorationBufferBlock);
-        } else {
+        } else if (flags & EF_Block) {
             builder.addDecoration(id, spv::DecorationBlock);
         }
         for (size_t i = 0; i < count; ++i) {
@@ -9156,11 +9168,9 @@ struct SPIRVGenerator {
         } break;
         case TK_Pointer: {
             auto pt = cast<PointerType>(type);
-            auto cls = spv::StorageClassFunction;
-            if (pt->storage_class != SYM_Unnamed) {
-                cls = storage_class_from_extern_class(pt->storage_class);
-            }
-            return builder.makePointer(cls, type_to_spirv_type(pt->element_type));
+            return builder.makePointer(
+                storage_class_from_extern_class(pt->storage_class),
+                type_to_spirv_type(pt->element_type));
         } break;
         case TK_Array: {
             auto ai = cast<ArrayType>(type);
@@ -11756,11 +11766,21 @@ struct Solver {
             const Type *argT = arg.value.indirect_type();
             if (k < fargcount) {
                 const Type *ft = fi->argument_types[k];
-                if (storage_type(ft) != storage_type(argT)) {
-                    StyledString ss;
-                    ss.out << "argument of type " << ft << " expected, got " << argT;
-                    location_error(ss.str());
+                const Type *A = storage_type(argT);
+                const Type *B = storage_type(ft);
+                if (A == B)
+                    continue;
+                if ((A->kind() == TK_Pointer) && (B->kind() == TK_Pointer)) {
+                    auto pa = cast<PointerType>(A);
+                    auto pb = cast<PointerType>(B);
+                    if ((pa->element_type == pb->element_type)
+                        && (pa->flags == pb->flags)
+                        && (pb->storage_class == SYM_Unnamed))
+                        continue;
                 }
+                StyledString ss;
+                ss.out << "argument of type " << ft << " expected, got " << argT;
+                location_error(ss.str());
             }
         }
     }
@@ -11913,8 +11933,6 @@ struct Solver {
                     if (T->kind() == TK_Pointer) {
                         auto pt = cast<PointerType>(T);
                         if (pt->storage_class != SYM_Unnamed) {
-                            StyledStream ss;
-                            ss << "found one: " << l << std::endl;
                             return true;
                         }
                     }
@@ -12504,15 +12522,19 @@ struct Solver {
             args[1].value.verify(TYPE_Type);
             RETARGTYPES(args[1].value.typeref);
         } break;
-        case FN_Malloc:
-        case FN_Alloca: {
+        case FN_Malloc: {
             CHECKARGS(1, 1);
             args[1].value.verify(TYPE_Type);
             RETARGTYPES(NativePointer(args[1].value.typeref));
         } break;
+        case FN_Alloca: {
+            CHECKARGS(1, 1);
+            args[1].value.verify(TYPE_Type);
+            RETARGTYPES(LocalPointer(args[1].value.typeref));
+        } break;
         case FN_AllocaOf: {
             CHECKARGS(1, 1);
-            RETARGTYPES(NativeROPointer(args[1].value.indirect_type()));
+            RETARGTYPES(LocalROPointer(args[1].value.indirect_type()));
         } break;
         case FN_MallocArray:
         case FN_AllocaArray: {
@@ -12526,6 +12548,10 @@ struct Solver {
             const Type *T = args[1].value.indirect_type();
             verify_kind<TK_Pointer>(T);
             verify_writable(T);
+            if (cast<PointerType>(T)->storage_class != SYM_Unnamed) {
+                location_error(String::from(
+                    "pointer is not a heap pointer"));
+            }
             RETARGTYPES();
         } break;
         case FN_GetElementPtr: {
