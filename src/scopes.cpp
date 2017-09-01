@@ -867,6 +867,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
     T(FN_DumpLabel, "dump-label") \
+    T(FN_DumpList, "dump-list") \
     T(FN_ClosureLabel, "Closure-label") \
     T(FN_ClosureFrame, "Closure-frame") \
     T(FN_FormatFrame, "Frame-format") \
@@ -5044,10 +5045,7 @@ struct StreamExpr : StreamAnchors {
             auto it = e.list;
             while (it != EOL) {
                 auto q = maybe_unsyntax(it->at);
-                if ((q.type == TYPE_Symbol)
-                    ||(q.type == TYPE_String)
-                    ||(q.type == TYPE_I32)
-                    ||(q.type == TYPE_F32)) {
+                if (q.type == TYPE_List) {
                     return true;
                 }
                 it = it->next;
@@ -5261,7 +5259,7 @@ public:
         return new Parameter(_anchor, _name, _type, PK_Regular);
     }
 
-    static Parameter *vararg_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
+    static Parameter *variadic_from(const Anchor *_anchor, Symbol _name, const Type *_type) {
         return new Parameter(_anchor, _name, _type, PK_Variadic);
     }
 };
@@ -14500,6 +14498,16 @@ static void verify_at_parameter_count(const List *topit, int mincount, int maxco
 
 //------------------------------------------------------------------------------
 
+static bool ends_with_parenthesis(Symbol sym) {
+    if (sym == SYM_Parenthesis)
+        return true;
+    const String *str = sym.name();
+    if (str->count < 3)
+        return false;
+    const char *dot = str->data + str->count - 3;
+    return !strcmp(dot, "...");
+}
+
 struct Expander {
     Label *state;
     Scope *env;
@@ -14595,7 +14603,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
+            Parameter *param = Parameter::variadic_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             args.push_back(nextstate);
             result = param;
@@ -14627,16 +14635,6 @@ struct Expander {
         }
     }
 
-    bool ends_with_parenthesis(Symbol sym) {
-        if (sym == SYM_Parenthesis)
-            return true;
-        const String *str = sym.name();
-        if (str->count < 3)
-            return false;
-        const char *dot = str->data + str->count - 3;
-        return !strcmp(dot, "...");
-    }
-
     Parameter *expand_parameter(Any value) {
         const Syntax *sxvalue = value;
         const Anchor *anchor = sxvalue->anchor;
@@ -14649,7 +14647,7 @@ struct Expander {
             _value.verify(TYPE_Symbol);
             Parameter *param = nullptr;
             if (ends_with_parenthesis(_value.symbol)) {
-                param = Parameter::vararg_from(anchor, _value.symbol, TYPE_Unknown);
+                param = Parameter::variadic_from(anchor, _value.symbol, TYPE_Unknown);
             } else {
                 param = Parameter::from(anchor, _value.symbol, TYPE_Unknown);
             }
@@ -14763,7 +14761,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor,
+            Parameter *param = Parameter::variadic_from(_anchor,
                 Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             if (state) {
@@ -15011,7 +15009,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
+            Parameter *param = Parameter::variadic_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             if (state) {
                 nextstate->body.scope_label = state;
@@ -15101,7 +15099,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
+            Parameter *param = Parameter::variadic_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             args.push_back(nextstate);
             longdest = nextstate;
@@ -15171,7 +15169,7 @@ struct Expander {
         Any result = none;
         if (dest.type == TYPE_Symbol) {
             nextstate = Label::continuation_from(_anchor, Symbol(SYM_Unnamed));
-            Parameter *param = Parameter::vararg_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
+            Parameter *param = Parameter::variadic_from(_anchor, Symbol(SYM_Unnamed), TYPE_Unknown);
             nextstate->append(param);
             args.push_back(nextstate);
             result = param;
@@ -15541,6 +15539,12 @@ static void f_dump_label(Label *label) {
     stream_label(ss, label, StreamLabelFormat::debug_all());
 }
 
+static const List *f_dump_list(const List *l) {
+    StyledStream ss(std::cerr);
+    stream_expr(ss, l, StreamExprFormat());
+    return l;
+}
+
 typedef struct { Any result; bool ok; } AnyBoolPair;
 static AnyBoolPair f_scope_at(Scope *scope, Symbol key) {
     Any result = none;
@@ -15710,7 +15714,11 @@ static const Syntax *f_syntax_new(const Anchor *anchor, Any value, bool quoted) 
 }
 
 static Parameter *f_parameter_new(const Anchor *anchor, Symbol symbol, const Type *type) {
-    return Parameter::from(anchor, symbol, type);
+    if (ends_with_parenthesis(symbol)) {
+        return Parameter::variadic_from(anchor, symbol, type);
+    } else {
+        return Parameter::from(anchor, symbol, type);
+    }
 }
 
 static const String *f_realpath(const String *path) {
@@ -16082,6 +16090,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ParameterIndex, f_parameter_index, TYPE_I32, TYPE_Parameter);
     DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, NativeROPointer(TYPE_I8), TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
+    DEFINE_PURE_C_FUNCTION(FN_DumpList, f_dump_list, TYPE_List, TYPE_List);
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, NativeROPointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);

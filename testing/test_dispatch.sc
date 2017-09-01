@@ -37,5 +37,23 @@ do
     #dump
         add3 true
 
+do
+    # recursive dispatch
+    fn... div2
+        (a : f32, b : f32)
+            fdiv a b
+        (a : i32, b : i32)
+            div2 (f32 a) (f32 b)
+        (a : i32, b : f32)
+            div2 (f32 a) b
+        (a : f32, b : i32)
+            div2 a (f32 b)
+
+    assert ((div2 4.0 2.0) == 2.0)
+    assert ((div2 4   2  ) == 2.0)
+    assert ((div2 4.0 2  ) == 2.0)
+    assert ((div2 4   2.0) == 2.0)
+
+
 false
 

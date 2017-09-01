@@ -1741,26 +1741,6 @@ fn type-matcher (types...)
                             get-types
                 loop i result... outargs...
 
-# takes two type matchers that have been specialized up to the function target
-    and returns a new type matcher that has also specialized up to the function
-    target, which tries to match f1 first, then f2, and otherwise passes
-    an error message to the error function, along with all previously attempted
-    type signature constructors to the error function.
-fn chain-fn-dispatch2 (f1 f2)
-    fn "with-error-fn" (f-error)
-        fn (args...)
-            call
-                f1
-                    fn (msgf get-types1)
-                        call
-                            f2
-                                fn (msgf get-types...)
-                                    f-error "could not match arguments to function" get-types1 get-types...
-                            args...
-                args...
-# same as the previous function, but takes an arbitrary number of arguments
-define chain-fn-dispatch (op2-rtl-multiop chain-fn-dispatch2)
-
 # formats a list of types to a string that can be used as readable function
     type signature
 fn format-type-signature (types...)
@@ -1779,6 +1759,31 @@ fn format-type-signature (types...)
                 .. (k as string) ":" (repr T)
             " "
 
+# takes two type matchers that have been specialized up to the function target
+    and returns a new type matcher that has also specialized up to the function
+    target, which tries to match f1 first, then f2, and otherwise passes
+    an error message to the error function, along with all previously attempted
+    type signature constructors to the error function.
+fn chain-fn-dispatch2 (f1 f2)
+    fn "with-error-fn" (f-error)
+        fn (args...)
+            call
+                f1
+                    fn (msgf get-types1)
+                        call
+                            f2
+                                fn (msgf get-types...)
+                                    f-error
+                                        fn ()
+                                            .. "could not match arguments of types "
+                                                format-type-signature (va-types args...)
+                                                "to function"
+                                        \ get-types1 get-types...
+                            args...
+                args...
+# same as the previous function, but takes an arbitrary number of arguments
+define chain-fn-dispatch (op2-rtl-multiop chain-fn-dispatch2)
+
 # a default error handling function that prints all type signatures and
     produces a compiler error
 fn fn-dispatch-error-handler (msgf get-types...)
@@ -1786,7 +1791,7 @@ fn fn-dispatch-error-handler (msgf get-types...)
     let sz = (va-countof get-types...)
     let loop (i) = 0
     if (icmp== i sz)
-        compiler-error! msgf
+        compiler-error! (msgf)
     else
         let get-types = (va@ i get-types...)
         compiler-message (format-type-signature (get-types))
@@ -1798,8 +1803,8 @@ fn fn-dispatcher (args...)
 
 # sugar for fn-dispatcher
 define-macro fn...
-    let name defs = (decons args)
-    let name = (name as Syntax as Symbol)
+    let sxname defs = (decons args)
+    let name = (sxname as Syntax as Symbol)
     fn handle-argdef (argdef)
         let argdef = (argdef as Syntax as list)
         let loop (i indefs argtypes argnames) = (unconst 0) argdef (unconst '()) (unconst '())
@@ -1829,9 +1834,12 @@ define-macro fn...
             cons fn argnames body
     let loop (indefs outdefs) = defs (unconst '())
     if (empty? indefs)
-        list define name
-            cons fn-dispatcher
-                list-reverse outdefs
+        let args = (Parameter (Syntax-anchor (sxname as Syntax)) 'args...)
+        list fn name (list args)
+            list
+                cons fn-dispatcher
+                    list-reverse outdefs
+                args
     else
         let def indefs = (decons indefs)
         let def = (def as Syntax as list)
