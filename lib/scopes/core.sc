@@ -510,10 +510,23 @@ fn op2-dispatch-bidi (symbol fallback)
 
 fn op2-ltr-multiop (f)
     fn (a b ...)
+        let sz = (va-countof ...)
         let loop (i result...) = 0 (f a b)
-        if (icmp<s i (va-countof ...))
+        if (icmp<s i sz)
             let x = (va@ i ...)
             loop (add i 1) (f result... x)
+        else result...
+
+fn op2-rtl-multiop (f)
+    fn (...)
+        let sz = (va-countof ...)
+        let i = (sub sz 1)
+        let x = (va@ i ...)
+        let loop (i result...) = i x
+        if (icmp>s i 0)
+            let i = (sub i 1)
+            let x = (va@ i ...)
+            loop i (f x result...)
         else result...
 
 fn == (a b) ((op2-dispatch-bidi '==) a b)
@@ -853,8 +866,8 @@ fn string-compare (a b)
         if (< ca cb) ca
         else cb
     let pa pb =
-        bitcast (getelementptr a 0 1 0) (pointer-type i8)
-        bitcast (getelementptr b 0 1 0) (pointer-type i8)
+        bitcast (getelementptr a 0 1 0) (pointer i8)
+        bitcast (getelementptr b 0 1 0) (pointer i8)
     let loop (i) =
         tie-const cc 0:usize
     if (== i cc)
