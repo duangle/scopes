@@ -1,5 +1,5 @@
 
-assert 
+assert
     match '(1 2 3)
         '(1 2 3) true
         else false
@@ -24,7 +24,7 @@ assert (w == 5)
 
 #assert
     match '(1 2 3)
-        (list 1 $q 3) 
+        (list 1 $q 3)
             assert (q == 2)
             true
         else false

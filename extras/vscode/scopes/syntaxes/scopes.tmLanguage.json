@@ -21,7 +21,7 @@
                 },
                 {
                     "name": "keyword.control.library.scopes",
-                    "match": "(method|struct|typefn|while|break|continue|for|in|match|using|filter|\\:|var|global|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "(fn\\.\\.\\.|method|struct|typefn|while|break|continue|for|in|match|using|filter|\\:|var|global|try|except|locals|import|assert|define(((-block)?-scope)?-macro|-infix[\\<\\>])?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "keyword.control.glsl.scopes",
@@ -112,7 +112,7 @@
                 },
                 {
                     "name": "support.type.glsl.scopes",
-                    "match": "((i|u)?sampler(1D|2D|3D|Cube|2DRect|(1D|2D|Cube)Array|Buffer|2DMS(Array)?)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+                    "match": "((i|u)?sampler(1D|2D|3D|Cube|2DRect|(1D|2D|Cube)Array|Buffer|2DMS(Array)?))(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 }
             ]
 		},

@@ -1696,6 +1696,151 @@ define-infix> 800 @
 #define-infix> 800 =@
 
 #-------------------------------------------------------------------------------
+# type based function dispatch
+#-------------------------------------------------------------------------------
+
+# a lazily constructed type matcher that takes a target function, an error
+    function, and finally a set of arguments and calls the target function
+    if all arguments could be implicitly converted to the destination type,
+    otherwise it calls the error function with a function that returns an
+    error message, and a function that returns the original type arguments used.
+fn type-matcher (types...)
+    fn get-types ()
+        types...
+    let typesz = (va-countof types...)
+    fn "with-target" (f)
+        fn "with-error-fn" (f-error)
+            fn (args...)
+                let sz = (va-countof args...)
+                if (icmp!= sz typesz)
+                    return
+                        f-error
+                            fn ()
+                                .. "argument mismatch (expected "
+                                    repr typesz
+                                    " but got "
+                                    repr sz
+                                    ")"
+                            get-types
+                let loop (i outargs...) = sz
+                if (icmp== i 0)
+                    return
+                        f outargs...
+                let i = (sub i 1)
+                let T = (va@ i types...)
+                let arg = (va@ i args...)
+                let result... = (forward-imply arg T)
+                if (va-empty? result...)
+                    return
+                        f-error
+                            fn ()
+                                .. "couldn't convert argument type from "
+                                    repr (typeof arg)
+                                    " to parameter type "
+                                    repr T
+                            get-types
+                loop i result... outargs...
+
+# takes two type matchers that have been specialized up to the function target
+    and returns a new type matcher that has also specialized up to the function
+    target, which tries to match f1 first, then f2, and otherwise passes
+    an error message to the error function, along with all previously attempted
+    type signature constructors to the error function.
+fn chain-fn-dispatch2 (f1 f2)
+    fn "with-error-fn" (f-error)
+        fn (args...)
+            call
+                f1
+                    fn (msgf get-types1)
+                        call
+                            f2
+                                fn (msgf get-types...)
+                                    f-error "could not match arguments to function" get-types1 get-types...
+                            args...
+                args...
+# same as the previous function, but takes an arbitrary number of arguments
+define chain-fn-dispatch (op2-rtl-multiop chain-fn-dispatch2)
+
+# formats a list of types to a string that can be used as readable function
+    type signature
+fn format-type-signature (types...)
+    let typesz = (va-countof types...)
+    let keys... = (va-keys types...)
+    let loop (i s) = 0 ""
+    if (icmp== i typesz)
+        return s
+    let T = (va@ i types...)
+    let k = (va@ i keys...)
+    loop (add i 1)
+        .. s
+            if (k == unnamed)
+                repr T
+            else
+                .. (k as string) ":" (repr T)
+            " "
+
+# a default error handling function that prints all type signatures and
+    produces a compiler error
+fn fn-dispatch-error-handler (msgf get-types...)
+    compiler-message "expected one of"
+    let sz = (va-countof get-types...)
+    let loop (i) = 0
+    if (icmp== i sz)
+        compiler-error! msgf
+    else
+        let get-types = (va@ i get-types...)
+        compiler-message (format-type-signature (get-types))
+        loop (add i 1)
+
+# composes multiple target-bound type matchers into a single function
+fn fn-dispatcher (args...)
+    (chain-fn-dispatch args...) fn-dispatch-error-handler
+
+# sugar for fn-dispatcher
+define-macro fn...
+    let name defs = (decons args)
+    let name = (name as Syntax as Symbol)
+    fn handle-argdef (argdef)
+        let argdef = (argdef as Syntax as list)
+        let loop (i indefs argtypes argnames) = (unconst 0) argdef (unconst '()) (unconst '())
+        if (empty? indefs)
+            return (list-reverse argtypes) (list-reverse argnames)
+        else
+            let indefs =
+                do
+                    if (i > 0)
+                        let comma indefs = (decons indefs)
+                        if ((comma as Syntax as Symbol) != ',)
+                            syntax-error! comma "',' separator expected"
+                        indefs
+                    else indefs
+            let argname sep argtype indefs = (decons indefs 3)
+            argname as Syntax as Symbol # verify argname is a symbol
+            if ((sep as Syntax as Symbol) != ':)
+                syntax-error! sep "syntax: (name : type, ...)"
+            loop (i + 1) indefs
+                cons (list argname '= argtype) argtypes
+                cons argname argnames
+    fn handle-def (def)
+        let argdef body = (decons def)
+        let argtypes argnames = (handle-argdef argdef)
+        list
+            cons type-matcher argtypes
+            cons fn argnames body
+    let loop (indefs outdefs) = defs (unconst '())
+    if (empty? indefs)
+        list define name
+            cons fn-dispatcher
+                list-reverse outdefs
+    else
+        let def indefs = (decons indefs)
+        let def = (def as Syntax as list)
+        loop indefs
+            cons
+                handle-def def
+                outdefs
+
+#-------------------------------------------------------------------------------
 # references
 #-------------------------------------------------------------------------------
 
