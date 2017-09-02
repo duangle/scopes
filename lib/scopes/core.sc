@@ -37,6 +37,9 @@ fn cond-const (a b)
     if a b
     else (unconst b)
 
+fn pointer== (a b)
+    rawcall icmp== (rawcall ptrtoint a usize) (rawcall ptrtoint b usize)
+
 fn type? (T)
     rawcall icmp== (rawcall ptrtoint type usize) (rawcall ptrtoint (rawcall typeof T) usize)
 
@@ -256,6 +259,9 @@ syntax-extend
 
     set-type-symbol! type '== (gen-type-op2 type==)
     set-type-symbol! Any '== (gen-type-op2 Any==)
+    set-type-symbol! Closure '== (gen-type-op2 pointer==)
+    set-type-symbol! Label '== (gen-type-op2 pointer==)
+
     set-type-symbol! string '.. (gen-type-op2 string-join)
     set-type-symbol! list '.. (gen-type-op2 list-join)
 
