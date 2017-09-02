@@ -1091,6 +1091,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Bitwidth, "bitwidth") \
     T(SYM_Super, "super") \
     T(SYM_ApplyType, "apply-type") \
+    T(SYM_ScopeCall, "scope-call") \
     T(SYM_Styler, "styler") \
     \
     /* list styles */ \
@@ -3966,7 +3967,7 @@ static void location_error(const String *msg) {
 
 struct Scope {
 public:
-    typedef std::unordered_map<Any, Any, Any::Hash> Map;
+    typedef std::unordered_map<Symbol, Any, Symbol::Hash> Map;
 protected:
     Scope(Scope *_parent = nullptr, Map *_map = nullptr) :
         parent(_parent),
@@ -4014,15 +4015,15 @@ public:
         bind(Symbol(name), value);
     }
 
-    void bind(const Any &name, const Any &value) {
+    void bind(Symbol name, const Any &value) {
         ensure_not_borrowed();
-        auto ret = map->insert(std::pair<Any, Any>(name, value));
+        auto ret = map->insert({name, value});
         if (!ret.second) {
             ret.first->second = value;
         }
     }
 
-    void del(const Any &name) {
+    void del(Symbol name) {
         ensure_not_borrowed();
         auto it = map->find(name);
         if (it != map->end()) {
@@ -4039,9 +4040,7 @@ public:
         do {
             auto &&map = *self->map;
             for (auto &&k : map) {
-                if (k.first.type != TYPE_Symbol)
-                    continue;
-                Symbol sym = k.first.symbol;
+                Symbol sym = k.first;
                 if (done.count(sym))
                     continue;
                 size_t dist = distance(s, sym.name());
@@ -4059,7 +4058,7 @@ public:
         return best_syms;
     }
 
-    bool lookup(const Any &name, Any &dest) const {
+    bool lookup(Symbol name, Any &dest) const {
         const Scope *self = this;
         do {
             auto it = self->map->find(name);
@@ -4072,7 +4071,7 @@ public:
         return false;
     }
 
-    bool lookup_local(const Any &name, Any &dest) const {
+    bool lookup_local(Symbol name, Any &dest) const {
         auto it = map->find(name);
         if (it != map->end()) {
             dest = it->second;
@@ -5302,7 +5301,8 @@ struct Body {
     // parent frame that maps the scope label.
     Label *scope_label;
 
-    Body() : anchor(nullptr), enter(none), flags(0), scope_label(nullptr) {}
+    Body() :
+        anchor(nullptr), enter(none), flags(0), scope_label(nullptr) {}
 
     bool is_complete() const {
         return flags & LBF_Complete;
@@ -5324,6 +5324,11 @@ struct Body {
         } else {
             flags &= ~LBF_RawCall;
         }
+    }
+
+    void copy_traits_from(const Body &other) {
+        flags = other.flags;
+        anchor = other.anchor;
     }
 };
 
@@ -5444,9 +5449,17 @@ public:
     }
 
     void verify_valid () {
-        if (!is_valid()) {
+        const String *msg = nullptr;
+        if (params.empty()) {
+            msg = String::from("label corrupt: parameters are missing");
+        } else if (!body.anchor) {
+            msg = String::from("label corrupt: body anchor is missing");
+        } else if (body.args.empty()) {
+            msg = String::from("label corrupt: body arguments are missing");
+        }
+        if (msg) {
             set_active_anchor(anchor);
-            location_error(String::from("function/label without valid body or parameters"));
+            location_error(msg);
         }
     }
 
@@ -6258,8 +6271,7 @@ static void mangle_remap_body(Label::UserMap &um, Label *ll, Label *entry, Mangl
         }
     }
     ll->flags = entry->flags & LF_Reentrant;
-    ll->body.flags = entry->body.flags;
-    ll->body.anchor = entry->body.anchor;
+    ll->body.copy_traits_from(entry->body);
     ll->body.enter = enter;
 
     size_t lasti = (args.size() - 1);
@@ -6293,8 +6305,7 @@ static void evaluate_body(const Frame *frame, Label *dest, Label *source) {
     Args &args = source->body.args;
     Args &body = dest->body.args;
     Args ret;
-    dest->body.flags = source->body.flags;
-    dest->body.anchor = source->body.anchor;
+    dest->body.copy_traits_from(source->body);
     evaluate(frame, source->body.enter, ret);
     dest->body.enter = first(ret).value;
     body.clear();
@@ -12821,7 +12832,7 @@ struct Solver {
         const Type *T = enter.indirect_type();
 
         Any value = none;
-        auto result = T->lookup_call_handler(value);
+        bool result = T->lookup_call_handler(value);
         assert(result);
         args.insert(args.begin() + 1, KeyAny(enter));
         enter = value;
@@ -15943,7 +15954,8 @@ static AnyAnyPair f_scope_next(Scope *scope, Any key) {
             return { it->first, it->second };
         }
     } else {
-        auto it = map.find(key);
+        key.verify(TYPE_Symbol);
+        auto it = map.find(key.symbol);
         if (it == map.end()) {
             return { none, none };
         } else {
