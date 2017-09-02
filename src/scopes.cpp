@@ -4766,6 +4766,11 @@ struct LexerParser {
             return Syntax::from(anchor, get_number());
         } else if (this->token == tok_quote) {
             this->read_token();
+            if (this->token == tok_eof) {
+                set_active_anchor(anchor);
+                location_error(
+                    String::from("unexpected end of file after quote token"));
+            }
             return Syntax::from(anchor,
                 List::from({
                     Any(Syntax::from(anchor, Symbol(KW_Quote))),
