@@ -868,6 +868,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
     T(FN_DumpLabel, "dump-label") \
     T(FN_DumpList, "dump-list") \
+    T(FN_DumpFrame, "dump-frame") \
     T(FN_ClosureLabel, "Closure-label") \
     T(FN_ClosureFrame, "Closure-frame") \
     T(FN_FormatFrame, "Frame-format") \
@@ -878,6 +879,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_ExternLibrary, "extern-library") \
     T(FN_ExternSymbol, "extern-symbol") \
     T(FN_ExtractMemory, "extract-memory") \
+    T(FN_EnterSolverCLI, "enter-solver-cli!") \
     T(FN_ExtractValue, "extractvalue") T(FN_InsertValue, "insertvalue") \
     T(FN_ExtractElement, "extractelement") T(FN_InsertElement, "insertelement") \
     T(FN_ShuffleVector, "shufflevector") T(FN_GetElementPtr, "getelementptr") \
@@ -1128,6 +1130,11 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(SYM_Restrict, "restrict") \
     T(SYM_ReadOnly, "readonly") \
     T(SYM_WriteOnly, "writeonly") \
+    \
+    /* PE debugger commands */ \
+    T(SYM_C, "c") \
+    T(SYM_Skip, "skip") \
+    T(SYM_Original, "original") \
     \
     /* timer names */ \
     T(TIMER_Compile, "compile()") \
@@ -5334,6 +5341,7 @@ struct Body {
     void copy_traits_from(const Body &other) {
         flags = other.flags;
         anchor = other.anchor;
+        scope_label = other.scope_label;
     }
 };
 
@@ -5940,12 +5948,35 @@ protected:
         label(_label), frame(_frame) {}
 
 public:
+
+    struct Hash {
+        std::size_t operator()(const Closure &k) const {
+            return HashLen16(
+                std::hash<Label *>{}(k.label),
+                std::hash<const Frame *>{}(k.frame));
+        }
+    };
+
+    bool operator ==(const Closure &k) const {
+        return (label == k.label)
+            && (frame == k.frame);
+    }
+
+    static std::unordered_map<Closure, const Closure *, Closure::Hash> map;
+
     Label *label;
     const Frame *frame;
 
     static const Closure *from(Label *label, const Frame *frame) {
         assert (label->is_template());
-        return new Closure(label, frame);
+        Closure cl(label, frame);
+        auto it = map.find(cl);
+        if (it != map.end()) {
+            return it->second;
+        }
+        const Closure *result = new Closure(label, frame);
+        map.insert({cl, result});
+        return result;
     }
 
     StyledStream &stream(StyledStream &ost) const {
@@ -5957,6 +5988,8 @@ public:
         return ost;
     }
 };
+
+std::unordered_map<Closure, const Closure *, Closure::Hash> Closure::map;
 
 static StyledStream& operator<<(StyledStream& ss, const Closure *closure) {
     closure->stream(ss);
@@ -6002,54 +6035,6 @@ struct Frame {
         return true;
     }
 };
-
-void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
-    if (arg.value.type == TYPE_Label) {
-        // do not wrap labels in closures that have been solved
-        if (arg.value.label->body.is_complete()) {
-            dest.push_back(KeyAny(arg.key, arg.value.label));
-        } else {
-            dest.push_back(KeyAny(arg.key, Closure::from(arg.value.label, frame)));
-        }
-    } else if (arg.value.type == TYPE_Parameter
-        && arg.value.parameter->label) {
-        auto param = arg.value.parameter;
-        frame = frame->find_frame(param->label);
-        if (!frame) {
-            StyledString ss;
-            ss.out << "parameter " << param << " is unbound";
-            location_error(ss.str());
-        }
-        if (last_param && param->is_vararg()) {
-            for (size_t i = (size_t)param->index; i < frame->args.size(); ++i) {
-                dest.push_back(frame->args[i]);
-            }
-        } else if ((size_t)param->index < frame->args.size()) {
-            dest.push_back(KeyAny(arg.key, frame->args[param->index].value));
-        } else {
-            if (!param->is_vararg()) {
-#if SCOPES_DEBUG_CODEGEN
-                {
-                    StyledStream ss;
-                    ss << frame << " " << frame->label;
-                    for (size_t i = 0; i < frame->args.size(); ++i) {
-                        ss << " " << frame->args[i];
-                    }
-                    ss << std::endl;
-                }
-#endif
-                StyledString ss;
-                ss.out << "parameter " << param << " is out of bounds ("
-                    << param->index << " >= " << (int)frame->args.size() << ")";
-                location_error(ss.str());
-            }
-            dest.push_back(KeyAny(arg.key, none));
-        }
-    } else {
-        dest.push_back(arg);
-    }
-}
-
 
 //------------------------------------------------------------------------------
 // IL PRINTER
@@ -6257,6 +6242,68 @@ const ReturnLabelType *Label::verify_return_label() {
 }
 
 //------------------------------------------------------------------------------
+// FRAME PRINTER
+//------------------------------------------------------------------------------
+
+struct StreamFrameFormat {
+    enum Tagging {
+        All,
+        None,
+    };
+
+    Tagging follow;
+
+    StreamFrameFormat()
+        : follow(All)
+    {}
+
+    static StreamFrameFormat single() {
+        StreamFrameFormat fmt;
+        fmt.follow = None;
+        return fmt;
+    }
+};
+
+struct StreamFrame : StreamAnchors {
+    bool follow_all;
+    StreamFrameFormat fmt;
+
+    StreamFrame(StyledStream &_ss, const StreamFrameFormat &_fmt) :
+        StreamAnchors(_ss), fmt(_fmt) {
+        follow_all = (fmt.follow == StreamFrameFormat::All);
+    }
+
+    void stream_frame(const Frame *frame) {
+        if (follow_all) {
+            if (frame->parent)
+                stream_frame(frame->parent);
+        }
+        ss << frame;
+        if (frame->loop_count) {
+            ss << " [loop=" << frame->loop_count << "]" << std::endl;
+        }
+        ss << std::endl;
+        ss << "    instance = " << frame->instance << std::endl;
+        ss << "    original label = " << frame->label << std::endl;
+        auto &&args = frame->args;
+        for (size_t i = 0; i < args.size(); ++i) {
+            ss << "    " << i << " = " << args[i] << std::endl;
+        }
+    }
+
+    void stream(const Frame *frame) {
+        stream_frame(frame);
+    }
+
+};
+
+static void stream_frame(
+    StyledStream &_ss, const Frame *frame, const StreamFrameFormat &_fmt) {
+    StreamFrame streamer(_ss, _fmt);
+    streamer.stream(frame);
+}
+
+//------------------------------------------------------------------------------
 // IL MANGLING
 //------------------------------------------------------------------------------
 
@@ -6304,6 +6351,71 @@ static void mangle_remap_body(Label::UserMap &um, Label *ll, Label *entry, Mangl
     }
 
     ll->insert_into_usermap(um);
+}
+
+void evaluate(const Frame *frame, KeyAny arg, Args &dest, bool last_param = false) {
+    if (arg.value.type == TYPE_Label) {
+        // do not wrap labels in closures that have been solved
+        if (arg.value.label->body.is_complete()) {
+            dest.push_back(KeyAny(arg.key, arg.value.label));
+        } else {
+            Label *label = arg.value.label;
+            if (frame) {
+                const Frame *top = frame->find_frame(label);
+                if (top) {
+                    frame = top;
+                } else if (label->body.scope_label) {
+                    top = frame->find_frame(label->body.scope_label);
+                    if (top) {
+                        frame = top;
+                    } else {
+                        #if 0
+                        StyledStream ss(std::cerr);
+                        stream_frame(ss, frame, StreamFrameFormat());
+                        ss << "warning: can't find scope label " << label->body.scope_label << " for " << label << std::endl;
+                        #endif
+                    }
+                }
+            }
+            dest.push_back(KeyAny(arg.key, Closure::from(label, frame)));
+        }
+    } else if (arg.value.type == TYPE_Parameter
+        && arg.value.parameter->label) {
+        auto param = arg.value.parameter;
+        frame = frame->find_frame(param->label);
+        if (!frame) {
+            StyledString ss;
+            ss.out << "parameter " << param << " is unbound";
+            location_error(ss.str());
+        }
+        if (last_param && param->is_vararg()) {
+            for (size_t i = (size_t)param->index; i < frame->args.size(); ++i) {
+                dest.push_back(frame->args[i]);
+            }
+        } else if ((size_t)param->index < frame->args.size()) {
+            dest.push_back(KeyAny(arg.key, frame->args[param->index].value));
+        } else {
+            if (!param->is_vararg()) {
+#if SCOPES_DEBUG_CODEGEN
+                {
+                    StyledStream ss;
+                    ss << frame << " " << frame->label;
+                    for (size_t i = 0; i < frame->args.size(); ++i) {
+                        ss << " " << frame->args[i];
+                    }
+                    ss << std::endl;
+                }
+#endif
+                StyledString ss;
+                ss.out << "parameter " << param << " is out of bounds ("
+                    << param->index << " >= " << (int)frame->args.size() << ")";
+                location_error(ss.str());
+            }
+            dest.push_back(KeyAny(arg.key, none));
+        }
+    } else {
+        dest.push_back(arg);
+    }
 }
 
 static void evaluate_body(const Frame *frame, Label *dest, Label *source) {
@@ -6511,26 +6623,16 @@ static void map_constant_arguments(Frame *frame, Label *label, const Args &args)
 static Label *fold_type_label_single(const Frame *parent, Label *label, const Args &args) {
     assert(!label->body.is_complete());
     size_t loop_count = 0;
-    if (parent) {
-        const Frame *top = parent->find_frame(label);
-        if (top) {
-            parent = top->parent;
-            loop_count = top->loop_count + 1;
-            if (loop_count > SCOPES_MAX_RECURSIONS) {
-                StyledString ss;
-                ss.out << "maximum number of recursions exceeded during"
-                " compile time evaluation (" << SCOPES_MAX_RECURSIONS << ")."
-                " Use 'unconst' to prevent constant propagation.";
-                location_error(ss.str());
-            }
-        } else if (label->body.scope_label) {
-            const Frame *top = parent->find_frame(label->body.scope_label);
-            if (top) {
-                parent = top;
-            } else {
-                // the scope label isn't even part of this frame, truncate all of it
-                // parent = nullptr;
-            }
+    if (parent && (parent->label == label)) {
+        const Frame *top = parent;
+        parent = top->parent;
+        loop_count = top->loop_count + 1;
+        if (loop_count > SCOPES_MAX_RECURSIONS) {
+            StyledString ss;
+            ss.out << "maximum number of recursions exceeded during"
+            " compile time evaluation (" << SCOPES_MAX_RECURSIONS << ")."
+            " Use 'unconst' to prevent constant propagation.";
+            location_error(ss.str());
         }
     }
 
@@ -7536,7 +7638,7 @@ void f_exit(int c) {
     exit(c);
 }
 
-static void default_exception_handler(const Any &value) {
+static void print_exception(const Any &value) {
     auto cerr = StyledStream(std::cerr);
     if (value.type == TYPE_Exception) {
         const Exception *exc = value;
@@ -7551,6 +7653,10 @@ static void default_exception_handler(const Any &value) {
     } else {
         cerr << "exception raised: " << value << std::endl;
     }
+}
+
+static void default_exception_handler(const Any &value) {
+    print_exception(value);
     f_abort();
 }
 
@@ -11517,16 +11623,13 @@ static Any apply_real_op(Any a, Any b) {
 static Label *expand_module(Any expr, Scope *scope = nullptr);
 
 struct Solver {
-#if SCOPES_DEBUG_CODEGEN
     StyledStream ss_cout;
-#endif
     static std::vector<Label *> traceback;
     static int solve_refs;
+    static bool enable_step_debugger;
 
     Solver()
-#if SCOPES_DEBUG_CODEGEN
         : ss_cout(std::cout)
-#endif
     {}
 
     // inlining the continuation of a branch label without arguments
@@ -13966,6 +14069,92 @@ struct Solver {
         }
     }
 
+    enum CLICmd {
+        CmdNone,
+        CmdSkip,
+    };
+
+    CLICmd on_label_processing(Label *l, const char *task = nullptr) {
+        if (!enable_step_debugger)
+            return CmdNone;
+        CLICmd clicmd = CmdNone;
+        auto slfmt = StreamLabelFormat::debug_single();
+        slfmt.anchors = StreamLabelFormat::Line;
+        if (task) {
+            ss_cout << task << std::endl;
+        }
+        stream_label(ss_cout, l, slfmt);
+        bool skip = false;
+        while (!skip) {
+            set_active_anchor(l->body.anchor);
+            char *r = linenoise("solver> ");
+            if (!r) {
+                location_error(String::from("aborted"));
+            }
+
+            linenoiseHistoryAdd(r);
+            SCOPES_TRY()
+                auto file = SourceFile::from_string(Symbol("<string>"),
+                    String::from_cstr(r));
+                LexerParser parser(file);
+                auto expr = parser.parse();
+                //stream_expr(ss_cout, expr, StreamExprFormat());
+                const List *stmts = unsyntax(expr);
+                if (stmts != EOL) {
+                    while (stmts != EOL) {
+                        set_active_anchor(stmts->at.syntax->anchor);
+                        auto cmd = unsyntax(stmts->at);
+                        Symbol head = SYM_Unnamed;
+                        const List *arglist = nullptr;
+                        if (cmd.type == TYPE_Symbol) {
+                            head = cmd.symbol;
+                        } else if (cmd.type == TYPE_List) {
+                            arglist = cmd.list;
+                            if (arglist != EOL) {
+                                cmd = unsyntax(arglist->at);
+                                if (cmd.type == TYPE_Symbol) {
+                                    head = cmd.symbol;
+                                }
+                                arglist = arglist->next;
+                            }
+                        }
+                        if (head == SYM_Unnamed) {
+                            location_error(String::from("syntax error"));
+                        }
+                        switch(head.value()) {
+                        case SYM_C:
+                        case KW_Continue: {
+                            skip = true;
+                            enable_step_debugger = false;
+                        } break;
+                        case SYM_Skip: {
+                            skip = true;
+                            clicmd = CmdSkip;
+                            enable_step_debugger = false;
+                        } break;
+                        case SYM_Original: {
+                            Label *o = l->original;
+                            while (o) {
+                                stream_label(ss_cout, o, slfmt);
+                                o = o->original;
+                            }
+                        } break;
+                        default: {
+                            location_error(String::from("unknown command"));
+                        }break;
+                        }
+                        stmts = stmts->next;
+                    }
+                } else {
+                    skip = true;
+                }
+            SCOPES_CATCH(exc)
+                print_exception(exc);
+            SCOPES_TRY_END()
+        }
+        return clicmd;
+    }
+
     void normalize_label(Label *l) {
         if (l->body.is_complete())
             return;
@@ -13976,17 +14165,16 @@ struct Solver {
             location_error(String::from("stack overflow during partial evaluation"));
         }
 
+        CLICmd clicmd = CmdNone;
         while (!l->body.is_complete()) {
             assert(!l->is_template());
+            if (clicmd == CmdSkip) {
+                enable_step_debugger = true;
+            }
+            clicmd = on_label_processing(l);
 
-#if SCOPES_DEBUG_CODEGEN
-            ss_cout << "processing " << l << std::endl;
-#endif
             l->verify_valid();
 
-#if SCOPES_DEBUG_CODEGEN
-            stream_label(ss_cout, l, StreamLabelFormat::debug_single());
-#endif
             assert(all_params_typed(l));
 
             set_active_anchor(l->body.anchor);
@@ -14064,6 +14252,7 @@ struct Solver {
             l->body.set_complete();
             if (jumps_immediately(l)) {
                 Label *enter_label = l->get_label_enter();
+                /*
                 if (!enter_label->has_params()) {
 #if SCOPES_DEBUG_CODEGEN
                     stream_label(ss_cout, l, StreamLabelFormat::debug_single());
@@ -14072,7 +14261,7 @@ struct Solver {
 #endif
                     l->body = enter_label->body;
                     continue;
-                } else {
+                } else */ {
                     if (!is_jumping(l)) {
                         clear_continuation_arg(l);
                     }
@@ -14481,6 +14670,7 @@ struct Solver {
 
 std::vector<Label *> Solver::traceback;
 int Solver::solve_refs = 0;
+bool Solver::enable_step_debugger = false;
 
 //------------------------------------------------------------------------------
 // MACRO EXPANDER
@@ -15555,6 +15745,11 @@ static void f_dump_label(Label *label) {
     stream_label(ss, label, StreamLabelFormat::debug_all());
 }
 
+static void f_dump_frame(const Frame *frame) {
+    StyledStream ss(std::cerr);
+    stream_frame(ss, frame, StreamFrameFormat::single());
+}
+
 static const List *f_dump_list(const List *l) {
     StyledStream ss(std::cerr);
     stream_expr(ss, l, StreamExprFormat());
@@ -16059,6 +16254,10 @@ size_t f_label_countof_reachable(Label *label) {
     return labels.size();
 }
 
+static void f_enter_solver_cli () {
+    Solver::enable_step_debugger = true;
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -16108,6 +16307,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_StringNew, f_string_new, TYPE_String, NativeROPointer(TYPE_I8), TYPE_USize);
     DEFINE_PURE_C_FUNCTION(FN_DumpLabel, f_dump_label, TYPE_Void, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_DumpList, f_dump_list, TYPE_List, TYPE_List);
+    DEFINE_PURE_C_FUNCTION(FN_DumpFrame, f_dump_frame, TYPE_Void, TYPE_Frame);
     DEFINE_PURE_C_FUNCTION(FN_Eval, f_eval, TYPE_Label, TYPE_Syntax, TYPE_Scope);
     DEFINE_PURE_C_FUNCTION(FN_Typify, f_typify, TYPE_Label, TYPE_Closure, TYPE_I32, NativeROPointer(TYPE_Type));
     DEFINE_PURE_C_FUNCTION(FN_ArrayType, f_array_type, TYPE_Type, TYPE_Type, TYPE_USize);
@@ -16128,8 +16328,9 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_FunctionTypeIsVariadic, f_function_type_is_variadic, TYPE_Bool, TYPE_Type);
     DEFINE_PURE_C_FUNCTION(FN_LabelAnchor, f_label_anchor, TYPE_Anchor, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_ClosureLabel, f_closure_label, TYPE_Label, TYPE_Closure);
-    DEFINE_PURE_C_FUNCTION(FN_ClosureFrame, f_closure_frame, TYPE_Frame, TYPE_Frame);
+    DEFINE_PURE_C_FUNCTION(FN_ClosureFrame, f_closure_frame, TYPE_Frame, TYPE_Closure);
     DEFINE_PURE_C_FUNCTION(FN_LabelCountOfReachable, f_label_countof_reachable, TYPE_USize, TYPE_Label);
+    DEFINE_PURE_C_FUNCTION(FN_EnterSolverCLI, f_enter_solver_cli, TYPE_Void);
 
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);
 

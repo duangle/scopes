@@ -9,6 +9,7 @@ let modules =
         .test_dispatch
         .test_dots
         .test_extraparams
+        .test_frame
         .test_folding
         .test_fwdecl
         .test_glsl

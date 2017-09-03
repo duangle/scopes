@@ -261,6 +261,7 @@ syntax-extend
     set-type-symbol! Any '== (gen-type-op2 Any==)
     set-type-symbol! Closure '== (gen-type-op2 pointer==)
     set-type-symbol! Label '== (gen-type-op2 pointer==)
+    set-type-symbol! Frame '== (gen-type-op2 pointer==)
 
     set-type-symbol! string '.. (gen-type-op2 string-join)
     set-type-symbol! list '.. (gen-type-op2 list-join)
