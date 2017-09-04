@@ -246,6 +246,7 @@ extern "C" {
 #pragma GCC diagnostic ignored "-Wunused-function"
 #pragma GCC diagnostic ignored "-Wunused-const-variable"
 #pragma GCC diagnostic ignored "-Wdate-time"
+#pragma GCC diagnostic ignored "-Wabsolute-value"
 
 #ifdef SCOPES_WIN32
 #include <setjmpex.h>
@@ -561,13 +562,13 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
     T(OP_Tertiary) T(KW_SyntaxLog) \
     T(FN_Round) T(FN_RoundEven) T(FN_Trunc) \
-    T(FN_FAbs) T(FN_SAbs) T(FN_FSign) T(FN_SSign) \
+    T(OP_FAbs) T(OP_SAbs) T(FN_FSign) T(FN_SSign) \
     T(FN_Floor) T(FN_Ceil) T(FN_Fract) \
-    T(FN_Radians) T(FN_Degrees) \
-    T(FN_Sin) T(FN_Cos) T(FN_Tan) \
-    T(FN_Asin) T(FN_Acos) T(FN_Atan) T(FN_Atan2) \
-    T(FN_Exp) T(FN_Log) T(FN_Exp2) T(FN_Log2) \
-    T(FN_Sqrt) T(FN_InverseSqrt) \
+    T(OP_Radians) T(OP_Degrees) \
+    T(OP_Sin) T(OP_Cos) T(OP_Tan) \
+    T(OP_Asin) T(OP_Acos) T(OP_Atan) T(OP_Atan2) \
+    T(OP_Exp) T(OP_Log) T(OP_Exp2) T(OP_Log2) \
+    T(OP_Sqrt) T(OP_InverseSqrt) \
     T(FN_Fma) T(FN_Frexp) T(FN_Ldexp) \
     T(FN_Length) T(FN_Distance) T(FN_Cross) T(FN_Normalize)
 
@@ -765,13 +766,13 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
     T(FN_Round, "round") T(FN_RoundEven, "roundeven") T(FN_Trunc, "trunc") \
-    T(FN_FAbs, "fabs") T(FN_SAbs, "sabs") T(FN_FSign, "fsign") T(FN_SSign, "ssign") \
+    T(OP_FAbs, "fabs") T(OP_SAbs, "sabs") T(FN_FSign, "fsign") T(FN_SSign, "ssign") \
     T(FN_Floor, "floor") T(FN_Ceil, "ceil") T(FN_Fract, "fract") \
-    T(FN_Radians, "radians") T(FN_Degrees, "degrees") \
-    T(FN_Sin, "sin") T(FN_Cos, "cos") T(FN_Tan, "tan") \
-    T(FN_Asin, "asin") T(FN_Acos, "acos") T(FN_Atan, "atan") T(FN_Atan2, "atan2") \
-    T(FN_Exp, "exp") T(FN_Log, "log") T(FN_Exp2, "exp2") T(FN_Log2, "log2") \
-    T(FN_Sqrt, "sqrt") T(FN_InverseSqrt, "inversesqrt") \
+    T(OP_Radians, "radians") T(OP_Degrees, "degrees") \
+    T(OP_Sin, "sin") T(OP_Cos, "cos") T(OP_Tan, "tan") \
+    T(OP_Asin, "asin") T(OP_Acos, "acos") T(OP_Atan, "atan") T(OP_Atan2, "atan2") \
+    T(OP_Exp, "exp") T(OP_Log, "log") T(OP_Exp2, "exp2") T(OP_Log2, "log2") \
+    T(OP_Sqrt, "sqrt") T(OP_InverseSqrt, "inversesqrt") \
     T(FN_Fma, "fma") T(FN_Frexp, "frexp") T(FN_Ldexp, "ldexp") \
     T(FN_Length, "length") T(FN_Distance, "distance") T(FN_Cross, "cross") T(FN_Normalize, "normalize") \
     T(FN_AnyExtract, "Any-extract-constant") T(FN_AnyWrap, "Any-wrap") \
@@ -11272,7 +11273,15 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
 // OPERATOR TEMPLATES
 //------------------------------------------------------------------------------
 
-#define OP_TEMPLATE(NAME, RTYPE, OP) \
+#define OP1_TEMPLATE(NAME, RTYPE, OP) \
+    template<typename T> struct op_ ## NAME { \
+        typedef RTYPE rtype; \
+        rtype operator()(T x) { \
+            return OP; \
+        } \
+    };
+
+#define OP2_TEMPLATE(NAME, RTYPE, OP) \
     template<typename T> struct op_ ## NAME { \
         typedef RTYPE rtype; \
         rtype operator()(T a, T b) { \
@@ -11285,13 +11294,14 @@ inline bool isnan(T f) {
     return f != f;
 }
 
-#define BOOL_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, a OP b)
-#define BOOL_OF_TEMPLATE(NAME) OP_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b))
-#define BOOL_UF_TEMPLATE(NAME) OP_TEMPLATE(NAME, bool, isnan(a) || isnan(b))
-#define BOOL_OF_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b) && (a OP b))
-#define BOOL_UF_IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, bool, isnan(a) || isnan(b) || (a OP b))
-#define IFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, T, a OP b)
-#define PFXOP_TEMPLATE(NAME, OP) OP_TEMPLATE(NAME, T, OP(a, b))
+#define BOOL_IFXOP_TEMPLATE(NAME, OP) OP2_TEMPLATE(NAME, bool, a OP b)
+#define BOOL_OF_TEMPLATE(NAME) OP2_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b))
+#define BOOL_UF_TEMPLATE(NAME) OP2_TEMPLATE(NAME, bool, isnan(a) || isnan(b))
+#define BOOL_OF_IFXOP_TEMPLATE(NAME, OP) OP2_TEMPLATE(NAME, bool, !isnan(a) && !isnan(b) && (a OP b))
+#define BOOL_UF_IFXOP_TEMPLATE(NAME, OP) OP2_TEMPLATE(NAME, bool, isnan(a) || isnan(b) || (a OP b))
+#define IFXOP_TEMPLATE(NAME, OP) OP2_TEMPLATE(NAME, T, a OP b)
+#define PFXOP_TEMPLATE(NAME, OP) OP2_TEMPLATE(NAME, T, OP(a, b))
+#define PUNOP_TEMPLATE(NAME, OP) OP1_TEMPLATE(NAME, T, OP(x))
 
 template<typename RType>
 struct select_op_return_type {
@@ -11361,6 +11371,48 @@ IFXOP_TEMPLATE(FMul, *)
 IFXOP_TEMPLATE(FDiv, /)
 PFXOP_TEMPLATE(FRem, std::fmod)
 
+} namespace std {
+
+static bool abs(bool x) {
+    return x;
+}
+
+} namespace scopes {
+
+PUNOP_TEMPLATE(FAbs, std::abs)
+PUNOP_TEMPLATE(SAbs, std::abs)
+
+template<typename T>
+static T radians(T x) {
+    return x * T(M_PI / 180.0);
+}
+
+template<typename T>
+static T degrees(T x) {
+    return x * T(180.0 / M_PI);
+}
+
+template<typename T>
+static T inversesqrt(T x) {
+    return T(1.0) / std::sqrt(x);
+}
+
+PUNOP_TEMPLATE(Radians, radians)
+PUNOP_TEMPLATE(Degrees, degrees)
+PUNOP_TEMPLATE(Sin, std::sin)
+PUNOP_TEMPLATE(Cos, std::cos)
+PUNOP_TEMPLATE(Tan, std::tan)
+PUNOP_TEMPLATE(Asin, std::asin)
+PUNOP_TEMPLATE(Acos, std::acos)
+PUNOP_TEMPLATE(Atan, std::atan)
+PFXOP_TEMPLATE(Atan2, std::atan2)
+PUNOP_TEMPLATE(Exp, std::exp)
+PUNOP_TEMPLATE(Log, std::log)
+PUNOP_TEMPLATE(Exp2, std::exp2)
+PUNOP_TEMPLATE(Log2, std::log2)
+PUNOP_TEMPLATE(Sqrt, std::sqrt)
+PUNOP_TEMPLATE(InverseSqrt, inversesqrt)
+
 #undef BOOL_IFXOP_TEMPLATE
 #undef BOOL_OF_TEMPLATE
 #undef BOOL_UF_TEMPLATE
@@ -11406,11 +11458,62 @@ struct IntTypes_u {
 };
 
 template<typename IT, template<typename T> class OpT>
+static void apply_integer_vector_op(void *srcptr_a, void *destptr, size_t count) {
+    typedef typename OpT<IT>::rtype rtype;
+    for (size_t i = 0; i < count; ++i) {
+        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i]);
+    }
+}
+
+template<typename IT, template<typename T> class OpT>
 static void apply_integer_vector_op(void *srcptr_a, void *srcptr_b, void *destptr, size_t count) {
     typedef typename OpT<IT>::rtype rtype;
     for (size_t i = 0; i < count; ++i) {
         ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i], ((IT *)srcptr_b)[i]);
     }
+}
+
+template<typename IT, template<typename T> class OpT >
+static Any apply_integer_op(Any a) {
+    auto ST = storage_type(a.type);
+    size_t count;
+    size_t width;
+    void *srcptr_a;
+    void *destptr;
+    Any result = none;
+    auto RT = select_op_return_type<typename OpT<int8_t>::rtype>{}(a.type);
+    if (ST->kind() == TK_Vector) {
+        auto vi = cast<VectorType>(ST);
+        count = vi->count;
+        width = cast<IntegerType>(storage_type(vi->element_type))->width;
+        srcptr_a = a.pointer;
+        destptr = alloc_storage(RT);
+        result = Any::from_pointer(RT, destptr);
+    } else {
+        count = 1;
+        width = cast<IntegerType>(ST)->width;
+        srcptr_a = get_pointer(a.type, a);
+        result.type = RT;
+        destptr = get_pointer(result.type, result);
+    }
+    switch(width) {
+    case 1: apply_integer_vector_op<typename IT::i1, OpT>(
+        srcptr_a, destptr, count); break;
+    case 8: apply_integer_vector_op<typename IT::i8, OpT>(
+        srcptr_a, destptr, count); break;
+    case 16: apply_integer_vector_op<typename IT::i16, OpT>(
+        srcptr_a, destptr, count); break;
+    case 32: apply_integer_vector_op<typename IT::i32, OpT>(
+        srcptr_a, destptr, count); break;
+    case 64: apply_integer_vector_op<typename IT::i64, OpT>(
+        srcptr_a, destptr, count); break;
+    default:
+        StyledString ss;
+        ss.out << "unsupported bitwidth (" << width << ") for integer operation";
+        location_error(ss.str());
+        break;
+    };
+    return result;
 }
 
 template<typename IT, template<typename T> class OpT >
@@ -11460,11 +11563,56 @@ static Any apply_integer_op(Any a, Any b) {
 }
 
 template<typename IT, template<typename T> class OpT>
+static void apply_real_vector_op(void *srcptr_a, void *destptr, size_t count) {
+    typedef typename OpT<IT>::rtype rtype;
+    for (size_t i = 0; i < count; ++i) {
+        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i]);
+    }
+}
+
+template<typename IT, template<typename T> class OpT>
 static void apply_real_vector_op(void *srcptr_a, void *srcptr_b, void *destptr, size_t count) {
     typedef typename OpT<IT>::rtype rtype;
     for (size_t i = 0; i < count; ++i) {
         ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i], ((IT *)srcptr_b)[i]);
     }
+}
+
+template<template<typename T> class OpT>
+static Any apply_real_op(Any a) {
+    auto ST = storage_type(a.type);
+    size_t count;
+    size_t width;
+    void *srcptr_a;
+    void *destptr;
+    Any result = none;
+    auto RT = select_op_return_type<typename OpT<float>::rtype>{}(a.type);
+    if (ST->kind() == TK_Vector) {
+        auto vi = cast<VectorType>(ST);
+        count = vi->count;
+        width = cast<RealType>(storage_type(vi->element_type))->width;
+        srcptr_a = a.pointer;
+        destptr = alloc_storage(RT);
+        result = Any::from_pointer(RT, destptr);
+    } else {
+        count = 1;
+        width = cast<RealType>(ST)->width;
+        srcptr_a = get_pointer(a.type, a);
+        result.type = RT;
+        destptr = get_pointer(result.type, result);
+    }
+    switch(width) {
+    case 32: apply_real_vector_op<float, OpT>(
+        srcptr_a, destptr, count); break;
+    case 64: apply_real_vector_op<double, OpT>(
+        srcptr_a, destptr, count); break;
+    default:
+        StyledString ss;
+        ss.out << "unsupported bitwidth (" << width << ") for float operation";
+        location_error(ss.str());
+        break;
+    };
+    return result;
 }
 
 template<template<typename T> class OpT>
@@ -11533,7 +11681,16 @@ static Any apply_real_op(Any a, Any b) {
         FARITH_OP(FSub) \
         FARITH_OP(FMul) \
         FARITH_OP(FDiv) \
-        FARITH_OP(FRem)
+        FARITH_OP(FRem) \
+        \
+        IUN_OP(SAbs, i) \
+        FUN_OP(FAbs) \
+        \
+        FUN_OP(Radians) FUN_OP(Degrees) \
+        FUN_OP(Sin) FUN_OP(Cos) FUN_OP(Tan) \
+        FUN_OP(Asin) FUN_OP(Acos) FUN_OP(Atan) FARITH_OP(Atan2) \
+        FUN_OP(Exp) FUN_OP(Log) FUN_OP(Exp2) FUN_OP(Log2) \
+        FUN_OP(Sqrt) FUN_OP(InverseSqrt)
 
 static Label *expand_module(Any expr, Scope *scope = nullptr);
 
@@ -11623,6 +11780,14 @@ struct Solver {
             apply_type_error(dest);
         }
         return dest;
+    }
+
+    static void verify_integer_ops(Any x) {
+        verify_integer_vector(storage_type(x.indirect_type()));
+    }
+
+    static void verify_real_ops(Any x) {
+        verify_real_vector(storage_type(x.indirect_type()));
     }
 
     static void verify_integer_ops(Any a, Any b) {
@@ -12774,11 +12939,25 @@ struct Solver {
         verify_real_ops(args[1].value, args[2].value); \
         RETARGTYPES(args[1].value.indirect_type()); \
     } break;
-        B_ARITH_OPS()
+#define IUN_OP(NAME, PFX) \
+    case OP_ ## NAME: { \
+        CHECKARGS(1, 1); \
+        verify_integer_ops(args[1].value); \
+        RETARGTYPES(args[1].value.indirect_type()); \
+    } break;
+#define FUN_OP(NAME) \
+    case OP_ ## NAME: { \
+        CHECKARGS(1, 1); \
+        verify_real_ops(args[1].value); \
+        RETARGTYPES(args[1].value.indirect_type()); \
+    } break;
+            B_ARITH_OPS()
 
 #undef IARITH_NUW_NSW_OPS
 #undef IARITH_OP
 #undef FARITH_OP
+#undef IUN_OP
+#undef FUN_OP
         default: {
             StyledString ss;
             ss.out << "can not type builtin " << enter.builtin;
@@ -13586,6 +13765,8 @@ struct Solver {
         case OP_ICmpSLE: {
             CHECKARGS(2, 2);
             verify_integer_ops(args[1].value, args[2].value);
+#define B_INT_OP1(OP, N) \
+    result = apply_integer_op<IntTypes_ ## N, op_ ## OP>(args[1].value);
 #define B_INT_OP2(OP, N) \
     result = apply_integer_op<IntTypes_ ## N, op_ ## OP>(args[1].value, args[2].value);
             Any result = false;
@@ -13620,6 +13801,8 @@ struct Solver {
         case OP_FCmpULE: {
             CHECKARGS(2, 2);
             verify_real_ops(args[1].value, args[2].value);
+#define B_FLOAT_OP1(OP) \
+    result = apply_real_op<op_ ## OP>(args[1].value);
 #define B_FLOAT_OP2(OP) \
     result = apply_real_op<op_ ## OP>(args[1].value, args[2].value);
             Any result = false;
@@ -13675,6 +13858,24 @@ struct Solver {
         B_FLOAT_OP2(NAME); \
         RETARGS(result); \
     } break;
+#define IUN_OP(NAME, PFX) \
+    case OP_ ## NAME: { \
+        CHECKARGS(1, 1); \
+        verify_integer_ops(args[1].value); \
+        Any result = none; \
+        B_INT_OP1(NAME, PFX); \
+        result.type = args[1].value.type; \
+        RETARGS(result); \
+    } break;
+#define FUN_OP(NAME) \
+    case OP_ ## NAME: { \
+        CHECKARGS(1, 1); \
+        verify_real_ops(args[1].value); \
+        Any result = none; \
+        B_FLOAT_OP1(NAME); \
+        RETARGS(result); \
+    } break;
+
         B_ARITH_OPS()
 
         default: {
@@ -13708,8 +13909,13 @@ struct Solver {
 #undef FARITH_OP
 #undef FARITH_OPF
 #undef B_INT_OP2
+#undef B_INT_OP1
+#undef B_FLOAT_OP2
+#undef B_FLOAT_OP1
 #undef CHECKARGS
 #undef RETARGS
+#undef IUN_OP
+#undef FUN_OP
 
     /*
     void inline_single_label(Label *dest, Label *source) {

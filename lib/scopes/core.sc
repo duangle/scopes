@@ -638,18 +638,18 @@ fn repr (value)
 
 fn scalar-type (T)
     let ST = (storageof T)
-    if (type== ST vector)
+    if (type== (superof ST) vector)
         element-type ST 0
     else ST
+fn select-op (T sop fop)
+    let T = (scalar-type T)
+    if (type== (superof T) integer) sop
+    elseif (type== (superof T) real) fop
+    else
+        compiler-error! "invalid argument type; integer or real vector or scalar expected"
 
 fn abs (x)
-    let T = (scalar-type (typeof x))
-    if (type== (superof T) integer)
-        sabs x
-    elseif (type== (superof T) real)
-        fabs x
-    else
-        compiler-error! "invalid type"
+    (select-op (typeof x) sabs fabs) x
 
 fn getattr (self name)
     let T = (typeof self)
