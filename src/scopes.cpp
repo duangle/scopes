@@ -542,7 +542,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_IntToPtr) T(FN_PtrToInt) T(FN_Load) T(FN_Store) \
     T(FN_VolatileLoad) T(FN_VolatileStore) T(SFXFN_ExecutionMode) \
     T(FN_ExtractElement) T(FN_InsertElement) T(FN_ShuffleVector) \
-    T(FN_ExtractValue) T(FN_InsertValue) T(FN_Trunc) T(FN_ZExt) T(FN_SExt) \
+    T(FN_ExtractValue) T(FN_InsertValue) T(FN_ITrunc) T(FN_ZExt) T(FN_SExt) \
     T(FN_GetElementPtr) T(FN_OffsetOf) T(SFXFN_CompilerError) T(FN_VaCountOf) T(FN_VaAt) \
     T(FN_VaKeys) T(FN_VaValues) T(FN_CompilerMessage) T(FN_Undef) T(FN_NullOf) T(KW_Let) \
     T(KW_If) T(SFXFN_SetTypeSymbol) T(SFXFN_DelTypeSymbol) T(FN_ExternSymbol) \
@@ -559,7 +559,17 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_Shl) T(OP_LShr) T(OP_AShr) \
     T(OP_BAnd) T(OP_BOr) T(OP_BXor) \
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
-    T(OP_Tertiary) T(KW_SyntaxLog)
+    T(OP_Tertiary) T(KW_SyntaxLog) \
+    T(FN_Round) T(FN_RoundEven) T(FN_Trunc) \
+    T(FN_FAbs) T(FN_SAbs) T(FN_FSign) T(FN_SSign) \
+    T(FN_Floor) T(FN_Ceil) T(FN_Fract) \
+    T(FN_Radians) T(FN_Degrees) \
+    T(FN_Sin) T(FN_Cos) T(FN_Tan) \
+    T(FN_Asin) T(FN_Acos) T(FN_Atan) T(FN_Atan2) \
+    T(FN_Exp) T(FN_Log) T(FN_Exp2) T(FN_Log2) \
+    T(FN_Sqrt) T(FN_InverseSqrt) \
+    T(FN_Fma) T(FN_Frexp) T(FN_Ldexp) \
+    T(FN_Length) T(FN_Distance) T(FN_Cross) T(FN_Normalize)
 
 #define B_SPIRV_STORAGE_CLASS() \
     T(UniformConstant) \
@@ -726,99 +736,6 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(ContractionOff) \
     T(PostDepthCoverage)
 
-#define B_GLSL_STD_450_BUILTINS() \
-    T(Round) \
-    T(RoundEven) \
-    T(Trunc) \
-    T(FAbs) \
-    T(SAbs) \
-    T(FSign) \
-    T(SSign) \
-    T(Floor) \
-    T(Ceil) \
-    T(Fract) \
-    \
-    T(Radians) \
-    T(Degrees) \
-    T(Sin) \
-    T(Cos) \
-    T(Tan) \
-    T(Asin) \
-    T(Acos) \
-    T(Atan) \
-    T(Sinh) \
-    T(Cosh) \
-    T(Tanh) \
-    T(Asinh) \
-    T(Acosh) \
-    T(Atanh) \
-    T(Atan2) \
-    \
-    T(Pow) \
-    T(Exp) \
-    T(Log) \
-    T(Exp2) \
-    T(Log2) \
-    T(Sqrt) \
-    T(InverseSqrt) \
-    \
-    T(Determinant) \
-    T(MatrixInverse) \
-    \
-    T(Modf) \
-    T(ModfStruct) \
-    T(FMin) \
-    T(UMin) \
-    T(SMin) \
-    T(FMax) \
-    T(UMax) \
-    T(SMax) \
-    T(FClamp) \
-    T(UClamp) \
-    T(SClamp) \
-    T(FMix) \
-    T(IMix) \
-    T(Step) \
-    T(SmoothStep) \
-    \
-    T(Fma) \
-    T(Frexp) \
-    T(FrexpStruct) \
-    T(Ldexp) \
-    \
-    T(PackSnorm4x8) \
-    T(PackUnorm4x8) \
-    T(PackSnorm2x16) \
-    T(PackUnorm2x16) \
-    T(PackHalf2x16) \
-    T(PackDouble2x32) \
-    T(UnpackSnorm2x16) \
-    T(UnpackUnorm2x16) \
-    T(UnpackHalf2x16) \
-    T(UnpackSnorm4x8) \
-    T(UnpackUnorm4x8) \
-    T(UnpackDouble2x32) \
-    \
-    T(Length) \
-    T(Distance) \
-    T(Cross) \
-    T(Normalize) \
-    T(FaceForward) \
-    T(Reflect) \
-    T(Refract) \
-    \
-    T(FindILsb) \
-    T(FindSMsb) \
-    T(FindUMsb) \
-    \
-    T(InterpolateAtCentroid) \
-    T(InterpolateAtSample) \
-    T(InterpolateAtOffset) \
-    \
-    T(NMin) \
-    T(NMax) \
-    T(NClamp)
-
 #define B_MAP_SYMBOLS() \
     T(SYM_Unnamed, "") \
     \
@@ -847,6 +764,16 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
+    T(FN_Round, "round") T(FN_RoundEven, "roundeven") T(FN_Trunc, "trunc") \
+    T(FN_FAbs, "fabs") T(FN_SAbs, "sabs") T(FN_FSign, "fsign") T(FN_SSign, "ssign") \
+    T(FN_Floor, "floor") T(FN_Ceil, "ceil") T(FN_Fract, "fract") \
+    T(FN_Radians, "radians") T(FN_Degrees, "degrees") \
+    T(FN_Sin, "sin") T(FN_Cos, "cos") T(FN_Tan, "tan") \
+    T(FN_Asin, "asin") T(FN_Acos, "acos") T(FN_Atan, "atan") T(FN_Atan2, "atan2") \
+    T(FN_Exp, "exp") T(FN_Log, "log") T(FN_Exp2, "exp2") T(FN_Log2, "log2") \
+    T(FN_Sqrt, "sqrt") T(FN_InverseSqrt, "inversesqrt") \
+    T(FN_Fma, "fma") T(FN_Frexp, "frexp") T(FN_Ldexp, "ldexp") \
+    T(FN_Length, "length") T(FN_Distance, "distance") T(FN_Cross, "cross") T(FN_Normalize, "normalize") \
     T(FN_AnyExtract, "Any-extract-constant") T(FN_AnyWrap, "Any-wrap") \
     T(FN_ActiveAnchor, "active-anchor") T(FN_ActiveFrame, "active-frame") \
     T(FN_BitCountOf, "bitcountof") T(FN_IsSigned, "signed?") \
@@ -986,7 +913,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_SyntaxNew, "Syntax-new") \
     T(FN_SyntaxWrap, "Syntax-wrap") \
     T(FN_SyntaxStrip, "Syntax-strip") \
-    T(FN_Translate, "translate") T(FN_Trunc, "trunc") \
+    T(FN_Translate, "translate") T(FN_ITrunc, "itrunc") \
     T(FN_ZExt, "zext") T(FN_SExt, "sext") \
     T(FN_TupleOf, "tupleof") T(FN_TypeNew, "type-new") T(FN_TypeName, "type-name") \
     T(FN_TypeSizeOf, "type-sizeof") \
@@ -1192,10 +1119,6 @@ SYM_SPIRV_StorageClass ## NAME,
     SYM_SPIRV_ImageFormat ## NAME,
     B_SPIRV_IMAGE_FORMAT()
 #undef T
-#define T(NAME) \
-    SYM_GLSL_std_450_ ## NAME,
-    B_GLSL_STD_450_BUILTINS()
-#undef T
     SYM_Count,
 };
 
@@ -1250,10 +1173,6 @@ B_SPIRV_DIM()
 #define T(NAME) \
     case SYM_SPIRV_ImageFormat ## NAME: return "SYM_SPIRV_ImageFormat" #NAME;
 B_SPIRV_IMAGE_FORMAT()
-#undef T
-#define T(NAME) \
-    case SYM_GLSL_std_450_ ## NAME: return "SYM_GLSL_std_450_" #NAME;
-B_GLSL_STD_450_BUILTINS()
 #undef T
 case SYM_Count: return "SYM_Count";
     }
@@ -1811,10 +1730,6 @@ public:
     #define T(NAME) \
         map_known_symbol(SYM_SPIRV_ImageFormat ## NAME, String::from(#NAME));
         B_SPIRV_IMAGE_FORMAT()
-    #undef T
-    #define T(NAME) \
-        map_known_symbol(SYM_GLSL_std_450_ ## NAME, String::from("glsl.std.450." #NAME));
-        B_GLSL_STD_450_BUILTINS()
     #undef T
     }
 
@@ -8810,7 +8725,7 @@ struct SPIRVGenerator {
             case FN_Bitcast:
             case FN_IntToPtr:
             case FN_PtrToInt:
-            case FN_Trunc:
+            case FN_ITrunc:
             case FN_SExt:
             case FN_ZExt:
             case FN_FPTrunc:
@@ -8835,7 +8750,7 @@ struct SPIRVGenerator {
                 case FN_PtrToInt: op = spv::OpConvertPtrToU; break;
                 case FN_SExt: op = spv::OpSConvert; break;
                 case FN_ZExt: op = spv::OpUConvert; break;
-                case FN_Trunc: op = spv::OpSConvert; break;
+                case FN_ITrunc: op = spv::OpSConvert; break;
                 case FN_FPTrunc: op = spv::OpFConvert; break;
                 case FN_FPExt: op = spv::OpFConvert; break;
                 case FN_FPToUI: op = spv::OpConvertFToU; break;
@@ -8995,7 +8910,7 @@ struct SPIRVGenerator {
                 location_error(ss.str());
             } break;
             }
-        } else if (enter.type->kind() == TK_Extern) {
+        } /* else if (enter.type->kind() == TK_Extern) {
             auto et = cast<ExternType>(enter.type);
             GLSLstd450 builtin = GLSLstd450Bad;
             switch (enter.symbol.value()) {
@@ -9016,7 +8931,7 @@ struct SPIRVGenerator {
                 values.push_back(argument_to_value(args[i + 1].value));
             }
             retvalue = builder.createBuiltinCall(T, glsl_ext_inst, builtin, values);
-        } else if (enter.type == TYPE_Label) {
+        } */ else if (enter.type == TYPE_Label) {
             if (enter.label->is_basic_block_like()) {
                 auto block = label_to_basic_block(enter.label, is_loop_header);
                 if (!block) {
@@ -10431,7 +10346,7 @@ struct LLVMIRGenerator {
                 retvalue = LLVMBuildIntToPtr(builder, val, ty, ""); } break;
             case FN_PtrToInt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildPtrToInt(builder, val, ty, ""); } break;
-            case FN_Trunc: { READ_VALUE(val); READ_TYPE(ty);
+            case FN_ITrunc: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildTrunc(builder, val, ty, ""); } break;
             case FN_SExt: { READ_VALUE(val); READ_TYPE(ty);
                 retvalue = LLVMBuildSExt(builder, val, ty, ""); } break;
@@ -12444,7 +12359,7 @@ struct Solver {
             verify_integer(storage_type(DestT));
             RETARGTYPES(DestT);
         } break;
-        case FN_Trunc: {
+        case FN_ITrunc: {
             CHECKARGS(2, 2);
             const Type *T = args[1].value.indirect_type();
             verify_integer(storage_type(T));
@@ -13329,7 +13244,7 @@ struct Solver {
             result.type = DestT;
             RETARGS(result);
         } break;
-        case FN_Trunc: {
+        case FN_ITrunc: {
             CHECKARGS(2, 2);
             const Type *T = args[1].value.type;
             verify_integer(storage_type(T));
@@ -16695,7 +16610,7 @@ int main(int argc, char *argv[]) {
     }
 
 skip_regular_load:
-    Label *fn = expand_module(expr);
+    Label *fn = expand_module(expr, Scope::from(globals));
 
 #if SCOPES_DEBUG_CODEGEN
     StyledStream ss(std::cout);

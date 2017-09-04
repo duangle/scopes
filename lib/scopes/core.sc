@@ -330,7 +330,7 @@ syntax-extend
                         else
                             zext val destT
                     else
-                        trunc val destT
+                        itrunc val destT
                 elseif (real-type? destST)
                     if (signed? vT)
                         sitofp val destT
@@ -636,6 +636,21 @@ fn repr (value)
             default-styler style-type (type-name CT)
     else text
 
+fn scalar-type (T)
+    let ST = (storageof T)
+    if (type== ST vector)
+        element-type ST 0
+    else ST
+
+fn abs (x)
+    let T = (scalar-type (typeof x))
+    if (type== (superof T) integer)
+        sabs x
+    elseif (type== (superof T) real)
+        fabs x
+    else
+        compiler-error! "invalid type"
+
 fn getattr (self name)
     let T = (typeof self)
     let op success = (type@ T 'getattr)
@@ -741,10 +756,10 @@ fn Any-extract (val T)
             if (pointer-type? storageT)
                 inttoptr payload T
             elseif (integer-type? storageT)
-                trunc payload T
+                itrunc payload T
             elseif (real-type? storageT)
                 bitcast
-                    trunc payload (integer-type (bitcountof storageT) false)
+                    itrunc payload (integer-type (bitcountof storageT) false)
                     T
             else
                 compiler-error!
@@ -2419,7 +2434,7 @@ define-macro match
 typefn Closure 'imply (self destT)
     if (function-pointer-type? destT)
         let ET = (rawcall element-type destT 0)
-        let sz = (trunc (rawcall type-countof ET) i32)
+        let sz = (itrunc (rawcall type-countof ET) i32)
         if (rawcall function-type-variadic? ET)
             compiler-error! "cannot typify to variadic function"
         let loop (i args...) = sz
@@ -2633,7 +2648,7 @@ typefn CUnion 'getattr& (self name)
 typefn extern 'call (self ...)
     label docall (dest ET)
         let sz = (va-countof ...)
-        let count = (trunc (rawcall type-countof ET) i32)
+        let count = (itrunc (rawcall type-countof ET) i32)
         let variadic = (rawcall function-type-variadic? ET)
         let loop (i args...) = sz
         if (icmp== i 0)
@@ -3105,7 +3120,7 @@ typefn vector '.. (a b flipped)
         return;
     if (type== Ta Tb)
         let usz = (mul (type-countof (typeof a)) 2:usize)
-        let sz = (trunc usz i32)
+        let sz = (itrunc usz i32)
         let loop (i mask) = 0 (nullof (vector i32 usz))
         if (icmp<u i sz)
             loop (add i 1) (insertelement mask i i)
@@ -3123,6 +3138,13 @@ typefn vector '.. (a b flipped)
             loop (add i 1:usize)
                 insertelement result (extractelement b (sub i asz)) i
         else result
+
+#-------------------------------------------------------------------------------
+# apply locals as globals
+#-------------------------------------------------------------------------------
+
+set-globals!
+    clone-scope-symbols (locals) (globals)
 
 #-------------------------------------------------------------------------------
 # REPL
