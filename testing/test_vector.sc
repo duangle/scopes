@@ -37,6 +37,14 @@ assert ((length (vectorof f32 2 10 11)) == 15.0)
 assert
     all?
         ==
+            ? true
+                vectorof i32 1 2 3 4
+                vectorof i32 5 6 7 8
+            vectorof i32 1 2 3 4
+
+assert
+    all?
+        ==
             ? (vectorof bool true false true false)
                 vectorof i16 1 0 3 0
                 vectorof i16 0 2 0 4

@@ -8647,6 +8647,32 @@ struct SPIRVGenerator {
                     builder.getTypeId(then_value), cond,
                     then_value, else_value);
             } break;
+            case OP_Sin:
+            case OP_Cos:
+            case OP_Tan:
+            case OP_Asin:
+            case OP_Acos:
+            case OP_Atan: {
+                READ_VALUE(val);
+                GLSLstd450 builtin = GLSLstd450Bad;
+                switch (enter.symbol.value()) {
+                case OP_Sin: builtin = GLSLstd450Sin; break;
+                case OP_Cos: builtin = GLSLstd450Cos; break;
+                case OP_Tan: builtin = GLSLstd450Tan; break;
+                case OP_Asin: builtin = GLSLstd450Asin; break;
+                case OP_Acos: builtin = GLSLstd450Acos; break;
+                case OP_Atan: builtin = GLSLstd450Atan; break;
+                default: {
+                    StyledString ss;
+                    ss.out << "IL->SPIR: unsupported intrinsic " << enter << " encountered";
+                    location_error(ss.str());
+                } break;
+                }
+                retvalue = builder.createBuiltinCall(
+                    builder.getTypeId(val),
+                    glsl_ext_inst, builtin,
+                    { val });
+            } break;
             case FN_Unconst: {
                 READ_VALUE(val);
                 retvalue = val;
@@ -8951,28 +8977,7 @@ struct SPIRVGenerator {
                 location_error(ss.str());
             } break;
             }
-        } /* else if (enter.type->kind() == TK_Extern) {
-            auto et = cast<ExternType>(enter.type);
-            GLSLstd450 builtin = GLSLstd450Bad;
-            switch (enter.symbol.value()) {
-            #define T(NAME) \
-            case SYM_GLSL_std_450_ ## NAME: \
-                builtin = GLSLstd450 ## NAME; break;
-                B_GLSL_STD_450_BUILTINS()
-            #undef T
-            default: {
-                StyledString ss;
-                ss.out << "IL->SPIR: unsupported intrinsic " << enter << " encountered";
-                location_error(ss.str());
-            } break;
-            }
-            auto T = type_to_spirv_type(cast<FunctionType>(et->type)->return_type);
-            std::vector<spv::Id> values;
-            for (size_t i = 0; i < argcount; ++i) {
-                values.push_back(argument_to_value(args[i + 1].value));
-            }
-            retvalue = builder.createBuiltinCall(T, glsl_ext_inst, builtin, values);
-        } */ else if (enter.type == TYPE_Label) {
+        } else if (enter.type == TYPE_Label) {
             if (enter.label->is_basic_block_like()) {
                 auto block = label_to_basic_block(enter.label, is_loop_header);
                 if (!block) {
@@ -11712,6 +11717,19 @@ static Any apply_real_op(Any a, Any b) {
 // NORMALIZE
 //------------------------------------------------------------------------------
 
+// assuming that value is an elementary type that can be put in a vector
+static Any smear(Any value, size_t count) {
+    size_t sz = size_of(value.type);
+    void *psrc = get_pointer(value.type, value);
+    auto VT = cast<VectorType>(Vector(value.type, count));
+    void *pdest = alloc_storage(VT);
+    for (size_t i = 0; i < count; ++i) {
+        void *p = VT->getelementptr(pdest, i);
+        memcpy(p, psrc, sz);
+    }
+    return Any::from_pointer(VT, pdest);
+}
+
 #define B_ARITH_OPS() \
         IARITH_NUW_NSW_OPS(Add) \
         IARITH_NUW_NSW_OPS(Sub) \
@@ -12456,6 +12474,7 @@ struct Solver {
         case FN_ImageRead:
         case FN_GetElementPtr:
         case SFXFN_ExecutionMode:
+        case OP_Tertiary:
             return true;
         default: return false;
         }
@@ -12532,12 +12551,39 @@ struct Solver {
         } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
-            auto T1 = storage_type(args[1].value.indirect_type());
-            auto T2 = storage_type(args[2].value.indirect_type());
-            verify_bool_vector(T1);
-            verify_vector_sizes(T1, T2);
-            verify(args[2].value.indirect_type(), args[3].value.indirect_type());
-            RETARGTYPES(args[2].value.indirect_type());
+            auto &&cond = args[1].value;
+            if (cond.is_const() &&
+                ((cond.type == TYPE_Bool)
+                    || (args[2].value.is_const() && args[3].value.is_const()))) {
+                if (cond.type == TYPE_Bool) {
+                    if (cond.i1) {
+                        RETARGS(args[2].value);
+                    } else {
+                        RETARGS(args[3].value);
+                    }
+                } else {
+                    auto T1 = storage_type(cond.type);
+                    auto T2 = storage_type(args[2].value.type);
+                    verify_bool_vector(T1);
+                    verify(args[2].value.type, args[3].value.type);
+                    if (T1->kind() == TK_Vector) {
+                        verify_vector_sizes(T1, T2);
+                    } else if (T2->kind() == TK_Vector) {
+                        cond = smear(cond, cast<VectorType>(T2)->count);
+                    }
+                    Any fargs[] = { cond, args[2].value, args[3].value };
+                    RETARGS(apply_op< DispatchSelect >(fargs, 3));
+                }
+            } else {
+                auto T1 = storage_type(args[1].value.indirect_type());
+                auto T2 = storage_type(args[2].value.indirect_type());
+                verify_bool_vector(T1);
+                if (T1->kind() == TK_Vector) {
+                    verify_vector_sizes(T1, T2);
+                }
+                verify(args[2].value.indirect_type(), args[3].value.indirect_type());
+                RETARGTYPES(args[2].value.indirect_type());
+            }
         } break;
         case FN_Unconst: {
             CHECKARGS(1, 1);
@@ -13483,17 +13529,6 @@ struct Solver {
             }
             verify_branch_continuation(newl);
             evaluate_body(newl->frame, l, newl->label);
-        } break;
-        case OP_Tertiary: {
-            CHECKARGS(3, 3);
-            auto T1 = storage_type(args[1].value.type);
-            auto T2 = storage_type(args[2].value.type);
-            verify_bool_vector(T1);
-            verify_vector_sizes(T1, T2);
-            verify(args[2].value.type, args[3].value.type);
-
-            Any fargs[] = { args[1].value, args[2].value, args[3].value };
-            RETARGS(apply_op< DispatchSelect >(fargs, 3));
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);

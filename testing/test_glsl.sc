@@ -9,9 +9,6 @@ let gl_VertexID =
     extern 'spirv.VertexId i32
         storage = 'Input
 
-let sin =
-    extern 'glsl.std.450.Sin (function f32 f32)
-
 fn set-vertex-position ()
     let screen-tri-vertices =
         arrayof vec2
@@ -69,11 +66,12 @@ let fragment-code =
                 unconst 0.0
             #else
                 unconst 1.0
-            (sin phase) * 0.5 + 0.5
+            (sin (phase as immutable)) * 0.5 + 0.5
         fn fragment-shader ()
             let uv = (load uv)
             let color = (vectorof f32 (uv @ 0) (uv @ 1) (make-phase) 1)
             let s = (sample (load tex) uv)
+            let s = (? (unconst true) (vectorof f32 0 0 0 0) s)
             out_Color = (fmul color s)
             return;
 
