@@ -12,11 +12,11 @@ fn do-ops (v w)
 fn test-vector-ops (v w)
     let v = (vectorof i32 10 20 (unpack (vectorof i32 30 40)))
     let w = (vectorof i32 1 2 3 4)
-    assert 
-        all? 
+    assert
+        all?
             (do-ops v w) == (vectorof i32 11 24 39 56)
     assert
-        all? 
+        all?
             (shufflevector v w (vectorof i32 7 5 3 1)) == (vectorof i32 4 2 40 20)
     print v w
 
@@ -31,3 +31,7 @@ test-vector-ops (unconst (nullof VT)) (unconst (nullof VT))
     typify do-ops VT VT
     'dump-disassembly
     'dump-function
+
+assert ((length (vectorof f32 2 10 11)) == 15.0)
+
+
