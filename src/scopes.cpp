@@ -2707,6 +2707,17 @@ static void verify_real_vector(const Type *type) {
     }
 }
 
+static void verify_bool_vector(const Type *type) {
+    if (type->kind() == TK_Vector) {
+        type = cast<VectorType>(type)->element_type;
+    }
+    if (type != TYPE_Bool) {
+        StyledString ss;
+        ss.out << "bool value or vector type expected, got " << type;
+        location_error(ss.str());
+    }
+}
+
 static void verify_real_vector(const Type *type, size_t fixedsz) {
     if (type->kind() == TK_Vector) {
         auto T = cast<VectorType>(type);
@@ -2715,6 +2726,24 @@ static void verify_real_vector(const Type *type, size_t fixedsz) {
     }
     StyledString ss;
     ss.out << "vector type of size " << fixedsz << " expected, got " << type;
+    location_error(ss.str());
+}
+
+static void verify_vector_sizes(const Type *type1, const Type *type2) {
+    bool type1v = (type1->kind() == TK_Vector);
+    bool type2v = (type2->kind() == TK_Vector);
+    if (type1v == type2v) {
+        if (type1v) {
+            if (cast<VectorType>(type1)->count
+                    == cast<VectorType>(type2)->count) {
+                return;
+            }
+        } else {
+            return;
+        }
+    }
+    StyledString ss;
+    ss.out << "operands must be vector of same size or scalar";
     location_error(ss.str());
 }
 
@@ -11544,9 +11573,14 @@ struct IntTypes_u {
 template<typename IT, template<typename T> class OpT>
 struct DispatchInteger {
     typedef typename OpT<int8_t>::rtype rtype;
-    typedef IntegerType Type;
     static bool reductive() { return OpT<int8_t>::reductive(); }
-    void operator ()(size_t width, void **srcptrs, void *destptr, size_t count) {
+    static const Type *return_type(Any *args, size_t numargs) {
+        assert(numargs >= 1);
+        return select_op_return_type<rtype>{}(args[0].type);
+    }
+    void operator ()(const Type *ET, void **srcptrs, void *destptr, size_t count,
+                        Any *args, size_t numargs) {
+        size_t width = cast<IntegerType>(ET)->width;
         switch(width) {
         case 1: OpT<typename IT::i1>{}(srcptrs, destptr, count); break;
         case 8: OpT<typename IT::i8>{}(srcptrs, destptr, count); break;
@@ -11565,9 +11599,14 @@ struct DispatchInteger {
 template<template<typename T> class OpT>
 struct DispatchReal {
     typedef typename OpT<float>::rtype rtype;
-    typedef RealType Type;
     static bool reductive() { return OpT<float>::reductive(); }
-    void operator ()(size_t width, void **srcptrs, void *destptr, size_t count) {
+    static const Type *return_type(Any *args, size_t numargs) {
+        assert(numargs >= 1);
+        return select_op_return_type<rtype>{}(args[0].type);
+    }
+    void operator ()(const Type *ET, void **srcptrs, void *destptr, size_t count,
+                        Any *args, size_t numargs) {
+        size_t width = cast<RealType>(ET)->width;
         switch(width) {
         case 32: OpT<float>{}(srcptrs, destptr, count); break;
         case 64: OpT<double>{}(srcptrs, destptr, count); break;
@@ -11580,41 +11619,68 @@ struct DispatchReal {
     }
 };
 
+struct DispatchSelect {
+    static bool reductive() { return false; }
+    static const Type *return_type(Any *args, size_t numargs) {
+        assert(numargs >= 1);
+        return args[1].type;
+    }
+    void operator ()(const Type *ET, void **srcptrs, void *destptr, size_t count,
+                        Any *args, size_t numargs) {
+        assert(numargs == 3);
+        bool *cond = (bool *)srcptrs[0];
+        void *x = srcptrs[1];
+        void *y = srcptrs[2];
+        const Type *Tx = storage_type(args[1].type);
+        if (Tx->kind() == TK_Vector) {
+            auto VT = cast<VectorType>(Tx);
+            auto stride = VT->stride;
+            for (size_t i = 0; i < count; ++i) {
+                memcpy(VT->getelementptr(destptr, i),
+                    VT->getelementptr((cond[i] ? x : y), i),
+                    stride);
+            }
+        } else {
+            assert(count == 1);
+            auto sz = size_of(Tx);
+            memcpy(destptr, (cond[0] ? x : y), sz);
+        }
+    }
+};
+
 template<typename DispatchT>
 static Any apply_op(Any *args, size_t numargs) {
     auto ST = storage_type(args[0].type);
     size_t count;
-    size_t width;
     void *srcptrs[numargs];
     void *destptr;
     Any result = none;
-    auto RT = select_op_return_type<typename DispatchT::rtype>{}(args[0].type);
+    auto RT = DispatchT::return_type(args, numargs);
+    const Type *ET = nullptr;
     if (ST->kind() == TK_Vector) {
         auto vi = cast<VectorType>(ST);
         count = vi->count;
-        auto ET = vi->element_type;
-        width = cast<typename DispatchT::Type>(storage_type(ET))->width;
         for (size_t i = 0; i < numargs; ++i) {
             srcptrs[i] = args[i].pointer;
         }
         if (DispatchT::reductive()) {
-            result.type = ET;
+            result.type = vi->element_type;
             destptr = get_pointer(result.type, result);
         } else {
             destptr = alloc_storage(RT);
             result = Any::from_pointer(RT, destptr);
         }
+        ET = storage_type(vi->element_type);
     } else {
         count = 1;
-        width = cast<typename DispatchT::Type>(ST)->width;
         for (size_t i = 0; i < numargs; ++i) {
             srcptrs[i] = get_pointer(args[i].type, args[i]);
         }
         result.type = RT;
         destptr = get_pointer(result.type, result);
+        ET = ST;
     }
-
-    DispatchT{}(width, srcptrs, destptr, count);
+    DispatchT{}(ET, srcptrs, destptr, count, args, numargs);
     return result;
 }
 
@@ -12466,7 +12532,10 @@ struct Solver {
         } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
-            verify(TYPE_Bool, args[1].value.indirect_type());
+            auto T1 = storage_type(args[1].value.indirect_type());
+            auto T2 = storage_type(args[2].value.indirect_type());
+            verify_bool_vector(T1);
+            verify_vector_sizes(T1, T2);
             verify(args[2].value.indirect_type(), args[3].value.indirect_type());
             RETARGTYPES(args[2].value.indirect_type());
         } break;
@@ -13417,13 +13486,14 @@ struct Solver {
         } break;
         case OP_Tertiary: {
             CHECKARGS(3, 3);
-            args[1].value.verify(TYPE_Bool);
+            auto T1 = storage_type(args[1].value.type);
+            auto T2 = storage_type(args[2].value.type);
+            verify_bool_vector(T1);
+            verify_vector_sizes(T1, T2);
             verify(args[2].value.type, args[3].value.type);
-            if (args[1].value.i1) {
-                RETARGS(args[2]);
-            } else {
-                RETARGS(args[3]);
-            }
+
+            Any fargs[] = { args[1].value, args[2].value, args[3].value };
+            RETARGS(apply_op< DispatchSelect >(fargs, 3));
         } break;
         case FN_IntToPtr: {
             CHECKARGS(2, 2);

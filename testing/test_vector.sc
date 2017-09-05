@@ -34,4 +34,18 @@ test-vector-ops (unconst (nullof VT)) (unconst (nullof VT))
 
 assert ((length (vectorof f32 2 10 11)) == 15.0)
 
+assert
+    all?
+        ==
+            ? (vectorof bool true false true false)
+                vectorof i16 1 0 3 0
+                vectorof i16 0 2 0 4
+            vectorof i16 1 2 3 4
 
+assert
+    all?
+        ==
+            ? (unconst (vectorof bool true false true false))
+                vectorof i16 1 0 3 0
+                vectorof i16 0 2 0 4
+            vectorof i16 1 2 3 4
