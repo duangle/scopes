@@ -2707,6 +2707,17 @@ static void verify_real_vector(const Type *type) {
     }
 }
 
+static void verify_real_vector(const Type *type, size_t fixedsz) {
+    if (type->kind() == TK_Vector) {
+        auto T = cast<VectorType>(type);
+        if (T->count == fixedsz)
+            return;
+    }
+    StyledString ss;
+    ss.out << "vector type of size " << fixedsz << " expected, got " << type;
+    location_error(ss.str());
+}
+
 //------------------------------------------------------------------------------
 // TUPLE TYPE
 //------------------------------------------------------------------------------
@@ -11276,7 +11287,13 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
 #define OP1_TEMPLATE(NAME, RTYPE, OP) \
     template<typename T> struct op_ ## NAME { \
         typedef RTYPE rtype; \
-        rtype operator()(T x) { \
+        static bool reductive() { return false; } \
+        void operator()(void **srcptrs, void *destptr, size_t count) { \
+            for (size_t i = 0; i < count; ++i) { \
+                ((rtype *)destptr)[i] = op(((T *)(srcptrs[0]))[i]); \
+            } \
+        } \
+        rtype op(T x) { \
             return OP; \
         } \
     };
@@ -11284,7 +11301,13 @@ void invalid_op2_types_error(const Type *A, const Type *B) {
 #define OP2_TEMPLATE(NAME, RTYPE, OP) \
     template<typename T> struct op_ ## NAME { \
         typedef RTYPE rtype; \
-        rtype operator()(T a, T b) { \
+        static bool reductive() { return false; } \
+        void operator()(void **srcptrs, void *destptr, size_t count) { \
+            for (size_t i = 0; i < count; ++i) { \
+                ((rtype *)destptr)[i] = op(((T *)(srcptrs[0]))[i], ((T *)(srcptrs[1]))[i]); \
+            } \
+        } \
+        rtype op(T a, T b) { \
             return OP; \
         } \
     };
@@ -11413,6 +11436,67 @@ PUNOP_TEMPLATE(Log2, std::log2)
 PUNOP_TEMPLATE(Sqrt, std::sqrt)
 PUNOP_TEMPLATE(InverseSqrt, inversesqrt)
 
+template<typename T> struct op_Cross {
+    typedef T rtype;
+    static bool reductive() { return false; }
+    void operator()(void **srcptrs, void *destptr, size_t count) {
+        assert(count == 3);
+        auto x = (T *)(srcptrs[0]);
+        auto y = (T *)(srcptrs[1]);
+        auto ret = (rtype *)destptr;
+        ret[0] = x[1] * y[2] - y[1] * x[2];
+        ret[1] = x[2] * y[0] - y[2] * x[0];
+        ret[2] = x[0] * y[1] - y[0] * x[1];
+    }
+};
+
+template<typename T> struct op_Normalize {
+    typedef T rtype;
+    static bool reductive() { return false; }
+    void operator()(void **srcptrs, void *destptr, size_t count) {
+        auto x = (T *)(srcptrs[0]);
+        T r = T(0);
+        for (size_t i = 0; i < count; ++i) {
+            r += x[i] * x[i];
+        }
+        r = (r == T(0))?T(1):(T(1)/std::sqrt(r));
+        auto ret = (rtype *)destptr;
+        for (size_t i = 0; i < count; ++i) {
+            ret[i] = x[i] * r;
+        }
+    }
+};
+
+template<typename T> struct op_Length {
+    typedef T rtype;
+    static bool reductive() { return true; }
+    void operator()(void **srcptrs, void *destptr, size_t count) {
+        auto x = (T *)(srcptrs[0]);
+        T r = T(0);
+        for (size_t i = 0; i < count; ++i) {
+            r += x[i] * x[i];
+        }
+        auto ret = (rtype *)destptr;
+        ret[0] = std::sqrt(r);
+    }
+};
+
+template<typename T> struct op_Distance {
+    typedef T rtype;
+    static bool reductive() { return true; }
+    void operator()(void **srcptrs, void *destptr, size_t count) {
+        auto x = (T *)(srcptrs[0]);
+        auto y = (T *)(srcptrs[1]);
+        T r = T(0);
+        for (size_t i = 0; i < count; ++i) {
+            T d = x[i] - y[i];
+            r += d * d;
+        }
+        auto ret = (rtype *)destptr;
+        ret[0] = std::sqrt(r);
+    }
+};
+
 #undef BOOL_IFXOP_TEMPLATE
 #undef BOOL_OF_TEMPLATE
 #undef BOOL_UF_TEMPLATE
@@ -11458,201 +11542,104 @@ struct IntTypes_u {
 };
 
 template<typename IT, template<typename T> class OpT>
-static void apply_integer_vector_op(void *srcptr_a, void *destptr, size_t count) {
-    typedef typename OpT<IT>::rtype rtype;
-    for (size_t i = 0; i < count; ++i) {
-        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i]);
+struct DispatchInteger {
+    typedef typename OpT<int8_t>::rtype rtype;
+    typedef IntegerType Type;
+    static bool reductive() { return OpT<int8_t>::reductive(); }
+    void operator ()(size_t width, void **srcptrs, void *destptr, size_t count) {
+        switch(width) {
+        case 1: OpT<typename IT::i1>{}(srcptrs, destptr, count); break;
+        case 8: OpT<typename IT::i8>{}(srcptrs, destptr, count); break;
+        case 16: OpT<typename IT::i16>{}(srcptrs, destptr, count); break;
+        case 32: OpT<typename IT::i32>{}(srcptrs, destptr, count); break;
+        case 64: OpT<typename IT::i64>{}(srcptrs, destptr, count); break;
+        default:
+            StyledString ss;
+            ss.out << "unsupported bitwidth (" << width << ") for integer operation";
+            location_error(ss.str());
+            break;
+        };
     }
-}
+};
 
-template<typename IT, template<typename T> class OpT>
-static void apply_integer_vector_op(void *srcptr_a, void *srcptr_b, void *destptr, size_t count) {
-    typedef typename OpT<IT>::rtype rtype;
-    for (size_t i = 0; i < count; ++i) {
-        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i], ((IT *)srcptr_b)[i]);
+template<template<typename T> class OpT>
+struct DispatchReal {
+    typedef typename OpT<float>::rtype rtype;
+    typedef RealType Type;
+    static bool reductive() { return OpT<float>::reductive(); }
+    void operator ()(size_t width, void **srcptrs, void *destptr, size_t count) {
+        switch(width) {
+        case 32: OpT<float>{}(srcptrs, destptr, count); break;
+        case 64: OpT<double>{}(srcptrs, destptr, count); break;
+        default:
+            StyledString ss;
+            ss.out << "unsupported bitwidth (" << width << ") for float operation";
+            location_error(ss.str());
+            break;
+        };
     }
-}
+};
 
-template<typename IT, template<typename T> class OpT >
-static Any apply_integer_op(Any a) {
-    auto ST = storage_type(a.type);
+template<typename DispatchT>
+static Any apply_op(Any *args, size_t numargs) {
+    auto ST = storage_type(args[0].type);
     size_t count;
     size_t width;
-    void *srcptr_a;
+    void *srcptrs[numargs];
     void *destptr;
     Any result = none;
-    auto RT = select_op_return_type<typename OpT<int8_t>::rtype>{}(a.type);
+    auto RT = select_op_return_type<typename DispatchT::rtype>{}(args[0].type);
     if (ST->kind() == TK_Vector) {
         auto vi = cast<VectorType>(ST);
         count = vi->count;
-        width = cast<IntegerType>(storage_type(vi->element_type))->width;
-        srcptr_a = a.pointer;
-        destptr = alloc_storage(RT);
-        result = Any::from_pointer(RT, destptr);
+        auto ET = vi->element_type;
+        width = cast<typename DispatchT::Type>(storage_type(ET))->width;
+        for (size_t i = 0; i < numargs; ++i) {
+            srcptrs[i] = args[i].pointer;
+        }
+        if (DispatchT::reductive()) {
+            result.type = ET;
+            destptr = get_pointer(result.type, result);
+        } else {
+            destptr = alloc_storage(RT);
+            result = Any::from_pointer(RT, destptr);
+        }
     } else {
         count = 1;
-        width = cast<IntegerType>(ST)->width;
-        srcptr_a = get_pointer(a.type, a);
+        width = cast<typename DispatchT::Type>(ST)->width;
+        for (size_t i = 0; i < numargs; ++i) {
+            srcptrs[i] = get_pointer(args[i].type, args[i]);
+        }
         result.type = RT;
         destptr = get_pointer(result.type, result);
     }
-    switch(width) {
-    case 1: apply_integer_vector_op<typename IT::i1, OpT>(
-        srcptr_a, destptr, count); break;
-    case 8: apply_integer_vector_op<typename IT::i8, OpT>(
-        srcptr_a, destptr, count); break;
-    case 16: apply_integer_vector_op<typename IT::i16, OpT>(
-        srcptr_a, destptr, count); break;
-    case 32: apply_integer_vector_op<typename IT::i32, OpT>(
-        srcptr_a, destptr, count); break;
-    case 64: apply_integer_vector_op<typename IT::i64, OpT>(
-        srcptr_a, destptr, count); break;
-    default:
-        StyledString ss;
-        ss.out << "unsupported bitwidth (" << width << ") for integer operation";
-        location_error(ss.str());
-        break;
-    };
+
+    DispatchT{}(width, srcptrs, destptr, count);
     return result;
+}
+
+template<typename IT, template<typename T> class OpT >
+static Any apply_integer_op(Any x) {
+    Any args[] = { x };
+    return apply_op< DispatchInteger<IT, OpT> >(args, 1);
 }
 
 template<typename IT, template<typename T> class OpT >
 static Any apply_integer_op(Any a, Any b) {
-    auto ST = storage_type(a.type);
-    size_t count;
-    size_t width;
-    void *srcptr_a;
-    void *srcptr_b;
-    void *destptr;
-    Any result = none;
-    auto RT = select_op_return_type<typename OpT<int8_t>::rtype>{}(a.type);
-    if (ST->kind() == TK_Vector) {
-        auto vi = cast<VectorType>(ST);
-        count = vi->count;
-        width = cast<IntegerType>(storage_type(vi->element_type))->width;
-        srcptr_a = a.pointer;
-        srcptr_b = b.pointer;
-        destptr = alloc_storage(RT);
-        result = Any::from_pointer(RT, destptr);
-    } else {
-        count = 1;
-        width = cast<IntegerType>(ST)->width;
-        srcptr_a = get_pointer(a.type, a);
-        srcptr_b = get_pointer(b.type, b);
-        result.type = RT;
-        destptr = get_pointer(result.type, result);
-    }
-    switch(width) {
-    case 1: apply_integer_vector_op<typename IT::i1, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    case 8: apply_integer_vector_op<typename IT::i8, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    case 16: apply_integer_vector_op<typename IT::i16, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    case 32: apply_integer_vector_op<typename IT::i32, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    case 64: apply_integer_vector_op<typename IT::i64, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    default:
-        StyledString ss;
-        ss.out << "unsupported bitwidth (" << width << ") for integer operation";
-        location_error(ss.str());
-        break;
-    };
-    return result;
-}
-
-template<typename IT, template<typename T> class OpT>
-static void apply_real_vector_op(void *srcptr_a, void *destptr, size_t count) {
-    typedef typename OpT<IT>::rtype rtype;
-    for (size_t i = 0; i < count; ++i) {
-        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i]);
-    }
-}
-
-template<typename IT, template<typename T> class OpT>
-static void apply_real_vector_op(void *srcptr_a, void *srcptr_b, void *destptr, size_t count) {
-    typedef typename OpT<IT>::rtype rtype;
-    for (size_t i = 0; i < count; ++i) {
-        ((rtype *)destptr)[i] = OpT<IT>{}(((IT *)srcptr_a)[i], ((IT *)srcptr_b)[i]);
-    }
+    Any args[] = { a, b };
+    return apply_op< DispatchInteger<IT, OpT> >(args, 2);
 }
 
 template<template<typename T> class OpT>
-static Any apply_real_op(Any a) {
-    auto ST = storage_type(a.type);
-    size_t count;
-    size_t width;
-    void *srcptr_a;
-    void *destptr;
-    Any result = none;
-    auto RT = select_op_return_type<typename OpT<float>::rtype>{}(a.type);
-    if (ST->kind() == TK_Vector) {
-        auto vi = cast<VectorType>(ST);
-        count = vi->count;
-        width = cast<RealType>(storage_type(vi->element_type))->width;
-        srcptr_a = a.pointer;
-        destptr = alloc_storage(RT);
-        result = Any::from_pointer(RT, destptr);
-    } else {
-        count = 1;
-        width = cast<RealType>(ST)->width;
-        srcptr_a = get_pointer(a.type, a);
-        result.type = RT;
-        destptr = get_pointer(result.type, result);
-    }
-    switch(width) {
-    case 32: apply_real_vector_op<float, OpT>(
-        srcptr_a, destptr, count); break;
-    case 64: apply_real_vector_op<double, OpT>(
-        srcptr_a, destptr, count); break;
-    default:
-        StyledString ss;
-        ss.out << "unsupported bitwidth (" << width << ") for float operation";
-        location_error(ss.str());
-        break;
-    };
-    return result;
+static Any apply_real_op(Any x) {
+    Any args[] = { x };
+    return apply_op< DispatchReal<OpT> >(args, 1);
 }
 
 template<template<typename T> class OpT>
 static Any apply_real_op(Any a, Any b) {
-    auto ST = storage_type(a.type);
-    size_t count;
-    size_t width;
-    void *srcptr_a;
-    void *srcptr_b;
-    void *destptr;
-    Any result = none;
-    auto RT = select_op_return_type<typename OpT<float>::rtype>{}(a.type);
-    if (ST->kind() == TK_Vector) {
-        auto vi = cast<VectorType>(ST);
-        count = vi->count;
-        width = cast<RealType>(storage_type(vi->element_type))->width;
-        srcptr_a = a.pointer;
-        srcptr_b = b.pointer;
-        destptr = alloc_storage(RT);
-        result = Any::from_pointer(RT, destptr);
-    } else {
-        count = 1;
-        width = cast<RealType>(ST)->width;
-        srcptr_a = get_pointer(a.type, a);
-        srcptr_b = get_pointer(b.type, b);
-        result.type = RT;
-        destptr = get_pointer(result.type, result);
-    }
-    switch(width) {
-    case 32: apply_real_vector_op<float, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    case 64: apply_real_vector_op<double, OpT>(
-        srcptr_a, srcptr_b, destptr, count); break;
-    default:
-        StyledString ss;
-        ss.out << "unsupported bitwidth (" << width << ") for float operation";
-        location_error(ss.str());
-        break;
-    };
-    return result;
+    Any args[] = { a, b };
+    return apply_op< DispatchReal<OpT> >(args, 2);
 }
 
 //------------------------------------------------------------------------------
@@ -12885,6 +12872,41 @@ struct Solver {
                 storage_type(args[1].value.indirect_type()));
             RETARGTYPES();
         } break;
+        case FN_Cross: {
+            CHECKARGS(2, 2);
+            const Type *Ta = storage_type(args[1].value.indirect_type());
+            const Type *Tb = storage_type(args[2].value.indirect_type());
+            verify_real_vector(Ta, 3);
+            verify(Ta, Tb);
+            RETARGTYPES(args[1].value.indirect_type());
+        } break;
+        case FN_Normalize: {
+            CHECKARGS(1, 1);
+            verify_real_ops(args[1].value.indirect_type());
+            RETARGTYPES(args[1].value.indirect_type());
+        } break;
+        case FN_Length: {
+            CHECKARGS(1, 1);
+            const Type *T = storage_type(args[1].value.indirect_type());
+            verify_real_vector(T);
+            if (T->kind() == TK_Vector) {
+                RETARGTYPES(cast<VectorType>(T)->element_type);
+            } else {
+                RETARGTYPES(args[1].value.indirect_type());
+            }
+        } break;
+        case FN_Distance: {
+            CHECKARGS(2, 2);
+            verify_real_ops(
+                args[1].value.indirect_type(),
+                args[2].value.indirect_type());
+            const Type *T = storage_type(args[1].value.indirect_type());
+            if (T->kind() == TK_Vector) {
+                RETARGTYPES(cast<VectorType>(T)->element_type);
+            } else {
+                RETARGTYPES(args[1].value.indirect_type());
+            }
+        } break;
         case OP_ICmpEQ:
         case OP_ICmpNE:
         case OP_ICmpUGT:
@@ -13752,6 +13774,29 @@ struct Solver {
             }
             enter = args[0].value;
             args[0].value = none;
+        } break;
+        case FN_Cross: {
+            CHECKARGS(2, 2);
+            const Type *Ta = storage_type(args[1].value.type);
+            const Type *Tb = storage_type(args[2].value.type);
+            verify_real_vector(Ta, 3);
+            verify(Ta, Tb);
+            RETARGS(apply_real_op<op_Cross>(args[1].value, args[2].value));
+        } break;
+        case FN_Normalize: {
+            CHECKARGS(1, 1);
+            verify_real_ops(args[1].value);
+            RETARGS(apply_real_op<op_Normalize>(args[1].value));
+        } break;
+        case FN_Length: {
+            CHECKARGS(1, 1);
+            verify_real_ops(args[1].value);
+            RETARGS(apply_real_op<op_Length>(args[1].value));
+        } break;
+        case FN_Distance: {
+            CHECKARGS(2, 2);
+            verify_real_ops(args[1].value, args[2].value);
+            RETARGS(apply_real_op<op_Distance>(args[1].value, args[2].value));
         } break;
         case OP_ICmpEQ:
         case OP_ICmpNE:
