@@ -562,6 +562,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_BAnd) T(OP_BOr) T(OP_BXor) \
     T(OP_FAdd) T(OP_FSub) T(OP_FMul) T(OP_FDiv) T(OP_FRem) \
     T(OP_Tertiary) T(KW_SyntaxLog) \
+    T(OP_Mix) T(OP_Step) T(OP_SmoothStep) \
     T(FN_Round) T(FN_RoundEven) T(FN_Trunc) \
     T(OP_FAbs) T(OP_SAbs) T(FN_FSign) T(FN_SSign) \
     T(FN_Floor) T(FN_Ceil) T(FN_Fract) \
@@ -766,6 +767,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_AnchorPath, "Anchor-path") T(FN_AnchorLineNumber, "Anchor-line-number") \
     T(FN_AnchorColumn, "Anchor-column") T(FN_AnchorOffset, "Anchor-offset") \
     T(FN_AnchorSource, "Anchor-source") \
+    T(OP_Mix, "mix") T(OP_Step, "step") T(OP_SmoothStep, "smoothstep") \
     T(FN_Round, "round") T(FN_RoundEven, "roundeven") T(FN_Trunc, "trunc") \
     T(OP_FAbs, "fabs") T(OP_SAbs, "sabs") T(FN_FSign, "fsign") T(FN_SSign, "ssign") \
     T(FN_Floor, "floor") T(FN_Ceil, "ceil") T(FN_Fract, "fract") \
