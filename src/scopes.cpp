@@ -570,7 +570,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(OP_Sin) T(OP_Cos) T(OP_Tan) \
     T(OP_Asin) T(OP_Acos) T(OP_Atan) T(OP_Atan2) \
     T(OP_Exp) T(OP_Log) T(OP_Exp2) T(OP_Log2) \
-    T(OP_Sqrt) T(OP_InverseSqrt) \
+    T(OP_Pow) T(OP_Sqrt) T(OP_InverseSqrt) \
     T(FN_Fma) T(FN_Frexp) T(FN_Ldexp) \
     T(FN_Length) T(FN_Distance) T(FN_Cross) T(FN_Normalize)
 
@@ -11479,6 +11479,7 @@ PUNOP_TEMPLATE(Exp2, std::exp2)
 PUNOP_TEMPLATE(Log2, std::log2)
 PUNOP_TEMPLATE(Sqrt, std::sqrt)
 PUNOP_TEMPLATE(InverseSqrt, inversesqrt)
+PFXOP_TEMPLATE(Pow, std::pow)
 
 template<typename T> struct op_Cross {
     typedef T rtype;
@@ -11771,7 +11772,7 @@ static Any smear(Any value, size_t count) {
         FUN_OP(Sin) FUN_OP(Cos) FUN_OP(Tan) \
         FUN_OP(Asin) FUN_OP(Acos) FUN_OP(Atan) FARITH_OP(Atan2) \
         FUN_OP(Exp) FUN_OP(Log) FUN_OP(Exp2) FUN_OP(Log2) \
-        FUN_OP(Sqrt) FUN_OP(InverseSqrt)
+        FARITH_OP(Pow) FUN_OP(Sqrt) FUN_OP(InverseSqrt)
 
 static Label *expand_module(Any expr, Scope *scope = nullptr);
 

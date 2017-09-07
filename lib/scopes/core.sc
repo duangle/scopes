@@ -1715,7 +1715,7 @@ define-infix> 600 %
 define-infix> 600 /
 define-infix> 600 //
 define-infix> 600 *
-#define-infix< 700 **
+define-infix< 700 **
 define-infix> 750 as
 define-infix> 800 .
 define-infix> 800 @
