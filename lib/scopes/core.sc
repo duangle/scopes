@@ -651,6 +651,9 @@ fn select-op (T sop fop)
 fn abs (x)
     (select-op (typeof x) sabs fabs) x
 
+fn sign (x)
+    (select-op (typeof x) ssign fsign) x
+
 fn getattr (self name)
     let T = (typeof self)
     let op success = (type@ T 'getattr)
@@ -2090,6 +2093,13 @@ typefn fnchain 'apply-type (cls name)
             oldfn self args...
         self
     T
+
+#-------------------------------------------------------------------------------
+# docstrings
+#-------------------------------------------------------------------------------
+
+fn docstring (f)
+    Label-docstring (Closure-label f)
 
 #-------------------------------------------------------------------------------
 # module loading

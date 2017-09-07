@@ -792,6 +792,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_CompilerMessage, "compiler-message") \
     T(FN_CStr, "cstr") T(FN_DatumToSyntax, "datum->syntax") \
     T(FN_DatumToQuotedSyntax, "datum->quoted-syntax") \
+    T(FN_LabelDocString, "Label-docstring") \
     T(FN_DefaultStyler, "default-styler") T(FN_StyleToString, "style->string") \
     T(FN_Disqualify, "disqualify") T(FN_Dump, "dump") \
     T(FN_DumpLabel, "dump-label") \
@@ -936,6 +937,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     /* builtin and global functions with side effects */ \
     T(SFXFN_CopyMemory, "copy-memory!") \
     T(SFXFN_Unreachable, "unreachable!") \
+    T(SFXFN_Discard, "discard!") \
     T(SFXFN_Error, "__error!") \
     T(SFXFN_AnchorError, "__anchor-error!") \
     T(SFXFN_Raise, "__raise!") \
@@ -5338,12 +5340,14 @@ protected:
     static uint64_t next_uid;
 
     Label(const Anchor *_anchor, Symbol _name, uint64_t _flags) :
-        original(nullptr), uid(0), next_instanceid(1), anchor(_anchor), name(_name),
+        original(nullptr), docstring(nullptr),
+        uid(0), next_instanceid(1), anchor(_anchor), name(_name),
         paired(nullptr), flags(_flags)
         {}
 
 public:
     Label *original;
+    const String *docstring;
     size_t uid;
     size_t next_instanceid;
     const Anchor *anchor;
@@ -8971,6 +8975,9 @@ struct SPIRVGenerator {
             case SFXFN_Unreachable:
                 builder.makeUnreachable();
                 terminated = true; break;
+            case SFXFN_Discard:
+                builder.makeDiscard();
+                terminated = true; break;
             default: {
                 StyledString ss;
                 ss.out << "IL->SPIR: unsupported builtin " << enter.builtin << " encountered";
@@ -12466,6 +12473,7 @@ struct Solver {
         case FN_Malloc:
         case FN_MallocArray:
         case SFXFN_Unreachable:
+        case SFXFN_Discard:
         case FN_VolatileStore:
         case FN_Store:
         case FN_VolatileLoad:
@@ -14240,7 +14248,8 @@ struct Solver {
         auto &&enter = l->body.enter;
         assert(enter.type == TYPE_Builtin);
         auto &&args = l->body.args;
-        if (enter.builtin == SFXFN_Unreachable) {
+        if ((enter.builtin == SFXFN_Unreachable)
+            || (enter.builtin == SFXFN_Discard)) {
             args[0] = none;
         } else {
             Args values;
@@ -15209,6 +15218,14 @@ struct Expander {
         while (params != EOL) {
             func->append(subexpr.expand_parameter(params->at));
             params = params->next;
+        }
+
+        if ((it != EOL) && (it->next != EOL)) {
+            Any val = unsyntax(it->at);
+            if (val.type == TYPE_String) {
+                func->docstring = val.string;
+                it = it->next;
+            }
         }
 
         subexpr.expand_function_body(it, label?longdest:Any(func->params[0]));
@@ -16529,6 +16546,14 @@ static void f_enter_solver_cli () {
     Solver::enable_step_debugger = true;
 }
 
+const String *f_label_docstring(Label *label) {
+    if (label->docstring) {
+        return label->docstring;
+    } else {
+        return Symbol(SYM_Unnamed).name();
+    }
+}
+
 static void init_globals(int argc, char *argv[]) {
 
 #define DEFINE_C_FUNCTION(SYMBOL, FUNC, RETTYPE, ...) \
@@ -16602,6 +16627,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_PURE_C_FUNCTION(FN_ClosureFrame, f_closure_frame, TYPE_Frame, TYPE_Closure);
     DEFINE_PURE_C_FUNCTION(FN_LabelCountOfReachable, f_label_countof_reachable, TYPE_USize, TYPE_Label);
     DEFINE_PURE_C_FUNCTION(FN_EnterSolverCLI, f_enter_solver_cli, TYPE_Void);
+    DEFINE_PURE_C_FUNCTION(FN_LabelDocString, f_label_docstring, TYPE_String, TYPE_Label);
 
     DEFINE_PURE_C_FUNCTION(FN_DefaultStyler, f_default_styler, TYPE_String, TYPE_Symbol, TYPE_String);
 
