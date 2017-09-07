@@ -29,6 +29,9 @@
     functions and macros, parses the command-line and optionally enters
     the REPL.
 
+fn _ (...)
+    return ...
+
 fn tie-const (a b)
     if (constant? a) b
     else (unconst b)
@@ -2205,6 +2208,7 @@ syntax-extend
             let package = (unconst package)
             package.path as list
 
+    let incomplete = (typename "incomplete")
     fn require-from (base-dir name)
         let name = (unconst name)
         let package = (unconst package)
@@ -2224,9 +2228,15 @@ syntax-extend
             let module-path-sym = (Symbol module-path)
             let content ok = (@ modules module-path-sym)
             if ok
+                if (('typeof content) == type)
+                    if (content == incomplete)
+                        error!
+                            .. "trying to import module " (repr name)
+                                " while it is being imported"
                 return content (unconst true)
             if (not (file? module-path))
                 loop patterns
+            set-scope-symbol! modules module-path-sym incomplete
             let content ok = (load-module module-path)
             set-scope-symbol! modules module-path-sym content
             return content ok
