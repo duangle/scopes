@@ -128,7 +128,7 @@
                 },
                 {
                     "name": "support.function.sfx.builtin.scopes",
-				    "match": "((enter-solver-cli|set-execution-mode|io-write|set-anchor|set-globals|set-typename(-storage|-super|-fields)|compiler-error|abort|unreachable|set-signal-abort|(set|delete)-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
+				    "match": "((enter-solver-cli|set-execution-mode|io-write|set-anchor|set-globals|set-typename(-storage|-super|-fields)|compiler-error|abort|discard|unreachable|set-signal-abort|(set|delete)-(type|scope)-symbol)!)(?=[\\s\\(\\)\\[\\]\\{\\}\\,\\;\\#])"
                 },
                 {
                     "name": "support.function.sfx.library.scopes",
