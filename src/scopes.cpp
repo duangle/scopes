@@ -790,6 +790,7 @@ static std::function<R (Args...)> memoize(R (*fn)(Args...)) {
     T(FN_Countof, "countof") \
     T(FN_Compile, "__compile") T(FN_CompileSPIRV, "__compile-spirv") \
     T(FN_CompileGLSL, "__compile-glsl") \
+    T(FN_CompileObject, "__compile-object") \
     T(FN_TypenameFieldIndex, "typename-field-index") \
     T(FN_TypenameFieldName, "typename-field-name") \
     T(FN_CompilerMessage, "compiler-message") \
@@ -9406,7 +9407,9 @@ struct SPIRVGenerator {
         }
     }
 
-    spv::Function *label_to_function(Label *label, bool root_function = false) {
+    spv::Function *label_to_function(Label *label,
+        bool root_function = false,
+        Symbol funcname = SYM_Unnamed) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
 
@@ -9416,11 +9419,15 @@ struct SPIRVGenerator {
 
             auto old_bb = builder.getBuildPoint();
 
+            if (funcname == SYM_Unnamed) {
+                funcname = label->name;
+            }
+
             const char *name;
-            if (root_function && (label->name == SYM_Unnamed)) {
+            if (root_function && (funcname == SYM_Unnamed)) {
                 name = "unnamed";
             } else {
-                name = label->name.name()->data;
+                name = funcname.name()->data;
             }
 
             label->verify_compilable();
@@ -9691,6 +9698,9 @@ static LLVMValueRef LLVMDIBuilderCreateFile(
 
 static std::vector<void *> loaded_libs;
 static void *local_aware_dlsym(const char *name) {
+#if 1
+    return LLVMSearchForAddressOfSymbol(name);
+#else
     size_t i = loaded_libs.size();
     while (i--) {
         void *ptr = dlsym(loaded_libs[i], name);
@@ -9700,6 +9710,7 @@ static void *local_aware_dlsym(const char *name) {
         }
     }
     return dlsym(global_c_namespace, name);
+#endif
 }
 
 struct LLVMIRGenerator {
@@ -10797,7 +10808,9 @@ struct LLVMIRGenerator {
         }
     }
 
-    LLVMValueRef label_to_function(Label *label, bool root_function = false) {
+    LLVMValueRef label_to_function(Label *label,
+        bool root_function = false,
+        Symbol funcname = SYM_Unnamed) {
         auto it = label2func.find(label);
         if (it == label2func.end()) {
 
@@ -10807,11 +10820,15 @@ struct LLVMIRGenerator {
 
             auto old_bb = LLVMGetInsertBlock(builder);
 
+            if (funcname == SYM_Unnamed) {
+                funcname = label->name;
+            }
+
             const char *name;
-            if (root_function && (label->name == SYM_Unnamed)) {
+            if (root_function && (funcname == SYM_Unnamed)) {
                 name = "unnamed";
             } else {
-                name = label->name.name()->data;
+                name = funcname.name()->data;
             }
 
             label->verify_compilable();
@@ -10867,21 +10884,8 @@ struct LLVMIRGenerator {
         }
     }
 
-    std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
-        assert(all_parameters_lowered(entry));
-        assert(!entry->is_basic_block_like());
-
-        {
-            std::unordered_set<Label *> visited;
-            std::vector<Label *> labels;
-            entry->build_reachable(visited, &labels);
-            for (auto it = labels.begin(); it != labels.end(); ++it) {
-                (*it)->insert_into_usermap(user_map);
-            }
-        }
-
-        const char *name = entry->name.name()->data;
-        module = LLVMModuleCreateWithName(name);
+    void setup_generate(const char *module_name) {
+        module = LLVMModuleCreateWithName(module_name);
         builder = LLVMCreateBuilder();
         di_builder = LLVMCreateDIBuilder(module);
 
@@ -10899,9 +10903,9 @@ struct LLVMIRGenerator {
                 false, "", 0, "", 0);
             //LLVMAddNamedMetadataOperand(module, "llvm.dbg.cu", dicu);
         }
+    }
 
-        auto func = label_to_function(entry, true);
-        LLVMSetLinkage(func, LLVMExternalLinkage);
+    void teardown_generate(Label *entry = nullptr) {
         process_labels();
 
         size_t k = finalize_types();
@@ -10916,7 +10920,9 @@ struct LLVMIRGenerator {
         char *errmsg = NULL;
         if (LLVMVerifyModule(module, LLVMReturnStatusAction, &errmsg)) {
             StyledStream ss(std::cerr);
-            stream_label(ss, entry, StreamLabelFormat());
+            if (entry) {
+                stream_label(ss, entry, StreamLabelFormat());
+            }
             LLVMDumpModule(module);
             location_error(
                 String::join(
@@ -10924,6 +10930,69 @@ struct LLVMIRGenerator {
                     String::from_cstr(errmsg)));
         }
         LLVMDisposeMessage(errmsg);
+    }
+
+    // for generating object files
+    LLVMModuleRef generate(const String *name, Scope *table) {
+
+        {
+            std::unordered_set<Label *> visited;
+            std::vector<Label *> labels;
+            Scope *t = table;
+            while (t) {
+                for (auto it = t->map->begin(); it != t->map->end(); ++it) {
+                    Label *fn = it->second;
+
+                    fn->verify_compilable();
+                    fn->build_reachable(visited, &labels);
+                }
+                t = t->parent;
+            }
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                (*it)->insert_into_usermap(user_map);
+            }
+        }
+
+        setup_generate(name->data);
+
+        Scope *t = table;
+        while (t) {
+            for (auto it = t->map->begin(); it != t->map->end(); ++it) {
+
+                Symbol name = it->first;
+                Label *fn = it->second;
+
+                auto func = label_to_function(fn, true, name);
+                LLVMSetLinkage(func, LLVMExternalLinkage);
+
+            }
+            t = t->parent;
+        }
+
+        teardown_generate();
+        return module;
+    }
+
+    std::pair<LLVMModuleRef, LLVMValueRef> generate(Label *entry) {
+        assert(all_parameters_lowered(entry));
+        assert(!entry->is_basic_block_like());
+
+        {
+            std::unordered_set<Label *> visited;
+            std::vector<Label *> labels;
+            entry->build_reachable(visited, &labels);
+            for (auto it = labels.begin(); it != labels.end(); ++it) {
+                (*it)->insert_into_usermap(user_map);
+            }
+        }
+
+        const char *name = entry->name.name()->data;
+        setup_generate(name);
+
+        auto func = label_to_function(entry, true);
+        LLVMSetLinkage(func, LLVMExternalLinkage);
+
+        teardown_generate(entry);
 
         return std::pair<LLVMModuleRef, LLVMValueRef>(module, func);
     }
@@ -11047,6 +11116,54 @@ enum {
     CF_O2               = (1 << 6),
     CF_O3               = CF_O1 | CF_O2,
 };
+
+static void compile_object(const String *path, Scope *scope, uint64_t flags) {
+    Timer sum_compile_time(TIMER_Compile);
+#if SCOPES_COMPILE_WITH_DEBUG_INFO
+#else
+    flags |= CF_NoDebugInfo;
+#endif
+#if SCOPES_OPTIMIZE_ASSEMBLY
+    flags |= CF_O3;
+#endif
+
+    LLVMIRGenerator ctx;
+    if (flags & CF_NoDebugInfo) {
+        ctx.use_debug_info = false;
+    }
+
+    LLVMModuleRef module;
+    {
+        Timer generate_timer(TIMER_Generate);
+        module = ctx.generate(path, scope);
+    }
+
+    if (flags & CF_O3) {
+        Timer optimize_timer(TIMER_Optimize);
+        int level = 0;
+        if ((flags & CF_O3) == CF_O1)
+            level = 1;
+        else if ((flags & CF_O3) == CF_O2)
+            level = 2;
+        else if ((flags & CF_O3) == CF_O3)
+            level = 3;
+        build_and_run_opt_passes(module, level);
+    }
+    if (flags & CF_DumpModule) {
+        LLVMDumpModule(module);
+    }
+
+    assert(ee);
+    auto tm = LLVMGetExecutionEngineTargetMachine(ee);
+
+    char *errormsg = nullptr;
+    char *path_cstr = strdup(path->data);
+    if (LLVMTargetMachineEmitToFile(tm, module, path_cstr,
+        LLVMObjectFile, &errormsg)) {
+        location_error(String::from_cstr(errormsg));
+    }
+    free(path_cstr);
+}
 
 static DisassemblyListener *disassembly_listener = nullptr;
 static Any compile(Label *fn, uint64_t flags) {
@@ -16351,8 +16468,11 @@ static const String *f_compile_spirv(Symbol target, Label *srcl, uint64_t flags)
 }
 
 static const String *f_compile_glsl(Symbol target, Label *srcl, uint64_t flags) {
-
     return compile_glsl(target, srcl, flags);
+}
+
+void f_compile_object(const String *path, Scope *table, uint64_t flags) {
+    compile_object(path, table, flags);
 }
 
 static const Type *f_array_type(const Type *element_type, size_t count) {
@@ -16481,11 +16601,12 @@ static bool f_string_match(const String *pattern, const String *text) {
 }
 
 static void f_load_library(const String *name) {
+#if 0
     dlerror();
 #ifdef SCOPES_WIN32
     void *handle = dlopen(name->data, RTLD_LAZY);
 #else
-    void *handle = dlopen(name->data, RTLD_LAZY|RTLD_DEEPBIND);
+    void *handle = dlopen(name->data, RTLD_LAZY | RTLD_DEEPBIND);
 #endif
     if (!handle) {
         StyledString ss;
@@ -16497,6 +16618,9 @@ static void f_load_library(const String *name) {
         location_error(ss.str());
     }
     loaded_libs.push_back(handle);
+#else
+    LLVMLoadLibraryPermanently(name->data);
+#endif
 }
 
 static const String *f_type_name(const Type *T) {
@@ -16638,6 +16762,7 @@ static void init_globals(int argc, char *argv[]) {
     DEFINE_C_FUNCTION(FN_Compile, f_compile, TYPE_Any, TYPE_Label, TYPE_U64);
     DEFINE_PURE_C_FUNCTION(FN_CompileSPIRV, f_compile_spirv, TYPE_String, TYPE_Symbol, TYPE_Label, TYPE_U64);
     DEFINE_PURE_C_FUNCTION(FN_CompileGLSL, f_compile_glsl, TYPE_String, TYPE_Symbol, TYPE_Label, TYPE_U64);
+    DEFINE_PURE_C_FUNCTION(FN_CompileObject, f_compile_object, TYPE_Void, TYPE_String, TYPE_Scope, TYPE_U64);
     DEFINE_C_FUNCTION(FN_Prompt, f_prompt, Tuple({TYPE_String, TYPE_Bool}), TYPE_String, TYPE_String);
     DEFINE_C_FUNCTION(FN_LoadLibrary, f_load_library, TYPE_Void, TYPE_String);
 

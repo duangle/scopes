@@ -126,7 +126,9 @@ project "scopes"
     }
 
     configuration { "linux" }
-        buildoptions_cpp(LLVM_CXXFLAGS)
+        includedirs {
+            "clang/include"
+        }
 
         buildoptions_cpp {
             "-std=c++11",

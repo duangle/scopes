@@ -19,6 +19,7 @@ syntax: regexp
 ^libffi
 ^scopes$
 ^testing/myscopes$
+^testing/test$
 ^scopes[.]h$
 ^doc/_build/
 ^bin/
