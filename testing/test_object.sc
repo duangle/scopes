@@ -9,9 +9,9 @@ fn main (argc argv)
     C.printf "hello world\n"
     return 0
 
-#main none none
-let table = (Scope)
-set-scope-symbol! table 'main
-    typify main i32 (pointer rawstring)
+let main = (typify main i32 (pointer rawstring))
+compile-object "test.o"
+    scopeof
+        main = main
+    #'dump-module
 
-compile-object "test.o" table 'dump-module

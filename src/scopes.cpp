@@ -501,6 +501,26 @@ static size_t memory_stack_size() {
     return ss;
 }
 
+// for allocated pointers, register the size of the range
+static std::map<void *, size_t> tracked_allocations;
+static void track(void *ptr, size_t size) {
+    tracked_allocations.insert({ptr,size});
+}
+static void *tracked_malloc(size_t size) {
+    void *ptr = malloc(size);
+    track(ptr, size);
+    return ptr;
+}
+static bool find_allocation(void *srcptr,  void *&start, size_t &size) {
+    auto it = tracked_allocations.upper_bound(srcptr);
+    if (it == tracked_allocations.begin())
+        return false;
+    it--;
+    start = it->first;
+    size = it->second;
+    return (srcptr >= start)&&((uint8_t*)srcptr < ((uint8_t*)start + size));
+}
+
 using llvm::isa;
 using llvm::cast;
 using llvm::dyn_cast;
@@ -1421,14 +1441,14 @@ struct String {
     }
 
     static String *alloc(size_t count) {
-        String *str = (String *)malloc(
+        String *str = (String *)tracked_malloc(
             sizeof(size_t) + sizeof(char) * (count + 1));
         str->count = count;
         return str;
     }
 
     static const String *from(const char *s, size_t count) {
-        String *str = (String *)malloc(
+        String *str = (String *)tracked_malloc(
             sizeof(size_t) + sizeof(char) * (count + 1));
         str->count = count;
         memcpy(str->data, s, sizeof(char) * count);
@@ -3622,7 +3642,7 @@ void *get_pointer(const Type *type, Any &value, bool create = false) {
     case TK_Tuple:
     case TK_Union:
         if (create) {
-            value.pointer = malloc(size_of(type));
+            value.pointer = tracked_malloc(size_of(type));
         }
         return value.pointer;
     default: break;
@@ -9744,6 +9764,8 @@ struct LLVMIRGenerator {
     static std::vector<const Type *> type_todo;
 
     std::unordered_map<Any, LLVMValueRef, Any::Hash> extern2global;
+    std::unordered_map<void *, LLVMValueRef> ptr2global;
+
     Label::UserMap user_map;
 
     LLVMModuleRef module;
@@ -9769,6 +9791,7 @@ struct LLVMIRGenerator {
     LLVMValueRef active_function_value;
 
     bool use_debug_info;
+    bool inline_pointers;
 
     template<unsigned N>
     static LLVMAttributeRef get_attribute(const char (&s)[N]) {
@@ -9780,7 +9803,8 @@ struct LLVMIRGenerator {
     LLVMIRGenerator() :
         active_function(nullptr),
         active_function_value(nullptr),
-        use_debug_info(true) {
+        use_debug_info(true),
+        inline_pointers(true) {
         static_init();
     }
 
@@ -10148,10 +10172,38 @@ struct LLVMIRGenerator {
             LLVMTypeRef LLT = type_to_llvm_type(value.type);
             if (!value.pointer) {
                 return LLVMConstPointerNull(LLT);
-            } else {
+            } else if (inline_pointers) {
                 return LLVMConstIntToPtr(
                     LLVMConstInt(i64T, *(uint64_t*)&value.pointer, false),
                     LLT);
+            } else {
+                // to serialize a pointer, we serialize the allocation range
+                // of the pointer as a global binary blob
+                void *baseptr;
+                size_t alloc_size;
+                if (!find_allocation(value.pointer, baseptr, alloc_size)) {
+                    StyledString ss;
+                    ss.out << "IL->IR: constant pointer of type " << value.type
+                        << " points to unserializable memory";
+                    location_error(ss.str());
+                }
+                LLVMValueRef basevalue = nullptr;
+                auto it = ptr2global.find(baseptr);
+                if (it == ptr2global.end()) {
+                    auto data = LLVMConstString((const char *)baseptr, alloc_size, true);
+                    basevalue = LLVMAddGlobal(module, LLVMTypeOf(data), "");
+                    ptr2global.insert({ baseptr, basevalue });
+                    LLVMSetInitializer(basevalue, data);
+                    LLVMSetGlobalConstant(basevalue, true);
+                } else {
+                    basevalue = it->second;
+                }
+                size_t offset = (uint8_t*)value.pointer - (uint8_t*)baseptr;
+                LLVMValueRef indices[2];
+                indices[0] = LLVMConstInt(i64T, 0, false);
+                indices[1] = LLVMConstInt(i64T, offset, false);
+                return LLVMConstPointerCast(
+                    LLVMConstGEP(basevalue, indices, 2), LLT);
             }
         } break;
         case TK_Typename: {
@@ -11128,6 +11180,7 @@ static void compile_object(const String *path, Scope *scope, uint64_t flags) {
 #endif
 
     LLVMIRGenerator ctx;
+    ctx.inline_pointers = false;
     if (flags & CF_NoDebugInfo) {
         ctx.use_debug_info = false;
     }
@@ -11671,7 +11724,7 @@ static void *aligned_alloc(size_t sz, size_t al) {
     assert(sz);
     assert(al);
     return reinterpret_cast<void *>(
-        ::align(reinterpret_cast<uintptr_t>(malloc(sz + al - 1)), al));
+        ::align(reinterpret_cast<uintptr_t>(tracked_malloc(sz + al - 1)), al));
 }
 
 static void *alloc_storage(const Type *T) {
@@ -13384,7 +13437,7 @@ struct Solver {
             CHECKARGS(1, 1);
             const Type *T = args[1].value.type;
             void *src = get_pointer(T, args[1].value);
-            void *dst = malloc(size_of(T));
+            void *dst = tracked_malloc(size_of(T));
             memcpy(dst, src, size_of(T));
             RETARGS(Any::from_pointer(NativeROPointer(T), dst));
         } break;
