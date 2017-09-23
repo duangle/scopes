@@ -10,8 +10,10 @@ fn main (argc argv)
     return 0
 
 let main = (typify main i32 (pointer rawstring))
-compile-object "test.o"
+compile-object
+    module-dir .. "/test.o"
     scopeof
         main = main
+    'no-debug-info
     #'dump-module
 

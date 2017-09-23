@@ -10434,7 +10434,17 @@ struct LLVMIRGenerator {
             case FN_Undef: { READ_TYPE(ty);
                 retvalue = LLVMGetUndef(ty); } break;
             case FN_Alloca: { READ_TYPE(ty);
-                retvalue = LLVMBuildAlloca(builder, ty, ""); } break;
+                auto oldbb = LLVMGetInsertBlock(builder);
+                auto entry = LLVMGetEntryBasicBlock(active_function_value);
+                auto term = LLVMGetBasicBlockTerminator(entry);
+                if (term) {
+                    LLVMPositionBuilderBefore(builder, term);
+                } else {
+                    LLVMPositionBuilderAtEnd(builder, entry);
+                }
+                retvalue = LLVMBuildAlloca(builder, ty, "");
+                LLVMPositionBuilderAtEnd(builder, oldbb);
+            } break;
             case FN_AllocaArray: { READ_TYPE(ty); READ_VALUE(val);
                 retvalue = LLVMBuildArrayAlloca(builder, ty, val, ""); } break;
             case FN_AllocaOf: {
