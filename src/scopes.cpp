@@ -79,7 +79,9 @@ BEWARE: If you build this with anything else but a recent enough clang,
 // maximum size of process stack
 #ifdef SCOPES_WIN32
 // on windows, we only get 1 MB of stack
-#define SCOPES_MAX_STACK_SIZE ((1 << 10) * 768)
+// #define SCOPES_MAX_STACK_SIZE ((1 << 10) * 768)
+// but we build with "-Wl,--stack,8388608"
+#define SCOPES_MAX_STACK_SIZE ((1 << 20) * 7)
 #else
 // on linux, the system typically gives us 8 MB
 #define SCOPES_MAX_STACK_SIZE ((1 << 20) * 7)

@@ -262,6 +262,9 @@ project "scopes"
         }
 
         linkoptions {
+            "-Wl,--stack,8388608"
+        }        
+        linkoptions {
             THISDIR .. "/SPIRV-Tools/build/source/libSPIRV-Tools.a",
             THISDIR .. "/SPIRV-Tools/build/source/opt/libSPIRV-Tools-opt.a",
         }
