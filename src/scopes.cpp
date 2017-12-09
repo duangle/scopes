@@ -6884,11 +6884,9 @@ public:
                 StyledStream ss;
                 auto anchor = anchorFromLocation(rd->getSourceRange().getBegin());
                 if (al != needalign) {
-                    anchor->stream_source_line(ss);
                     ss << anchor << " type " << ST << " alignment mismatch: " << al << " != " << needalign << std::endl;
                 }
                 if (sz != needsize) {
-                    anchor->stream_source_line(ss);
                     ss << anchor << " type " << ST << " size mismatch: " << sz << " != " << needsize << std::endl;
                 }
                 #if 0
