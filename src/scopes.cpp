@@ -9890,6 +9890,22 @@ struct LLVMIRGenerator {
         return result;
     }
 
+    static void diag_handler(LLVMDiagnosticInfoRef info, void *) {
+        const char *severity = "Message";
+        switch(LLVMGetDiagInfoSeverity(info)) {
+        case LLVMDSError: severity = "Error"; break;
+        case LLVMDSWarning: severity = "Warning"; break;
+        case LLVMDSRemark: return;// severity = "Remark"; break;
+        case LLVMDSNote: return;//severity = "Note"; break;
+        default: break;
+        }
+
+        char *str = LLVMGetDiagInfoDescription(info);
+        fprintf(stderr, "LLVM %s: %s\n", severity, str);
+        LLVMDisposeMessage(str);
+        //LLVMDiagnosticSeverity LLVMGetDiagInfoSeverity(LLVMDiagnosticInfoRef DI);
+    }
+
     static void static_init() {
         if (voidT) return;
         voidT = LLVMVoidType();
@@ -9906,6 +9922,11 @@ struct LLVMIRGenerator {
         attr_byval = get_attribute("byval");
         attr_sret = get_attribute("sret");
         attr_nonnull = get_attribute("nonnull");
+
+        LLVMContextSetDiagnosticHandler(LLVMGetGlobalContext(),
+            diag_handler,
+            nullptr);
+
     }
 
 #undef DEFINE_BUILTIN
