@@ -2787,12 +2787,16 @@ struct TupleType : StorageType {
     TupleType(const std::vector<Any> &_types)
         : StorageType(TK_Tuple) {
         packed = _types.back().i1;
-        size_t tcount = _types.size() - 1;
+        size_t explicit_alignment = _types[_types.size()-2].sizeval;
+        size_t tcount = _types.size() - 2;
         types.reserve(tcount);
         for (size_t i = 0; i < tcount; ++i) {
             types.push_back(_types[i]);
         }
         std::stringstream ss;
+        if (explicit_alignment) {
+            ss << "[align:" << explicit_alignment << "]";
+        }
         if (packed) {
             ss << "<";
         }
@@ -2810,8 +2814,8 @@ struct TupleType : StorageType {
         _name = String::from_stdstring(ss.str());
 
         offsets.resize(types.size());
+        size_t sz = 0;
         if (packed) {
-            size_t sz = 0;
             for (size_t i = 0; i < types.size(); ++i) {
                 const Type *ET = types[i];
                 offsets[i] = sz;
@@ -2820,7 +2824,6 @@ struct TupleType : StorageType {
             size = sz;
             align = 1;
         } else {
-            size_t sz = 0;
             size_t al = 1;
             for (size_t i = 0; i < types.size(); ++i) {
                 const Type *ET = types[i];
@@ -2832,6 +2835,10 @@ struct TupleType : StorageType {
             }
             size = ::align(sz, al);
             align = al;
+        }
+        if (explicit_alignment) {
+            align = explicit_alignment;
+            size = ::align(sz, align);
         }
     }
 
@@ -2854,13 +2861,15 @@ struct TupleType : StorageType {
     bool packed;
 };
 
-static const Type *Tuple(const std::vector<const Type *> &types, bool packed = false) {
+static const Type *Tuple(const std::vector<const Type *> &types, 
+    bool packed = false, size_t alignment = 0) {
     static TypeFactory<TupleType> tuples;
     std::vector<Any> atypes;
     atypes.reserve(types.size() + 1);
     for (auto &&arg : types) {
         atypes.push_back(arg);
     }
+    atypes.push_back(alignment);
     atypes.push_back(packed);
     return tuples.insert(atypes);
 }
@@ -6856,28 +6865,40 @@ public:
         if (packed) {
             al = 1;
         }
+        bool explicit_alignment = false;
         if (has_bitfield) {
             // ignore for now and hope that an underlying union fixes the problem
         } else {
-            sz = ::align(sz, al);
             size_t needalign = rl.getAlignment().getQuantity();
             size_t needsize = rl.getSize().getQuantity();
+            #if 0
+            if (!is_union && (needalign != al)) {
+                al = needalign;
+                explicit_alignment = true;
+            }
+            #endif
+            sz = ::align(sz, al);
             bool align_ok = (al == needalign);
             bool size_ok = (sz == needsize);
             if (!(align_ok && size_ok)) {
                 StyledStream ss;
+                auto anchor = anchorFromLocation(rd->getSourceRange().getBegin());
                 if (al != needalign) {
-                    ss << "type " << ST << " alignment mismatch: " << al << " != " << needalign << std::endl;
+                    anchor->stream_source_line(ss);
+                    ss << anchor << " type " << ST << " alignment mismatch: " << al << " != " << needalign << std::endl;
                 }
                 if (sz != needsize) {
-                    ss << "type " << ST << " size mismatch: " << sz << " != " << needsize << std::endl;
+                    anchor->stream_source_line(ss);
+                    ss << anchor << " type " << ST << " size mismatch: " << sz << " != " << needsize << std::endl;
                 }
-                set_active_anchor(anchorFromLocation(rd->getSourceRange().getBegin()));
+                #if 0
+                set_active_anchor(anchor);
                 location_error(String::from("clang-bridge: imported record doesn't fit"));
+                #endif
             }
         }
 
-        tni->finalize(is_union?Union(types):Tuple(types, packed));
+        tni->finalize(is_union?Union(types):Tuple(types, packed, explicit_alignment?al:0));
         tni->field_names = names;
     }
 
